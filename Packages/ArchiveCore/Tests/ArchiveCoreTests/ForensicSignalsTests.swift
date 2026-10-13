@@ -161,3 +161,25 @@ final class ForensicSignalsTests: XCTestCase {
         XCTAssertEqual(c.record(selector: "sel", domain: "example.com"), "v=DKIM1; k=rsa; p=ABC")
     }
 }
+
+final class DKIMMultiSignatureTests: XCTestCase {
+    func testAnyValidSignaturePasses_andARCMessageSignatureIsChecked() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let other = Curve25519.Signing.PrivateKey()
+        let keys = DKIMKeyCache(records: ["sel._domainkey.example.com": "v=DKIM1; k=ed25519; p=\(key.publicKey.rawRepresentation.base64EncodedString())"])
+        let bh = Data(SHA256.hash(data: Data("hi\r\n".utf8))).base64EncodedString()
+        func sign(_ header: String, _ k: Curve25519.Signing.PrivateKey) throws -> String {
+            let tags = "i=1; a=ed25519-sha256; c=relaxed/relaxed; d=example.com; s=sel; h=from; bh=\(bh); b="
+            let canon = "from:a@example.com\r\n\(header.lowercased()):\(tags)"
+            let b = try k.signature(for: Data(SHA256.hash(data: Data(canon.utf8)))).base64EncodedString()
+            return "\(header): \(tags)\(b)\r\n"
+        }
+        // First signature is from a key we do not hold (fails), the second verifies.
+        let raw = try sign("DKIM-Signature", other) + sign("DKIM-Signature", key) + "From: a@example.com\r\n\r\nhi\r\n"
+        XCTAssertEqual(DKIMVerifier.verify(rawSource: raw, keys: keys), .pass(domain: "example.com", selector: "sel"))
+        let arc = try sign("ARC-Message-Signature", key) + "From: a@example.com\r\n\r\nhi\r\n"
+        XCTAssertEqual(DKIMVerifier.verify(rawSource: arc, keys: keys, signatureHeader: "ARC-Message-Signature"),
+                       .pass(domain: "example.com", selector: "sel"))
+        XCTAssertEqual(DKIMVerifier.verify(rawSource: arc, keys: keys), .noSignature)
+    }
+}

@@ -294,3 +294,37 @@ struct ExportEmailsCSVIntent: AppIntent {
         return .result(value: IntentFile(fileURL: url, filename: url.lastPathComponent, type: .commaSeparatedText))
     }
 }
+
+struct AssignBatesIntent: AppIntent {
+    static var title: LocalizedStringResource = "Assign Bates Numbers in mailin"
+    static var description: IntentDescription = "Numbers every email matching a search that has no Bates number yet, oldest first, using the prefix set in mailin. Numbers already given never change. Shows the count and asks first."
+
+    @Parameter(title: "Search") var search: String
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        try ShortcutsActionSupport.allow(.produce)
+        let (scope, n) = try await ShortcutsActionSupport.scope(search)
+        try await ShortcutsActionSupport.confirm(self, "Number up to \(n) emails?") {
+            try await $search.requestConfirmation(for: search, dialog: "Number up to \(n) emails?")
+        }
+        let r = try await BatesEngine.assign(scope: scope, manager: BatesNumberingManager.shared)
+        let range = r.state.first.map { "\($0) – \(r.state.last ?? $0)" } ?? "—"
+        return .result(value: String(localized: "\(r.state.assigned) new numbers (\(range)); \(r.state.skipped) already numbered, unchanged. Fingerprint \(r.receipt.fingerprint)."))
+    }
+}
+
+struct VerifyIntegrityIntent: AppIntent {
+    static var title: LocalizedStringResource = "Verify Emails in mailin"
+    static var description: IntentDescription = "Checks every email matching a search against its original seal and reports how many passed and failed."
+
+    @Parameter(title: "Search", default: "") var search: String
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let (scope, n) = try await ShortcutsActionSupport.scope(search)
+        let (state, receipt) = try await EDiscoveryEngine.verifyCollection(scope: scope)
+        let base = String(localized: "\(state.passed) of \(n) verified, \(state.failed) failed, \(state.newlySealed) sealed for the first time. Fingerprint \(receipt.fingerprint).")
+        return .result(value: receipt.cancelled ? String(localized: "Stopped early: ") + base : base)
+    }
+}

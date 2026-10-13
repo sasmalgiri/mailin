@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 @testable import ArchiveCore
 
 struct ReviewPackView: View {
+    @Environment(ModuleRegistry.self) private var modules
     @State private var search = ""
     @State private var title = ""
     @State private var instructions = ""
@@ -25,6 +26,7 @@ struct ReviewPackView: View {
 
     var body: some View {
         Form {
+            if modules.isEnabled(.professional) {
             Section {
                 TextField(String(localized: "Search (empty = whole archive)"), text: $search)
                     .onSubmit { Task { await countScope() } }
@@ -65,6 +67,7 @@ struct ReviewPackView: View {
                 } header: {
                     Text("Conflicts (\(conflicts.count))")
                 }
+            }
             }
 
             Section {

@@ -214,7 +214,10 @@ struct EngineSpec: Sendable {
                 name: String(localized: "mailin Scripts (3.1)"),
                 detail: String(localized: "Runs your own JavaScript over the archive on this device, with no network access. Changes are shown before they apply and every run is recorded."))
         case .v31ReviewPack:
-            return EngineSpec(.professional, maturity: .preview,
+            // Archive page (free tier): a reviewer needs no licence to code a
+            // pack they received. Sending packs and merging responses stay
+            // Professional, checked where those actions are offered.
+            return EngineSpec(.archive, maturity: .preview,
                 name: String(localized: "Review Pack (3.1)"),
                 detail: String(localized: "Sends a set of emails to a reviewer who codes them in any copy of mailin, even the free one, and merges their decisions back with who decided what."))
         case .v31TeamCase:

@@ -38,6 +38,7 @@ struct ForensicSignalsView: View {
     let email: MBOXParser.RawEmail
     @State private var expanded = false
     @State private var dkim: DKIMResult?
+    @State private var arc: DKIMResult?
     @State private var showKeyImport = false
     @State private var keyStatus: String?
 
@@ -112,11 +113,15 @@ struct ForensicSignalsView: View {
             Text("DKIM (offline)").font(.subheadline.weight(.semibold))
             HStack {
                 Button(String(localized: "Check signature")) {
-                    dkim = DKIMVerifier.verify(rawSource: email.rawSource, keys: DKIMKeyStore.load())
+                    let keys = DKIMKeyStore.load()
+                    dkim = DKIMVerifier.verify(rawSource: email.rawSource, keys: keys)
+                    let a = DKIMVerifier.verify(rawSource: email.rawSource, keys: keys, signatureHeader: "ARC-Message-Signature")
+                    arc = a == .noSignature ? nil : a
                 }
                 Button(String(localized: "Import DKIM keys…")) { showKeyImport = true }
             }
             if let dkim { Text(Self.describe(dkim)).font(.callout) }
+            if let arc { Text(String(localized: "ARC message signature: ") + Self.describe(arc)).font(.callout) }
             if let keyStatus { Text(keyStatus).font(.caption) }
             Text("mailin never looks keys up online. Import the domain's DKIM records (captured at collection, or from the sender's DNS) as a text file: one `selector._domainkey.domain  \"v=DKIM1; k=rsa; p=…\"` per line.")
                 .font(.caption).foregroundStyle(.secondary)

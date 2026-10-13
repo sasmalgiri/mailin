@@ -248,13 +248,29 @@ public struct DKIMKeyCache: Codable, Sendable, Equatable {
 }
 
 public enum DKIMVerifier {
-    public static func verify(rawSource: String, keys: DKIMKeyCache) -> DKIMResult {
+    /// Every signature in the message is checked; the result is a pass when
+    /// any one verifies, else the first signature's failure. `signatureHeader`
+    /// "ARC-Message-Signature" checks the ARC message signatures the same way
+    /// (RFC 8617 §4.1.2; the ARC-Seal chain is not checked).
+    public static func verify(rawSource: String, keys: DKIMKeyCache,
+                              signatureHeader: String = "DKIM-Signature") -> DKIMResult {
         let raw = rawSource.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
         guard let split = raw.range(of: "\r\n\r\n") else { return .unsupported("no header/body separator") }
         let headerBlock = String(raw[..<split.lowerBound]) + "\r\n"
         let body = String(raw[split.upperBound...])
         let fields = unfoldFields(headerBlock)
-        guard let sigField = fields.first(where: { $0.name.lowercased() == "dkim-signature" }) else { return .noSignature }
+        let sigs = fields.filter { $0.name.lowercased() == signatureHeader.lowercased() }
+        guard !sigs.isEmpty else { return .noSignature }
+        var first: DKIMResult?
+        for sig in sigs {
+            let r = verifyOne(sig, fields: fields, body: body, keys: keys)
+            if case .pass = r { return r }
+            if first == nil { first = r }
+        }
+        return first ?? .noSignature
+    }
+
+    static func verifyOne(_ sigField: Field, fields: [Field], body: String, keys: DKIMKeyCache) -> DKIMResult {
         let tags = parseTags(sigField.value)
         guard let d = tags["d"], let s = tags["s"], let b = tags["b"], let bh = tags["bh"], let h = tags["h"] else {
             return .fail("DKIM-Signature is missing a required tag")

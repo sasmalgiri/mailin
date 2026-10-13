@@ -61,6 +61,8 @@ struct mailinApp: App {
     @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
     #endif
     @State private var showLaunchAnimation = false
+    /// 3.1: a .mailinpack / .mailinresponse / .mailinscript opened from Finder or Files.
+    @State private var incomingDocument: IncomingMailinDocument?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
 
@@ -325,6 +327,13 @@ struct mailinApp: App {
                     }
                     .onOpenURL { url in
                         handleIncomingURL(url)
+                    }
+                    .sheet(item: $incomingDocument) { doc in
+                        IncomingDocumentView(document: doc)
+                            .environment(modules)
+                            #if os(macOS)
+                            .frame(minWidth: 680, minHeight: 520)
+                            #endif
                     }
                     .onContinueUserActivity(CSSearchableItemActionType) { activity in
                         if let emailID = SpotlightIndexer.shared.handleSpotlightActivity(activity) {
@@ -847,6 +856,10 @@ struct mailinApp: App {
         // OAuth callback schemes were removed in v2 — mailin is strictly
         // offline. The only incoming URLs we honour are file imports.
         let ext = url.pathExtension.lowercased()
+        if IncomingMailinDocument.extensions.contains(ext) {
+            incomingDocument = IncomingMailinDocument(url: url)
+            return
+        }
         if ParserFactory.allSupportedExtensions.contains(ext) {
             NotificationCenter.default.post(name: .importFileFromURL, object: url)
         }
