@@ -405,7 +405,8 @@ enum ScriptEngine {
             var stop = false
             for e in batch {
                 do {
-                    let r = try runtime.run(e, userTags: Array(tags[e.id] ?? []).sorted(), ai: analysis[e.id])
+                    // JavaScriptCore objects are autoreleased; drain per email (async loops never drain).
+                    let r = try autoreleasepool { try runtime.run(e, userTags: Array(tags[e.id] ?? []).sorted(), ai: analysis[e.id]) }
                     batchChanges += r.changes
                     if summary.report.count < 10_000 { summary.report += r.report }
                 } catch let err as ScriptError {
@@ -529,7 +530,7 @@ final class ScriptImportRunner {
             var changes: [ScriptChange] = []
             var failed = 0
             for e in emails {
-                do { changes += try runtime.run(e, userTags: e.tags).changes } catch { failed += 1 }
+                do { changes += try autoreleasepool { try runtime.run(e, userTags: e.tags).changes } } catch { failed += 1 }
                 entry.fp.add(e.id)
                 entry.summary.processed += 1
             }

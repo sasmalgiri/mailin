@@ -168,29 +168,48 @@ final class SignedLineWriter {
 }
 
 enum SignedLineReader {
+    /// Reads `url` in 1 MB windows and calls `line` for each line (without
+    /// its newline), then `tail` with any bytes after the last newline.
+    /// Each window is cut once (no per-line copying of the rest), and drained
+    /// in its own autorelease pool, so time is linear and memory flat.
+    static func scan(_ url: URL, raw: ((Data) -> Void)? = nil, line: (Data) throws -> Void) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var pending = Data()
+        while true {
+            let more: Bool = try autoreleasepool {
+                guard let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty else { return false }
+                raw?(chunk)
+                pending.append(chunk)
+                var start = pending.startIndex
+                while let nl = pending[start...].firstIndex(of: 0x0A) {
+                    try line(Data(pending[start..<nl]))
+                    start = pending.index(after: nl)
+                }
+                pending = Data(pending[start...])
+                return true
+            }
+            if !more { break }
+        }
+        return pending
+    }
+
     /// Verifies the signature line against `publicKey` (raw base64) and every
     /// byte before it, streaming. Returns the SHA-256 of the whole file.
     static func verify(url: URL, publicKey: (Data) throws -> String) throws -> String {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
         var body = SHA256()
         var whole = SHA256()
-        var pending = Data()
         var firstLine: Data?
         var lastLine = Data()
-        // Read in windows; hold back the last line (the signature) until EOF.
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            whole.update(data: chunk)
-            pending.append(chunk)
-            while let nl = pending.firstIndex(of: 0x0A) {
-                let line = pending[pending.startIndex...nl]
-                if firstLine == nil { firstLine = Data(line) }
-                if !lastLine.isEmpty { body.update(data: lastLine) }
-                lastLine = Data(line)
-                pending.removeSubrange(pending.startIndex...nl)
-            }
+        // Hold back the last line (the signature) until the end.
+        let tail = try scan(url, raw: { whole.update(data: $0) }) { l in
+            var withNL = l
+            withNL.append(0x0A)
+            if firstLine == nil { firstLine = withNL }
+            if !lastLine.isEmpty { body.update(data: lastLine) }
+            lastLine = withNL
         }
-        guard pending.isEmpty, let firstLine, !lastLine.isEmpty else { throw ReviewPackError.unreadable(url.lastPathComponent) }
+        guard tail.isEmpty, let firstLine, !lastLine.isEmpty else { throw ReviewPackError.unreadable(url.lastPathComponent) }
         let dec = decoder()
         guard let sigLine = try? dec.decode(ReviewPackSignature.self, from: lastLine), sigLine.kind == "mailin.signature" else {
             throw ReviewPackError.badSignature
@@ -208,18 +227,10 @@ enum SignedLineReader {
 
     /// Calls `body` with every line except the signature line (already verified).
     static func forEachLine(url: URL, _ body: (Data) throws -> Void) throws {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var pending = Data()
         var held: Data?
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            pending.append(chunk)
-            while let nl = pending.firstIndex(of: 0x0A) {
-                let line = Data(pending[pending.startIndex..<nl])
-                pending.removeSubrange(pending.startIndex...nl)
-                if let h = held { try body(h) }
-                held = line
-            }
+        _ = try scan(url) { l in
+            if let h = held { try body(h) }
+            held = l
         }
     }
 
@@ -278,7 +289,7 @@ enum ReviewPackBuilder {
                                           scope: ScopeJob.describe(scope.query)))
         var written = 0
         for try await batch in ArchiveDataService.shared.streamFullEmails(query: scope.query, batchSize: 200) {
-            for e in batch {
+            try autoreleasepool { for e in batch {
                 try writer.write(ReviewPackEmail(
                     id: e.id, date: e.headers["Date"] ?? e.timestamp, from: e.headers["From"] ?? "",
                     to: e.headers["To"] ?? "", cc: e.headers["Cc"] ?? "", subject: e.headers["Subject"] ?? "",
@@ -286,7 +297,7 @@ enum ReviewPackBuilder {
                     attachments: e.attachments.map(\.filename),
                     sourceSHA256: Data(SHA256.hash(data: Data(e.rawSource.utf8))).hexString))
                 written += 1
-            }
+            } }
             progress(written, total)
             try Task.checkCancellation()
         }
@@ -440,18 +451,8 @@ enum ReviewMergeLog {
 
 extension SignedLineReader {
     static func forEachLineIncludingLast(url: URL, _ body: (Data) throws -> Void) throws {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var pending = Data()
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            pending.append(chunk)
-            while let nl = pending.firstIndex(of: 0x0A) {
-                let line = Data(pending[pending.startIndex..<nl])
-                pending.removeSubrange(pending.startIndex...nl)
-                try body(line)
-            }
-        }
-        if !pending.isEmpty { try body(pending) }
+        let tail = try scan(url, line: body)
+        if !tail.isEmpty { try body(tail) }
     }
 }
 

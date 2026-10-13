@@ -1068,6 +1068,11 @@ final class V31ReviewTests: XCTestCase {
         XCTAssertEqual(torn.0.count, 3)
         XCTAssertTrue(torn.1.first?.contains("interrupted") ?? false)
 
+        // A torn line in the middle (an interrupted write a later entry follows) is skipped, not fatal.
+        let midTorn = TeamCase.readLog(try file(Array(es.prefix(2)), tail: "{\"seq\":2,\"lam\n" + String(decoding: try TeamCaseIO.encoder.encode(es[2]), as: UTF8.self) + "\n"))
+        XCTAssertEqual(midTorn.0.count, 3, "the entry after the torn line still counts")
+        XCTAssertTrue(midTorn.1.first?.contains("skipped") ?? false)
+
         var changed = es
         changed[1].value = "Not relevant"     // signature no longer matches
         let tampered = TeamCase.readLog(try file(changed))
@@ -1124,5 +1129,95 @@ final class V31ShortcutsTests: XCTestCase {
         ShortcutsPolicy.actionsEnabled = false
         defer { ShortcutsPolicy.actionsEnabled = was }
         XCTAssertThrowsError(try ShortcutsPolicy.requireEnabled())
+    }
+}
+
+// MARK: - 3.1 T12: two reviewers on one shared folder
+
+final class V31SharedFolderTests: XCTestCase {
+    private var root: URL!
+    override func setUp() {
+        super.setUp()
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("V31Shared-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+    override func tearDown() { try? FileManager.default.removeItem(at: root); super.tearDown() }
+
+    /// A case folder written by hand: evidence pack + manifest, `n` emails in batches of 10.
+    private func makeCase(lead: Curve25519.Signing.PrivateKey, emails n: Int) throws -> URL {
+        let folder = root.appendingPathComponent("c.mailincase", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let w = try SignedLineWriter(url: folder.appendingPathComponent("evidence.mailinpack"))
+        var ids: [UUID] = []
+        try w.write(ReviewPackHeader(packID: UUID(), title: "c", createdAt: Date(), createdBy: "L",
+                                     examinerKey: lead.publicKey.rawRepresentation.base64EncodedString(),
+                                     emailCount: n, codes: ReviewPackBuilder.defaultCodes, instructions: "", scope: "all"))
+        for i in 0..<n {
+            let id = UUID(); ids.append(id)
+            try w.write(ReviewPackEmail(id: id, date: "d", from: "f", to: "t", cc: "", subject: "S\(i)", body: "b", attachments: [], sourceSHA256: "x"))
+        }
+        try w.finish(signingWith: lead)
+        let manifest = TeamCaseManifest(caseID: UUID(), title: "c", createdAt: Date(), createdBy: "L",
+                                        leadKey: lead.publicKey.rawRepresentation.base64EncodedString(),
+                                        codes: ReviewPackBuilder.defaultCodes,
+                                        batches: stride(from: 0, to: n, by: 10).map { Array(ids[$0..<min($0 + 10, n)]) },
+                                        qcPercent: 10, layout: nil)
+        try TeamCaseIO.atomicWrite(try TeamCaseIO.encoder.encode(manifest), to: folder.appendingPathComponent("manifest.json"))
+        return folder
+    }
+
+    func testTwoReviewers_sameState_exclusiveLeases_tornWrites_andExpiredLeases() throws {
+        let leadKey = Curve25519.Signing.PrivateKey()
+        let folder = try makeCase(lead: leadKey, emails: 40)
+        let ann = try TeamCase(folder: folder, name: "Ann", role: "reviewer", signingKey: Curve25519.Signing.PrivateKey())
+        let bo = try TeamCase(folder: folder, name: "Bo", role: "reviewer", signingKey: Curve25519.Signing.PrivateKey())
+
+        // Exclusive check-out: two reviewers can never hold one batch.
+        XCTAssertTrue(try ann.checkout(0, state: ann.load()))
+        XCTAssertFalse(try bo.checkout(0, state: bo.load()))
+        XCTAssertTrue(try bo.checkout(1, state: bo.load()))
+
+        // Interleaved coding from both instances.
+        for (i, id) in ann.manifest.batches[0].enumerated() {
+            try ann.append(.code, emailID: id, value: "Relevant", state: ann.load())
+            try bo.append(.code, emailID: bo.manifest.batches[1][i], value: "Not relevant", state: bo.load())
+        }
+        // An interrupted write in Ann's log, then she carries on.
+        let annLog = ann.myLog
+        let h = try FileHandle(forWritingTo: annLog); try h.seekToEnd(); try h.write(contentsOf: Data("{\"seq\":99,\"lam".utf8)); try h.close()
+        try ann.append(.code, emailID: ann.manifest.batches[0][0], value: "Privileged", state: ann.load())
+
+        let a = ann.load(), b = bo.load()
+        XCTAssertEqual(a, b, "both copies reach the same state")
+        XCTAssertEqual(a.emails[ann.manifest.batches[0][0]]?.codes.values.first, "Privileged", "the entry after the torn write counts")
+        XCTAssertEqual(a.emails.values.filter { !$0.codes.isEmpty }.count, 20)
+        XCTAssertTrue(a.problems.contains { $0.contains("skipped") })
+
+        // An expired lease can be reclaimed.
+        let stale = TeamLease(batch: 2, holder: "someone", holderName: "Gone", expires: Date().addingTimeInterval(-60))
+        try TeamCaseIO.encoder.encode(stale).write(to: ann.leasesDir.appendingPathComponent("2.lease"))
+        XCTAssertTrue(try bo.checkout(2, state: bo.load()))
+
+        // A viewer may not check out (T5).
+        let viewer = try TeamCase(folder: folder, name: "V", role: "viewer", signingKey: Curve25519.Signing.PrivateKey())
+        XCTAssertThrowsError(try viewer.checkout(3, state: viewer.load()))
+    }
+
+    func testIncrementalLoad_readsOnlyNewEntries_andStaysCorrect() throws {
+        let leadKey = Curve25519.Signing.PrivateKey()
+        let folder = try makeCase(lead: leadKey, emails: 500)
+        let r = try TeamCase(folder: folder, name: "R", role: "reviewer", signingKey: Curve25519.Signing.PrivateKey())
+        var state = r.load()
+        let start = Date()
+        for batch in r.manifest.batches {
+            for id in batch {
+                try r.append(.code, emailID: id, value: "Relevant", state: state)
+                state = r.load()
+            }
+        }
+        let seconds = Date().timeIntervalSince(start)
+        XCTAssertEqual(state.emails.count, 500)
+        XCTAssertEqual(TeamCase.readLog(r.myLog).0.count, 500, "a fresh full read agrees")
+        XCTAssertLessThan(seconds, 60, "500 codes, each followed by a reload")
     }
 }

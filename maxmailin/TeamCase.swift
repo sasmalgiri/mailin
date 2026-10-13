@@ -259,13 +259,14 @@ final class TeamCase: @unchecked Sendable {
     var leasesDir: URL { folder.appendingPathComponent("leases", isDirectory: true) }
     var myLog: URL { logsDir.appendingPathComponent(TeamCaseIO.keyID(myKey) + ".jsonl") }
 
-    init(folder: URL, name: String, role: String) throws {
+    /// `signingKey` is for tests (two reviewers on one machine); the app uses the device key.
+    init(folder: URL, name: String, role: String, signingKey: Curve25519.Signing.PrivateKey? = nil) throws {
         self.folder = folder
         let data = try Data(contentsOf: folder.appendingPathComponent("manifest.json"))
         manifest = try TeamCaseIO.decoder.decode(TeamCaseManifest.self, from: data)
         guard manifest.kind == "mailin.case" else { throw ReviewPackError.wrongKind }
         evidence = try OpenedReviewPack.open(folder.appendingPathComponent("evidence.\(ReviewPackFormat.packExtension)"))
-        key = try ReviewSigningKey.privateKey()
+        key = try signingKey ?? ReviewSigningKey.privateKey()
         myKey = key.publicKey.rawRepresentation.base64EncodedString()
         myName = name
         myRole = role
@@ -301,47 +302,95 @@ final class TeamCase: @unchecked Sendable {
 
     // MARK: Reading (T3/T12)
 
+    /// What has been read and verified of one log so far (T12: logs only
+    /// grow, so each load reads just the bytes appended since the last one).
+    struct LogCache {
+        var parsedBytes = 0
+        var lineNo = 0
+        var entries: [TeamLogEntry] = []
+        var prev = ""
+        var author: String?
+        var problems: [String] = []
+        var stopped = false
+    }
+    private var caches: [String: LogCache] = [:]
+    private let cacheLock = NSLock()
+
     /// Reads and verifies every log; returns the folded state.
     func load() -> TeamCaseState {
         var all: [TeamLogEntry] = []
         var problems: [String] = []
         let files = (try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil)) ?? []
         for file in files where file.pathExtension == "jsonl" {
-            let (entries, issues) = Self.readLog(file)
-            all += entries
-            problems += issues
+            let c = cached(file)
+            all += c.entries
+            problems += c.problems
+            if let tail = Self.tornTail(file, after: c.parsedBytes) { problems.append(tail) }
         }
         var state = Self.fold(all, manifest: manifest)
         state.problems = problems
         return state
     }
 
+    private func cached(_ url: URL) -> LogCache {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        var c = caches[url.lastPathComponent] ?? LogCache()
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+        if size < c.parsedBytes { c = LogCache() }       // replaced or truncated: read again from the start
+        Self.readMore(url, into: &c)
+        caches[url.lastPathComponent] = c
+        return c
+    }
+
+    /// Whole-log read (tests and one-off checks).
     static func readLog(_ url: URL) -> ([TeamLogEntry], [String]) {
-        guard let data = try? Data(contentsOf: url) else { return ([], ["\(url.lastPathComponent): unreadable"]) }
-        var out: [TeamLogEntry] = []
-        var problems: [String] = []
-        var prev = ""
-        var author: String?
-        let lines = data.split(separator: 0x0A, omittingEmptySubsequences: false)
-        for (i, line) in lines.enumerated() where !line.isEmpty {
+        var c = LogCache()
+        readMore(url, into: &c)
+        var problems = c.problems
+        if let tail = tornTail(url, after: c.parsedBytes) { problems.append(tail) }
+        return (c.entries, problems)
+    }
+
+    static func tornTail(_ url: URL, after offset: Int) -> String? {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+        return size > offset ? "\(url.lastPathComponent): last line incomplete (interrupted write) — ignored" : nil
+    }
+
+    /// Parses complete lines after `c.parsedBytes`. A line that cannot be read
+    /// (an interrupted write that a later entry follows) is skipped and
+    /// reported — the chain still proves nothing was removed. A line whose
+    /// signature or chain fails stops the log there (tampered).
+    static func readMore(_ url: URL, into c: inout LogCache) {
+        guard !c.stopped, let h = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? h.close() }
+        try? h.seek(toOffset: UInt64(c.parsedBytes))
+        guard let data = try? h.readToEnd(), let lastNL = data.lastIndex(of: 0x0A) else { return }
+        let complete = data[data.startIndex...lastNL]
+        var start = complete.startIndex
+        while start < complete.endIndex, !c.stopped {
+            let nl = complete[start...].firstIndex(of: 0x0A) ?? complete.endIndex
+            let line = complete[start..<nl]
+            start = complete.index(after: nl)
+            c.lineNo += 1
+            if line.isEmpty { continue }
             guard let e = try? TeamCaseIO.decoder.decode(TeamLogEntry.self, from: Data(line)) else {
-                if i == lines.count - 1 { problems.append("\(url.lastPathComponent): last line incomplete (interrupted write) — ignored") }
-                else { problems.append("\(url.lastPathComponent): line \(i + 1) unreadable — the rest of this log was not used"); break }
+                c.problems.append("\(url.lastPathComponent): line \(c.lineNo) unreadable (interrupted write) — skipped")
                 continue
             }
-            if author == nil { author = e.author }
-            guard e.author == author, e.prevHash == prev, e.seq == out.count,
+            if c.author == nil { c.author = e.author }
+            guard e.author == c.author, e.prevHash == c.prev, e.seq == c.entries.count,
                   let keyData = Data(base64Encoded: e.author),
                   let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData),
                   let sig = Data(base64Encoded: e.signature),
                   let bytes = try? e.signedBytes(), key.isValidSignature(sig, for: bytes) else {
-                problems.append("\(url.lastPathComponent): entry \(i + 1) fails its signature or chain (tampered) — the rest of this log was not used")
+                c.problems.append("\(url.lastPathComponent): entry \(c.lineNo) fails its signature or chain (tampered) — the rest of this log was not used")
+                c.stopped = true
                 break
             }
-            out.append(e)
-            prev = e.hash
+            c.entries.append(e)
+            c.prev = e.hash
         }
-        return (out, problems)
+        c.parsedBytes += complete.count
     }
 
     /// Deterministic fold: Lamport, then author, then seq.
@@ -392,16 +441,19 @@ final class TeamCase: @unchecked Sendable {
 
     /// Appends one signed entry to this device's own log.
     func append(_ op: TeamLogEntry.Op, emailID: UUID? = nil, batch: Int? = nil, value: String = "", state: TeamCaseState) throws {
-        let (mine, _) = Self.readLog(myLog)
-        var e = TeamLogEntry(seq: mine.count, lamport: max(state.maxLamport, mine.last?.lamport ?? 0) + 1,
+        let mine = cached(myLog)
+        guard !mine.stopped else {
+            throw ReviewPackError.unreadable(String(localized: "Your own log in this case fails its check; nothing more is written to it."))
+        }
+        var e = TeamLogEntry(seq: mine.entries.count, lamport: max(state.maxLamport, mine.entries.last?.lamport ?? 0) + 1,
                              author: myKey, authorName: myName, role: myRole, at: Date(), op: op,
-                             emailID: emailID, batch: batch, value: value, prevHash: mine.last?.hash ?? "")
+                             emailID: emailID, batch: batch, value: value, prevHash: mine.entries.last?.hash ?? "")
         e.signature = try key.signature(for: try e.signedBytes()).base64EncodedString()
         var line = try TeamCaseIO.encoder.encode(e)
         line.append(0x0A)
         if !FileManager.default.fileExists(atPath: myLog.path) {
             FileManager.default.createFile(atPath: myLog.path, contents: nil)
-        } else if let data = try? Data(contentsOf: myLog), let last = data.last, last != 0x0A {
+        } else if Self.tornTail(myLog, after: mine.parsedBytes) != nil {
             // A torn previous write: start the next entry on a fresh line.
             line.insert(0x0A, at: 0)
         }
