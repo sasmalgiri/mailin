@@ -1010,6 +1010,16 @@ extension View {
         return self
         #endif
     }
+
+    /// A sheet's working minimum on macOS. No-op on iOS, where a minimum
+    /// wider than an iPhone screen would push content off both edges.
+    func macSheetFrame(minWidth: CGFloat, minHeight: CGFloat) -> some View {
+        #if os(macOS)
+        return frame(minWidth: minWidth, minHeight: minHeight)
+        #else
+        return self
+        #endif
+    }
 }
 
 // MARK: - Help Dot

@@ -86,3 +86,16 @@ Legend:
 - **B8:** Outlook on Windows (only if the Outlook-loadable PST is in scope).
 - **D1–D5:** presence on the Mac to approve automation.
 - **A4:** the promotion sign-off per switch.
+
+---
+
+## Progress
+
+| # | State | Commit | Notes |
+|---|---|---|---|
+| A1–A3 | Done | 7169a63 | One `TierAccess` table; `TierGate` on every new screen; "(3.1)" removed from names (persisted keys unchanged) |
+| B1, B2, B4 | Done | de14344 | Gmail boundary µs and X-GM-MSGID/THRID ms (Metaspike examples), version-1 UUIDs; ARC chain per RFC 8617 — ValiMail open suite 166/168, the 2 differences pinned; import sheet states what recovery will do |
+| C1 | Done | dcd4381 | Native allocation guards, memory checked inside loops, 64 KB value cap, deep recursion reported, async/generator constructors blocked, API frozen; limits stated on screen |
+| C5 | Partly done | 1ed892b | New MS-PST reader checked on 15 real Outlook PSTs (Digital Corpora): items, Message-IDs, subjects, senders and deleted-folder counts equal `readpst`; deep recovery on all 15 invents nothing readable as noise. Cyclic encoding verified by re-encoding all 15. **Still needs** an Outlook PST with Deleted Items emptied (owner) for the "emptied items carved" half |
+| C6 | Partly done | 1ed892b | Thunderbird: 828 public messages, 35 deleted-but-unpurged, equal to an independent scan, through both import engines. **Still needs** the owner's Apple Mail Deleted Messages folder |
+| C2 | Partly done | see below | iPhone 17 simulator, all four new Settings screens. Found and fixed: Scripts was blank (a split view nested in the More tab's stack) — now a list with each script in a sheet; sheet minimum sizes (640–680 pt) pushed content off a phone — now macOS-only; team coding buttons ran off the screen — now scroll sideways; cut-off intro and AI hint; empty "Yours" section explained. Recovery, Review Pack and Team fit. Seen, not changed: disabled Label buttons in a Form keep a black title on iOS 27 (system drawing; the reasons are stated beside them); the Settings tabs show no title of their own on iPhone, like the older tabs. **Still open:** iPad pass, and the shared-folder flow from Files (D3) |

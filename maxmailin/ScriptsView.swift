@@ -20,72 +20,109 @@ struct ScriptsView: View {
     @State private var showImport = false
     @State private var history: [SQLiteEmailStore.ScriptRunRow] = []
     @State private var status: String?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
 
     var body: some View {
+        content
+            .navigationTitle(String(localized: "Scripts"))
+            .task { await reloadHistory() }
+            .modifier(ScriptsSheets(editing: $editing, showRecipe: $showRecipe, showImport: $showImport,
+                                    selectedID: $selectedID, status: $status, library: library))
+    }
+
+    @ViewBuilder private var content: some View {
+        #if os(iOS)
+        if sizeClass == .compact {
+            // iPhone: a split view nested in Settings' More stack renders
+            // nothing, so the list stands alone and a script opens as a sheet.
+            List {
+                Section { intro }
+                scriptSections(tappable: true)
+            }
+            .toolbar { addMenu }
+            .sheet(item: Binding(get: { library.scripts.first { $0.id == selectedID } },
+                                 set: { selectedID = $0?.id })) { s in
+                NavigationStack {
+                    detail(s)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button(String(localized: "Done")) { selectedID = nil }
+                            }
+                        }
+                }
+            }
+        } else {
+            split
+        }
+        #else
+        split
+        #endif
+    }
+
+    private var split: some View {
         NavigationSplitView {
-            List(selection: $selectedID) {
-                Section(String(localized: "Bundled")) {
-                    ForEach(library.scripts.filter(\.builtIn)) { row($0) }
-                }
-                Section(String(localized: "Yours")) {
-                    ForEach(library.scripts.filter { !$0.builtIn }) { row($0) }
-                }
-            }
-            .toolbar {
-                Menu {
-                    Button(String(localized: "New script")) {
-                        editing = MailinScript(name: String(localized: "New script"), source: "function process(email) {\n  \n}\n")
-                    }
-                    Button(String(localized: "New recipe (no code)…")) { showRecipe = true }
-                    Button(String(localized: "Import .mailinscript…")) { showImport = true }
-                } label: { Label("Add", systemImage: "plus") }
-            }
+            List(selection: $selectedID) { scriptSections(tappable: false) }
+                .toolbar { addMenu }
         } detail: {
             if let s = library.scripts.first(where: { $0.id == selectedID }) {
-                ScriptDetailView(script: s, edit: { editing = $0 }, history: history.filter { $0.name == s.name },
-                                 onRun: { Task { await reloadHistory() } })
+                detail(s)
             } else {
-                VStack(alignment: .leading, spacing: Spacing.small) {
-                    Text("Scripts run on this device only and never reach the network. Choose a script to run it over a search, or add your own.")
-                    Text("Limits: a script is stopped when one email takes more than \(Int(ScriptPolicy.perEmailSeconds)) seconds, the app's memory passes \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB, or it builds an array or string of more than \(ScriptPolicy.maxElements) items. Tags, notes and column values can be up to 64 KB each.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if let status { Text(status).font(.callout) }
-                    if let err = library.saveError { Text(err).font(.callout).foregroundStyle(.red) }
-                }
-                .padding()
-            }
-        }
-        .navigationTitle(String(localized: "Scripts"))
-        .task { await reloadHistory() }
-        .sheet(item: $editing) { s in
-            ScriptEditorView(script: s) { saved in
-                library.upsert(saved)
-                selectedID = saved.id
-            }
-            .frame(minWidth: 640, minHeight: 480)
-        }
-        .sheet(isPresented: $showRecipe) {
-            RecipeBuilderView { s in
-                library.upsert(s)
-                selectedID = s.id
-            }
-            .frame(minWidth: 640, minHeight: 480)
-        }
-        .fileImporter(isPresented: $showImport, allowedContentTypes: [.data, .json, .item]) { result in
-            guard case .success(let url) = result else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let s = try ScriptFile.importScript(try Data(contentsOf: url))
-                library.upsert(s)
-                selectedID = s.id
-                status = String(localized: "Imported \(s.label). Read it before you run it.")
-            } catch {
-                status = error.localizedDescription
+                intro.padding()
             }
         }
     }
 
+    /// Rows are buttons where a List has no selection outside edit mode (iPhone).
+    @ViewBuilder private func scriptSections(tappable: Bool) -> some View {
+        Section(String(localized: "Bundled")) {
+            ForEach(library.scripts.filter(\.builtIn)) { cell($0, tappable) }
+        }
+        Section(String(localized: "Yours")) {
+            ForEach(library.scripts.filter { !$0.builtIn }) { cell($0, tappable) }
+            if !library.scripts.contains(where: { !$0.builtIn }) {
+                Text("None yet. Use + to write one, build a recipe or import a .mailinscript file.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private func cell(_ s: MailinScript, _ tappable: Bool) -> some View {
+        if tappable {
+            Button { selectedID = s.id } label: { row(s).contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+        } else {
+            row(s)
+        }
+    }
+
+    private var addMenu: some View {
+        Menu {
+            Button(String(localized: "New script")) {
+                editing = MailinScript(name: String(localized: "New script"), source: "function process(email) {\n  \n}\n")
+            }
+            Button(String(localized: "New recipe (no code)…")) { showRecipe = true }
+            Button(String(localized: "Import .mailinscript…")) { showImport = true }
+        } label: { Label("Add", systemImage: "plus") }
+    }
+
+    private func detail(_ s: MailinScript) -> some View {
+        ScriptDetailView(script: s, edit: { editing = $0 }, history: history.filter { $0.name == s.name },
+                         onRun: { Task { await reloadHistory() } })
+    }
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            Text("Scripts run on this device only and never reach the network. Choose a script to run it over a search, or add your own.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Limits: a script is stopped when one email takes more than \(Int(ScriptPolicy.perEmailSeconds)) seconds, the app's memory passes \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB, or it builds an array or string of more than \(ScriptPolicy.maxElements) items. Tags, notes and column values can be up to 64 KB each.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let status { Text(status).font(.callout) }
+            if let err = library.saveError { Text(err).font(.callout).foregroundStyle(.red) }
+        }
+    }
     private func row(_ s: MailinScript) -> some View {
         VStack(alignment: .leading) {
             HStack {
@@ -239,7 +276,7 @@ struct ScriptEditorView: View {
             TextEditor(text: $script.source).font(.body.monospaced())
             if #available(macOS 26.0, iOS 26.0, *), ScriptAssistant.isAvailable {
                 HStack {
-                    TextField(String(localized: "Describe a script and let the on-device model draft it"), text: $ask)
+                    TextField(String(localized: "Describe a script and let the on-device model draft it"), text: $ask, axis: .vertical)
                     Button(drafting ? String(localized: "Drafting…") : String(localized: "Draft")) {
                         drafting = true
                         Task {
@@ -320,5 +357,47 @@ struct RecipeBuilderView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The editor, recipe and import presentations, shared by the iPhone list
+/// and the split view.
+private struct ScriptsSheets: ViewModifier {
+    @Binding var editing: MailinScript?
+    @Binding var showRecipe: Bool
+    @Binding var showImport: Bool
+    @Binding var selectedID: UUID?
+    @Binding var status: String?
+    let library: ScriptLibraryStore
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: $editing) { s in
+                ScriptEditorView(script: s) { saved in
+                    library.upsert(saved)
+                    selectedID = saved.id
+                }
+                .macSheetFrame(minWidth: 640, minHeight: 480)
+            }
+            .sheet(isPresented: $showRecipe) {
+                RecipeBuilderView { s in
+                    library.upsert(s)
+                    selectedID = s.id
+                }
+                .macSheetFrame(minWidth: 640, minHeight: 480)
+            }
+            .fileImporter(isPresented: $showImport, allowedContentTypes: [.data, .json, .item]) { result in
+                guard case .success(let url) = result else { return }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let s = try ScriptFile.importScript(try Data(contentsOf: url))
+                    library.upsert(s)
+                    selectedID = s.id
+                    status = String(localized: "Imported \(s.label). Read it before you run it.")
+                } catch {
+                    status = error.localizedDescription
+                }
+            }
     }
 }

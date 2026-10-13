@@ -110,7 +110,7 @@ struct ReviewPackView: View {
         .sheet(isPresented: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
             if let opened {
                 ReviewPackReviewerView(pack: opened)
-                    .frame(minWidth: 640, minHeight: 480)
+                    .macSheetFrame(minWidth: 640, minHeight: 480)
             }
         }
     }

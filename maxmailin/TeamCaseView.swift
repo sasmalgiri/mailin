@@ -87,13 +87,13 @@ struct TeamCaseView: View {
         }
         .sheet(isPresented: $showQC) {
             if let c = teamCase {
-                TeamQCView(teamCase: c, state: $state).frame(minWidth: 640, minHeight: 480)
+                TeamQCView(teamCase: c, state: $state).macSheetFrame(minWidth: 640, minHeight: 480)
             }
         }
         .sheet(item: Binding(get: { activeBatch.map(BatchRef.init) }, set: { activeBatch = $0?.id })) { ref in
             if let c = teamCase {
                 TeamBatchReviewView(teamCase: c, batch: ref.id, state: $state)
-                    .frame(minWidth: 680, minHeight: 500)
+                    .macSheetFrame(minWidth: 680, minHeight: 500)
             }
         }
     }
@@ -300,7 +300,8 @@ struct TeamBatchReviewView: View {
                     Text(e.subject).font(.headline)
                     Text("From \(e.from) · \(e.date)").font(.caption)
                     ScrollView { Text(e.body).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                    HStack {
+                    // Codes and choices scroll sideways rather than run off a phone screen.
+                    ScrollView(.horizontal) { HStack {
                         ForEach(teamCase.manifest.codes, id: \.self) { code in
                             Button(code) {
                                 if teamCase.manifest.layout == nil { write(.code, e.id, code); advance() } else { chosenCode = code }
@@ -309,17 +310,19 @@ struct TeamBatchReviewView: View {
                             .tint(chosenCode == code ? .accentColor : .secondary)
                         }
                         Button(String(localized: "Review later")) { write(.reviewLater, e.id, "on"); advance() }
-                    }
+                    } }
                     if let layout = teamCase.manifest.layout {
                         ForEach(layout.fields) { f in
                             HStack {
                                 Text(f.name + (f.required ? " *" : "")).font(.callout)
-                                ForEach(f.choices, id: \.self) { choice in
-                                    let on = values[f.name]?.contains(choice) ?? false
-                                    Button(choice) { toggle(f, choice) }
-                                        .buttonStyle(.bordered)
-                                        .tint(on ? .accentColor : .secondary)
-                                }
+                                ScrollView(.horizontal) { HStack {
+                                    ForEach(f.choices, id: \.self) { choice in
+                                        let on = values[f.name]?.contains(choice) ?? false
+                                        Button(choice) { toggle(f, choice) }
+                                            .buttonStyle(.bordered)
+                                            .tint(on ? .accentColor : .secondary)
+                                    }
+                                } }
                             }
                         }
                         Button(String(localized: "Save coding")) { save(e.id) }

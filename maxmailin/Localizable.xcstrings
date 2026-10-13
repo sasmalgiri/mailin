@@ -350730,6 +350730,70 @@
           }
         }
       }
+    },
+    "None yet. Use + to write one, build a recipe or import a .mailinscript file." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine. Mit + eines schreiben, ein Rezept erstellen oder eine .mailinscript-Datei importieren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no hay ninguno. Usa + para escribir uno, crear una receta o importar un archivo .mailinscript."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun pour l’instant. Utilisez + pour en écrire un, créer une recette ou importer un fichier .mailinscript."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अभी कोई नहीं। + से एक लिखें, रेसिपी बनाएँ या .mailinscript फ़ाइल इम्पोर्ट करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ancora nessuno. Usa + per scriverne uno, creare una ricetta o importare un file .mailinscript."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだありません。+ で作成、レシピを作成、または .mailinscript ファイルを読み込めます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 없습니다. +로 직접 작성하거나 레시피를 만들거나 .mailinscript 파일을 가져오세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum ainda. Use + para escrever um, criar uma receita ou importar um arquivo .mailinscript."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无。使用 + 编写脚本、创建配方或导入 .mailinscript 文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚無。使用 + 撰寫指令碼、建立配方或匯入 .mailinscript 檔案。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
