@@ -151,6 +151,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     case v3EvidenceReceipts
     case v3PreservationExport
     // 3.1 (TODO_3_1_RECOVERY_SCRIPTING_TEAM.md) — preview, off until tested.
+    case v3PSTSpecReader
     case v31Recovery
     case v31DeepRecovery
     case v31ShortcutsActions

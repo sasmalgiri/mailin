@@ -197,6 +197,13 @@ struct EngineSpec: Sendable {
                 detail: String(localized: "Exports a BagIt package with PREMIS metadata — the archival standard — with the original emails, checksums and sidecar files."))
 
         // MARK: 3.1 — preview (off until each passes its tests)
+        case .v3PSTSpecReader:
+            // Gate passed 2026-10-13: 15 public Outlook PSTs (Digital Corpora) read
+            // with the same messages, Message-IDs, subjects and deleted-items
+            // counts as libpst's readpst; the heuristic reader read 0–1 per file.
+            return EngineSpec(.archive, maturity: .stable,
+                name: String(localized: "Outlook PST reader (MS-PST)"),
+                detail: String(localized: "Reads Outlook PST and OST files by Microsoft's published format: every folder, message, recipient and attachment, ANSI and Unicode files, all encodings. Off: the earlier reader, which reads mailin's own PST exports."))
         case .v31Recovery:
             return EngineSpec(.archive, maturity: .preview,
                 name: String(localized: "Deleted-email recovery"),

@@ -39,6 +39,8 @@ enum CapabilityWiring {
             ArchiveSnapshotPolicy.isEnabled = isOn
         case .v3SafeHTML:
             SafeHTMLPolicy.isEnabled = isOn
+        case .v3PSTSpecReader:
+            PSTReaderPolicy.useSpecReader = isOn
         case .v31Recovery:
             RecoveryPolicy.isEnabled = isOn
         case .v31DeepRecovery:

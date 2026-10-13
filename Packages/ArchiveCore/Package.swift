@@ -22,6 +22,8 @@ let package = Package(
         .testTarget(name: "ArchiveCoreTests",
                     dependencies: ["ArchiveCore"],
                     path: "Tests/ArchiveCoreTests",
+                    // Test data read by path (#filePath), not bundled.
+                    exclude: ["Fixtures"],
                     swiftSettings: [.swiftLanguageMode(.v5)])
     ]
 )

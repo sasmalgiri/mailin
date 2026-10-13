@@ -95,7 +95,7 @@ same bytes (FTS shard eviction thrash between members) — a 3.1 tuning item.
 | eml | `MBOXParser` | Yes | As mbox; a missing `From ` envelope is synthesised. **Fixed 2026-09-26:** an envelope line INSIDE the header block (real Gmail exports put it a dozen headers down) is no longer a separator, in both engines | **Fixed 2026-09-25:** the streaming path (the one imports use) began a message only on a `From ` line, so a bare `.eml` imported as ZERO messages with no failure reported. A first line that is a header field now starts one bare message. Pinned by `singleEMLStreams`; the reverse case (mbox preamble) by `mboxPreambleIsNotAMessage` |
 | emlx | `EMLXParser` | No | Per-file parse with a damaged-file report (`ParseResult.summary`) | Whole set materialises before draining |
 | msg | `MSGParser` | No | OLE2 → MAPI properties (sender, recipients, subject, bodies, attachments) | Refuses above 2 GB; one message per file |
-| pst / ost | `PSTParser` | No | In-house NDB reader: node + block B-trees (leaf vs branch by `cLevel`, MS-PST §2.2.2.7.7), MAPI property contexts, attachment subnodes, `bCryptMethod` 1 (permute) decoding for PST and OST | **First executed PST import 2026-09-27** (Apache Tika `testPST.pst`): the parser read ZERO messages from every real PST before that day — it decided leaf/branch pages by `ptype` instead of `cLevel`, expected private block-page types (0x82/0x83), and decoded `bCryptMethod` for OST only. Fixed; the Tika file now yields its messages and reconciles. `bCryptMethod` 2 (cyclic) is refused with a message rather than decoded (§6). Not executed above 50 GB (see §4); WIP-protected content is reported, not silently dropped |
+| pst / ost | `PSTSpecReader` (switch **Outlook PST reader (MS-PST)**, on); earlier `PSTParser` reader when off | No | Reads by the published [MS-PST] layers: NDB (node + block B-trees, XBLOCK/XXBLOCK data trees, SLBLOCK/SIBLOCK subnode trees), LTP (heap-on-node, BTH, property context, table context) and the messaging layer (folder hierarchy, contents, recipient and attachment tables). ANSI (Outlook 97–2002) and Unicode files; `bCryptMethod` 0, 1 (permute) and 2 (cyclic). Only mail items (`IPM.Note…`, reports, meeting mail) are imported — contacts, calendar, tasks, notes, journal, RSS and hidden folder-configuration items are not. PSTs written by mailin itself, which use an earlier layout, still go to the earlier reader. The 4 KB-page OST of Outlook 2013 and later (`wVer` 36) is not read by layout yet; no fixture exists | **Executed 2026-10-13 on 15 real Outlook PSTs** (Digital Corpora filetypes1, ANSI and Unicode): same mail items, Message-IDs, subjects and senders as `readpst` (libpff/libpst); the reader before that day read 0–1 items from these files. Cyclic: no public file exists, so all 15 were re-encoded block by block with CryptCyclic and read back identically. Not executed above 50 GB (see §4) |
 | nsf | `NSFParser` | No | Structured note records with LZSS decompression and LMBCS strings, attachments by item | Falls back to a **heuristic text scan** when the structured parse finds nothing — fidelity is lower on that path and it is not byte-exact |
 | Apple Mail package | `MBOXParser` per member | Yes | As mbox | Reports "nothing to import" when no `mbox` file is inside |
 | Maildir | `MBOXParser` per member | Yes | As eml, one message per file | `tmp/` skipped by design |
@@ -216,10 +216,8 @@ the offset-index work (S4/S5) exists to preserve.
 - **Encrypted ZIP members, and ZIP compression methods other than stored /
   deflate** — refused by name and counted; the rest of the archive still
   imports. Nested archives inside an archive are skipped, not recursed into.
-- **PST/OST with `bCryptMethod` 2 (cyclic encoding)** — refused with a message
-  naming the reason (the decoder tables are not implemented; re-save from
-  Outlook with compressible encryption or none). `bCryptMethod` 1 (permute,
-  Outlook's default) is decoded for both PST and OST.
+- **Non-mail Outlook items** — contacts, calendar entries, tasks, notes, journal
+  and RSS items in a PST/OST are counted out, not imported.
 - **Encrypted PST/OST beyond that obfuscation** — password-protected files are
   not decrypted.
 - **Live mail accounts** — Page 4 ships default-off and its features are
@@ -242,7 +240,7 @@ Honest split, because "supported" and "tested" are different claims:
 | Format classification | Unit-tested (`SourceFormatClassifierTests`) |
 | Size policy verdicts | Unit-tested (`SourceSizePolicyTests`) |
 | Directory-source import (Apple Mail package, Maildir, `.eml` folder, `.emlx` folder) | **Executed 2026-09-27 at 1 GB each** through the production coordinator, exact reconciliation (`SCALE_RESULTS.md`). Real content, synthetic layout: a genuine Apple Mail / Dovecot export has still not been run |
-| PST / MSG import | **Executed 2026-09-27** on the Apache Tika fixtures: `testPST.pst` (Unicode, `bCryptMethod` 1) and three `.msg` files import and reconcile through the production path (`RealBinaryFixtureTests`). The PST fixture yields one message; the fixture's true count has not been independently verified with another reader |
+| PST / MSG import | **Executed** — 2026-09-27 on the Apache Tika fixtures (`testPST.pst` and three `.msg` files, `RealBinaryFixtureTests`); 2026-10-13 on 15 real Outlook PSTs from Digital Corpora through the production importer: 587 mail items stored, 33 in deleted-items folders, both equal to `readpst` (`RealDataRecoveryTests`, opt-in with `MAILIN_REAL_FIXTURES`, files fetched by `Scripts/fetch_open_fixtures.sh`). Thunderbird: 828 messages, 35 deleted-but-unpurged, equal to an independent scan |
 | OST / NSF import | **Not executed on a real file** — no fixture exists; synthetic headers exercise classification and honest refusal only (`SyntheticBinaryFormatTests`) |
 | PST above 50 GB, NSF above 64 GB | **Never executed.** The warnings say so. |
 

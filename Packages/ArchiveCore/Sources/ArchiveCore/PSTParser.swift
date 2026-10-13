@@ -53,8 +53,26 @@ struct PSTParser {
         // a 10 GB PST never has 10 GB resident. Random-access B-tree
         // patterns benefit massively from this vs `Data(contentsOf:)`.
         let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-        let reader = try PSTReader(data: data)
-        let messages = try reader.readAllMessages(onProgress: onProgress)
+        var messages: [PSTReader.PSTMessage] = []
+        var specRead = false
+        // A cyclic-encoded file stays with the spec reader even when it holds
+        // no mail (contacts or calendar only): the earlier reader cannot decode
+        // cyclic blocks and would refuse the file instead of reading zero mail.
+        if PSTReaderPolicy.useSpecReader, let spec = try? PSTSpecReader(data: data),
+           spec.crypt == 2 || spec.nodes.values.contains(where: { $0.nid & 0x1F == PSTSpecReader.nidTypeMessage }) {
+            specRead = true
+            messages = spec.messages()
+            if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled && !messages.isEmpty {
+                messages += spec.carveUnallocated(listed: messages)
+            }
+            onProgress?(1)
+        }
+        // PSTs written by mailin itself use an earlier layout with no
+        // NID_TYPE_NORMAL_MESSAGE nodes; only those go to the heuristic reader.
+        if !specRead {
+            let reader = try PSTReader(data: data)
+            messages = try reader.readAllMessages(onProgress: onProgress)
+        }
 
         let isoFormatter = ISO8601DateFormatter()
         return messages.compactMap { msg in
@@ -100,6 +118,7 @@ struct PSTParser {
                 references: headers["References"]?.components(separatedBy: .whitespaces).filter { !$0.isEmpty },
                 tags: msg.folderPath.isEmpty ? [] : [msg.folderPath],
                 anomalies: MBOXParser.findAnomalies(headers: headers, body: msg.bodyText, attachments: msg.attachments)
+                    + (msg.unreadable ? ["PST item whose properties could not be read; imported empty"] : [])
             ).withRecovery(msg.recovery)
         }
     }
@@ -127,6 +146,11 @@ struct PSTParser {
 }
 
 // MARK: - PST File Reader
+
+/// Which PST reader runs (pushed by CapabilityWiring, `v3PSTSpecReader`).
+public enum PSTReaderPolicy {
+    nonisolated(unsafe) public static var useSpecReader = true
+}
 
 struct PSTReader {
     private let data: Data
@@ -162,6 +186,8 @@ struct PSTReader {
         var recovery: RecoveryInfo?
         var attachments: [AttachmentMetadata] = []
         var hasAttachments: Bool = false
+        /// The item exists in the file but its properties could not be read.
+        var unreadable = false
         var messageSize: Int = 0
     }
 
@@ -190,7 +216,10 @@ struct PSTReader {
         // looked at OST files and never decoded a PST, so every default
         // Outlook export parsed as garbage and yielded zero messages (found
         // 2026-09-27 by the first executed PST import, Apache Tika fixture).
-        self.encType = data[513]
+        // [MS-PST] 2.2.2.6: bCryptMethod is at offset 513 in a Unicode header
+        // but 461 in an ANSI (Outlook 97–2002) header. Reading 513 for ANSI
+        // files took a header byte for the method and refused real files.
+        self.encType = isUnicode ? data[513] : data[461]
         switch encType {
         case 0x00, 0x01:
             break

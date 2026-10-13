@@ -224,7 +224,15 @@ struct MBOXParser {
            size > maxNonStreamingBytes {
             throw ExtractionError.fileTooLarge(filename: fileURL.lastPathComponent, size: size)
         }
-        let content = try FileUtils.readTextFile(url: fileURL)
+        // Mail older than UTF-8 (Thunderbird, Eudora) is often Latin-1 or mixed:
+        // a strict UTF-8 read refused the whole file. Fall back to Latin-1,
+        // which maps every byte, as the streaming engine already does.
+        let content: String
+        if let utf8 = try? FileUtils.readTextFile(url: fileURL) {
+            content = utf8
+        } else {
+            content = try FileUtils.readTextFile(url: fileURL, encoding: .isoLatin1)
+        }
         let rawMessages = splitMBOX(content: content)
         var messages: [RawEmail] = []
         let total = Double(rawMessages.count)
