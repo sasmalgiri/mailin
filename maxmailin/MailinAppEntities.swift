@@ -152,7 +152,7 @@ struct EmailEntityQuery: EntityPropertyQuery {
 
     /// "All" = one query; "any" = one query per clause, merged without repeats.
     static func find(_ clauses: [EmailEntityClause], mode: ComparatorMode, limit: Int) async throws -> [EmailEntity] {
-        guard await StorageActivationCoordinator.shared.activate() == .active else { throw ShortcutsActionError.notReady }
+        guard await ScopeJobEnvironment.archiveReady() else { throw ShortcutsActionError.notReady }
         let queries: [EmailQuery]
         if mode == .or, clauses.count > 1 {
             queries = clauses.map { c in var q = EmailQuery(); c.apply(to: &q); return q }
@@ -181,7 +181,7 @@ struct EmailEntityQuery: EntityPropertyQuery {
 enum ShortcutsActionSupport {
     static func scope(_ search: String) async throws -> (ArchiveScope, Int) {
         try ShortcutsPolicy.requireEnabled()
-        guard await StorageActivationCoordinator.shared.activate() == .active else { throw ShortcutsActionError.notReady }
+        guard await ScopeJobEnvironment.archiveReady() else { throw ShortcutsActionError.notReady }
         let q = ArchiveQueryCompiler.compile(search)
         let n = try await ScopeJobEnvironment.archive.count(query: q)
         return (ArchiveScope(query: q, total: n, loaded: nil), n)

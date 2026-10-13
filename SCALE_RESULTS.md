@@ -369,3 +369,13 @@ executed, and the claim wording ("verified up to 1.5 GB") stands.
 messages / 4.7 GB, 582 MB peak RSS) remains the largest executed message
 count. It measured a different shape — small messages, no attachments — and
 its per-message throughput figures do not transfer to attachment-heavy mail.
+
+## Review Pack, team case, Shortcuts Find at 100k (2026-10-13, Debug test host, this Mac)
+
+Opt-in: `MAILIN_SCALE=1` — `V3ReviewTeamScaleTests`, `V31ScriptRunTests/testShortcutsFind_100k_tenThousandResults`.
+
+| Run | Result |
+|---|---|
+| Review Pack, 100,000 emails (~2 KB body each) | written 1.7 s (200 MB); opened and verified 3.3 s; random body reads instant; 100,000-decision response written and verified 0.9 s; memory +28 MB (bodies are read on demand) |
+| Team case, 100,000 log entries from 3 reviewers | cold open (every entry's signature and chain checked) 7.3 s, +186 MB; reload after one new entry **0.23 s**. Before the fix found by this run it was 6.5 s: a date formatter was built for every entry on every reload |
+| Shortcuts Find, 100,000-email archive | 10,000 results (the stated per-Find limit) in 0.05 s, +36 MB |

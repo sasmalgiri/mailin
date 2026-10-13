@@ -14,6 +14,7 @@
 import XCTest
 import SQLite3
 import CryptoKit
+import AppIntents
 @testable import maxmailin
 
 @MainActor
@@ -1312,6 +1313,46 @@ final class V31ScriptRunTests: XCTestCase {
         XCTAssertTrue(r.proof.hasPrefix("Proved"), r.proof)
     }
 
+    /// C4: Shortcuts Find reads the bound archive (no app activation) and
+    /// "any" merges without repeats.
+    func testShortcutsFind_readsTheBoundArchive() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch(emails(300), batchSize: 100)
+        let was = ShortcutsPolicy.actionsEnabled, wasTier = TierAccess.tier
+        ShortcutsPolicy.actionsEnabled = true; TierAccess.tier = .professional
+        defer { ShortcutsPolicy.actionsEnabled = was; TierAccess.tier = wasTier }
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let contracts = try await EmailEntityQuery.find([.subject("Contract")], mode: .and, limit: 1_000)
+            XCTAssertEqual(contracts.count, 100)
+            let either = try await EmailEntityQuery.find([.subject("Contract"), .sender("example.com")], mode: .or, limit: 1_000)
+            XCTAssertEqual(either.count, 300, "\"any\" merges without repeats")
+            let first50 = try await EmailEntityQuery.find([], mode: .and, limit: 50)
+            XCTAssertEqual(first50.count, 50)
+        }
+    }
+
+    func testShortcutsFind_100k_tenThousandResults() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "opt-in: MAILIN_SCALE=1")
+        let env = makeEnv()
+        for chunk in stride(from: 0, to: 100_000, by: 10_000) {
+            try await env.store.insertBatch(emails(10_000).enumerated().map { i, e in
+                var e = e; e.headers["Message-ID"] = "<s\(chunk + i)@t>"; return e }, batchSize: 1_000)
+        }
+        let was = ShortcutsPolicy.actionsEnabled
+        ShortcutsPolicy.actionsEnabled = true
+        defer { ShortcutsPolicy.actionsEnabled = was }
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let base = ScriptSandbox.footprint()
+            let start = Date()
+            let found = try await EmailEntityQuery.find([.sender("example.com")], mode: .and, limit: ShortcutsPolicy.findLimit)
+            let seconds = Date().timeIntervalSince(start)
+            let mem = Int(ScriptSandbox.footprint()) - Int(base)
+            print(String(format: "FIND-100K: %d results in %.2f s, memory +%d MB", found.count, seconds, mem / 1_048_576))
+            XCTAssertEqual(found.count, ShortcutsPolicy.findLimit)
+            XCTAssertLessThan(seconds, 10)
+        }
+    }
+
     func testHundredThousandEmails_memoryAndTime() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "opt-in: MAILIN_SCALE=1")
         let start = Date()
@@ -1377,5 +1418,143 @@ final class V3NewFeatureGatingTests: XCTestCase {
         let pro = ForensicManager.assessRisk(for: email).factors
         XCTAssertFalse(free.contains { $0.contains("DKIM-Signature") })
         XCTAssertTrue(pro.contains { $0.contains("DKIM-Signature") })
+    }
+}
+
+// MARK: - C3: Review Pack and team case at 100k (opt-in, MAILIN_SCALE=1)
+
+final class V3ReviewTeamScaleTests: XCTestCase {
+    private var root: URL!
+    override func setUpWithError() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "opt-in: MAILIN_SCALE=1")
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("V3Scale-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+    override func tearDown() { if let root { try? FileManager.default.removeItem(at: root) }; super.tearDown() }
+
+    private let body = String(repeating: "Quarterly figures attached; please review the contract terms before Friday. ", count: 25)
+
+    /// The pack is streamed exactly as ReviewPackBuilder writes it (header, one
+    /// line per email, signature); the builder itself also records the pack in
+    /// the user's issued list and uses the Keychain, so it is not run here.
+    private func writePack(_ n: Int, key: Curve25519.Signing.PrivateKey) throws -> (URL, [UUID]) {
+        let url = root.appendingPathComponent("p.mailinpack")
+        let w = try SignedLineWriter(url: url)
+        try w.write(ReviewPackHeader(packID: UUID(), title: "Scale", createdAt: Date(), createdBy: "E",
+                                     examinerKey: key.publicKey.rawRepresentation.base64EncodedString(),
+                                     emailCount: n, codes: ReviewPackBuilder.defaultCodes, instructions: "", scope: "all"))
+        var ids: [UUID] = []
+        ids.reserveCapacity(n)
+        for i in 0..<n {
+            try autoreleasepool {
+                let id = UUID(); ids.append(id)
+                try w.write(ReviewPackEmail(id: id, date: "2024-01-01", from: "sender\(i % 500)@example.com", to: "t@example.com", cc: "",
+                                            subject: "Subject \(i)", body: body, attachments: [], sourceSHA256: "x"))
+            }
+        }
+        try w.finish(signingWith: key)
+        return (url, ids)
+    }
+
+    func testReviewPack_100k_buildOpenReadRespond() throws {
+        let n = 100_000
+        let key = Curve25519.Signing.PrivateKey()
+        let base = ScriptSandbox.footprint()
+        var t = Date()
+        let (url, _) = try writePack(n, key: key)
+        let write = Date().timeIntervalSince(t)
+        let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+
+        t = Date()
+        let pack = try OpenedReviewPack.open(url)
+        let open = Date().timeIntervalSince(t)
+        XCTAssertEqual(pack.index.count, n)
+        let afterOpen = ScriptSandbox.footprint()
+
+        t = Date()
+        for i in stride(from: 0, to: n, by: 997) { XCTAssertEqual(try pack.email(at: i).subject, "Subject \(i)") }
+        let reads = Date().timeIntervalSince(t)
+
+        // The response: one signed decision per email, then verified the way a merge starts.
+        let reviewer = Curve25519.Signing.PrivateKey()
+        let out = root.appendingPathComponent("r.mailinresponse")
+        t = Date()
+        let w = try SignedLineWriter(url: out)
+        try w.write(ReviewResponseHeader(packID: pack.header.packID, packSHA256: pack.sha256, reviewer: "R",
+                                         reviewerKey: reviewer.publicKey.rawRepresentation.base64EncodedString(), createdAt: Date()))
+        for (i, e) in pack.index.enumerated() {
+            try autoreleasepool {
+                try w.write(ReviewDecision(emailID: e.id, code: ReviewPackBuilder.defaultCodes[i % 4], tags: [], note: nil, decidedAt: Date()))
+            }
+        }
+        try w.finish(signingWith: reviewer)
+        var decisions = 0, first = true
+        _ = try SignedLineReader.verify(url: out) { _ in reviewer.publicKey.rawRepresentation.base64EncodedString() }
+        try SignedLineReader.forEachLine(url: out) { _ in if first { first = false } else { decisions += 1 } }
+        let respond = Date().timeIntervalSince(t)
+        XCTAssertEqual(decisions, n)
+        let peak = Int(max(afterOpen, ScriptSandbox.footprint())) - Int(base)
+
+        print(String(format: "PACK-100K: write %.1f s (%d MB), open %.1f s, 101 random reads %.2f s, respond+verify %.1f s, memory +%d MB",
+                     write, size / 1_048_576, open, reads, respond, peak / 1_048_576))
+        XCTAssertLessThan(open, 30)
+        XCTAssertLessThan(peak, 400 * 1_048_576, "bodies are not held in memory")
+    }
+
+    func testTeamCase_100kEntries_threeReviewers_loadTime() throws {
+        let n = 100_000
+        let lead = Curve25519.Signing.PrivateKey()
+        let folder = root.appendingPathComponent("c.mailincase", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let (packURL, ids) = try writePack(n, key: lead)
+        try FileManager.default.moveItem(at: packURL, to: folder.appendingPathComponent("evidence.mailinpack"))
+        let manifest = TeamCaseManifest(caseID: UUID(), title: "c", createdAt: Date(), createdBy: "L",
+                                        leadKey: lead.publicKey.rawRepresentation.base64EncodedString(),
+                                        codes: ReviewPackBuilder.defaultCodes,
+                                        batches: stride(from: 0, to: n, by: 100).map { Array(ids[$0..<min($0 + 100, n)]) },
+                                        qcPercent: 10, layout: nil)
+        try TeamCaseIO.atomicWrite(try TeamCaseIO.encoder.encode(manifest), to: folder.appendingPathComponent("manifest.json"))
+
+        // Three reviewers' signed logs, written the way `append` writes them
+        // (same keys, hash chain and signature) but without one fsync per entry.
+        let keys = (0..<3).map { _ in Curve25519.Signing.PrivateKey() }
+        let logs = folder.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        var t = Date()
+        for (r, key) in keys.enumerated() {
+            let pub = key.publicKey.rawRepresentation.base64EncodedString()
+            var data = Data(), prev = "", seq = 0
+            for i in stride(from: r, to: n, by: 3) {
+                try autoreleasepool {
+                    var e = TeamLogEntry(seq: seq, lamport: i + 1, author: pub, authorName: "R\(r)", role: "reviewer", at: Date(),
+                                         op: .code, emailID: ids[i], batch: nil, value: ReviewPackBuilder.defaultCodes[i % 4], prevHash: prev)
+                    e.signature = try key.signature(for: try e.signedBytes()).base64EncodedString()
+                    data.append(try TeamCaseIO.encoder.encode(e)); data.append(0x0A)
+                    prev = e.hash; seq += 1
+                }
+            }
+            try data.write(to: logs.appendingPathComponent(TeamCaseIO.keyID(pub) + ".jsonl"))
+        }
+        let writing = Date().timeIntervalSince(t)
+        let reviewers = try keys.enumerated().map { try TeamCase(folder: folder, name: "R\($0.offset)", role: "reviewer", signingKey: $0.element) }
+
+        // A reviewer who opens the case cold, then picks up one new entry.
+        let fresh = try TeamCase(folder: folder, name: "Dee", role: "reviewer", signingKey: Curve25519.Signing.PrivateKey())
+        let base = ScriptSandbox.footprint()
+        t = Date()
+        let cold = fresh.load()
+        let coldLoad = Date().timeIntervalSince(t)
+        let mem = Int(ScriptSandbox.footprint()) - Int(base)
+        XCTAssertEqual(cold.emails.values.filter { !$0.codes.isEmpty }.count, n)
+
+        try reviewers[1].append(.tagAdd, emailID: ids[5], value: "hot", state: reviewers[1].load())
+        t = Date()
+        let warm = fresh.load()
+        let incremental = Date().timeIntervalSince(t)
+        XCTAssertEqual(warm.emails[ids[5]]?.tags["hot"]?.count, 1)
+
+        print(String(format: "TEAM-100K: logs written %.0f s, cold load %.1f s, reload after one entry %.2f s, memory +%d MB",
+                     writing, coldLoad, incremental, mem / 1_048_576))
+        XCTAssertLessThan(incremental, 2, "a reload after one new entry reads only the new entry")
     }
 }

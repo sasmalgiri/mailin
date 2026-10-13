@@ -143,6 +143,13 @@ struct ScopeJobEnvironment: Sendable {
     @MainActor static var custodians: CustodianManager { current?.custodian ?? .shared }
     @MainActor static var legalMirror: LegalStateMirror { current?.legal ?? .shared }
 
+    /// Ready to read: a bound environment is open already; the shared archive
+    /// is activated on demand (Shortcuts may run before the app's window).
+    static func archiveReady() async -> Bool {
+        if current != nil { return true }
+        return await StorageActivationCoordinator.shared.activate() == .active
+    }
+
     /// Audit entry for a 3.0 engine action — call only after the action
     /// really happened (rule 5). In a bound environment the entry is kept
     /// with it (`auditLines`), never in the real audit chain.
