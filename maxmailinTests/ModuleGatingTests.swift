@@ -1784,14 +1784,14 @@ struct OwnerAndMatterTests {
 
     @Test("The owner's own mail reads as You, in names and in prose")
     func ownerAsYou() {
-        OwnerIdentity.update(from: [email("Fees", from: "Everything Media <owner@example.com>", type: "sent"),
-                                    email("Re: Fees", from: "Ann Lee <ann@example.com>")])
-        defer { OwnerIdentity.update(from: []) }
-        #expect(OwnerIdentity.isOwner("Everything Media <owner@example.com>"))
-        #expect(!OwnerIdentity.isOwner("Ann Lee <ann@example.com>"))
-        #expect(AIAssistantView.senderDisplayName("Everything Media <owner@example.com>") == "You")
-        let text = OwnerIdentity.rewritingOwnerNames(in: "Everything Media promised to pay. Later, Ann thanked Everything Media.")
-        #expect(text == "You promised to pay. Later, Ann thanked you.")
+        // A scoped identity: a parallel test that runs the model engine refreshes the shared one.
+        OwnerIdentity.$scoped.withValue(OwnerIdentity.snapshot(from: [email("Fees", from: "Everything Media <owner@example.com>", type: "sent"), email("Re: Fees", from: "Ann Lee <ann@example.com>")])) {
+            #expect(OwnerIdentity.isOwner("Everything Media <owner@example.com>"))
+            #expect(!OwnerIdentity.isOwner("Ann Lee <ann@example.com>"))
+            #expect(AIAssistantView.senderDisplayName("Everything Media <owner@example.com>") == "You")
+            let text = OwnerIdentity.rewritingOwnerNames(in: "Everything Media promised to pay. Later, Ann thanked Everything Media.")
+            #expect(text == "You promised to pay. Later, Ann thanked you.")
+        }
     }
 
     @available(macOS 26, iOS 26, *)
@@ -1871,28 +1871,29 @@ struct LargeRecentArchiveTests {
     @Test("Counts, payments, passwords, people and search over 5,000 emails")
     func answersAtScale() async {
         let emails = Self.archive()
-        OwnerIdentity.update(from: emails)
-        defer { OwnerIdentity.update(from: []) }
-        let year = Calendar.current.component(.year, from: Date())
+        // A scoped identity: a parallel test that runs the model engine refreshes the shared one.
+        await OwnerIdentity.$scoped.withValue(OwnerIdentity.snapshot(from: emails)) {
+            let year = Calendar.current.component(.year, from: Date())
 
-        let (sent, t1) = await ask("How many emails did I send in \(year)?", emails)
-        let expectedSent = emails.filter { $0.messageType == "sent" && (MBOXParser.parseDate($0.headers["Date"]).map { Calendar.current.component(.year, from: $0) == year } ?? false) }.count
-        #expect(sent.contains("You sent \(expectedSent) email"))
+            let (sent, t1) = await ask("How many emails did I send in \(year)?", emails)
+            let expectedSent = emails.filter { $0.messageType == "sent" && (MBOXParser.parseDate($0.headers["Date"]).map { Calendar.current.component(.year, from: $0) == year } ?? false) }.count
+            #expect(sent.contains("You sent \(expectedSent) email"))
 
-        let (paid, t2) = await ask("How much did I pay Corp in total?", emails)
-        #expect(paid.contains("₹10,000 across 10 payments"))
+            let (paid, t2) = await ask("How much did I pay Corp in total?", emails)
+            #expect(paid.contains("₹10,000 across 10 payments"))
 
-        let (secret, t3) = await ask("Do any emails contain a password?", emails)
-        #expect(secret.contains("1 email shows a password") && !secret.contains("hunter22"))
+            let (secret, t3) = await ask("Do any emails contain a password?", emails)
+            #expect(secret.contains("1 email shows a password") && !secret.contains("hunter22"))
 
-        let (who, t4) = await ask("Who is Sender 7?", emails)
-        #expect(who.contains("emails from them"))
+            let (who, t4) = await ask("Who is Sender 7?", emails)
+            #expect(who.contains("emails from them"))
 
-        let (found, t5) = await ask("Find the email about the supplier invoice", emails)
-        #expect(found.contains("conversations match") || found.contains("Found it"))
+            let (found, t5) = await ask("Find the email about the supplier invoice", emails)
+            #expect(found.contains("conversations match") || found.contains("Found it"))
 
-        // Each app-built answer over 5,000 emails stays interactive.
-        for t in [t1, t2, t3, t4, t5] { #expect(t < 3.0, "took \(t) s") }
+            // Each app-built answer over 5,000 emails stays interactive.
+            for t in [t1, t2, t3, t4, t5] { #expect(t < 3.0, "took \(t) s") }
+        }
     }
 }
 
@@ -1907,14 +1908,15 @@ struct OwnerNameNotATopicTests {
                 // "contract" in 3 of the 6 conversations: a topic, not boilerplate.
                 plainBody: (i % 6 < 3 ? "The warehouse contract needs review. " : "Lunch on Friday. ") + "Regards, Shirshendu Sasmal.", htmlBody: "")
         }
-        OwnerIdentity.update(from: emails)
-        defer { OwnerIdentity.update(from: []) }
-        guard let handler = AIAssistantView.handleSmartQuery(query: "What are the most common topics in my inbox?") else {
-            Issue.record("no topic handler"); return
+        // A scoped identity: a parallel test that runs the model engine refreshes the shared one.
+        await OwnerIdentity.$scoped.withValue(OwnerIdentity.snapshot(from: emails)) {
+            guard let handler = AIAssistantView.handleSmartQuery(query: "What are the most common topics in my inbox?") else {
+                Issue.record("no topic handler"); return
+            }
+            let answer = await handler(emails).answer.lowercased()
+            #expect(!answer.contains("sasmal") && !answer.contains("shirshendu"))
+            #expect(answer.contains("contract") || answer.contains("warehouse"))
         }
-        let answer = await handler(emails).answer.lowercased()
-        #expect(!answer.contains("sasmal") && !answer.contains("shirshendu"))
-        #expect(answer.contains("contract") || answer.contains("warehouse"))
     }
 }
 

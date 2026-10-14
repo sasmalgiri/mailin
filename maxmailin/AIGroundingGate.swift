@@ -353,6 +353,20 @@ enum OwnerIdentity {
     nonisolated(unsafe) private static var addresses: Set<String> = []
     nonisolated(unsafe) private static var names: Set<String> = []
 
+    /// Who the owner is, as one value.
+    struct Snapshot: Sendable { var addresses: Set<String>; var names: Set<String> }
+
+    /// A scoped identity for one task (tests), so a parallel task that
+    /// refreshes the shared identity — the model engine does on every answer —
+    /// cannot change it underneath. Nil: the shared identity.
+    @TaskLocal static var scoped: Snapshot?
+
+    private static var current: Snapshot {
+        if let scoped { return scoped }
+        lock.lock(); defer { lock.unlock() }
+        return Snapshot(addresses: addresses, names: names)
+    }
+
     /// The address in a From/To header: "Ann <a@x>" → "a@x".
     static func address(in header: String) -> String {
         if let lt = header.firstIndex(of: "<") {
@@ -362,6 +376,12 @@ enum OwnerIdentity {
     }
 
     static func update(from emails: [MBOXParser.RawEmail]) {
+        let s = snapshot(from: emails)
+        lock.lock(); addresses = s.addresses; names = s.names; lock.unlock()
+    }
+
+    /// The owner identity the given emails show (pure; nothing is stored).
+    static func snapshot(from emails: [MBOXParser.RawEmail]) -> Snapshot {
         let own = emails.filter { email in
             if email.messageType == "sent" { return true }
             let labels = (email.headers["X-Gmail-Labels"] ?? email.headers["X-gmail-labels"] ?? "").lowercased()
@@ -382,19 +402,18 @@ enum OwnerIdentity {
             let name = from[..<lt].trimmingCharacters(in: CharacterSet(charactersIn: "\"' ").union(.whitespaces))
             if name.split(separator: " ").count >= 2, !name.contains("@") { displayNames.insert(name) }
         }
-        lock.lock(); addresses = found; names = displayNames; lock.unlock()
+        return Snapshot(addresses: found, names: displayNames)
     }
 
     /// Lower-cased words of the owner's display names ("shirshendu", "sasmal").
     static var nameWords: Set<String> {
-        lock.lock(); let known = names; lock.unlock()
+        let known = current.names
         return Set(known.flatMap { $0.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init) }.filter { $0.count >= 3 })
     }
 
     static func isOwner(_ header: String) -> Bool {
         let addr = address(in: header)
-        lock.lock(); defer { lock.unlock() }
-        return !addr.isEmpty && addresses.contains(addr)
+        return !addr.isEmpty && current.addresses.contains(addr)
     }
 
     /// "You" for the owner, else the header as given.
@@ -405,7 +424,7 @@ enum OwnerIdentity {
     /// Model prose names the owner by display name ("Everything Media
     /// promised…"); rewritten to "you", capitalised at a sentence start.
     static func rewritingOwnerNames(in text: String) -> String {
-        lock.lock(); let known = names; lock.unlock()
+        let known = current.names
         var result = text
         for name in known.sorted(by: { $0.count > $1.count }) {
             let escaped = NSRegularExpression.escapedPattern(for: name)
