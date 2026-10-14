@@ -1,9 +1,9 @@
 # PST export (`PSTSpecWriter`, switch "Outlook PST writer (MS-PST)") — validation record
 
-Status: **not verified in Outlook.** SCANPST and Outlook are not available in the development
-environment; every Outlook-side result below comes from logs the owner ran on Windows. The writer
-stays a preview switch, and exports use the earlier writer by default, until a fresh, unrepaired file
-passes SCANPST with nothing to repair and opens in Outlook.
+Status: **opens in Outlook** — owner, 2026-10-15, on Windows: the fresh, unrepaired v9 file
+(`~/Downloads/mailin-pst-v9`, SHA-256 1a5145c4…) works in Outlook. SCANPST logs: v8 no findings; the
+v8 "minor inconsistencies" cause (padded last heap block, fill levels) fixed in v9. The writer stays a
+preview switch until the owner's promotion decision (A4).
 
 Source: `Packages/ArchiveCore/Sources/ArchiveCore/PSTSpecWriter.swift`.
 Tests: `Packages/ArchiveCore/Tests/ArchiveCoreTests/PSTSpecWriterTests.swift`.
@@ -33,6 +33,7 @@ Independent checks (run on the Mac, not shipped): `Scripts/pstvalidate.py` (NDB)
 | v7 dialog | Owner: the diagnostic file drew "Only minor inconsistencies were found… repairing is optional" | Exact per-column diff (`rowcheck.table_rows`): the optional repair added only replication state (store 0x0E34; 0x0E30/0x0E33/0x0E34 on 1,005 folder and message rows; HMP records) and renumbered row versions; no message PC changed | v8 (`replicationCells`, `PSTSpecWriter.swift` ≈ line 250; store PC and HMP in `finalize()`): writes that state, plus the empty 0xEC1 update queue. Independent check: same populated cells as SCANPST's repair on 1,006/1,006 rows, same store property set, HMP the same 1,005 NIDs in byte order. Item IDs are counter-prefixed so the HMP streams in key order (memory flat) |
 | v8 | **No findings** (no `!!`, `??` or row lines) | Repaired copy `mailin-outlook-test-v8 (1)1.pst` (not opened in Outlook) vs original: same nodes; every message, attachment and subnode byte-identical; the HMP, store and hierarchy tables unchanged. Only the two contents tables were re-serialised: row matrix and row index byte-identical, every decoded cell identical; their heaps gained one 16-byte allocation per row (200 / 801) holding fresh random values that no row, message or HMP record references, i.e. unused space. Heap fill levels ruled out (`fillcheck.py`: SCANPST's own output has more out-of-date levels than mailin's) | Nothing to correct. Pending: which SCANPST dialog appeared, and Outlook open / close / reopen on the unrepaired v8 |
 | v8 dialog | "Only minor inconsistencies… repairing is optional" | Heap layouts of the two rewritten tables vs Outlook's: mailin padded the **last** block of a multi-block heap to 8,176 bytes (`HeapBuilder.finish` used the middle-block `closeBlock`); every Outlook heap ends its last block at the page map. Exactly 3 heaps had it: the two contents tables SCANPST rewrote, and the HMP. Also: HNBITMAPHDR fill levels for blocks 9+ written as 15 (SCANPST's rewrite set them exactly) | v9 (`HeapBuilder.closeBlock(last:)`, `writePendingBitmap`, ≈ line 568): last block unpadded; bitmap block held until its blocks close, then written with exact levels. Tests: no padded last block, every stored fill level = computed (both fail on v8 code) |
+| v9 | Owner: "it working in outlook now" (fresh unrepaired v9) | — | B8 acceptance met on the owner's word; promotion to default is the A4 decision |
 Check of the v6 writer against Microsoft's corrections (`vs_repaired.py`, same content, matched by subject):
 size equal on 990/1,000, DisplayCc and DisplayBcc equal on 1,000/1,000. The 10 others are Inbox
 messages Outlook changed after the repair (it added PidTagPreview 0x3FD9, PidTagUserEntryId 0x6619
