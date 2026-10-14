@@ -1232,7 +1232,11 @@ final class V31SharedFolderTests: XCTestCase {
     private var root: URL!
     override func setUp() {
         super.setUp()
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("V31Shared-\(UUID().uuidString)", isDirectory: true)
+        // D3: `MAILIN_SHARE_PATH` runs the same tests in a real shared folder
+        // (a file share, a NAS, a USB disk); a fresh subfolder is used and removed.
+        let base = ProcessInfo.processInfo.environment["MAILIN_SHARE_PATH"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.temporaryDirectory
+        root = base.appendingPathComponent("V31Shared-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
     override func tearDown() { try? FileManager.default.removeItem(at: root); super.tearDown() }
