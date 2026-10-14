@@ -351,6 +351,10 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// What happens to existing work when this is switched off. Nothing in
     /// this list deletes anything — that is the point.
     var whenOff: String {
+        if EngineSpec.of(self) != nil, rawValue.hasPrefix("v31") {
+            // New features with no earlier engine behind them.
+            return String(localized: "The feature is not offered. What it already recorded stays in the archive and is there again when it is switched back on.")
+        }
         if EngineSpec.of(self) != nil {
             return String(localized: "The previous engine is used, exactly as before this release. Nothing is lost: both engines read and write the same data.")
         }

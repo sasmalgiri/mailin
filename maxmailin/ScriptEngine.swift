@@ -79,10 +79,33 @@ struct ScriptRunSummary: Equatable, Sendable {
     var line: String {
         var parts = [String(localized: "\(processed) of \(total) emails read")]
         for k in [ScriptChange.Kind.tag, .untag, .note, .column, .exclude] where (counts[k] ?? 0) > 0 {
-            parts.append("\(counts[k] ?? 0) \(k.rawValue)")
+            parts.append(Self.phrase(k, counts[k] ?? 0))
         }
         if !errors.isEmpty { parts.append(String(localized: "\(errors.count) errors")) }
         if let stoppedReason { parts.append(String(localized: "stopped: \(stoppedReason)")) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// One change kind and its count, worded so no plural form is needed.
+    static func phrase(_ kind: ScriptChange.Kind, _ n: Int) -> String {
+        switch kind {
+        case .tag: return String(localized: "tags added: \(n)")
+        case .untag: return String(localized: "tags removed: \(n)")
+        case .note: return String(localized: "notes: \(n)")
+        case .column: return String(localized: "column values: \(n)")
+        case .exclude: return String(localized: "set aside: \(n)")
+        }
+    }
+
+    /// The Runs list line for a recorded run (`changesJSON` as the engine writes it).
+    static func describe(changesJSON: String) -> String {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(changesJSON.utf8)) as? [String: Any] else { return "" }
+        let applied = object["applied"] as? Bool ?? false
+        let counts = object["counts"] as? [String: Int] ?? [:]
+        var parts = [applied ? String(localized: "Applied") : String(localized: "Dry run")]
+        for k in [ScriptChange.Kind.tag, .untag, .note, .column, .exclude] {
+            if let n = counts[k.rawValue], n > 0 { parts.append(phrase(k, n)) }
+        }
         return parts.joined(separator: " · ")
     }
 }

@@ -734,6 +734,29 @@ final class V3FoundationTests: XCTestCase {
         XCTAssertLessThanOrEqual(ArchiveExportService.pstPartBytes(for: out), 45_000_000_000, "below the format's 50 GB")
     }
 
+    /// A7: the screenshot seed's sample mail is recognised as deleted-but-present.
+    @MainActor
+    func testRecoveryScreenshotSamples_areAllMarkedRecovered() throws {
+        let was = RecoveryPolicy.isEnabled
+        RecoveryPolicy.isEnabled = false   // seeding runs before the user's switches are applied
+        defer { RecoveryPolicy.isEnabled = was }
+        let samples = try UITestSupport.recoverySamples()
+        XCTAssertFalse(RecoveryPolicy.isEnabled, "the user's switch is restored")
+        XCTAssertEqual(samples.count, 12)
+        XCTAssertEqual(samples.filter { $0.recovery?.state == .flaggedDeleted }.count, 6)
+        XCTAssertEqual(samples.filter { $0.recovery?.state == .unpurged }.count, 6)
+    }
+
+    /// Script runs read as words, not JSON; counts need no plural forms.
+    func testScriptRunDescription_isReadable() {
+        let json = "{\"applied\":false,\"digest\":\"ab\",\"counts\":{\"column\":60,\"tag\":3}}"
+        let text = ScriptRunSummary.describe(changesJSON: json)
+        XCTAssertFalse(text.contains("{"), text)
+        XCTAssertTrue(text.contains("60") && text.contains("3"), text)
+        var s = ScriptRunSummary(); s.processed = 20; s.total = 20; s.counts = [.column: 60]
+        XCTAssertFalse(s.line.contains("60 column"), s.line)
+    }
+
     /// B8: with the MS-PST writer switched on, File > Export PST (whole and in
     /// parts) writes Outlook-layout files that the MS-PST reader reads back,
     /// every email once. Off, the earlier writer runs (the test above).

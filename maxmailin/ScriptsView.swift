@@ -219,7 +219,7 @@ struct ScriptDetailView: View {
                         HStack {
                             VStack(alignment: .leading) {
                                 Text("\(r.startedAt.formatted()) · v\(r.version) · \(r.processed) emails · \(r.startedBy)")
-                                Text(r.changesJSON).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                                Text(ScriptRunSummary.describe(changesJSON: r.changesJSON)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer()
                             Button(String(localized: "Re-run and prove")) {
