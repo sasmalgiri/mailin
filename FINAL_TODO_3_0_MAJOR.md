@@ -66,6 +66,25 @@ Legend:
 
 ---
 
+## Phase E — 3.0.x: close the DEVONthink gaps (owner, 2026-10-15)
+
+From the DEVONthink comparison: DEVONthink is the main competitor, but a general document manager. Don't
+copy its breadth. Close the one gap that hurts email evidence work (OCR), and make mailin the email tool
+DEVONthink users add, rather than a replacement. Both are offline-only (rule 7). Each is a new capability
+next to the old path (rules 14–15): `.preview` until its gate passes. Every new string goes into the 10
+languages (rule 10). Starts after the 3.0 release, not before.
+
+| # | Item | What to build | Done means |
+|---|---|---|---|
+| E1 🔴 | **OCR of scanned attachments** | New capability `v3xAttachmentOCR`. In `AttachmentTextIndexJob.extractText`, when an image attachment (PNG/JPEG/TIFF/HEIC) has no text, or a PDF's `PDFDocument.string` is empty or nearly so, run Apple Vision `RecognizeTextRequest` on the device (each PDF page rendered in turn, one page in memory). Recognised text goes into the existing `attachment_search` index, marked as OCR. Emails already marked "attempted" with an image or scanned PDF need a second pass: add an OCR-version column (or a separate state row) to `attachment_text_state` so they are revisited exactly once (rule 1: no existing row changed). A memory and time limit per page is stated on screen, not hidden (rule 6). Settings ▸ Modules shows the progress as "X of Y attachments" | `in:attachments` finds a word that exists only in a scanned PDF and in a photo of a letter. 1,000-email fixture with 100 scanned attachments: every one indexed once, with steady memory and the job resuming after a kill. No network use (Release verify-no-network passes). Old path untouched with the switch off. Tests fail without the change. Translated |
+| E2 🔴 | **Work with DEVONthink** | (a) **Send to DEVONthink**: for the selected emails, or the whole current filter (count shown first, rule 4), export each as `.eml` with its attachments into a temporary folder, then hand them to DEVONthink with `NSWorkspace.open(_:withApplicationAt:)` (no Apple Events entitlement, sandbox-safe); falls back to Finder "Reveal" when DEVONthink isn't installed. The outcome is reported as saved / shared / cancelled / failed (rule 5). (b) **Links to an email**: register a `mailin://email/<uuid>` URL (through Xcode's Info.plist tool, not by editing the pbxproj, rule 12); "Copy link" on an email; opening the link selects that email, or says it isn't in this archive. DEVONthink and any notes app can store these links. (c) Optional: a short "DEVONthink + mailin" help page | 100 emails sent: DEVONthink (installed) imports 100 `.eml` files with attachments, and the files round-trip byte-identical to the originals. Copied links open the right email after a relaunch; a link to a missing email says so. Works with DEVONthink absent. Tests for export, link parse and the missing-email case. Translated |
+
+Later, not scheduled (from the same comparison): local AI models through Ollama as an option (offline);
+AppleScript support; a DEVONthink-style licence (lifetime with a year of updates plus an optional update fee).
+Sync and web access conflict with 3.0 Private's no-network decision.
+
+---
+
 ## Suggested order
 
 1. A1 → A2 → A3 (gating and labels: small, and they block release).
@@ -75,6 +94,7 @@ Legend:
 5. D2, D3, D4, D5 (device and owner sessions).
 6. A4 promotion → A5 → A6/A7 → D6 TestFlight → submit.
 7. B3, B5–B8 can ship in 3.0.x if time is short. Each is behind its own switch, and the limits doc already states what is missing.
+8. After release, 3.0.x: E1 OCR, then E2 DEVONthink interoperability (Phase E).
 
 ## What you need to provide
 
