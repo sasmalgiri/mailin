@@ -245,6 +245,9 @@ final class PSTSpecWriter: PSTStreamWriting {
     }
     /// rgnid[] as the header stores it.
     var rgnid: [UInt32] { (0..<32).map { max(Self.rgnidStart($0), maxNidIndex[$0]) } }
+    /// Diagnostics for SCANPST runs only, never set by the app: extra empty internal nodes
+    /// (e.g. 0xEC1, which SCANPST's repair adds and [MS-PST] does not define).
+    var diagnosticEmptyNodes: [UInt32] = []
     private(set) var defaultFolder: UInt32 = 0
     private var messages = 0
 
@@ -466,6 +469,15 @@ final class PSTSpecWriter: PSTStreamWriting {
             starts.append(header + current.count)
             current.append(bytes)
             return UInt32(blockIndex << 16) | UInt32(starts.count << 5)
+        }
+
+        /// Replaces an allocation of the open block with bytes of the same length.
+        func overwrite(_ hid: UInt32, with bytes: Data) {
+            let index = Int((hid >> 5) & 0x7FF) - 1
+            precondition(Int(hid >> 16) == blockIndex && starts.indices.contains(index))
+            let start = starts[index] - header
+            precondition(start + bytes.count <= current.count)
+            current.replaceSubrange(start..<start + bytes.count, with: bytes)
         }
 
         private static func level(_ free: Int) -> UInt8 {
@@ -1022,11 +1034,22 @@ final class PSTSpecWriter: PSTStreamWriting {
                                         nextSubnodeIndex: &unused)
         specialNodes.append((0x61, names.data, names.sub, 0))
         specialNodes.append((0x1E1, 0, 0, 0))
-        // Search domain object ([MS-PST] 2.4.8): "the global list of all Folder objects that are
-        // referenced by any Folder object's Search Criteria". The only criteria written (0x2227)
-        // reference no folder, so the list is empty — the node SCANPST rebuilt in its v5 repair
-        // ("Deleting SDO"), and as an Outlook-written backup PST holds it (Digital Corpora).
-        specialNodes.append((0x261, 0, 0, 0))
+        // No search domain object (0x261): the only criteria written (0x2227) reference no folder,
+        // and SCANPST deletes an empty one ("Deleting SDO", v6; its repair has no 0x261).
+        //
+        // 0xC01, which SCANPST calls the HMP ("HMP not found – creating"; not in [MS-PST]): a heap
+        // (client signature 0x9C) whose root points to a BTH of 16-byte GUID keys → 4-byte NIDs.
+        // Written as Outlook 2010 writes it, empty — byte for byte the node in the Digital Corpora
+        // bill.jobs and johnblair68 PSTs, which hold 135 and 18 messages with an empty HMP.
+        let hmp = HeapBuilder(writer: self, clientSig: 0x9C)
+        var bthHeader = Data(); bthHeader.u8(0xB5); bthHeader.u8(16); bthHeader.u8(4); bthHeader.u8(0); bthHeader.u32(0)
+        var hmpRoot = Data(); hmpRoot.u32(0)
+        let hmpRootHID = try hmp.alloc(hmpRoot)
+        let bthHID = try hmp.alloc(bthHeader)
+        var rootValue = Data(); rootValue.u32(bthHID)
+        hmp.overwrite(hmpRootHID, with: rootValue)
+        specialNodes.append((0xC01, try hmp.finish(root: hmpRootHID), 0, 0))
+        for nid in diagnosticEmptyNodes { specialNodes.append((nid, 0, 0, 0)) }
         // The search activity list names the search folders (Outlook writes the spam folder first).
         var sal = Data(); sal.u32(Self.spamSearchFolderNid)
         specialNodes.append((0x201, try writeBlock(sal, isInternal: false), 0, 0))

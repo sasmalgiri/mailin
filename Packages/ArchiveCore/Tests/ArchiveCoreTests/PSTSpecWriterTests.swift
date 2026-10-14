@@ -44,9 +44,15 @@ final class PSTSpecWriterTests: XCTestCase {
         }
     }
 
-    func writeFixture(_ n: Int, name: String = "spec.pst") throws -> URL {
+    /// Node 0xC01 of the Digital Corpora Outlook 2010 PSTs (bill.jobs, johnblair68), copied byte for byte.
+    static let outlookEmptyHMP: [UInt8] = [
+        0x18, 0x00, 0xEC, 0x9C, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
+        0xB5, 0x10, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x10, 0x00, 0x18, 0x00]
+
+    func writeFixture(_ n: Int, name: String = "spec.pst", diagnosticEmptyNodes: [UInt32] = []) throws -> URL {
         let url = dir.appendingPathComponent(name)
         let w = try PSTSpecWriter(url: url)
+        w.diagnosticEmptyNodes = diagnosticEmptyNodes
         let inbox = w.appendFolder(name: "Inbox")
         for (i, e) in Self.emails(n).enumerated() {
             if i % 5 == 0 { try w.append(email: e, folder: inbox) } else { try w.appendMessage(e) }
@@ -152,9 +158,12 @@ final class PSTSpecWriterTests: XCTestCase {
         // folder table maps the default class, the LTP high-water mark is past every LTP NID.
         let sal = spec.nodes[0x201].map { spec.dataBlocks($0.dataBid).flatMap { $0 } } ?? []
         XCTAssertEqual(Array(sal.prefix(4)), [0x23, 0x22, 0x00, 0x00], "search activity list")
-        // SCANPST on v5: "Deleting SDO"; its repair left the search domain object as an empty list.
-        XCTAssertNotNil(spec.nodes[0x261], "search domain object")
-        XCTAssertEqual(spec.nodes[0x261]?.dataBid, 0, "no search criteria reference a folder: empty list")
+        // SCANPST on v6: "Deleting SDO" (its repair removed the empty 0x261) and "HMP not found –
+        // creating" (its repair added 0xC01). No SDO; the HMP byte for byte as Outlook 2010 writes it.
+        XCTAssertNil(spec.nodes[0x261], "no search domain object: no criteria reference a folder")
+        let hmp = spec.nodes[0xC01].map { spec.dataBlocks($0.dataBid).flatMap { $0 } } ?? []
+        XCTAssertEqual(hmp, Self.outlookEmptyHMP, "HMP as in the Outlook 2010 bill.jobs / johnblair68 PSTs")
+        XCTAssertNil(spec.nodes[0xEC1], "no undocumented placeholder node in a normal export")
         let receive = spec.nodes[0x62B].map { spec.table(dataBid: $0.dataBid, subBid: $0.subBid) } ?? []
         XCTAssertEqual(receive.map { $0.values[0x001A_001F]?.string ?? "-" }, ["", "IPM", "Report.IPM", "IPC"])
         let rgnidLTP = bytes.subdata(in: (44 + 4 * 31)..<(48 + 4 * 31)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
@@ -176,6 +185,15 @@ final class PSTSpecWriterTests: XCTestCase {
         // Keep a copy for the external readers.
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
         try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
+        // Diagnostic twin for a SCANPST run (never what the app writes): plus the empty 0xEC1
+        // SCANPST's v6 repair added for "Search folder (nid=EC1) missing update queue".
+        if let out = ProcessInfo.processInfo.environment["MAILIN_PST_FIXTURE_DIR"] {
+            let diag = try writeFixture(n, name: "spec-ec1.pst", diagnosticEmptyNodes: [0xEC1])
+            XCTAssertNotNil(try PSTSpecReader(data: Data(contentsOf: diag)).nodes[0xEC1])
+            let target = URL(fileURLWithPath: out).appendingPathComponent("diagnostic-ec1.pst")
+            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.copyItem(at: diag, to: target)
+        }
     }
 
     /// Bytes of a node's data blocks — its data tree and every subnode's, nested ones too;

@@ -28,7 +28,7 @@ Independent checks (run on the Mac, not shipped): `Scripts/pstvalidate.py` (NDB)
 | v4 | (no SCANPST line) | PidTagMessageStatus and PidTagHasAttachments stored on messages; computed by the store, never stored by Outlook | not stored (≈ line 845) |
 | v5 | NID high-water mark, receive folder class, SAL 2223 | — | no longer reported (v4 fixes confirmed) |
 | v5 | Row ≠ message on all 1,000 rows (both v5 files; row version ruled out: identical logs) | Decoded diff of the original against SCANPST's repaired copy (`mailin-outlook-test-v51.pst`): SCANPST rewrote **PidTagMessageSize on all 1,000 messages** and **added DisplayCc (334) / DisplayBcc (143)**, DisplayCc also to the rows. The size SCANPST computes = bytes of the message node's data blocks (property context + every subnode, nested; XBLOCK/SLBLOCK excluded): exact on 1,000/1,000 repaired messages and on all 158 messages of the three newest Digital Corpora Outlook files (bill.jobs ×2, johnblair68); the nine older ones store other values (an older Outlook's rule, not followed). mailin stored the raw MIME length. The v3 removal of DisplayCc/Bcc was wrong (the Outlook files compared then had no Cc). | `MessageBuild.write` (≈ line 880): size measured from the bytes written (`leafBytesWritten`, `propertyContextDataBytes`), shared by message and row; DisplayCc/Bcc stored when present, DisplayCc in the row. Reader takes To/Cc/Bcc from the recipient table (addresses) before the name-only display lines (`PSTSpecReader` ≈ line 499). |
-
+| v6 | All 1,000 row mismatches gone. Left: EC1 update queue, HMP not found, Deleting SDO | Repair `mailin-outlook-test-v61.pst` (not opened in Outlook) made exactly three changes: removed the empty 0x261; added 0xC01 "HMP" (heap client 0x9C → BTH of 16-byte GUID → NID, one per message and normal folder; not in [MS-PST]); added an empty 0xEC1 (not in [MS-PST], in none of 12 Outlook files) | v7: no SDO; 0xC01 written as Outlook 2010 writes it, empty, byte-identical to bill.jobs/johnblair68 (135 / 18 messages, empty HMP); 0xEC1 **not** written (placeholder with no definition) — only in a labelled diagnostic file for SCANPST (`diagnosticEmptyNodes`, test-only) |
 Check of the v6 writer against Microsoft's corrections (`vs_repaired.py`, same content, matched by subject):
 size equal on 990/1,000, DisplayCc and DisplayBcc equal on 1,000/1,000. The 10 others are Inbox
 messages Outlook changed after the repair (it added PidTagPreview 0x3FD9, PidTagUserEntryId 0x6619
@@ -48,8 +48,6 @@ tables in Outlook-written files lack 0x3602. To be confirmed by the v6 log.
   the v5 log after the SAL fix; no published structure ties it to anything mailin writes. The v5 repair
   added internal nodes 0xC01, 0xE01, 0xE41, 0xEC1, 0xEE1, 0xF01, 0xF21 (undocumented); of 12
   Outlook-written files, 0xC01 is in 10, 0xE01/0xE41 in 3, the other four in none. Not written.
-- **"Deleting SDO" (v5, a `??` warning).** Fixed in v6: SCANPST's repair left 0x261 as an empty list,
-  as an Outlook-written backup PST holds it, and all 12 Outlook files have the node. Written empty
-  (the only criteria reference no folder), in `finalize()`.
-- **"HMP not found – creating".** No structure of that name exists in [MS-PST]; not implemented
-  (no invented node). Reported by users on Outlook-created files too.
+- **"Deleting SDO".** v6 wrote an empty SDO; SCANPST deleted it. v7 writes none (no criteria reference a folder).
+- **"HMP not found – creating".** v7 writes 0xC01 empty, exactly as Outlook 2010 does. Whether SCANPST accepts an empty HMP with 1,000 messages is for the v7 log to show; if not, the next evidence is a second SCANPST pass over the repaired v61.
+- **EC1.** Open. Diagnostic file `mailin-outlook-test-v7-diagnostic-ec1.pst` tests whether the empty node alone clears it; adopting it in exports is the owner's decision (it has no published definition).
