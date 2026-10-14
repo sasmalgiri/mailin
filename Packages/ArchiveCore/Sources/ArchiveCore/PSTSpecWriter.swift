@@ -223,10 +223,23 @@ final class PSTSpecWriter: PSTStreamWriting {
     }
     /// A rising row version for each table row, as Outlook numbers them.
     func nextRowVersion() -> UInt32 { rowVersion += 4; return rowVersion }
-    /// Highest NID index used for NID_TYPE_LTP subnodes: the header's rgnid[31] must be past
-    /// it (SCANPST "Header NID high-water mark has incorrect value (type=31)").
-    private var maxLTPIndex: UInt32 = 1
-    func noteLTPIndex(_ i: UInt32) { maxLTPIndex = max(maxLTPIndex, i) }
+    /// Highest nidIndex allocated per NID_TYPE, top-level nodes and subnodes alike. The
+    /// header's rgnid[] holds "the last nidIndex value that had been allocated" for each
+    /// type ([MS-PST] 2.2.2.6), never below the type's starting value; checked on 12
+    /// Outlook-written files (SCANPST on v4: "type=31, read=400, calculated=401").
+    private var maxNidIndex = [UInt32](repeating: 0, count: 32)
+    func noteNID(_ nid: UInt32) { maxNidIndex[Int(nid & 0x1F)] = max(maxNidIndex[Int(nid & 0x1F)], nid >> 5) }
+    static func rgnidStart(_ type: Int) -> UInt32 {
+        switch type {
+        case 0x02: return 0x400      // NID_TYPE_NORMAL_FOLDER
+        case 0x03: return 0x4000     // NID_TYPE_SEARCH_FOLDER
+        case 0x04: return 0x10000    // NID_TYPE_NORMAL_MESSAGE
+        case 0x08: return 0x8000     // NID_TYPE_ASSOC_MESSAGE
+        default: return 0x400
+        }
+    }
+    /// rgnid[] as the header stores it.
+    var rgnid: [UInt32] { (0..<32).map { max(Self.rgnidStart($0), maxNidIndex[$0]) } }
     private(set) var defaultFolder: UInt32 = 0
     private var messages = 0
 
@@ -294,6 +307,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         var msg = try MessageBuild(writer: self, email: email)
         let (data, sub) = try msg.write()
         try spillNBT(msgNbtSpill, nid: nid, data: data, sub: sub, parent: folder)
+        noteNID(nid)
         msgNbtCount += 1
         messages += 1
         folders[folder]!.count += 1
@@ -391,6 +405,7 @@ final class PSTSpecWriter: PSTStreamWriting {
     /// A subnode tree (SLBLOCK, or SIBLOCK over SLBLOCKs).
     func subnodeTree(_ entries: [(nid: UInt32, data: UInt64, sub: UInt64)]) throws -> UInt64 {
         if entries.isEmpty { return 0 }
+        for e in entries { noteNID(e.nid) }   // every subnode NID passes through here
         let sorted = entries.sorted { $0.nid < $1.nid }
         func sl(_ part: ArraySlice<(nid: UInt32, data: UInt64, sub: UInt64)>) throws -> UInt64 {
             var d = Data(); d.u8(2); d.u8(0); d.u16(UInt16(part.count)); d.u32(0)
@@ -588,7 +603,6 @@ final class PSTSpecWriter: PSTStreamWriting {
                     hnid = try heap.alloc(bytes)
                 } else {
                     let snid = F.nid(nextSubnodeIndex, F.tLTP)
-                    noteLTPIndex(nextSubnodeIndex)
                     nextSubnodeIndex += 1
                     subs.append((snid, try writeData(bytes), 0))
                     hnid = snid
@@ -659,7 +673,7 @@ final class PSTSpecWriter: PSTStreamWriting {
                     if !bytes.isEmpty {
                         if bytes.count <= PSTSpecFormat.maxAllocation { hnid = try heap.alloc(bytes) }
                         else {
-                            let snid = PSTSpecFormat.nid(nextSub, PSTSpecFormat.tLTP); writer.noteLTPIndex(nextSub); nextSub += 1
+                            let snid = PSTSpecFormat.nid(nextSub, PSTSpecFormat.tLTP); nextSub += 1
                             extraSubnodes.append((snid, try writer.writeData(bytes), 0))
                             hnid = snid
                         }
@@ -1133,6 +1147,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             var d = Data(); d.u64(UInt64(nid)); d.u64(data); d.u64(sub); d.u32(parent); d.u32(0)
             return (UInt64(nid), d)
         }
+        for n in specialNodes { noteNID(n.nid) }
         let special = specialNodes.sorted { $0.nid < $1.nid }.map { leaf($0.nid, $0.data, $0.sub, $0.parent) }
         var si = special.makeIterator()
         let msgs = try spillReader("nbt", recordSize: 24)
@@ -1166,15 +1181,9 @@ final class PSTSpecWriter: PSTStreamWriting {
         h.put64(32, nextPageBid)                                           // bidNextP
         h.put32(40, UInt32(messages + 1))                                  // dwUnique
         // rgnid: next free index per NID type.
-        for t in 0..<32 { h.put32(44 + 4 * t, 0x400) }
+        let ids = rgnid
+        for t in 0..<32 { h.put32(44 + 4 * t, ids[t]) }
         // Types this writer does not allocate: the values Outlook writes in a new file.
-        h.put32(44 + 4 * 3, 0x4001); h.put32(44 + 4 * 6, 0x4001); h.put32(44 + 4 * 7, 0x4001); h.put32(44 + 4 * 8, 0x8000)
-        h.put32(44 + 4 * Int(F.tLTP), max(0x400, maxLTPIndex + 1))
-        h.put32(44 + 4 * Int(F.tFolder), nextFolderIndex)
-        h.put32(44 + 4 * Int(F.tMessage), nextMessageIndex)
-        h.put32(44 + 4 * Int(F.tHierarchy), nextFolderIndex)
-        h.put32(44 + 4 * Int(F.tContents), nextFolderIndex)
-        h.put32(44 + 4 * Int(F.tAssoc), nextFolderIndex)
         // ROOT
         h.put64(184, eof); h.put64(192, amapLast); h.put64(200, amapFree); h.put64(208, 0)
         h.put64(216, nbt.0); h.put64(224, nbt.1); h.put64(232, bbt.0); h.put64(240, bbt.1)

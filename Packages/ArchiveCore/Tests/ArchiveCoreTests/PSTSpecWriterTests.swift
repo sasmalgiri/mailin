@@ -159,4 +159,79 @@ final class PSTSpecWriterTests: XCTestCase {
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
         try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
     }
+
+    // MARK: Fixture set (each feature on its own, for Windows/SCANPST and independent decoders)
+
+    /// rgnid[t] = max(starting value, highest nidIndex of type t in use), computed from the
+    /// file itself: every top-level node and every subnode.
+    static func expectedRGNID(_ spec: PSTSpecReader) -> [UInt32] {
+        var used = [UInt32](repeating: 0, count: 32)
+        func note(_ nid: UInt32) { used[Int(nid & 0x1F)] = max(used[Int(nid & 0x1F)], nid >> 5) }
+        for node in spec.nodes.values {
+            note(node.nid)
+            for sub in spec.subnodes(node.subBid).keys { note(sub) }
+        }
+        return (0..<32).map { max(PSTSpecWriter.rgnidStart($0), used[$0]) }
+    }
+
+    static func variant(_ i: Int, to: [String] = ["Ann <ann@example.org>"], cc: [String] = [], bcc: [String] = [],
+                        subject: String? = nil, body: String? = nil, html: String = "",
+                        attachments: [(String, Int)] = []) -> MBOXParser.RawEmail {
+        var headers = ["From": "Sender \(i) <s\(i)@example.com>", "To": to.joined(separator: ", "),
+                       "Subject": subject ?? "Message \(i)", "Message-ID": "<v\(i)@example.com>",
+                       "Date": "Tue, 7 Jan 2025 09:\(String(format: "%02d", i % 60)):00 +0000"]
+        if !cc.isEmpty { headers["Cc"] = cc.joined(separator: ", ") }
+        if !bcc.isEmpty { headers["Bcc"] = bcc.joined(separator: ", ") }
+        let text = body ?? "Body of message \(i)."
+        let atts = attachments.map { name, size -> AttachmentMetadata in
+            let bytes = Data((0..<size).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ i) })
+            return AttachmentMetadata(filename: name, mimeType: "application/octet-stream", size: size, base64: bytes.base64EncodedString())
+        }
+        return MBOXParser.RawEmail(headers: headers, rawSource: "", messageType: "email", attachments: atts,
+                                   timestamp: "2025-01-07T09:\(String(format: "%02d", i % 60)):00Z", domains: ["example.com"],
+                                   plainBody: text, htmlBody: html)
+    }
+
+    func testFixtureSet_eachFeatureWritesAValidStore() throws {
+        let unicode = "Résumé — naïve façade ✓ Ελληνικά 日本語 עברית 🙂"
+        let cases: [(String, [MBOXParser.RawEmail])] = [
+            ("01-empty-store", []),
+            ("02-one-plain-message", [Self.variant(1)]),
+            ("03-recipients-to-cc-bcc", [Self.variant(2, to: ["Ann <ann@example.org>", "bob@example.org", "Chloé Durand <chloe@example.fr>"],
+                                                       cc: ["Cara <cara@example.net>", "dan@example.net"], bcc: ["hidden@example.net", "Eve <eve@example.com>"])]),
+            ("04-html-and-unicode", [Self.variant(3, subject: unicode, body: unicode + "\nSecond line.", html: "<p>\(unicode)</p>")]),
+            ("05-attachments-small-and-multiblock", [Self.variant(4, attachments: [("small.txt", 40), ("two-blocks.bin", 12_000), ("many-blocks.bin", 300_000)])]),
+            ("06-crosses-table-and-heap-blocks", (0..<300).map { Self.variant(100 + $0, subject: "Boundary \($0) " + String(repeating: "x", count: 60)) }),
+        ]
+        let outDir = ProcessInfo.processInfo.environment["MAILIN_PST_FIXTURE_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        for (name, emails) in cases {
+            let url = dir.appendingPathComponent("\(name).pst")
+            let w = try PSTSpecWriter(url: url)
+            for e in emails { try w.appendMessage(e) }
+            XCTAssertEqual(try w.finalize(), emails.count, name)
+            let bytes = try Data(contentsOf: url)
+            let spec = try PSTSpecReader(data: bytes)
+            // Header high-water marks equal what the file allocates (per type, start-clamped).
+            let header = (0..<32).map { t in bytes.subdata(in: (44 + 4 * t)..<(48 + 4 * t)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) } }
+            XCTAssertEqual(header, Self.expectedRGNID(spec), "\(name): rgnid")
+            // Read back: subjects, bodies, recipients, attachment bytes.
+            let read = spec.messages()
+            XCTAssertEqual(read.count, emails.count, name)
+            for e in emails {
+                guard let m = read.first(where: { $0.internetMessageId == e.headers["Message-ID"] }) else { XCTFail("\(name): missing \(e.headers["Message-ID"]!)"); continue }
+                XCTAssertEqual(m.subject, e.headers["Subject"], name)
+                XCTAssertEqual(m.bodyText, e.plainBody, name)
+                for cc in PSTSpecWriter.addresses(e.headers["Cc"]) { XCTAssertTrue(m.displayCc.contains(cc.email), "\(name): cc \(cc.email)") }
+                for bcc in PSTSpecWriter.addresses(e.headers["Bcc"]) { XCTAssertTrue(m.displayBcc.contains(bcc.email), "\(name): bcc \(bcc.email)") }
+                XCTAssertEqual(m.attachments.map { Data(base64Encoded: $0.base64 ?? "", options: .ignoreUnknownCharacters) },
+                               e.attachments.map { Data(base64Encoded: $0.base64 ?? "") }, "\(name): attachment bytes")
+            }
+            if let outDir {
+                try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+                let dest = outDir.appendingPathComponent("\(name).pst")
+                try? FileManager.default.removeItem(at: dest)
+                try FileManager.default.copyItem(at: url, to: dest)
+            }
+        }
+    }
 }
