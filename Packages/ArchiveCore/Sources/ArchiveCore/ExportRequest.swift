@@ -15,6 +15,11 @@ enum UnifiedExportFormat: String, Codable, CaseIterable, Sendable {
     case vcard, ics                      // derived extracts
 }
 
+/// An app a finished export is handed to.
+enum ExportHandOff: String, Codable, Sendable {
+    case devonthink
+}
+
 // MARK: - Options
 
 enum ExportFolderLayout: String, Codable, CaseIterable, Sendable {
@@ -101,6 +106,9 @@ struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
     var resumeArtifactSHA256: String? = nil
     /// Count known when the request was built (menu headline); nil = unknown.
     var emailCountHint: Int?
+    /// After the files are written, hand them to another app (E2: DEVONthink). Optional,
+    /// so receipts written before it existed still decode.
+    var handOff: ExportHandOff? = nil
 
     var destinationURL: URL { URL(fileURLWithPath: destination) }
 

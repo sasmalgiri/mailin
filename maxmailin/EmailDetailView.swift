@@ -697,6 +697,17 @@ struct EmailDetailView: View {
                     errorMessage: $exportError
                 )
                 .environmentObject(storeManager)
+
+                // E2: a link DEVONthink, Notes or any app can keep; it opens this email in mailin.
+                if DEVONthinkHandOff.isEnabled {
+                    Divider()
+                    Button {
+                        EmailLink.copy(emailID: shown.id, subject: shown.headers["Subject"] ?? "")
+                    } label: {
+                        Label("Copy Link to Email", systemImage: "link")
+                    }
+                    .help("Copies a mailin:// link that opens this email in mailin")
+                }
             } label: {
                 Label(storeManager.isPremium ? String(localized: "Export Email") : String(localized: "Export Email (Pro)"), systemImage: "square.and.arrow.up")
             }

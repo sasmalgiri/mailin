@@ -87,6 +87,12 @@ struct UnifiedExportSections: View {
             button("Individual .eml Files", icon: "envelope",
                    help: "One standard email file each — reimportable") { exportEML() }
         }
+        #if os(macOS)
+        if DEVONthinkHandOff.isEnabled {
+            button(String(localized: "Send to DEVONthink"), icon: "tray.and.arrow.up",
+                   help: String(localized: "Exports these emails as .eml files and opens them in DEVONthink, which imports them")) { sendToDEVONthink() }
+        }
+        #endif
         if included(.pdfFiles) {
             button("PDF Files (one per email)", icon: "doc.viewfinder",
                    help: "One PDF per email") { exportPDFs() }
@@ -181,7 +187,8 @@ struct UnifiedExportSections: View {
     /// Build the request and send it to the pre-flight sheet. The runner is
     /// given this host's renderer, share sheet, error binding and store so a
     /// later Resume behaves the same way.
-    private func request(_ format: UnifiedExportFormat, title: String, destination: URL, isFolder: Bool) {
+    private func request(_ format: UnifiedExportFormat, title: String, destination: URL, isFolder: Bool,
+                         handOff: ExportHandOff? = nil) {
         guard gate() else { return }
         let runner = ExportJobRunner.shared
         if let render = emlRender {
@@ -199,7 +206,8 @@ struct UnifiedExportSections: View {
             destination: destination.path,
             isFolder: isFolder,
             cap: cap,
-            emailCountHint: emailCount))
+            emailCountHint: emailCount,
+            handOff: handOff))
     }
 
     // MARK: - Formats
@@ -228,6 +236,19 @@ struct UnifiedExportSections: View {
         guard let folder = folderDestination(message: String(localized: "Select a folder to save .eml files"),
                                              fallbackName: "eml_export_\(UUID().uuidString)") else { return }
         request(.emlFiles, title: String(localized: "Exporting emails as EML"), destination: folder, isFolder: true)
+    }
+
+    /// E2: the .eml export into a folder of mailin's own, then handed to DEVONthink by the runner
+    /// when the run ends. The count is shown in the menu headline and the pre-flight sheet first.
+    private func sendToDEVONthink() {
+        DEVONthinkHandOff.prune()
+        do {
+            let folder = try DEVONthinkHandOff.newHandOffFolder()
+            request(.emlFiles, title: String(localized: "Sending emails to DEVONthink"), destination: folder,
+                    isFolder: true, handOff: .devonthink)
+        } catch {
+            errorMessage = String(localized: "Could not prepare the files for DEVONthink: \(error.localizedDescription)")
+        }
     }
 
     private func exportPDFs() {

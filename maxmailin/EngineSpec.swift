@@ -245,6 +245,18 @@ struct EngineSpec: Sendable {
             return EngineSpec(.professional, maturity: .stable,
                 name: String(localized: "Hidden timestamps and signature checks"),
                 detail: String(localized: "Decodes timestamps hidden in Message-IDs, MIME boundaries and Thread-Index, and flags messages that should carry a DKIM signature but do not."))
+        // MARK: 3.0.x — Phase E (owner 2026-10-15), preview until tested
+        case .devonthinkHandOff:
+            // E2: work alongside DEVONthink. Exports .eml through the normal export run, then hands
+            // the files to DEVONthink; mailin://email/<id> links open an email from any app.
+            return EngineSpec(.archive, maturity: .preview,
+                name: String(localized: "Send to DEVONthink and email links"),
+                detail: String(localized: "Sends emails to DEVONthink as standard .eml files, and copies links that open an email in mailin from DEVONthink or any notes app. Nothing leaves this Mac."))
+        case .attachmentOCR:
+            // E1: Apple Vision text recognition on scanned PDFs and images, on the device.
+            return EngineSpec(.archive, maturity: .preview,
+                name: String(localized: "Text in scanned attachments (OCR)"),
+                detail: String(localized: "Reads the text in scanned PDFs and photos attached to emails, on this device, so attachment search finds it. No network."))
         default:
             return nil
         }

@@ -55,6 +55,15 @@ enum CapabilityWiring {
         case .v31ForensicTimestamps:
             // F1–F4: read by the risk score and the detail view.
             ForensicSignalsPolicy.isEnabled = isOn
+        case .devonthinkHandOff:
+            // E2: read by the export menus, the email link command and the URL handler.
+            DEVONthinkHandOff.isEnabled = isOn
+        case .attachmentOCR:
+            // E1: read by AttachmentTextIndexJob, which runs without a view.
+            AttachmentOCR.isEnabled = isOn
+            // Turned on mid-session: start the pass shortly after, so the launch-time start (which
+            // registers the job in "Running now") is not raced; a running job ignores the kick.
+            if isOn { Task { @MainActor in try? await Task.sleep(for: .seconds(5)); AttachmentTextIndexJob.shared.kickIfNeeded() } }
         case .v31ShortcutsActions:
             // S1–S4: intents run without a view, so they read a pushed flag.
             ShortcutsPolicy.actionsEnabled = isOn

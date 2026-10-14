@@ -1,6 +1,11 @@
 @testable import ArchiveCore
 import XCTest
 @testable import maxmailin
+import CoreGraphics
+import CoreText
+import ImageIO
+import UniformTypeIdentifiers
+import PDFKit
 
 /// Regression net for the two highest-blast-radius v2 behavioral changes:
 /// R1 (v1→v2 migration) and R2 (search routed through FTS5).
@@ -4530,5 +4535,234 @@ final class V2AIOutputQualityTests: XCTestCase {
         #else
         throw XCTSkip("FoundationModels not available at build time")
         #endif
+    }
+}
+
+// MARK: - Phase E (3.0.x): DEVONthink hand-off, email links, OCR of scanned attachments
+
+
+@MainActor
+final class PhaseEDEVONthinkAndOCRTests: XCTestCase {
+
+    private func tempRoot(_ name: String) -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-\(name)-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    // MARK: E2 — email links
+
+    func testEmailLink_roundTrips_andRejectsOtherURLs() throws {
+        let id = UUID()
+        let link = try XCTUnwrap(EmailLink.url(for: id))
+        XCTAssertEqual(link.absoluteString, "mailin://email/\(id.uuidString)")
+        XCTAssertEqual(EmailLink.emailID(from: link), id)
+        XCTAssertEqual(EmailLink.emailID(from: try XCTUnwrap(URL(string: "MAILIN://EMAIL/\(id.uuidString.lowercased())"))), id)
+        XCTAssertNil(EmailLink.emailID(from: try XCTUnwrap(URL(string: "mailin://email/not-a-uuid"))))
+        XCTAssertNil(EmailLink.emailID(from: try XCTUnwrap(URL(string: "mailin://other/\(id.uuidString)"))))
+        XCTAssertNil(EmailLink.emailID(from: URL(fileURLWithPath: "/tmp/a.mbox")), "file imports are not links")
+    }
+
+    func testEmailLink_resolve_opensKnown_saysMissingOrSwitchedOff() throws {
+        let id = UUID()
+        let link = try XCTUnwrap(EmailLink.url(for: id))
+        XCTAssertEqual(EmailLink.resolve(link, isEnabled: true, exists: { $0 == id }), .open(id))
+        XCTAssertEqual(EmailLink.resolve(link, isEnabled: true, exists: { _ in false }), .missing,
+                       "a link to an email not in this archive says so")
+        XCTAssertEqual(EmailLink.resolve(link, isEnabled: false, exists: { _ in true }), .switchedOff,
+                       "with the switch off the link is refused with a reason, not silently ignored")
+        XCTAssertEqual(EmailLink.resolve(URL(fileURLWithPath: "/tmp/a.eml"), isEnabled: true, exists: { _ in true }), .notALink)
+    }
+
+    // MARK: E2 — Send to DEVONthink
+
+    func testHandOff_findsEveryEML_inYearFolders_andNothingElse() throws {
+        let root = tempRoot("handoff-files")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fm = FileManager.default
+        try fm.createDirectory(at: root.appendingPathComponent("2024"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("Attachments"), withIntermediateDirectories: true)
+        try Data("a".utf8).write(to: root.appendingPathComponent("b.eml"))
+        try Data("b".utf8).write(to: root.appendingPathComponent("2024/a.eml"))
+        try Data("{}".utf8).write(to: root.appendingPathComponent(ExportFolderManifest.filename))
+        try Data("%PDF".utf8).write(to: root.appendingPathComponent("Attachments/x.pdf"))
+        let files = DEVONthinkHandOff.emlFiles(in: root).map { $0.path.replacingOccurrences(of: root.path + "/", with: "") }
+        XCTAssertEqual(files, ["2024/a.eml", "b.eml"], "every .eml, nested too; manifest and attachments stay behind")
+    }
+
+    func testHandOff_newFolderPerSend_andPruneRemovesOnlyOldOnes() throws {
+        let root = tempRoot("handoff-root")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let fresh = try DEVONthinkHandOff.newHandOffFolder(root: root, now: now)
+        let old = try DEVONthinkHandOff.newHandOffFolder(root: root, now: now.addingTimeInterval(-60))
+        XCTAssertNotEqual(fresh, old)
+        XCTAssertTrue(fresh.lastPathComponent.hasPrefix("mailin "))
+        try FileManager.default.setAttributes([.creationDate: now.addingTimeInterval(-10 * 24 * 3600)], ofItemAtPath: old.path)
+        XCTAssertEqual(DEVONthinkHandOff.prune(root: root, now: now), 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+    }
+
+    #if os(macOS)
+    func testHandOff_emptyFolder_sendsNothing_andSaysSo() async throws {
+        let root = tempRoot("handoff-empty")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let delivery = await DEVONthinkHandOff.deliver(folder: root)
+        XCTAssertEqual(delivery, .nothingToSend)
+        XCTAssertFalse(delivery.summary.isEmpty)
+    }
+    #endif
+
+    func testExportRequest_handOffIsOptional_oldReceiptsStillDecode() throws {
+        var request = ExportRequest(format: .emlFiles, title: "t", scope: .explicit([UUID()]),
+                                    destination: "/tmp/x", isFolder: true, cap: nil, emailCountHint: 1)
+        let old = try JSONEncoder().encode(request)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: old) as? [String: Any])
+        json.removeValue(forKey: "handOff")
+        let decodedOld = try JSONDecoder().decode(ExportRequest.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(decodedOld.handOff, "a receipt written before E2 decodes with no hand-off")
+        request.handOff = .devonthink
+        let roundTrip = try JSONDecoder().decode(ExportRequest.self, from: JSONEncoder().encode(request))
+        XCTAssertEqual(roundTrip.handOff, .devonthink, "a resumed send still hands off at the end")
+    }
+
+    func testPhaseESwitches_arePreviews_withMatrixEntries() {
+        for capability in [Capability.devonthinkHandOff, .attachmentOCR] {
+            XCTAssertNotNil(EngineSpec.of(capability), "\(capability) has a matrix entry")
+            XCTAssertEqual(capability.maturity, .preview, "rule 15: off in App Store builds until its gate passes")
+            XCTAssertFalse(Capability.defaultOn(maturity: capability.maturity, isEngine: true, beta: false))
+            XCTAssertEqual(capability.owner, .archive)
+        }
+    }
+
+    // MARK: E1 — OCR
+
+    /// A white image with black text — what a scanner produces.
+    private func scannedImage(_ text: String) throws -> CGImage {
+        let width = 1600, height = 500
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let font = CTFontCreateWithName("Helvetica" as CFString, 96, nil)
+        let attributed = NSAttributedString(string: text, attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(red: 0, green: 0, blue: 0, alpha: 1),
+        ])
+        let line = CTLineCreateWithAttributedString(attributed)
+        context.textPosition = CGPoint(x: 60, y: 200)
+        CTLineDraw(line, context)
+        return try XCTUnwrap(context.makeImage())
+    }
+
+    private func pngData(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
+
+    /// A PDF whose only page is that image — no text layer, like a scan.
+    private func scannedPDF(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 800, height: 250)
+        let consumer = try XCTUnwrap(CGDataConsumer(data: data))
+        let context = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, nil))
+        context.beginPDFPage(nil)
+        context.draw(image, in: box)
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+
+    func testOCR_pdfNeedsOCR_onlyWithoutARealTextLayer() {
+        XCTAssertTrue(AttachmentOCR.pdfNeedsOCR(text: nil, pageCount: 1))
+        XCTAssertTrue(AttachmentOCR.pdfNeedsOCR(text: "  p. 1  ", pageCount: 1), "a stamp or page number is still a scan")
+        XCTAssertFalse(AttachmentOCR.pdfNeedsOCR(text: String(repeating: "word ", count: 20), pageCount: 1))
+        XCTAssertTrue(AttachmentOCR.pdfNeedsOCR(text: String(repeating: "word ", count: 20), pageCount: 10), "20 characters per page")
+        XCTAssertFalse(AttachmentOCR.pdfNeedsOCR(text: "", pageCount: 0))
+    }
+
+    func testOCR_readsAPhotographedLetter_andAScannedPDF() throws {
+        let image = try scannedImage("INVOICE QUARTZ 4711")
+        let fromImage = try XCTUnwrap(AttachmentOCR.text(fromImageData: pngData(image)))
+        XCTAssertTrue(fromImage.uppercased().contains("QUARTZ"), "image OCR: \(fromImage)")
+
+        let pdf = try scannedPDF(image)
+        let document = try XCTUnwrap(PDFDocument(data: pdf))
+        XCTAssertTrue(AttachmentOCR.pdfNeedsOCR(text: document.string, pageCount: document.pageCount), "the fixture has no text layer")
+        let attachment = AttachmentMetadata(filename: "scan.pdf", mimeType: "application/pdf", size: pdf.count,
+                                            base64: pdf.base64EncodedString())
+        XCTAssertTrue((AttachmentTextIndexJob.extractText(from: attachment, ocr: false) ?? "").isEmpty,
+                      "without OCR a scan has no searchable text (the old behaviour)")
+        let scanned = try XCTUnwrap(AttachmentTextIndexJob.extractText(from: attachment, ocr: true))
+        XCTAssertTrue(scanned.uppercased().contains("4711"), "scanned-PDF OCR: \(scanned)")
+    }
+
+    /// The done-means of E1: an archive indexed before OCR existed gets each scanned attachment
+    /// read once by the second pass, and `in:attachments` then finds a word only the scan holds.
+    func testOCR_secondPass_readsEachScanOnce_andSearchFindsIt() async throws {
+        let root = tempRoot("ocr-pass")
+        let wasOn = AttachmentOCR.isEnabled
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AttachmentTextIndexJob.testStoreOverride = nil
+            AttachmentOCR.isEnabled = wasOn
+        }
+        let store = SQLiteEmailStore(directory: root)
+        AttachmentTextIndexJob.testStoreOverride = store
+        let pdf = try scannedPDF(scannedImage("CONTRACT ZEPHYR 2049"))
+        let lines = pdf.base64EncodedString(options: [.lineLength76Characters, .endLineWithLineFeed])
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Signed contract
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <ocr-1@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        scan attached
+        --B
+        Content-Type: application/pdf; name="signed.pdf"
+        Content-Disposition: attachment; filename="signed.pdf"
+        Content-Transfer-Encoding: base64
+
+        \(lines)
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await store.insertBatch([email], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        // Indexed with OCR off: the scan holds no searchable text.
+        AttachmentOCR.isEnabled = false
+        _ = await AttachmentTextIndexJob.shared.run()
+        let before = try await store.attachmentTextSearch("ZEPHYR")
+        XCTAssertTrue(before.isEmpty)
+
+        // OCR on: the second pass reads it, and search finds it.
+        AttachmentOCR.isEnabled = true
+        let pass = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(pass.ocrTotal, 1)
+        XCTAssertEqual(pass.ocrEmails, 1)
+        let after = try await store.attachmentTextSearch("ZEPHYR")
+        XCTAssertEqual(after, [email.id], "in:attachments finds a word only the scan holds")
+        let byFilename = try await store.attachmentTextSearch("signed")
+        XCTAssertEqual(byFilename, [email.id], "the filename still matches")
+
+        // A later run does not read it again.
+        let state = try AttachmentOCRState(url: await store.attachmentOCRStateURL)
+        XCTAssertEqual(try state.doneCount(), 1)
+        let again = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(again.ocrEmails, 1, "already read: counted, not processed again")
+        XCTAssertEqual(again.indexedEmails, 0)
+        XCTAssertNil(state.cursor, "a finished pass clears its cursor")
     }
 }

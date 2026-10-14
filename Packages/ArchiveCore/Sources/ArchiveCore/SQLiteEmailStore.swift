@@ -4964,6 +4964,66 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return (attempted, pending)
     }
 
+    // MARK: - E1: OCR second pass (attachment text already attempted without OCR)
+
+    /// SQL predicate: the email has an attachment OCR can read (an image or a PDF).
+    private static let ocrAttachmentPredicate = """
+        EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id AND (
+            lower(a.mime_type) LIKE 'image/%' OR lower(a.mime_type) LIKE '%pdf%'
+            OR lower(a.filename) LIKE '%.pdf' OR lower(a.filename) LIKE '%.png' OR lower(a.filename) LIKE '%.jpg'
+            OR lower(a.filename) LIKE '%.jpeg' OR lower(a.filename) LIKE '%.tif' OR lower(a.filename) LIKE '%.tiff'
+            OR lower(a.filename) LIKE '%.heic' OR lower(a.filename) LIKE '%.heif'))
+        """
+
+    /// The OCR pass's own state file, beside the archive. Kept outside `emails.db` so the archive
+    /// schema does not change: an earlier build opens the archive as before and ignores this file.
+    var attachmentOCRStateURL: URL { directory.appendingPathComponent("attachment-ocr.sqlite") }
+
+    /// IDs (ascending, after `cursor`) of emails whose attachment text was already extracted and
+    /// that hold an image or PDF — the OCR second pass's work list, without loading any message.
+    func attachmentOCRCandidateIDs(after cursor: String?, limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id FROM emails e
+            WHERE e.has_attach = 1 AND e.id > ?
+              AND EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
+              AND \(Self.ocrAttachmentPredicate)
+            ORDER BY e.id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, cursor ?? "")
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    /// How many emails the OCR second pass covers (for "X of Y").
+    func attachmentOCRCandidateCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, """
+            SELECT COUNT(*) FROM emails e WHERE e.has_attach = 1
+              AND EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
+              AND \(Self.ocrAttachmentPredicate);
+        """)
+    }
+
+    /// Raw MIME for the given emails, in byte-capped pages like the extraction job's work list;
+    /// IDs not returned (page full) are simply asked for again.
+    func rawCandidates(ids: [UUID]) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        guard !ids.isEmpty else { return ([], []) }
+        let db = try ensureDB()
+        let marks = Array(repeating: "?", count: ids.count).joined(separator: ",")
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.id IN (\(marks)) ORDER BY e.id;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        for (i, id) in ids.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024, context: "attachment OCR")
+    }
+
     // MARK: - Forensic state (§21)
 
     struct ForensicEmailHashRow: Sendable, Equatable {

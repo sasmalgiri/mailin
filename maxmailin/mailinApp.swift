@@ -63,6 +63,8 @@ struct mailinApp: App {
     @State private var showLaunchAnimation = false
     /// 3.1: a .mailinpack / .mailinresponse / .mailinscript opened from Finder or Files.
     @State private var incomingDocument: IncomingMailinDocument?
+    /// E2: why a mailin://email link could not open its email.
+    @State private var emailLinkMessage: String?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
 
@@ -347,6 +349,12 @@ struct mailinApp: App {
                             #if os(macOS)
                             .frame(minWidth: 680, minHeight: 520)
                             #endif
+                    }
+                    .alert("Email Link", isPresented: Binding(get: { emailLinkMessage != nil },
+                                                             set: { if !$0 { emailLinkMessage = nil } })) {
+                        Button("OK") { emailLinkMessage = nil }
+                    } message: {
+                        Text(emailLinkMessage ?? "")
                     }
 
                 if showLaunchAnimation {
@@ -865,7 +873,26 @@ struct mailinApp: App {
 
     private func handleIncomingURL(_ url: URL) {
         // OAuth callback schemes were removed in v2 — mailin is strictly
-        // offline. The only incoming URLs we honour are file imports.
+        // offline. The incoming URLs we honour are file imports and, E2,
+        // mailin://email/<id> links (offline: they only select an email).
+        if let linked = EmailLink.emailID(from: url) {
+            Task { @MainActor in
+                let exists = DEVONthinkHandOff.isEnabled
+                    ? ((try? await SQLiteEmailStore.shared.summaries(ids: [linked]))?.isEmpty == false)
+                    : false
+                switch EmailLink.resolve(url, isEnabled: DEVONthinkHandOff.isEnabled, exists: { _ in exists }) {
+                case .open(let emailID):
+                    NotificationCenter.default.post(name: .spotlightEmailSelected, object: emailID)
+                case .switchedOff:
+                    emailLinkMessage = String(localized: "Email links are turned off. Turn on “Send to DEVONthink and email links” in Settings ▸ Modules to open them.")
+                case .missing:
+                    emailLinkMessage = String(localized: "The linked email is not in this archive.")
+                case .notALink:
+                    break
+                }
+            }
+            return
+        }
         let ext = url.pathExtension.lowercased()
         if IncomingMailinDocument.extensions.contains(ext) {
             incomingDocument = IncomingMailinDocument(url: url)

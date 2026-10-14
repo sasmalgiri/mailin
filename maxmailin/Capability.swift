@@ -160,6 +160,9 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     case v31ReviewPack
     case v31TeamCase
     case v31ForensicTimestamps
+    // 3.0.x (FINAL_TODO_3_0_MAJOR.md Phase E) — preview, off until tested.
+    case devonthinkHandOff
+    case attachmentOCR
 
     var id: String { rawValue }
 

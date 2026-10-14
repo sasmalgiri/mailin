@@ -7,6 +7,19 @@
 		<string>com.ecosanskriti.mailin.backgroundAnalysis</string>
 		<string>com.ecosanskriti.mailin.scopejob.*</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.ecosanskriti.mailin.email-link</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>mailin</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

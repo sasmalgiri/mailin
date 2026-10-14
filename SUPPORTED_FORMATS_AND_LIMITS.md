@@ -300,3 +300,28 @@ Mail files do not record when a message was deleted, so deletion analysis counts
 | Team case | Responses and log entries are signed by the device key; they prove integrity, not who held the device | Identity is the device; MDM-managed roles are recorded with each entry |
 | DKIM / ARC | Checked against keys you import; the ARC-Seal chain is not checked, only ARC message signatures | No DNS lookups (offline) |
 | Hidden timestamps | Thread-Index, Outlook and JavaMail boundaries, Unix times in Message-IDs; other Message-ID formats (e.g. historical Gmail) are not decoded | Only documented encodings are decoded |
+
+## 3.0.x previews (off by default; switches in Settings ▸ Modules)
+
+**Text in scanned attachments (OCR)** — switch "Text in scanned attachments (OCR)".
+- Reads scanned PDFs (a PDF whose own text layer holds fewer than 20 characters per page) and image
+  attachments (PNG, JPEG, TIFF, HEIC, GIF, BMP, WebP) with Apple Vision, on this device. No network.
+- Each image or PDF page is read at most 3,000 pixels on its longest side; one page in memory at a time.
+  Very small print in a large scan may not be recognised at that size.
+- Recognised text joins the attachment search (`in:attachments`); per attachment, the first 500,000
+  characters are indexed (the same limit as other attachment text).
+- Mail already indexed before OCR was switched on is read in a second pass, each email once, resuming
+  after an interruption. Progress shows in Settings ▸ Modules ▸ Running now as "scanned text: X of Y
+  emails". The pass's own state is a file beside the archive (`attachment-ocr.sqlite`); the archive
+  itself is not changed in format, so an earlier build still opens it.
+- Handwriting and low-contrast photos are recognised poorly or not at all.
+
+**Send to DEVONthink and email links** — switch "Send to DEVONthink and email links" (Mac).
+- Export ▸ Send to DEVONthink: the emails (count shown first) are written as standard .eml files through
+  the normal export run — pre-flight, receipt, Resume, the Free plan's 500-email limit — then opened with
+  DEVONthink, which imports them by its own Import setting (Global Inbox or a chosen group). Without
+  DEVONthink the files are shown in Finder; the receipt says which happened.
+- DEVONthink 3 and 4 are looked for by identifier. Tested here without DEVONthink installed (the Finder
+  fallback and the file set); the import itself is to be confirmed on a Mac with DEVONthink.
+- Export ▸ Copy Link to Email (open email): a `mailin://email/<id>` link that DEVONthink, Notes or any app
+  can keep. Opening it selects the email; a link to an email not in this archive says so.

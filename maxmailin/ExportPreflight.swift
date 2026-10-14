@@ -539,6 +539,16 @@ final class ExportJobRunner {
             resume = Self.resumeRequest(for: request, positions: result?.positionsConsumed ?? written)
         }
 
+        // E2: a hand-off happens only after files were really written (rule 5) — never after a
+        // cancel or a failure, which keep the partial folder for Resume instead.
+        #if os(macOS)
+        if request.handOff == .devonthink, outcome != .cancelled, outcome != .failed {
+            let delivery = await DEVONthinkHandOff.deliver(folder: request.destinationURL)
+            note = note.map { $0 + "; " + delivery.summary } ?? delivery.summary
+            if case .failed = delivery { onError?(delivery.summary) }
+        }
+        #endif
+
         var isFolder: ObjCBool = false
         _ = FileManager.default.fileExists(atPath: request.destination, isDirectory: &isFolder)
         ExportRunCenter.shared.record(ExportReceipt(
