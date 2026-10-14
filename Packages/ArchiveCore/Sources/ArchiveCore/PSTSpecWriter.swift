@@ -557,7 +557,8 @@ final class PSTSpecWriter: PSTStreamWriting {
                 for i in 1..<8 { levels[i] = fill[i] ?? 0 }
                 for i in 0..<4 { d[8 + i] = levels[2 * i] | (levels[2 * i + 1] << 4) }
             } else if (blockIndex - 8) % 128 == 0 && blockIndex >= 8 {
-                // HNBITMAPHDR: its own level is known; later blocks are not yet, so they read as full.
+                // HNBITMAPHDR: its own level is known now; the later blocks' are filled in when
+                // the block is written (`writePendingBitmap`).
                 var levels = [UInt8](repeating: 0xF, count: 128)
                 levels[0] = Self.level(PSTSpecFormat.blockDataMax - d.count)
                 for i in 0..<64 { d[2 + i] = levels[2 * i] | (levels[2 * i + 1] << 4) }
@@ -565,17 +566,45 @@ final class PSTSpecWriter: PSTStreamWriting {
             return d
         }
 
-        private func closeBlock() throws {
+        /// `last`: the heap's final block, which ends at its page map — Outlook never pads it
+        /// (v8: SCANPST found "minor inconsistencies" in exactly the two heaps whose last block
+        /// was padded, and rewrote them so the padded block was no longer last).
+        private func closeBlock(last: Bool = false) throws {
             var d = blockBytes(root: 0)
             fill[blockIndex] = Self.level(PSTSpecFormat.blockDataMax - d.count)
             // A heap block followed by another is padded to the whole block after its page
             // map, as Outlook writes them: every block but the last in a data tree must be
             // full (SCANPST "Middle page not full"). ibHnpm still points at the map.
-            if d.count < PSTSpecFormat.blockDataMax { d.append(Data(count: PSTSpecFormat.blockDataMax - d.count)) }
+            if !last, d.count < PSTSpecFormat.blockDataMax { d.append(Data(count: PSTSpecFormat.blockDataMax - d.count)) }
             totalBytes += d.count
-            if blockIndex == 0 { block0 = d; block0Starts = starts } else if !measureOnly { bids.append(try writer.writeBlock(d, isInternal: false)) }
+            if blockIndex == 0 {
+                block0 = d; block0Starts = starts
+            } else if !measureOnly {
+                if (blockIndex - 8) % 128 == 0 {
+                    // An HNBITMAPHDR block holds the fill levels of the next 128 blocks, not
+                    // known yet: keep it (one block) and write it once they are closed.
+                    try writePendingBitmap()
+                    pendingBitmap = (bids.count, blockIndex, d)
+                    bids.append(0)
+                } else {
+                    bids.append(try writer.writeBlock(d, isInternal: false))
+                }
+            }
             blockIndex += 1
             current = Data(); starts = []
+        }
+
+        private var pendingBitmap: (position: Int, block: Int, data: Data)?
+
+        /// Writes the held HNBITMAPHDR block with the real fill levels of its 128 blocks (0 for
+        /// blocks past the end, as the HNHDR does).
+        private func writePendingBitmap() throws {
+            guard var p = pendingBitmap else { return }
+            for i in 0..<64 {
+                p.data[2 + i] = (fill[p.block + 2 * i] ?? 0) | ((fill[p.block + 2 * i + 1] ?? 0) << 4)
+            }
+            bids[p.position] = try writer.writeBlock(p.data, isInternal: false)
+            pendingBitmap = nil
         }
 
         /// Writes the heap; returns the node's data BID.
@@ -586,8 +615,9 @@ final class PSTSpecWriter: PSTStreamWriting {
                 return measureOnly ? 0 : try writer.writeBlock(d, isInternal: false)
             }
             // Close the open block, then write block 0 with the root and fill levels.
-            if !current.isEmpty || starts.isEmpty == false { try closeBlock() }
+            if !current.isEmpty || starts.isEmpty == false { try closeBlock(last: true) }
             if measureOnly { return 0 }
+            try writePendingBitmap()
             var b0 = block0!
             b0.put32(4, root)
             var levels = [UInt8](repeating: 0, count: 8)

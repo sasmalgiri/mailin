@@ -44,6 +44,30 @@ final class PSTSpecWriterTests: XCTestCase {
         }
     }
 
+    static func fillLevelProblems(_ spec: PSTSpecReader) -> [String] {
+        func level(_ free: Int) -> UInt8 {
+            let limits = [3584, 2560, 2048, 1792, 1536, 1280, 1024, 768, 512, 256, 128, 64, 32, 16, 8]
+            return UInt8(limits.firstIndex { free >= $0 } ?? 15)
+        }
+        var problems: [String] = []
+        for node in spec.nodes.values where node.dataBid != 0 {
+            let blocks = spec.dataBlocks(node.dataBid)
+            guard blocks.count > 1, blocks[0].count >= 12, blocks[0][2] == 0xEC else { continue }
+            func stored(_ i: Int) -> UInt8 {
+                let (holder, offset, first) = i < 8 ? (0, 8, 0) : (8 + (i - 8) / 128 * 128, 2, 8 + (i - 8) / 128 * 128)
+                let byte = blocks[holder][offset + (i - first) / 2]
+                return (i - first) % 2 == 0 ? byte & 0xF : byte >> 4
+            }
+            for (i, b) in blocks.enumerated() {
+                let map = Int(PSTSpecReader.u16(b, 0)), cAlloc = Int(PSTSpecReader.u16(b, map))
+                let allocEnd = Int(PSTSpecReader.u16(b, map + 4 + 2 * cAlloc))
+                let free = 8176 - (map + 4 + 2 * (cAlloc + 1)) + (map - allocEnd)
+                if stored(i) != level(free) { problems.append("node \(String(node.nid, radix: 16)) block \(i): stored \(stored(i)), free \(free)"); break }
+            }
+        }
+        return problems
+    }
+
     /// Replication state as SCANPST's optional repair leaves it: the store's version history
     /// [1][GUID][1]; on every folder row (but the spam folder's) and message row a ReplItemid,
     /// a unique change number (multiple of 4) and the store's version history; the HMP (0xC01:
@@ -211,6 +235,19 @@ final class PSTSpecWriterTests: XCTestCase {
             let sizes = spec.dataBlocks(node.dataBid).map(\.count)
             XCTAssertTrue(sizes.dropLast().allSatisfy { $0 == 8176 }, "heap of \(String(folder, radix: 16)): \(sizes)")
         }
+        // SCANPST on v8 ("only minor inconsistencies"): the last block of a heap ends at its page
+        // map, as in every Outlook-written heap — middle blocks full, the last one not padded.
+        var paddedLast: [String] = []
+        for node in spec.nodes.values where node.dataBid & 2 != 0 {
+            let blocks = spec.dataBlocks(node.dataBid)
+            guard blocks.count > 1, blocks[0].count >= 12, blocks[0][2] == 0xEC, let last = blocks.last else { continue }
+            let map = Int(PSTSpecReader.u16(last, 0)), cAlloc = Int(PSTSpecReader.u16(last, map))
+            if last.count != map + 4 + 2 * (cAlloc + 1) { paddedLast.append(String(node.nid, radix: 16)) }
+        }
+        XCTAssertEqual(paddedLast, [], "heaps whose last block is padded past its page map")
+        // Every block's stored fill level (HNHDR for blocks 0–7, HNBITMAPHDR at 8, 136, … for the
+        // next 128) equals the level of its actual free space ([MS-PST] 2.3.1.5), as in Outlook's files.
+        XCTAssertEqual(Self.fillLevelProblems(spec), [])
         let spamProps = spec.propertyContext(dataBid: spec.nodes[0x2223]?.dataBid ?? 0, subBid: 0)
         if case .string(let name)? = spamProps[0x3001] { XCTAssertEqual(name, "SPAM Search Folder 2") } else { XCTFail("spam folder name") }
         // Keep a copy for the external readers.
