@@ -3457,10 +3457,12 @@ struct EmailRowView: View {
                             Text("\(riskScore)")
                                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                         }
-                        .foregroundColor(riskScore >= 75 ? .red : riskScore >= 55 ? .orange : .yellow)
+                        // Yellow text fails contrast on a light row; the colour
+                        // stays in the badge, the number stays readable.
+                        .foregroundColor(riskScore >= 75 ? .red : riskScore >= 55 ? .orange : .primary)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
-                        .background((riskScore >= 75 ? Color.red : riskScore >= 55 ? Color.orange : Color.yellow).opacity(0.1))
+                        .background((riskScore >= 75 ? Color.red : riskScore >= 55 ? Color.orange : Color.yellow).opacity(riskScore >= 55 ? 0.1 : 0.3))
                         .cornerRadius(3)
                     }
                     Spacer()
@@ -3471,7 +3473,7 @@ struct EmailRowView: View {
 
                 Text(highlightedText(email.headers["Subject"] ?? "(No Subject)", field: .subject))
                     .font(.footnote)
-                    .foregroundColor(.primary.opacity(0.85))
+                    .foregroundColor(.primary)
                     .lineLimit(1)
 
                 SearchMatchFieldChips(fields: matchedFields)

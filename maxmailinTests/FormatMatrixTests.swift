@@ -115,7 +115,7 @@ struct ProductionImportRun {
 final class TestTempHygiene: XCTestCase {
     static let prefixes = ["format-", "large-message-", "handoff-", "reloc-", "enospc-", "eject-", "v1lib-", "v2lib-",
                            "mboxrd-", "throughput-", "mailin-container-", "measure-", "overflow-",
-                           "scale-", "golden-"]
+                           "scale-", "golden-", "V3Scale-", "v31run-", "V31Shared-", "V31ReviewTests-"]
 
     func testSweepStaleDisposableStores() throws {
         let fm = FileManager.default

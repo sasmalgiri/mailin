@@ -49,6 +49,10 @@ final class AccessibilityAuditUITests: XCTestCase {
         // name is announced for that area either way).
         let namedFrames = app.groups.matching(NSPredicate(format: "label != ''")).allElementsBoundByIndex
             .map { ($0.frame, $0.label) }
+        // Text inside a List, with the List's own frame (its clip).
+        let listTextClips: [(CGRect, CGRect)] = app.outlines.allElementsBoundByIndex.flatMap { outline in
+            outline.descendants(matching: .staticText).allElementsBoundByIndex.map { ($0.frame, outline.frame) }
+        }
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
                 let element = issue.element.map { e in
@@ -76,7 +80,8 @@ final class AccessibilityAuditUITests: XCTestCase {
                 // labelling each List section header/footer, a stock menu
                 // Picker in place of a Menu). Reported, not failed; anything
                 // the app draws still fails. See ACCESSIBILITY_3_0.md.
-                if let why = Self.frameworkElement(issue, windowFrames: windowFrames, scrollFrames: scrollFrames, namedFrames: namedFrames) {
+                if let why = Self.frameworkElement(issue, windowFrames: windowFrames, scrollFrames: scrollFrames, namedFrames: namedFrames,
+                                                 listTextClips: listTextClips) {
                     self.advisories.append("\(surface): SwiftUI-generated (\(why)) — \(issue.compactDescription) — \(element)")
                     return true
                 }
@@ -95,7 +100,8 @@ final class AccessibilityAuditUITests: XCTestCase {
     }
 
     private static func frameworkElement(_ issue: XCUIAccessibilityAuditIssue, windowFrames: [CGRect],
-                                         scrollFrames: [CGRect], namedFrames: [(CGRect, String)]) -> String? {
+                                         scrollFrames: [CGRect], namedFrames: [(CGRect, String)],
+                                         listTextClips: [(CGRect, CGRect)]) -> String? {
         let text = issue.compactDescription
         guard let e = issue.element else {
             return text.localizedCaseInsensitiveContains("no description") || text.localizedCaseInsensitiveContains("contrast")
@@ -120,6 +126,9 @@ final class AccessibilityAuditUITests: XCTestCase {
         // the audit samples pixels of whatever is drawn there instead.
         if text.localizedCaseInsensitiveContains("contrast failed") {
             let f = e.frame
+            if let list = listTextClips.first(where: { $0.0 == f })?.1, !list.insetBy(dx: -1, dy: -1).contains(f) {
+                return "list row scrolled out of view, contrast not measurable"
+            }
             let clip = scrollFrames.filter { $0.minX <= f.minX + 1 && $0.maxX >= f.maxX - 1 }.max { $0.height < $1.height }
             if let clip, f.minY > clip.minY, !clip.insetBy(dx: -1, dy: -1).contains(f) {
                 return "scrolled out of view, contrast not measurable"
