@@ -496,10 +496,10 @@ final class PSTSpecReader {
                 m.messageSize = Int(pc[0x0E08]?.int ?? 0)
                 m.contentType = messageClass.hasPrefix("IPM.Note") ? nil : messageClass
                 let subs = subnodes(node.subBid)
-                // Outlook stores DisplayTo but computes DisplayCc/DisplayBcc ([MS-PST] 2.5.2.3,
-                // SPGET_DISPLAY): fill each missing line from the recipient table, not only To.
-                if m.displayTo.isEmpty || m.displayCc.isEmpty || m.displayBcc.isEmpty || m.senderEmail.isEmpty,
-                   let rt = subs[Self.nidRecipientTable] {
+                // The display lines hold names only ("Ann; Cara"), and DisplayCc/DisplayBcc are
+                // absent when no Cc/Bcc ([MS-PST] 2.5.2.3): take each line from the recipient
+                // table, which has the addresses, and keep the stored line when the table has none.
+                if let rt = subs[Self.nidRecipientTable] {
                     let rows = table(dataBid: rt.0, subBid: rt.1)
                     func list(_ kind: Int64) -> String {
                         rows.filter { ($0.values[0x0C150003]?.int ?? 1) == kind }.map { r in
@@ -508,9 +508,10 @@ final class PSTSpecReader {
                             return addr.isEmpty ? name : (name.isEmpty || name == addr ? addr : "\(name) <\(addr)>")
                         }.joined(separator: ", ")
                     }
-                    if m.displayTo.isEmpty { m.displayTo = list(1) }
-                    if m.displayCc.isEmpty { m.displayCc = list(2) }
-                    if m.displayBcc.isEmpty { m.displayBcc = list(3) }
+                    for (kind, line) in [(Int64(1), \PSTReader.PSTMessage.displayTo), (2, \.displayCc), (3, \.displayBcc)] {
+                        let fromTable = list(kind)
+                        if !fromTable.isEmpty { m[keyPath: line] = fromTable }
+                    }
                 }
                 // Attachments: the attachment table's rows, plus any attachment object
                 // (NID type 0x05) the table does not list — some damaged files lost the

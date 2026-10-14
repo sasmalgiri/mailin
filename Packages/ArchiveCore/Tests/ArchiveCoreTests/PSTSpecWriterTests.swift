@@ -81,7 +81,7 @@ final class PSTSpecWriterTests: XCTestCase {
                 problems.append("attachment bytes of \(m.subject): read \(Data(base64Encoded: a.base64 ?? "", options: .ignoreUnknownCharacters)?.count ?? -1) of \(b.size), meta size \(a.size), file \(a.fileURL?.path ?? "-")")
             }
             if m.senderEmail != PSTSpecWriter.addresses(e.headers["From"]).first?.email { problems.append("sender of \(m.subject)") }
-            // Cc/Bcc come back from the recipient table (the display lines are computed, not stored).
+            // Cc/Bcc come back (display lines, or the recipient table when a reader has none).
             if e.headers["Cc"] != nil, !m.displayCc.contains("cara@example.net") { problems.append("cc of \(m.subject): \(m.displayCc)") }
             if e.headers["Bcc"] != nil, !m.displayBcc.contains("hidden@example.net") { problems.append("bcc of \(m.subject): \(m.displayBcc)") }
         }
@@ -116,18 +116,33 @@ final class PSTSpecWriterTests: XCTestCase {
         }
         XCTAssertEqual(lacking.count, 0, "messages missing a required property")
         // Contents rows agree with their messages the way Outlook's do (SCANPST,
-        // 2026-10-14: "row doesn't match sub-object" on 990 of 1,000 rows): no cell
-        // the message lacks, no stored DisplayCc, rising row versions.
+        // 2026-10-14: "row doesn't match sub-object" on every row). The repaired v5 file
+        // showed Microsoft's corrections: PidTagMessageSize = the message node's data-block
+        // bytes, and DisplayCc / DisplayBcc stored (DisplayCc also in the row) when present.
         var versions = Set<Int64>()
+        var rowProblems: [String] = []
         for folder in [0x8082, 0x80A2] as [UInt32] {
             guard let node = spec.nodes[(folder >> 5) << 5 | 0x0E] else { XCTFail("contents table of \(folder)"); continue }
             for row in spec.table(dataBid: node.dataBid, subBid: node.subBid) {
-                for tag: UInt32 in [0x0057_000B, 0x0058_000B, 0x0E03_001F] where row.values[tag] != nil {
-                    XCTFail("row \(String(row.rowID, radix: 16)) carries \(String(tag, radix: 16))")
+                for tag: UInt32 in [0x0057_000B, 0x0058_000B] where row.values[tag] != nil {
+                    rowProblems.append("row \(String(row.rowID, radix: 16)) carries \(String(tag, radix: 16))")
                 }
                 if let v = row.values[0x67F3_0003]?.int { versions.insert(v) }
+                guard let msg = spec.nodes[row.rowID] else { rowProblems.append("row \(row.rowID) without message"); continue }
+                let props = spec.propertyContext(dataBid: msg.dataBid, subBid: msg.subBid)
+                let size = Self.dataBlockBytes(spec, msg.dataBid, msg.subBid)
+                if props[0x0E08]?.int != Int64(size) { rowProblems.append("message \(String(row.rowID, radix: 16)) size \(props[0x0E08]?.int ?? -1), data bytes \(size)") }
+                if row.values[0x0E08_0003]?.int != Int64(size) { rowProblems.append("row \(String(row.rowID, radix: 16)) size ≠ \(size)") }
+                if row.values[0x0E03_001F]?.string != props[0x0E03]?.string { rowProblems.append("row \(String(row.rowID, radix: 16)) DisplayCc ≠ message") }
+                let ccNames = (props[0x0E03]?.string).map { [$0] } ?? []
+                let subject = props[0x0037]?.string ?? ""
+                if let i = Int(subject.split(separator: " ").dropFirst().first ?? "") {
+                    XCTAssertEqual(ccNames, i % 3 == 0 ? ["Cara"] : [], "DisplayCc of \(subject)")
+                    XCTAssertEqual(props[0x0E02]?.string, i % 7 == 0 ? "hidden@example.net" : nil, "DisplayBcc of \(subject)")
+                }
             }
         }
+        XCTAssertTrue(rowProblems.isEmpty, rowProblems.prefix(8).joined(separator: "\n"))
         XCTAssertEqual(versions.count, n, "every row has its own non-zero row version")
         XCTAssertFalse(versions.contains(0))
         // SCANPST on the v3 file (2026-10-14): the templates Outlook writes, recipient row IDs
@@ -137,6 +152,9 @@ final class PSTSpecWriterTests: XCTestCase {
         // folder table maps the default class, the LTP high-water mark is past every LTP NID.
         let sal = spec.nodes[0x201].map { spec.dataBlocks($0.dataBid).flatMap { $0 } } ?? []
         XCTAssertEqual(Array(sal.prefix(4)), [0x23, 0x22, 0x00, 0x00], "search activity list")
+        // SCANPST on v5: "Deleting SDO"; its repair left the search domain object as an empty list.
+        XCTAssertNotNil(spec.nodes[0x261], "search domain object")
+        XCTAssertEqual(spec.nodes[0x261]?.dataBid, 0, "no search criteria reference a folder: empty list")
         let receive = spec.nodes[0x62B].map { spec.table(dataBid: $0.dataBid, subBid: $0.subBid) } ?? []
         XCTAssertEqual(receive.map { $0.values[0x001A_001F]?.string ?? "-" }, ["", "IPM", "Report.IPM", "IPC"])
         let rgnidLTP = bytes.subdata(in: (44 + 4 * 31)..<(48 + 4 * 31)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
@@ -158,6 +176,13 @@ final class PSTSpecWriterTests: XCTestCase {
         // Keep a copy for the external readers.
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
         try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
+    }
+
+    /// Bytes of a node's data blocks — its data tree and every subnode's, nested ones too;
+    /// XBLOCK/SLBLOCK bytes not counted. What SCANPST recomputes PidTagMessageSize as.
+    static func dataBlockBytes(_ spec: PSTSpecReader, _ dataBid: UInt64, _ subBid: UInt64) -> Int {
+        spec.dataBlocks(dataBid).reduce(0) { $0 + $1.count }
+            + spec.subnodes(subBid).values.reduce(0) { $0 + dataBlockBytes(spec, $1.0, $1.1) }
     }
 
     // MARK: Fixture set (each feature on its own, for Windows/SCANPST and independent decoders)

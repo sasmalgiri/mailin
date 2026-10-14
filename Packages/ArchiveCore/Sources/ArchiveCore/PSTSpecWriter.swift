@@ -221,6 +221,11 @@ final class PSTSpecWriter: PSTStreamWriting {
         for s in [name.isEmpty ? email : name, "SMTP", email] { d.append(PSTSpecFormat.utf16(s)); d.u16(0) }
         return d
     }
+    /// Bytes of every data (non-internal) block written so far. PidTagMessageSize is the sum
+    /// of the data-block bytes of the message node — its property context and every subnode,
+    /// nested ones included, XBLOCKs and SLBLOCKs excluded: SCANPST's recomputed value on all
+    /// 1,000 messages of its repaired v5 file, and the stored value in Outlook 2010 files.
+    private(set) var leafBytesWritten = 0
     /// A rising row version for each table row, as Outlook numbers them.
     func nextRowVersion() -> UInt32 { rowVersion += 4; return rowVersion }
     /// Highest nidIndex allocated per NID_TYPE, top-level nodes and subnodes alike. The
@@ -368,6 +373,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         var r = Data(); r.u64(bid); r.u64(ib); r.u16(UInt16(data.count)); r.u16(2)
         try bbtSpill.write(contentsOf: r)
         bbtCount += 1
+        if !isInternal { leafBytesWritten += data.count }
         return bid
     }
 
@@ -440,7 +446,12 @@ final class PSTSpecWriter: PSTStreamWriting {
         private var fill: [Int: UInt8] = [:]
         private(set) var totalBytes = 0
 
-        init(writer: PSTSpecWriter, clientSig: UInt8) { self.writer = writer; self.clientSig = clientSig; starts = [] }
+        /// Lays the heap out without writing anything, to learn `totalBytes` in advance.
+        private let measureOnly: Bool
+
+        init(writer: PSTSpecWriter, clientSig: UInt8, measureOnly: Bool = false) {
+            self.writer = writer; self.clientSig = clientSig; self.measureOnly = measureOnly; starts = []
+        }
 
         static func headerSize(_ i: Int) -> Int { i == 0 ? 12 : ((i - 8) % 128 == 0 && i >= 8 ? 66 : 2) }
 
@@ -511,7 +522,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             // full (SCANPST "Middle page not full"). ibHnpm still points at the map.
             if d.count < PSTSpecFormat.blockDataMax { d.append(Data(count: PSTSpecFormat.blockDataMax - d.count)) }
             totalBytes += d.count
-            if blockIndex == 0 { block0 = d } else { bids.append(try writer.writeBlock(d, isInternal: false)) }
+            if blockIndex == 0 { block0 = d } else if !measureOnly { bids.append(try writer.writeBlock(d, isInternal: false)) }
             blockIndex += 1
             current = Data(); starts = []
         }
@@ -521,10 +532,11 @@ final class PSTSpecWriter: PSTStreamWriting {
             if blockIndex == 0 {
                 let d = blockBytes(root: root)
                 totalBytes += d.count
-                return try writer.writeBlock(d, isInternal: false)
+                return measureOnly ? 0 : try writer.writeBlock(d, isInternal: false)
             }
             // Close the open block, then write block 0 with the root and fill levels.
             if !current.isEmpty || starts.isEmpty == false { try closeBlock() }
+            if measureOnly { return 0 }
             var b0 = block0!
             b0.put32(4, root)
             var levels = [UInt8](repeating: 0, count: 8)
@@ -614,6 +626,30 @@ final class PSTSpecWriter: PSTStreamWriting {
         }
         let root = try bth.finish()
         return (try heap.finish(root: root), try subnodeTree(subs))
+    }
+
+    /// The data-block bytes `propertyContext(props)` will write, laid out without writing:
+    /// the heap (padded middle blocks included) plus each value stored in its own subnode.
+    /// Fixed-size values do not change the layout, so a size property can be filled in after.
+    func propertyContextDataBytes(_ props: [(UInt16, PSTSpecValue)]) throws -> Int {
+        let heap = HeapBuilder(writer: self, clientSig: 0xBC, measureOnly: true)
+        let bth = BTHBuilder(heap: heap, cbKey: 2, cbEnt: 6)
+        var subnodeBytes = 0
+        for (id, v) in props.sorted(by: { $0.0 < $1.0 }) {
+            var hnid: UInt32 = 0
+            if let inline = v.inline {
+                hnid = inline
+            } else {
+                let bytes = v.bytes
+                if bytes.count > F.maxAllocation { subnodeBytes += bytes.count; hnid = F.nid(0x400, F.tLTP) }
+                else if !bytes.isEmpty { hnid = try heap.alloc(bytes) }
+            }
+            var k = Data(); k.u16(id)
+            var e = Data(); e.u16(v.type); e.u32(hnid)
+            try bth.add(key: k, value: e)
+        }
+        _ = try heap.finish(root: try bth.finish())
+        return heap.totalBytes + subnodeBytes
     }
 
     // MARK: LTP — table context
@@ -833,10 +869,11 @@ final class PSTSpecWriter: PSTStreamWriting {
             let from = PSTSpecWriter.addresses(header("From")).first
             let to = PSTSpecWriter.addresses(header("To")), cc = PSTSpecWriter.addresses(header("Cc")), bcc = PSTSpecWriter.addresses(header("Bcc"))
             let subject = header("Subject") ?? ""
+            let displayTo = to.map(\.name).joined(separator: "; ")
+            let displayCc = cc.map(\.name).joined(separator: "; "), displayBcc = bcc.map(\.name).joined(separator: "; ")
             let hasAttachments = !email.attachments.isEmpty
             let flags: UInt32 = 0x01 | (hasAttachments ? 0x10 : 0)
-            var size = email.rawSource.utf8.count
-            if size == 0 { size = email.plainBody.utf8.count + email.htmlBody.utf8.count }
+            let leafBytesBefore = writer.leafBytesWritten
 
             var p: [(UInt16, PSTSpecValue)] = [
                 (0x001A, .unicode("IPM.Note")), (0x0037, .unicode(subject)), (0x0070, .unicode(subject)),
@@ -845,15 +882,17 @@ final class PSTSpecWriter: PSTStreamWriting {
                 // PidTagMessageStatus and PidTagHasAttachments are computed by the store
                 // ([MS-PST] 2.5.2.3: SPGET_MSGSTATUS, SPGET_HASATTACH; not settable) and Outlook
                 // never stores them on the message; the status lives in the contents row.
-                (0x0E07, .long(flags)), (0x0E08, .long(UInt32(min(size, Int(UInt32.max))))),
-                (0x0E04, .unicode(to.map(\.name).joined(separator: "; "))),
+                (0x0E07, .long(flags)),
+                (0x0E04, .unicode(displayTo)),
                 // PidTagSearchKey: required on every Message object PC ([MS-PST] 2.4.5.1.1);
                 // 16 bytes, the email's own identifier, so it is unique and stable.
                 (0x300B, .binary(withUnsafeBytes(of: email.id.uuid) { Data($0) })),
             ]
-            // DisplayCc / DisplayBcc are computed from the recipient table by the store
-            // ([MS-PST] 2.5.2.3, SPGET_DISPLAY); Outlook does not store them, and SCANPST
-            // reports a contents row that differs from the computed value.
+            // DisplayCc / DisplayBcc are stored when the message has Cc / Bcc recipients, in
+            // DisplayTo's "Name; Name" form: SCANPST added exactly these to the 334 Cc and 143
+            // Bcc messages of the v5 file it repaired, and DisplayCc to their contents rows.
+            if !displayCc.isEmpty { p.append((0x0E03, .unicode(displayCc))) }
+            if !displayBcc.isEmpty { p.append((0x0E02, .unicode(displayBcc))) }
             if let f = from {
                 p += [(0x0C1A, .unicode(f.name)), (0x0C1E, .unicode("SMTP")), (0x0C1F, .unicode(f.email)),
                       (0x0042, .unicode(f.name)), (0x0064, .unicode("SMTP")), (0x0065, .unicode(f.email))]
@@ -920,15 +959,29 @@ final class PSTSpecWriter: PSTStreamWriting {
             let t = try table.finish()
             subs.append((0x671, t.data, t.sub))
 
+            // PidTagMessageSize: the data bytes of everything written for this message — the
+            // recipient and attachment tables and attachment objects (already on disk) plus the
+            // property context about to be written, measured first; the size value is a fixed
+            // 4 bytes, so adding it does not change that layout.
+            p.append((0x0E08, .long(0)))
+            let size = writer.leafBytesWritten - leafBytesBefore + (try writer.propertyContextDataBytes(p))
+            let sizeValue = PSTSpecValue.long(UInt32(clamping: size))
+            p[p.count - 1] = (0x0E08, sizeValue)
+
+            // The row is filled from the same values as the message, so they cannot disagree.
             contentsRow = [
                 0x0017_0003: .long(1), 0x001A_001F: .unicode("IPM.Note"), 0x0036_0003: .long(0), 0x0037_001F: .unicode(subject),
                 0x0039_0040: .time(date), 0x0070_001F: .unicode(subject),
-                0x0E04_001F: .unicode(to.map(\.name).joined(separator: "; ")), 0x0E06_0040: .time(date), 0x0E07_0003: .long(flags),
-                0x0E08_0003: .long(UInt32(min(size, Int(UInt32.max)))), 0x0E17_0003: .long(0), 0x3008_0040: .time(date),
+                0x0E04_001F: .unicode(displayTo), 0x0E06_0040: .time(date), 0x0E07_0003: .long(flags),
+                0x0E08_0003: sizeValue, 0x0E17_0003: .long(0), 0x3008_0040: .time(date),
             ]
+            if !displayCc.isEmpty { contentsRow[0x0E03_001F] = .unicode(displayCc) }
             if let f = from { contentsRow[0x0042_001F] = .unicode(f.name) }
 
-            return try writer.propertyContext(p, extraSubnodes: subs, nextSubnodeIndex: &subIndex)
+            let before = writer.leafBytesWritten
+            let written = try writer.propertyContext(p, extraSubnodes: subs, nextSubnodeIndex: &subIndex)
+            assert(writer.leafBytesWritten - before == size - (before - leafBytesBefore), "message size measured ≠ written")
+            return written
         }
     }
 
@@ -969,6 +1022,11 @@ final class PSTSpecWriter: PSTStreamWriting {
                                         nextSubnodeIndex: &unused)
         specialNodes.append((0x61, names.data, names.sub, 0))
         specialNodes.append((0x1E1, 0, 0, 0))
+        // Search domain object ([MS-PST] 2.4.8): "the global list of all Folder objects that are
+        // referenced by any Folder object's Search Criteria". The only criteria written (0x2227)
+        // reference no folder, so the list is empty — the node SCANPST rebuilt in its v5 repair
+        // ("Deleting SDO"), and as an Outlook-written backup PST holds it (Digital Corpora).
+        specialNodes.append((0x261, 0, 0, 0))
         // The search activity list names the search folders (Outlook writes the spam folder first).
         var sal = Data(); sal.u32(Self.spamSearchFolderNid)
         specialNodes.append((0x201, try writeBlock(sal, isInternal: false), 0, 0))

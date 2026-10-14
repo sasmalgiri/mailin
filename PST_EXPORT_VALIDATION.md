@@ -16,7 +16,7 @@ Independent checks (run on the Mac, not shipped): `Scripts/pstvalidate.py` (NDB)
 | Log | SCANPST finding | Root cause | Fix (PSTSpecWriter.swift) |
 |---|---|---|---|
 | v2 | Mandatory spam search folder missing (Outlook refused the file) | [MS-PST] 2.7.1 node 0x2223 not written | spam folder + 0x2226/0x2227/0x2230 written in `finalize()` (≈ line 1037) |
-| v2 | 990/1000 contents rows ≠ message | row cells Outlook never fills (PidTagMessageToMe/CcMe), stored DisplayCc/DisplayBcc (computed, [MS-PST] 2.5.2.3) | dropped (≈ line 854) |
+| v2 | 990/1000 contents rows ≠ message | row cells Outlook never fills (PidTagMessageToMe/CcMe), stored DisplayCc/DisplayBcc (computed, [MS-PST] 2.5.2.3) | dropped (≈ line 854) — DisplayCc/Bcc part reversed in v6, see v5 row |
 | v3 | Recipient TCs rejected ("keys overlap", 12 "missing" columns) | recipient row IDs started at 0 | unique non-zero IDs + one-off EntryID (`nextRecipientRowID`, `oneOffEntryID` ≈ line 217) |
 | v3 | Root hierarchy TC invalid | spam row appended after higher row IDs; row index is a sorted B-tree | rows must ascend; enforced in `TableBuilder.addRow` (≈ line 656) |
 | v3 | "Middle page not full" | heap and row-matrix blocks before the last not padded to 8,176 bytes | `closeBlock` (≈ line 512), `flushRows(padToBlock:)` (≈ line 695) |
@@ -26,21 +26,30 @@ Independent checks (run on the Mac, not shipped): `Scripts/pstvalidate.py` (NDB)
 | v4 | Receive folder table missing default message class | 0x62B written without rows | Outlook's four rows: "" / IPM / Report.IPM → Inbox, IPC → root (≈ line 987) |
 | v4 | SAL missing entry (nid=2223) | 0x201 empty | lists the spam search folder (≈ line 972) |
 | v4 | (no SCANPST line) | PidTagMessageStatus and PidTagHasAttachments stored on messages; computed by the store, never stored by Outlook | not stored (≈ line 845) |
+| v5 | NID high-water mark, receive folder class, SAL 2223 | — | no longer reported (v4 fixes confirmed) |
+| v5 | Row ≠ message on all 1,000 rows (both v5 files; row version ruled out: identical logs) | Decoded diff of the original against SCANPST's repaired copy (`mailin-outlook-test-v51.pst`): SCANPST rewrote **PidTagMessageSize on all 1,000 messages** and **added DisplayCc (334) / DisplayBcc (143)**, DisplayCc also to the rows. The size SCANPST computes = bytes of the message node's data blocks (property context + every subnode, nested; XBLOCK/SLBLOCK excluded): exact on 1,000/1,000 repaired messages and on all 158 messages of the three newest Digital Corpora Outlook files (bill.jobs ×2, johnblair68); the nine older ones store other values (an older Outlook's rule, not followed). mailin stored the raw MIME length. The v3 removal of DisplayCc/Bcc was wrong (the Outlook files compared then had no Cc). | `MessageBuild.write` (≈ line 880): size measured from the bytes written (`leafBytesWritten`, `propertyContextDataBytes`), shared by message and row; DisplayCc/Bcc stored when present, DisplayCc in the row. Reader takes To/Cc/Bcc from the recipient table (addresses) before the name-only display lines (`PSTSpecReader` ≈ line 499). |
 
-## Open after v4
+Check of the v6 writer against Microsoft's corrections (`vs_repaired.py`, same content, matched by subject):
+size equal on 990/1,000, DisplayCc and DisplayBcc equal on 1,000/1,000. The 10 others are Inbox
+messages Outlook changed after the repair (it added PidTagPreview 0x3FD9, PidTagUserEntryId 0x6619
+and a named property when showing them), so SCANPST's original value is not recoverable for them;
+their size still follows the same rule.
 
-- **Contents-table rows (800 in 0x8082, 200 in 0x80A2).** `pstrowdiag.py` finds every column
-  descriptor valid, the row index, row matrix and NBT consistent, and all 13 copied columns equal to the
-  message on all 1,000 rows. Decoding cannot show what SCANPST compares. Next evidence: the SCANPST
-  logs for `mailin-outlook-test-v5.pst` and `…-v5-rowver0.pst` (the only difference is
-  PidTagLtpRowVer, which changed between v2, where 10 rows passed, and v4, where none did), and a
-  **SCANPST-repaired copy**, whose diff against the original shows Microsoft's correction.
+Not changed, on evidence: the repaired contents tables have extra columns (0x3602 in both folders;
+sender, preview, flag and two named-property columns in Inbox). They appear identically in the
+rowver0 repair, which Outlook never previewed, and include named properties SCANPST does not create,
+so they are Outlook's view columns (tables gain columns as views ask for them); 178 of 214 contents
+tables in Outlook-written files lack 0x3602. To be confirmed by the v6 log.
+
+## Open after v5
+
 - **Search folder `EC1` missing update queue.** 0xEC1 (an internal-type NID) occurs nowhere in the
-  generated file (byte search over all blocks); it is created by SCANPST during repair. Expected to
-  clear with the SAL fix; to be confirmed by the v5 log.
+  generated file (byte search over all blocks); it is created by SCANPST during repair. Still in
+  the v5 log after the SAL fix; no published structure ties it to anything mailin writes. The v5 repair
+  added internal nodes 0xC01, 0xE01, 0xE41, 0xEC1, 0xEE1, 0xF01, 0xF21 (undocumented); of 12
+  Outlook-written files, 0xC01 is in 10, 0xE01/0xE41 in 3, the other four in none. Not written.
+- **"Deleting SDO" (v5, a `??` warning).** Fixed in v6: SCANPST's repair left 0x261 as an empty list,
+  as an Outlook-written backup PST holds it, and all 12 Outlook files have the node. Written empty
+  (the only criteria reference no folder), in `finalize()`.
 - **"HMP not found – creating".** No structure of that name exists in [MS-PST]; not implemented
   (no invented node). Reported by users on Outlook-created files too.
-- **"Deleting SDO".** [MS-PST] 2.4.8 (special internal NIDs): the search domain object 0x261 is "the
-  global list of all Folder objects that are referenced by any Folder object's Search Criteria". The
-  only search criteria object written (0x2227) references no folder, so there is nothing to list; no SDO
-  is written. SCANPST's deletion is taken as maintenance, not a defect — to be confirmed.
