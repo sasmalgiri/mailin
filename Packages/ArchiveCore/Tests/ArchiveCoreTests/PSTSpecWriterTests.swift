@@ -44,10 +44,35 @@ final class PSTSpecWriterTests: XCTestCase {
         }
     }
 
-    /// Node 0xC01 of the Digital Corpora Outlook 2010 PSTs (bill.jobs, johnblair68), copied byte for byte.
-    static let outlookEmptyHMP: [UInt8] = [
-        0x18, 0x00, 0xEC, 0x9C, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
-        0xB5, 0x10, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x10, 0x00, 0x18, 0x00]
+    /// Replication state as SCANPST's optional repair leaves it: the store's version history
+    /// [1][GUID][1]; on every folder row (but the spam folder's) and message row a ReplItemid,
+    /// a unique change number (multiple of 4) and the store's version history; the HMP (0xC01:
+    /// heap 0x9C → root HID → BTH 16-byte key → NID) holding exactly those item IDs in byte order.
+    static func replicationProblems(_ spec: PSTSpecReader, expectedRows: Int) -> [String] {
+        var problems: [String] = []
+        let store = spec.nodes[0x21].map { spec.propertyContext(dataBid: $0.dataBid, subBid: $0.subBid) } ?? [:]
+        guard let history = store[0x0E34]?.bytes, history.count == 24,
+              history.prefix(4) == [1, 0, 0, 0], history.suffix(4) == [1, 0, 0, 0] else { return ["store version history"] }
+        var rows: [[UInt8]: UInt32] = [:]
+        var changeNumbers = Set<Int64>()
+        for node in spec.nodes.values where node.nid & 0x1F == 0x0D || node.nid & 0x1F == 0x0E {
+            for row in spec.table(dataBid: node.dataBid, subBid: node.subBid) where row.rowID != PSTSpecWriter.spamSearchFolderNid {
+                guard let id = row.values[0x0E30_0102]?.bytes, id.count == 16,
+                      let cn = row.values[0x0E33_0014]?.int, cn % 4 == 0,
+                      row.values[0x0E34_0102]?.bytes == history else { problems.append("row \(String(row.rowID, radix: 16)) replication cells"); continue }
+                if rows.updateValue(row.rowID, forKey: id) != nil { problems.append("item id repeated") }
+                if !changeNumbers.insert(cn).inserted { problems.append("change number \(cn) repeated") }
+            }
+        }
+        if rows.count != expectedRows { problems.append("\(rows.count) rows with item ids, expected \(expectedRows)") }
+        guard let node = spec.nodes[0xC01], let heap = PSTSpecReader.Heap(spec.dataBlocks(node.dataBid)), heap.clientSig == 0x9C,
+              let root = heap.alloc(heap.userRoot), root.count == 4 else { return problems + ["HMP heap"] }
+        let records = spec.bth(heap, PSTSpecReader.u32(root, 0))
+        if records.map(\.0) != records.map(\.0).sorted(by: { $0.lexicographicallyPrecedes($1) }) { problems.append("HMP keys not in byte order") }
+        if records.count != rows.count { problems.append("HMP \(records.count) records, \(rows.count) rows") }
+        for (key, value) in records where rows[key] != PSTSpecReader.u32(value, 0) { problems.append("HMP \(key) → wrong NID"); break }
+        return problems
+    }
 
     func writeFixture(_ n: Int, name: String = "spec.pst", diagnosticEmptyNodes: [UInt32] = []) throws -> URL {
         let url = dir.appendingPathComponent(name)
@@ -161,9 +186,15 @@ final class PSTSpecWriterTests: XCTestCase {
         // SCANPST on v6: "Deleting SDO" (its repair removed the empty 0x261) and "HMP not found –
         // creating" (its repair added 0xC01). No SDO; the HMP byte for byte as Outlook 2010 writes it.
         XCTAssertNil(spec.nodes[0x261], "no search domain object: no criteria reference a folder")
-        let hmp = spec.nodes[0xC01].map { spec.dataBlocks($0.dataBid).flatMap { $0 } } ?? []
-        XCTAssertEqual(hmp, Self.outlookEmptyHMP, "HMP as in the Outlook 2010 bill.jobs / johnblair68 PSTs")
-        XCTAssertNil(spec.nodes[0xEC1], "no undocumented placeholder node in a normal export")
+        // SCANPST on v7: "Search folder (nid=EC1) missing update queue"; its correction, an empty
+        // 0xEC1, made the diagnostic file draw no finding.
+        XCTAssertNotNil(spec.nodes[0xEC1], "search update queue 0xEC1")
+        XCTAssertEqual(spec.nodes[0xEC1]?.dataBid, 0, "empty: nothing pending")
+        // SCANPST on the v7 diagnostic: "only minor inconsistencies" — its optional repair gave the
+        // store PidTagReplVersionhistory, every folder and message row ReplItemid / ReplChangenum /
+        // ReplVersionhistory, and the HMP one ReplItemid → NID record per row.
+        let replProblems = Self.replicationProblems(spec, expectedRows: n + 5)
+        XCTAssertTrue(replProblems.isEmpty, replProblems.prefix(8).joined(separator: "\n"))
         let receive = spec.nodes[0x62B].map { spec.table(dataBid: $0.dataBid, subBid: $0.subBid) } ?? []
         XCTAssertEqual(receive.map { $0.values[0x001A_001F]?.string ?? "-" }, ["", "IPM", "Report.IPM", "IPC"])
         let rgnidLTP = bytes.subdata(in: (44 + 4 * 31)..<(48 + 4 * 31)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
@@ -257,6 +288,9 @@ final class PSTSpecWriterTests: XCTestCase {
             // Header high-water marks equal what the file allocates (per type, start-clamped).
             let header = (0..<32).map { t in bytes.subdata(in: (44 + 4 * t)..<(48 + 4 * t)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) } }
             XCTAssertEqual(header, Self.expectedRGNID(spec), "\(name): rgnid")
+            // Replication state: 4 folder rows (Top of Personal Folders, Search Root, Deleted Items,
+            // mailin export) plus one row per message, each in the HMP.
+            XCTAssertEqual(Self.replicationProblems(spec, expectedRows: emails.count + 4), [], name)
             // Read back: subjects, bodies, recipients, attachment bytes.
             let read = spec.messages()
             XCTAssertEqual(read.count, emails.count, name)

@@ -245,6 +245,33 @@ final class PSTSpecWriter: PSTStreamWriting {
     }
     /// rgnid[] as the header stores it.
     var rgnid: [UInt32] { (0..<32).map { max(Self.rgnidStart($0), maxNidIndex[$0]) } }
+    // Replication state, as SCANPST initialises it when it finds a PST without it ("only minor
+    // inconsistencies", v7): the store's PidTagReplVersionhistory = [1][store GUID][1]; on every
+    // folder row (but the spam search folder's) and message row PidTagReplItemid (16 bytes),
+    // PidTagReplChangenum (store-wide, multiples of 4) and the store's version history; and the
+    // HMP (0xC01) maps each ReplItemid to its NID, keys in byte order (as in SCANPST's and
+    // Outlook's HMPs). Item IDs are a counter in the leading bytes plus a per-store random tail,
+    // so they arrive in key order and the HMP streams to disk without sorting.
+    private let replicaGUID = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+    private let itemIDTail = Data((0..<8).map { _ in UInt8.random(in: 0...255) })
+    private var itemIDCounter: UInt64 = 0
+    private var changeNumber: UInt64 = 0x80
+    private var hmpHeap: HeapBuilder!
+    private var hmpBTH: BTHBuilder!
+    private var hmpRootHID: UInt32 = 0
+    var replVersionHistory: Data { var d = Data(); d.u32(1); d.append(replicaGUID); d.u32(1); return d }
+
+    /// The three replication cells for a folder or message row, entered in the HMP.
+    func replicationCells(for nid: UInt32) throws -> [UInt32: PSTSpecValue] {
+        itemIDCounter += 1
+        var id = Data(); for shift in stride(from: 56, through: 0, by: -8) { id.u8(UInt8(truncatingIfNeeded: itemIDCounter >> UInt64(shift))) }
+        id.append(itemIDTail)
+        changeNumber += 4
+        var value = Data(); value.u32(nid)
+        try hmpBTH.add(key: id, value: value)
+        return [0x0E30_0102: .binary(id), 0x0E33_0014: .i64(changeNumber), 0x0E34_0102: .binary(replVersionHistory)]
+    }
+
     /// Diagnostics for SCANPST runs only, never set by the app: extra empty internal nodes
     /// (e.g. 0xEC1, which SCANPST's repair adds and [MS-PST] does not define).
     var diagnosticEmptyNodes: [UInt32] = []
@@ -271,6 +298,10 @@ final class PSTSpecWriter: PSTStreamWriting {
         for name in ["bbt", "nbt"] { FileManager.default.createFile(atPath: scratch.appendingPathComponent(name).path, contents: nil) }
         bbtSpill = try FileHandle(forWritingTo: scratch.appendingPathComponent("bbt"))
         msgNbtSpill = try FileHandle(forWritingTo: scratch.appendingPathComponent("nbt"))
+        // The HMP's heap: its root (first allocation) will hold the HID of the BTH header.
+        hmpHeap = HeapBuilder(writer: self, clientSig: 0x9C)
+        hmpBTH = BTHBuilder(heap: hmpHeap, cbKey: 16, cbEnt: 4)
+        hmpRootHID = try hmpHeap.alloc(Data(count: 4))
 
         folders[Self.rootNid] = Folder(nid: Self.rootNid, name: "", parent: Self.rootNid)
         folders[Self.ipmSubtreeNid] = Folder(nid: Self.ipmSubtreeNid, name: "Top of Personal Folders", parent: Self.rootNid)
@@ -320,7 +351,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         messages += 1
         folders[folder]!.count += 1
         if folders[folder]!.contents == nil { folders[folder]!.contents = TableBuilder(writer: self, columns: Templates.contents) }
-        try folders[folder]!.contents!.addRow(rowID: nid, msg.contentsRow)
+        try folders[folder]!.contents!.addRow(rowID: nid, msg.contentsRow.merging(try replicationCells(for: nid)) { a, _ in a })
     }
 
     // MARK: NDB — allocation and blocks
@@ -471,14 +502,22 @@ final class PSTSpecWriter: PSTStreamWriting {
             return UInt32(blockIndex << 16) | UInt32(starts.count << 5)
         }
 
-        /// Replaces an allocation of the open block with bytes of the same length.
+        /// Replaces an allocation of the open block, or of block 0 (held until `finish`), with
+        /// bytes of the same length.
         func overwrite(_ hid: UInt32, with bytes: Data) {
             let index = Int((hid >> 5) & 0x7FF) - 1
-            precondition(Int(hid >> 16) == blockIndex && starts.indices.contains(index))
-            let start = starts[index] - header
-            precondition(start + bytes.count <= current.count)
-            current.replaceSubrange(start..<start + bytes.count, with: bytes)
+            if Int(hid >> 16) == blockIndex {
+                precondition(starts.indices.contains(index))
+                let start = starts[index] - header
+                precondition(start + bytes.count <= current.count)
+                current.replaceSubrange(start..<start + bytes.count, with: bytes)
+            } else {
+                precondition(hid >> 16 == 0 && block0 != nil && block0Starts.indices.contains(index))
+                let start = block0Starts[index]
+                block0!.replaceSubrange(start..<start + bytes.count, with: bytes)
+            }
         }
+        private var block0Starts: [Int] = []
 
         private static func level(_ free: Int) -> UInt8 {
             switch free {
@@ -534,7 +573,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             // full (SCANPST "Middle page not full"). ibHnpm still points at the map.
             if d.count < PSTSpecFormat.blockDataMax { d.append(Data(count: PSTSpecFormat.blockDataMax - d.count)) }
             totalBytes += d.count
-            if blockIndex == 0 { block0 = d } else if !measureOnly { bids.append(try writer.writeBlock(d, isInternal: false)) }
+            if blockIndex == 0 { block0 = d; block0Starts = starts } else if !measureOnly { bids.append(try writer.writeBlock(d, isInternal: false)) }
             blockIndex += 1
             current = Data(); starts = []
         }
@@ -1018,7 +1057,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             (0x0FF9, .binary(storeKey)), (0x3001, .unicode(url.deletingPathExtension().lastPathComponent)),
             (0x35DF, .long(0x89)), (0x35E0, .binary(entryID(Self.ipmSubtreeNid))),
             (0x35E3, .binary(entryID(Self.deletedItemsNid))), (0x35E7, .binary(entryID(Self.searchRootNid))),
-            (0x67FF, .long(0)),
+            (0x67FF, .long(0)), (0x0E34, .binary(replVersionHistory)),
         ], nextSubnodeIndex: &unused)
         specialNodes.append((0x21, store.data, store.sub, 0))
         // Name-to-ID map ([MS-PST] 2.4.7): one standard named property, PidLidCommonStart
@@ -1037,18 +1076,11 @@ final class PSTSpecWriter: PSTStreamWriting {
         // No search domain object (0x261): the only criteria written (0x2227) reference no folder,
         // and SCANPST deletes an empty one ("Deleting SDO", v6; its repair has no 0x261).
         //
-        // 0xC01, which SCANPST calls the HMP ("HMP not found – creating"; not in [MS-PST]): a heap
-        // (client signature 0x9C) whose root points to a BTH of 16-byte GUID keys → 4-byte NIDs.
-        // Written as Outlook 2010 writes it, empty — byte for byte the node in the Digital Corpora
-        // bill.jobs and johnblair68 PSTs, which hold 135 and 18 messages with an empty HMP.
-        let hmp = HeapBuilder(writer: self, clientSig: 0x9C)
-        var bthHeader = Data(); bthHeader.u8(0xB5); bthHeader.u8(16); bthHeader.u8(4); bthHeader.u8(0); bthHeader.u32(0)
-        var hmpRoot = Data(); hmpRoot.u32(0)
-        let hmpRootHID = try hmp.alloc(hmpRoot)
-        let bthHID = try hmp.alloc(bthHeader)
-        var rootValue = Data(); rootValue.u32(bthHID)
-        hmp.overwrite(hmpRootHID, with: rootValue)
-        specialNodes.append((0xC01, try hmp.finish(root: hmpRootHID), 0, 0))
+        // Search update queue 0xEC1 (SCANPST: "Search folder (nid=EC1) missing update queue"):
+        // SCANPST's correction is this node, empty — the form an update queue with nothing pending
+        // takes (the spam folder's 0x2226 is empty in every Outlook-written PST). With it, the v7
+        // diagnostic file drew no finding.
+        specialNodes.append((0xEC1, 0, 0, 0))
         for nid in diagnosticEmptyNodes { specialNodes.append((nid, 0, 0, 0)) }
         // The search activity list names the search folders (Outlook writes the spam folder first).
         var sal = Data(); sal.u32(Self.spamSearchFolderNid)
@@ -1098,6 +1130,7 @@ final class PSTSpecWriter: PSTStreamWriting {
                 var row: [UInt32: PSTSpecValue] = [0x3001_001F: .unicode(c.name), 0x3602_0003: .long(UInt32(c.count)),
                                                     0x3603_0003: .long(UInt32(c.unread)), 0x360A_000B: .bool(!c.children.isEmpty)]
                 if let cls = c.containerClass { row[0x3613_001F] = .unicode(cls) }
+                row.merge(try replicationCells(for: child)) { a, _ in a }
                 try hier.addRow(rowID: child, row)
             }
             let h = try hier.finish()
@@ -1108,6 +1141,14 @@ final class PSTSpecWriter: PSTStreamWriting {
             let a = try emptyTable(Templates.assoc)
             specialNodes.append((F.nid(index, F.tAssoc), a.data, a.sub, 0))
         }
+
+        // 0xC01, which SCANPST calls the HMP (not in [MS-PST]): a heap, client signature 0x9C,
+        // whose root holds the HID of a BTH (16-byte ReplItemid → 4-byte NID), one record per
+        // folder and message row — the layout of SCANPST's repair and of Outlook 2010's PSTs.
+        let hmpBTHHeader = try hmpBTH.finish()
+        var hmpRootValue = Data(); hmpRootValue.u32(hmpBTHHeader)
+        hmpHeap.overwrite(hmpRootHID, with: hmpRootValue)
+        specialNodes.append((0xC01, try hmpHeap.finish(root: hmpRootHID), 0, 0))
 
         // [MS-PST] 2.7.1 mandatory node 0x2223, the spam search folder (2.7.3.4.4), with the
         // objects Outlook writes beside it: its search update queue (0x2226, empty), search

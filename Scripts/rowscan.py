@@ -7,7 +7,9 @@ sys.path.insert(0, __import__('os').path.dirname(__import__('os').path.abspath(_
 from pstdump import PST, pc, alloc
 import rowcheck
 
-ROW_ONLY = {0x67F2, 0x67F3, 0x0E17, 0x3013}
+# Table-only ([MS-PST] 2.5.2.3 SPGET_TABLE_ONLY): SCANPST's v7 repair put ReplItemid / ReplChangenum /
+# ReplVersionhistory into rows only, leaving every message unchanged.
+ROW_ONLY = {0x67F2, 0x67F3, 0x0E17, 0x3013, 0x0E30, 0x0E33, 0x0E34}
 
 def check(path, limit=None):
     p = PST(path)
