@@ -6,9 +6,10 @@ Everything that can be built and tested without you is done and committed on `v3
 
 ## Done (verified)
 
-- **Unit suites (2026-10-12/13):** app 594 XCTest + 239 Swift Testing, 0 failures, 0 warnings; StoreKit 9/9 on the
-  iPhone simulator. On 2026-10-14: ArchiveCore 117 tests, 0 failures. The 10 real-file tests run with
-  `MAILIN_REAL_FIXTURES` and pass.
+- **Unit suites (2026-10-14):** app 878 tests: 860 pass, 0 fail, 18 skipped (opt-in scale and owner-bound runs).
+  The first run's single failure (8 strings Xcode had written back untranslated) is fixed and re-run. ArchiveCore 117,
+  0 failures; the 10 real-file tests run with `MAILIN_REAL_FIXTURES` and pass. StoreKit 9/9 on the iPhone simulator
+  (2026-10-12).
 - **UI (V5):** every iPhone UI test passes (accessibility audit, click-through, every-button crawl, real-mailbox
   crawl, exports, every Professional tool, AI questions, purchases buy/restore/lifetime). Mac: 10 UI tests pass,
   0 fail; 5 Apple-sandbox purchase tests skip (they need a person to sign a sandbox tester in).
