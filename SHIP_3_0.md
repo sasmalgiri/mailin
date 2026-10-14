@@ -6,10 +6,11 @@ Everything that can be built and tested without you is done and committed on `v3
 
 ## Done (verified)
 
-- **Unit suites (2026-10-14):** app 878 tests: 860 pass, 0 fail, 18 skipped (opt-in scale and owner-bound runs).
-  The first run's single failure (8 strings Xcode had written back untranslated) is fixed and re-run. ArchiveCore 117,
-  0 failures; the 10 real-file tests run with `MAILIN_REAL_FIXTURES` and pass. StoreKit 9/9 on the iPhone simulator
-  (2026-10-12).
+- **Unit suites (2026-10-14, evening):** app 878 tests: 859 pass, 18 skipped (opt-in scale and owner-bound runs), 1
+  failed — a race between two tests over a shared value, fixed (`549b25f`) and the affected suites re-run green.
+  ArchiveCore 122, 0 failures; the 10 real-file tests run with `MAILIN_REAL_FIXTURES` and pass. StoreKit 9/9 on the
+  iPhone simulator (2026-10-12).
+- **Mac accessibility audit (D1):** passed with you present — no accessibility issues.
 - **UI (V5):** every iPhone UI test passes (accessibility audit, click-through, every-button crawl, real-mailbox
   crawl, exports, every Professional tool, AI questions, purchases buy/restore/lifetime). Mac: 10 UI tests pass,
   0 fail; 5 Apple-sandbox purchase tests skip (they need a person to sign a sandbox tester in).
@@ -35,7 +36,7 @@ Everything that can be built and tested without you is done and committed on `v3
 |---|---|---|---|
 | 1 | ~~Accessibility confirming run (D1)~~ | done 2026-10-14 | Passed on the Mac with you present: no accessibility issues (`ACCESSIBILITY_3_0.md`) |
 | 2 | **Promotion decision (A4)** | you | For each preview switch — Deleted-email recovery, Deep recovery, Shortcuts actions, mailin Scripts, Review Packs, Team case, Hidden timestamps, Outlook PST writer — say "promote" or "keep preview". I then set it stable and update the matrix test. My evidence per switch is in `FINAL_TODO_3_0_MAJOR.md` § Progress. I recommend keeping the PST writer a preview until step 5 |
-| 3 | **Screenshots (A7)** | me, then you approve | Simulator, sample data only: recovered folder + evidence badge, Recovery center, Scripts dry run, Review Pack reviewer, Team dashboard, timestamps panel |
+| 3 | **Screenshots (A7)** | you | You are providing the store set. Mine (iPhone 6.9", sample data) are in `Screenshots/3.0/iphone-6.9/` if useful |
 | 4 | **Upload the build** (your pbxproj is at build 700, uncommitted) | you or me | Tell me "upload 700" (`Scripts/testflight.sh --build 700 --upload`), or Xcode ▸ Organizer ▸ Distribute ▸ TestFlight |
 | 5 | **Owner-only checks** | you | B8: open `~/Downloads/mailin-outlook-test-1000.pst` in Outlook on Windows (checklist beside it). D2 Shortcuts on a device; D3 on a network share / second Mac (the Mail-folder run passed 5/5); D5 the script assistant on an Apple Intelligence Mac. B3 is done on synthetic files; a real HCL Notes database would confirm it |
 | 6 | **TestFlight period (D6)** 1–2 weeks on your real archives | you | TestFlight builds turn the preview engines on; any engine the app stops inside switches itself off (Settings ▸ Archive Health) |
@@ -48,5 +49,8 @@ Everything that can be built and tested without you is done and committed on `v3
 - **Launch time on a 1M archive (V7):** not measured (you chose 1k-scale testing); the app logs
   "first page shown after X s" at every launch (Console ▸ category `launch`), so TestFlight use shows it.
 - **No real device:** lock/suspend (S3), iPad background jobs (S4), MetricKit (S5) — simulator only.
-- **Lotus Notes deletion stubs (B3):** not built; the limits doc says "not supported" until real NSF files exist.
+- **Lotus Notes deletion stubs (B3):** built and verified on mailin's own synthetic NSF files; not yet on a database
+  written by HCL Notes (the stub layout is undocumented) — stated in the limits doc.
+- **Mac UI tests open your real archive** (they seed the demo mailbox only when the archive is empty). The audit only
+  reads, but a separate test archive for UI tests is still to be built.
 - **Outlook PST writer:** experimental until Outlook itself opens one of its files.
