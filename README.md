@@ -22,6 +22,13 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Import from and export to Apple Mail and Thunderbird with a read-back check
 - AI Insights and Professional Workflows are separate optional pages, off until switched on
 - Single messages over 100 MB are archived by byte range and read from the original file instead of being reported as damaged; ZIP archives import directly
+- Outlook PST and OST files read by Microsoft's published format (every folder, message, recipient and attachment); Apple Mail's own library folder imports directly
+- Each of the following is off until switched on in Settings ▸ Modules:
+  - Deleted-email recovery: deleted mail still in the file is marked, with how it was found. Deep recovery carves unlisted messages from PST free space and damaged files
+  - mailin Scripts: your own JavaScript on the device, with no network access and a dry run before anything changes; recipes without code
+  - Shortcuts actions: find, tag, hold, number, export and verify
+  - Review Packs: send emails out for coding and merge the answers. Team cases: shared folders with signed logs, roles, second-level review and a Verify audit button
+  - Hidden timestamps and signature checks: Gmail and GUID time values, ARC chains and DKIM against sourced provider dates
 - Details: `RELEASE_NOTES_3_0.md`; what was executed: `RELEASE_READINESS.md`, `SCALE_RESULTS.md`, `Verification/`
 
 ---
@@ -169,6 +176,11 @@ Requires iOS 17.6+ / macOS 14.6+. Free tier included, no signup.
 | Export | EML, CSV (limited) | All formats | All formats |
 | Forensic Mode | — | — | Full |
 | Audit Trail | — | — | Full |
+| Deleted-email recovery | — | Full | Full |
+| Deep recovery and carving | — | — | Full |
+| mailin Scripts, Shortcuts actions | — | — | Full |
+| Hidden timestamps and signature checks | — | — | Full |
+| Review Packs and team cases | Review a pack you received; join a case | Review a pack you received; join a case | Send packs, merge responses, lead a case |
 | | Free | $4.99/mo, $44.99/yr or $99.99 lifetime | $9.99/mo, $79.99/yr or $249.99 lifetime |
 
 ---

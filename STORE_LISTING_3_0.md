@@ -32,6 +32,19 @@ searchable, private archive that never leaves your Mac.
 > batches, with progress, Cancel and resume after an interruption, and a receipt that proves which
 > emails were covered. Analyses that read message text say "based on N of M emails".
 
+> **Hold until A4 (paste only for the switches the owner promotes):**
+> *Find deleted mail.* mailin marks mail that was deleted but is still inside your mailbox files
+> (Outlook, Thunderbird, Apple Mail, Gmail Takeout) and says how each message was found. Deep
+> recovery searches the free space of Outlook files for messages no folder lists any more.
+> *Scripts and Shortcuts.* Tag, set aside and note your own emails with small scripts that run on
+> your Mac with no network access, after a dry run that shows every change. Or build the same rule
+> from menus without writing code. Shortcuts can find, tag, hold, number and export emails.
+> *Review together.* Send a set of emails to a reviewer as a Review Pack and merge their answers, or
+> run a team case in a shared folder with signed logs, roles, second-level review and an audit you
+> can verify. Reviewers need no purchase.
+> *Hidden timestamps.* Read the time values Gmail and other systems hide in message headers, and
+> check ARC and DKIM signatures.
+
 **No built-in size limit.** Import streams from disk, so archive size is bounded by your storage,
 not by mailin. Verified on real mail up to 1.5 GB; larger archives have not been tested.
 
@@ -59,6 +72,18 @@ mailin has no account, no sync and no telemetry. Your archive is a folder you ow
   runs until you do.
 - Offset import engine is now the default: single messages over 100 MB are archived instead of
   reported as damaged.
+- Outlook PST and OST files are read by Microsoft's published format: every folder, message,
+  recipient and attachment.
+- Choose Apple Mail's own library folder and it imports directly.
+- (Hold until A4) Deleted-email recovery, Scripts, Shortcuts actions, Review Packs, team cases and
+  hidden timestamps: optional, off until you switch them on.
+
+## Keywords (100 characters)
+
+`email archive,mbox,pst,eml,ediscovery,legal hold,bates,recovery,forensic,offline,review,scripts`
+
+Add `recovery`, `scripts` and `review` only once A4 has promoted those switches; until then use
+`email archive,mbox,pst,eml,ediscovery,legal hold,bates,forensic,offline,thunderbird,apple mail`.
 
 ## Privacy label (as built in this configuration)
 

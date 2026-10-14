@@ -5,6 +5,51 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
 **implemented and building**; the Phase J test pass (`MAILIN_3_0_TODO.md`) is what turns
 "implemented" into "verified", and `RELEASE_READINESS.md` records which rows have executed numbers.
 
+## Recovery, scripting and team review (2026-10-13 / 14, FINAL_TODO_3_0_MAJOR.md)
+
+Built as 3.1 and moved into 3.0 by the owner. Each is a separate switch in Settings ▸ Modules, **off
+by default (preview)** until the owner promotes it (A4). Which purchase each needs is in one table
+(`TierAccess`), shown on the screen itself.
+
+- **Deleted-email recovery** (Personal): mail deleted but still in the file is marked, with how it was
+  found: deleted folders, unpurged Thunderbird mail, Apple Mail's deleted flag, Gmail Trash, Outlook
+  items no folder lists. Query with `is:recovered` / `recovery:<kind>`; a report pages every one.
+  **Deep recovery** (Professional) carves unlisted messages from PST free space and damaged files,
+  marked partial when incomplete.
+  - Checked on real files: 15 public Outlook PSTs (Digital Corpora) read with the same messages,
+    Message-IDs, subjects and deleted-folder counts as libpst's readpst. With Deleted Items emptied
+    inside those files, 31 of 31 items were carved back. Thunderbird: 828 public messages, 35 unpurged,
+    equal to an independent scan. Apple Mail: 1,000-message library, 30 flagged and 170 deleted
+    counted exactly.
+- **Outlook PST reader by the published format** ([MS-PST]): every folder, message, recipient and
+  attachment, ANSI and Unicode, all encodings, attached emails kept as `.eml`. On by default: the
+  earlier reader read 0 or 1 messages of each real Outlook file.
+- **Apple Mail's own library folder** (`~/Library/Mail/V10`) imports directly. Before this it imported
+  0 messages.
+- **mailin Scripts** (Professional): JavaScript run in JavaScriptCore on the device. There is no network,
+  no timers and no eval. A watchdog, memory guards and a 64 KB value cap are stated on screen. A dry run
+  shows every change before it applies, and every run is recorded. There are 12 bundled scripts, each
+  with a "How it works" page. Recipes need no code: fields include the body SHA-256, Received IPs and
+  any header, with "is one of" and CIDR operators and computed columns. Scripts can also run at import.
+- **Shortcuts** (Professional): Find Emails, tag, hold, Bates-number, export and verify actions;
+  entities for Email, Tag, Legal Hold Matter and Document. Every action checks the user's role and is
+  recorded. 10,000 results from 100,000 emails take 0.05 s.
+- **Review Packs**: send a set of emails out for coding (Professional) and merge the responses. A
+  reviewer codes the pack they received on the free tier.
+- **Team cases**: a shared folder with each member's Ed25519-signed, chained log. Roles; coding
+  layouts with rules; second-level QC; disagreements between relevance score and code; per-reviewer
+  throughput. Under MDM the managed name signs every entry. Shared redaction profiles are signed by the
+  lead. **Verify audit** re-reads every log and names the exact entry that was tampered with. A team
+  reload at 100,000 entries takes 0.23 s.
+- **Hidden timestamps and signature checks** (Professional): Gmail MIME-boundary µs, X-GM-MSGID/THRID
+  ms and version-1 UUID times. The ARC chain is checked per RFC 8617 (ValiMail open suite 166/168, the
+  2 differences pinned). Missing DKIM is judged against sourced provider dates and never flags Sent
+  copies.
+- **Outlook PST writer by the published format** (preview, off): the layout Outlook writes. 1,000
+  emails with attachments read back exactly by mailin, libpff and libpst. It stays experimental until
+  Outlook itself opens one.
+- **Schema v20** is additive. A real v19 archive upgrades with a snapshot first and every row kept.
+
 ## Whole-archive engines and editions (2026-10-10 / 11, SCALE_TODO_3_0.md)
 
 - **35 whole-archive engines** (Settings ▸ Modules ▸ 3.0 engines): legal, analysis and AI tools work on

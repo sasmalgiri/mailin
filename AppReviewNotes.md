@@ -123,8 +123,14 @@ A: Standard StoreKit 2 auto-renewable subscriptions (monthly / yearly) plus a on
 **Q: GDPR Compliance Report — does this confer GDPR compliance on the user's data?**
 A: No. It's a discovery tool that helps users locate personal data (PII) in their email archives. The user remains the data controller; mailin is a tool, not a compliance certifier. This is clearly stated in the Glossary entry for "GDPR" and in the report's own disclaimer.
 
-**Q: mailin 3.1 Scripts — does the app download or run executable code? (Guideline 2.5.2)**
+**Q: mailin Scripts — does the app download or run executable code? (Guideline 2.5.2)**
 A: No. Scripts are small JavaScript functions the user writes or picks from a dozen bundled with the app. They run in Apple's JavaScriptCore on the device, have no network access (no fetch, XMLHttpRequest, WebSocket or timers; eval and Function are removed), cannot change the app's features, and only tag, annotate or set aside the user's own emails after a dry run the user reviews. Scripts are never downloaded; a `.mailinscript` file is a text file the user shares themselves, and its contents are shown before it can run. Scripts are off by default (Settings ▸ Modules).
+
+**Q: Review Packs and team cases — does the app send data anywhere?**
+A: No. A Review Pack is a file the user saves and hands over themselves (AirDrop, a USB disk, their own file share). A team case is a folder the user picks, for example on iCloud Drive or a file server mounted in Finder or Files; each member's app reads and writes signed files in that folder through the standard file system. mailin itself opens no connection (the sandbox grants no network entitlement). A reviewer who received a pack or joined a case needs no purchase to do that work.
+
+**Q: Deleted-email recovery — what does it do?**
+A: It marks mail that the user's own mailbox file still contains although it was deleted (a Deleted Items folder, messages Thunderbird has not yet compacted away, Apple Mail's deleted flag, unlisted Outlook items) and says how each was found. It reads only files the user chose to import; it does not touch the user's mail accounts.
 
 ---
 
