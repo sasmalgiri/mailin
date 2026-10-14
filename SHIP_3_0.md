@@ -16,7 +16,7 @@ Everything that can be built and tested without you is done and committed on `v3
   0 fail; 5 Apple-sandbox purchase tests skip (they need a person to sign a sandbox tester in).
 - **Correctness at scale:** 27 tools have golden tests; every Legal tool passes at 100,000 emails with exact
   answers, flat memory and a time limit; the 1M run passed earlier.
-- **Recovery, scripting, team review (in 3.0, preview switches):** A1–A3, A5, B1, B2, B4–B8, C1–C7 done:
+- **Recovery, scripting, team review (in 3.0, promoted 2026-10-15, on by default):** A1–A3, A5, B1, B2, B4–B8, C1–C7 done:
   - A5: a real v19 archive upgrades to v20 with a snapshot first and every row kept.
   - B8: the new PST writer is read back exactly by libpff and libpst.
   - C5 and C6: real Outlook, Thunderbird and Apple Mail files.
@@ -35,12 +35,12 @@ Everything that can be built and tested without you is done and committed on `v3
 | # | Step | Who | How |
 |---|---|---|---|
 | 1 | ~~Accessibility confirming run (D1)~~ | done 2026-10-14 | Passed on the Mac with you present: no accessibility issues (`ACCESSIBILITY_3_0.md`) |
-| 2 | **Promotion decision (A4)** | you | For each preview switch — Deleted-email recovery, Deep recovery, Shortcuts actions, mailin Scripts, Review Packs, Team case, Hidden timestamps, Outlook PST writer — say "promote" or "keep preview". I then set it stable and update the matrix test. My evidence per switch is in `FINAL_TODO_3_0_MAJOR.md` § Progress. I recommend keeping the PST writer a preview until step 5 |
+| 2 | ~~Promotion decision (A4)~~ — done 2026-10-15: "promote all" | you | For each preview switch — Deleted-email recovery, Deep recovery, Shortcuts actions, mailin Scripts, Review Packs, Team case, Hidden timestamps, Outlook PST writer — say "promote" or "keep preview". I then set it stable and update the matrix test. My evidence per switch is in `FINAL_TODO_3_0_MAJOR.md` § Progress. I recommend keeping the PST writer a preview until step 5 |
 | 3 | **Screenshots (A7)** | you | You are providing the store set. Mine (iPhone 6.9", sample data) are in `Screenshots/3.0/iphone-6.9/` if useful |
 | 4 | **Upload the build** (your pbxproj is at build 700, uncommitted) | you or me | Tell me "upload 700" (`Scripts/testflight.sh --build 700 --upload`), or Xcode ▸ Organizer ▸ Distribute ▸ TestFlight |
 | 5 | **Owner-only checks** | you | ~~B8 Outlook~~ done 2026-10-15 (v9 opens in Outlook). D2 Shortcuts on a device; D3 on a network share / second Mac (the Mail-folder run passed 5/5); D5 the script assistant on an Apple Intelligence Mac. B3 is done on synthetic files; a real HCL Notes database would confirm it |
 | 6 | **TestFlight period (D6)** 1–2 weeks on your real archives | you | TestFlight builds turn the preview engines on; any engine the app stops inside switches itself off (Settings ▸ Archive Health) |
-| 7 | **App Store submission (V8)** — Mac first | you | `STORE_LISTING_3_0.md` (paste the "Hold until A4" text only for promoted switches), `AppReviewNotes.md`, privacy "Data Not Collected", accessibility answers from `ACCESSIBILITY_3_0.md`, price; submit |
+| 7 | **App Store submission (V8)** — Mac first | you | `STORE_LISTING_3_0.md` (the A4 text is now to be pasted: all switches promoted), `AppReviewNotes.md`, privacy "Data Not Collected", accessibility answers from `ACCESSIBILITY_3_0.md`, price; submit |
 
 ## Open, stated
 
@@ -53,4 +53,4 @@ Everything that can be built and tested without you is done and committed on `v3
   written by HCL Notes (the stub layout is undocumented) — stated in the limits doc.
 - **Mac UI tests open your real archive** (they seed the demo mailbox only when the archive is empty). The audit only
   reads, but a separate test archive for UI tests is still to be built.
-- **Outlook PST writer:** opens in Outlook (owner, 2026-10-15, v9 file; `PST_EXPORT_VALIDATION.md`); still a preview switch until A4.
+- **Outlook PST writer:** opens in Outlook (owner, 2026-10-15, v9 file; `PST_EXPORT_VALIDATION.md`); promoted with the rest (A4).

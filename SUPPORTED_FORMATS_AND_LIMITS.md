@@ -247,7 +247,7 @@ Honest split, because "supported" and "tested" are different claims:
 ## Tool scope (3.0 engines, 2026-10-10)
 
 Each tool has two engines for the whole of 3.0: the previous engine and the 3.0 engine, chosen per tool in
-Settings ▸ Modules ▸ 3.0 engines (previews, off until switched on).
+Settings ▸ Modules ▸ 3.0 engines (on by default; switch one off for the previous engine).
 
 | | Previous engine | 3.0 engine |
 |---|---|---|
@@ -259,14 +259,14 @@ Settings ▸ Modules ▸ 3.0 engines (previews, off until switched on).
 | Thread stories | First 200 messages | **Every message**, read in parts that fit the on-device model (4,096 tokens) |
 | Near-duplicates | Newest 10,000, pairwise | Whole archive: MinHash candidates, exact Jaccard verification; covers the emails the analysis index has reached (shown) |
 | PST export | One file; error at 50 GB | Parts below 45 GB and below the destination's maximum file size (FAT32: 4 GB) |
-| PST export layout (switch "Outlook PST writer (MS-PST)", preview, off) | Earlier writer: read by mailin, not guaranteed in Outlook | Outlook's own [MS-PST] layout; read back exactly by mailin, libpff and libpst on 1,000 emails with attachments. Not yet confirmed in Outlook itself, so still experimental |
+| PST export layout (switch "Outlook PST writer (MS-PST)", on by default) | Earlier writer: read by mailin, not guaranteed in Outlook | Outlook's own [MS-PST] layout; read back exactly by mailin, libpff and libpst on 1,000 emails with attachments. Not yet confirmed in Outlook itself, so still experimental |
 
 Real limits that remain, by design:
 - Lists show a page at a time with "N of M" and Load more; nothing is dropped.
 - Per-type PII findings shown on screen: 200 per type; Export CSV writes every finding.
 - The analysis index (needed by near-duplicates, analysis queries) builds in the background and pauses on low battery, heat or Safe Mode; coverage is shown in Settings ▸ Health.
 
-## Deleted-email recovery (3.1, preview — off by default)
+## Deleted-email recovery (on by default; a switch in Settings ▸ Modules)
 
 With **Settings ▸ Modules ▸ Recovery** on, imports mark mail the files show as deleted; recovered mail appears under **Recovered** in the sidebar and with `is:recovered` / `recovery:<kind>`, and each recovered email shows how it was found.
 
@@ -285,7 +285,7 @@ Measured (2026-10-13, Release, this Mac): carving 1 GB of random data with 100 p
 
 Mail files do not record when a message was deleted, so deletion analysis counts recovered emails against legal-hold dates only.
 
-## Scripts, Shortcuts and team review (3.1, preview — off by default)
+## Scripts, Shortcuts and team review (on by default; switches in Settings ▸ Modules)
 
 **Recipes (no code).** Conditions on from, to/cc, subject, body, attachment names and count, size, date, the body's SHA-256, the IPv4 addresses in Received headers, or any named header; operators contains / does not contain / equals / greater / less / matches pattern / is one of a list / is in an IPv4 range (CIDR). Actions: add tag, add note, set column (a fixed value or a computed one: `{sha1}` `{sha256}` `{sha512}` `{received_ips}` `{from_domain}`), set aside. Checked 2026-10-14 on 1,000 emails: recipes make exactly the changes of the bundled Hash columns, Domain filter, Date filter, Hash list exclude and Privilege screen scripts, and the private-hop part of IP addresses. Scripts that compute (entity catalogue, attachment risk score, keyword proximity, card-number checks) stay scripts; each bundled script has a "How it works" page.
 

@@ -334,14 +334,15 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
-    func test31Engines_arePreviews_offByDefault_withMatrixEntries() {
-        let previews = Capability.allCases.filter { $0.rawValue.hasPrefix("v31") } + [.v3PSTSpecWriter]
-        XCTAssertEqual(Set(previews), [.v31Recovery, .v31DeepRecovery, .v31ShortcutsActions, .v31Scripts,
-                                       .v31ReviewPack, .v31TeamCase, .v31ForensicTimestamps, .v3PSTSpecWriter])
-        for c in previews {
-            XCTAssertNotNil(EngineSpec.of(c), "\(c) has a matrix entry")
-            XCTAssertEqual(c.maturity, .preview, "\(c) stays a preview until its gate passes (rule 15)")
-            XCTAssertFalse(Capability.defaultOn(maturity: c.maturity, isEngine: true, beta: false), "\(c) is off in App Store builds")
+    func test31Engines_arePromoted_onByDefault_withMatrixEntries() {
+        let engines = Capability.allCases.filter { $0.rawValue.hasPrefix("v31") } + [.v3PSTSpecWriter]
+        XCTAssertEqual(Set(engines), [.v31Recovery, .v31DeepRecovery, .v31ShortcutsActions, .v31Scripts,
+                                      .v31ReviewPack, .v31TeamCase, .v31ForensicTimestamps, .v3PSTSpecWriter])
+        for c in engines {
+            XCTAssertNotNil(EngineSpec.of(c), "\(c) has a matrix entry (still a switch, the earlier engine one switch away)")
+            // A4 (owner, 2026-10-15): "promote all" — on in App Store builds too.
+            XCTAssertEqual(c.maturity, .stable, "\(c) promoted")
+            XCTAssertTrue(Capability.defaultOn(maturity: c.maturity, isEngine: true, beta: false), "\(c) is on in App Store builds")
         }
         XCTAssertTrue(Capability.v31DeepRecovery.requires.contains(.v31Recovery))
         XCTAssertTrue(Capability.v31TeamCase.requires.contains(.v31ReviewPack))

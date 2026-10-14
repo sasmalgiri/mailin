@@ -32,7 +32,7 @@ searchable, private archive that never leaves your Mac.
 > batches, with progress, Cancel and resume after an interruption, and a receipt that proves which
 > emails were covered. Analyses that read message text say "based on N of M emails".
 
-> **Hold until A4 (paste only for the switches the owner promotes):**
+> **Paste (A4, owner 2026-10-15: all eight switches promoted):**
 > *Find deleted mail.* mailin marks mail that was deleted but is still inside your mailbox files
 > (Outlook, Thunderbird, Apple Mail, Gmail Takeout) and says how each message was found. Deep
 > recovery searches the free space of Outlook files for messages no folder lists any more.
@@ -75,15 +75,14 @@ mailin has no account, no sync and no telemetry. Your archive is a folder you ow
 - Outlook PST and OST files are read by Microsoft's published format: every folder, message,
   recipient and attachment.
 - Choose Apple Mail's own library folder and it imports directly.
-- (Hold until A4) Deleted-email recovery, Scripts, Shortcuts actions, Review Packs, team cases and
-  hidden timestamps: optional, off until you switch them on.
+- Deleted-email recovery, Scripts, Shortcuts actions, Review Packs, team cases, hidden timestamps and
+  Outlook-compatible PST export: on by default; each can be switched off in Settings ▸ Modules.
 
 ## Keywords (100 characters)
 
 `email archive,mbox,pst,eml,ediscovery,legal hold,bates,recovery,forensic,offline,review,scripts`
 
-Add `recovery`, `scripts` and `review` only once A4 has promoted those switches; until then use
-`email archive,mbox,pst,eml,ediscovery,legal hold,bates,forensic,offline,thunderbird,apple mail`.
+A4 promoted those switches (2026-10-15), so the keywords above, with `recovery`, `scripts` and `review`, apply.
 
 ## Privacy label (as built in this configuration)
 

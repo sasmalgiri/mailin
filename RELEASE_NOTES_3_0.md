@@ -7,8 +7,8 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
 
 ## Recovery, scripting and team review (2026-10-13 / 14, FINAL_TODO_3_0_MAJOR.md)
 
-Built as 3.1 and moved into 3.0 by the owner. Each is a separate switch in Settings ▸ Modules, **off
-by default (preview)** until the owner promotes it (A4). Which purchase each needs is in one table
+Built as 3.1 and moved into 3.0 by the owner. Each is a separate switch in Settings ▸ Modules, **on
+by default** (promoted by the owner, A4, 2026-10-15); switching one off returns to the earlier behaviour. Which purchase each needs is in one table
 (`TierAccess`), shown on the screen itself.
 
 - **Deleted-email recovery** (Personal): mail deleted but still in the file is marked, with how it was
@@ -45,9 +45,9 @@ by default (preview)** until the owner promotes it (A4). Which purchase each nee
   ms and version-1 UUID times. The ARC chain is checked per RFC 8617 (ValiMail open suite 166/168, the
   2 differences pinned). Missing DKIM is judged against sourced provider dates and never flags Sent
   copies.
-- **Outlook PST writer by the published format** (preview, off): the layout Outlook writes. 1,000
-  emails with attachments read back exactly by mailin, libpff and libpst. It stays experimental until
-  Outlook itself opens one.
+- **Outlook PST writer by the published format** (on by default): the layout Outlook writes. 1,000
+  emails with attachments read back exactly by mailin, libpff and libpst; SCANPST finds nothing to
+  repair and Outlook opens it (owner, Windows, 2026-10-15; `PST_EXPORT_VALIDATION.md`).
 - **Schema v20** is additive. A real v19 archive upgrades with a snapshot first and every row kept.
 
 ## Whole-archive engines and editions (2026-10-10 / 11, SCALE_TODO_3_0.md)
