@@ -223,6 +223,10 @@ final class PSTSpecWriter: PSTStreamWriting {
     }
     /// A rising row version for each table row, as Outlook numbers them.
     func nextRowVersion() -> UInt32 { rowVersion += 4; return rowVersion }
+    /// Highest NID index used for NID_TYPE_LTP subnodes: the header's rgnid[31] must be past
+    /// it (SCANPST "Header NID high-water mark has incorrect value (type=31)").
+    private var maxLTPIndex: UInt32 = 1
+    func noteLTPIndex(_ i: UInt32) { maxLTPIndex = max(maxLTPIndex, i) }
     private(set) var defaultFolder: UInt32 = 0
     private var messages = 0
 
@@ -584,6 +588,7 @@ final class PSTSpecWriter: PSTStreamWriting {
                     hnid = try heap.alloc(bytes)
                 } else {
                     let snid = F.nid(nextSubnodeIndex, F.tLTP)
+                    noteLTPIndex(nextSubnodeIndex)
                     nextSubnodeIndex += 1
                     subs.append((snid, try writeData(bytes), 0))
                     hnid = snid
@@ -654,7 +659,7 @@ final class PSTSpecWriter: PSTStreamWriting {
                     if !bytes.isEmpty {
                         if bytes.count <= PSTSpecFormat.maxAllocation { hnid = try heap.alloc(bytes) }
                         else {
-                            let snid = PSTSpecFormat.nid(nextSub, PSTSpecFormat.tLTP); nextSub += 1
+                            let snid = PSTSpecFormat.nid(nextSub, PSTSpecFormat.tLTP); writer.noteLTPIndex(nextSub); nextSub += 1
                             extraSubnodes.append((snid, try writer.writeData(bytes), 0))
                             hnid = snid
                         }
@@ -823,8 +828,10 @@ final class PSTSpecWriter: PSTStreamWriting {
                 (0x001A, .unicode("IPM.Note")), (0x0037, .unicode(subject)), (0x0070, .unicode(subject)),
                 (0x0017, .long(1)), (0x0036, .long(0)),
                 (0x0039, .time(date)), (0x0E06, .time(date)), (0x3007, .time(date)), (0x3008, .time(date)),
-                (0x0E07, .long(flags)), (0x0E08, .long(UInt32(min(size, Int(UInt32.max))))), (0x0E17, .long(0)),
-                (0x0E1B, .bool(hasAttachments)),
+                // PidTagMessageStatus and PidTagHasAttachments are computed by the store
+                // ([MS-PST] 2.5.2.3: SPGET_MSGSTATUS, SPGET_HASATTACH; not settable) and Outlook
+                // never stores them on the message; the status lives in the contents row.
+                (0x0E07, .long(flags)), (0x0E08, .long(UInt32(min(size, Int(UInt32.max))))),
                 (0x0E04, .unicode(to.map(\.name).joined(separator: "; "))),
                 // PidTagSearchKey: required on every Message object PC ([MS-PST] 2.4.5.1.1);
                 // 16 bytes, the email's own identifier, so it is unique and stable.
@@ -948,18 +955,30 @@ final class PSTSpecWriter: PSTStreamWriting {
                                         nextSubnodeIndex: &unused)
         specialNodes.append((0x61, names.data, names.sub, 0))
         specialNodes.append((0x1E1, 0, 0, 0))
-        specialNodes.append((0x201, 0, 0, 0))
+        // The search activity list names the search folders (Outlook writes the spam folder first).
+        var sal = Data(); sal.u32(Self.spamSearchFolderNid)
+        specialNodes.append((0x201, try writeBlock(sal, isInternal: false), 0, 0))
 
         // Table templates.
         for (nid, layout) in [(UInt32(0x60D), Templates.hierarchy), (0x60E, Templates.contents), (0x60F, Templates.assoc),
                               (0x610, Templates.searchContents), (0x671, Templates.attachments), (0x692, Templates.recipients),
                               (0x6B6, Templates.searchFolders),
                               // The further templates an Outlook-made PST carries (SCANPST: "Missing template (nid=6F8)").
-                              (0x62B, Templates.receiveFolders), (0x64C, Templates.outgoingQueue),
+                              (0x64C, Templates.outgoingQueue),
                               (0x6D7, Templates.changeHistory), (0x6F8, Templates.tombstones)] {
             let t = try emptyTable(layout)
             specialNodes.append((nid, t.data, t.sub, 0))
         }
+
+        // Receive folder table (0x62B): which folder new mail of each class goes to, the four
+        // rows Outlook writes (SCANPST: "Receive folder table missing default message class").
+        let inbox = folders.values.first { $0.name == "Inbox" && $0.parent == Self.ipmSubtreeNid }?.nid ?? defaultFolder
+        let receive = TableBuilder(writer: self, columns: Templates.receiveFolders)
+        for (i, (cls, target)) in [("", inbox), ("IPM", inbox), ("Report.IPM", inbox), ("IPC", Self.rootNid)].enumerated() {
+            try receive.addRow(rowID: UInt32(i + 1), [0x001A_001F: .unicode(cls), 0x6605_0003: .long(target)])
+        }
+        let rf = try receive.finish()
+        specialNodes.append((0x62B, rf.data, rf.sub, 0))
 
         // Folders: property context and the three tables each.
         for nid in folderOrder {
@@ -1150,6 +1169,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         for t in 0..<32 { h.put32(44 + 4 * t, 0x400) }
         // Types this writer does not allocate: the values Outlook writes in a new file.
         h.put32(44 + 4 * 3, 0x4001); h.put32(44 + 4 * 6, 0x4001); h.put32(44 + 4 * 7, 0x4001); h.put32(44 + 4 * 8, 0x8000)
+        h.put32(44 + 4 * Int(F.tLTP), max(0x400, maxLTPIndex + 1))
         h.put32(44 + 4 * Int(F.tFolder), nextFolderIndex)
         h.put32(44 + 4 * Int(F.tMessage), nextMessageIndex)
         h.put32(44 + 4 * Int(F.tHierarchy), nextFolderIndex)

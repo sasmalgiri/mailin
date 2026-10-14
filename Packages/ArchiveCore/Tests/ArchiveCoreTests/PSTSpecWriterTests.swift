@@ -106,8 +106,10 @@ final class PSTSpecWriterTests: XCTestCase {
         let missing = mandatory.filter { spec.nodes[$0] == nil }
         XCTAssertEqual(missing.map { String($0, radix: 16) }, [], "mandatory nodes missing")
         XCTAssertEqual(spec.nodes[0x2223]?.parent, 0x122, "the spam search folder belongs to the root folder")
-        // [MS-PST] 2.4.5.1.1: properties every Message object PC must carry.
-        let requiredMessageProps: [UInt16] = [0x001A, 0x0E07, 0x0E08, 0x0E17, 0x3007, 0x3008, 0x300B]
+        // [MS-PST] 2.4.5.1.1: properties every Message object PC must carry — except
+        // PidTagMessageStatus, which Outlook computes and never stores on the message
+        // (2.5.2.3; checked on Outlook-written files): it lives in the contents row.
+        let requiredMessageProps: [UInt16] = [0x001A, 0x0E07, 0x0E08, 0x3007, 0x3008, 0x300B]
         let lacking = messageNodes.prefix(50).filter { node in
             let props = spec.propertyContext(dataBid: node.dataBid, subBid: node.subBid)
             return requiredMessageProps.contains { props[$0] == nil }
@@ -131,6 +133,15 @@ final class PSTSpecWriterTests: XCTestCase {
         // SCANPST on the v3 file (2026-10-14): the templates Outlook writes, recipient row IDs
         // non-zero, every block but the last of a heap full.
         for template: UInt32 in [0x62B, 0x64C, 0x6D7, 0x6F8] { XCTAssertNotNil(spec.nodes[template], "template \(String(template, radix: 16))") }
+        // SCANPST on the v4 file: the search activity list names the spam folder, the receive
+        // folder table maps the default class, the LTP high-water mark is past every LTP NID.
+        let sal = spec.nodes[0x201].map { spec.dataBlocks($0.dataBid).flatMap { $0 } } ?? []
+        XCTAssertEqual(Array(sal.prefix(4)), [0x23, 0x22, 0x00, 0x00], "search activity list")
+        let receive = spec.nodes[0x62B].map { spec.table(dataBid: $0.dataBid, subBid: $0.subBid) } ?? []
+        XCTAssertEqual(receive.map { $0.values[0x001A_001F]?.string ?? "-" }, ["", "IPM", "Report.IPM", "IPC"])
+        let rgnidLTP = bytes.subdata(in: (44 + 4 * 31)..<(48 + 4 * 31)).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+        XCTAssertGreaterThan(rgnidLTP, 0x400, "rgnid[NID_TYPE_LTP] past the subnode NIDs in use")
+        XCTAssertNil(spec.propertyContext(dataBid: messageNodes[0].dataBid, subBid: messageNodes[0].subBid)[0x0E17], "status not stored on the message")
         for node in messageNodes.prefix(50) {
             guard let rt = spec.subnodes(node.subBid)[0x692] else { continue }
             let ids = spec.table(dataBid: rt.0, subBid: rt.1).map(\.rowID)
