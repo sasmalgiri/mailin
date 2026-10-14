@@ -190,6 +190,9 @@ final class PSTSpecWriter: PSTStreamWriting {
     private var folderOrder: [UInt32] = []
     private var nextFolderIndex: UInt32 = 0x404           // 0x401–0x403 are the fixed folders
     private var nextMessageIndex: UInt32 = 0x10000         // message NIDs sort after every other node
+    private var rowVersion: UInt32 = 0x40
+    /// A rising row version for each table row, as Outlook numbers them.
+    func nextRowVersion() -> UInt32 { rowVersion += 4; return rowVersion }
     private(set) var defaultFolder: UInt32 = 0
     private var messages = 0
 
@@ -595,7 +598,8 @@ final class PSTSpecWriter: PSTStreamWriting {
             var row = Data(count: rowSize)
             var vals = values
             vals[0x67F2_0003] = .long(rowID)
-            vals[0x67F3_0003] = .long(0)
+            // PidTagLtpRowVer: Outlook numbers row versions; a zero version on every row is not what it writes.
+            if vals[0x67F3_0003] == nil { vals[0x67F3_0003] = .long(writer.nextRowVersion()) }
             for c in columns {
                 guard let v = vals[c.tag] else { continue }
                 if c.cb == 1 { row[c.ib] = UInt8(truncatingIfNeeded: v.inline ?? 0) }
@@ -766,8 +770,9 @@ final class PSTSpecWriter: PSTStreamWriting {
                 // 16 bytes, the email's own identifier, so it is unique and stable.
                 (0x300B, .binary(withUnsafeBytes(of: email.id.uuid) { Data($0) })),
             ]
-            if !cc.isEmpty { p.append((0x0E03, .unicode(cc.map(\.name).joined(separator: "; ")))) }
-            if !bcc.isEmpty { p.append((0x0E02, .unicode(bcc.map(\.name).joined(separator: "; ")))) }
+            // DisplayCc / DisplayBcc are computed from the recipient table by the store
+            // ([MS-PST] 2.5.2.3, SPGET_DISPLAY); Outlook does not store them, and SCANPST
+            // reports a contents row that differs from the computed value.
             if let f = from {
                 p += [(0x0C1A, .unicode(f.name)), (0x0C1E, .unicode("SMTP")), (0x0C1F, .unicode(f.email)),
                       (0x0042, .unicode(f.name)), (0x0064, .unicode("SMTP")), (0x0065, .unicode(f.email))]
@@ -831,12 +836,11 @@ final class PSTSpecWriter: PSTStreamWriting {
 
             contentsRow = [
                 0x0017_0003: .long(1), 0x001A_001F: .unicode("IPM.Note"), 0x0036_0003: .long(0), 0x0037_001F: .unicode(subject),
-                0x0039_0040: .time(date), 0x0057_000B: .bool(false), 0x0058_000B: .bool(false), 0x0070_001F: .unicode(subject),
+                0x0039_0040: .time(date), 0x0070_001F: .unicode(subject),
                 0x0E04_001F: .unicode(to.map(\.name).joined(separator: "; ")), 0x0E06_0040: .time(date), 0x0E07_0003: .long(flags),
                 0x0E08_0003: .long(UInt32(min(size, Int(UInt32.max)))), 0x0E17_0003: .long(0), 0x3008_0040: .time(date),
             ]
             if let f = from { contentsRow[0x0042_001F] = .unicode(f.name) }
-            if !cc.isEmpty { contentsRow[0x0E03_001F] = .unicode(cc.map(\.name).joined(separator: "; ")) }
 
             return try writer.propertyContext(p, extraSubnodes: subs, nextSubnodeIndex: &subIndex)
         }

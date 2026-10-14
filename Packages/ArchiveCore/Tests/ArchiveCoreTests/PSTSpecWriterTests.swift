@@ -81,6 +81,9 @@ final class PSTSpecWriterTests: XCTestCase {
                 problems.append("attachment bytes of \(m.subject): read \(Data(base64Encoded: a.base64 ?? "", options: .ignoreUnknownCharacters)?.count ?? -1) of \(b.size), meta size \(a.size), file \(a.fileURL?.path ?? "-")")
             }
             if m.senderEmail != PSTSpecWriter.addresses(e.headers["From"]).first?.email { problems.append("sender of \(m.subject)") }
+            // Cc/Bcc come back from the recipient table (the display lines are computed, not stored).
+            if e.headers["Cc"] != nil, !m.displayCc.contains("cara@example.net") { problems.append("cc of \(m.subject): \(m.displayCc)") }
+            if e.headers["Bcc"] != nil, !m.displayBcc.contains("hidden@example.net") { problems.append("bcc of \(m.subject): \(m.displayBcc)") }
         }
         XCTAssertTrue(problems.isEmpty, problems.prefix(8).joined(separator: "\n"))
         // Folders: Inbox holds every fifth message, the export folder the rest.
@@ -110,6 +113,21 @@ final class PSTSpecWriterTests: XCTestCase {
             return requiredMessageProps.contains { props[$0] == nil }
         }
         XCTAssertEqual(lacking.count, 0, "messages missing a required property")
+        // Contents rows agree with their messages the way Outlook's do (SCANPST,
+        // 2026-10-14: "row doesn't match sub-object" on 990 of 1,000 rows): no cell
+        // the message lacks, no stored DisplayCc, rising row versions.
+        var versions = Set<Int64>()
+        for folder in [0x8082, 0x80A2] as [UInt32] {
+            guard let node = spec.nodes[(folder >> 5) << 5 | 0x0E] else { XCTFail("contents table of \(folder)"); continue }
+            for row in spec.table(dataBid: node.dataBid, subBid: node.subBid) {
+                for tag: UInt32 in [0x0057_000B, 0x0058_000B, 0x0E03_001F] where row.values[tag] != nil {
+                    XCTFail("row \(String(row.rowID, radix: 16)) carries \(String(tag, radix: 16))")
+                }
+                if let v = row.values[0x67F3_0003]?.int { versions.insert(v) }
+            }
+        }
+        XCTAssertEqual(versions.count, n, "every row has its own non-zero row version")
+        XCTAssertFalse(versions.contains(0))
         let spamProps = spec.propertyContext(dataBid: spec.nodes[0x2223]?.dataBid ?? 0, subBid: 0)
         if case .string(let name)? = spamProps[0x3001] { XCTAssertEqual(name, "SPAM Search Folder 2") } else { XCTFail("spam folder name") }
         // Keep a copy for the external readers.

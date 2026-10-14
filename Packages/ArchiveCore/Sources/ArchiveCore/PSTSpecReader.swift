@@ -496,7 +496,10 @@ final class PSTSpecReader {
                 m.messageSize = Int(pc[0x0E08]?.int ?? 0)
                 m.contentType = messageClass.hasPrefix("IPM.Note") ? nil : messageClass
                 let subs = subnodes(node.subBid)
-                if m.displayTo.isEmpty || m.senderEmail.isEmpty, let rt = subs[Self.nidRecipientTable] {
+                // Outlook stores DisplayTo but computes DisplayCc/DisplayBcc ([MS-PST] 2.5.2.3,
+                // SPGET_DISPLAY): fill each missing line from the recipient table, not only To.
+                if m.displayTo.isEmpty || m.displayCc.isEmpty || m.displayBcc.isEmpty || m.senderEmail.isEmpty,
+                   let rt = subs[Self.nidRecipientTable] {
                     let rows = table(dataBid: rt.0, subBid: rt.1)
                     func list(_ kind: Int64) -> String {
                         rows.filter { ($0.values[0x0C150003]?.int ?? 1) == kind }.map { r in
