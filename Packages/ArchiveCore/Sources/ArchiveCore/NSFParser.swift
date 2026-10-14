@@ -43,7 +43,10 @@ struct NSFParser {
         let total = Double(notes.count)
 
         for (idx, note) in notes.enumerated() {
-            if let email = buildEmail(from: note, senderEmail: senderEmail) {
+            // B3: with recovery on, a deletion stub becomes a marked, partial row.
+            if RecoveryPolicy.isEnabled, let info = NSFDeletionStub.recovery(for: note) {
+                emails.append(NSFDeletionStub.email(for: note, info: info))
+            } else if let email = buildEmail(from: note, senderEmail: senderEmail) {
                 emails.append(email)
             }
             onProgress?(Double(idx + 1) / max(total, 1))
@@ -119,6 +122,8 @@ struct NSFParser {
             anomalies: MBOXParser.findAnomalies(headers: headers, body: body.isEmpty ? htmlBody : body, attachments: note.attachments)
         )
     }
+
+    static func parseNotesDateForStub(_ dateStr: String) -> Date? { parseNotesDate(dateStr) }
 
     private static func parseNotesDate(_ dateStr: String) -> Date? {
         if dateStr.isEmpty { return nil }
@@ -351,6 +356,11 @@ struct NSFReader {
             pos = nextPos
 
             if itemName == "Form" && note.items.count > 1 {
+                break
+            }
+            // B3: a deletion stub has no Form; its deleted note ID ends the record.
+            if RecoveryPolicy.isEnabled, itemName == "$NoteID" || itemName == "NoteID",
+               NSFDeletionStub.isDeletedID(itemValue) {
                 break
             }
         }
