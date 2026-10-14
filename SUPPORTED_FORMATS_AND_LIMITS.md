@@ -259,6 +259,7 @@ Settings ▸ Modules ▸ 3.0 engines (previews, off until switched on).
 | Thread stories | First 200 messages | **Every message**, read in parts that fit the on-device model (4,096 tokens) |
 | Near-duplicates | Newest 10,000, pairwise | Whole archive: MinHash candidates, exact Jaccard verification; covers the emails the analysis index has reached (shown) |
 | PST export | One file; error at 50 GB | Parts below 45 GB and below the destination's maximum file size (FAT32: 4 GB) |
+| PST export layout (switch "Outlook PST writer (MS-PST)", preview, off) | Earlier writer: read by mailin, not guaranteed in Outlook | Outlook's own [MS-PST] layout; read back exactly by mailin, libpff and libpst on 1,000 emails with attachments. Not yet confirmed in Outlook itself, so still experimental |
 
 Real limits that remain, by design:
 - Lists show a page at a time with "N of M" and Load more; nothing is dropped.

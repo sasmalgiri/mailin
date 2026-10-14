@@ -734,6 +734,40 @@ final class V3FoundationTests: XCTestCase {
         XCTAssertLessThanOrEqual(ArchiveExportService.pstPartBytes(for: out), 45_000_000_000, "below the format's 50 GB")
     }
 
+    /// B8: with the MS-PST writer switched on, File > Export PST (whole and in
+    /// parts) writes Outlook-layout files that the MS-PST reader reads back,
+    /// every email once. Off, the earlier writer runs (the test above).
+    func testPSTExport_specWriterSwitchedOn_writesOutlookLayout_readBackEveryEmail() async throws {
+        let wasWriter = PSTWriterPolicy.useSpecWriter, wasReader = PSTReaderPolicy.useSpecReader
+        PSTWriterPolicy.useSpecWriter = true
+        PSTReaderPolicy.useSpecReader = true
+        defer { PSTWriterPolicy.useSpecWriter = wasWriter; PSTReaderPolicy.useSpecReader = wasReader }
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<1_000).map { makeEmail($0, tag: "spec") }, batchSize: 200)
+        let exporter = ArchiveExportService(archive: env.archive)
+        let whole = env.root.appendingPathComponent("whole.pst")
+        let written = try await exporter.exportPST(scope: .query(.all, exclusions: []), to: whole)
+        XCTAssertEqual(written, 1_000)
+        let parsed = try PSTParser.parse(fileURL: whole, senderEmail: "")
+        XCTAssertEqual(Set(parsed.map { $0.headers["Subject"] ?? "" }).count, 1_000)
+        // The MS-PST writer files mail under Outlook's own folder tree; the earlier one does not.
+        XCTAssertTrue(parsed.allSatisfy { $0.tags.contains { $0.hasSuffix("mailin export") } },
+                      parsed.first?.tags.joined(separator: ",") ?? "-")
+
+        let parts = try await exporter.exportPSTParts(scope: .query(.all, exclusions: []),
+                                                      toDirectory: env.root.appendingPathComponent("parts", isDirectory: true),
+                                                      baseName: "m", partBytes: 400_000)
+        XCTAssertGreaterThan(parts.count, 1)
+        XCTAssertEqual(parts.reduce(0) { $0 + $1.messages }, 1_000)
+        var subjects = Set<String>()
+        for part in parts {
+            let inPart = try PSTParser.parse(fileURL: part.url, senderEmail: "")
+            XCTAssertEqual(inPart.count, part.messages, part.url.lastPathComponent)
+            for email in inPart { subjects.insert(email.headers["Subject"] ?? "") }
+        }
+        XCTAssertEqual(subjects.count, 1_000, "every email in exactly one part")
+    }
+
     // MARK: - Q3: EDRM Message Identification Hash
 
     /// The same message from two sources (different stored ids and header
@@ -1446,14 +1480,14 @@ final class V31ScriptRunTests: XCTestCase {
             let acme = try await MatterEntityQuery().entities(matching: "acme")
             XCTAssertEqual(acme.map(\.id), ["Acme v. Beta"])
 
-            var find = FindEmailsWithTagIntent()
+            let find = FindEmailsWithTagIntent()
             find.tag = tags[1]
             let found = try await find.perform().value ?? []
             XCTAssertEqual(Set(found.map(\.id)), Set(ids[250..<300]), "exactly the tagged emails, quotes in the tag included")
 
             let docs = try await DocumentEntityQuery().entities(matching: "Acme")
             XCTAssertEqual(Set(docs.map(\.id)), Set(numbers))
-            var get = GetDocumentIntent()
+            let get = GetDocumentIntent()
             get.document = try XCTUnwrap(docs.first { $0.id == numbers[1] })
             let text = try await get.perform().value
             XCTAssertEqual(text, "Hold notice text for Acme v. Beta.")

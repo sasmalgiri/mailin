@@ -146,7 +146,7 @@ enum TeamCaseIO {
     /// One formatter for every entry: building one per entry made a reload of a
     /// 100,000-entry case take seconds (found by the 100k scale run).
     /// `DateFormatter` is safe to share for formatting.
-    nonisolated(unsafe) private static let dayFormatter: DateFormatter = {
+    private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")

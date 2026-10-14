@@ -39,13 +39,13 @@ public enum PSTWriterPolicy {
 /// What both PST writers offer the export service.
 protocol PSTStreamWriting: AnyObject {
     var dataBytesWritten: UInt64 { get }
-    func append(email: MBOXParser.RawEmail) throws
+    func appendMessage(_ email: MBOXParser.RawEmail) throws
     @discardableResult func finalize() throws -> Int
     func abort()
 }
 
 extension PSTStreamWriter: PSTStreamWriting {
-    func append(email: MBOXParser.RawEmail) throws { try append(email: email, folder: PSTStreamWriter.rootFolderNid) }
+    func appendMessage(_ email: MBOXParser.RawEmail) throws { try append(email: email, folder: PSTStreamWriter.rootFolderNid) }
 }
 
 enum PSTWriterFactory {
@@ -195,6 +195,7 @@ final class PSTSpecWriter: PSTStreamWriting {
 
     static let rootNid = F.nid(0x9, F.tFolder)             // 0x122
     static let ipmSubtreeNid = F.nid(0x401, F.tFolder)     // 0x8022
+    static let maxFileBytes: UInt64 = 50_000_000_000
     static let searchRootNid = F.nid(0x402, F.tFolder)     // 0x8042
     static let deletedItemsNid = F.nid(0x403, F.tFolder)   // 0x8062
 
@@ -242,14 +243,16 @@ final class PSTSpecWriter: PSTStreamWriting {
         return nid
     }
 
-    func append(email: MBOXParser.RawEmail) throws { try append(email: email, folder: defaultFolder) }
+    func appendMessage(_ email: MBOXParser.RawEmail) throws { try append(email: email, folder: defaultFolder) }
 
     func append(email: MBOXParser.RawEmail, folder: UInt32) throws {
         guard !finished else { throw WriteError.io("The PST writer is already finished") }
         guard folders[folder] != nil else { throw WriteError.io("Unknown folder") }
+        // Same stated ceiling as the earlier writer: Outlook refuses larger files.
+        guard eof <= Self.maxFileBytes else { throw PSTWriter.WriterError.formatSizeExceeded(eof) }
         let nid = F.nid(nextMessageIndex, F.tMessage)
         nextMessageIndex += 1
-        let msg = try MessageBuild(writer: self, email: email)
+        var msg = try MessageBuild(writer: self, email: email)
         let (data, sub) = try msg.write()
         try spillNBT(msgNbtSpill, nid: nid, data: data, sub: sub, parent: folder)
         msgNbtCount += 1
@@ -299,9 +302,9 @@ final class PSTSpecWriter: PSTStreamWriting {
     }
 
     /// One block (≤ 8176 bytes), 64-byte aligned, with its trailer; recorded in the block index.
-    func writeBlock(_ data: Data, internal: Bool) throws -> UInt64 {
+    func writeBlock(_ data: Data, isInternal: Bool) throws -> UInt64 {
         precondition(data.count <= F.blockDataMax)
-        let bid = nextBid | (internal ? 2 : 0)
+        let bid = nextBid | (isInternal ? 2 : 0)
         nextBid += 4
         let total = (data.count + 16 + 63) / 64 * 64
         let ib = reserve(total, align: 64)
@@ -322,7 +325,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         func xblock(level: UInt8, _ children: [UInt64], _ total: Int) throws -> UInt64 {
             var d = Data(); d.u8(1); d.u8(level); d.u16(UInt16(children.count)); d.u32(UInt32(total))
             for c in children { d.u64(c) }
-            return try writeBlock(d, internal: true)
+            return try writeBlock(d, isInternal: true)
         }
         if bids.count <= 1021 { return try xblock(level: 1, bids, totalBytes) }
         var xs: [UInt64] = []
@@ -341,7 +344,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         if d.isEmpty { return 0 }
         var bids: [UInt64] = []
         for start in stride(from: 0, to: d.count, by: F.blockDataMax) {
-            bids.append(try writeBlock(d.subdata(in: start..<min(start + F.blockDataMax, d.count)), internal: false))
+            bids.append(try writeBlock(d.subdata(in: start..<min(start + F.blockDataMax, d.count)), isInternal: false))
         }
         return try dataTree(bids, totalBytes: d.count)
     }
@@ -353,7 +356,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         func sl(_ part: ArraySlice<(nid: UInt32, data: UInt64, sub: UInt64)>) throws -> UInt64 {
             var d = Data(); d.u8(2); d.u8(0); d.u16(UInt16(part.count)); d.u32(0)
             for e in part { d.u64(UInt64(e.nid)); d.u64(e.data); d.u64(e.sub) }
-            return try writeBlock(d, internal: true)
+            return try writeBlock(d, isInternal: true)
         }
         if sorted.count <= 340 { return try sl(sorted[...]) }
         var d = Data(); var children: [(UInt32, UInt64)] = []
@@ -364,7 +367,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         precondition(children.count <= 510)
         d.u8(2); d.u8(1); d.u16(UInt16(children.count)); d.u32(0)
         for (nid, bid) in children { d.u64(UInt64(nid)); d.u64(bid) }
-        return try writeBlock(d, internal: true)
+        return try writeBlock(d, isInternal: true)
     }
 
     // MARK: LTP — heap-on-node
@@ -450,7 +453,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             let d = blockBytes(root: 0)
             fill[blockIndex] = Self.level(PSTSpecFormat.blockDataMax - d.count)
             totalBytes += d.count
-            if blockIndex == 0 { block0 = d } else { bids.append(try writer.writeBlock(d, internal: false)) }
+            if blockIndex == 0 { block0 = d } else { bids.append(try writer.writeBlock(d, isInternal: false)) }
             blockIndex += 1
             current = Data(); starts = []
         }
@@ -460,7 +463,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             if blockIndex == 0 {
                 let d = blockBytes(root: root)
                 totalBytes += d.count
-                return try writer.writeBlock(d, internal: false)
+                return try writer.writeBlock(d, isInternal: false)
             }
             // Close the open block, then write block 0 with the root and fill levels.
             if !current.isEmpty || starts.isEmpty == false { try closeBlock() }
@@ -469,7 +472,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             var levels = [UInt8](repeating: 0, count: 8)
             for i in 0..<8 { levels[i] = fill[i] ?? 0 }
             for i in 0..<4 { b0[8 + i] = levels[2 * i] | (levels[2 * i + 1] << 4) }
-            let bid0 = try writer.writeBlock(b0, internal: false)
+            let bid0 = try writer.writeBlock(b0, isInternal: false)
             return try writer.dataTree([bid0] + bids, totalBytes: totalBytes)
         }
     }
@@ -622,7 +625,7 @@ final class PSTSpecWriter: PSTStreamWriting {
 
         private func flushRows() throws {
             guard !rowBlock.isEmpty else { return }
-            rowBids.append(try writer.writeBlock(rowBlock, internal: false))
+            rowBids.append(try writer.writeBlock(rowBlock, isInternal: false))
             rowBytes += rowBlock.count
             rowBlock = Data()
         }
@@ -792,9 +795,11 @@ final class PSTSpecWriter: PSTStreamWriting {
             let r = try recips.finish()
             subs.append((0x692, r.data, r.sub))
 
-            // Attachments: a table plus one object per attachment.
+            // Attachments: a table plus one object per attachment. Outlook writes the
+            // table even when it is empty, and libpff rejects a message whose subnode
+            // tree has recipients but no attachment table.
+            let table = TableBuilder(writer: writer, columns: Templates.attachments)
             if hasAttachments {
-                let table = TableBuilder(writer: writer, columns: Templates.attachments)
                 let cache = AttachmentHydrator.Cache()
                 for (i, att) in email.attachments.enumerated() {
                     let anid = PSTSpecFormat.nid(subIndex, PSTSpecFormat.tAttachment)
@@ -814,10 +819,10 @@ final class PSTSpecWriter: PSTStreamWriting {
                     try table.addRow(rowID: anid, [0x0E20_0003: .long(UInt32(bytes.count)), 0x3704_001F: .unicode(att.filename),
                                                    0x3705_0003: .long(1), 0x370B_0003: .long(0xFFFF_FFFF)])
                 }
-                for h in cache.files { try? FileManager.default.removeItem(at: h) }
-                let t = try table.finish()
-                subs.append((0x671, t.data, t.sub))
+                cache.removeTemporaryFiles()
             }
+            let t = try table.finish()
+            subs.append((0x671, t.data, t.sub))
 
             contentsRow = [
                 0x0017_0003: .long(1), 0x001A_001F: .unicode("IPM.Note"), 0x0036_0003: .long(0), 0x0037_001F: .unicode(subject),
@@ -856,7 +861,16 @@ final class PSTSpecWriter: PSTStreamWriting {
             (0x67FF, .long(0)),
         ], nextSubnodeIndex: &unused)
         specialNodes.append((0x21, store.data, store.sub, 0))
-        let names = try propertyContext([(0x0001, .long(251)), (0x0002, .binary(Data())), (0x0003, .binary(Data())), (0x0004, .binary(Data()))],
+        // Name-to-ID map ([MS-PST] 2.4.7): one standard named property, PidLidCommonStart
+        // (PSETID_Common, 0x8516) as property 0x8000, with its hash bucket — readers
+        // such as libpff refuse a map without entries. Bucket = (id ^ (wGuid<<1 | N)) % 251,
+        // checked against an Outlook file (259 of 259 entries).
+        let psetidCommon = Data([0x08, 0x20, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46])
+        let lid: UInt32 = 0x8516, guidField: UInt16 = (3 << 1) | 0   // GUID stream index 0 → wGuid 3
+        var nameEntry = Data(); nameEntry.u32(lid); nameEntry.u16(guidField); nameEntry.u16(0)
+        let bucket = UInt16(0x1000 + (lid ^ UInt32(guidField)) % 251)
+        let names = try propertyContext([(0x0001, .long(251)), (0x0002, .binary(psetidCommon)), (0x0003, .binary(nameEntry)),
+                                         (0x0004, .binary(Data())), (bucket, .binary(nameEntry))],
                                         nextSubnodeIndex: &unused)
         specialNodes.append((0x61, names.data, names.sub, 0))
         specialNodes.append((0x1E1, 0, 0, 0))

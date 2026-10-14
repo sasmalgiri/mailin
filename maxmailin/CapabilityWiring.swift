@@ -41,6 +41,9 @@ enum CapabilityWiring {
             SafeHTMLPolicy.isEnabled = isOn
         case .v3PSTSpecReader:
             PSTReaderPolicy.useSpecReader = isOn
+        case .v3PSTSpecWriter:
+            // B8: read by every PST export (ArchiveExportService via PSTWriterFactory).
+            PSTWriterPolicy.useSpecWriter = isOn
         case .v31Recovery:
             RecoveryPolicy.isEnabled = isOn
         case .v31DeepRecovery:

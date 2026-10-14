@@ -34,6 +34,11 @@ enum AttachmentHydrator {
         fileprivate var hydrated: [AttachmentMetadata]?
         fileprivate var attemptedFor: UUID?
         init() {}
+
+        /// Deletes the scratch files hydration wrote (callers that stream many emails).
+        func removeTemporaryFiles() {
+            for a in hydrated ?? [] { if let u = a.fileURL { try? FileManager.default.removeItem(at: u) } }
+        }
     }
 
     // MARK: - S5: source-backed reads (behind `Capability.locatorReads`)

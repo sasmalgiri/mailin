@@ -319,8 +319,9 @@ final class V3CompatibilityTests: XCTestCase {
     // MARK: - M1 / M5: every 3.0 engine is a switch, promoted (on by default)
 
     func testEveryEngine_hasAMatrixEntry_andIsOnByDefaultAfterPromotion() {
-        // 3.1 engines (v31…) are previews, off by default — see the next test.
-        let engines = Capability.allCases.filter { $0.rawValue.hasPrefix("v3") && !$0.rawValue.hasPrefix("v31") }
+        // 3.1 engines (v31…) are previews, off by default — see the next test. So is
+        // the B8 MS-PST writer until Outlook itself opens one of its files.
+        let engines = Capability.allCases.filter { $0.rawValue.hasPrefix("v3") && !$0.rawValue.hasPrefix("v31") && $0 != .v3PSTSpecWriter }
         XCTAssertGreaterThanOrEqual(engines.count, 35, "the L/A/I/Q/S engines")
         for capability in engines {
             let spec = EngineSpec.of(capability)
@@ -334,9 +335,9 @@ final class V3CompatibilityTests: XCTestCase {
     }
 
     func test31Engines_arePreviews_offByDefault_withMatrixEntries() {
-        let previews = Capability.allCases.filter { $0.rawValue.hasPrefix("v31") }
+        let previews = Capability.allCases.filter { $0.rawValue.hasPrefix("v31") } + [.v3PSTSpecWriter]
         XCTAssertEqual(Set(previews), [.v31Recovery, .v31DeepRecovery, .v31ShortcutsActions, .v31Scripts,
-                                       .v31ReviewPack, .v31TeamCase, .v31ForensicTimestamps])
+                                       .v31ReviewPack, .v31TeamCase, .v31ForensicTimestamps, .v3PSTSpecWriter])
         for c in previews {
             XCTAssertNotNil(EngineSpec.of(c), "\(c) has a matrix entry")
             XCTAssertEqual(c.maturity, .preview, "\(c) stays a preview until its gate passes (rule 15)")

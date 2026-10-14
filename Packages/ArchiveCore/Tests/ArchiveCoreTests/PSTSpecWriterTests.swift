@@ -77,8 +77,8 @@ final class PSTSpecWriterTests: XCTestCase {
             if m.subject != e.headers["Subject"] { problems.append("subject \(m.subject)") }
             if m.bodyText != e.plainBody { problems.append("body of \(m.subject) (\(m.bodyText.count) vs \(e.plainBody.count))") }
             if m.attachments.count != e.attachments.count { problems.append("attachments of \(m.subject)") }
-            for (a, b) in zip(m.attachments, e.attachments) where a.data != Data(base64Encoded: b.base64 ?? "") {
-                problems.append("attachment bytes of \(m.subject)")
+            for (a, b) in zip(m.attachments, e.attachments) where Data(base64Encoded: a.base64 ?? "", options: .ignoreUnknownCharacters) != Data(base64Encoded: b.base64 ?? "") {
+                problems.append("attachment bytes of \(m.subject): read \(Data(base64Encoded: a.base64 ?? "", options: .ignoreUnknownCharacters)?.count ?? -1) of \(b.size), meta size \(a.size), file \(a.fileURL?.path ?? "-")")
             }
             if m.senderEmail != PSTSpecWriter.addresses(e.headers["From"]).first?.email { problems.append("sender of \(m.subject)") }
         }
@@ -86,6 +86,15 @@ final class PSTSpecWriterTests: XCTestCase {
         // Folders: Inbox holds every fifth message, the export folder the rest.
         let inInbox = read.filter { $0.folderPath.hasSuffix("Inbox") }.count
         XCTAssertEqual(inInbox, n / 5)
+        // Like Outlook, every message carries both a recipient table (0x692) and an
+        // attachment table (0x671), empty or not; libpff rejects one without the other.
+        let messageNodes = spec.nodes.values.filter { $0.nid & 0x1F == 0x04 }
+        XCTAssertEqual(messageNodes.count, n)
+        let incomplete = messageNodes.filter { node in
+            let subs = spec.subnodes(node.subBid)
+            return subs[0x692] == nil || subs[0x671] == nil
+        }
+        XCTAssertEqual(incomplete.count, 0, "messages missing a recipient or attachment table")
         // Keep a copy for the external readers.
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
         try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))

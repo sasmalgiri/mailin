@@ -46,9 +46,9 @@ struct PSTWriter {
     @discardableResult
     static func write(emails: [MBOXParser.RawEmail], to url: URL) throws -> Int {
         guard !emails.isEmpty else { throw WriterError.emptyInput }
-        let writer = try PSTStreamWriter(url: url)
+        let writer = try PSTWriterFactory.make(url: url)
         do {
-            for email in emails { try writer.append(email: email) }
+            for email in emails { try writer.appendMessage(email) }
             return try writer.finalize()
         } catch {
             writer.abort()

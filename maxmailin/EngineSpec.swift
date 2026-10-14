@@ -204,6 +204,12 @@ struct EngineSpec: Sendable {
             return EngineSpec(.archive, maturity: .stable,
                 name: String(localized: "Outlook PST reader (MS-PST)"),
                 detail: String(localized: "Reads Outlook PST and OST files by Microsoft's published format: every folder, message, recipient and attachment, ANSI and Unicode files, all encodings. Off: the earlier reader, which reads mailin's own PST exports."))
+        case .v3PSTSpecWriter:
+            // B8: 1,000 emails written and read back exactly by mailin's MS-PST
+            // reader, libpff and libpst; preview until Outlook itself opens one.
+            return EngineSpec(.archive, maturity: .preview,
+                name: String(localized: "Outlook PST writer (MS-PST)"),
+                detail: String(localized: "Writes PST exports in the layout Outlook writes: folders, recipients, attachments, HTML and long bodies. Off: the earlier writer, which mailin reads but Outlook may not open."))
         case .v31Recovery:
             return EngineSpec(.archive, maturity: .preview,
                 name: String(localized: "Deleted-email recovery"),

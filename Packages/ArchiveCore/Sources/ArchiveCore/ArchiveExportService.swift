@@ -994,9 +994,9 @@ final class ArchiveExportService {
         let total = try await archive.count(scope: scope)
         var parts: [(url: URL, messages: Int)] = []
         var part = 1
-        func newWriter() throws -> (PSTStreamWriter, URL) {
+        func newWriter() throws -> (PSTStreamWriting, URL) {
             let url = directory.appendingPathComponent(String(format: "%@-%04d.pst", baseName, part))
-            return (try PSTStreamWriter(url: url), url)
+            return (try PSTWriterFactory.make(url: url), url)
         }
         var (writer, url) = try newWriter()
         var inPart = 0
@@ -1012,7 +1012,7 @@ final class ArchiveExportService {
                         (writer, url) = try newWriter()
                         inPart = 0
                     }
-                    try writer.append(email: email)
+                    try writer.appendMessage(email)
                     inPart += 1
                     done += 1
                 }
@@ -1040,13 +1040,13 @@ final class ArchiveExportService {
                    to url: URL,
                    onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> Int {
         let total = try await archive.count(scope: scope)
-        let writer = try PSTStreamWriter(url: url)
+        let writer = try PSTWriterFactory.make(url: url)
         do {
             var done = 0
             for try await batch in archive.streamSelected(scope: scope) {
                 try Task.checkCancellation()
                 for email in batch {
-                    try writer.append(email: email)
+                    try writer.appendMessage(email)
                     done += 1
                 }
                 onProgress?(done, total)
