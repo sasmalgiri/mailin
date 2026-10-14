@@ -210,15 +210,100 @@ enum BundledScripts {
     ]
 }
 
+// MARK: - Help (3.0 B6)
+
+extension BundledScripts {
+    /// One page per bundled script: what it does, what it writes, what to change.
+    static func help(for script: MailinScript) -> String? {
+        guard script.builtIn, let n = Int(script.id.uuidString.suffix(12)) else { return nil }
+        switch n {
+        case 1: return String(localized: "Computes the SHA-1, SHA-256 and SHA-512 of each email's body and writes them as the columns sha1, sha256 and sha512. Use it to match emails against hash lists from another review or to prove two copies have the same text. Nothing is tagged or set aside. Same result as a recipe with three \"Set column\" actions and the values {sha1}, {sha256}, {sha512}.")
+        case 2: return String(localized: "Collects every IPv4 address in the Received headers into the column received_ips and tags emails that passed through a private address (10.x, 172.16–31.x, 192.168.x) with private-hop — a sign the message was relayed inside a company network. A recipe can do either part: \"Received IP addresses — is in IP range\" for the tag, or a column with the value {received_ips}.")
+        case 3: return String(localized: "Tags email from the domains in the DOMAINS list at the top of the script with domain:<name>. Copy the script, replace example.com with your domains (lower case, in quotes, separated by commas), then dry-run it. Same as a recipe \"From — contains\" for one domain.")
+        case 4: return String(localized: "Sets aside (moves to Trash, never deletes) email dated before FROM or after TO at the top of the script. Edit both dates in YYYY-MM-DD form, dry-run, check the count, then apply. Emails with no readable date are left alone.")
+        case 5: return String(localized: "Tags emails with an attachment over MAX_BYTES (25 MB as shipped) with large-attachment and emails with a risky file type (programs, scripts, macro documents, disk images) with risky-attachment. Edit MAX_BYTES or the RISKY list at the top. An email with several matching attachments is tagged once per attachment found.")
+        case 6: return String(localized: "Sets aside email whose body SHA-256 is in the KNOWN list at the top — for example newsletters or notices already reviewed elsewhere. Paste the hashes in quotes, separated by commas. Same as a recipe \"Body SHA-256 — is one of\" with \"Set aside\".")
+        case 7: return String(localized: "Scores each email's attachments from 0 to 100 (programs and scripts 60, double extensions 30, macro documents 30, archives and disk images 15, capped at 100), writes the score as the column attachment_risk and tags emails scoring 60 or more with attachment-risk. Emails without attachments are untouched.")
+        case 8: return String(localized: "Tags emails where the word A appears within WITHIN words of the word B (shipped: contract and terminate, 10 words) and lists their subjects in the run report. Edit A, B and WITHIN at the top; words are matched whole, ignoring case.")
+        case 9: return String(localized: "Tags emails that mention counsel or carry privilege wording with privilege-screen, for a first privilege pass. Edit the WORDS list at the top. It flags candidates only; a person decides privilege.")
+        case 10: return String(localized: "Tags emails with no Message-ID (no-message-id), no readable Date (no-date), or a Date more than 48 hours from the first Received hop (date-mismatch) — signs an email was composed, forwarded or altered outside a normal mail server.")
+        case 11: return String(localized: "Lists the email addresses, phone numbers and web addresses found in each body as the columns emails_in_body, phones and urls, for building a contact or link catalogue. Nothing is tagged.")
+        case 12: return String(localized: "Tags emails that appear to hold payment card numbers (digits passing the Luhn check) with pii:card, IBANs with pii:iban and US Social Security numbers with pii:ssn. It finds candidates; check them before relying on the result.")
+        default: return nil
+        }
+    }
+}
+
 // MARK: - No-code recipes (S9)
 
 struct ScriptRecipe: Codable, Equatable, Sendable {
-    enum Field: String, Codable, CaseIterable, Sendable { case from, to, subject, body, attachmentName, attachmentCount, size, date }
-    enum Op: String, Codable, CaseIterable, Sendable { case contains, notContains, equals, greaterThan, lessThan, matches }
-    enum ActionKind: String, Codable, CaseIterable, Sendable { case tag, note, column, exclude }
+    enum Field: String, Codable, CaseIterable, Sendable {
+        case from, to, subject, body, attachmentName, attachmentCount, size, date
+        /// 3.0 B6: the body's SHA-256, the IPv4 addresses in the Received headers, any named header.
+        case bodySHA256, receivedIPs, header
 
-    struct Condition: Codable, Equatable, Sendable, Identifiable { var id = UUID(); var field: Field; var op: Op; var value: String }
+        var label: String {
+            switch self {
+            case .from: return String(localized: "From")
+            case .to: return String(localized: "To or Cc")
+            case .subject: return String(localized: "Subject")
+            case .body: return String(localized: "Body")
+            case .attachmentName: return String(localized: "Attachment name")
+            case .attachmentCount: return String(localized: "Number of attachments")
+            case .size: return String(localized: "Size (bytes)")
+            case .date: return String(localized: "Date")
+            case .bodySHA256: return String(localized: "Body SHA-256")
+            case .receivedIPs: return String(localized: "Received IP addresses")
+            case .header: return String(localized: "Header")
+            }
+        }
+    }
+    enum Op: String, Codable, CaseIterable, Sendable {
+        case contains, notContains, equals, greaterThan, lessThan, matches
+        /// 3.0 B6: one of a list (commas, spaces or new lines); an IPv4 range list in CIDR form.
+        case oneOf, inIPRange
+
+        var label: String {
+            switch self {
+            case .contains: return String(localized: "contains")
+            case .notContains: return String(localized: "does not contain")
+            case .equals: return String(localized: "equals")
+            case .greaterThan: return String(localized: "is greater than")
+            case .lessThan: return String(localized: "is less than")
+            case .matches: return String(localized: "matches pattern")
+            case .oneOf: return String(localized: "is one of")
+            case .inIPRange: return String(localized: "is in IP range")
+            }
+        }
+    }
+    enum ActionKind: String, Codable, CaseIterable, Sendable {
+        case tag, note, column, exclude
+
+        var label: String {
+            switch self {
+            case .tag: return String(localized: "Add tag")
+            case .note: return String(localized: "Add note")
+            case .column: return String(localized: "Set column")
+            case .exclude: return String(localized: "Set aside")
+            }
+        }
+    }
+
+    struct Condition: Codable, Equatable, Sendable, Identifiable {
+        var id = UUID(); var field: Field; var op: Op; var value: String
+        /// The header's name when `field` is `.header` (absent in recipes saved before 3.0 B6).
+        var header: String? = nil
+    }
     struct Action: Codable, Equatable, Sendable, Identifiable { var id = UUID(); var kind: ActionKind; var value: String; var value2 = "" }
+
+    /// Column values that are computed per email, written as tokens.
+    static let columnTokens: [String: String] = [
+        "{sha1}": "mailin.hash(email.body, \"sha1\")",
+        "{sha256}": "mailin.hash(email.body, \"sha256\")",
+        "{sha512}": "mailin.hash(email.body, \"sha512\")",
+        "{received_ips}": "__ips(email).join(\" \")",
+        "{from_domain}": "((email.from.match(/@([^>\\s]+)/) || [])[1] || \"\").toLowerCase()",
+    ]
 
     var name = "New recipe"
     var matchAll = true
@@ -231,8 +316,13 @@ struct ScriptRecipe: Codable, Equatable, Sendable {
             let data = try? JSONSerialization.data(withJSONObject: [s], options: [.fragmentsAllowed])
             return data.flatMap { String(data: $0, encoding: .utf8) }.map { String($0.dropFirst().dropLast()) } ?? "\"\""
         }
-        func subject(_ f: Field) -> String {
-            switch f {
+        func list(_ s: String) -> String {
+            let items = s.split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == " " || $0 == ";" })
+                .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+            return "[" + items.map(js).joined(separator: ", ") + "]"
+        }
+        func subject(_ c: Condition) -> String {
+            switch c.field {
             case .from: return "email.from"
             case .to: return "(email.to + ' ' + email.cc)"
             case .subject: return "email.subject"
@@ -241,10 +331,16 @@ struct ScriptRecipe: Codable, Equatable, Sendable {
             case .attachmentCount: return "email.attachments.length"
             case .size: return "email.size"
             case .date: return "new Date(email.date).getTime()"
+            case .bodySHA256: return "mailin.hash(email.body)"
+            case .receivedIPs: return "__ips(email).join(' ')"
+            case .header: return "__header(email, \(js((c.header ?? "").lowercased())))"
             }
         }
+        var helpers = Set<String>()
         let tests: [String] = conditions.map { c in
-            let s = subject(c.field)
+            let s = subject(c)
+            if c.field == .receivedIPs { helpers.insert("ips") }
+            if c.field == .header { helpers.insert("header") }
             let v = c.field == .date ? "new Date(\(js(c.value))).getTime()" : (Double(c.value) != nil && [.attachmentCount, .size].contains(c.field) ? c.value : js(c.value))
             switch c.op {
             case .contains: return "String(\(s)).toLowerCase().indexOf(\(js(c.value.lowercased()))) >= 0"
@@ -253,6 +349,13 @@ struct ScriptRecipe: Codable, Equatable, Sendable {
             case .greaterThan: return "(\(s)) > \(v)"
             case .lessThan: return "(\(s)) < \(v)"
             case .matches: return "new RegExp(\(js(c.value)), 'i').test(String(\(s)))"
+            case .oneOf:
+                if c.field == .receivedIPs { return "__ips(email).some(function (ip) { return \(list(c.value)).indexOf(ip) >= 0; })" }
+                return "\(list(c.value)).indexOf(String(\(s)).toLowerCase()) >= 0"
+            case .inIPRange:
+                helpers.insert("range")
+                if c.field == .receivedIPs { return "__ips(email).some(function (ip) { return __inRange(ip, \(list(c.value))); })" }
+                return "String(\(s)).split(/\\s+/).some(function (ip) { return __inRange(ip, \(list(c.value))); })"
             }
         }
         let cond = tests.isEmpty ? "true" : tests.map { "(\($0))" }.joined(separator: matchAll ? " && " : " || ")
@@ -260,12 +363,53 @@ struct ScriptRecipe: Codable, Equatable, Sendable {
             switch a.kind {
             case .tag: return "    mailin.tag(\(js(a.value)));"
             case .note: return "    mailin.note(\(js(a.value)));"
-            case .column: return "    mailin.column(\(js(a.value)), \(js(a.value2)));"
+            case .column:
+                if let expr = Self.columnTokens[a.value2.trimmingCharacters(in: .whitespaces).lowercased()] {
+                    if a.value2.lowercased().contains("received_ips") { helpers.insert("ips") }
+                    // A computed value that comes out empty sets no column.
+                    return "    (function (v) { if (v) mailin.column(\(js(a.value)), String(v)); })(\(expr));"
+                }
+                return "    mailin.column(\(js(a.value)), \(js(a.value2)));"
             case .exclude: return "    mailin.exclude(\(js(a.value)));"
             }
         }.joined(separator: "\n")
+        var prelude: [String] = []
+        if helpers.contains("ips") {
+            prelude.append("""
+                function __ips(email) {
+                  var r = "";
+                  for (var k in email.headers) { if (k.toLowerCase() === "received") r += email.headers[k] + "\\n"; }
+                  var m = r.match(/\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b/g) || [];
+                  return m.filter(function (v, i) { return m.indexOf(v) === i; });
+                }
+                """)
+        }
+        if helpers.contains("header") {
+            prelude.append("""
+                function __header(email, name) {
+                  var out = [];
+                  for (var k in email.headers) { if (k.toLowerCase() === name) out.push(String(email.headers[k])); }
+                  return out.join("\\n");
+                }
+                """)
+        }
+        if helpers.contains("range") {
+            prelude.append("""
+                function __ip4(s) { var p = String(s).split("."); if (p.length !== 4) return -1; var n = 0; for (var i = 0; i < 4; i++) { var x = parseInt(p[i], 10); if (isNaN(x) || x < 0 || x > 255 || !/^\\d+$/.test(p[i])) return -1; n = n * 256 + x; } return n; }
+                function __inRange(ip, cidrs) {
+                  var n = __ip4(ip); if (n < 0) return false;
+                  return cidrs.some(function (c) {
+                    var parts = c.split("/"), base = __ip4(parts[0]), bits = parts.length > 1 ? parseInt(parts[1], 10) : 32;
+                    if (base < 0 || isNaN(bits) || bits < 0 || bits > 32) return false;
+                    var size = Math.pow(2, 32 - bits);
+                    return Math.floor(n / size) === Math.floor(base / size);
+                  });
+                }
+                """)
+        }
         return """
             // Generated by the mailin recipe builder: \(name)
+            \(prelude.joined(separator: "\n"))
             function process(email) {
               if (\(cond)) {
             \(acts)

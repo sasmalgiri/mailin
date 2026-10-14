@@ -157,6 +157,11 @@ struct ScriptDetailView: View {
         Form {
             Section {
                 Text(script.summary)
+                if let help = BundledScripts.help(for: script) {
+                    DisclosureGroup(String(localized: "How it works")) {
+                        Text(help).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 LabeledContent(String(localized: "Version"), value: script.version)
                 LabeledContent(String(localized: "SHA-256"), value: String(script.sha256.prefix(16)) + "…")
                 Toggle(String(localized: "Also run on newly imported mail"), isOn: Binding(
@@ -326,8 +331,12 @@ struct RecipeBuilderView: View {
             Section {
                 ForEach($recipe.conditions) { $c in
                     HStack {
-                        Picker("", selection: $c.field) { ForEach(ScriptRecipe.Field.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
-                        Picker("", selection: $c.op) { ForEach(ScriptRecipe.Op.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+                        Picker("", selection: $c.field) { ForEach(ScriptRecipe.Field.allCases, id: \.self) { Text($0.label).tag($0) } }
+                        if c.field == .header {
+                            TextField(String(localized: "Header name"), text: Binding(get: { c.header ?? "" }, set: { c.header = $0 }))
+                                .frame(maxWidth: 140)
+                        }
+                        Picker("", selection: $c.op) { ForEach(ScriptRecipe.Op.allCases, id: \.self) { Text($0.label).tag($0) } }
                         TextField(String(localized: "Value"), text: $c.value)
                     }
                 }
@@ -336,13 +345,16 @@ struct RecipeBuilderView: View {
             Section {
                 ForEach($recipe.actions) { $a in
                     HStack {
-                        Picker("", selection: $a.kind) { ForEach(ScriptRecipe.ActionKind.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+                        Picker("", selection: $a.kind) { ForEach(ScriptRecipe.ActionKind.allCases, id: \.self) { Text($0.label).tag($0) } }
                         TextField(a.kind == .column ? String(localized: "Column") : String(localized: "Value"), text: $a.value)
                         if a.kind == .column { TextField(String(localized: "Column value"), text: $a.value2) }
                     }
                 }
                 Button(String(localized: "Add action")) { recipe.actions.append(.init(kind: .tag, value: "")) }
-            } header: { Text("Then") }
+            } header: { Text("Then") } footer: {
+                Text("A column value can be computed for each email: {sha1}, {sha256}, {sha512}, {received_ips} or {from_domain}. \"Is one of\" takes a list separated by commas or new lines; \"is in IP range\" takes ranges such as 10.0.0.0/8, 192.168.0.0/16.")
+                    .font(.caption)
+            }
             Section {
                 Text(recipe.source).font(.caption.monospaced()).textSelection(.enabled)
             } header: { Text("Generated code") }

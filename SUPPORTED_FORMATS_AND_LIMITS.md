@@ -286,6 +286,8 @@ Mail files do not record when a message was deleted, so deletion analysis counts
 
 ## Scripts, Shortcuts and team review (3.1, preview — off by default)
 
+**Recipes (no code).** Conditions on from, to/cc, subject, body, attachment names and count, size, date, the body's SHA-256, the IPv4 addresses in Received headers, or any named header; operators contains / does not contain / equals / greater / less / matches pattern / is one of a list / is in an IPv4 range (CIDR). Actions: add tag, add note, set column (a fixed value or a computed one: `{sha1}` `{sha256}` `{sha512}` `{received_ips}` `{from_domain}`), set aside. Checked 2026-10-14 on 1,000 emails: recipes make exactly the changes of the bundled Hash columns, Domain filter, Date filter, Hash list exclude and Privilege screen scripts, and the private-hop part of IP addresses. Scripts that compute (entity catalogue, attachment risk score, keyword proximity, card-number checks) stay scripts; each bundled script has a "How it works" page.
+
 | Feature | Real limit | Why |
 |---|---|---|
 | Scripts | A script is stopped when one email takes more than 5 s, or the app's memory passes 2 GB | JavaScriptCore has no public time limit; every loop is guarded instead |

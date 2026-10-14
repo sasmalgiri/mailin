@@ -1384,6 +1384,73 @@ final class V31ScriptRunTests: XCTestCase {
         }
     }
 
+    /// B6: for each bundled filter script, the no-code recipe makes exactly the
+    /// same changes (same digest of every email, kind, key and value) on a
+    /// 1,000-email fixture; the IP-range condition matches CIDR exactly.
+    func testRecipes_rebuildTheBundledFilterScripts_sameChangesOn1k() async throws {
+        let env = makeEnv()
+        let domains = ["example.com", "acme.org", "beta.net", "gamma.io"]
+        let privilege = ["attorney-client", "privileged", "legal advice", "work product", "counsel"]
+        let raws: [MBOXParser.RawEmail] = (0..<1_000).map { i in
+            let year = 2019 + i % 7
+            let body = i % 50 == 0 ? "Weekly newsletter." : (i % 7 == 0 ? "Please treat as \(privilege[i % 5]) material, item \(i)." : "Ordinary update \(i).")
+            // Range edges included: 172.15.x is outside 172.16.0.0/12, 172.31.x inside.
+            let edges = ["192.168.\(i % 9).4", "172.15.\(i % 9).9", "172.31.\(i % 9).9"]
+            let ip = i % 3 == 0 ? "10.\(i % 5).0.1" : (i % 3 == 1 ? edges[(i / 3) % 3] : "203.0.113.\(i % 250)")
+            let date = "Mon, 6 Jan \(year) 10:00:00 +0000"
+            return MBOXParser.RawEmail(
+                headers: ["Message-ID": "<r\(i)@t>", "Subject": "Note \(i)", "From": "u\(i)@\(domains[i % 4])", "Date": date,
+                          "Received": "from mx\(i) ([\(ip)]) by mail.example.org; \(date)"],
+                rawSource: "Received: from mx\(i) ([\(ip)]) by mail.example.org; \(date)\nSubject: Note \(i)\n\n\(body)",
+                messageType: "email", attachments: [], timestamp: "\(year)-01-06T10:00:00Z", domains: [domains[i % 4]],
+                plainBody: body, htmlBody: "")
+        }
+        try await env.store.insertBatch(raws, batchSize: 500)
+
+        let was = ScriptPolicy.isEnabled, wasTier = TierAccess.tier
+        ScriptPolicy.isEnabled = true; TierAccess.tier = .professional
+        defer { ScriptPolicy.isEnabled = was; TierAccess.tier = wasTier }
+        func bundled(_ n: Int) -> MailinScript { BundledScripts.all[n - 1] }
+        func with(_ s: MailinScript, _ from: String, _ to: String) -> MailinScript {
+            var c = s; c.source = c.source.replacingOccurrences(of: from, with: to); return c
+        }
+        func recipe(_ name: String, all: Bool = true, _ conds: [ScriptRecipe.Condition], _ acts: [ScriptRecipe.Action]) -> MailinScript {
+            MailinScript(name: name, source: ScriptRecipe(name: name, matchAll: all, conditions: conds, actions: acts).source)
+        }
+        let knownHash = Data(SHA256.hash(data: Data("Weekly newsletter.".utf8))).map { String(format: "%02x", $0) }.joined()
+        let pairs: [(String, MailinScript, MailinScript)] = [
+            ("Hash columns", bundled(1),
+             recipe("h", [], [.init(kind: .column, value: "sha1", value2: "{sha1}"), .init(kind: .column, value: "sha256", value2: "{sha256}"),
+                              .init(kind: .column, value: "sha512", value2: "{sha512}")])),
+            ("Domain filter", with(bundled(3), "[\"example.com\"]", "[\"acme.org\"]"),
+             recipe("d", [.init(field: .from, op: .contains, value: "@acme.org")], [.init(kind: .tag, value: "domain:acme.org")])),
+            ("Date filter", with(with(bundled(4), "2000-01-01", "2021-01-01"), "2100-01-01", "2023-12-31"),
+             recipe("t", all: false, [.init(field: .date, op: .lessThan, value: "2021-01-01"), .init(field: .date, op: .greaterThan, value: "2023-12-31")],
+                    [.init(kind: .exclude, value: "outside date window")])),
+            ("Hash list exclude", with(bundled(6), "var KNOWN = [];", "var KNOWN = [\"\(knownHash)\"];"),
+             recipe("k", [.init(field: .bodySHA256, op: .oneOf, value: knownHash)], [.init(kind: .exclude, value: "known hash")])),
+            ("Privilege screen", bundled(9),
+             recipe("p", all: false, privilege.flatMap { w in [ScriptRecipe.Condition(field: .subject, op: .contains, value: w),
+                                                                ScriptRecipe.Condition(field: .body, op: .contains, value: w)] },
+                    [.init(kind: .tag, value: "privilege-screen")])),
+            ("Private hop", with(bundled(2), "if (unique.length) mailin.column(\"received_ips\", unique.join(\" \"));", ""),
+             recipe("ip", [.init(field: .receivedIPs, op: .inIPRange, value: "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")],
+                    [.init(kind: .tag, value: "private-hop")])),
+        ]
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            for (name, script, rec) in pairs {
+                let a = try await ScriptEngine.run(script, query: .all, apply: false) { _, _ in }
+                let b = try await ScriptEngine.run(rec, query: .all, apply: false) { _, _ in }
+                XCTAssertTrue(a.errors.isEmpty && b.errors.isEmpty, "\(name): \(a.errors.prefix(2)) \(b.errors.prefix(2))")
+                XCTAssertGreaterThan(a.emailsChanged, 0, "\(name): the fixture exercises it")
+                XCTAssertEqual(b.counts, a.counts, name)
+                XCTAssertEqual(b.changesDigest, a.changesDigest, "\(name): the recipe makes exactly the script's changes")
+            }
+        }
+        // Help pages exist for every bundled script.
+        XCTAssertTrue(BundledScripts.all.allSatisfy { BundledScripts.help(for: $0) != nil })
+    }
+
     func testShortcutsFind_100k_tenThousandResults() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "opt-in: MAILIN_SCALE=1")
         let env = makeEnv()
