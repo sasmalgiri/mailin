@@ -95,6 +95,23 @@ final class PSTSpecWriterTests: XCTestCase {
             return subs[0x692] == nil || subs[0x671] == nil
         }
         XCTAssertEqual(incomplete.count, 0, "messages missing a recipient or attachment table")
+        // [MS-PST] 2.7.1 "Mandatory Nodes": a PST without any of these is invalid, and
+        // Outlook refuses it (2026-10-14: the spam search folder 0x2223 was missing).
+        let mandatory: [UInt32] = [0x21, 0x61, 0x122, 0x12D, 0x12E, 0x12F, 0x1E1, 0x201, 0x60D, 0x60E, 0x60F, 0x610,
+                                   0x692, 0x671, 0x2223, 0x8022, 0x802D, 0x802E, 0x802F, 0x8042, 0x804D, 0x804E, 0x804F,
+                                   0x8062, 0x806D, 0x806E, 0x806F]
+        let missing = mandatory.filter { spec.nodes[$0] == nil }
+        XCTAssertEqual(missing.map { String($0, radix: 16) }, [], "mandatory nodes missing")
+        XCTAssertEqual(spec.nodes[0x2223]?.parent, 0x122, "the spam search folder belongs to the root folder")
+        // [MS-PST] 2.4.5.1.1: properties every Message object PC must carry.
+        let requiredMessageProps: [UInt16] = [0x001A, 0x0E07, 0x0E08, 0x0E17, 0x3007, 0x3008, 0x300B]
+        let lacking = messageNodes.prefix(50).filter { node in
+            let props = spec.propertyContext(dataBid: node.dataBid, subBid: node.subBid)
+            return requiredMessageProps.contains { props[$0] == nil }
+        }
+        XCTAssertEqual(lacking.count, 0, "messages missing a required property")
+        let spamProps = spec.propertyContext(dataBid: spec.nodes[0x2223]?.dataBid ?? 0, subBid: 0)
+        if case .string(let name)? = spamProps[0x3001] { XCTAssertEqual(name, "SPAM Search Folder 2") } else { XCTFail("spam folder name") }
         // Keep a copy for the external readers.
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))
         try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: "/tmp/mailin-spec-1k.pst"))

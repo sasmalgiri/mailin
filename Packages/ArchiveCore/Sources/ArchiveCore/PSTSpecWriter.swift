@@ -197,6 +197,8 @@ final class PSTSpecWriter: PSTStreamWriting {
     static let ipmSubtreeNid = F.nid(0x401, F.tFolder)     // 0x8022
     static let maxFileBytes: UInt64 = 50_000_000_000
     static let searchRootNid = F.nid(0x402, F.tFolder)     // 0x8042
+    static let spamSearchFolderNid = F.nid(0x111, 3)        // 0x2223, NID_TYPE_SEARCH_FOLDER
+    static let spamSearchFolderName = "SPAM Search Folder 2"
     static let deletedItemsNid = F.nid(0x403, F.tFolder)   // 0x8062
 
     var dataBytesWritten: UInt64 { eof }
@@ -760,6 +762,9 @@ final class PSTSpecWriter: PSTStreamWriting {
                 (0x0E07, .long(flags)), (0x0E08, .long(UInt32(min(size, Int(UInt32.max))))), (0x0E17, .long(0)),
                 (0x0E1B, .bool(hasAttachments)),
                 (0x0E04, .unicode(to.map(\.name).joined(separator: "; "))),
+                // PidTagSearchKey: required on every Message object PC ([MS-PST] 2.4.5.1.1);
+                // 16 bytes, the email's own identifier, so it is unique and stable.
+                (0x300B, .binary(withUnsafeBytes(of: email.id.uuid) { Data($0) })),
             ]
             if !cc.isEmpty { p.append((0x0E03, .unicode(cc.map(\.name).joined(separator: "; ")))) }
             if !bcc.isEmpty { p.append((0x0E02, .unicode(bcc.map(\.name).joined(separator: "; ")))) }
@@ -903,6 +908,11 @@ final class PSTSpecWriter: PSTStreamWriting {
                 if let cls = c.containerClass { row[0x3613_001F] = .unicode(cls) }
                 try hier.addRow(rowID: child, row)
             }
+            if nid == Self.rootNid {
+                // The spam search folder is a child of the root, listed in its hierarchy table (as Outlook writes it).
+                try hier.addRow(rowID: Self.spamSearchFolderNid, [0x3001_001F: .unicode(Self.spamSearchFolderName), 0x3602_0003: .long(0),
+                                                                  0x3603_0003: .long(0), 0x360A_000B: .bool(false)])
+            }
             let h = try hier.finish()
             let index = nid >> 5
             specialNodes.append((F.nid(index, F.tHierarchy), h.data, h.sub, 0))
@@ -911,6 +921,19 @@ final class PSTSpecWriter: PSTStreamWriting {
             let a = try emptyTable(Templates.assoc)
             specialNodes.append((F.nid(index, F.tAssoc), a.data, a.sub, 0))
         }
+
+        // [MS-PST] 2.7.1 mandatory node 0x2223, the spam search folder (2.7.3.4.4), with the
+        // objects Outlook writes beside it: its search update queue (0x2226, empty), search
+        // criteria object (0x2227) and search contents table (0x2230). Outlook refuses a PST
+        // without them; libpff and libpst do not notice.
+        let spam = try propertyContext([(0x3001, .unicode(Self.spamSearchFolderName)), (0x3602, .long(0)),
+                                        (0x3603, .long(0)), (0x360A, .bool(false))], nextSubnodeIndex: &unused)
+        specialNodes.append((Self.spamSearchFolderNid, spam.data, spam.sub, Self.rootNid))
+        specialNodes.append((F.nid(0x111, 6), 0, 0, 0))
+        let criteria = try propertyContext([(0x660B, .long(0))], nextSubnodeIndex: &unused)
+        specialNodes.append((F.nid(0x111, 7), criteria.data, criteria.sub, 0))
+        let searchContents = try emptyTable(Templates.searchContents)
+        specialNodes.append((F.nid(0x111, 0x10), searchContents.data, searchContents.sub, 0))
 
         // B-trees from the sorted spills.
         try bbtSpill.close(); try msgNbtSpill.close()
@@ -1052,6 +1075,8 @@ final class PSTSpecWriter: PSTStreamWriting {
         h.put32(40, UInt32(messages + 1))                                  // dwUnique
         // rgnid: next free index per NID type.
         for t in 0..<32 { h.put32(44 + 4 * t, 0x400) }
+        // Types this writer does not allocate: the values Outlook writes in a new file.
+        h.put32(44 + 4 * 3, 0x4001); h.put32(44 + 4 * 6, 0x4001); h.put32(44 + 4 * 7, 0x4001); h.put32(44 + 4 * 8, 0x8000)
         h.put32(44 + 4 * Int(F.tFolder), nextFolderIndex)
         h.put32(44 + 4 * Int(F.tMessage), nextMessageIndex)
         h.put32(44 + 4 * Int(F.tHierarchy), nextFolderIndex)
