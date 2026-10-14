@@ -519,7 +519,12 @@ final class PSTSpecReader {
     /// Property contexts in space no block uses (64-byte steps), read as
     /// single-page heaps; carved and partial, with their byte offsets.
     func carveUnallocated(listed: [PSTReader.PSTMessage]) -> [PSTReader.PSTMessage] {
-        let listedKeys = Set(listed.map { $0.subject + "|" + String($0.bodyText.prefix(64)) })
+        // A copy is the same message only if its Message-ID and delivery time
+        // match too: identical test messages or alerts are separate evidence.
+        func key(_ subject: String, _ body: String, _ id: String?, _ time: Date?) -> String {
+            [subject, id ?? "", time.map { String(Int($0.timeIntervalSince1970)) } ?? "", String(body.prefix(64))].joined(separator: "|")
+        }
+        let listedKeys = Set(listed.map { key($0.subject, $0.bodyText, $0.internetMessageId, $0.deliveryTime) })
         let listedSubjects = Set(listed.map(\.subject))
         var allocated = blocks.values.map { (Int($0.ib), Int($0.ib) + $0.cb + (unicode ? 16 : 12)) }
         allocated.sort { $0.0 < $1.0 }
@@ -544,7 +549,7 @@ final class PSTSpecReader {
                     }
                     let subject = Self.subject(pc[0x0037]?.string ?? "")
                     let body = pc[0x1000]?.string ?? ""
-                    let key = subject + "|" + String(body.prefix(64))
+                    let key = key(subject, body, pc[0x1035]?.string, pc[0x0E06]?.date)
                     // An exact earlier copy of a listed message adds nothing; an earlier
                     // version that differs is kept and said to be one.
                     if (!subject.isEmpty || !body.isEmpty), Self.isMail(pc[0x001A]?.string ?? ""),

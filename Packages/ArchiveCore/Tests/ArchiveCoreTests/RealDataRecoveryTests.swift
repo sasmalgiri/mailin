@@ -204,6 +204,92 @@ final class RealDataRecoveryTests: XCTestCase {
         XCTAssertTrue(flagged.isEmpty, flagged.prefix(5).joined(separator: "\n"))
     }
 
+    /// C5: emptying Deleted Items in Outlook removes the messages from the node
+    /// and block B-trees; their bytes stay until overwritten. Done here to real
+    /// Outlook files, entry by entry: deep recovery must carve every emptied
+    /// message back (partial, with its offset) and the listed count must drop
+    /// by exactly that many.
+    func testDeepRecovery_afterDeletedItemsAreEmptied_carvesThemBack() throws {
+        let deepWas = RecoveryPolicy.deepRecoveryEnabled
+        RecoveryPolicy.deepRecoveryEnabled = true
+        defer { RecoveryPolicy.deepRecoveryEnabled = deepWas }
+        let files = try FileManager.default.contentsOfDirectory(at: root!.appendingPathComponent("PST/PST"), includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "pst" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var emptiedTotal = 0, carvedBack = 0, report: [String] = []
+        for url in files {
+            var bytes = [UInt8](try Data(contentsOf: url))
+            let spec = try PSTSpecReader(data: Data(bytes))
+            // Messages in deleted-items folders whose properties sit in one block.
+            var targets: [(nid: UInt32, bid: UInt64, subject: String)] = []
+            for n in spec.nodes.values where n.nid & 0x1F == PSTSpecReader.nidTypeMessage && n.dataBid & 2 == 0 {
+                guard let path = spec.folderPath(n.parent), DeletedFolderNames.isDeleted(path: path) else { continue }
+                let pc = spec.propertyContext(dataBid: n.dataBid, subBid: n.subBid)
+                guard PSTSpecReader.isMail(pc[0x001A]?.string ?? "IPM.Note") else { continue }
+                let subject = PSTSpecReader.subject(pc[0x0037]?.string ?? "")
+                if !subject.isEmpty { targets.append((n.nid, n.dataBid & ~1, subject)) }
+            }
+            guard !targets.isEmpty else { continue }
+            let before = try PSTParser.parse(fileURL: url, senderEmail: "").filter { $0.recovery?.state != .carved }.count
+            Self.removeLeafEntries(&bytes, unicode: spec.unicode, nids: Set(targets.map(\.nid)), bids: Set(targets.map(\.bid)))
+            let out = FileManager.default.temporaryDirectory.appendingPathComponent("emptied-\(UUID().uuidString).pst")
+            try Data(bytes).write(to: out)
+            defer { try? FileManager.default.removeItem(at: out) }
+
+            let after = try PSTParser.parse(fileURL: out, senderEmail: "")
+            let listed = after.filter { $0.recovery?.state != .carved }
+            let carved = after.filter { $0.recovery?.state == .carved }
+            let carvedSubjects = Set(carved.map { $0.headers["Subject"] ?? "" })
+            let found = targets.filter { carvedSubjects.contains($0.subject) }.count
+            emptiedTotal += targets.count; carvedBack += found
+            XCTAssertEqual(listed.count, before - targets.count, "\(url.lastPathComponent): emptied items are no longer listed")
+            for c in carved {
+                XCTAssertEqual(c.recovery?.partial, true)
+                XCTAssertGreaterThan(c.recovery?.offset ?? 0, 0)
+            }
+            if found != targets.count {
+                report.append("\(url.lastPathComponent): carved \(found) of \(targets.count) emptied — missing \(targets.filter { !carvedSubjects.contains($0.subject) }.map(\.subject).prefix(3))")
+            }
+        }
+        XCTAssertGreaterThan(emptiedTotal, 0, "the public set has deleted items to empty")
+        XCTAssertTrue(report.isEmpty, report.joined(separator: "\n"))
+        print("EMPTIED: \(emptiedTotal) deleted items emptied in real PSTs, \(carvedBack) carved back")
+    }
+
+    /// Removes NBT entries for `nids` and BBT entries for `bids` from the leaf
+    /// pages of both B-trees ([MS-PST] 2.2.2.7), shifting later entries down.
+    static func removeLeafEntries(_ b: inout [UInt8], unicode: Bool, nids: Set<UInt32>, bids: Set<UInt64>) {
+        func u32(_ o: Int) -> UInt32 { UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24 }
+        func u64(_ o: Int) -> UInt64 { UInt64(u32(o)) | UInt64(u32(o + 4)) << 32 }
+        let end = unicode ? 488 : 496
+        func walk(_ page: Int, nbt: Bool, depth: Int) {
+            guard depth < 16, page >= 0, page + 512 <= b.count else { return }
+            var cEnt = Int(b[page + end]); let cbEnt = Int(b[page + end + 2]); let level = Int(b[page + end + 3])
+            guard cbEnt > 0, cEnt * cbEnt <= end else { return }
+            if level > 0 {
+                for i in 0..<cEnt {
+                    let e = page + i * cbEnt
+                    walk(unicode ? Int(u64(e + 16)) : Int(u32(e + 8)), nbt: nbt, depth: depth + 1)
+                }
+                return
+            }
+            var i = 0
+            while i < cEnt {
+                let e = page + i * cbEnt
+                let hit = nbt ? nids.contains(u32(e)) : bids.contains((unicode ? u64(e) : UInt64(u32(e))) & ~1)
+                if hit {
+                    let tail = page + cEnt * cbEnt
+                    b.replaceSubrange(e..<(tail - cbEnt), with: b[(e + cbEnt)..<tail])
+                    cEnt -= 1
+                    b[page + end] = UInt8(cEnt)
+                } else {
+                    i += 1
+                }
+            }
+        }
+        walk(unicode ? Int(u64(224)) : Int(u32(188)), nbt: true, depth: 0)
+        walk(unicode ? Int(u64(240)) : Int(u32(196)), nbt: false, depth: 0)
+    }
+
     /// No public PST uses cyclic encoding (bCryptMethod 2), so each real
     /// permute-encoded file is re-encoded block by block with [MS-PST] 5.2
     /// CryptCyclic and its method byte set to 2. The reader must read back
