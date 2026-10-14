@@ -1228,6 +1228,87 @@ final class V31SharedFolderTests: XCTestCase {
         XCTAssertThrowsError(try viewer.checkout(3, state: viewer.load()))
     }
 
+    /// B7 T2: a managed name wins over what was typed.
+    func testManagedIdentity_winsOverTheTypedName() {
+        XCTAssertEqual(TeamIdentity.name(typed: "me", managed: "Ann Example (Legal)").name, "Ann Example (Legal)")
+        XCTAssertTrue(TeamIdentity.name(typed: "me", managed: "Ann Example (Legal)").managed)
+        XCTAssertEqual(TeamIdentity.name(typed: "  me ", managed: nil).name, "me")
+        XCTAssertFalse(TeamIdentity.name(typed: "me", managed: "  ").managed)
+    }
+
+    /// B7 T9: profiles are the lead's, signed; a reviewer cannot write them and
+    /// any changed byte or other signer is refused.
+    func testSharedRedactionProfiles_leadOnly_signed_tamperRefused() throws {
+        let leadKey = Curve25519.Signing.PrivateKey()
+        let folder = try makeCase(lead: leadKey, emails: 1_000)
+        let lead = try TeamCase(folder: folder, name: "Lead", role: "examiner", signingKey: leadKey)
+        let reviewerKey = Curve25519.Signing.PrivateKey()
+        let reviewer = try TeamCase(folder: folder, name: "Bo", role: "reviewer", signingKey: reviewerKey)
+        XCTAssertEqual(try reviewer.redactionProfiles(), [])
+
+        let rules = RedactionEngine.defaultRules + RedactionEngine.personRedactionRules(name: "Jane Roe")
+        try lead.saveRedactionProfile(name: "Production set", rules: rules)
+        let read = try reviewer.redactionProfiles()
+        XCTAssertEqual(read.map(\.name), ["Production set"])
+        XCTAssertEqual(read.first?.rules, rules)
+        XCTAssertEqual(read.first?.savedBy, "Lead")
+
+        XCTAssertThrowsError(try reviewer.saveRedactionProfile(name: "Mine", rules: [])) {
+            XCTAssertEqual($0 as? SharedRedactionError, .onlyTheLead)
+        }
+        // One changed byte inside the signed payload.
+        let url = lead.redactionProfilesURL
+        var text = try String(contentsOf: url, encoding: .utf8)
+        let payloadRange = try XCTUnwrap(text.range(of: #""payload":"[A-Za-z0-9+/=]+""#, options: .regularExpression))
+        var payload = String(text[payloadRange])
+        let i = payload.index(payload.startIndex, offsetBy: 20)
+        payload.replaceSubrange(i...i, with: payload[i] == "A" ? "B" : "A")
+        text.replaceSubrange(payloadRange, with: payload)
+        try Data(text.utf8).write(to: url)
+        XCTAssertThrowsError(try reviewer.redactionProfiles())
+        // A reviewer forging a fully valid file with their own key.
+        let forged = try JSONSerialization.data(withJSONObject: [
+            "payload": try TeamCaseIO.encoder.encode([SharedRedactionProfile(name: "Lax", rules: [], savedBy: "Bo", savedAt: Date())]).base64EncodedString(),
+            "signature": try reviewer.sign(TeamCaseIO.encoder.encode([SharedRedactionProfile(name: "Lax", rules: [], savedBy: "Bo", savedAt: Date())])),
+            "signer": reviewer.myKey])
+        try forged.write(to: url)
+        XCTAssertThrowsError(try reviewer.redactionProfiles()) { XCTAssertEqual($0 as? SharedRedactionError, .tampered) }
+    }
+
+    /// B7 T11: every log re-checked from disk; a tampered entry and a log filed
+    /// under another member's name are both reported, with the count before them.
+    func testVerifyAudit_1kEntries_findsTamperingAndMisfiledLogs() throws {
+        let leadKey = Curve25519.Signing.PrivateKey()
+        let folder = try makeCase(lead: leadKey, emails: 1_000)
+        let members = try (0..<3).map { try TeamCase(folder: folder, name: "R\($0)", role: "reviewer", signingKey: Curve25519.Signing.PrivateKey()) }
+        let ids = members[0].manifest.batches.flatMap { $0 }
+        var state = members[0].load()
+        for (i, id) in ids.enumerated() {
+            try members[i % 3].append(.code, emailID: id, value: "Relevant", state: state)
+            if i % 100 == 99 { state = members[0].load() }
+        }
+        let clean = members[0].verifyAudit()
+        XCTAssertTrue(clean.ok, clean.summary)
+        XCTAssertEqual(clean.totalEntries, 1_000)
+        XCTAssertEqual(clean.logs.count, 3)
+
+        // Change the value of entry 51 in R1's log.
+        let log = members[1].myLog
+        var lines = try String(contentsOf: log, encoding: .utf8).components(separatedBy: "\n")
+        lines[50] = lines[50].replacingOccurrences(of: "\"Relevant\"", with: "\"Not relevant\"")
+        try Data(lines.joined(separator: "\n").utf8).write(to: log)
+        // And file a copy of R2's log under a made-up owner.
+        try FileManager.default.copyItem(at: members[2].myLog, to: members[2].logsDir.appendingPathComponent("0000000000000000.jsonl"))
+
+        let check = members[0].verifyAudit()
+        XCTAssertFalse(check.ok)
+        let r1 = try XCTUnwrap(check.logs.first { $0.file == log.lastPathComponent })
+        XCTAssertEqual(r1.verifiedEntries, 50, "verified up to the changed entry")
+        XCTAssertTrue(r1.problems.first?.contains("tampered") ?? false)
+        let misfiled = try XCTUnwrap(check.logs.first { $0.file == "0000000000000000.jsonl" })
+        XCTAssertTrue(misfiled.problems.contains { $0.contains("not this file's owner") })
+    }
+
     func testIncrementalLoad_readsOnlyNewEntries_andStaysCorrect() throws {
         let leadKey = Curve25519.Signing.PrivateKey()
         let folder = try makeCase(lead: leadKey, emails: 500)

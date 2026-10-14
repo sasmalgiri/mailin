@@ -457,7 +457,11 @@ struct RedactionConfigView: View {
     /// `emails` (the newest 2,000) is only for the preview.
     var exportQuery: EmailQuery? = nil
 
-    @State private var rules: [RedactionEngine.RedactionRule] = RedactionEngine.defaultRules
+    @State private var rules: [RedactionEngine.RedactionRule] = TeamCaseSession.chosenProfile?.profile.rules ?? RedactionEngine.defaultRules
+    @State private var sharedProfileNote: String? = TeamCaseSession.chosenProfile.map {
+        String(localized: "Rules from the team case \($0.caseTitle): “\($0.profile.name)”, saved by \($0.profile.savedBy).")
+    }
+    @State private var teamProfileName = ""
     @State private var previewEmail: MBOXParser.RawEmail?
     @State private var previewResult: RedactionEngine.RedactedEmail?
     @State private var showAddRule = false
@@ -524,6 +528,26 @@ struct RedactionConfigView: View {
             VStack(alignment: .leading, spacing: Spacing.xSmall) {
                 Text("Redaction Rules")
                     .font(Typography.headline)
+                // B7 T9: rules shared by a team case's lead.
+                if let shared = sharedProfileNote {
+                    Label(shared, systemImage: "person.3")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                }
+                if let c = TeamCaseSession.open, c.isLead {
+                    HStack {
+                        TextField(String(localized: "Profile name"), text: $teamProfileName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 220)
+                        Button(String(localized: "Save these rules to the team case")) {
+                            do {
+                                try c.saveRedactionProfile(name: teamProfileName, rules: rules)
+                                sharedProfileNote = String(localized: "Saved “\(teamProfileName)” to \(c.manifest.title) — every member can use it.")
+                            } catch { sharedProfileNote = error.localizedDescription }
+                        }
+                        .disabled(teamProfileName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
 
                 ForEach($rules) { $rule in
                     HStack(spacing: Spacing.small) {

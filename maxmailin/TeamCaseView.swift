@@ -35,17 +35,25 @@ struct TeamCaseView: View {
     @State private var showQC = false
     @State private var aiDisagreements: [(id: UUID, code: String, score: Double)] = []
 
+    private var identity: (name: String, managed: Bool) { TeamIdentity.name(typed: myName) }
+    @State private var audit: TeamAuditCheck?
+
     var body: some View {
         Form {
             if let c = teamCase {
                 dashboard(c)
             } else {
                 Section {
-                    TextField(String(localized: "Your name (shown to the team)"), text: $myName)
+                    if identity.managed {
+                        // T2: an organisation sets the name its people sign with.
+                        LabeledContent(String(localized: "Your name (set by your organisation)"), value: identity.name)
+                    } else {
+                        TextField(String(localized: "Your name (shown to the team)"), text: $myName)
+                    }
                     Button {
                         showOpenPicker = true
                     } label: { Label("Open a case folder…", systemImage: "folder") }
-                    .disabled(myName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(identity.name.isEmpty)
                 } header: { Text("Join a case") }
                 if mayLead {
                 Section {
@@ -57,7 +65,7 @@ struct TeamCaseView: View {
                     Button {
                         showCreatePicker = true
                     } label: { Label("Create case on a shared folder…", systemImage: "folder.badge.plus") }
-                    .disabled(title.isEmpty || myName.isEmpty || creating)
+                    .disabled(title.isEmpty || identity.name.isEmpty || creating)
                 } header: { Text("Start a case (lead)") } footer: {
                     Text("The case folder can live on a file server, NAS or external drive. Everyone works offline; each person's work is a signed log in the folder, and every copy of mailin reading the folder shows the same result.")
                 }
@@ -112,9 +120,25 @@ struct TeamCaseView: View {
             ForEach(state.problems, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
             HStack {
                 Button(String(localized: "Refresh")) { reload() }
-                Button(String(localized: "Close case")) { teamCase = nil }
+                Button(String(localized: "Verify audit")) { audit = c.verifyAudit() }
+                    .help("Reads every member's log again and re-checks each entry's signature and chain")
+                Button(String(localized: "Close case")) {
+                    teamCase = nil; audit = nil
+                    TeamCaseSession.open = nil; TeamCaseSession.chosenProfile = nil
+                }
+            }
+            if let audit {
+                Label(audit.summary, systemImage: audit.ok ? "checkmark.seal" : "exclamationmark.triangle")
+                    .foregroundStyle(audit.ok ? Color.primary : Color.orange)
+                ForEach(audit.logs, id: \.file) { log in
+                    LabeledContent(log.member, value: log.ok ? String(localized: "\(log.verifiedEntries) entries verified")
+                                                            : String(localized: "\(log.verifiedEntries) verified, then: \(log.problems.first ?? "")"))
+                        .font(.caption)
+                }
             }
         } header: { Text(c.manifest.title + (isLead ? String(localized: " — you lead") : "")) }
+
+        redactionProfilesSection(c)
 
         Section {
             ForEach(c.manifest.batches.indices, id: \.self) { b in
@@ -233,11 +257,42 @@ struct TeamCaseView: View {
         }
     }
 
+    /// B7 T9: the lead's shared redaction rule sets, signature-checked.
+    @ViewBuilder
+    private func redactionProfilesSection(_ c: TeamCase) -> some View {
+        Section {
+            switch Result(catching: { try c.redactionProfiles() }) {
+            case .success(let profiles) where profiles.isEmpty:
+                Text(c.isLead ? String(localized: "None yet. In Redaction, set the rules and choose “Save these rules to the team case”.")
+                              : String(localized: "The lead has not shared any yet."))
+                    .font(.caption).foregroundStyle(.secondary)
+            case .success(let profiles):
+                ForEach(profiles) { p in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(p.name)
+                            Text("\(p.rules.filter(\.isEnabled).count) rules · \(p.savedBy) · \(p.savedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(String(localized: "Use in Redaction")) {
+                            TeamCaseSession.chosenProfile = (c.manifest.title, p)
+                            status = String(localized: "Redaction will use “\(p.name)” the next time it opens.")
+                        }
+                    }
+                }
+            case .failure(let error):
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            }
+        } header: { Text("Redaction profiles") }
+    }
+
     private func open(_ url: URL) {
         _ = url.startAccessingSecurityScopedResource()   // kept for the session: the case is read and written while open
         do {
-            let c = try TeamCase(folder: url, name: myName, role: OrgPolicy.role.rawValue)
+            let c = try TeamCase(folder: url, name: identity.name, role: OrgPolicy.role.rawValue)
             teamCase = c
+            TeamCaseSession.open = c
             reload()
             if state.members[c.myKey] == nil { try c.append(.join, state: state); reload() }
         } catch {

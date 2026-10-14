@@ -296,7 +296,8 @@ final class TeamCase: @unchecked Sendable {
         let ids = pack.index.map(\.id)
         let size = max(1, batchSize)
         let batches = stride(from: 0, to: ids.count, by: size).map { Array(ids[$0..<min($0 + size, ids.count)]) }
-        let examiner = ForensicManager.shared.examinerName.isEmpty ? String(localized: "Lead") : ForensicManager.shared.examinerName
+        let who = TeamIdentity.name(typed: ForensicManager.shared.examinerName).name   // T2: the managed name wins
+        let examiner = who.isEmpty ? String(localized: "Lead") : who
         let manifest = TeamCaseManifest(caseID: pack.header.packID, title: title, createdAt: Date(), createdBy: examiner,
                                         leadKey: try ReviewSigningKey.publicKeyBase64(), codes: ReviewPackBuilder.defaultCodes,
                                         batches: batches, qcPercent: max(0, min(100, qcPercent)), layout: layout)
@@ -445,6 +446,11 @@ final class TeamCase: @unchecked Sendable {
     }
 
     // MARK: Writing
+
+    /// Signs bytes with this member's key (shared redaction profiles, B7).
+    func sign(_ data: Data) throws -> String {
+        try key.signature(for: data).base64EncodedString()
+    }
 
     /// Appends one signed entry to this device's own log.
     func append(_ op: TeamLogEntry.Op, emailID: UUID? = nil, batch: Int? = nil, value: String = "", state: TeamCaseState) throws {
