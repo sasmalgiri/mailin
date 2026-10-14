@@ -20,7 +20,7 @@ struct DuplicateManagerView: View {
     private var v3: Bool { modules?.isOn(.v3Duplicates) ?? false }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
             if isScanning {
@@ -361,7 +361,9 @@ struct DuplicateManagerView: View {
     /// group list below is window-bounded). Keeps the best copy per
     /// Message-ID (source-identified over migrated, then earliest import).
     private var archiveWideDedupCard: some View {
-        Group {
+        // A view that is always there: `.task` on an empty Group never runs,
+        // so the content it loads could never appear.
+        VStack(alignment: .leading, spacing: 0) {
             if archiveDupChecked && !archiveDupIDs.isEmpty {
                 HStack(spacing: Spacing.small) {
                     Image(systemName: "doc.on.doc.fill")

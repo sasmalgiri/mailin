@@ -72,7 +72,29 @@ def lint_file(path):
             if ra.search(l) and any(rb.search(x) for x in lines[max(0, i - span):i + span + 1]):
                 n += 1
         if n: counts[rule] = n
+    n = task_on_empty_group(lines)
+    if n: counts["taskOnEmptyGroup"] = n
     return counts
+
+
+def task_on_empty_group(lines):
+    """`Group { if ... }` + `.task`/`.onAppear`, no else: the task never runs while empty."""
+    ind = lambda l: len(l) - len(l.lstrip(" "))
+    n = 0
+    for i, l in enumerate(lines):
+        if l.strip() != "Group {":
+            continue
+        rest = [x for x in lines[i + 1:] if x.strip()]
+        if not rest or not rest[0].strip().startswith("if "):
+            continue
+        close = next((k for k in range(i + 1, len(lines)) if ind(lines[k]) == ind(l) and lines[k].strip().startswith("}")), None)
+        if close is None or close + 1 >= len(lines):
+            continue
+        if any(ind(x) == ind(l) + 4 and x.strip().startswith("} else") for x in lines[i + 1:close]):
+            continue
+        if lines[close + 1].strip().startswith((".task", ".onAppear")):
+            n += 1
+    return n
 
 
 def swift_files():

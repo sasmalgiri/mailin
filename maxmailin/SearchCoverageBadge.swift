@@ -42,7 +42,9 @@ struct SearchCoverageBadge: View {
     @State private var showDetail = false
 
     var body: some View {
-        Group {
+        // A view that is always there: `.task` on an empty Group never runs,
+        // so the content it loads could never appear.
+        VStack(alignment: .leading, spacing: 0) {
             if isQueryActive, !isDismissed, let partialCount, partialCount > 0 {
                 content(partialCount: partialCount)
             }

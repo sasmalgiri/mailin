@@ -92,7 +92,32 @@ struct V3LintTests {
             }
             if n > 0 { counts[rule] = n }
         }
+        let empty = taskOnEmptyGroupCount(lines)
+        if empty > 0 { counts["taskOnEmptyGroup"] = empty }
         return counts
+    }
+
+    /// `Group { if … { … } }.task { … }` with no `else`: a Group hands its
+    /// modifiers to its children, so while the condition is false there is
+    /// nothing to run the task — content the task loads can never appear
+    /// (the recovery and search-coverage badges, found 2026-10-14).
+    static func taskOnEmptyGroupCount(_ lines: [String]) -> Int {
+        func indent(_ l: String) -> Int { l.prefix { $0 == " " }.count }
+        var n = 0
+        for (i, line) in lines.enumerated() where line.trimmingCharacters(in: .whitespaces) == "Group {" {
+            guard let first = lines[(i + 1)...].first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
+                  first.trimmingCharacters(in: .whitespaces).hasPrefix("if ") else { continue }
+            let level = indent(line)
+            guard let close = lines.indices.dropFirst(i + 1).first(where: {
+                indent(lines[$0]) == level && lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("}")
+            }) else { continue }
+            let body = lines[(i + 1)..<close]
+            if body.contains(where: { indent($0) == level + 4 && $0.trimmingCharacters(in: .whitespaces).hasPrefix("} else") }) { continue }
+            guard close + 1 < lines.count else { continue }
+            let next = lines[close + 1].trimmingCharacters(in: .whitespaces)
+            if next.hasPrefix(".task") || next.hasPrefix(".onAppear") { n += 1 }
+        }
+        return n
     }
 
     @Test("New 3.0 code has no audit-lesson violations; old files do not get worse")
@@ -140,5 +165,9 @@ struct V3LintTests {
         #expect(try Self.lint(pair)["documentBeforeSave"] == 1)
         let near = "let shown = rows.prefix(50)\nText(\"All emails\")"
         #expect(try Self.lint(near)["allNextToCap"] == 1)
+        let group = "        Group {\n            if let info {\n                Text(info)\n            }\n        }\n        .task { info = await load() }"
+        #expect(try Self.lint(group)["taskOnEmptyGroup"] == 1)
+        let withElse = group.replacingOccurrences(of: "            }\n        }", with: "            } else {\n                Color.clear\n            }\n        }")
+        #expect(try Self.lint(withElse)["taskOnEmptyGroup"] == nil, "an else branch keeps a view there")
     }
 }

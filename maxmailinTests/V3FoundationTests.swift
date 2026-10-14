@@ -747,6 +747,18 @@ final class V3FoundationTests: XCTestCase {
         XCTAssertEqual(samples.filter { $0.recovery?.state == .unpurged }.count, 6)
     }
 
+    /// The list's in-memory filter leaves SQL-compiled operators alone: as free
+    /// text, `is:recovered` matched nothing and emptied the list (found on iPhone).
+    @MainActor
+    func testListSearch_compiledOperatorsAreNotFreeText() {
+        for token in ["is:recovered", "recovery:unpurged", "domain:example.com", "-tag:x", "is:pinned", "sort:oldest"] {
+            XCTAssertTrue(ParsedEmailListViewModel.isCompiledOperator(token), token)
+        }
+        for token in ["invoice", "https://example.com/a", "10:30"] {
+            XCTAssertFalse(ParsedEmailListViewModel.isCompiledOperator(token), token)
+        }
+    }
+
     /// Script runs read as words, not JSON; counts need no plural forms.
     func testScriptRunDescription_isReadable() {
         let json = "{\"applied\":false,\"digest\":\"ab\",\"counts\":{\"column\":60,\"tag\":3}}"

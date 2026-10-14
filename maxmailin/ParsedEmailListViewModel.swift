@@ -896,6 +896,13 @@ class ParsedEmailListViewModel: ObservableObject {
         var proximityDistance: Int = 5
     }
 
+    /// A `key:value` token that `ArchiveQueryCompiler` turns into a SQL filter
+    /// rather than search text.
+    static func isCompiledOperator(_ token: String) -> Bool {
+        guard token.contains(":") else { return false }
+        return ArchiveQueryCompiler.compile(token, exclusions: true).text == nil
+    }
+
     private func parseSearchQuery(_ raw: String) -> ParsedSearch {
         var parsed = ParsedSearch()
         var freeWords: [String] = []
@@ -940,6 +947,11 @@ class ParsedEmailListViewModel: ObservableObject {
                 parsed.tagOperator = unquoted(String(part.dropFirst(4)))
             } else if lower.hasPrefix("source:") {
                 parsed.sourceOperator = unquoted(String(part.dropFirst(7)))
+            } else if Self.isCompiledOperator(part) {
+                // Already applied by the SQL query (`is:recovered`, `domain:`,
+                // `-tag:` …); as free text it would match nothing and empty the list.
+            } else if lower == "not", i + 1 < parts.count, Self.isCompiledOperator(parts[i + 1]) {
+                i += 1   // "NOT before:2024-01-01": the compiler negated it
             } else {
                 freeWords.append(part)
             }

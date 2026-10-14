@@ -199,7 +199,9 @@ struct ShadowComparisonPanel: View {
     @State private var failure: String?
 
     var body: some View {
-        Group {
+        // A view that is always there: `.task` on an empty Group never runs,
+        // so the content it loads could never appear.
+        VStack(alignment: .leading, spacing: 0) {
             if available {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Compare with the previous engines")
