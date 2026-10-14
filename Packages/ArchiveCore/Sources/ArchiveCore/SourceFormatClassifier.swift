@@ -39,6 +39,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     case gzip
     /// Directory forms.
     case appleMailMailbox     // Apple Mail's .mbox *package*
+    case appleMailLibrary     // Mail's own folders: <box>.mbox/<UUID>/Data/…/Messages/*.emlx
     case maildir              // cur/new/tmp
     case emlFolder            // a plain folder of .eml files
     case unknown
@@ -46,7 +47,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     var isSupported: Bool {
         switch self {
         case .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf,
-             .appleMailMailbox, .maildir, .emlFolder, .zip, .gzip:
+             .appleMailMailbox, .appleMailLibrary, .maildir, .emlFolder, .zip, .gzip:
             return true
         case .unknown:
             return false
@@ -63,7 +64,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         switch self {
         case .mbox, .appleMailMailbox, .maildir, .emlFolder: return "mbox"
         case .eml: return "eml"
-        case .emlx: return "emlx"
+        case .emlx, .appleMailLibrary: return "emlx"
         case .msg: return "msg"
         case .pst: return "pst"
         case .ost: return "ost"
@@ -86,6 +87,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .zip: return "ZIP archive"
         case .gzip: return "gzip-compressed file"
         case .appleMailMailbox: return "Apple Mail mailbox package"
+        case .appleMailLibrary: return "Apple Mail folder (.emlx messages)"
         case .maildir: return "Maildir folder"
         case .emlFolder: return "folder of .eml messages"
         case .unknown: return "unrecognised file"
@@ -344,6 +346,17 @@ enum SourceFormatClassifier {
 
         let names = Set((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? [])
 
+        // Mail's own library (V10, an account, or one of its mailboxes): the
+        // messages are .emlx files a few folders down, there is no `mbox` file.
+        // Classified as a package before 2026-10-14, it imported nothing.
+        if !names.contains("mbox"), !names.contains(where: { $0.lowercased().hasSuffix(".emlx") }),
+           !emlxDirectories(under: url, limit: 1).isEmpty {
+            return SourceClassification(
+                format: .appleMailLibrary,
+                evidence: "folder with .emlx messages below it (Apple Mail's own layout)",
+                extensionHint: ext, nameContentMismatch: false, warning: nil)
+        }
+
         // Apple Mail exports a .mbox *package* containing `mbox` and/or `Data/`.
         if ext == "mbox" || names.contains("mbox") || names.contains("Info.plist") {
             return SourceClassification(
@@ -420,6 +433,9 @@ enum SourceFormatClassifier {
             }
             return found.sorted { $0.path < $1.path }
 
+        case .appleMailLibrary:
+            return emlxDirectories(under: url, limit: .max)
+
         case .emlFolder:
             return (((try? fm.contentsOfDirectory(at: url,
                                                   includingPropertiesForKeys: nil,
@@ -447,7 +463,21 @@ enum SourceFormatClassifier {
 
     /// True when `format` needs `expand(_:format:)` before a parser can run.
     static func isDirectoryForm(_ format: SourceFormat) -> Bool {
-        format == .appleMailMailbox || format == .maildir || format == .emlFolder
+        format == .appleMailMailbox || format == .maildir || format == .emlFolder || format == .appleMailLibrary
+    }
+
+    /// Folders under `url` that hold .emlx files (Mail's `…/Data/…/Messages`),
+    /// sorted, hidden folders skipped; stops after `limit` folders.
+    static func emlxDirectories(under url: URL, limit: Int) -> [URL] {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey],
+                                         options: [.skipsHiddenFiles]) else { return [] }
+        var dirs = Set<URL>()
+        for case let child as URL in walker where child.pathExtension.lowercased() == "emlx" {
+            dirs.insert(child.deletingLastPathComponent().standardizedFileURL)
+            if dirs.count >= limit { break }
+        }
+        return dirs.sorted { $0.path < $1.path }
     }
 
     // MARK: - I/O

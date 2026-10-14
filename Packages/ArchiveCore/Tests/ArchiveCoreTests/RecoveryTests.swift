@@ -352,3 +352,95 @@ final class PSTDeepRecoveryTests: XCTestCase {
         XCTAssertEqual(all.filter { $0.recovery?.state != .carved }.count, 2, "listed messages are not carved twice")
     }
 }
+
+/// C6: an Apple Mail library laid out as Mail does it (V10/<account>/<box>.mbox/
+/// <UUID>/Data/<n>/Messages/<id>.emlx, plist flags after the message), 1,000
+/// messages: the deleted flag and the Deleted Messages / Trash mailboxes must be
+/// counted exactly, through the real importer with both engines.
+final class AppleMailLibraryRecoveryTests: XCTestCase {
+    private var root: URL!
+    private var was = false
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("applemail-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        was = RecoveryPolicy.isEnabled
+        RecoveryPolicy.isEnabled = true
+    }
+    override func tearDown() { RecoveryPolicy.isEnabled = was; try? FileManager.default.removeItem(at: root); super.tearDown() }
+
+    private func emlx(_ i: Int, flags: Int) -> Data {
+        let msg = "From: Sender \(i % 40) <s\(i % 40)@example.com>\r\nTo: me@example.org\r\nSubject: Apple Mail message \(i)\r\nMessage-ID: <am\(i)@example.com>\r\nDate: Mon, 6 Jan 2025 10:\(String(format: "%02d", i % 60)):00 +0000\r\n\r\nBody of message \(i).\r\n"
+        let body = Data(msg.utf8)
+        let plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>date-received</key><integer>1736157600</integer><key>flags</key><integer>\(flags)</integer></dict></plist>\n"
+        var d = Data("\(body.count)\n".utf8)
+        d.append(body); d.append(Data(plist.utf8))
+        return d
+    }
+
+    /// Writes `count` messages into one mailbox; `deletedFlag` of them carry flag 0x02.
+    private func mailbox(_ path: String, start: Int, count: Int, deletedFlag: Int = 0, partial: Int = 0) throws {
+        let dir = root.appendingPathComponent("V10/\(UUID().uuidString)/\(path)/\(UUID().uuidString)/Data/0/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for k in 0..<count {
+            let i = start + k
+            let flags = 0x01 | (k < deletedFlag ? 0x02 : 0)
+            let name = k >= count - partial ? "\(i).partial.emlx" : "\(i).emlx"
+            try emlx(i, flags: flags).write(to: dir.appendingPathComponent(name))
+        }
+    }
+
+    func testAppleMailLibrary_1k_deletedFlagAndMailboxesCountedExactly() async throws {
+        try mailbox("Inbox.mbox", start: 0, count: 800, deletedFlag: 30, partial: 5)
+        try mailbox("Deleted Messages.mbox", start: 800, count: 150)
+        try mailbox("[Gmail].mbox/Trash.mbox", start: 950, count: 20)
+        try mailbox("Archive.mbox", start: 970, count: 30)
+
+        // Classification: the library and each Mail mailbox folder are Apple Mail
+        // folders; a Messages folder is plain .emlx; an exported package with an
+        // `mbox` file stays a package.
+        XCTAssertEqual(SourceFormatClassifier.classify(url: root.appendingPathComponent("V10")).format, .appleMailLibrary)
+        let anInbox = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("V10"), includingPropertiesForKeys: nil)
+            .map { $0.appendingPathComponent("Inbox.mbox") }.first { FileManager.default.fileExists(atPath: $0.path) }!
+        XCTAssertEqual(SourceFormatClassifier.classify(url: anInbox).format, .appleMailLibrary)
+        let export = root.appendingPathComponent("Export.mbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: export, withIntermediateDirectories: true)
+        try Data("From a@b Mon Jan  6 10:00:00 2025\nSubject: x\n\nbody\n".utf8).write(to: export.appendingPathComponent("mbox"))
+        XCTAssertEqual(SourceFormatClassifier.classify(url: export).format, .appleMailMailbox)
+        try FileManager.default.removeItem(at: export)
+
+        // Parser: per mailbox, exactly.
+        var parsed: [MBOXParser.RawEmail] = []
+        let fm = FileManager.default
+        let e = fm.enumerator(at: root, includingPropertiesForKeys: nil)!
+        var dirs = Set<URL>()
+        while let u = e.nextObject() as? URL { if u.pathExtension == "emlx" { dirs.insert(u.deletingLastPathComponent()) } }
+        for d in dirs { parsed += try EMLXParser.parse(fileURL: d, senderEmail: "") }
+        XCTAssertEqual(parsed.count, 1_000)
+        XCTAssertEqual(parsed.filter { $0.recovery?.state == .flaggedDeleted }.count, 30)
+        XCTAssertEqual(parsed.filter { $0.recovery?.state == .deletedFolder }.count, 170, "Deleted Messages 150 + [Gmail]/Trash 20")
+        XCTAssertEqual(parsed.filter { $0.recovery == nil }.count, 800)
+
+        // The real importer, both engines, the library folder as the source.
+        for offset in [false, true] {
+            let dir = fm.temporaryDirectory.appendingPathComponent("applemail-store-\(UUID().uuidString)", isDirectory: true)
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: dir) }
+            let store = SQLiteEmailStore(directory: dir.appendingPathComponent("store", isDirectory: true))
+            let fts = FTSSearchIndex(shardsDirectory: dir.appendingPathComponent("fts", isDirectory: true))
+            let coordinator = await BulkImportCoordinator(store: store, fts: fts, checkpoints: ImportCheckpointStore(store: store),
+                                                          requiresStorageActivation: false)
+            var options = BulkImportCoordinator.Options()
+            options.enforceStoragePreflight = false
+            options.useOffsetEngine = offset
+            options.recordLocators = offset
+            options.dedupPolicy = .preserveAll
+            let summary = try await coordinator.runImport(urls: [root.appendingPathComponent("V10")], options: options)
+            let stored = try await store.filteredCount(.all)
+            let c = try await store.recoveryCounts()
+            XCTAssertEqual(stored, 1_000, "offset \(offset)")
+            XCTAssertEqual(c[.flaggedDeleted], 30, "offset \(offset)")
+            XCTAssertEqual(c[.deletedFolder], 170, "offset \(offset)")
+            XCTAssertEqual(summary.receipt?.recovery?[.deletedFolder], 170, "offset \(offset): the receipt says so")
+        }
+    }
+}

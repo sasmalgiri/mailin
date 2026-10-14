@@ -25,6 +25,12 @@ struct ParserFactory {
             }
             var all: [MBOXParser.RawEmail] = []
             for (index, member) in members.enumerated() {
+                if classification.format == .appleMailLibrary {
+                    all += try EMLXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
+                        onProgress?((Double(index) + fraction) / Double(members.count))
+                    }
+                    continue
+                }
                 all += try MBOXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
                     onProgress?((Double(index) + fraction) / Double(members.count))
                 }
@@ -338,6 +344,21 @@ struct ParserFactory {
             var total = 0, parsed = 0, failed = 0
             var categories: [String: Int] = [:]
             for (index, member) in members.enumerated() {
+                if classification.format == .appleMailLibrary {
+                    // One mailbox folder at a time, in batches.
+                    try Task.checkCancellation()
+                    let result = try EMLXParser.parseWithReport(fileURL: member, senderEmail: senderEmail) { fraction in
+                        onProgress?((Double(index) + fraction) / Double(members.count))
+                    }
+                    total += result.totalFiles
+                    parsed += result.emails.count
+                    failed += result.failedFiles
+                    if result.failedFiles > 0 { categories["emlx_damaged", default: 0] += result.failedFiles }
+                    for start in stride(from: 0, to: result.emails.count, by: max(1, batchSize)) {
+                        try await onBatch(Array(result.emails[start..<min(start + max(1, batchSize), result.emails.count)]))
+                    }
+                    continue
+                }
                 let report = try await MBOXParser.parseStreamingCallback(
                     fileURL: member,
                     senderEmail: senderEmail,

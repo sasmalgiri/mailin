@@ -274,7 +274,7 @@ With **Settings ▸ Modules ▸ Recovery** on, imports mark mail the files show 
 | Thunderbird mbox | `X-Mozilla-Status` bit 0x0008 (deleted, not yet purged) | Compacting the folder removes such mail for good |
 | mbox (mutt / pine) | `X-Status` containing `D` | — |
 | Gmail Takeout | Trash / Bin labels | Mail emptied from Trash is not in Takeout |
-| Apple Mail EMLX | Deleted flag (0x02); Deleted Messages / Trash mailboxes | — |
+| Apple Mail EMLX | Deleted flag (0x02); Deleted Messages / Trash mailboxes. Mail's own library folder (V10, an account or a mailbox) can be chosen directly; checked 2026-10-14 on a 1,000-message library in Mail's layout through both import engines | — |
 | PST / OST | Deleted Items, Recoverable Items and other deleted-items folders; messages in no folder (orphans) | Outlook 2016 and later rarely leave orphans |
 | PST deep recovery (separate switch) | Property contexts found in unallocated space, marked carved and partial, with byte offsets. Checked 2026-10-14 on real Outlook PSTs with their Deleted Items emptied (entries removed from both B-trees, as Outlook does): 31 of 31 emptied messages carved back | Best effort; overwritten space cannot be read. Files with cyclic encoding cannot be carved (the decoding key is the block ID, which freed space no longer has) |
 | Any file (carving, deep recovery switch) | RFC 5322 messages with a sender and a date or Message-ID | Best effort; candidates that do not verify are counted as rejected, never imported |
