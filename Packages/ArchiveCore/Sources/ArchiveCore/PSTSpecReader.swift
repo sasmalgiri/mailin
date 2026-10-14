@@ -354,6 +354,10 @@ final class PSTSpecReader {
         case 0x0102:
             guard let d = referenced() else { return nil }
             return .binary(d)
+        case 0x000D:
+            // PtypObject ([MS-PST] 2.3.3.5): 8 bytes, the subnode's NID and the object's size.
+            guard let d = referenced(), d.count >= 8 else { return nil }
+            return .binary(d)
         default:
             return nil
         }
@@ -421,6 +425,40 @@ final class PSTSpecReader {
         return nodes[nid] != nil && nid & 0x1F == Self.nidTypeFolder ? parts.reversed().joined(separator: "/") : nil
     }
 
+    /// An embedded message rebuilt as RFC 822 text from its own properties (the
+    /// original transport headers are not reused: their MIME boundaries would not
+    /// match the rebuilt body). Marked as reconstructed.
+    func embeddedMessage(data: UInt64, sub: UInt64) -> (message: [UInt8], subject: String)? {
+        let pc = propertyContext(dataBid: data, subBid: sub)
+        guard !pc.isEmpty else { return nil }
+        let subject = Self.subject(pc[0x0037]?.string ?? "")
+        var lines: [String] = []
+        let fromAddr = pc[0x0C1F]?.string ?? pc[0x0065]?.string ?? ""
+        let fromName = pc[0x0C1A]?.string ?? pc[0x0042]?.string ?? ""
+        if !fromAddr.isEmpty || !fromName.isEmpty {
+            lines.append("From: " + (fromName.isEmpty || fromName == fromAddr ? fromAddr : "\"\(fromName)\" <\(fromAddr)>"))
+        }
+        if let to = pc[0x0E04]?.string, !to.isEmpty { lines.append("To: \(to)") }
+        if let cc = pc[0x0E03]?.string, !cc.isEmpty { lines.append("Cc: \(cc)") }
+        lines.append("Subject: \(subject)")
+        if let d = pc[0x0E06]?.date ?? pc[0x0039]?.date {
+            let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC")
+            f.dateFormat = "EEE, d MMM yyyy HH:mm:ss Z"
+            lines.append("Date: \(f.string(from: d))")
+        }
+        if let id = pc[0x1035]?.string { lines.append("Message-ID: \(id)") }
+        lines.append("MIME-Version: 1.0")
+        lines.append("X-Mailin-Reconstructed: rebuilt from an Outlook embedded message")
+        var body = pc[0x1000]?.string ?? ""
+        if body.isEmpty, let html = pc[0x1013] {
+            lines.append("Content-Type: text/html; charset=utf-8")
+            body = html.string ?? html.bytes.map { String(decoding: $0, as: UTF8.self) } ?? ""
+        } else {
+            lines.append("Content-Type: text/plain; charset=utf-8")
+        }
+        return (Array((lines.joined(separator: "\r\n") + "\r\n\r\n" + body).utf8), subject)
+    }
+
     func messages() -> [PSTReader.PSTMessage] {
         var folderCache: [UInt32: String?] = [:]
         var out: [PSTReader.PSTMessage] = []
@@ -471,14 +509,35 @@ final class PSTSpecReader {
                     if m.displayCc.isEmpty { m.displayCc = list(2) }
                     if m.displayBcc.isEmpty { m.displayBcc = list(3) }
                 }
-                if let at = subs[Self.nidAttachmentTable] {
-                    for row in table(dataBid: at.0, subBid: at.1) {
-                        guard let a = subs[row.rowID] else { continue }
+                // Attachments: the attachment table's rows, plus any attachment object
+                // (NID type 0x05) the table does not list — some damaged files lost the
+                // table but kept the objects (Digital Corpora "Jean" PST; readpst finds them too).
+                let listed = subs[Self.nidAttachmentTable].map { table(dataBid: $0.0, subBid: $0.1).map(\.rowID) } ?? []
+                let unlisted = subs.keys.filter { $0 & 0x1F == 0x05 && !listed.contains($0) }.sorted()
+                let attachmentNids = listed + unlisted
+                if !attachmentNids.isEmpty {
+                    for rowID in attachmentNids {
+                        guard let a = subs[rowID] else { continue }
                         let apc = propertyContext(dataBid: a.0, subBid: a.1)
-                        let name = apc[0x3707]?.string ?? apc[0x3704]?.string ?? apc[0x3001]?.string ?? "attachment"
-                        let size = apc[0x3701]?.bytes?.count ?? Int(apc[0x0E20]?.int ?? 0)
-                        m.attachments.append(AttachmentMetadata(filename: name, mimeType: apc[0x370E]?.string ?? "application/octet-stream",
-                                                                size: size, isInline: apc[0x3712] != nil, contentID: apc[0x3712]?.string))
+                        var name = apc[0x3707]?.string ?? apc[0x3704]?.string ?? apc[0x3001]?.string ?? "attachment"
+                        var bytes = apc[0x3701]?.bytes
+                        var mime = apc[0x370E]?.string ?? "application/octet-stream"
+                        // An attached email (method 5, ATTACH_EMBEDDED_MSG) becomes an .eml file
+                        // instead of an empty attachment.
+                        if apc[0x3705]?.int == 5, let obj = bytes, obj.count >= 8,
+                           let inner = subnodes(a.1)[Self.u32(obj, 0)],
+                           let eml = embeddedMessage(data: inner.0, sub: inner.1) {
+                            bytes = eml.message
+                            mime = "message/rfc822"
+                            if apc[0x3707] == nil && apc[0x3704] == nil { name = eml.subject.isEmpty ? "attached message" : eml.subject }
+                            if !name.lowercased().hasSuffix(".eml") { name += ".eml" }
+                        }
+                        let size = bytes?.count ?? Int(apc[0x0E20]?.int ?? 0)
+                        // The attachment's content travels with it, as the earlier reader
+                        // did; without it the import kept only names and sizes (B8 test).
+                        m.attachments.append(AttachmentMetadata(filename: name, mimeType: mime,
+                                                                size: size, isInline: apc[0x3712] != nil, contentID: apc[0x3712]?.string,
+                                                                base64: bytes.map { Data($0).base64EncodedString() }))
                     }
                     m.hasAttachments = !m.attachments.isEmpty
                 }

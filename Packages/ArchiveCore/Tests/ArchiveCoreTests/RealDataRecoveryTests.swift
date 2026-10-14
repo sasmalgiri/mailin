@@ -204,6 +204,32 @@ final class RealDataRecoveryTests: XCTestCase {
         XCTAssertTrue(flagged.isEmpty, flagged.prefix(5).joined(separator: "\n"))
     }
 
+    /// B8 found it: the spec reader kept attachment names and sizes but not the
+    /// bytes. Every real attachment must arrive with its content — count and
+    /// total bytes equal to what readpst extracts.
+    func testOutlookPSTs_attachmentBytesEqualReadpst() throws {
+        struct Entry: Decodable { let count: Int; let bytes: Int }
+        let expected = try manifest("pst-readpst-attachments.json", as: [String: Entry].self)
+        var report: [String] = []
+        for (file, e) in expected.sorted(by: { $0.key < $1.key }) where !file.hasPrefix("_") {
+            let emails = try PSTParser.parse(fileURL: root!.appendingPathComponent("PST/PST/\(file)"), senderEmail: "")
+            let all = emails.flatMap(\.attachments)
+            func content(_ a: AttachmentMetadata) -> Data { Data(base64Encoded: a.base64 ?? "", options: .ignoreUnknownCharacters) ?? Data() }
+            // readpst writes file attachments; attached emails (rebuilt as .eml) are checked apart.
+            let files = all.filter { $0.mimeType != "message/rfc822" }
+            let embedded = all.filter { $0.mimeType == "message/rfc822" }
+            let bytes = files.reduce(0) { $0 + content($1).count }
+            if files.count != e.count || bytes != e.bytes {
+                report.append("\(file): \(files.count) attachments, \(bytes) bytes (readpst \(e.count), \(e.bytes)); names \(files.map(\.filename).sorted())")
+            }
+            for m in embedded where !String(decoding: content(m), as: UTF8.self).contains("Subject:") {
+                report.append("\(file): embedded message \(m.filename) has no headers")
+            }
+            if !embedded.isEmpty { print("EMBEDDED \(file): \(embedded.count) attached emails rebuilt") }
+        }
+        XCTAssertTrue(report.isEmpty, report.joined(separator: "\n"))
+    }
+
     /// C5: emptying Deleted Items in Outlook removes the messages from the node
     /// and block B-trees; their bytes stay until overwritten. Done here to real
     /// Outlook files, entry by entry: deep recovery must carve every emptied
