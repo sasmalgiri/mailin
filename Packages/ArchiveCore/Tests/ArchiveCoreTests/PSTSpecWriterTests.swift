@@ -128,6 +128,20 @@ final class PSTSpecWriterTests: XCTestCase {
         }
         XCTAssertEqual(versions.count, n, "every row has its own non-zero row version")
         XCTAssertFalse(versions.contains(0))
+        // SCANPST on the v3 file (2026-10-14): the templates Outlook writes, recipient row IDs
+        // non-zero, every block but the last of a heap full.
+        for template: UInt32 in [0x62B, 0x64C, 0x6D7, 0x6F8] { XCTAssertNotNil(spec.nodes[template], "template \(String(template, radix: 16))") }
+        for node in messageNodes.prefix(50) {
+            guard let rt = spec.subnodes(node.subBid)[0x692] else { continue }
+            let ids = spec.table(dataBid: rt.0, subBid: rt.1).map(\.rowID)
+            XCTAssertFalse(ids.contains(0), "recipient row id 0")
+            XCTAssertEqual(ids, ids.sorted())
+        }
+        for folder in [0x808E, 0x80AE] as [UInt32] {
+            guard let node = spec.nodes[folder] else { continue }
+            let sizes = spec.dataBlocks(node.dataBid).map(\.count)
+            XCTAssertTrue(sizes.dropLast().allSatisfy { $0 == 8176 }, "heap of \(String(folder, radix: 16)): \(sizes)")
+        }
         let spamProps = spec.propertyContext(dataBid: spec.nodes[0x2223]?.dataBid ?? 0, subBid: 0)
         if case .string(let name)? = spamProps[0x3001] { XCTAssertEqual(name, "SPAM Search Folder 2") } else { XCTFail("spam folder name") }
         // Keep a copy for the external readers.

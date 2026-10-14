@@ -191,6 +191,36 @@ final class PSTSpecWriter: PSTStreamWriting {
     private var nextFolderIndex: UInt32 = 0x404           // 0x401–0x403 are the fixed folders
     private var nextMessageIndex: UInt32 = 0x10000         // message NIDs sort after every other node
     private var rowVersion: UInt32 = 0x40
+    private var recipientRowID: UInt32 = 0
+    /// Recipient row IDs: unique in the file and never 0.
+    func nextRecipientRowID() -> UInt32 { recipientRowID += 1; return recipientRowID }
+
+    /// PidTagAttachSize as Outlook computes it: the bytes of every property value — strings
+    /// and binaries by length, 4 per 32-bit integer (this one included), 1 per boolean,
+    /// 8 per time. Matches 78 of 80 attachments in real Outlook files (the other two are
+    /// embedded messages, which mailin writes as .eml files).
+    static func attachmentSize(_ props: [(UInt16, PSTSpecValue)]) -> UInt32 {
+        var n = 4   // PidTagAttachSize itself
+        for (_, v) in props {
+            switch v {
+            case .long: n += 4
+            case .bool: n += 1
+            case .time, .i64: n += 8
+            case .short: n += 0
+            case .unicode, .binary: n += v.bytes.count
+            }
+        }
+        return UInt32(clamping: n)
+    }
+
+    /// A MAPI one-off EntryID ([MS-OXCDATA] 2.2.5.1) for an SMTP recipient, Unicode, no rich info.
+    static func oneOffEntryID(name: String, email: String) -> Data {
+        var d = Data(count: 4)
+        d.append(Data([0x81, 0x2B, 0x1F, 0xA4, 0xBE, 0xA3, 0x10, 0x19, 0x9D, 0x6E, 0x00, 0xDD, 0x01, 0x0F, 0x54, 0x02]))
+        d.u16(0x0000); d.u16(0x8001)
+        for s in [name.isEmpty ? email : name, "SMTP", email] { d.append(PSTSpecFormat.utf16(s)); d.u16(0) }
+        return d
+    }
     /// A rising row version for each table row, as Outlook numbers them.
     func nextRowVersion() -> UInt32 { rowVersion += 4; return rowVersion }
     private(set) var defaultFolder: UInt32 = 0
@@ -455,8 +485,12 @@ final class PSTSpecWriter: PSTStreamWriting {
         }
 
         private func closeBlock() throws {
-            let d = blockBytes(root: 0)
+            var d = blockBytes(root: 0)
             fill[blockIndex] = Self.level(PSTSpecFormat.blockDataMax - d.count)
+            // A heap block followed by another is padded to the whole block after its page
+            // map, as Outlook writes them: every block but the last in a data tree must be
+            // full (SCANPST "Middle page not full"). ibHnpm still points at the map.
+            if d.count < PSTSpecFormat.blockDataMax { d.append(Data(count: PSTSpecFormat.blockDataMax - d.count)) }
             totalBytes += d.count
             if blockIndex == 0 { block0 = d } else { bids.append(try writer.writeBlock(d, isInternal: false)) }
             blockIndex += 1
@@ -594,7 +628,15 @@ final class PSTSpecWriter: PSTStreamWriting {
         }
         private let rgib: (Int, Int, Int, Int)
 
+        private var lastRowID: UInt32?
+
         func addRow(rowID: UInt32, _ values: [UInt32: PSTSpecValue]) throws {
+            // The row index is a B-tree streamed in key order: a row ID out of order (or
+            // repeated) makes the table invalid ("keys overlap" in SCANPST).
+            if let last = lastRowID, rowID <= last {
+                throw WriteError.io("Table rows must be added in ascending row ID (\(rowID) after \(last))")
+            }
+            lastRowID = rowID
             var row = Data(count: rowSize)
             var vals = values
             vals[0x67F2_0003] = .long(rowID)
@@ -626,11 +668,16 @@ final class PSTSpecWriter: PSTStreamWriting {
             try index.add(key: k, value: e)
             rowBlock.append(row)
             rows += 1
-            if rowBlock.count / rowSize == perBlock { try flushRows() }
+            if rowBlock.count / rowSize == perBlock { try flushRows(padToBlock: true) }
         }
 
-        private func flushRows() throws {
+        /// A full block of rows is padded to the whole block: every block but the last in
+        /// a data tree must be full (SCANPST: "Middle page not full"; Outlook pads them).
+        private func flushRows(padToBlock: Bool = false) throws {
             guard !rowBlock.isEmpty else { return }
+            if padToBlock, rowBlock.count < PSTSpecFormat.blockDataMax {
+                rowBlock.append(Data(count: PSTSpecFormat.blockDataMax - rowBlock.count))
+            }
             rowBids.append(try writer.writeBlock(rowBlock, isInternal: false))
             rowBytes += rowBlock.count
             rowBlock = Data()
@@ -700,6 +747,19 @@ final class PSTSpecWriter: PSTStreamWriting {
             (0x0FFF_0102, 16, 4, 5), (0x3001_001F, 20, 4, 6), (0x3002_001F, 8, 4, 3), (0x3003_001F, 12, 4, 4),
             (0x300B_0102, 28, 4, 8), (0x3900_0003, 40, 4, 11), (0x39FF_001F, 44, 4, 13), (0x3A40_000B, 49, 1, 12),
             (0x67F2_0003, 0, 4, 0), (0x67F3_0003, 4, 4, 1)])
+        // The four further templates, as Outlook 2010 writes them (Digital Corpora bill.jobs PST).
+        static let receiveFolders = L((16, 16, 16, 17), [
+            (0x001A_001F, 12, 4, 3), (0x6605_0003, 8, 4, 2), (0x67F2_0003, 0, 4, 0), (0x67F3_0003, 4, 4, 1)])
+        static let outgoingQueue = L((48, 48, 48, 50), [
+            (0x000F_0040, 40, 8, 9), (0x0039_0040, 16, 8, 4), (0x0E07_0003, 36, 4, 8), (0x0E10_0003, 12, 4, 3),
+            (0x0E14_0003, 8, 4, 2), (0x0E29_001F, 32, 4, 7), (0x0EA2_0003, 24, 4, 5), (0x67F1_0003, 28, 4, 6),
+            (0x67F2_0003, 0, 4, 0), (0x67F3_0003, 4, 4, 1)])
+        static let changeHistory = L((40, 40, 40, 42), [
+            (0x001A_001F, 36, 4, 8), (0x0E30_0102, 16, 4, 4), (0x0E31_0102, 12, 4, 3), (0x0E33_0014, 28, 8, 7),
+            (0x0E34_0102, 24, 4, 6), (0x0E38_0003, 20, 4, 5), (0x0E3E_0102, 8, 4, 2), (0x67F2_0003, 0, 4, 0),
+            (0x67F3_0003, 4, 4, 1)])
+        static let tombstones = L((24, 24, 24, 25), [
+            (0x0E33_0014, 16, 8, 3), (0x3007_0040, 8, 8, 2), (0x67F2_0003, 0, 4, 0), (0x67F3_0003, 4, 4, 1)])
         static let searchFolders = L((24, 24, 24, 25), [
             (0x0E33_0014, 8, 8, 2), (0x0E37_0102, 16, 4, 3), (0x0E38_0003, 20, 4, 4),
             (0x67F2_0003, 0, 4, 0), (0x67F3_0003, 4, 4, 1)])
@@ -795,7 +855,10 @@ final class PSTSpecWriter: PSTStreamWriting {
             for (kind, list) in [(UInt32(1), to), (2, cc), (3, bcc)] {
                 for a in list {
                     var search = Data("SMTP:\(a.email.uppercased())".utf8); search.append(0)
-                    try recips.addRow(rowID: UInt32(recips.rows), [
+                    // Row IDs unique and non-zero, as Outlook numbers recipients (a row ID 0
+                    // reads as "keys overlap" to SCANPST), with the one-off EntryID Outlook stores.
+                    try recips.addRow(rowID: writer.nextRecipientRowID(), [
+                        0x0FFF_0102: .binary(PSTSpecWriter.oneOffEntryID(name: a.name, email: a.email)),
                         0x0C15_0003: .long(kind), 0x0E0F_000B: .bool(true), 0x0FFE_0003: .long(6),
                         0x3001_001F: .unicode(a.name), 0x3002_001F: .unicode("SMTP"), 0x3003_001F: .unicode(a.email),
                         0x300B_0102: .binary(search), 0x3900_0003: .long(0), 0x39FF_001F: .unicode(a.name), 0x3A40_000B: .bool(false),
@@ -817,16 +880,18 @@ final class PSTSpecWriter: PSTStreamWriting {
                     let bytes = AttachmentHydrator.data(for: att, index: i, email: email, cache: cache) ?? Data()
                     let ext = (att.filename as NSString).pathExtension
                     var ap: [(UInt16, PSTSpecValue)] = [
-                        (0x0E20, .long(UInt32(bytes.count))), (0x3705, .long(1)), (0x370B, .long(0xFFFF_FFFF)),
+                        (0x3705, .long(1)), (0x370B, .long(0xFFFF_FFFF)),
                         (0x3704, .unicode(att.filename)), (0x3707, .unicode(att.filename)), (0x3001, .unicode(att.filename)),
                         (0x370E, .unicode(att.mimeType)), (0x3701, .binary(bytes)),
                     ]
                     if !ext.isEmpty { ap.append((0x3703, .unicode("." + ext))) }
                     if let cid = att.contentID { ap.append((0x3712, .unicode(cid))) }
+                    let attachSize = PSTSpecWriter.attachmentSize(ap)
+                    ap.insert((0x0E20, .long(attachSize)), at: 0)
                     var attSub: UInt32 = 0x400
                     let a = try writer.propertyContext(ap, nextSubnodeIndex: &attSub)
                     subs.append((anid, a.data, a.sub))
-                    try table.addRow(rowID: anid, [0x0E20_0003: .long(UInt32(bytes.count)), 0x3704_001F: .unicode(att.filename),
+                    try table.addRow(rowID: anid, [0x0E20_0003: .long(attachSize), 0x3704_001F: .unicode(att.filename),
                                                    0x3705_0003: .long(1), 0x370B_0003: .long(0xFFFF_FFFF)])
                 }
                 cache.removeTemporaryFiles()
@@ -888,7 +953,10 @@ final class PSTSpecWriter: PSTStreamWriting {
         // Table templates.
         for (nid, layout) in [(UInt32(0x60D), Templates.hierarchy), (0x60E, Templates.contents), (0x60F, Templates.assoc),
                               (0x610, Templates.searchContents), (0x671, Templates.attachments), (0x692, Templates.recipients),
-                              (0x6B6, Templates.searchFolders)] {
+                              (0x6B6, Templates.searchFolders),
+                              // The further templates an Outlook-made PST carries (SCANPST: "Missing template (nid=6F8)").
+                              (0x62B, Templates.receiveFolders), (0x64C, Templates.outgoingQueue),
+                              (0x6D7, Templates.changeHistory), (0x6F8, Templates.tombstones)] {
             let t = try emptyTable(layout)
             specialNodes.append((nid, t.data, t.sub, 0))
         }
@@ -905,17 +973,18 @@ final class PSTSpecWriter: PSTStreamWriting {
             specialNodes.append((nid, pcNode.data, pcNode.sub, f.parent))
 
             let hier = TableBuilder(writer: self, columns: Templates.hierarchy)
-            for child in f.children {
+            if nid == Self.rootNid {
+                // The spam search folder is a child of the root, listed in its hierarchy table (as
+                // Outlook writes it); its NID (0x2223) sorts before the folders, so it comes first.
+                try hier.addRow(rowID: Self.spamSearchFolderNid, [0x3001_001F: .unicode(Self.spamSearchFolderName), 0x3602_0003: .long(0),
+                                                                  0x3603_0003: .long(0), 0x360A_000B: .bool(false)])
+            }
+            for child in f.children.sorted() {
                 guard let c = folders[child] else { continue }
                 var row: [UInt32: PSTSpecValue] = [0x3001_001F: .unicode(c.name), 0x3602_0003: .long(UInt32(c.count)),
                                                     0x3603_0003: .long(UInt32(c.unread)), 0x360A_000B: .bool(!c.children.isEmpty)]
                 if let cls = c.containerClass { row[0x3613_001F] = .unicode(cls) }
                 try hier.addRow(rowID: child, row)
-            }
-            if nid == Self.rootNid {
-                // The spam search folder is a child of the root, listed in its hierarchy table (as Outlook writes it).
-                try hier.addRow(rowID: Self.spamSearchFolderNid, [0x3001_001F: .unicode(Self.spamSearchFolderName), 0x3602_0003: .long(0),
-                                                                  0x3603_0003: .long(0), 0x360A_000B: .bool(false)])
             }
             let h = try hier.finish()
             let index = nid >> 5
