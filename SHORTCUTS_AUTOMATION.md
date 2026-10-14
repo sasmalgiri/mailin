@@ -7,6 +7,9 @@ Turn on **Settings ▸ Modules ▸ Shortcuts actions**. Until then every mailin 
 | Action | Input | Output | Notes |
 |---|---|---|---|
 | Find Emails (automatic) | Filters: From, Subject, Preview (text), Date, Has Attachments, Recovered; "all" or "any" | Emails | Up to 10,000 emails per Find (a Shortcuts list is held in memory). Use **Count Emails** for the exact total |
+| Find Emails with Tag | Tag (picked from every tag in the archive, with its count) | Emails | Up to 10,000 per run, newest first; **Count Emails** with `tag:` gives the exact total |
+| Get Document | mailin Document (newest 50 suggested; typing searches every document) | Text | Needs the Export permission; the read is audited |
+| *Entities* | **Tag**, **Legal Hold Matter** (with emails on hold), **mailin Document** — usable as parameters in any shortcut | — | Listed from the whole archive with exact counts |
 | Count Emails in mailin | Search (mailin search syntax) | Number | Exact, whole archive |
 | Tag Emails in mailin | Search, Tag | Summary text with the email-set fingerprint | Shows the count and asks first; needs the Reviewer role or higher |
 | Place Legal Hold in mailin | Search | Summary text with fingerprint | Shows the count and asks first; needs the Examiner role or higher |

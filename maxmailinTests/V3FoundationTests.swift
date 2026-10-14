@@ -1331,6 +1331,59 @@ final class V31ScriptRunTests: XCTestCase {
         }
     }
 
+    /// B5: Tag, Matter and Document entities list the whole archive with exact
+    /// counts; Find Emails with Tag returns exactly the tagged emails; Get
+    /// Document returns the stored text; all refuse while the switch is off.
+    func testShortcutsEntities_1k_tagsMattersDocuments() async throws {
+        let env = makeEnv()
+        let raws = emails(1_000)
+        try await env.store.insertBatch(raws, batchSize: 500)
+        let ids = raws.map(\.id)
+        try await env.store.userTagAdd("contract", ids: Array(ids[0..<300]))
+        try await env.store.userTagAdd("hot \"lead\"", ids: Array(ids[250..<300]))
+        try await env.store.legalHoldsAdd(Array(ids[0..<120]), matter: "Acme v. Beta")
+        try await env.store.legalHoldsAdd(Array(ids[500..<540]), matter: "Gamma audit")
+        try await env.store.legalHoldsAdd(Array(ids[900..<930]))
+        var numbers: [String] = []
+        for i in 0..<3 {
+            let n = try await env.store.issueDocument(type: "LH", summary: "Hold notice \(i) for Acme", refs: "")
+            numbers.append(n)
+        }
+        try await env.store.attachDocumentPayload(numbers[1], body: "Hold notice text for Acme v. Beta.")
+
+        let was = ShortcutsPolicy.actionsEnabled, wasTier = TierAccess.tier
+        defer { ShortcutsPolicy.actionsEnabled = was; TierAccess.tier = wasTier }
+        ShortcutsPolicy.actionsEnabled = true; TierAccess.tier = .professional
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let tags = try await TagEntityQuery().suggestedEntities()
+            XCTAssertEqual(tags.map(\.id), ["contract", "hot \"lead\""])
+            XCTAssertEqual(tags.map(\.count), [300, 50])
+
+            let matters = try await MatterEntityQuery().suggestedEntities()
+            XCTAssertEqual(Dictionary(uniqueKeysWithValues: matters.map { ($0.id, $0.count) }),
+                           ["Acme v. Beta": 120, "Gamma audit": 40, "": 30])
+            let acme = try await MatterEntityQuery().entities(matching: "acme")
+            XCTAssertEqual(acme.map(\.id), ["Acme v. Beta"])
+
+            var find = FindEmailsWithTagIntent()
+            find.tag = tags[1]
+            let found = try await find.perform().value ?? []
+            XCTAssertEqual(Set(found.map(\.id)), Set(ids[250..<300]), "exactly the tagged emails, quotes in the tag included")
+
+            let docs = try await DocumentEntityQuery().entities(matching: "Acme")
+            XCTAssertEqual(Set(docs.map(\.id)), Set(numbers))
+            var get = GetDocumentIntent()
+            get.document = try XCTUnwrap(docs.first { $0.id == numbers[1] })
+            let text = try await get.perform().value
+            XCTAssertEqual(text, "Hold notice text for Acme v. Beta.")
+            XCTAssertTrue(env.job.auditLines().contains { $0.contains("Shortcuts document read") }, "audited after it happened")
+
+            ShortcutsPolicy.actionsEnabled = false
+            do { _ = try await TagEntityQuery().suggestedEntities(); XCTFail("refused while off") } catch {}
+            do { _ = try await find.perform(); XCTFail("refused while off") } catch {}
+        }
+    }
+
     func testShortcutsFind_100k_tenThousandResults() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "opt-in: MAILIN_SCALE=1")
         let env = makeEnv()
