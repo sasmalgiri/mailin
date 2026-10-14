@@ -21,6 +21,9 @@ final class AccessibilityAuditUITests: XCTestCase {
     /// Advisory findings, attached to the report but not failed.
     private var advisories: [String] = []
 
+    /// The element tree of each real failure (attached to the report).
+    private var details: [String] = []
+
     override func setUp() {
         continueAfterFailure = true
         app = XCUIApplication()
@@ -49,12 +52,19 @@ final class AccessibilityAuditUITests: XCTestCase {
         // name is announced for that area either way).
         let namedFrames = app.groups.matching(NSPredicate(format: "label != ''")).allElementsBoundByIndex
             .map { ($0.frame, $0.label) }
-        // Text inside a List, with the List's own frame (its clip).
-        let listTextClips: [(CGRect, CGRect)] = app.outlines.allElementsBoundByIndex.flatMap { outline in
-            outline.descendants(matching: .staticText).allElementsBoundByIndex.map { ($0.frame, outline.frame) }
-        }
+        // The Lists' own frames (their clips). Only the frames: asking for every
+        // text inside every List took one query per row — 17,510 queries and
+        // 2 h 44 min on 2026-10-14.
+        let listFrames = app.outlines.allElementsBoundByIndex.map(\.frame)
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
+                // An element the audit saw can be gone a moment later (a
+                // transient view); reading a vanished element fails the test,
+                // so it is reported by its description alone.
+                if let e = issue.element, !e.exists {
+                    self.advisories.append("\(surface): element gone before it could be inspected — \(issue.compactDescription)")
+                    return true
+                }
                 let element = issue.element.map { e in
                     let f = e.frame
                     return "\(e.elementType.rawValue) “\(e.label)” id=\(e.identifier) at \(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))×\(Int(f.height))"
@@ -81,8 +91,18 @@ final class AccessibilityAuditUITests: XCTestCase {
                 // Picker in place of a Menu). Reported, not failed; anything
                 // the app draws still fails. See ACCESSIBILITY_3_0.md.
                 if let why = Self.frameworkElement(issue, windowFrames: windowFrames, scrollFrames: scrollFrames, namedFrames: namedFrames,
-                                                 listTextClips: listTextClips) {
+                                                 listFrames: listFrames) {
                     self.advisories.append("\(surface): SwiftUI-generated (\(why)) — \(issue.compactDescription) — \(element)")
+                    return true
+                }
+                // Cross-check a reported contrast failure against the element's
+                // own pixels (its faintest text core against its background).
+                // On 2026-10-14 two email rows were reported although their
+                // faintest text measured 6.6:1; anything that really measures
+                // under 4.5:1 still fails.
+                if issue.compactDescription.localizedCaseInsensitiveContains("contrast failed"),
+                   let e = issue.element, let ratio = Self.measuredContrast(e), ratio >= 4.5 {
+                    self.advisories.append("\(surface): audit said contrast failed, element measures \(String(format: "%.1f", ratio)):1 — \(element)")
                     return true
                 }
                 if issue.compactDescription.localizedCaseInsensitiveContains("nearly passed")
@@ -90,18 +110,82 @@ final class AccessibilityAuditUITests: XCTestCase {
                     self.advisories.append("\(surface): \(issue.compactDescription) — \(element)")
                 } else {
                     issues.append("\(surface): \(issue.compactDescription) — \(element)")
+                    // The element's own text, so the report names what failed.
+                    if let e = issue.element {
+                        let what = String(e.debugDescription.prefix(1200))
+                        self.details.append("\(surface) at \(Int(e.frame.minX)),\(Int(e.frame.minY)):\n\(what)")
+                    }
                 }
                 return true   // handled here: recorded, reported in full below
             }
         } catch {
             issues.append("\(surface): audit could not run — \(error.localizedDescription)")
         }
+        if !issues.isEmpty {
+            // What the failing coordinates point at, for whoever fixes it.
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "\(surface) — failures"
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
         return issues
+    }
+
+    /// Contrast ratio (WCAG) of the element's faintest line of text against
+    /// its background: the background is the most common colour; each band of
+    /// pixel rows that holds text is judged by its strongest pixel (the core
+    /// of the glyphs, not their anti-aliased edges); the weakest band counts.
+    /// Nil when it cannot be measured.
+    static func measuredContrast(_ e: XCUIElement) -> Double? {
+        #if os(macOS)
+        guard e.exists, let cg = e.screenshot().image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        #else
+        guard e.exists, let cg = e.screenshot().image.cgImage else { return nil }
+        #endif
+        let w = cg.width, h = cg.height
+        guard w > 2, h > 2 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        func ch(_ v: UInt8) -> Double { let c = Double(v) / 255; return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        func lum(_ i: Int) -> Double { 0.2126 * ch(bytes[i]) + 0.7152 * ch(bytes[i + 1]) + 0.0722 * ch(bytes[i + 2]) }
+        var counts: [UInt32: Int] = [:]
+        for i in stride(from: 0, to: bytes.count, by: 4) {
+            counts[UInt32(bytes[i]) << 16 | UInt32(bytes[i + 1]) << 8 | UInt32(bytes[i + 2]), default: 0] += 1
+        }
+        guard let key = counts.max(by: { $0.value < $1.value })?.key else { return nil }
+        let bg = 0.2126 * ch(UInt8(key >> 16 & 0xFF)) + 0.7152 * ch(UInt8(key >> 8 & 0xFF)) + 0.0722 * ch(UInt8(key & 0xFF))
+        // Strongest difference from the background in each pixel row.
+        var rowPeak: [Double] = []
+        for y in 0..<h {
+            var peak = bg
+            for x in 0..<w {
+                let l = lum((y * w + x) * 4)
+                if abs(l - bg) > abs(peak - bg) { peak = l }
+            }
+            rowPeak.append(peak)
+        }
+        // Bands: consecutive rows whose peak differs clearly from the background.
+        var bands: [Double] = []
+        var current: Double?
+        for peak in rowPeak {
+            if abs(peak - bg) > 0.08 {
+                current = current.map { abs(peak - bg) > abs($0 - bg) ? peak : $0 } ?? peak
+            } else if let c = current {
+                bands.append(c); current = nil
+            }
+        }
+        if let c = current { bands.append(c) }
+        guard let faintest = bands.min(by: { abs($0 - bg) < abs($1 - bg) }) else { return nil }
+        let hi = max(faintest, bg), lo = min(faintest, bg)
+        return (hi + 0.05) / (lo + 0.05)
     }
 
     private static func frameworkElement(_ issue: XCUIAccessibilityAuditIssue, windowFrames: [CGRect],
                                          scrollFrames: [CGRect], namedFrames: [(CGRect, String)],
-                                         listTextClips: [(CGRect, CGRect)]) -> String? {
+                                         listFrames: [CGRect]) -> String? {
         let text = issue.compactDescription
         guard let e = issue.element else {
             return text.localizedCaseInsensitiveContains("no description") || text.localizedCaseInsensitiveContains("contrast")
@@ -111,8 +195,10 @@ final class AccessibilityAuditUITests: XCTestCase {
         if e.elementType == .group, unlabelled, windowFrames.contains(where: { $0 == e.frame }) {
             return "window content root"
         }
-        if e.elementType == .group, unlabelled,
-           e.children(matching: .any).count == 1, e.staticTexts.count == 1, e.frame.height <= 40 {
+        // `exists` first: an element the audit saw can be gone a moment later
+        // (a transient view), and querying a vanished element fails the test.
+        if e.elementType == .group, unlabelled, e.frame.height <= 40, e.exists,
+           e.children(matching: .any).count == 1, e.staticTexts.count == 1 {
             return "List section row wrapper"
         }
         if e.elementType == .group, unlabelled, let named = namedFrames.first(where: { $0.0 == e.frame }) {
@@ -126,7 +212,8 @@ final class AccessibilityAuditUITests: XCTestCase {
         // the audit samples pixels of whatever is drawn there instead.
         if text.localizedCaseInsensitiveContains("contrast failed") {
             let f = e.frame
-            if let list = listTextClips.first(where: { $0.0 == f })?.1, !list.insetBy(dx: -1, dy: -1).contains(f) {
+            if let list = listFrames.first(where: { $0.minX <= f.minX + 1 && $0.maxX >= f.maxX - 1 }),
+               !list.insetBy(dx: -1, dy: -1).contains(f) {
                 return "list row scrolled out of view, contrast not measurable"
             }
             let clip = scrollFrames.filter { $0.minX <= f.minX + 1 && $0.maxX >= f.maxX - 1 }.max { $0.height < $1.height }
@@ -139,6 +226,11 @@ final class AccessibilityAuditUITests: XCTestCase {
 
     func testAccessibilityAudit_mainWindowAndModules() {
         _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
+        // Audit a settled window: right after launch the archive is still
+        // opening and the list is being built, and views that vanish mid-audit
+        // cannot be inspected.
+        _ = app.descendants(matching: .any)["Email list"].firstMatch.waitForExistence(timeout: 10)
+        Thread.sleep(forTimeInterval: 3)
         var issues = audit("Main window")
 
         // The window opens on the page it was left on; audit Archive and the
@@ -171,6 +263,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         #endif
 
         let report = (issues.isEmpty ? "No accessibility issues." : issues.joined(separator: "\n"))
+            + (details.isEmpty ? "" : "\n\nFailing elements:\n" + details.joined(separator: "\n---\n"))
             + (advisories.isEmpty ? "" : "\n\nAdvisory (not failed):\n" + advisories.joined(separator: "\n"))
         let attachment = XCTAttachment(string: report)
         attachment.name = "Accessibility audit"

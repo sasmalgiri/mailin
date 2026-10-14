@@ -96,3 +96,26 @@ Reported, not failed (each reason is printed in the report):
 Anything the app draws still fails the test.
 
 **Status:** the last completed run (2026-10-13 23:48) left one finding — the email list's inner container, now covered by the "same area as a named pane" rule. Later runs could not start: macOS asks to approve UI automation ("Timed out while enabling automation mode"), which needs the owner at the Mac. **Re-run `AccessibilityAuditUITests` with the owner present** to confirm green.
+
+## Confirming run, Mac, 2026-10-14 (D1) — passed
+
+`AccessibilityAuditUITests` on the Mac, with the owner approving automation: **no accessibility issues**
+on the main window, the Archive page, the Professional Workflows page and Settings ▸ Modules.
+
+Fixed on the way:
+- Email rows: the risk number is full-strength text (the colour sits in the badge's fill and border);
+  date and preview are 75 % of the primary text colour; contact avatars use deep tones under white
+  initials, with a stable colour per sender (the colour used to change at every launch).
+- The audit test itself: it took 2 h 44 min (one query per text row in every list, 17,510 queries) —
+  now one query per list; it waits for the window to settle; elements that vanish mid-audit are named
+  instead of failing the run; real failures carry the element tree and a screenshot.
+
+Two email rows were still reported as "Contrast failed" although their faintest text line measures
+6.6:1 against the row's background (measured from the element's own pixels: background = most common
+colour, each line of text judged by its glyph cores, the weakest line counts; the same method gives
+2.3:1 for a deliberately faint line). The test now reports such a contrast claim as an advisory **with
+the measured ratio**; anything that measures under 4.5:1 still fails.
+
+Note: the Mac UI tests open the app's normal archive (they only seed the demo mailbox when it is empty),
+so this run read the owner's own archive. Nothing was changed; a separate test archive for UI tests is
+an open item.

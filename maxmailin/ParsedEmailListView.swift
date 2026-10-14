@@ -3355,6 +3355,10 @@ struct EmailRowView: View {
         showRiskIndicator ? ForensicManager.assessRisk(for: email).score : 0
     }
 
+    private var riskTint: Color {
+        riskScore >= 75 ? .red : riskScore >= 55 ? .orange : .yellow
+    }
+
     /// A7: the search read through the one compiler, so highlighting and the
     /// matched-field strip attribute `from:alice report` the way the store
     /// executed it — not by looking for the literal whole string.
@@ -3457,18 +3461,22 @@ struct EmailRowView: View {
                             Text("\(riskScore)")
                                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                         }
-                        // Yellow text fails contrast on a light row; the colour
-                        // stays in the badge, the number stays readable.
-                        .foregroundColor(riskScore >= 75 ? .red : riskScore >= 55 ? .orange : .primary)
+                        // Coloured text (yellow, orange, red) fails contrast on a
+                        // light row: the colour lives in the badge's fill and
+                        // border, the number and icon stay full strength.
+                        .foregroundColor(.primary)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
-                        .background((riskScore >= 75 ? Color.red : riskScore >= 55 ? Color.orange : Color.yellow).opacity(riskScore >= 55 ? 0.1 : 0.3))
-                        .cornerRadius(3)
+                        .background(riskTint.opacity(0.3), in: RoundedRectangle(cornerRadius: 3))
+                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(riskTint, lineWidth: 1))
                     }
                     Spacer()
                     Text(parseDate(email.headers["Date"]))
                         .font(.caption)
-                        .foregroundColor(AppColors.secondary)
+                        // The audit judges the row as one element by its
+                        // faintest text; system secondary grey fell just below
+                        // 4.5:1 on some rows. Still lighter than the subject.
+                        .foregroundColor(Color.primary.opacity(0.75))
                 }
 
                 Text(highlightedText(email.headers["Subject"] ?? "(No Subject)", field: .subject))
@@ -3484,7 +3492,7 @@ struct EmailRowView: View {
                     if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
                         Text(highlightedText(preview, field: .body))
                             .font(.caption)
-                            .foregroundColor(AppColors.secondary)
+                            .foregroundColor(Color.primary.opacity(0.75))
                             .lineLimit(1)
                     }
                 }

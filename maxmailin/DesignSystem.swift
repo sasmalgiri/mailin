@@ -808,18 +808,22 @@ struct ContactAvatar: View {
     }
 
     private var gradientColors: [Color] {
-        let hash = abs(name.hashValue)
+        // A stable hash: `hashValue` is seeded per launch, so the same sender
+        // got a different colour every time the app opened.
+        let hash = name.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
+        // Deep tones only: white initials on cyan, mint or pink failed the
+        // contrast audit (white needs about 4.5:1).
         let palettes: [[Color]] = [
-            [.blue, .purple],
-            [.green, .teal],
-            [.orange, .pink],
-            [.indigo, .blue],
-            [.purple, .pink],
-            [.teal, .cyan],
-            [.red, .orange],
-            [.mint, .green],
+            [Color(red: 0.16, green: 0.32, blue: 0.75), Color(red: 0.40, green: 0.20, blue: 0.70)],
+            [Color(red: 0.05, green: 0.45, blue: 0.30), Color(red: 0.05, green: 0.40, blue: 0.45)],
+            [Color(red: 0.70, green: 0.25, blue: 0.10), Color(red: 0.65, green: 0.15, blue: 0.35)],
+            [Color(red: 0.25, green: 0.22, blue: 0.65), Color(red: 0.16, green: 0.32, blue: 0.75)],
+            [Color(red: 0.45, green: 0.18, blue: 0.62), Color(red: 0.65, green: 0.15, blue: 0.40)],
+            [Color(red: 0.05, green: 0.40, blue: 0.48), Color(red: 0.10, green: 0.35, blue: 0.60)],
+            [Color(red: 0.70, green: 0.12, blue: 0.15), Color(red: 0.65, green: 0.28, blue: 0.05)],
+            [Color(red: 0.12, green: 0.42, blue: 0.20), Color(red: 0.05, green: 0.45, blue: 0.30)],
         ]
-        return palettes[hash % palettes.count]
+        return palettes[Int(hash % UInt32(palettes.count))]
     }
 
     var body: some View {
