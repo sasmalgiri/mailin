@@ -447,6 +447,9 @@ struct PaywallView: View {
                             .fill(selectedPeriod == period ? AppColors.backgroundPrimary : Color.clear)
                             .shadow(color: selectedPeriod == period ? .black.opacity(0.1) : .clear, radius: 2, y: 1)
                     )
+                    // A plain button only takes clicks where something is drawn; an unselected tab's
+                    // fill is clear, so only its words responded. The whole tab is the target.
+                    .contentShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
                 }
                 .buttonStyle(.plain)
             }
@@ -569,6 +572,8 @@ struct PaywallView: View {
                 RoundedRectangle(cornerRadius: CornerRadius.large)
                     .stroke(isSelected ? color : Color.clear, lineWidth: 2)
             )
+            // The whole card selects the plan, including the space between name and price.
+            .contentShape(RoundedRectangle(cornerRadius: CornerRadius.large))
         }
         .buttonStyle(.plain)
     }
@@ -632,6 +637,7 @@ struct PaywallView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
+            .contentShape(Rectangle())   // the whole bar buys, not only its label
         }
         .buttonStyle(PrimaryButtonStyle())
         .disabled(selectedProduct == nil || store.purchaseInProgress)
