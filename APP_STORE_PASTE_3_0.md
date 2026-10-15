@@ -75,4 +75,4 @@ mailin 3.0 is the biggest update yet.
 | App Privacy | Data Not Collected |
 | Sign-in required | No (no account exists) |
 | Review notes | paste `AppReviewNotes.md`; test archive: Help ▸ Open sample (bundled demo_emails.mbox) |
-| Export compliance | Uses only Apple's built-in encryption (exempt): answer "None of the algorithms mentioned above" / standard exemption |
+| Export compliance | Already answered inside the build (`ITSAppUsesNonExemptEncryption = NO`), so App Store Connect does not ask |
