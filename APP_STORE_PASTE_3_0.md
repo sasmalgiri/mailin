@@ -1,78 +1,119 @@
 # mailin 3.0 — App Store Connect, ready to paste (2026-10-15)
 
-Prices unchanged (owner, 2026-10-15): Personal $4.99 / $44.99 / $99.99, Professional $9.99 / $79.99 / $249.99.
-Everything below describes build 801 as built. Nothing untested is claimed.
+Compared with the live listing (iOS 2.0, macOS 2.0.1; text from `main:docs/AppStoreConnect.md`) and checked
+against the 3.0 code. Prices unchanged (owner): Personal $4.99 / $44.99 / $99.99, Professional $9.99 / $79.99 / $249.99.
 
-## Promotional Text (169 of 170)
+## 2.0 → 3.0 comparison
+
+| Area | Live 2.0 | 3.0 (build 801) | In What's New? |
+|---|---|---|---|
+| Formats in | mbox, eml, emlx, msg, pst, ost, nsf, zip | same; PST/OST read by Microsoft's published format (every folder, recipient, attachment); Apple Mail library folder directly | yes (reader) |
+| Archive size | "up to 500 emails" free; no stated limit | streams from disk, memory flat; checked to 1.5 GB real files and 1M synthetic emails | yes |
+| Layout | single list + panels | three-pane archive; AI Insights / Professional Workflows as pages you switch on | yes |
+| Import | one-shot | queue with pause / resume / reorder, pre-flight, signed receipt | yes |
+| Export | EML, JSON, CSV, PDF, MSG, PST, Bates PDF, Concordance | same formats plus TIFF, Word, Markdown, HTML viewer; pre-flight, receipt with hash, resume; **PST rebuilt — opens in Outlook** | yes (rebuilt PST, resume) |
+| Search | Boolean, regex, NEAR, BM25 | same, plus where it matched and how much was searched; **text inside scanned attachments (OCR)** | yes (OCR, coverage) |
+| Deleted mail | — | recovery center; deep recovery of Outlook free space | **new** |
+| Automation | rule-based auto-tag | + Scripts (dry run, no network) and Shortcuts actions | **new** |
+| Review | review batches | + Review Packs, team cases with signed logs, second-level review; reviewers free | **new** |
+| Authentication | SPF / DKIM / DMARC, S/MIME | + hidden header timestamps (Gmail and others), ARC chain, DKIM signing dates | **new** |
+| AI | assistant, digest, NLP | answers list their source emails; counts computed by the app; works without Apple Intelligence | yes |
+| Other apps | — | Send to DEVONthink, `mailin://` email links (Mac) | **new** |
+| Languages | 11 claimed | all 4,497 interface strings in 11 languages | yes ("complete") |
+| Move archive | — | verified copy to an external disk | **new** |
+| iCloud sync | **claimed, but the live app has no iCloud entitlement** — it never worked | not offered | do **not** claim |
+
+Kept from 2.0 and still true in 3.0: analytics dashboard, sentiment/topics/language detection, PII scan, predictive
+coding, near-duplicates, anomaly detection, Bates, Concordance, custodians, legal hold, chain of custody, email
+comparison, smart alerts, biometric lock, Spotlight.
+
+## Fields to leave as they are in the live listing
+
+| Field | Keep |
+|---|---|
+| Name | mailin |
+| Subtitle | Email Archive Analyzer (or change to "Your mail archive, on your Mac") |
+| Category | Productivity, secondary Utilities |
+| Support URL | https://sasmalgiri.github.io/mailin/support/ — only change if getmailin.app serves the same pages |
+| Marketing URL | https://sasmalgiri.github.io/mailin/ |
+| Privacy Policy URL | https://sasmalgiri.github.io/mailin/privacy |
+| Copyright | whatever 2.0 shows (your other apps use "© 2026 Eco Sanskriti Innovation") |
+| Age rating | 4+ (unchanged) |
+| App Privacy | Data Not Collected (unchanged) |
+| Sign-in | not required |
+| Export compliance | answered in the build (`ITSAppUsesNonExemptEncryption = NO`) |
+| Review notes | `docs/AppStoreConnect.md` ▸ App Review Notes (still accurate) |
+
+## Promotional Text (≤170)
 
 Open Gmail, Outlook, Apple Mail and Thunderbird archives on your Mac. Search everything, find deleted mail, ask questions on-device. No account, nothing leaves your Mac.
 
-## Description
+## Keywords (96 of 100)
 
-mailin opens your email archives — Gmail Takeout, Apple Mail, Thunderbird, Outlook (.pst, .ost, .msg), Lotus Notes (.nsf), plain .mbox and .eml, or a ZIP of any of them — and turns them into a fast, searchable, private archive that never leaves your device.
+mbox,eml,pst,msg,email archive,takeout,forensic,ediscovery,bates,recovery,ocr,legal hold,offline
 
-THE ARCHIVE
-• Three panes: mailboxes, sources and labels; the list; the message. Keyboard-first: J/K, Return, / to search.
-• Search with from:, has:attachment, AND/OR/NOT, "exact phrase" and /regex/. Results say where they matched and how much of the archive was searched.
-• Text in scanned attachments: scanned PDFs and photos are read on your device, so attachment search finds the words inside them.
-• Import with a receipt: what was found, written and skipped, and why. Pause, resume and reorder imports.
-• Export to mbox, .eml, PDF, TIFF, .msg, Outlook .pst, CSV, Word, Markdown, JSON or a portable HTML viewer, with a pre-flight showing the space needed and a receipt with its hash. An interrupted export resumes.
-• Move your archive to an external disk as a verified copy.
-• Interface in 11 languages.
-
-FIND DELETED MAIL
-mailin marks mail that was deleted but is still inside your mailbox files and says how each message was found. Deep recovery searches the free space of Outlook files for messages no folder lists any more.
-
-AI INSIGHTS (optional, on-device)
-Ask questions and get answers that list the emails they came from; summaries and reports. Counts, dates and amounts are read from your archive by the app, not written by the model. Runs on your device with Apple's on-device models. There is no cloud AI.
-
-PROFESSIONAL WORKFLOWS (optional)
-Custodians and legal holds, chain of custody, Bates numbering, redaction, review batches, eDiscovery and investigation reports. Scripts and Shortcuts actions that tag, hold, number and export emails after a dry run. Review Packs and team cases with signed logs and second-level review — reviewers need no purchase. Hidden timestamps in message headers, with ARC and DKIM signature checks.
-
-WORKS WITH YOUR OTHER APPS (Mac)
-Send emails to DEVONthink as standard .eml files, and copy a mailin:// link that reopens any email from DEVONthink, Notes or any app.
-
-No built-in size limit: import streams from disk, so archive size is bounded by your storage. Verified on real mail files up to 1.5 GB.
-
-PLANS
-Free: the newest 500 emails of your archive, with search, analytics and a daily allowance of AI questions.
-Personal and Professional (monthly, yearly or lifetime, via in-app purchase): the whole archive, unlimited exports, deleted-mail recovery and the AI assistant; Professional adds the legal, review, scripting and forensic tools.
-
-mailin has no account, no sync and no telemetry. Your archive is a folder you own.
-
-DEVONthink is a trademark of DEVONtechnologies, LLC. Outlook is a trademark of Microsoft Corporation. mailin is not affiliated with either company.
-
-## Keywords (99 of 100)
-
-email archive,mbox,pst,eml,ediscovery,legal hold,bates,recovery,forensic,offline,ocr,scripts,review
-
-(No other companies' trademarks in keywords — Apple guideline 2.3.7.)
+(2.0's mbox/eml/pst/msg/takeout/forensic kept for ranking; no company trademarks — guideline 2.3.7.)
 
 ## What's New in This Version
 
 mailin 3.0 is the biggest update yet.
-• New three-pane archive, import queue, resumable exports with receipts.
 • Find deleted mail still inside Outlook, Thunderbird, Apple Mail and Gmail files.
-• Text in scanned PDFs and photos is now searchable.
-• Export to Outlook .pst.
+• Search the text inside scanned PDFs and photos.
+• New three-pane archive; AI Insights and Professional Workflows are pages you switch on.
+• Import queue with pause and resume; every import and export ends in a receipt, and an interrupted export resumes.
+• Archives of any size: mail is streamed from disk.
+• Outlook .pst export rebuilt — the files open in Outlook.
 • Scripts and Shortcuts actions, Review Packs and team cases.
-• Hidden timestamps and ARC/DKIM checks.
-• Send to DEVONthink and links to any email (Mac).
+• Hidden header timestamps, ARC and DKIM checks.
+• Mac: Send to DEVONthink and links to any email.
 • AI answers list the emails they came from.
-• Interface in 11 languages.
+• The whole interface in 11 languages.
 
-## Other fields
+## Description
 
-| Field | Value |
-|---|---|
-| Subtitle (30) | Your mail archive, on your Mac |
-| Category | Productivity (secondary: Business) |
-| Support URL | https://getmailin.app/support/ (confirm domain) |
-| Marketing URL | https://getmailin.app/ |
-| Privacy Policy URL | https://getmailin.app/privacy/ |
-| Copyright | 2026 Shrabani Sasmal |
-| Age rating | 4+ (no objectionable content; user's own mail) |
-| App Privacy | Data Not Collected |
-| Sign-in required | No (no account exists) |
-| Review notes | paste `AppReviewNotes.md`; test archive: Help ▸ Open sample (bundled demo_emails.mbox) |
-| Export compliance | Already answered inside the build (`ITSAppUsesNonExemptEncryption = NO`), so App Store Connect does not ask |
+mailin is a private email archive analyzer for Mac, iPhone and iPad. Open .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf or .zip files from Gmail Takeout, Apple Mail, Thunderbird, Outlook or Lotus Notes — then search, analyze, recover and export your email history. Everything runs on your device. Nothing leaves it.
+
+THE ARCHIVE
+• Three panes: mailboxes, sources and labels; the list; the message. Keyboard-first.
+• No built-in size limit: mail is streamed from disk. Checked on real mail files up to 1.5 GB.
+• Import queue with pause, resume and reorder, and a receipt for every import.
+• Move your archive to an external disk as a verified copy.
+
+SEARCH
+• Boolean AND / OR / NOT, "exact phrase", regex, NEAR proximity and relevance ranking.
+• Results say where they matched and how much of the archive was searched.
+• Finds words inside scanned PDFs and photos attached to emails, read on your device.
+
+FIND DELETED MAIL
+mailin marks mail that was deleted but is still inside your mailbox files, and says how each message was found. Deep recovery searches the free space of Outlook files for messages no folder lists any more.
+
+ON-DEVICE AI
+• Ask questions in plain language; every answer lists the emails it came from. Counts, dates and amounts are read from your archive by the app, not written by the model.
+• Summaries, digests, sentiment, topics, language detection, priority scoring, anomaly detection.
+• Runs with Apple's on-device models. No cloud AI.
+
+ANALYTICS
+Volume timeline, top contacts, activity heatmap, attachment and size breakdowns, contact network, exportable reports.
+
+EXPORT
+EML, mbox, JSON, CSV, PDF, TIFF, MSG, Outlook PST, Word, Markdown, a portable HTML viewer, Bates-stamped PDF and Concordance load files. A pre-flight shows the space needed; a receipt records the hash; an interrupted export resumes.
+
+LEGAL & FORENSIC
+• Custodians, legal holds, chain of custody, tamper-evident audit log, review batches, predictive coding, redaction.
+• SPF, DKIM, DMARC and ARC checks, S/MIME, hidden header timestamps.
+• Review Packs and team cases with signed logs and second-level review — reviewers need no purchase.
+• Scripts and Shortcuts actions that tag, hold, number and export emails after a dry run.
+
+WORKS WITH YOUR OTHER APPS (Mac)
+Send emails to DEVONthink as standard .eml files; copy a mailin:// link that reopens any email from DEVONthink, Notes or any app.
+
+PRIVATE
+No account, no tracking, no telemetry. The app has no network access; your archive is a folder you own. Biometric lock available. Interface in 11 languages.
+
+PLANS
+• Free: the newest 500 emails of your archive, with search, analytics and a daily allowance of AI questions.
+• Personal: the whole archive, unlimited exports, the AI assistant, deleted-mail recovery.
+• Professional: adds the legal, forensic, review, scripting and deep-recovery tools.
+Monthly, yearly or one-time lifetime purchase.
+
+DEVONthink is a trademark of DEVONtechnologies, LLC. Outlook is a trademark of Microsoft Corporation. mailin is not affiliated with either company.
