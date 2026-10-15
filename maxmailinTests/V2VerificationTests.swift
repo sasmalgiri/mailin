@@ -4704,6 +4704,9 @@ final class PhaseEDEVONthinkAndOCRTests: XCTestCase {
     /// The done-means of E1: an archive indexed before OCR existed gets each scanned attachment
     /// read once by the second pass, and `in:attachments` then finds a word only the scan holds.
     func testOCR_secondPass_readsEachScanOnce_andSearchFindsIt() async throws {
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        defer { AttachmentTextIndexJob.testSuppressKicks = false }
         let root = tempRoot("ocr-pass")
         let wasOn = AttachmentOCR.isEnabled
         defer {
@@ -4764,5 +4767,176 @@ final class PhaseEDEVONthinkAndOCRTests: XCTestCase {
         XCTAssertEqual(again.ocrEmails, 1, "already read: counted, not processed again")
         XCTAssertEqual(again.indexedEmails, 0)
         XCTAssertNil(state.cursor, "a finished pass clears its cursor")
+    }
+
+    /// Two passes started together never overlap: the second waits, and each email is indexed once.
+    func testPasses_neverOverlap_eachEmailIndexedOnce() async throws {
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        let root = tempRoot("no-overlap")
+        defer {
+            AttachmentTextIndexJob.testSuppressKicks = false
+            try? FileManager.default.removeItem(at: root)
+            AttachmentTextIndexJob.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        AttachmentTextIndexJob.testStoreOverride = store
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<30 {
+            let raw = """
+            From: a@b.com
+            To: c@d.com
+            Subject: Overlap \(i)
+            Date: Wed, 15 Jan 2025 10:00:00 +0000
+            Message-ID: <overlap-\(i)@t>
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="B"
+
+            --B
+            Content-Type: text/plain
+
+            body
+            --B
+            Content-Type: text/plain; name="n\(i).txt"
+            Content-Disposition: attachment; filename="n\(i).txt"
+
+            note \(i)
+            --B--
+            """
+            emails.append(try MBOXParser.processRawMessage(raw, senderEmail: ""))
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 50, progress: nil)
+        async let first = AttachmentTextIndexJob.shared.run(batchSize: 5)
+        async let second = AttachmentTextIndexJob.shared.run(batchSize: 5)
+        let (a, b) = await (first, second)
+        XCTAssertEqual(a.indexedEmails + b.indexedEmails, 30, "each email indexed once across both passes")
+    }
+
+    /// E1 done-means at scale: 1,000 emails, 100 with a scanned PDF, indexed before OCR existed.
+    /// The second pass is interrupted and resumed; every scan is read once, each is found by the
+    /// number only it holds, and memory stays flat. Skipped with MAILIN_SCALE_TIER=off.
+    func testOCR_scale_1000Emails_100Scans_interruptedAndResumed_memoryFlat() async throws {
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        defer { AttachmentTextIndexJob.testSuppressKicks = false }
+        if (ProcessInfo.processInfo.environment["MAILIN_SCALE_TIER"] ?? "").lowercased() == "off" {
+            throw XCTSkip("MAILIN_SCALE_TIER=off")
+        }
+        let root = tempRoot("ocr-scale")
+        let wasOn = AttachmentOCR.isEnabled
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AttachmentTextIndexJob.testStoreOverride = nil
+            AttachmentOCR.isEnabled = wasOn
+        }
+        let store = SQLiteEmailStore(directory: root)
+        AttachmentTextIndexJob.testStoreOverride = store
+
+        var scans: [(id: UUID, token: String)] = []
+        var batch: [MBOXParser.RawEmail] = []
+        for i in 0..<1_000 {
+            var parts = """
+            --B
+            Content-Type: text/plain
+
+            Message \(i) body.
+            """
+            var token: String? = nil
+            if i % 10 == 0 {
+                let ref = String(70_000 + i)
+                token = ref
+                let pdf = try scannedPDF(scannedImage("REF \(ref) SIGNED"))
+                parts += """
+
+                --B
+                Content-Type: application/pdf; name="scan-\(i).pdf"
+                Content-Disposition: attachment; filename="scan-\(i).pdf"
+                Content-Transfer-Encoding: base64
+
+                \(pdf.base64EncodedString(options: [.lineLength76Characters, .endLineWithLineFeed]))
+                """
+            } else if i % 10 == 5 {
+                parts += """
+
+                --B
+                Content-Type: text/plain; name="note-\(i).txt"
+                Content-Disposition: attachment; filename="note-\(i).txt"
+
+                plain attachment \(i)
+                """
+            }
+            let raw = """
+            From sender@example.com Wed Jan 15 10:00:00 2025
+            From: sender\(i % 30)@example.com
+            To: user@dest.org
+            Subject: Scale \(i)
+            Date: Wed, 15 Jan 2025 10:\(String(format: "%02d", i % 60)):00 +0000
+            Message-ID: <ocr-scale-\(i)@t>
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="B"
+
+            \(parts)
+            --B--
+            """
+            let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+            if let token { scans.append((email.id, token)) }
+            batch.append(email)
+        }
+        _ = try await store.insertBatch(batch, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 200, progress: nil)
+        batch.removeAll()
+        XCTAssertEqual(scans.count, 100)
+
+        // Indexed before OCR existed.
+        AttachmentOCR.isEnabled = false
+        let first = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(first.indexedEmails, 200, "100 scans + 100 text attachments")
+        let noneYet = try await store.attachmentTextSearch(scans[0].token)
+        XCTAssertTrue(noneYet.isEmpty)
+
+        // OCR on: the second pass is interrupted part-way, as a quit would.
+        AttachmentOCR.isEnabled = true
+        let state = try AttachmentOCRState(url: await store.attachmentOCRStateURL)
+        let baseline = currentFootprintBytes()
+        var peak: UInt64 = 0
+        let interrupted = Task { @MainActor in await AttachmentTextIndexJob.shared.run() }
+        while (try state.doneCount()) < 25 {
+            peak = max(peak, currentFootprintBytes())
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        interrupted.cancel()
+        _ = await interrupted.value
+        let doneAtStop = try state.doneCount()
+        XCTAssertGreaterThanOrEqual(doneAtStop, 25)
+        XCTAssertLessThan(doneAtStop, 100, "the pass was really interrupted")
+
+        // Resumed: only the rest are read.
+        let sampler = Task { @MainActor in
+            while !Task.isCancelled {
+                peak = max(peak, currentFootprintBytes())
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        let resumed = await AttachmentTextIndexJob.shared.run()
+        sampler.cancel()
+        XCTAssertEqual(resumed.ocrTotal, 100)
+        XCTAssertEqual(resumed.ocrEmails, 100)
+        XCTAssertEqual(try state.doneCount(), 100, "every scan read, none twice")
+        let growth = peak > baseline ? peak - baseline : 0
+        XCTAssertLessThan(growth, 300 * 1_048_576, "memory stays flat: grew \(growth / 1_048_576) MB")
+
+        // Each scan is found by the number only it holds.
+        var missed: [String] = []
+        for scan in scans {
+            let hits = try await store.attachmentTextSearch(scan.token)
+            if hits != [scan.id] { missed.append(scan.token) }
+        }
+        XCTAssertEqual(missed, [], "every scanned reference is searchable")
+
+        // A later run reads nothing again.
+        let again = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(again.indexedEmails, 0)
+        XCTAssertEqual(try state.doneCount(), 100)
     }
 }

@@ -34,6 +34,8 @@ final class AttachmentTextIndexJob {
 
     /// Test seam.
     static var testStoreOverride: SQLiteEmailStore?
+    /// Test seam: the app's own launch/import kicks stay out while a test drives passes itself.
+    static var testSuppressKicks = false
     private var store: SQLiteEmailStore { Self.testStoreOverride ?? .shared }
 
     private var task: Task<Void, Never>?
@@ -72,7 +74,7 @@ final class AttachmentTextIndexJob {
     }
 
     func kickIfNeeded(registry: JobRegistry? = nil) {
-        guard task == nil else { return }
+        guard task == nil, !Self.testSuppressKicks else { return }
         guard SafeMode.shared.allowsBackgroundWork else { return }   // §3-S6
         guard BackgroundExecution.isProtectedDataAvailable else { return }   // §3-S3
         if let registry { self.registry = registry }
@@ -104,8 +106,35 @@ final class AttachmentTextIndexJob {
         registry?.update(id: Self.jobID, detail: parts.joined(separator: ", "))
     }
 
+    /// The pass in progress. Passes never overlap: two at once could index the same email twice
+    /// and one could overwrite the other's freshly read (OCR) text.
+    /// The pass clears this itself when it ends, so a waiter never finds a finished pass still
+    /// marked active (it would wait on it again and again without ever yielding).
+    private var activeRun: (id: UUID, task: Task<Outcome, Never>)?
+
+    /// Runs one pass, after any pass already running has finished. Cancelling the caller cancels
+    /// the pass (an interrupted pass resumes on the next run).
     @discardableResult
     func run(batchSize: Int = 50) async -> Outcome {
+        while let active = activeRun { _ = await active.task.value }
+        let id = UUID()
+        // Main-actor isolated: the pass cannot start before `activeRun` is set below.
+        let pass = Task { @MainActor in
+            let outcome = await self.runPass(batchSize: batchSize)
+            if self.activeRun?.id == id { self.activeRun = nil }
+            return outcome
+        }
+        activeRun = (id, pass)
+        return await withTaskCancellationHandler { await pass.value } onCancel: { pass.cancel() }
+    }
+
+    /// Returns once no pass is running (a kicked pass is cancelled first).
+    func cancelAndWaitUntilIdle() async {
+        cancel()
+        while let active = activeRun { active.task.cancel(); _ = await active.task.value }
+    }
+
+    private func runPass(batchSize: Int) async -> Outcome {
         var outcome = Outcome()
         // E1: read once per run; a switch flipped mid-run applies from the next run.
         let ocr = AttachmentOCR.isEnabled
