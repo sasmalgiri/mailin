@@ -37,12 +37,13 @@ comparison, smart alerts, biometric lock, Spotlight.
 | Support URL | https://sasmalgiri.github.io/mailin/support/ — only change if getmailin.app serves the same pages |
 | Marketing URL | https://sasmalgiri.github.io/mailin/ |
 | Privacy Policy URL | https://sasmalgiri.github.io/mailin/privacy |
-| Copyright | whatever 2.0 shows (your other apps use "© 2026 Eco Sanskriti Innovation") |
+| Copyright | © 2026 EcoSanskriti Innovation Pvt Ltd (the developer named in the Terms of Use) |
 | Age rating | 4+ (unchanged) |
 | App Privacy | Data Not Collected (unchanged) |
 | Sign-in | not required |
 | Export compliance | answered in the build (`ITSAppUsesNonExemptEncryption = NO`) |
 | Review notes | `docs/AppStoreConnect.md` ▸ App Review Notes (still accurate) |
+| Terms of Use / EULA | link in the description (guideline 3.1.2); `docs/terms` updated for 3.0 — publish before submitting |
 
 ## Promotional Text (≤170)
 
@@ -114,6 +115,14 @@ PLANS
 • Free: the newest 500 emails of your archive, with search, analytics and a daily allowance of AI questions.
 • Personal: the whole archive, unlimited exports, the AI assistant, deleted-mail recovery.
 • Professional: adds the legal, forensic, review, scripting and deep-recovery tools.
-Monthly, yearly or one-time lifetime purchase.
+
+SUBSCRIPTIONS
+mailin Personal and mailin Professional are available as auto-renewable subscriptions (1 month or 1 year) or as a one-time lifetime purchase. Prices are shown in the app in your local currency. Payment is charged to your Apple Account when you confirm the purchase. A subscription renews automatically unless it is cancelled at least 24 hours before the end of the current period; your account is charged for renewal within 24 hours before the period ends. Manage or cancel subscriptions in your Apple Account settings at any time.
+
+Terms of Use: https://sasmalgiri.github.io/mailin/terms
+Privacy Policy: https://sasmalgiri.github.io/mailin/privacy
+
+DISCLAIMER
+mailin is not a certified forensic tool and does not give legal advice. AI analysis, deleted-mail recovery, text read from scanned attachments, header timestamps and signature checks can be incomplete or wrong; verify results independently before relying on them in legal or business decisions.
 
 DEVONthink is a trademark of DEVONtechnologies, LLC. Outlook is a trademark of Microsoft Corporation. mailin is not affiliated with either company.
