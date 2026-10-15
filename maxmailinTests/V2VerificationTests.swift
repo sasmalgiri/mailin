@@ -4941,3 +4941,42 @@ final class PhaseEDEVONthinkAndOCRTests: XCTestCase {
         XCTAssertEqual(try state.doneCount(), 100)
     }
 }
+
+// MARK: - Free plan on the classic list: "500 of 526" (2026-10-15)
+
+@MainActor
+final class FreePlanClassicListTests: XCTestCase {
+
+    /// The classic list shows the archive total (526) with no "first 500" notice on Free; the
+    /// rows were already limited. Its counts must say what the plan reaches.
+    func testFreePlan_classicListSays500Of526_paidSays526() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-freelist-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let emails = (0..<526).map { i in
+            MBOXParser.RawEmail(headers: ["Message-ID": "<free-\(i)@t>", "Subject": "S\(i % 7)", "From": "a@b.com",
+                                          "To": "c@d.com", "Date": "Wed, 15 Jan 2025 10:00:00 +0000"],
+                                rawSource: "", messageType: "received", attachments: [],
+                                timestamp: ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1_700_000_000 + Double(i) * 60)),
+                                domains: [], plainBody: "b", htmlBody: "")
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 200, progress: nil)
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: archive, pageSize: 100, maxRetained: 500)
+
+        // Free: the newest 500 are reachable, and the list says so.
+        archive.accessLimit = StoreManager.freeEmailLimit
+        await vm.refreshFromStoreNow()
+        XCTAssertEqual(vm.displayedEmailCount, 500, "the header counts what the Free plan reaches")
+        XCTAssertEqual(vm.accessLimitedTotal, 526, "the notice reads \"First 500 of 526\"")
+
+        // Paid: everything, no notice.
+        archive.accessLimit = nil
+        await vm.refreshFromStoreNow()
+        XCTAssertEqual(vm.displayedEmailCount, 526)
+        XCTAssertNil(vm.accessLimitedTotal)
+    }
+}

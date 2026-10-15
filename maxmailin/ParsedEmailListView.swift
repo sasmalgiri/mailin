@@ -637,6 +637,28 @@ struct ParsedEmailListView: View {
                 .accessibilityLabel("Sort order: \(model.sortBy.label)")
             }
 
+            // Free plan: the reachable and total counts apart, with the upgrade right there (the
+            // same notice and strings as the three-pane list). Rows past the limit stay in the
+            // archive; a purchase unlocks them.
+            if let total = model.accessLimitedTotal {
+                Button {
+                    storeManager.requestPurchase(
+                        .personal,
+                        feature: String(localized: "Full Archive"),
+                        reason: "The Free plan browses the first \(model.displayedEmailCount) emails of any list or search. Personal and Professional browse all \(total).",
+                        target: .main)
+                } label: {
+                    Label("First \(model.displayedEmailCount) of \(total) emails · Unlock Full Archive",
+                          systemImage: "lock.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help("The Free tier browses the first \(model.displayedEmailCount) emails of any list. Personal and Professional browse the whole archive.")
+                .accessibilityIdentifier("classic.list.accessLimit")
+            }
+
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "magnifyingglass")
                     .font(.footnote)

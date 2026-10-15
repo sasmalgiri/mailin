@@ -392,9 +392,13 @@ class ParsedEmailListViewModel: ObservableObject {
     /// exactly what the user sees.
     var displayedEmailCount: Int {
         visibleEmails.count == residentEmails.count
-            ? max(queryTotalCount, visibleEmails.count)
+            ? max(min(queryTotalCount, pager.accessLimit ?? Int.max), visibleEmails.count)
             : visibleEmails.count
     }
+
+    /// Free plan: the archive's total for the current query when the plan reaches fewer
+    /// ("500 of 526"); nil when everything is reachable.
+    var accessLimitedTotal: Int? { pager.isAccessLimited ? pager.totalCount : nil }
 
     /// §13.1: the current filter state compiled onto the full archive query —
     /// operator syntax (from:/to:/has:attachment/…) via ArchiveQueryCompiler
@@ -549,6 +553,15 @@ class ParsedEmailListViewModel: ObservableObject {
             .compactMap { $0.object as? String }
             .receive(on: RunLoop.main)
             .sink { [weak self] persona in self?.restoreFilters(for: persona) }
+        // The plan's reach changed (purchase, expiry, restore — or settled at launch before any
+        // view observed the plan): re-page, so the counts and the "first 500 of N" notice agree
+        // with the rows the data layer returns.
+        accessScopeObserver = NotificationCenter.default.publisher(for: .accessScopeChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isParsed else { return }
+                self.refreshFromStore()
+            }
         // Views observe this VM — forward review-state changes (pin/read/tag
         // badges) so rows re-render without observing the service directly.
         reviewChangeForwarder = review.objectWillChange.sink { [weak self] _ in
@@ -648,6 +661,10 @@ class ParsedEmailListViewModel: ObservableObject {
         await refreshSenderAggregates()
         let compiled = pagerQuery
         lastPagedQuery = compiled
+        // The plan's depth limit (Free = newest 500), so this list's counts and its "first 500 of
+        // N" notice agree with the rows the data layer returns. Read on every reload, so a
+        // purchase, expiry or restore takes effect at the next refresh.
+        pager.accessLimit = archive.accessLimit
         await pager.setQuery(compiled)
         forwardPagesLoaded = 1
         guard revision == windowRevision else { return }
@@ -1021,6 +1038,7 @@ class ParsedEmailListViewModel: ObservableObject {
     }
 
     private var personaObserver: AnyCancellable?
+    private var accessScopeObserver: AnyCancellable?
     private var isRestoringFilters = false
     private var rememberedPersona: String?
 

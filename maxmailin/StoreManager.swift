@@ -334,8 +334,12 @@ class StoreManager: ObservableObject {
     /// the whole archive. Called whenever the effective tier can change.
     func publishAccessScope() {
         guard Self.live === self || Self.live == nil else { return }   // test fixtures never reach the live data
-        ArchiveDataService.shared.accessLimit = isPremium ? nil : Self.freeEmailLimit
+        let limit: Int? = isPremium ? nil : Self.freeEmailLimit
+        let changed = ArchiveDataService.shared.accessLimit != limit
+        ArchiveDataService.shared.accessLimit = limit
         TierAccess.tier = effectiveTier
+        // Views that load once (subject groups, …) reload when the plan's reach changes.
+        if changed { NotificationCenter.default.post(name: .accessScopeChanged, object: nil) }
     }
 
     /// The single tier every purchase gate consults. Enterprise: everything is

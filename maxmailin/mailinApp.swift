@@ -1285,6 +1285,8 @@ extension Notification.Name {
     static let importFileFromURL = Notification.Name("importFileFromURL")
     static let triggerFileImportFromShortcut = Notification.Name("triggerFileImportFromShortcut")
     static let spotlightEmailSelected = Notification.Name("spotlightEmailSelected")
+    /// The plan's reach changed (Free ↔ paid): views that load once read their data again.
+    static let accessScopeChanged = Notification.Name("mailin.accessScopeChanged")
     static let togglePinEmail = Notification.Name("togglePinEmail")
     static let addTagToEmail = Notification.Name("addTagToEmail")
     static let composeEmailSent = Notification.Name("composeEmailSent")

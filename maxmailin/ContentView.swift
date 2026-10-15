@@ -2212,11 +2212,13 @@ struct ContentView: View {
                         .accessibilityLabel("Add more email files")
                     }
 
-                    if !storeManager.isPremium && viewModel.totalParsedCount > StoreManager.freeEmailLimit {
+                    // The archive total behind the list (unscoped), not the launch-time count — that
+                    // one is already limited to 500 on Free, so the box never appeared.
+                    if !storeManager.isPremium, let archiveTotal = modelVM.accessLimitedTotal {
                         Button {
                             storeManager.showPaywall = true
                         } label: {
-                            let remaining = viewModel.totalParsedCount - StoreManager.freeEmailLimit
+                            let remaining = archiveTotal - StoreManager.freeEmailLimit
                             HStack(spacing: Spacing.xSmall) {
                                 Image(systemName: "lock.fill")
                                     .foregroundColor(.orange)
@@ -4579,7 +4581,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
             UserDefaults.standard.removeObject(forKey: "freeAttachmentDownloadCount")
         }
         if modelVM.isParsed {
-            // Premium unlock lifts the free paging cap — re-page from the store.
+            // A plan change moves the paging limit — re-page from the store (the list's counts and
+            // its "first 500 of N" notice follow).
             modelVM.refreshFromStore()
         }
     }

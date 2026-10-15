@@ -151,6 +151,8 @@ struct ArchiveSubjectGroupsView: View {
 
     @State private var rows: [(subject: String, count: Int)] = []
     @State private var distinct = 0
+    /// The plan's reach when the rows were read (Free = newest 500), nil for the whole archive.
+    @State private var scopeLimit: Int? = nil
     @State private var loading = false
     @State private var exhausted = false
 
@@ -158,8 +160,14 @@ struct ArchiveSubjectGroupsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("\(rows.count.formatted()) of \(distinct.formatted()) subjects — whole archive")
-                .font(.caption).foregroundStyle(.secondary).padding(Spacing.small)
+            Group {
+                if let scopeLimit {
+                    Text("\(rows.count.formatted()) of \(distinct.formatted()) subjects — newest \(scopeLimit.formatted()) emails")
+                } else {
+                    Text("\(rows.count.formatted()) of \(distinct.formatted()) subjects — whole archive")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary).padding(Spacing.small)
             List {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     Button {
@@ -194,6 +202,11 @@ struct ArchiveSubjectGroupsView: View {
             .accessibilityLabel(String(localized: "Subjects"))
         }
         .task { if rows.isEmpty { await loadMore() } }
+        // A purchase, expiry or restore changes what the plan reaches: read the groups again.
+        .onReceive(NotificationCenter.default.publisher(for: .accessScopeChanged)) { _ in
+            rows = []; distinct = 0; exhausted = false
+            Task { await loadMore() }
+        }
     }
 
     private func loadMore() async {
@@ -213,6 +226,7 @@ struct ArchiveSubjectGroupsView: View {
             return
         }
         distinct = page.distinct
+        scopeLimit = ArchiveDataService.shared.accessLimit
         rows += page.rows
         if page.rows.count < Self.pageSize { exhausted = true }
     }
