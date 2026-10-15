@@ -301,7 +301,7 @@ Mail files do not record when a message was deleted, so deletion analysis counts
 | DKIM / ARC | Checked against keys you import; the ARC-Seal chain is not checked, only ARC message signatures | No DNS lookups (offline) |
 | Hidden timestamps | Thread-Index, Outlook and JavaMail boundaries, Unix times in Message-IDs; other Message-ID formats (e.g. historical Gmail) are not decoded | Only documented encodings are decoded |
 
-## 3.0.x previews (off by default; switches in Settings ▸ Modules)
+## OCR and DEVONthink (on by default; switches in Settings ▸ Modules)
 
 **Text in scanned attachments (OCR)** — switch "Text in scanned attachments (OCR)".
 - Reads scanned PDFs (a PDF whose own text layer holds fewer than 20 characters per page) and image

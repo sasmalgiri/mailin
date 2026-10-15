@@ -4627,11 +4627,12 @@ final class PhaseEDEVONthinkAndOCRTests: XCTestCase {
         XCTAssertEqual(roundTrip.handOff, .devonthink, "a resumed send still hands off at the end")
     }
 
-    func testPhaseESwitches_arePreviews_withMatrixEntries() {
+    func testPhaseESwitches_arePromoted_withMatrixEntries() {
         for capability in [Capability.devonthinkHandOff, .attachmentOCR] {
-            XCTAssertNotNil(EngineSpec.of(capability), "\(capability) has a matrix entry")
-            XCTAssertEqual(capability.maturity, .preview, "rule 15: off in App Store builds until its gate passes")
-            XCTAssertFalse(Capability.defaultOn(maturity: capability.maturity, isEngine: true, beta: false))
+            XCTAssertNotNil(EngineSpec.of(capability), "\(capability) has a matrix entry (still a switch)")
+            // Owner, 2026-10-15: "switch on what we just built" — on in App Store builds too.
+            XCTAssertEqual(capability.maturity, .stable)
+            XCTAssertTrue(Capability.defaultOn(maturity: capability.maturity, isEngine: true, beta: false))
             XCTAssertEqual(capability.owner, .archive)
         }
     }

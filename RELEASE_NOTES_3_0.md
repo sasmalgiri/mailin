@@ -5,6 +5,16 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
 **implemented and building**; the Phase J test pass (`MAILIN_3_0_TODO.md`) is what turns
 "implemented" into "verified", and `RELEASE_READINESS.md` records which rows have executed numbers.
 
+## Scanned attachments and DEVONthink (2026-10-15, on by default)
+
+- **Text in scanned attachments (OCR):** scanned PDFs and photos attached to emails are read on this
+  device by Apple Vision, so attachment search finds their text. Mail already in the archive is read once
+  in the background, resuming after an interruption. No network. Checked on 1,000 emails with 100 scans.
+- **Send to DEVONthink and email links (Mac):** Export ▸ Send to DEVONthink writes the emails as standard
+  .eml files and opens them in DEVONthink (Finder when it is not installed; the receipt says which).
+  Copy Link to Email gives a `mailin://` link that opens the email from DEVONthink or any notes app.
+  The import into DEVONthink itself is still to be confirmed on a Mac with DEVONthink.
+
 ## Recovery, scripting and team review (2026-10-13 / 14, FINAL_TODO_3_0_MAJOR.md)
 
 Built as 3.1 and moved into 3.0 by the owner. Each is a separate switch in Settings ▸ Modules, **on
