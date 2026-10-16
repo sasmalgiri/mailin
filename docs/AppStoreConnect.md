@@ -73,7 +73,7 @@ mbox,eml,pst,msg,email,archive,analyzer,gmail,takeout,forensic,nlp,sentiment,exp
 ## Promotional Text (170 characters max, can be updated without new version)
 
 ```
-Analyze email archives privately on Mac, iPhone, and iPad. Import Gmail, Outlook, Thunderbird, or Apple Mail — AI-powered insights, forensic tools, 11 languages.
+Analyze email archives privately on Mac, iPhone, and iPad. Import Gmail, Outlook, Thunderbird, or Apple Mail — on-device AI insights, forensic tools, 11 languages.
 ```
 
 ---
@@ -135,12 +135,12 @@ mailin is an email archive analyzer that opens .mbox, .eml, .emlx, .msg, .pst, .
 TESTING:
 - Help > Open sample loads the bundled demo_emails.mbox; it shows every surface. Or drag any supported file onto the window.
 - The archive page is always on. AI Insights and Professional Workflows are optional pages, off on a fresh install; the page switcher (top of the window) explains what each needs and turns it on.
-- Free tier: up to 500 emails. Personal and Professional features need a subscription or one-time purchase (StoreKit 2; cancel via Apple's Subscriptions UI).
+- Free tier: import up to 100 MB of archives and work with the newest 500 emails of the archive (list, search, analytics, exports and the AI assistant alike; the list states the archive's total). Personal and Professional features need a subscription or one-time purchase (StoreKit 2; cancel via Apple's Subscriptions UI).
 
 NETWORK:
 - No account, no login, no developer server. The archive never leaves the device.
 - No cloud AI. The app has no network entitlement and cannot contact any server.
-- The Live Mail page is a placeholder in 3.0: no account can be added and no mail server is contacted; the page says so.
+- There is no Live Mail page in this build: the page switcher shows Archive, AI Insights and Professional Workflows only. No account can be added and no mail server is contacted.
 - StoreKit is the only other network use.
 
 PRIVACY:
@@ -165,4 +165,9 @@ No demo account is needed.
   runs until you do.
 - Offset import engine is now the default: single messages over 100 MB are archived instead of
   reported as damaged.
+- Interface in 11 languages: English, German, Spanish, French, Hindi, Italian, Japanese, Korean,
+  Brazilian Portuguese, Simplified and Traditional Chinese.
+- AI answers list the emails they came from; counts, dates and amounts are read from the archive,
+  not generated. With Apple Intelligence off, the assistant answers from the emails themselves.
+- Free tier: the newest 500 emails of the archive in every view, with the archive's total shown.
 ```
