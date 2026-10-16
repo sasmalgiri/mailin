@@ -127,6 +127,23 @@ final class ExportRunCenter {
             resumeRequest: resume)
     }
 
+    /// The older exports (`runStreamingExport`) say how they ended in a status line rather than a
+    /// receipt; without this every one of them finished as "Failed — N written before the error",
+    /// even a complete export. Records the real outcome unless the body already recorded one.
+    func recordOutcome(_ outcome: ExportReceipt.Outcome, destination: URL? = nil, message: String? = nil) {
+        guard pendingReceipt == nil else { return }
+        pendingReceipt = ExportReceipt(
+            title: title,
+            destination: destination?.path ?? "—",
+            isFolder: false,
+            requested: total > 0 ? total : nil,
+            written: writtenForReceipt,
+            outcome: outcome,
+            errorMessage: outcome == .failed ? message : nil,
+            startedAt: startedAt,
+            completedAt: Date())
+    }
+
     func dismissReceipt() {
         showReceipt = false
     }

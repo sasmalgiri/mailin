@@ -4980,3 +4980,55 @@ final class FreePlanClassicListTests: XCTestCase {
         XCTAssertNil(vm.accessLimitedTotal)
     }
 }
+
+// MARK: - Older exports report their real outcome (2026-10-16)
+
+@MainActor
+final class ExportOutcomeReceiptTests: XCTestCase {
+
+    private func runToEnd(_ body: @escaping @MainActor (ExportRunCenter) async -> Void) async throws -> ExportReceipt {
+        let center = ExportRunCenter.shared
+        XCTAssertFalse(center.isActive)
+        center.run(title: "Test export") { await body(center) }
+        for _ in 0..<200 where center.isActive { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertFalse(center.isActive)
+        center.dismissReceipt()
+        return try XCTUnwrap(center.lastReceipt)
+    }
+
+    /// Every `runStreamingExport` export used to end "Failed — 20 written before the error"
+    /// although it completed (seen on iPhone, Tools ▸ Export).
+    func testCompletedRun_isReportedComplete_notFailed() async throws {
+        let receipt = try await runToEnd { center in
+            center.update(done: 20, total: 20)
+            center.recordOutcome(.complete)
+        }
+        XCTAssertEqual(receipt.outcome, .complete)
+        XCTAssertEqual(receipt.written, 20)
+        XCTAssertNil(receipt.errorMessage)
+    }
+
+    func testCancelledAndFailedRuns_sayWhatHappened() async throws {
+        let cancelled = try await runToEnd { center in
+            center.update(done: 3, total: 20); center.recordOutcome(.cancelled)
+        }
+        XCTAssertEqual(cancelled.outcome, .cancelled)
+        XCTAssertEqual(cancelled.written, 3)
+        let failed = try await runToEnd { center in
+            center.update(done: 7, total: 20); center.recordOutcome(.failed, message: "Disk full")
+        }
+        XCTAssertEqual(failed.outcome, .failed)
+        XCTAssertEqual(failed.errorMessage, "Disk full")
+    }
+
+    /// A body that already recorded its own receipt keeps it.
+    func testExplicitReceipt_isNotOverwritten() async throws {
+        let receipt = try await runToEnd { center in
+            center.update(done: 5, total: 10)
+            center.recordFailure(destination: nil, isFolder: false, requested: 10, message: "Writer error")
+            center.recordOutcome(.complete)
+        }
+        XCTAssertEqual(receipt.outcome, .failed)
+        XCTAssertEqual(receipt.errorMessage, "Writer error")
+    }
+}

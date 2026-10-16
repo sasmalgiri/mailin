@@ -592,11 +592,18 @@ enum ContinuedProcessing {
 
     private static var pending: [String: Handle] = [:]
 
+    /// Whether the launch handler was accepted. Submitting a request without one raises an
+    /// uncatchable NSInternalInconsistencyException (seen on iPhone, Tools ▸ Duplicates), so
+    /// `begin` submits only when this is true; the job then runs in the foreground as before.
+    private(set) static var isRegistered = false
+    private static let log = Logger(subsystem: "com.ecosanskriti.mailin", category: "ContinuedProcessing")
+
     /// Registers the launch handler. Call once, early at launch.
     static func register() {
         #if os(iOS)
         if #available(iOS 26, *) {
-            BGTaskScheduler.shared.register(forTaskWithIdentifier: identifierPrefix + ".*", using: .main) { task in
+            guard !isRegistered else { return }   // a second registration terminates the app
+            isRegistered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifierPrefix + ".*", using: .main) { task in
                 guard let task = task as? BGContinuedProcessingTask else { task.setTaskCompleted(success: false); return }
                 MainActor.assumeIsolated {
                     guard let handle = pending[task.identifier] else { task.setTaskCompleted(success: true); return }
@@ -604,13 +611,14 @@ enum ContinuedProcessing {
                     task.expirationHandler = { MainActor.assumeIsolated { handle.expired = true } }
                 }
             }
+            log.notice("continued-processing handler registered: \(isRegistered, privacy: .public)")
         }
         #endif
     }
 
     static func begin(title: String, total: Int, done: Int) -> Handle {
         #if os(iOS)
-        if #available(iOS 26, *) {
+        if #available(iOS 26, *), isRegistered {
             let id = identifierPrefix + "." + UUID().uuidString
             let request = BGContinuedProcessingTaskRequest(identifier: id, title: title,
                                                            subtitle: String(localized: "\(done) of \(total) emails"))

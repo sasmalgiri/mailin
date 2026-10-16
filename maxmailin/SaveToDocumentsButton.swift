@@ -48,12 +48,32 @@ struct SaveToDocumentsButton: View {
         self.make = document
     }
 
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+    /// iPhone width: the chip shows its icon only (the number stays in the accessibility label),
+    /// so it no longer wraps over three lines in report headers.
+    private var iconOnly: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+
+    @ViewBuilder
+    private var autoSavedChip: some View {
+        let label = Label(savedNumber.map { "Auto-saved \($0)" } ?? "Auto-save on",
+                          systemImage: savedNumber != nil ? "checkmark.circle.fill" : "square.and.arrow.down.on.square")
+        if iconOnly { label.labelStyle(.iconOnly) } else { label }
+    }
+
     var body: some View {
         Group {
             if autoCapture {
                 // Hands-free: a status chip, no button to press.
-                Label(savedNumber.map { "Auto-saved \($0)" } ?? "Auto-save on",
-                      systemImage: savedNumber != nil ? "checkmark.circle.fill" : "square.and.arrow.down.on.square")
+                autoSavedChip
+                    .lineLimit(1)
                     .font(Typography.caption2)
                     .foregroundColor(savedNumber != nil ? .green : AppColors.secondary)
                     .help("This result is recorded to Documents automatically. Turn off in Settings ▸ Auto-save my work.")

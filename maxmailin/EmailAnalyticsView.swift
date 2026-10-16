@@ -15,6 +15,13 @@ struct EmailAnalyticsView: View {
     /// ArchiveFullAnalyticsService (exact tallies + NLP over a capped set).
     var query: EmailQuery = .all
     @Environment(\.dismiss) private var dismiss
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// iPhone width: the header's buttons show icons only, so the title stays on one line.
+    private var compactHeader: Bool { horizontalSizeClass == .compact }
+    #else
+    private let compactHeader = false
+    #endif
     @State private var analyticsData: AnalyticsData?
     @State private var isComputing = false
     @State private var computeStage: String = ""
@@ -101,8 +108,12 @@ struct EmailAnalyticsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Email Analytics")
                         .font(Typography.headline)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Text("\(analyticsData?.totalCount ?? 0) emails analyzed")
                         .font(Typography.caption1)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(AppColors.secondary)
                     if let v3Note {
                         Text(v3Note).font(Typography.caption2).foregroundColor(AppColors.secondary)
@@ -115,7 +126,11 @@ struct EmailAnalyticsView: View {
                 Button {
                     exportAnalyticsReport()
                 } label: {
-                    Label("Export Report", systemImage: "square.and.arrow.up")
+                    if compactHeader {
+                        Label("Export Report", systemImage: "square.and.arrow.up").labelStyle(.iconOnly)
+                    } else {
+                        Label("Export Report", systemImage: "square.and.arrow.up")
+                    }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)

@@ -1199,6 +1199,13 @@ struct ContentView: View {
 
     // MARK: - iPhone Layout (Compact)
     #if os(iOS)
+    /// Tools ▸ Topics on iPhone: shown while the Topics panel is chosen; closing it returns to
+    /// the default panel.
+    private var iPhoneTopicsSheet: Binding<Bool> {
+        Binding(get: { appState.dockedBottomPanel == .topics },
+                set: { if !$0 { appState.dockedBottomPanel = .subjects } })
+    }
+
     private var iPhoneLayout: some View {
         @Bindable var appState = appState
         return NavigationStack {
@@ -1304,7 +1311,9 @@ struct ContentView: View {
                                 Button { appState.showArchiveComparison = true } label: {
                                     Label("Compare", systemImage: "doc.on.doc.fill")
                                 }
-                                Button { exportFilteredEmailsAsEML() } label: {
+                                Menu {
+                                    filteredExportSections
+                                } label: {
                                     Label("Export", systemImage: "square.and.arrow.up")
                                 }
                             }
@@ -1395,6 +1404,26 @@ struct ContentView: View {
                     }
                 }
                 .presentationDetents([.medium, .large])
+            }
+            // iOS shows one sheet at a time: a tool opened from Filters & Tools (Find Duplicates
+            // Now) waited until that sheet was closed by hand. Close it so the tool appears.
+            .onChange(of: appState.showDuplicateManager) { _, open in
+                if open { showFiltersSheet = false }
+            }
+            // iPhone has no docked panel under the email, so Tools ▸ Topics showed nothing:
+            // the topics panel opens as its own sheet instead.
+            .sheet(isPresented: iPhoneTopicsSheet) {
+                NavigationStack {
+                    dockedBottomPanelView
+                        .navigationTitle(String(localized: "Topics"))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { appState.dockedBottomPanel = .subjects }
+                            }
+                        }
+                }
+                .presentationDetents([.large])
             }
             .sheet(isPresented: $showIOSSettings) {
                 NavigationStack {
@@ -2466,9 +2495,17 @@ struct ContentView: View {
                             detailToolButton(title: String(localized: "Compare"), icon: "rectangle.on.rectangle.angled", color: .cyan) {
                                 appState.showArchiveComparison = true
                             }
-                            detailToolButton(title: String(localized: "Export"), icon: "square.and.arrow.up", color: .brown) {
-                                exportFilteredEmailsAsEML()
+                            // Offers the formats (like the sidebar's Export Emails) instead of starting
+                            // an .eml export straight away, which on iPhone also went to the share
+                            // sheet with no choice.
+                            Menu {
+                                filteredExportSections
+                            } label: {
+                                detailToolLabel(title: String(localized: "Export"), icon: "square.and.arrow.up", color: .brown)
                             }
+                            .menuStyle(.button)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(String(localized: "Export"))
                         }
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel(String(localized: "Tools"))
@@ -2621,10 +2658,36 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// The unified format list over the current filter, shared by the sidebar's Export Emails,
+    /// the Tools strip and the Tools menu.
+    private var filteredExportSections: some View {
+        UnifiedExportSections(
+            scope: { filteredScope },
+            emlRender: { viewModel.exportEmailAsEML($0) },
+            emailCount: modelVM.displayedEmailCount,
+            share: { url in
+                #if os(iOS)
+                iOSShareFile(at: url)
+                #endif
+            },
+            exportPST: { appState.triggerExportPST = true },
+            errorMessage: $sidebarExportError
+        )
+        .environmentObject(storeManager)
+    }
+
     private func detailToolButton(title: String, icon: String, color: Color, tip: String? = nil, action: @escaping () -> Void) -> some View {
         // Owner, 2026-09-30: compact chips instead of 64-pt tiles — the
         // detail column is for the message; tools and settings are a strip.
         Button(action: action) {
+            detailToolLabel(title: title, icon: icon, color: color)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .help(tip ?? title)
+    }
+
+    private func detailToolLabel(title: String, icon: String, color: Color) -> some View {
             HStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.system(size: 11))
@@ -2640,10 +2703,6 @@ struct ContentView: View {
             .padding(.horizontal, 4)
             .background(color.opacity(0.06))
             .cornerRadius(CornerRadius.small)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .help(tip ?? title)
     }
 
     @ViewBuilder
@@ -3112,18 +3171,7 @@ struct ContentView: View {
             Menu {
                 // THE unified format list — identical to the list footer's
                 // Export menu and the open-email export menu.
-                UnifiedExportSections(
-                    scope: { filteredScope },
-                    emlRender: { viewModel.exportEmailAsEML($0) },
-                    emailCount: modelVM.displayedEmailCount,
-                    share: { url in
-                        #if os(iOS)
-                        iOSShareFile(at: url)
-                        #endif
-                    },
-                    errorMessage: $sidebarExportError
-                )
-                .environmentObject(storeManager)
+                filteredExportSections
             } label: {
                 Label("Export Emails", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
@@ -3869,18 +3917,31 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func runStreamingExport(_ title: String,
                                     _ operation: @escaping @MainActor (ArchiveExportService) async throws -> String?) {
         let vm = viewModel
-        ExportRunCenter.shared.run(title: title) {
+        let center = ExportRunCenter.shared
+        center.run(title: title) {
             do {
-                if let message = try await operation(ArchiveExportService.shared) {
+                let message = try await operation(ArchiveExportService.shared)
+                if let message {
                     vm.statusMessage = message
                     vm.statusColor = .green
+                }
+                // The receipt says what really happened (rule 5): the free-tier cap is a
+                // truncation, a body that reports "cancelled" is a cancel, the rest completed.
+                if let message, message.hasSuffix(Self.exportCancelledSuffix) {
+                    center.recordOutcome(.cancelled)
+                } else if let message, message.contains("(free limit)") {
+                    center.recordOutcome(.truncated)
+                } else {
+                    center.recordOutcome(.complete)
                 }
             } catch is CancellationError {
                 vm.statusMessage = "\(title) cancelled — partial output removed."
                 vm.statusColor = .orange
+                center.recordOutcome(.cancelled)
             } catch {
                 vm.statusMessage = "\(title) failed: \(error.localizedDescription)"
                 vm.statusColor = .red
+                center.recordOutcome(.failed, message: error.localizedDescription)
             }
         }
     }
@@ -4503,19 +4564,16 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return "Exported \(count) emails to PST."
         }
         #else
-        let vm = viewModel
-        ExportRunCenter.shared.run(title: String(localized: "Exporting PST")) {
-            do {
-                let tmpURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("export.pst")
-                try? FileManager.default.removeItem(at: tmpURL)
-                _ = try await ArchiveExportService.shared.exportPST(scope: scope, to: tmpURL)
-                shareItems = [tmpURL]
-                showShareSheet = true
-            } catch {
-                vm.statusMessage = "PST export failed: \(error.localizedDescription)"
-                vm.statusColor = .red
-            }
+        // Same path as the Mac (progress, and a receipt that says what happened); it used to call
+        // the run center directly and so always ended "Failed — 0 written".
+        runStreamingExport("Exporting PST") { service in
+            let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("export.pst")
+            try? FileManager.default.removeItem(at: tmpURL)
+            let count = try await service.exportPST(
+                scope: scope, to: tmpURL,
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+            if count > 0 { self.iOSShareFile(at: tmpURL) }
+            return "Exported \(count) emails to PST."
         }
         #endif
     }

@@ -46,6 +46,9 @@ struct UnifiedExportSections: View {
     var requiresPremium: Bool = false
     /// iOS delivery: hand the finished artifact to the host's share sheet.
     var share: (URL) -> Void = { _ in }
+    /// Whole-list hosts: the Outlook .pst export (File ▸ Export as PST on the Mac). Without this
+    /// entry iPhone and iPad had no way to reach PST export. Nil hides it (single-email menus).
+    var exportPST: (() -> Void)? = nil
     @Binding var errorMessage: String?
 
     @EnvironmentObject private var storeManager: StoreManager
@@ -104,6 +107,12 @@ struct UnifiedExportSections: View {
         if included(.msgFiles) {
             button("Outlook Messages (.msg)", icon: "envelope.badge",
                    help: "One Outlook-compatible file per email") { exportMSGs() }
+        }
+        if let exportPST {
+            button(String(localized: "Outlook Archive (.pst)"), icon: "archivebox.fill",
+                   help: String(localized: "One Outlook data file with folders, recipients and attachments")) {
+                if gate() { exportPST() }
+            }
         }
         Divider()
         if included(.portableHTML) {

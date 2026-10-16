@@ -7,6 +7,7 @@ struct ParsedEmailListView: View {
     @ObservedObject var model: ParsedEmailListViewModel
     @Binding var selectedEmailIDs: Set<UUID>
     @EnvironmentObject var storeManager: StoreManager
+    @Environment(AppStateManager.self) private var appState
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
     @ObservedObject private var predictiveEngine = PredictiveCodingEngine.shared
@@ -272,6 +273,11 @@ struct ParsedEmailListView: View {
         }
         .sheet(isPresented: $showAnalyticsSheet) {
             EmailAnalyticsView(query: model.currentArchiveQuery)
+        }
+        // ⋯ ▸ PII Report set this flag, but this iPhone layout had no sheet for it.
+        .sheet(isPresented: $showPIIReport) {
+            PIIReportView(query: model.currentArchiveQuery)
+                .presentationDetents([.large])
         }
         #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $showAIPaywall) {
@@ -3341,6 +3347,7 @@ struct ParsedEmailListView: View {
                 iOSShareFile(at: url)
                 #endif
             },
+            exportPST: { appState.triggerExportPST = true },
             errorMessage: $listExportError
         )
         .environmentObject(storeManager)

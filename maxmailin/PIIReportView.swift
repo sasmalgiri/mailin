@@ -90,9 +90,11 @@ struct PIIReportView: View {
                 VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                     Label("PII Report", systemImage: "person.text.rectangle")
                         .font(Typography.title2)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Text(isScanning
                          ? "Scanning for personally identifiable information…"
-                         : "\(totalFindings) finding(s) in \(scannedCount) email(s) — detected on-device, nothing leaves this Mac")
+                         : "\(totalFindings) finding(s) in \(scannedCount) email(s) — detected on-device, nothing leaves this device")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                     if !isScanning && !findings.isEmpty {
@@ -207,8 +209,15 @@ struct PIIReportView: View {
                         Section {
                             ForEach(group.items.prefix(200)) { finding in
                                 HStack(alignment: .top) {
+                                    // One line, never wrapped: on iPhone a wrapped address was hyphenated
+                                    // ("dana.kim@exam-ple.com"), which misstates the evidence. It shrinks,
+                                    // and if it still does not fit it is shortened in the middle.
                                     Text(finding.value)
                                         .font(Typography.monoBody)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.6)
+                                        .truncationMode(.middle)
+                                        .layoutPriority(1)
                                         .textSelection(.enabled)
                                     Spacer()
                                     Text(finding.emailSubject)
