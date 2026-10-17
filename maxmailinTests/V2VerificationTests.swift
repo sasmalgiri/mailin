@@ -5119,3 +5119,14 @@ final class ErrorDescriptionTests: XCTestCase {
         XCTAssertTrue(StoreManager.StoreError.verificationFailed.localizedDescription.contains("Restore Purchases"))
     }
 }
+
+// MARK: - "No date limit" is shown as words, not as year 1 / 4001 (2026-10-17)
+
+final class DateFieldUnboundedTests: XCTestCase {
+    func testDistantDates_areUnbounded_realDatesAreNot() {
+        XCTAssertTrue(ModernDateField.isUnbounded(.distantPast), "read \"1 Jan 1\"")
+        XCTAssertTrue(ModernDateField.isUnbounded(.distantFuture), "read \"1 Jan 4001\"")
+        XCTAssertFalse(ModernDateField.isUnbounded(Date()))
+        XCTAssertFalse(ModernDateField.isUnbounded(Date(timeIntervalSince1970: 0)))   // 1970: a real old email
+    }
+}

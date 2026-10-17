@@ -350,7 +350,7 @@ class PersonaManager: ObservableObject {
                     "Who emails me the most?",
                     "What are the most common topics in my inbox?",
                     "Show me emails with photos or documents attached",
-                    "Who emails me the most?",
+                    "Which emails have I never replied to?",
                     "Find important emails I might have missed"
                 ],
                 emptyStateMessage: "Open an mbox or eml file to browse your old emails, search messages, and save attachments.",

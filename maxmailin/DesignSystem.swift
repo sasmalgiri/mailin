@@ -1192,6 +1192,17 @@ extension View {
 struct ModernDateField: View {
     let label: String
     @Binding var date: Date
+    /// Shown instead of the date while there is no limit (`.distantPast` / `.distantFuture`):
+    /// the field read "1 Jan 1" and "1 Jan 4001". Nil keeps the old behaviour.
+    var unboundedLabel: String? = nil
+    /// Where the picker starts when the field is opened with no limit (e.g. the first email).
+    var suggested: () -> Date = { Calendar.current.startOfDay(for: Date()) }
+
+    static func isUnbounded(_ date: Date) -> Bool {
+        let year = Calendar.current.component(.year, from: date)
+        return year < 1900 || year > 3000
+    }
+    private var showsUnbounded: Bool { unboundedLabel != nil && Self.isUnbounded(date) }
 
     #if os(macOS)
     @State private var showPicker = false
@@ -1200,12 +1211,13 @@ struct ModernDateField: View {
     var body: some View {
         #if os(macOS)
         Button {
+            if Self.isUnbounded(date) { date = suggested() }
             showPicker = true
         } label: {
             HStack(spacing: Spacing.xxSmall) {
                 Image(systemName: "calendar")
                     .foregroundColor(AppColors.primary)
-                Text(date.formatted(date: .abbreviated, time: .omitted))
+                Text(showsUnbounded ? (unboundedLabel ?? "") : date.formatted(date: .abbreviated, time: .omitted))
                     .foregroundColor(.primary)
             }
             .font(Typography.caption1)
@@ -1255,9 +1267,17 @@ struct ModernDateField: View {
             .frame(width: 280)
         }
         #else
-        DatePicker(label, selection: $date, displayedComponents: .date)
-            .labelsHidden()
-            .accessibilityLabel(label)
+        if showsUnbounded {
+            // No limit yet: a button, so the field does not show year 1 or 4001.
+            Button(unboundedLabel ?? "") { date = suggested() }
+                .font(Typography.caption1)
+                .buttonStyle(.bordered)
+                .accessibilityLabel(label)
+        } else {
+            DatePicker(label, selection: $date, displayedComponents: .date)
+                .labelsHidden()
+                .accessibilityLabel(label)
+        }
         #endif
     }
 

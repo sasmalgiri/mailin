@@ -297,44 +297,51 @@ struct EmailAnalyticsView: View {
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             } else {
+                // .monotone never overshoots (catmullRom dipped below zero between buckets); each
+                // series is named and unstacked (unnamed areas were stacked on each other), and the
+                // automatic legend is hidden because the dots below already label the colours.
                 Chart {
                     ForEach(data.timelineBuckets, id: \.date) { bucket in
                         AreaMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Sent", bucket.sent)
+                            y: .value("Emails", bucket.sent),
+                            series: .value("Kind", "Sent"),
+                            stacking: .unstacked
                         )
                         .foregroundStyle(AppColors.sentEmail.opacity(0.4))
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
 
                         LineMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Sent", bucket.sent)
+                            y: .value("Emails", bucket.sent),
+                            series: .value("Kind", "Sent")
                         )
                         .foregroundStyle(AppColors.sentEmail)
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
                         .lineStyle(StrokeStyle(lineWidth: 2))
 
                         AreaMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Received", bucket.received)
+                            y: .value("Emails", bucket.received),
+                            series: .value("Kind", "Received"),
+                            stacking: .unstacked
                         )
                         .foregroundStyle(AppColors.receivedEmail.opacity(0.3))
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
 
                         LineMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Received", bucket.received)
+                            y: .value("Emails", bucket.received),
+                            series: .value("Kind", "Received")
                         )
                         .foregroundStyle(AppColors.receivedEmail)
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                     }
                 }
                 .chartYAxisLabel("Emails")
-                .chartForegroundStyleScale([
-                    "Sent": AppColors.sentEmail,
-                    "Received": AppColors.receivedEmail
-                ])
+                .chartYScale(domain: .automatic(includesZero: true))
+                .chartLegend(.hidden)
                 .frame(height: 220)
 
                 HStack(spacing: Spacing.medium) {

@@ -2972,13 +2972,17 @@ struct ContentView: View {
             }
             if personaManager.showSection(.dateRange) {
                 HStack(spacing: Spacing.xSmall) {
-                    ModernDateField(label: String(localized: "Start date — hide emails older than this (click for calendar)"), date: $modelVM.startDate)
+                    ModernDateField(label: String(localized: "Start date — hide emails older than this (click for calendar)"), date: $modelVM.startDate,
+                                    unboundedLabel: String(localized: "From the first email"),
+                                    suggested: { modelVM.filteredDateRange.0.map { Calendar.current.startOfDay(for: $0) } ?? Calendar.current.startOfDay(for: Date()) })
                         .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
                     Text("–")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                         .accessibilityHidden(true)   // decorative; both dates are labelled
-                    ModernDateField(label: String(localized: "End date — hide emails newer than this (click for calendar)"), date: $modelVM.endDate)
+                    ModernDateField(label: String(localized: "End date — hide emails newer than this (click for calendar)"), date: $modelVM.endDate,
+                                    unboundedLabel: String(localized: "To the last email"),
+                                    suggested: { modelVM.filteredDateRange.1 ?? Date() })
                         .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
                     Spacer()
                 }
@@ -3534,7 +3538,14 @@ struct ContentView: View {
                 }
             }
         }
+        // iOS switch rows are taller: 90 pt showed two and a half rows, so the third looked cut off
+        // by the next section. A visible scroll bar says there is more.
+        #if os(iOS)
+        .frame(maxHeight: 170)
+        #else
         .frame(maxHeight: 90)
+        #endif
+        .scrollIndicators(.visible)
     }
 
     private var overlaySpinner: some View {
