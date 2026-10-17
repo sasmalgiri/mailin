@@ -88,12 +88,12 @@ struct AboutView: View {
                     featureRow(
                         icon: "gift.fill",
                         title: String(localized: "Free to Try, Flexible Upgrade"),
-                        description: String(localized: "Monthly or yearly — choose the plan that works for you.")
+                        description: String(localized: "Monthly, yearly or a one-time lifetime purchase — choose what works for you.")
                     )
                     featureRow(
                         icon: "lock.shield.fill",
                         title: String(localized: "Privacy First"),
-                        description: String(localized: "Zero data collection. On-device by default. Cloud AI is optional and user-controlled.")
+                        description: String(localized: "Zero data collection. Everything runs on your device; there is no cloud AI.")
                     )
                     featureRow(
                         icon: "swift",
@@ -102,8 +102,8 @@ struct AboutView: View {
                     )
                     featureRow(
                         icon: "brain.head.profile",
-                        title: String(localized: "Hybrid AI — On-Device + Cloud"),
-                        description: String(localized: "MoE expert pipeline with Apple Intelligence, NLP, and optional OpenAI/Anthropic cloud AI.")
+                        title: String(localized: "On-Device AI"),
+                        description: String(localized: "Apple Intelligence and Apple's language frameworks on your device. Every answer lists the emails it came from.")
                     )
                     featureRow(
                         icon: "envelope.open.fill",
@@ -113,7 +113,7 @@ struct AboutView: View {
                     featureRow(
                         icon: "lock.shield.fill",
                         title: String(localized: "Offline & Private"),
-                        description: String(localized: "No account, no mail servers, no data collection. Your archive stays on your device by default — optional Cloud AI is opt-in.")
+                        description: String(localized: "No account, no mail servers, no data collection. Your archive never leaves your device.")
                     )
                     // D1: state what the PLATFORM enforces for this build, read
                     // from its own signed entitlements — not what the app

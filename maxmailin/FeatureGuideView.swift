@@ -14,7 +14,10 @@ import SwiftUI
 extension FeatureTutorial {
     /// The complete catalog (every tutorial the app ships).
     static let allFeatures: [FeatureTutorial] = [
-        .general, .workCenter, .workflows, .emailTags, .piiReport, .emailHistory, .emailAnalytics, .emailTimeline, .communicationPatterns,
+        .general, .workCenter, .workflows,
+        // 3.0 (audit 2026-10-17)
+        .deletedMailRecovery, .scannedAttachments, .otherApps, .scriptsAndShortcuts, .reviewTogether, .hiddenTimestamps,
+        .emailTags, .piiReport, .emailHistory, .emailAnalytics, .emailTimeline, .communicationPatterns,
         .relationshipGraph, .executiveDashboard, .aiAssistant, .aiDigest,
         .knowledgeGraph, .threadSummarizer, .anomalyDetection, .iocExtractor,
         .keywordMonitor, .duplicateManager, .nearDuplicates, .topicClusters,

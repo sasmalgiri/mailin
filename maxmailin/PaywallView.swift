@@ -908,7 +908,7 @@ struct PlanAndPurchasesSection: View {
         return store.license.summary
         #else
         switch store.effectiveTier {
-        case .free: return String(localized: "No purchase. Import up to 100 MB, browse the first 500 results of any list or search, 5 Ask queries a day.")
+        case .free: return String(localized: "No purchase. Import up to 100 MB and work with the newest 500 emails of your archive; 5 Ask queries a day.")
         case .personal, .professional:
             if store.isLifetimePurchase { return String(localized: "Lifetime purchase: yours permanently, never renews.") }
             return String(localized: "Subscription")

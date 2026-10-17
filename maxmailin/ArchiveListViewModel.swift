@@ -79,14 +79,22 @@ final class ArchiveListViewModel: ObservableObject {
     /// shell sets it from the store manager and reloads when the tier changes.
     @Published var accessLimit: Int? = nil
 
+    /// Under a tier limit: how many of the query's rows lie inside it (the newest N of the
+    /// archive), counted by the data layer. A search with 50 matches of which 30 are among the
+    /// newest 500 reaches 30 — `min(50, 500)` said 50 while 30 rows loaded.
+    @Published private(set) var reachableCount: Int? = nil
+
     /// True when the current query has rows the tier cannot reach.
     var isAccessLimited: Bool {
-        guard let accessLimit else { return false }
-        return totalCount > accessLimit
+        guard accessLimit != nil else { return false }
+        return accessibleCount < totalCount
     }
 
     /// Rows of the current query the tier can reach.
-    var accessibleCount: Int { min(totalCount, accessLimit ?? Int.max) }
+    var accessibleCount: Int {
+        guard let accessLimit else { return totalCount }
+        return min(reachableCount ?? totalCount, accessLimit, totalCount)
+    }
 
     /// Cuts a fetched page at the access limit. Pages before the limit are
     /// full, so the depth of page `index` is `index * pageSize`; the page that
@@ -138,10 +146,12 @@ final class ArchiveListViewModel: ObservableObject {
             // "First 500 of 526" from it, while the pages themselves come
             // through the tier's scope.
             let count = try await archive.unscopedCount(query: query)
+            let reachable = accessLimit == nil ? nil : try await archive.count(query: query)
             let fetched = try await fetchPage(startingAt: nil)
             guard revision == queryRevision else { return }
             let (batch, next) = clampToAccessLimit(fetched.batch, next: fetched.next, pageIndex: 0)
             totalCount = count
+            reachableCount = reachable
             startCursor[0] = .some(nil)
             nextCursorByPage[0] = next
             lastDiscoveredPage = 0

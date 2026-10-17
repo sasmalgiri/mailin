@@ -1184,7 +1184,7 @@ struct SettingsView: View {
                         }
                     }
                 ))
-                    .help("Activates evidence integrity features: hash verification, audit logging, evidence tagging, and disables cloud AI")
+                    .help("Activates evidence integrity features: hash verification, audit logging and evidence tagging")
                     .accessibilityLabel("Forensic mode")
 
                 Toggle("Auto-advance after tagging", isOn: $autoAdvanceAfterTag)
@@ -1195,7 +1195,7 @@ struct SettingsView: View {
                     HStack(spacing: Spacing.xSmall) {
                         Image(systemName: "checkmark.shield.fill")
                             .foregroundColor(.green)
-                        Text("Active — All analysis on-device. Cloud AI disabled.")
+                        Text("Active — hash checks, the audit log and evidence tags are on.")
                             .font(Typography.caption1)
                             .foregroundColor(.green)
                     }
@@ -1205,7 +1205,7 @@ struct SettingsView: View {
                     .font(.headline)
             } footer: {
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                    Text("Forensic mode enables hash verification of source files, a full audit log, evidence tagging, and blocks cloud AI to maintain chain of custody.")
+                    Text("Forensic mode enables hash verification of source files, a full audit log and evidence tagging, to maintain the chain of custody. All analysis runs on this device, as always.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Text("Disclaimer: Forensic features are analytical tools and have NOT been independently validated for court admissibility. Verify all outputs independently before use in legal proceedings.")

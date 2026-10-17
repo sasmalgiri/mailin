@@ -246,7 +246,7 @@ struct AIAssistantView: View {
                 HStack(spacing: Spacing.xSmall) {
                     Image(systemName: "shield.checkered")
                         .foregroundColor(.orange)
-                    Text("Forensic Mode — Cloud AI disabled. All analysis is on-device only.")
+                    Text("Forensic Mode is on — all analysis runs on this device.")
                         .font(Typography.caption1)
                         .foregroundColor(.orange)
                     Spacer()
@@ -365,7 +365,7 @@ struct AIAssistantView: View {
                 Text("Unlock Apple Intelligence for richer AI answers")
                     .font(Typography.callout)
                     .fontWeight(.medium)
-                Text("Apple Intelligence is available on this Mac but not enabled yet. Enable it to get natural language summaries, deeper analysis, and conversational answers.")
+                Text("Apple Intelligence is available on this device but not enabled yet. Enable it to get natural language summaries, deeper analysis, and conversational answers.")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                     .fixedSize(horizontal: false, vertical: true)

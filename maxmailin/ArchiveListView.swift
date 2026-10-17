@@ -210,17 +210,17 @@ struct ArchiveListPane: View {
                     StoreManager.live?.requestPurchase(
                         .personal,
                         feature: String(localized: "Full Archive"),
-                        reason: "The Free plan browses the first \(model.accessibleCount) emails of any list or search. Personal and Professional browse all \(model.totalCount).",
+                        reason: "The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive: \(model.accessibleCount) of these \(model.totalCount) emails are among them. Personal and Professional include all of them.",
                         target: .main)
                 } label: {
-                    Label("First \(model.accessibleCount) of \(model.totalCount) emails · Unlock Full Archive",
+                    Label("\(model.accessibleCount) of \(model.totalCount) emails in the Free plan · Unlock Full Archive",
                           systemImage: "lock.fill")
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .padding(6)
-                .help("The Free tier browses the first \(model.accessibleCount) emails of any list. Personal and Professional browse the whole archive.")
+                .help("The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive. Personal and Professional include the whole archive.")
                 .accessibilityIdentifier("archive.list.count")
             } else {
                 Text("\(model.totalCount) emails")

@@ -184,7 +184,7 @@ struct AIInsightsPageView: View {
                 Divider()
                 Button("Delete the index", role: .destructive) { semanticIndex.deleteIndex() }
             }
-            Text("Sentence vectors for subject and preview, computed on this Mac; never sent anywhere. Lets Ask find messages that say the same thing in different words.")
+            Text("Sentence vectors for subject and preview, computed on this device; never sent anywhere. Lets Ask find messages that say the same thing in different words.")
         } label: {
             Label(semanticIndex.isEnabled ? (semanticIndex.isRunning ? "Indexing \(Int(semanticIndex.fraction * 100))%" : "Semantic index") : "Semantic index off",
                   systemImage: semanticIndex.isEnabled ? "point.3.connected.trianglepath.dotted" : "point.3.connected.trianglepath.dotted")

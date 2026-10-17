@@ -3641,11 +3641,11 @@ struct ContentView: View {
 
     private var personaPrivacyNote: String {
         switch personaManager.selectedPersona {
-        case .forensic: return String(localized: "All processing stays on-device. Cloud AI is disabled in forensic mode to maintain chain of custody.")
-        case .legal: return String(localized: "Documents never leave your Mac. Privilege review stays confidential.")
+        case .forensic: return String(localized: "All processing stays on this device, and forensic mode records each action to keep the chain of custody.")
+        case .legal: return String(localized: "Documents never leave your device. Privilege review stays confidential.")
         case .itAdmin: return String(localized: "All header analysis happens locally. No email content is transmitted externally.")
-        case .journalist: return String(localized: "Source material stays on your Mac. No data is shared with external servers.")
-        case .researcher: return String(localized: "Your corpus stays on your Mac. Analysis and citations are produced locally.")
+        case .journalist: return String(localized: "Source material stays on your device. No data is shared with external servers.")
+        case .researcher: return String(localized: "Your corpus stays on your device. Analysis and citations are produced locally.")
         case .personal, .general: return String(localized: "No data ever leaves your device. All analysis is performed locally.")
         }
     }

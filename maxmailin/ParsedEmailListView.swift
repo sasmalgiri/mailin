@@ -651,17 +651,17 @@ struct ParsedEmailListView: View {
                     storeManager.requestPurchase(
                         .personal,
                         feature: String(localized: "Full Archive"),
-                        reason: "The Free plan browses the first \(model.displayedEmailCount) emails of any list or search. Personal and Professional browse all \(total).",
+                        reason: "The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive: \(model.displayedEmailCount) of these \(total) emails are among them. Personal and Professional include all of them.",
                         target: .main)
                 } label: {
-                    Label("First \(model.displayedEmailCount) of \(total) emails · Unlock Full Archive",
+                    Label("\(model.displayedEmailCount) of \(total) emails in the Free plan · Unlock Full Archive",
                           systemImage: "lock.fill")
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help("The Free tier browses the first \(model.displayedEmailCount) emails of any list. Personal and Professional browse the whole archive.")
+                .help("The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive. Personal and Professional include the whole archive.")
                 .accessibilityIdentifier("classic.list.accessLimit")
             }
 

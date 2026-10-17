@@ -392,7 +392,7 @@ class ParsedEmailListViewModel: ObservableObject {
     /// exactly what the user sees.
     var displayedEmailCount: Int {
         visibleEmails.count == residentEmails.count
-            ? max(min(queryTotalCount, pager.accessLimit ?? Int.max), visibleEmails.count)
+            ? max(pager.accessLimit == nil ? queryTotalCount : pager.accessibleCount, visibleEmails.count)
             : visibleEmails.count
     }
 

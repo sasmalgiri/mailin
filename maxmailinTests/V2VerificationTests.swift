@@ -4979,6 +4979,45 @@ final class FreePlanClassicListTests: XCTestCase {
         XCTAssertEqual(vm.displayedEmailCount, 526)
         XCTAssertNil(vm.accessLimitedTotal)
     }
+
+    /// A search under the Free limit counts only its matches among the newest 500: here 50
+    /// emails match, the 26 oldest are outside the limit, so 24 are reachable (it said 50).
+    private func rfc2822(_ seconds: Double) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        return f.string(from: Date(timeIntervalSince1970: seconds))
+    }
+
+    func testFreePlan_searchCountsOnlyMatchesInsideTheNewest500() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-freesearch-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        // i = 0 is the oldest. Emails 0..<50 carry the subject "Quarterly match".
+        let emails = (0..<526).map { i in
+            MBOXParser.RawEmail(headers: ["Message-ID": "<fs-\(i)@t>", "Subject": i < 50 ? "Quarterly match \(i)" : "Other \(i)",
+                                          "From": "a@b.com", "To": "c@d.com", "Date": rfc2822(1_700_000_000 + Double(i) * 3600)],
+                                rawSource: "", messageType: "received", attachments: [],
+                                timestamp: ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1_700_000_000 + Double(i) * 3600)),
+                                domains: [], plainBody: "b", htmlBody: "")
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 200, progress: nil)
+        archive.accessLimit = StoreManager.freeEmailLimit
+        let list = ArchiveListViewModel(archive: archive, pageSize: 100, maxRetained: 500)
+        list.accessLimit = StoreManager.freeEmailLimit
+        var q = EmailQuery.all
+        q.subjectContains = "Quarterly match"
+        await list.setQuery(q)
+        XCTAssertEqual(list.totalCount, 50)
+        XCTAssertEqual(list.accessibleCount, 24, "only the matches inside the newest 500")
+        XCTAssertTrue(list.isAccessLimited)
+        XCTAssertEqual(list.summaries.count, 24, "the rows that load agree with the count")
+    }
 }
 
 // MARK: - Older exports report their real outcome (2026-10-16)
