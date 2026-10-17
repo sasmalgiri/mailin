@@ -5097,3 +5097,25 @@ final class SearchFieldWiringTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Errors shown to people say what went wrong (2026-10-17)
+
+final class ErrorDescriptionTests: XCTestCase {
+    /// `localizedDescription` ignores `CustomStringConvertible`; these types showed
+    /// "The operation couldn't be completed (… error N)" instead of their own message.
+    func testErrorTypes_showTheirOwnMessage() {
+        let errors: [(Error, String)] = [
+            (FileUtilsError.fileNotFound, "File not found"),
+            (EmailExtractionError.invalidEmail, "Invalid email format."),
+            (ZIPArchiveReader.ReadError.notAZip, "Not a ZIP archive"),
+            (EmailRepositoryError.staleSearchCursor, "The search changed"),
+            (ArchiveComparisonEngine.EngineError.sqlite("disk full"), "disk full"),
+        ]
+        for (error, expected) in errors {
+            let text = error.localizedDescription
+            XCTAssertTrue(text.contains(expected), "\(type(of: error)): \(text)")
+            XCTAssertFalse(text.contains("couldn’t be completed") || text.contains("couldn't be completed"), text)
+        }
+        XCTAssertTrue(StoreManager.StoreError.verificationFailed.localizedDescription.contains("Restore Purchases"))
+    }
+}
