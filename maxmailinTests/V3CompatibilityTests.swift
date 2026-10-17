@@ -543,7 +543,12 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: perBatchEmail * 80), 80, "in between: what fits")
         XCTAssertEqual(AdaptiveBatch.size(requested: 5, available: 0), 5, "never larger than the tool asked for")
         XCTAssertEqual(AdaptiveBatch.size(requested: 5, available: 64 * 1_073_741_824), 5)
-        XCTAssertGreaterThan(AdaptiveBatch.availableBytes(), 0, "this machine reports free memory")
+        // os_proc_available_memory() is 0 in the iOS simulator (no memory limit applies there), so
+        // the live reading is only meaningful on a Mac or a device.
+        #if !targetEnvironment(simulator)
+        XCTAssertGreaterThan(AdaptiveBatch.availableBytes(), 0,
+            "this machine reports free memory (physical \(ProcessInfo.processInfo.physicalMemory >> 20) MB, footprint \(currentFootprintBytes() >> 20) MB)")
+        #endif
     }
 
     // MARK: - F4: review workspaces in the database

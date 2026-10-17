@@ -24,9 +24,9 @@
 import Foundation
 import SwiftUI
 import CryptoKit
+import os
 #if os(iOS)
 import BackgroundTasks
-import os
 #endif
 
 // MARK: - Receipt
