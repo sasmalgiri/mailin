@@ -5032,3 +5032,29 @@ final class ExportOutcomeReceiptTests: XCTestCase {
         XCTAssertEqual(receipt.errorMessage, "Writer error")
     }
 }
+
+// MARK: - Every list search field re-queries as you type (2026-10-16)
+
+final class SearchFieldWiringTests: XCTestCase {
+
+    /// The iPad layout had its own field bound to the list's search text without the
+    /// `searchTextDidChange()` call, so typing never filtered (only Apply did) while each row was
+    /// labelled "Body". Every field bound to that text must trigger the re-query.
+    func testEveryFieldBoundToTheListSearchText_requeriesOnChange() throws {
+        let appDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        for (file, binding) in [("ContentView.swift", "text: $modelVM.searchText"),
+                                ("ParsedEmailListView.swift", "text: $model.searchText")] {
+            let lines = try String(contentsOf: appDir.appendingPathComponent(file), encoding: .utf8)
+                .components(separatedBy: "\n")
+            let hits = lines.indices.filter { lines[$0].contains("TextField") && lines[$0].contains(binding) }
+            XCTAssertFalse(hits.isEmpty, "\(file): expected a search field")
+            for i in hits {
+                let after = lines[i..<min(lines.count, i + 8)].joined(separator: "\n")
+                XCTAssertTrue(after.contains("searchTextDidChange()"),
+                              "\(file):\(i + 1) — this search field never re-queries the archive")
+            }
+        }
+    }
+}

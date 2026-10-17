@@ -1694,6 +1694,10 @@ struct ContentView: View {
                                 .foregroundColor(AppColors.secondary)
                             TextField("Search emails...", text: $modelVM.searchText)
                                 .textFieldStyle(.plain)
+                                // As the iPhone list's field does: re-query the archive as you type.
+                                // Without it the iPad list never filtered (only Apply did), while
+                                // every row was labelled "Body" for the typed word.
+                                .onChange(of: modelVM.searchText) { _, _ in modelVM.searchTextDidChange() }
                         }
                         .padding(.horizontal, Spacing.small)
                         .padding(.vertical, Spacing.xSmall)
