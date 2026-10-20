@@ -5130,3 +5130,21 @@ final class DateFieldUnboundedTests: XCTestCase {
         XCTAssertFalse(ModernDateField.isUnbounded(Date(timeIntervalSince1970: 0)))   // 1970: a real old email
     }
 }
+
+// 3.0.2 (store-page languages only) must not open an empty What's New for 3.0.1 users, while someone
+// updating straight from 2.0 still sees the 3.0 notes and a first launch still sees them all.
+final class WhatsNewGateTests: XCTestCase {
+    func testNoNotesForThisVersionDoesNotInterrupt() {
+        XCTAssertFalse(WhatsNewView.shouldShow(current: "3.0.2", lastSeen: "3.0.1"))
+    }
+
+    func testUnseenNotesStillShow() {
+        XCTAssertTrue(WhatsNewView.shouldShow(current: "3.0.2", lastSeen: "2.0"))
+        XCTAssertTrue(WhatsNewView.shouldShow(current: "3.0.1", lastSeen: "3.0"))
+        XCTAssertTrue(WhatsNewView.shouldShow(current: "3.0.2", lastSeen: ""))
+    }
+
+    func testSameVersionNeverShows() {
+        XCTAssertFalse(WhatsNewView.shouldShow(current: "3.0.2", lastSeen: "3.0.2"))
+    }
+}

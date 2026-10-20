@@ -106,7 +106,19 @@ struct WhatsNewView: View {
     static func shouldShow() -> Bool {
         let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let lastSeen = UserDefaults.standard.string(forKey: "lastSeenVersion") ?? ""
-        return lastSeen != current
+        return shouldShow(current: current, lastSeen: lastSeen)
+    }
+
+    /// Shows on a first launch, and after an update only when there are release notes the person has
+    /// not seen yet (a version newer than `lastSeen`, up to `current`). A store-page-only release with no
+    /// notes of its own (3.0.2) does not interrupt anyone; someone jumping from 2.0 still sees the 3.0 notes.
+    static func shouldShow(current: String, lastSeen: String) -> Bool {
+        guard lastSeen != current else { return false }
+        guard !lastSeen.isEmpty else { return true }
+        return releaseNotes.contains {
+            $0.version.compare(lastSeen, options: .numeric) == .orderedDescending
+                && $0.version.compare(current, options: .numeric) != .orderedDescending
+        }
     }
 }
 
