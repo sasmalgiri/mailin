@@ -37,7 +37,7 @@ comparison, smart alerts, biometric lock, Spotlight.
 | Support URL | https://sasmalgiri.github.io/mailin/support/ — only change if getmailin.app serves the same pages |
 | Marketing URL | https://sasmalgiri.github.io/mailin/ |
 | Privacy Policy URL | https://sasmalgiri.github.io/mailin/privacy |
-| Copyright | © 2026 EcoSanskriti Innovation Pvt Ltd (the developer named in the Terms of Use) |
+| Copyright | © 2026 Shrabani Sasmal (the App Store seller and the developer named in the Terms of Use, since 3.0.2) |
 | Age rating | 4+ (unchanged) |
 | App Privacy | Data Not Collected (unchanged) |
 | Sign-in | not required |

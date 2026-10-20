@@ -5148,3 +5148,17 @@ final class WhatsNewGateTests: XCTestCase {
         XCTAssertFalse(WhatsNewView.shouldShow(current: "3.0.2", lastSeen: "3.0.2"))
     }
 }
+
+// About names the App Store seller (Shrabani Sasmal), in every shipped language.
+final class AboutCopyrightTests: XCTestCase {
+    func testCopyrightNamesTheSellerInTranslations() throws {
+        let key = "\u{00A9} 2025-2026 Shrabani Sasmal. All rights reserved."
+        for lang in ["de", "fr", "hi", "zh-Hans"] {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"), "\(lang).lproj missing")
+            let value = try XCTUnwrap(Bundle(path: path)).localizedString(forKey: key, value: "MISSING", table: nil)
+            XCTAssertNotEqual(value, "MISSING", lang)
+            XCTAssertTrue(value.contains("Shrabani Sasmal"), "\(lang): \(value)")
+            XCTAssertFalse(value.contains("EcoSanskriti"), lang)
+        }
+    }
+}
