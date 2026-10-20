@@ -722,6 +722,76 @@ DEVONthink is a trademark of DEVONtechnologies, LLC. Outlook is a trademark of M
 
 ---
 
+## What's New in This Version (3.0.2) — every language, iOS and macOS
+
+**English (U.S.)**
+```
+• The App Store page is now in 11 languages, like the app itself: German, Spanish, French, Italian, Brazilian Portuguese, Hindi, Japanese, Korean and Chinese (Simplified and Traditional).
+• The What's New screen now opens only when there is something new to show.
+```
+
+**German (de-DE)**
+```
+• Die App-Store-Seite gibt es jetzt in 11 Sprachen – wie die App selbst.
+• „Neuerungen in mailin“ erscheint nur noch, wenn es wirklich etwas Neues gibt.
+```
+
+**Spanish (es-ES and es-MX)**
+```
+• La página del App Store ya está en 11 idiomas, como la propia app.
+• La pantalla de novedades solo aparece cuando hay algo nuevo que mostrar.
+```
+
+**French (fr-FR)**
+```
+• La page App Store est désormais disponible en 11 langues, comme l'app elle-même.
+• L'écran des nouveautés ne s'affiche plus que lorsqu'il y a du nouveau.
+```
+
+**Italian (it)**
+```
+• La pagina dell'App Store è ora in 11 lingue, come l'app.
+• La schermata delle novità compare solo quando c'è qualcosa di nuovo.
+```
+
+**Portuguese (Brazil) (pt-BR)**
+```
+• A página da App Store agora está em 11 idiomas, como o próprio app.
+• A tela de novidades só aparece quando há algo novo para mostrar.
+```
+
+**Hindi (hi)**
+```
+• App Store पेज अब 11 भाषाओं में है, ठीक ऐप की तरह।
+• "नया क्या है" स्क्रीन अब तभी खुलती है जब दिखाने के लिए कुछ नया हो।
+```
+
+**Japanese (ja)**
+```
+• App Storeのページが、アプリと同じく11言語に対応しました。
+• 「新機能」画面は、新しいお知らせがあるときだけ表示されるようになりました。
+```
+
+**Korean (ko)**
+```
+• 이제 App Store 페이지도 앱처럼 11개 언어로 제공됩니다.
+• '새로운 기능' 화면은 새로 알려 드릴 내용이 있을 때만 나타납니다.
+```
+
+**Chinese, Simplified (zh-Hans)**
+```
+• App Store 页面现已和 App 一样支持 11 种语言。
+• 只有在有新内容时才会显示“新功能”页面。
+```
+
+**Chinese, Traditional (zh-Hant)**
+```
+• App Store 頁面現已和 App 一樣支援 11 種語言。
+• 只有在有新內容時才會顯示「新功能」頁面。
+```
+
+---
+
 ## Custom Product Pages
 
 ### Legal and forensic
