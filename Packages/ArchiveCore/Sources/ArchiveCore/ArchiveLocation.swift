@@ -235,7 +235,12 @@ struct ArchiveLocationStore: Sendable {
         guard let bookmark = location.bookmark else { return nil }
         var isStale = false
         #if os(macOS)
-        let options: URL.BookmarkResolutionOptions = [.withSecurityScope]
+        // Never mount and never prompt: resolving a bookmark to a disk image that
+        // is not attached otherwise mounts it (an encrypted one asks for its
+        // password before the window appears). A volume that is not connected
+        // means "use the copy on this Mac" (ArchiveLayout.resolveRoot), as
+        // designed. Found 2026-10-21 by the disk-image eject test.
+        let options: URL.BookmarkResolutionOptions = [.withSecurityScope, .withoutMounting, .withoutUI]
         #else
         let options: URL.BookmarkResolutionOptions = []
         #endif

@@ -375,8 +375,7 @@ enum ArchiveRelocator {
         guard let walker = fm.enumerator(at: from, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
                                          options: [.skipsHiddenFiles]) else { return }
         for case let item as URL in walker {
-            let relative = item.path.dropFirst(from.path.count).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let target = to.appendingPathComponent(relative)
+            let target = to.appendingPathComponent(try relativePath(of: item, under: from))
             let values = try item.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
             if values.isDirectory == true {
                 try fm.createDirectory(at: target, withIntermediateDirectories: true)
@@ -387,6 +386,21 @@ enum ArchiveRelocator {
         }
     }
 
+    /// `item`'s path inside `base`. Both are resolved first: the enumerator can
+    /// hand back `/private/var/…` for a root given as `/var/…` (a symlink), and
+    /// cutting one string's length off the other then lands mid-component, so
+    /// every file was copied to a folder that does not exist. Found 2026-10-21
+    /// running the move outside the sandbox; inside it the container path has
+    /// no symlink, which is why the app-hosted tests passed.
+    static func relativePath(of item: URL, under base: URL) throws -> String {
+        let itemParts = item.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let baseParts = base.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard itemParts.count > baseParts.count, Array(itemParts.prefix(baseParts.count)) == baseParts else {
+            throw RelocationError.verificationFailed("\(item.path) is not inside \(base.path)")
+        }
+        return itemParts.dropFirst(baseParts.count).joined(separator: "/")
+    }
+
     private static func verifyTree(source: URL, destination: URL) throws {
         let fm = FileManager.default
         guard let walker = fm.enumerator(at: source, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
@@ -394,7 +408,7 @@ enum ArchiveRelocator {
         for case let item as URL in walker {
             let values = try item.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
             guard values.isDirectory != true else { continue }
-            let relative = item.path.dropFirst(source.path.count).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let relative = try relativePath(of: item, under: source)
             let target = destination.appendingPathComponent(relative)
             let copied = try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize
             guard let copied, copied == values.fileSize else {
