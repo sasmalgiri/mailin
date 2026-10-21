@@ -214,8 +214,17 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         switch self {
         // The engines added in this release cycle. None has been run against a
         // real archive yet, so none of them changes behaviour on install.
+        // M5 (owner, 2026-10-21): "Archive on another volume" is on by default on
+        // the Mac after the disk-image run (RelocationVolumeTests: move, verify,
+        // forced eject, fallback, re-attach), which found and fixed two bugs.
+        // iPhone and iPad reach external drives through the Files picker, which
+        // that run does not cover, so they keep it opt-in.
         case .externalStorage:
+            #if os(macOS)
+            return .stable
+            #else
             return .preview
+            #endif
         // S4 verdict (owner, 2026-09-27): the offset engine is 3.0's default
         // import engine — equal throughput to the streaming parser on the
         // 1.5 GB real-content run, imports the >100 MB messages the streaming

@@ -84,15 +84,20 @@ final class CapabilityMatrixTests: XCTestCase {
     /// 2026-09-26) promoted the offset engine, locator reads and the blob tier
     /// to the default, and the guided import sheet and import queue shipped
     /// as the one import path (A-4/A-5); the streaming parser stays as the
-    /// fallback. External storage is still opt-in.
-    func testUnprovenEnginesAreOffByDefault() {
+    /// fallback.
+    /// External storage: promoted on macOS 2026-10-21 (disk-image run), still
+    /// opt-in on iPhone and iPad, whose external drives that run does not cover.
+    func testExternalStorageDefaultIsPerPlatform() {
         let registry = freshRegistry()
-        for capability in [Capability.externalStorage] {
-            XCTAssertFalse(capability.defaultsOn,
-                           "\(capability.rawValue) is unproven and must default off")
-            XCTAssertFalse(registry.isOn(capability),
-                           "\(capability.rawValue) must be off on a fresh install")
-        }
+        #if os(macOS)
+        XCTAssertEqual(Capability.externalStorage.maturity, .stable)
+        XCTAssertTrue(Capability.externalStorage.defaultsOn)
+        XCTAssertTrue(registry.isOn(.externalStorage), "on for a fresh Mac install")
+        #else
+        XCTAssertEqual(Capability.externalStorage.maturity, .preview)
+        XCTAssertFalse(Capability.externalStorage.defaultsOn)
+        XCTAssertFalse(registry.isOn(.externalStorage), "opt-in on iPhone and iPad")
+        #endif
     }
 
     /// The 3.0 defaults, pinned so a change is a decision and not an accident.
@@ -269,7 +274,11 @@ final class CapabilityMatrixTests: XCTestCase {
         // streaming parser remains available as the fallback.
         XCTAssertTrue(registry.isOn(.batesNumbering))
         XCTAssertTrue(registry.isOn(.offsetParser))
+        #if os(macOS)
+        XCTAssertTrue(registry.isOn(.externalStorage))
+        #else
         XCTAssertFalse(registry.isOn(.externalStorage))
+        #endif
     }
 
     /// A capability added by a LATER build must arrive at its own default, not
