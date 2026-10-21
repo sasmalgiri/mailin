@@ -45,6 +45,16 @@ final class AccessibilityAuditUITests: XCTestCase {
     /// there; it is audited on its own while it is in front.
     private func audit(_ surface: String, within: CGRect? = nil) -> [String] {
         var issues: [String] = []
+        #if os(macOS)
+        // Park the pointer on the title bar first: a row under the pointer gets
+        // the hover highlight, and Apple's contrast check then flagged that one
+        // email row while its twin measured 14.9:1 (2026-10-21, the pointer had
+        // been left over the list). The audit judges the app, not the mouse.
+        if let window = app.windows.allElementsBoundByIndex.first(where: { $0.frame.width > 0 }) {
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.0)).withOffset(CGVector(dx: 0, dy: 12)).hover()
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        #endif
         let windowFrames = app.windows.allElementsBoundByIndex.map(\.frame)
         let scrollFrames = app.scrollViews.allElementsBoundByIndex.map(\.frame)
         // Named containers: an unnamed group of exactly the same rectangle is
