@@ -13,6 +13,8 @@ import SwiftUI
 /// height when no search is running.
 struct SearchMatchFieldChips: View {
     let fields: [SearchMatchField]
+    /// `.increased` on the iPad's open-email row (white on deep blue).
+    @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
         if !fields.isEmpty {
@@ -21,10 +23,14 @@ struct SearchMatchFieldChips: View {
                     Label(field.label, systemImage: field.symbol)
                         .labelStyle(.titleAndIcon)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        // On the blue open-email row: white on a lighter capsule
+                        // (navy on blue measured 2.3:1). Elsewhere 75 % primary,
+                        // not system secondary grey (3.9:1 on its capsule).
+                        .foregroundStyle(prominence == .increased ? Color.white : Color.primary.opacity(0.75))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
-                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                        .background(prominence == .increased ? Color.white.opacity(0.22) : Color.secondary.opacity(0.12),
+                                    in: Capsule())
                 }
             }
             .help("Where this search matched")

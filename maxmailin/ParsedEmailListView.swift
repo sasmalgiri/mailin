@@ -3361,6 +3361,9 @@ struct EmailRowView: View {
     var searchText: String = ""
     var showRiskIndicator: Bool = false
     @Environment(\.windowSizeClass) private var sizeClass
+    /// `.increased` when the row is drawn on the open-email fill (iPad list):
+    /// every line then turns white instead of keeping its usual dark colours.
+    @Environment(\.backgroundProminence) private var prominence
     @AppStorage("emailListDensity") private var density = "comfortable"
     @AppStorage("showEmailPreviews") private var showPreviews = true
 
@@ -3407,19 +3410,30 @@ struct EmailRowView: View {
         #endif
     }
 
+    /// The open email's row on iPad. Deeper than the system blue so white text
+    /// passes 4.5:1 (5.8:1; the preview line at 90 % white about 4.8:1), where
+    /// white on #0088FF is only 3.5:1. Outside `#if os(iOS)` so the Mac test
+    /// target can check the contrast.
+    static let openRowFill = Color(red: 0, green: 0x62 / 255, blue: 0xCC / 255)
+
     #if os(iOS)
+    private var onFill: Bool { prominence == .increased }
+    private var primaryText: Color { onFill ? .white : .primary }
+    private var secondaryText: Color { onFill ? .white.opacity(0.9) : .secondary }
+
     private var iOSRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Row 1: Sender
             Text(senderName)
                 .font(.body)
                 .fontWeight(.semibold)
+                .foregroundColor(primaryText)
                 .lineLimit(1)
 
             // Row 2: Subject
             Text(email.headers["Subject"] ?? "(No Subject)")
                 .font(.subheadline)
-                .foregroundColor(.primary)
+                .foregroundColor(primaryText)
                 .lineLimit(2)
 
             SearchMatchFieldChips(fields: matchedFields)
@@ -3431,7 +3445,7 @@ struct EmailRowView: View {
                 if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
                     Text(preview)
                         .font(.footnote)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(secondaryText)
                         .lineLimit(2)
                 }
             }
@@ -3440,7 +3454,7 @@ struct EmailRowView: View {
             HStack(spacing: 8) {
                 Text(parseDate(email.headers["Date"]))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(secondaryText)
 
                 if !email.attachments.isEmpty {
                     HStack(spacing: 2) {
@@ -3449,7 +3463,7 @@ struct EmailRowView: View {
                         Text("\(email.attachments.count)")
                             .font(.caption2)
                     }
-                    .foregroundColor(.secondary)
+                    .foregroundColor(secondaryText)
                 }
 
                 if email.messageType == "sent" {
@@ -3459,7 +3473,7 @@ struct EmailRowView: View {
                         Text("Sent")
                             .font(.caption2)
                     }
-                    .foregroundColor(.blue)
+                    .foregroundColor(onFill ? .white : .blue)
                 }
 
                 Spacer()

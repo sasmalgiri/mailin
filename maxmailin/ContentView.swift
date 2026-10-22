@@ -1704,8 +1704,18 @@ struct ContentView: View {
                         .background(AppColors.backgroundSecondary)
 
                         List(modelVM.visibleEmails, id: \.id, selection: $iPadSelectedEmailID) { email in
+                            // The open email stays blue. iPadOS greys the system
+                            // selection as soon as the reading pane takes focus (or
+                            // a scroll hands focus away), and tapping the same row
+                            // again does not bring it back — the open email looked
+                            // deselected (2026-10-18 simulator run). The row draws
+                            // the emphasized look itself; the List keeps the real
+                            // selection, so hardware-keyboard arrows still work.
+                            let isOpen = email.id == iPadSelectedEmailID
                             EmailRowView(email: email, searchText: modelVM.isNaturalLanguageMode ? "" : modelVM.searchText, showRiskIndicator: forensicManager.isEnabled)
                                 .padding(.vertical, Spacing.xxxSmall)
+                                .environment(\.backgroundProminence, isOpen ? .increased : .standard)
+                                .listRowBackground(isOpen ? EmailRowView.openRowFill : nil)
                                 .tag(email.id)
                                 .onAppear { modelVM.loadMoreIfNeeded(currentID: email.id) }
                         }

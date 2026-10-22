@@ -9,6 +9,7 @@
 //
 
 import XCTest
+import SwiftUI
 @testable import maxmailin
 
 private func email(from: String = "Alice Example <alice@example.com>",
@@ -126,5 +127,35 @@ final class SearchMatchFieldsTests: XCTestCase {
         XCTAssertEqual(terms.highlightTerms(for: .sender), ["alice", "budget"])
         XCTAssertEqual(terms.highlightTerms(for: .subject), ["report", "budget"])
         XCTAssertEqual(terms.highlightTerms(for: .body), ["budget"])
+    }
+}
+
+/// The iPad's open-email row draws white text on `EmailRowView.openRowFill`.
+/// WCAG AA needs 4.5:1 for body text; white on the system blue is only 3.5:1.
+final class OpenRowContrastTests: XCTestCase {
+
+    private func luminance(_ c: Color.Resolved) -> Double {
+        0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue)
+    }
+
+    private func contrast(_ a: Color.Resolved, _ b: Color.Resolved) -> Double {
+        let (l1, l2) = (luminance(a), luminance(b))
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
+
+    func testWhiteTextOnOpenRowPassesAA() {
+        let env = EnvironmentValues()
+        let fill = EmailRowView.openRowFill.resolve(in: env)
+        let white = Color.white.resolve(in: env)
+        XCTAssertGreaterThanOrEqual(contrast(white, fill), 4.5)
+
+        // The preview and date lines are 90 % white: blend over the fill.
+        func blend(_ f: Float, _ b: Float) -> Float { 0.9 * f + 0.1 * b }
+        // Composited in sRGB (gamma) space, as the system does.
+        let preview = Color.Resolved(colorSpace: .sRGB,
+                                     red: blend(white.red, fill.red),
+                                     green: blend(white.green, fill.green),
+                                     blue: blend(white.blue, fill.blue))
+        XCTAssertGreaterThanOrEqual(contrast(preview, fill), 4.5)
     }
 }
