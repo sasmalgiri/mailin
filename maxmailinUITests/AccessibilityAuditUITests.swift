@@ -201,6 +201,10 @@ final class AccessibilityAuditUITests: XCTestCase {
             return text.localizedCaseInsensitiveContains("no description") || text.localizedCaseInsensitiveContains("contrast")
                 ? "issue not attached to any element" : nil
         }
+        // Any attribute of an element that is gone (a transient view) throws
+        // "failed to get matching snapshot" and fails the test; 2026-10-22 it
+        // did so on `e.frame` below. Such an element has nothing to audit.
+        guard e.exists else { return "vanished between the audit and this check" }
         let unlabelled = e.label.isEmpty && e.identifier.isEmpty
         if e.elementType == .group, unlabelled, windowFrames.contains(where: { $0 == e.frame }) {
             return "window content root"
