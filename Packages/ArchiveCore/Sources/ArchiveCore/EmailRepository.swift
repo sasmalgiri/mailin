@@ -322,12 +322,20 @@ struct EmailStoreRepository: EmailRepository {
             let hasDates = query.afterDate != nil || query.beforeDate != nil
             // Fast path: pure text, no filters, and no trashed rows to
             // subtract → O(1)-memory FTS COUNT(*).
+            // Only when the index and the store hold the same number of rows:
+            // an index entry whose email is no longer in the store (a ghost row)
+            // would otherwise be counted — 6 for a search whose list showed 3
+            // (2026-10-21, iPad simulator: 16 index rows over 8 emails). The
+            // exact path below verifies every hit against the store.
             if !hasDates && !query.hasStructuredFilters {
+                var trashed = 0
                 if let sqlite = store as? SQLiteEmailStore {
-                    let trashed = try await sqlite.reviewCount(of: .trashed)
-                    if trashed == 0 { return try await fts.countRaw(ftsQuery) }
-                } else {
-                    return try await fts.countRaw(ftsQuery)
+                    trashed = try await sqlite.reviewCount(of: .trashed)
+                }
+                if trashed == 0 {
+                    let indexed = try await fts.rowCount()
+                    let stored = try await store.count(after: nil, before: nil)
+                    if indexed == stored { return try await fts.countRaw(ftsQuery) }
                 }
             }
             // §14.2 EXACT text(+date/filter) count: stream the ranked cursor
