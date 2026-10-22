@@ -2481,7 +2481,7 @@ struct ParsedEmailListView: View {
 
     #if os(iOS)
     private func iOSEmailRow(for email: MBOXParser.RawEmail) -> some View {
-        EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+        EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
@@ -2596,7 +2596,7 @@ struct ParsedEmailListView: View {
                     .help("Medium priority")
             }
 
-            EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+            EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let label = predictiveEngine.predictionLabel(for: email.id) {

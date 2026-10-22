@@ -1712,7 +1712,7 @@ struct ContentView: View {
                             // the emphasized look itself; the List keeps the real
                             // selection, so hardware-keyboard arrows still work.
                             let isOpen = email.id == iPadSelectedEmailID
-                            EmailRowView(email: email, searchText: modelVM.isNaturalLanguageMode ? "" : modelVM.searchText, showRiskIndicator: forensicManager.isEnabled)
+                            EmailRowView(email: email, searchText: modelVM.isNaturalLanguageMode ? "" : modelVM.windowSearchText, showRiskIndicator: forensicManager.isEnabled)
                                 .padding(.vertical, Spacing.xxxSmall)
                                 .environment(\.backgroundProminence, isOpen ? .increased : .standard)
                                 .listRowBackground(isOpen ? EmailRowView.openRowFill : nil)
@@ -2924,6 +2924,51 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    /// "N Emails" and the AI-filter chip at the top of the sidebar summary.
+    private var summaryCountRow: some View {
+        HStack(spacing: Spacing.small) {
+            // Part G3: unfiltered → store-backed archive total; filtered →
+            // the visible (preview-backed) list count.
+            Label("\(modelVM.displayedEmailCount) Emails", systemImage: "chart.bar.fill")
+                .font(Typography.title3)
+                .foregroundColor(AppColors.secondary)
+                .contentTransition(.numericText())
+                .adaptiveAnimation(modelVM.displayedEmailCount)
+            if modelVM.aiPinnedIDs != nil {
+                Button {
+                    modelVM.aiPinnedIDs = nil
+                    modelVM.applyFilters()
+                } label: {
+                    Label("AI Filter", systemImage: "sparkles")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)))
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear AI filter")
+            }
+        }
+    }
+
+    /// The date span of the listed emails, or nothing while there are none.
+    @ViewBuilder
+    private var summaryDateRange: some View {
+        if let start = modelVM.filteredDateRange.0, let end = modelVM.filteredDateRange.1 {
+            Text("\(formatted(start)) – \(formatted(end))")
+                .font(Typography.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(AppColors.info)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .padding(Spacing.xxSmall)
+        }
+    }
+
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
             if viewModel.duplicatesRemoved > 0 && personaManager.showSection(.summary) {
@@ -2943,41 +2988,18 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .help("View removed duplicates")
             }
-            HStack(spacing: Spacing.small) {
-                // Part G3: unfiltered → store-backed archive total; filtered →
-                // the visible (preview-backed) list count.
-                Label("\(modelVM.displayedEmailCount) Emails", systemImage: "chart.bar.fill")
-                    .font(Typography.title3)
-                    .foregroundColor(AppColors.secondary)
-                    .contentTransition(.numericText())
-                    .adaptiveAnimation(modelVM.displayedEmailCount)
-                if modelVM.aiPinnedIDs != nil {
-                    Button {
-                        modelVM.aiPinnedIDs = nil
-                        modelVM.applyFilters()
-                    } label: {
-                        Label("AI Filter", systemImage: "sparkles")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)))
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear AI filter")
+            // One line when the sidebar is wide enough; otherwise the date
+            // range gets its own line instead of being cut to "15 Jan 2025 – 19 J…"
+            // (iPad with three panes open, 2026-10-22).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Spacing.small) {
+                    summaryCountRow
+                    Spacer()
+                    summaryDateRange
                 }
-                Spacer()
-                if let start = modelVM.filteredDateRange.0, let end = modelVM.filteredDateRange.1 {
-                    Text("\(formatted(start)) – \(formatted(end))")
-                        .font(Typography.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(AppColors.info)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .padding(Spacing.xxSmall)
+                VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
+                    summaryCountRow
+                    summaryDateRange
                 }
             }
             if personaManager.showSection(.dateRange) {
@@ -3136,9 +3158,14 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: Spacing.xSmall) {
                         ForEach(modelVM.sortedSendersByReplyCount, id: \.email) { entry in
                             HStack {
-                                Text(entry.email.prefix(38))
+                                // The whole address; a narrow sidebar shortens it in the
+                                // middle so the name and the domain both stay readable
+                                // (a fixed 38-character cut lost "…com>").
+                                Text(entry.email)
                                     .font(Typography.caption1)
                                     .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(entry.email)
                                 Spacer()
                                 Text("\(entry.count)")
                                     .font(Typography.caption1)
@@ -3541,7 +3568,13 @@ struct ContentView: View {
                             modelVM.applyFilters()
                         }
                     )) {
-                        Text(item.prefix(38)).font(Typography.caption1)
+                        // The whole value, up to two lines, shortened in the middle
+                        // only if it still does not fit (a fixed 38-character cut
+                        // showed "<sarah.johnson@techcorp." at any width).
+                        Text(item)
+                            .font(Typography.caption1)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
                     }
                     .accessibilityLabel(String(localized: "Filter: \(Self.spokenAddress(item))"))
                     .help("Show only emails \(helpVerb) \(item) — check several to include all of them; searches the whole archive")

@@ -357,6 +357,12 @@ class ParsedEmailListViewModel: ObservableObject {
     /// The resident window after in-window refinements (review state, smart
     /// tags, operators, quick pickers) and sorting. What the list renders.
     @Published private(set) var visibleEmails: [MBOXParser.RawEmail] = []
+    /// The search the listed emails were paged for. `searchText` changes on
+    /// the keystroke while the old page is still listed; rows mark their
+    /// matched fields from this instead, so the old list never shows the new
+    /// search's chips (2026-10-22: every row read "Body" for a second).
+    @Published private(set) var windowSearchText: String = ""
+    private var pagedSearchText: String = ""
 
     /// Ordered ids of the visible window — detail-view navigation order.
     var visibleOrderedIDs: [UUID] { visibleEmails.map(\.id) }
@@ -661,6 +667,7 @@ class ParsedEmailListViewModel: ObservableObject {
         await refreshSenderAggregates()
         let compiled = pagerQuery
         lastPagedQuery = compiled
+        pagedSearchText = searchText
         // The plan's depth limit (Free = newest 500), so this list's counts and its "first 500 of
         // N" notice agree with the rows the data layer returns. Read on every reload, so a
         // purchase, expiry or restore takes effect at the next refresh.
@@ -691,6 +698,7 @@ class ParsedEmailListViewModel: ObservableObject {
         await refreshDerivedCoverageNotice()
         let compiled = pagerQuery
         lastPagedQuery = compiled
+        pagedSearchText = searchText
         await pager.setQuery(compiled)
         forwardPagesLoaded = 1
         guard revision == windowRevision else { return }
@@ -763,6 +771,7 @@ class ParsedEmailListViewModel: ObservableObject {
         let budgeted = Self.applyMemoryBudget(ids.compactMap { byID[$0] })
         deferredRawBytes = budgeted.deferred
         residentEmails = budgeted.emails
+        windowSearchText = pagedSearchText
         emailCount = residentEmails.count
         queryTotalCount = pager.totalCount
         // §19: review state for exactly this window (bounded read).
@@ -1129,6 +1138,10 @@ class ParsedEmailListViewModel: ObservableObject {
         if let lastPaged = lastPagedQuery, compiled != lastPaged {
             lastPagedQuery = compiled
             reloadPagesForQueryChange()
+        } else {
+            // Same pages (e.g. a regex refined in-window, or a never-paged
+            // VM): the listed emails already answer this search.
+            windowSearchText = searchText
         }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = parseSearchQuery(query)
