@@ -45,11 +45,11 @@ enum UITestSupport {
                 if ProcessInfo.processInfo.arguments.contains("-mailinSeedRecovery") {
                     emails += try recoverySamples()
                 }
-                _ = try await SQLiteEmailStore.shared.insertBatch(
+                let result = try await SQLiteEmailStore.shared.insertBatch(
                     emails, sourceFileHash: nil, accountID: nil,
                     sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
                     batchSize: 200, progress: nil)
-                try await FTSSearchIndex.shared.indexBatch(emails)
+                try await FTSSearchIndex.shared.indexBatch(result.inserted(from: emails))
                 NotificationCenter.default.post(name: .parsingFinished, object: nil)
             } catch {
                 // Seeding is best-effort; the UI test asserts on visible state.

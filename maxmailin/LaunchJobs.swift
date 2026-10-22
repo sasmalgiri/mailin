@@ -86,6 +86,13 @@ enum LaunchJobs {
                     _ = try? await FTSReconciler.reconcile(store: store, fts: .shared)
                 }
                 _ = try? await FTSSearchIndex.shared.dedupeShards()
+                // More index rows than emails after the dedupe: entries for
+                // emails the store never kept (older sample / intake / carve
+                // builds). Remove them so search counts stay on the fast path.
+                let indexedNow = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
+                if indexedNow > storeCount {
+                    _ = try? await FTSReconciler.pruneGhosts(store: store, fts: .shared)
+                }
                 await MainActor.run { modules.jobs.finish(id: "fts.reconcile") }
             }
             modules.jobs.register(id: "fts.reconcile", module: .archive, label: String(localized: "Reconcile store ↔ search index"),

@@ -756,7 +756,9 @@ class ContentViewModel: ObservableObject {
                 emails, sourceFileHash: nil, accountID: nil,
                 sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
                 batchSize: 200, progress: nil)
-            try await FTSSearchIndex.shared.indexBatch(emails)
+            // Only what the store wrote: loading the sample twice used to index
+            // the 8 skipped duplicates again (16 index rows over 8 emails).
+            try await FTSSearchIndex.shared.indexBatch(result.inserted(from: emails))
             _ = try? await ArchiveCorpusRevision.shared.bump()
             totalParsedCount = (try? await ArchiveDataService.shared.count()) ?? totalParsedCount
             isParsed = totalParsedCount > 0

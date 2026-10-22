@@ -131,7 +131,7 @@ struct RecoveryCenterView: View {
                 let r = try await ScopeJobEnvironment.store.insertBatch(
                     batch, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
                     dedupPolicy: .messageID, batchSize: 200, progress: nil)
-                try await FTSSearchIndex.shared.indexBatch(batch)
+                try await FTSSearchIndex.shared.indexBatch(r.inserted(from: batch))
                 added += r.insertedIDs.count
                 skipped += batch.count - r.insertedIDs.count
             }, progress: { done, total in

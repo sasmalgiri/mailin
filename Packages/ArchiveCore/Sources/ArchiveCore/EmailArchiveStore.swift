@@ -45,6 +45,14 @@ struct BatchInsertResult: Sendable {
     /// identity (deletion tombstone) — so re-importing a source never silently
     /// resurrects deleted mail. Cleared via "Forget deleted emails".
     var blockedByTombstoneIDs: [UUID] = []
+
+    /// The emails of `batch` this insert actually wrote — the only ones that
+    /// may be indexed. Indexing the whole batch turns every skipped duplicate
+    /// into a ghost search hit (its fresh UUID has no row in the store).
+    func inserted(from batch: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail] {
+        let ids = Set(insertedIDs)
+        return batch.filter { ids.contains($0.id) }
+    }
 }
 
 protocol EmailArchiveStore: Sendable {

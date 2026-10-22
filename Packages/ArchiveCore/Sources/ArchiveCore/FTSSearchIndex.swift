@@ -66,6 +66,36 @@ enum FTSQueryBuilder {
     }
 }
 
+extension FTSReconciler {
+    /// The reverse of `reconcile`: removes index entries whose email is not in
+    /// the store ("ghost rows"). Older builds indexed every email a sample /
+    /// intake / carve batch was handed, including the ones the store skipped as
+    /// duplicates, so a second sample load left 16 index rows over 8 emails
+    /// (2026-10-21). Walks each shard by rowid in pages of `pageSize`, checks
+    /// each page against the store, deletes the misses — memory stays flat at
+    /// any size. Returns the number of entries removed.
+    @discardableResult
+    static func pruneGhosts(store: any EmailArchiveStore, fts: FTSSearchIndex, pageSize: Int = 1_000) async throws -> Int {
+        var removed = 0
+        for year in try await fts.shardYears() {
+            var after: Int64 = 0
+            while true {
+                try Task.checkCancellation()
+                let page = try await fts.rowPage(year: year, afterRowID: after, limit: pageSize)
+                guard let last = page.last else { break }
+                let ids = page.compactMap(\.id)
+                let present = try await store.existingIDs(among: ids)
+                let ghosts = ids.filter { !present.contains($0) }
+                try await fts.delete(ids: ghosts, year: year)
+                removed += ghosts.count
+                after = last.rowID
+                if page.count < pageSize { break }
+            }
+        }
+        return removed
+    }
+}
+
 /// Bounded, restartable store→FTS reconciliation. Pages `EmailStore` by keyset
 /// cursor, checks the FTS registry per batch, indexes only genuinely-missing
 /// rows, and persists a cursor after each page. No archive-wide `Set<UUID>`, no
@@ -781,6 +811,54 @@ actor FTSSearchIndex {
             }
         }
         return removed
+    }
+
+    /// Every year-shard on disk, for walks that go one shard at a time.
+    func shardYears() throws -> [Int] {
+        try migrateLegacyIfNeeded()
+        return try discoverAllShardYears()
+    }
+
+    /// One keyset page of a shard's index rows, in rowid order. Bounded by
+    /// `limit`; rows whose id does not parse are returned with `id == nil` so
+    /// the walk still advances past them.
+    func rowPage(year: Int, afterRowID: Int64, limit: Int) throws -> [(rowID: Int64, id: UUID?)] {
+        try migrateLegacyIfNeeded()
+        let db = try ensureShard(year: year)
+        let stmt = try prepare(db, "SELECT rowid, email_id FROM email_search WHERE rowid > ? ORDER BY rowid LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, afterRowID)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var rows: [(rowID: Int64, id: UUID?)] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = sqlite3_column_text(stmt, 1).flatMap { UUID(uuidString: String(cString: $0)) }
+            rows.append((sqlite3_column_int64(stmt, 0), id))
+        }
+        return rows
+    }
+
+    /// Removes the given ids from one shard (content rows and registry) in a
+    /// single transaction — the bulk form of `delete(id:)` for the ghost prune.
+    func delete(ids: [UUID], year: Int) throws {
+        guard !ids.isEmpty else { return }
+        try migrateLegacyIfNeeded()
+        let db = try ensureShard(year: year)
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for table in ["email_search", "indexed_message"] {
+                let stmt = try prepare(db, "DELETE FROM \(table) WHERE email_id = ?;")
+                defer { sqlite3_finalize(stmt) }
+                for id in ids {
+                    sqlite3_reset(stmt)
+                    bindText(stmt, 1, id.uuidString)
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw FTSError.execFailed(lastError(db)) }
+                }
+            }
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
     }
 
     /// Total rows summed across every shard.
