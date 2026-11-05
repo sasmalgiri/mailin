@@ -28,7 +28,7 @@ enum DuplicateVerification {
 
     /// What differed between members of a group that did not verify.
     enum Difference: String, CaseIterable, Sendable {
-        case from, to, cc, bcc, date, subject, body, attachments
+        case from, to, cc, bcc, date, subject, body, structure, attachments
 
         var label: String {
             switch self {
@@ -39,22 +39,37 @@ enum DuplicateVerification {
             case .date: return String(localized: "date")
             case .subject: return String(localized: "subject")
             case .body: return String(localized: "body")
+            case .structure: return String(localized: "MIME structure")
             case .attachments: return String(localized: "attachments")
             }
         }
     }
 
+    /// DUP-03: the four classes, kept apart on screen and in what they allow.
     enum Verdict: Equatable, Sendable {
+        /// Every member's stored raw message hashes the same (line endings normalised).
         case byteIdentical
+        /// Content-equivalent as defined by `contentEquivalentDefinition`.
         /// `attachmentBytesCompared` is false when at least one attachment had
         /// no stored bytes, so only its name, type and size were compared.
         case contentEquivalent(attachmentBytesCompared: Bool)
+        /// Similar text above a threshold (near-duplicate engines) — never identical.
+        case similar(similarity: Double)
+        /// Grouped by a clue, but something named in `differences` differs.
         case candidate(differences: [Difference])
 
+        /// Only the two identical classes may be removed in bulk.
         var isVerified: Bool {
-            if case .candidate = self { return false }
-            return true
+            switch self {
+            case .byteIdentical, .contentEquivalent: return true
+            case .similar, .candidate: return false
+            }
         }
+    }
+
+    /// The explicit definition of the content-equivalent class (DUP-03).
+    static var contentEquivalentDefinition: String {
+        String(localized: "Content-equivalent: the same sender, recipients, Cc, Bcc, date, subject, whole body, MIME structure and attachment bytes — only the stored raw bytes differ (transport headers, line endings).")
     }
 
     struct Group: Identifiable, Sendable {
@@ -89,6 +104,11 @@ enum DuplicateVerification {
         check(.date) { dateKey($0.headers["Date"]) }
         check(.subject) { collapse($0.headers["Subject"] ?? "") }
         check(.body) { bodyKey($0) }
+        // MIME structure: which body parts exist and how many parts are
+        // attachments or inline (an HTML-only copy is not the plain copy).
+        check(.structure) { email in
+            "plain:\(!email.plainBody.isEmpty) html:\(!email.htmlBody.isEmpty) parts:\(email.attachments.count) inline:\(email.attachments.filter(\.isInline).count)"
+        }
 
         var bytesCompared = true
         let attachmentKeys = members.map { email -> String in
@@ -123,6 +143,34 @@ enum DuplicateVerification {
         groups.filter(\.verdict.isVerified).flatMap { $0.members.dropFirst().map(\.id) }
     }
 
+    /// DUP-04: which copy survives each group the selection touches. The
+    /// survivor is the first member the user did not tick; when every member
+    /// is ticked the first one stays (a group never loses all its copies).
+    static func plans(for selected: Set<UUID>, among groups: [[MBOXParser.RawEmail]]) -> [SQLiteEmailStore.DuplicateRemovalPlan] {
+        var plans: [SQLiteEmailStore.DuplicateRemovalPlan] = []
+        var planned = Set<UUID>()
+        for members in groups {
+            let ids = members.map(\.id)
+            let removed = ids.filter { selected.contains($0) && !planned.contains($0) }
+            guard !removed.isEmpty else { continue }
+            let survivor = ids.first { !selected.contains($0) } ?? ids[0]
+            let finalRemoved = removed.filter { $0 != survivor }
+            guard !finalRemoved.isEmpty else { continue }
+            planned.formUnion(finalRemoved)
+            plans.append(.init(survivor: survivor, removed: finalRemoved))
+        }
+        return plans
+    }
+
+    /// DUP-05: the survivor, described — who, when, where it lives.
+    static func survivorLine(_ members: [MBOXParser.RawEmail]) -> String {
+        guard let kept = members.first else { return "" }
+        var parts = [kept.headers["From"] ?? "", kept.timestamp].filter { !$0.isEmpty }
+        let folders = SQLiteEmailStore.folderPaths(for: kept)
+        if !folders.isEmpty { parts.append(String(localized: "in \(folders.joined(separator: ", "))")) }
+        return parts.joined(separator: " · ")
+    }
+
     /// One line naming what differs, for a candidate group's row.
     static func differenceLine(_ verdict: Verdict) -> String? {
         guard case .candidate(let differences) = verdict, !differences.isEmpty else { return nil }
@@ -138,8 +186,9 @@ enum DuplicateVerification {
     static func verifyArchiveWide(
         groups: [[UUID]],
         load: @escaping ([UUID]) async throws -> [MBOXParser.RawEmail]
-    ) async throws -> (removable: [UUID], verifiedGroups: Int, candidateGroups: Int) {
+    ) async throws -> (removable: [UUID], verifiedGroups: Int, candidateGroups: Int, plans: [SQLiteEmailStore.DuplicateRemovalPlan]) {
         var removable: [UUID] = []
+        var plans: [SQLiteEmailStore.DuplicateRemovalPlan] = []
         var verifiedGroups = 0
         var candidateGroups = 0
         var pending: [[UUID]] = []
@@ -155,7 +204,9 @@ enum DuplicateVerification {
                 guard members.count > 1 else { continue }
                 if verify(members).isVerified {
                     verifiedGroups += 1
-                    removable.append(contentsOf: members.dropFirst().map(\.id))
+                    let extra = members.dropFirst().map(\.id)
+                    removable.append(contentsOf: extra)
+                    plans.append(.init(survivor: members[0].id, removed: extra))
                 } else {
                     candidateGroups += 1
                 }
@@ -171,7 +222,7 @@ enum DuplicateVerification {
             if pendingCount >= 500 { try await flush() }
         }
         try await flush()
-        return (removable, verifiedGroups, candidateGroups)
+        return (removable, verifiedGroups, candidateGroups, plans)
     }
 
     // MARK: - Normalisation

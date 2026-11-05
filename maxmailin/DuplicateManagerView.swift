@@ -137,7 +137,7 @@ struct DuplicateManagerView: View {
                         .padding(.horizontal, Spacing.medium)
 
                     Label {
-                        Text("Every copy in these groups was compared in full — the stored message bytes, or every address, the date, the subject, the whole body and each attachment. Removing the extra copies loses no message content; the removed copy's labels and review state are not kept.")
+                        Text("Every copy in these groups was compared in full — the stored message bytes, or every address, the date, the subject, the whole body, the MIME structure and each attachment. Moving the extra copies to the Trash loses no message content: their folders, labels, tags and notes are merged into the kept copy, and the Trash restores them.")
                             .font(Typography.caption1)
                     } icon: {
                         Image(systemName: "checkmark.seal.fill")
@@ -179,7 +179,7 @@ struct DuplicateManagerView: View {
                 }
 
                 if showNearDuplicates && !nearDuplicateGroups.isEmpty {
-                    Text("Near Duplicates (\(nearDuplicateGroups.count) groups)")
+                    Text("Similar (\(nearDuplicateGroups.count) groups)")
                         .font(Typography.headline)
                         .padding(.horizontal, Spacing.medium)
                         .padding(.top, Spacing.small)
@@ -271,18 +271,23 @@ struct DuplicateManagerView: View {
         }
         var name: String {
             switch self {
-            case .verified: return String(localized: "Verified identical")
+            case .verified(.byteIdentical): return String(localized: "Byte-identical")
+            case .verified: return String(localized: "Content-equivalent")
             case .candidate: return String(localized: "Candidate")
-            case .near: return String(localized: "Near")
+            case .near: return String(localized: "Similar")
             }
         }
         /// The second line under a group's title, when there is something to say.
         var note: String? {
             switch self {
             case .verified(.contentEquivalent(attachmentBytesCompared: false)):
-                return String(localized: "Attachment bytes are not stored for every copy — names, types and sizes matched.")
+                return DuplicateVerification.contentEquivalentDefinition + " " + String(localized: "Attachment bytes are not stored for every copy — names, types and sizes matched.")
+            case .verified(.contentEquivalent):
+                return DuplicateVerification.contentEquivalentDefinition
             case .candidate(let verdict):
                 return DuplicateVerification.differenceLine(verdict)
+            case .near:
+                return String(localized: "Similar text above the chosen threshold — not identical. Compare the copies before ticking one.")
             default:
                 return nil
             }
@@ -323,6 +328,13 @@ struct DuplicateManagerView: View {
                     .foregroundColor(AppColors.secondary)
                     .padding(.leading, Spacing.large)
             }
+            // DUP-05: the survivor preview — which copy stays and where it lives.
+            Text("Kept: \(DuplicateVerification.survivorLine(group))")
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+                .lineLimit(2)
+                .padding(.leading, Spacing.large)
+                .accessibilityIdentifier("duplicates.group.kept")
 
             ForEach(group) { email in
                 HStack(spacing: Spacing.xSmall) {
@@ -350,12 +362,23 @@ struct DuplicateManagerView: View {
         .cornerRadius(CornerRadius.medium)
     }
 
+    /// DUP-05: what a later permanent deletion of the ticked copies would free.
+    @State private var reclaimEstimate: Int64?
+
     private var actionBar: some View {
         HStack {
-            Text("\(selectedForRemoval.count) selected for removal")
-                .font(Typography.callout)
-                .foregroundColor(AppColors.secondary)
-                .accessibilityLabel("\(selectedForRemoval.count) emails selected for removal")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(selectedForRemoval.count) selected to move to the Trash")
+                    .font(Typography.callout)
+                    .foregroundColor(AppColors.secondary)
+                    .accessibilityLabel("\(selectedForRemoval.count) emails selected to move to the Trash")
+                if !selectedForRemoval.isEmpty, let reclaimEstimate {
+                    Text("The Trash frees no space. Deleting these copies permanently later would free about \(ByteCountFormatter.string(fromByteCount: reclaimEstimate, countStyle: .file)).")
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary)
+                        .accessibilityIdentifier("duplicates.reclaimEstimate")
+                }
+            }
             Spacer()
             Button("Cancel") { closeSheet() }
                 .buttonStyle(.bordered)
@@ -364,27 +387,38 @@ struct DuplicateManagerView: View {
                 removeSelected()
             } label: {
                 if isRemoving {
-                    HStack(spacing: Spacing.xxSmall) { ProgressView().controlSize(.small); Text("Removing…") }
+                    HStack(spacing: Spacing.xxSmall) { ProgressView().controlSize(.small); Text("Moving to the Trash…") }
                 } else {
-                    Text("Remove Selected")
+                    Text("Move Selected to Trash")
                 }
             }
             .buttonStyle(.borderedProminent)
             .tint(AppColors.error)
             .disabled(selectedForRemoval.isEmpty || isRemoving)
-            .accessibilityLabel("Remove \(selectedForRemoval.count) selected emails")
-            .accessibilityHint("Permanently removes selected duplicate emails")
+            .accessibilityLabel("Move \(selectedForRemoval.count) selected emails to the Trash")
+            .accessibilityHint("Moves the selected copies to the Trash, restorable; their folders, labels, tags and notes are merged into the kept copy")
         }
         .padding(Spacing.medium)
+        .task(id: selectedForRemoval) {
+            guard !selectedForRemoval.isEmpty else { reclaimEstimate = nil; return }
+            reclaimEstimate = try? await SQLiteEmailStore.shared.reclaimableBytesEstimate(ids: Array(selectedForRemoval))
+        }
     }
 
     private func closeSheet() {
         if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
-    /// Remove the ticked copies. Awaits the delete fully, updates the in-memory
-    /// groups, and only THEN dismisses — never dismiss while the async delete's
-    /// refresh is still landing (that races window teardown and quit the app).
+    /// Every group on screen, as member lists, for survivor planning.
+    private var allGroupsOnScreen: [[MBOXParser.RawEmail]] {
+        verifiedGroups.map(\.members) + candidateGroups.map(\.members) + nearDuplicateGroups
+    }
+
+    /// DUP-04/05: merge each ticked copy into its group's survivor, then move
+    /// it to the Trash (restorable). Awaits the store fully, updates the
+    /// in-memory groups, records the receipt once it has happened, and only
+    /// THEN dismisses — never while a refresh is still landing (that raced
+    /// window teardown and quit the app).
     private func removeSelected() {
         let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedForRemoval)
         guard !allowed.isEmpty else {
@@ -394,17 +428,43 @@ struct DuplicateManagerView: View {
             return
         }
         isRemoving = true
+        let plans = DuplicateVerification.plans(for: allowed, among: allGroupsOnScreen)
         Task { @MainActor in
-            let ok = await model.removeDuplicateEmailsAwaiting(ids: allowed)
-            if ok { stripRemoved(allowed) }
+            await applyPlans(plans, alsoBlocked: blocked.count, closeWhenDone: true)
+        }
+    }
+
+    /// The one path every removal takes.
+    private func applyPlans(_ plans: [SQLiteEmailStore.DuplicateRemovalPlan], alsoBlocked: Int, closeWhenDone: Bool) async {
+        do {
+            let result = try await SQLiteEmailStore.shared.removeDuplicateCopies(plans)
+            model.invalidateSearchCache()
+            await model.refreshFromStoreNow()
+            if !result.trashed.isEmpty {
+                // The receipt is written only after the change really happened.
+                _ = await DocumentRegistry.post(.cleanup, summary: Self.receiptSummary(result))
+            }
+            stripRemoved(Set(result.trashed))
             isRemoving = false
-            if !blocked.isEmpty {
+            let kept = alsoBlocked + result.heldKept.count
+            if kept > 0 {
                 // Keep the window open so the user sees why some were kept.
-                legalHoldWarning = "\(blocked.count) email(s) skipped — under legal hold with evidence seal."
+                legalHoldWarning = String(localized: "\(kept) copies kept — under legal hold. The rest were moved to the Trash.")
                 return
             }
-            if ok { closeSheet() }
+            if closeWhenDone { closeSheet() }
+        } catch {
+            isRemoving = false
+            legalHoldWarning = String(localized: "The duplicates could not be moved to the Trash — nothing was changed. \(error.localizedDescription)")
         }
+    }
+
+    /// The durable record's one line (English, like every registry entry).
+    static func receiptSummary(_ result: SQLiteEmailStore.DuplicateCleanupResult) -> String {
+        var parts = ["Moved \(result.trashed.count) duplicate copies to the Trash (restorable)"]
+        parts.append("merged into the kept copies: \(result.membershipsMerged) folder memberships, \(result.userTagsMerged) tags, \(result.annotationsMerged) notes")
+        if !result.heldKept.isEmpty { parts.append("\(result.heldKept.count) held copies kept") }
+        return parts.joined(separator: "; ")
     }
 
     /// Drop the removed ids from the shown groups and the selection so the view
@@ -428,6 +488,8 @@ struct DuplicateManagerView: View {
 
     /// Archive-wide: the copies verified identical and safe to remove in one click.
     @State private var archiveRemovable: [UUID] = []
+    /// Archive-wide: survivor per group, for the merge before the move.
+    @State private var archivePlans: [SQLiteEmailStore.DuplicateRemovalPlan] = []
     /// Archive-wide: same-Message-ID groups whose content differed — never removed here.
     @State private var archiveCandidateGroups = 0
     @State private var archiveDupChecked = false
@@ -465,9 +527,9 @@ struct DuplicateManagerView: View {
                         Button {
                             showArchiveDedupConfirm = true
                         } label: {
-                            Label("Remove All", systemImage: "trash")
+                            Label("Move All to Trash", systemImage: "trash")
                         }
-                        .help("Delete every verified extra copy in one step — each email keeps exactly one row")
+                        .help("Moves every verified extra copy to the Trash in one step (restorable); each email keeps exactly one copy, with every folder, label, tag and note merged into it")
                     }
                 }
                 .padding(Spacing.small)
@@ -475,32 +537,23 @@ struct DuplicateManagerView: View {
                 .cornerRadius(CornerRadius.small)
                 .padding(.horizontal, Spacing.medium)
                 .adaptiveDestructiveConfirmation(
-                    "Remove \(archiveRemovable.count) Duplicates",
+                    "Move \(archiveRemovable.count) Duplicates to the Trash",
                     isPresented: $showArchiveDedupConfirm,
-                    message: "Every email keeps exactly one copy — \(archiveRemovable.count) redundant row\(archiveRemovable.count == 1 ? "" : "s") will be deleted. Review state on the removed copies is discarded.",
-                    actionTitle: String(localized: "Remove Duplicates")
+                    message: "Every email keeps exactly one copy — \(archiveRemovable.count) redundant copies move to the Trash, where they can be restored. Their folders, labels, tags and notes are merged into the kept copy first. The Trash frees no space until it is emptied.",
+                    actionTitle: String(localized: "Move to Trash")
                 ) {
                     // Held emails are never removed — the same protection the
-                    // per-group removal applies.
+                    // per-group removal applies, and the store checks its own
+                    // holds again.
                     let (ids, blocked) = CustodianManager.shared.filterProtected(Set(archiveRemovable))
+                    let plans = archivePlans.compactMap { plan -> SQLiteEmailStore.DuplicateRemovalPlan? in
+                        let removed = plan.removed.filter { ids.contains($0) }
+                        return removed.isEmpty ? nil : .init(survivor: plan.survivor, removed: removed)
+                    }
                     isRemoving = true
                     Task { @MainActor in
-                        let ok = ids.isEmpty ? true : await model.removeDuplicateEmailsAwaiting(ids: ids)
-                        if ok {
-                            // Record the cleanup only once it has actually happened.
-                            if !ids.isEmpty {
-                                _ = await DocumentRegistry.post(
-                                    .cleanup, summary: "Removed \(ids.count) verified identical duplicate(s) archive-wide")
-                            }
-                            stripRemoved(ids)
-                            archiveRemovable = Array(blocked)
-                        }
-                        isRemoving = false
-                        if !ok {
-                            legalHoldWarning = "The duplicates could not be removed — nothing was changed. Try again."
-                        } else if !blocked.isEmpty {
-                            legalHoldWarning = "\(blocked.count) duplicate(s) kept — under legal hold with evidence seal."
-                        }
+                        await applyPlans(plans, alsoBlocked: blocked.count, closeWhenDone: false)
+                        archiveRemovable = archiveRemovable.filter { id in blocked.contains(id) }
                     }
                 }
             }
@@ -513,9 +566,11 @@ struct DuplicateManagerView: View {
                     try await ArchiveDataService.shared.fullEmails(ids: ids)
                 }
                 archiveRemovable = result.removable
+                archivePlans = result.plans
                 archiveCandidateGroups = result.candidateGroups
             } catch {
                 archiveRemovable = []
+                archivePlans = []
                 archiveCandidateGroups = 0
             }
             archiveDupChecked = true

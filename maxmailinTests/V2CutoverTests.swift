@@ -2614,6 +2614,114 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs DUP-03 / DUP-04 / DUP-05 — classes kept apart; removal keeps everything and is reversible
+
+    func testDUP03_fourClassesAreDistinct_andOnlyTheIdenticalOnesAreBulkRemovable() {
+        let a = makeEmail(i: 300, total: 2, body: "the same body")
+        XCTAssertEqual(DuplicateVerification.verify([a, copy(of: a)]), .byteIdentical)
+        // Content-equivalent: raw bytes differ (transport header), everything compared matches.
+        let b = copy(of: a) { $0.rawSource = "Received: from relay\n" + $0.rawSource }
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .contentEquivalent(attachmentBytesCompared: true))
+        XCTAssertTrue(DuplicateVerification.contentEquivalentDefinition.contains("MIME structure"))
+        // A different MIME structure (an HTML-only rendering of the same text) is a candidate, named as such.
+        let htmlOnly = copy(of: a) { $0.rawSource = "raw other"; $0.htmlBody = "<p>the same body</p>"; $0.plainBody = "" }
+        if case .candidate(let differences) = DuplicateVerification.verify([a, htmlOnly]) {
+            XCTAssertTrue(differences.contains(.structure), "\(differences)")
+        } else { XCTFail("expected a candidate") }
+        let inline = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [AttachmentMetadata(filename: "logo.png", mimeType: "image/png", size: 3, isInline: true, contentID: "logo", base64: "AAA=")]
+        }
+        if case .candidate(let differences) = DuplicateVerification.verify([a, inline]) {
+            XCTAssertTrue(differences.contains(.structure) && differences.contains(.attachments))
+        } else { XCTFail("expected a candidate") }
+        // Similar is its own class and never verified.
+        XCTAssertFalse(DuplicateVerification.Verdict.similar(similarity: 0.9).isVerified)
+        XCTAssertTrue(DuplicateVerification.Verdict.byteIdentical.isVerified)
+        XCTAssertTrue(DuplicateVerification.Verdict.contentEquivalent(attachmentBytesCompared: false).isVerified)
+        XCTAssertFalse(DuplicateVerification.Verdict.candidate(differences: [.body]).isVerified)
+        // Survivor planning: the first unticked member stays; a fully ticked group keeps its first copy.
+        let c = copy(of: a)
+        let plans = DuplicateVerification.plans(for: [a.id, b.id, c.id], among: [[a, b, c]])
+        XCTAssertEqual(plans, [.init(survivor: a.id, removed: [b.id, c.id])])
+        let plans2 = DuplicateVerification.plans(for: [a.id], among: [[a, b, c]])
+        XCTAssertEqual(plans2, [.init(survivor: b.id, removed: [a.id])])
+        XCTAssertTrue(DuplicateVerification.survivorLine([a, b]).contains(a.headers["From"] ?? "?"))
+    }
+
+    func testDUP04_removalMergesEveryMembershipTagAndNote_andTheTrashRestoresIt() async throws {
+        let env = try makeEnv()
+        var keep = mail(310, from: "a@x.com", subject: "Kept copy", body: "same"); keep.tags = ["Inbox"]
+        var gone = copy(of: keep); gone.tags = ["Projects/Alpha", "Inbox"]
+        _ = try await env.store.insertBatch([keep, gone], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        try await env.store.userTagAdd("Follow up", ids: [gone.id])
+        try await env.store.annotationSet("Note on the removed copy", id: gone.id)
+        try await env.store.annotationSet("Note on the kept copy", id: keep.id)
+        let before = try await env.archive.count(query: .all)
+        XCTAssertEqual(before, 2)
+
+        let result = try await env.store.removeDuplicateCopies([.init(survivor: keep.id, removed: [gone.id])])
+        XCTAssertEqual(result.trashed, [gone.id])
+        XCTAssertTrue(result.heldKept.isEmpty)
+        XCTAssertEqual(result.membershipsMerged, 1, "Projects/Alpha was new to the survivor; Inbox it already had")
+        XCTAssertEqual(result.userTagsMerged, 1)
+        XCTAssertEqual(result.annotationsMerged, 1)
+        // The survivor now lives in both folders, carries the tag and both notes.
+        let survivorList = try await env.archive.fullEmails(ids: [keep.id])
+        let survivor = try XCTUnwrap(survivorList.first)
+        XCTAssertEqual(Set(SQLiteEmailStore.folderPaths(for: survivor)), ["Inbox", "Projects/Alpha"])
+        let tags = try await env.store.userTags(ids: [keep.id])
+        XCTAssertEqual(tags[keep.id], ["Follow up"])
+        let notes = try await env.store.annotations(ids: [keep.id])
+        XCTAssertEqual(notes[keep.id], "Note on the kept copy\n— from a removed duplicate copy: Note on the removed copy")
+        let nodes = try await env.store.folderNodes()
+        XCTAssertEqual(nodes.first { $0.path == "Projects/Alpha" }?.messageCount, 2, "the occurrence stays until the Trash is emptied")
+        // The copy is in the Trash — out of the archive view, restorable, not deleted.
+        let after = try await env.archive.count(query: .all)
+        XCTAssertEqual(after, 1)
+        let trashed = try await env.archive.trashedCount()
+        XCTAssertEqual(trashed, 1)
+        try await env.archive.setTrashed(ids: [gone.id], false)
+        let restored = try await env.archive.count(query: .all)
+        XCTAssertEqual(restored, 2, "the Trash restores it")
+
+        // A held copy is kept even though nothing turned the store's hold gate on.
+        let heldEnforced = await env.store.enforcesDatabaseLegalHolds
+        XCTAssertFalse(heldEnforced)
+        _ = try await env.store.legalHoldsAdd([gone.id], matter: "M-1")
+        let held = try await env.store.removeDuplicateCopies([.init(survivor: keep.id, removed: [gone.id])])
+        XCTAssertEqual(held.heldKept, [gone.id])
+        XCTAssertTrue(held.trashed.isEmpty)
+        let stillTwo = try await env.archive.count(query: .all)
+        XCTAssertEqual(stillTwo, 2)
+    }
+
+    func testDUP05_reclaimableBytesAreHonest_inlineBodiesCountSharedBlobsOnlyWhenUnreferenced() async throws {
+        let env = try makeEnv()
+        let small = mail(320, from: "a@x.com", subject: "Small", body: "tiny body")
+        var bigA = mail(321, from: "a@x.com", subject: "Big", body: "big")
+        bigA.rawSource = "Subject: Big\n\n" + String(repeating: "y", count: BlobStore.inlineThresholdBytes + 512)
+        let bigB = copy(of: bigA)   // the same bytes → the same content-addressed blob
+        _ = try await env.store.insertBatch([small, bigA, bigB], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        let smallBytes = try await env.store.reclaimableBytesEstimate(ids: [small.id])
+        XCTAssertGreaterThan(smallBytes, 0)
+        XCTAssertLessThan(smallBytes, 10_000, "inline bodies and headers only")
+        // One of two rows sharing a blob frees no blob bytes; both together free the blob.
+        let oneBig = try await env.store.reclaimableBytesEstimate(ids: [bigA.id])
+        let bothBig = try await env.store.reclaimableBytesEstimate(ids: [bigA.id, bigB.id])
+        XCTAssertLessThan(oneBig, Int64(BlobStore.inlineThresholdBytes), "the shared blob is still referenced by the other row")
+        XCTAssertGreaterThan(bothBig, Int64(BlobStore.inlineThresholdBytes), "unreferenced once both rows go")
+        let none = try await env.store.reclaimableBytesEstimate(ids: [])
+        XCTAssertEqual(none, 0)
+        // The receipt line names the counts and the reversibility.
+        var result = SQLiteEmailStore.DuplicateCleanupResult()
+        result.trashed = [bigB.id]; result.membershipsMerged = 2; result.userTagsMerged = 1; result.heldKept = [small.id]
+        let line = DuplicateManagerView.receiptSummary(result)
+        XCTAssertTrue(line.contains("1 duplicate copies to the Trash (restorable)") && line.contains("2 folder memberships") && line.contains("1 held copies kept"), line)
+    }
+
     // MARK: - Five jobs LIFE-03 — jobs that run together stay consistent
 
     func testLIFE03_importDuringSearchDuplicateReviewAndExport_staysConsistent() async throws {
