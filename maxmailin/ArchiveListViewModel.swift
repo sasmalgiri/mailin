@@ -65,7 +65,8 @@ final class ArchiveListViewModel: ObservableObject {
         return (Array(page.summaries.prefix(pageSize)), page.nextCursor.map(PageCursor.keyset))
     }
 
-    private let archive: ArchiveDataService
+    /// The archive this list reads (FIND-04: the shell asks it for the "may still match" count).
+    let archive: ArchiveDataService
     let pageSize: Int
     let windowPages: Int
 

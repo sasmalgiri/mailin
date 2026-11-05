@@ -173,6 +173,29 @@ struct SearchSpec: Codable, Equatable, Hashable, Sendable {
         SearchSpec(groups: liveGroups.filter { $0.kind != .exclude })
     }
 
+    // MARK: Editing (the chips remove exactly one thing)
+
+    /// Without the condition at `condition` of group `group`. Empty groups stay
+    /// (they have no effect) so indices elsewhere do not move.
+    func removingCondition(group: Int, condition: Int) -> SearchSpec {
+        var copy = self
+        guard groups.indices.contains(group), groups[group].conditions.indices.contains(condition) else { return copy }
+        copy.groups[group].conditions.remove(at: condition)
+        return copy
+    }
+
+    func removingAttachmentGroup(group: Int, attachment: Int) -> SearchSpec {
+        var copy = self
+        guard groups.indices.contains(group), groups[group].attachmentGroups.indices.contains(attachment) else { return copy }
+        copy.groups[group].attachmentGroups.remove(at: attachment)
+        return copy
+    }
+
+    /// Groups with at least one live condition, with their original index.
+    var indexedLiveGroups: [(index: Int, group: SearchGroup)] {
+        groups.enumerated().filter { !$0.element.isEmpty }.map { (index: $0.offset, group: $0.element) }
+    }
+
     // MARK: Validation (plan rule 2: reject inline, never run a different query)
 
     struct Problem: Equatable, Sendable {

@@ -29,6 +29,11 @@ struct ArchiveThreePaneView: View {
     @State private var scope: ArchiveDateScope = .all
     @State private var searchTask: Task<Void, Never>?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    // FIND-04: the applied Advanced Search and what could not be confirmed yet.
+    @State private var spec: SearchSpec?
+    @State private var unresolved = 0
+    @State private var showAdvancedSearch = false
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     /// Return to the tools hub (the Archive page keeps its other surfaces).
     var onHome: (() -> Void)? = nil
@@ -64,14 +69,36 @@ struct ArchiveThreePaneView: View {
                                onImport: onImport)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
         } content: {
-            ArchiveListPane(model: model,
-                            detail: detail,
-                            selectedID: $selectedID,
-                            matchTerms: SearchMatchTerms(searchText: searchText),
-                            isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty)
+            VStack(spacing: 0) {
+                if let spec, !spec.isEmpty {
+                    ActiveFiltersBar(spec: spec, scopeDescription: scopeDescription, unresolved: unresolved,
+                                     onChange: { newSpec in self.spec = newSpec; Task { await applyQuery() } },
+                                     onEdit: { showAdvancedSearch = true })
+                    Divider()
+                }
+                ArchiveListPane(model: model,
+                                detail: detail,
+                                selectedID: $selectedID,
+                                matchTerms: SearchMatchTerms(searchText: searchText),
+                                isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !(spec?.isEmpty ?? true))
+            }
                 .navigationTitle(selection?.title ?? "Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
+                .sheet(isPresented: $showAdvancedSearch) {
+                    AdvancedSearchView(applied: spec, scopeDescription: scopeDescription,
+                                       onApply: { newSpec in spec = newSpec; showAdvancedSearch = false; Task { await applyQuery() } },
+                                       onCancel: { showAdvancedSearch = false })
+                }
                 .toolbar {
+                    if modules?.isOn(.searchQueryModel) ?? false {
+                        ToolbarItem {
+                            Button { showAdvancedSearch = true } label: {
+                                Label("Advanced Search", systemImage: "line.3.horizontal.decrease.circle")
+                            }
+                            .help("Build a search from conditions: all / any / exclude, dates, attachments")
+                            .accessibilityIdentifier("archive.list.advancedSearch")
+                        }
+                    }
                     ToolbarItem {
                         Menu {
                             Picker("Date", selection: $scope) {
@@ -156,7 +183,20 @@ struct ArchiveThreePaneView: View {
         let base = (selection ?? .allMail).baseQuery(savedSearches: savedSearches.searches)
         let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         // A saved search already carries its text; a typed search narrows it.
-        let query = ArchiveBrowseState(searchText: text, afterDate: scope.after).query(base: base)
+        // FIND-04: the Advanced Search rides on top; scope stays in `base`.
+        let query = ArchiveBrowseState(searchText: text, afterDate: scope.after, spec: spec).query(base: base)
         await model.setQuery(query)
+        if let spec, !spec.isEmpty {
+            unresolved = (try? await model.archive.unresolvedCount(query: query)) ?? 0
+        } else {
+            unresolved = 0
+        }
+    }
+
+    /// What the sidebar and date scope limit the list to, in words.
+    private var scopeDescription: String {
+        var parts = [(selection ?? .allMail).title]
+        if scope != .all { parts.append(scope.rawValue) }
+        return parts.joined(separator: " · ")
     }
 }

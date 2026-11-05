@@ -2329,6 +2329,62 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    // MARK: - Five jobs FIND-04 step 4 — the builder's words and chips come from the model that runs
+
+    func testFIND04_describerSaysWhatRuns_andChipsRemoveExactlyOneThing() {
+        let spec = SearchSpec(groups: [
+            SearchGroup(.all, [SearchCondition(.sender, .contains, "alice"), SearchCondition(.dateOnOrAfter, .equals, "2024-01-01", timeZone: "Asia/Kolkata")],
+                        attachments: [AttachmentConditionGroup(type: "PDF", contentMatch: .phrase, content: "purchase order")]),
+            SearchGroup(.any, [SearchCondition(.body, .allWords, "invoice receipt"), SearchCondition(.hasAttachments, .equals, "yes")]),
+            SearchGroup(.exclude, [SearchCondition(.subject, .contains, "newsletter")]),
+        ])
+        let summary = SearchSpecDescriber.summary(spec)
+        XCTAssertTrue(summary.contains("Sender: alice") && summary.contains("Date on or after 2024-01-01 (Asia/Kolkata)"), summary)
+        XCTAssertTrue(summary.contains("One attachment: type PDF, text has the phrase “purchase order”"), summary)
+        XCTAssertTrue(summary.contains("Message body has all the words “invoice receipt” or Has attachments"), summary)
+        XCTAssertTrue(summary.contains("Leaving out messages where Subject: newsletter."), summary)
+        XCTAssertTrue(summary.contains("may still match"), "a text condition as one OR branch can be unknown, so the summary says so")
+
+        let certain = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, "quorum")]), SearchGroup(.exclude, [SearchCondition(.sender, .contains, "spam")])])
+        XCTAssertFalse(SearchSpecDescriber.summary(certain).contains("may still match"), "text only in an all-group, exclusion on metadata → nothing uncertain")
+        let uncertain = SearchSpec(groups: [SearchGroup(.exclude, [SearchCondition(.body, .phrase, "unsubscribe")])])
+        XCTAssertTrue(SearchSpecDescriber.summary(uncertain).contains("may still match"))
+        XCTAssertEqual(SearchSpecDescriber.summary(SearchSpec()), "No conditions — the list shows the selected scope.")
+
+        // Removing a chip removes that condition and nothing else; group indices stay stable.
+        let fewer = spec.removingCondition(group: 1, condition: 0)
+        XCTAssertEqual(fewer.groups[1].conditions.map(\.value), ["yes"])
+        XCTAssertEqual(fewer.groups[0].conditions.count, 2)
+        let noAttachment = spec.removingAttachmentGroup(group: 0, attachment: 0)
+        XCTAssertTrue(noAttachment.groups[0].attachmentGroups.isEmpty)
+        XCTAssertEqual(noAttachment.groups[0].conditions.count, 2)
+        XCTAssertEqual(spec.removingCondition(group: 7, condition: 0), spec, "an unknown index changes nothing")
+        XCTAssertEqual(spec.indexedLiveGroups.map(\.index), [0, 1, 2])
+        XCTAssertEqual(SearchSpec(groups: [SearchGroup(.all), SearchGroup(.exclude, [SearchCondition(.tag, .contains, "x")])]).indexedLiveGroups.map(\.index), [1])
+
+        // Chip texts name the field and the mode.
+        XCTAssertEqual(SearchSpecDescriber.chip(SearchCondition(.hasAttachments, .equals, "no")), "No attachments")
+        XCTAssertEqual(SearchSpecDescriber.chip(SearchCondition(.recipientTo, .equals, "me@x.com")), "To is “me@x.com”")
+        XCTAssertEqual(SearchSpecDescriber.chip(AttachmentConditionGroup(nameContains: "memo", type: "docx")), "One attachment: type docx, name has “memo”")
+    }
+
+    func testFIND04_browseStateCarriesTheSpecOnTopOfTheScope() {
+        var base = EmailQuery.all
+        base.folderID = 42
+        let spec = SearchSpec(groups: [SearchGroup(.any, [SearchCondition(.sender, .contains, "a"), SearchCondition(.sender, .contains, "b")])])
+        let q = ArchiveBrowseState(searchText: "from:carol", afterDate: nil, spec: spec).query(base: base)
+        XCTAssertEqual(q.folderID, 42, "scope is untouched by the spec")
+        XCTAssertEqual(q.spec, spec)
+        XCTAssertEqual(q.sender, "carol", "the typed operator still compiles next to it")
+        XCTAssertTrue(q.hasStructuredFilters)
+        XCTAssertNil(ArchiveBrowseState(searchText: "", afterDate: nil, spec: SearchSpec(groups: [SearchGroup(.all)])).query().spec, "an empty spec is no spec")
+        // Saved queries: the model round-trips through JSON with its version.
+        let data = try! JSONEncoder().encode(spec)
+        let back = try! JSONDecoder().decode(SearchSpec.self, from: data)
+        XCTAssertEqual(back, spec)
+        XCTAssertEqual(back.version, SearchSpec.currentVersion)
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

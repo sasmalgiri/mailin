@@ -26,6 +26,9 @@ struct ArchiveBrowseState: Equatable, Sendable {
     var hasAttachments: Bool? = nil
     var includeTrashed: Bool = false
     var sort: EmailSortOrder = .dateDesc
+    /// FIND-04: the Advanced Search model applied on top of the scope. It
+    /// rides on the query, so scope (the sidebar's base) stays outside it.
+    var spec: SearchSpec? = nil
 
     /// The archive-wide query: `base` carries the surface's own extra
     /// predicates; this state's fields are applied on top, then the search
@@ -37,6 +40,7 @@ struct ArchiveBrowseState: Equatable, Sendable {
         if let hasAttachments { q.hasAttachments = hasAttachments }
         if includeTrashed { q.includeTrashed = true }
         q.sort = sort
+        if let spec, !spec.isEmpty { q.spec = spec }
         return ArchiveQueryCompiler.compile(searchText.trimmingCharacters(in: .whitespacesAndNewlines), base: q)
     }
 
