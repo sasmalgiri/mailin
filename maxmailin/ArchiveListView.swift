@@ -112,6 +112,8 @@ struct ArchiveListPane: View {
     /// A7: built once per search string and shared by every row, so the
     /// matched-field strip never re-tokenizes the query per row.
     var matchTerms: SearchMatchTerms? = nil
+    /// FIND-05: evidence from the index per row (the search model on); nil = heuristic chips.
+    var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
     /// True while a search string is active — decides which empty state shows.
     var isSearching: Bool = false
 
@@ -158,7 +160,7 @@ struct ArchiveListPane: View {
             }
 
             ForEach(model.summaries) { summary in
-                ArchiveSummaryRow(summary: summary, matchTerms: matchTerms)
+                ArchiveSummaryRow(summary: summary, matchTerms: matchTerms, evidenceProvider: evidenceProvider)
                     .tag(summary.id)
                     .onAppear {
                         if summary.id == model.summaries.last?.id && model.hasMore {
@@ -269,6 +271,10 @@ struct ArchiveSummaryRow: View {
     /// The active search, read through the one compiler; nil or empty shows
     /// no matched-field strip.
     var matchTerms: SearchMatchTerms? = nil
+    /// FIND-05: when set, the strip shows evidence the index returned for
+    /// this row instead of the heuristic attribution.
+    var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
+    @State private var evidence: [MatchEvidence] = []
 
     private var matchedFields: [SearchMatchField] {
         matchTerms?.matchedFields(in: summary) ?? []
@@ -289,14 +295,22 @@ struct ArchiveSummaryRow: View {
             }
             Text(summary.subject.isEmpty ? "(No Subject)" : summary.subject)
                 .font(.subheadline).lineLimit(1)
-            SearchMatchFieldChips(fields: matchedFields)
-            if !summary.bodyPreview.isEmpty {
+            if evidenceProvider != nil {
+                MatchEvidenceChips(evidence: evidence)
+            } else {
+                SearchMatchFieldChips(fields: matchedFields)
+            }
+            if !summary.bodyPreview.isEmpty, evidence.compactMap(\.excerpt).isEmpty {
                 Text(summary.bodyPreview)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
         }
         .padding(.vertical, 2)
         .accessibilityIdentifier("archive.row.\(summary.id.uuidString)")
+        .task(id: summary.id) {
+            guard let evidenceProvider else { return }
+            evidence = await evidenceProvider(summary.id)
+        }
     }
 }
 

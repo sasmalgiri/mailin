@@ -209,6 +209,13 @@ final class ArchiveDataService {
         return try await sqlite.parserTagCounts(limit: limit)
     }
 
+    /// FIND-05: why one row is in the results — from the chunk index, never guessed.
+    func matchEvidence(emailID: EmailID, spec: SearchSpec?, freeText: String?) async throws -> [MatchEvidence] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [] }
+        return try await sqlite.matchEvidence(emailID: emailID, spec: spec, freeText: freeText)
+    }
+
     /// FIND-04: rows that pass the search's positive part but whose relevant
     /// text is not indexed yet — "may still match", counted apart.
     func unresolvedCount(query: EmailQuery) async throws -> Int {

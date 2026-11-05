@@ -2385,6 +2385,66 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(back.version, SearchSpec.currentVersion)
     }
 
+    // MARK: - Five jobs FIND-05 — evidence for every hit, from the index
+
+    func testFIND05_evidenceNamesTheRealPlace_neverGuessesBody() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        let x = mail(70, from: "supplier@example.com", subject: "Order confirmation", body: "Dear customer, your purchase order 4471 is confirmed. Regards.",
+                     attachments: [AttachmentMetadata(filename: "budget.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 10),
+                                   AttachmentMetadata(filename: "budget.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 11)])
+        try await env.store.insertBatch([x], batchSize: 10)
+        try await env.store.indexAttachmentSearchDocuments(emailID: x.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "budget.xlsx", text: "[Sheet: Summary]\ntotals only\n", state: .complete, extractorVersion: 3, ocr: false),
+            AttachmentSearchDocument(ordinal: 1, filename: "budget.xlsx", text: "[Sheet: Q3]\nGross margin\t42\n", state: .complete, extractorVersion: 3, ocr: true),
+        ])
+
+        // Body phrase: the place is the body, the excerpt holds the phrase, marked.
+        let bodySpec = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, "purchase order")])])
+        var evidence = try await env.store.matchEvidence(emailID: x.id, spec: bodySpec, freeText: nil)
+        XCTAssertEqual(evidence.count, 1)
+        XCTAssertEqual(evidence[0].location, .body)
+        let excerpt = try XCTUnwrap(evidence[0].excerpt)
+        XCTAssertTrue(excerpt.text.contains("purchase order 4471"), excerpt.text)
+        XCTAssertEqual(excerpt.marks.count, 1)
+        let marked = (excerpt.text as NSString).substring(with: NSRange(location: excerpt.marks[0].lowerBound, length: excerpt.marks[0].count))
+        XCTAssertEqual(marked.lowercased(), "purchase order")
+
+        // Attachment text: the right one of two same-named files, with its sheet, and OCR labelled.
+        let xlsxSpec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "xlsx", contentMatch: .allWords, content: "gross margin")])])
+        evidence = try await env.store.matchEvidence(emailID: x.id, spec: xlsxSpec, freeText: nil)
+        XCTAssertEqual(evidence.count, 1)
+        XCTAssertEqual(evidence[0].location, .attachmentText(ordinal: 1, filename: "budget.xlsx", ocr: true, context: "Sheet: Q3"))
+        XCTAssertTrue(MatchEvidenceChips.label(evidence[0].location).contains("budget.xlsx") && MatchEvidenceChips.label(evidence[0].location).contains("Sheet: Q3"))
+
+        // Metadata-only: says it matched the filters, invents no text.
+        let metaSpec = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "supplier"), SearchCondition(.hasAttachments, .equals, "yes")])])
+        evidence = try await env.store.matchEvidence(emailID: x.id, spec: metaSpec, freeText: nil)
+        XCTAssertEqual(evidence.map(\.location), [.sender, .metadata])
+        XCTAssertTrue(evidence.allSatisfy { $0.excerpt == nil })
+
+        // Free text from the search box: whole words anywhere; found in the subject here.
+        evidence = try await env.store.matchEvidence(emailID: x.id, spec: nil, freeText: "confirmation")
+        XCTAssertEqual(evidence.map(\.location), [.subject])
+
+        // No evidence in the index → said so, not "Body".
+        SearchChunkPolicy.isEnabled = false
+        let y = mail(71, from: "a@x.com", subject: "Unindexed", body: "hidden words here")
+        try await env.store.insertBatch([y], batchSize: 10)
+        SearchChunkPolicy.isEnabled = true
+        evidence = try await env.store.matchEvidence(emailID: y.id, spec: nil, freeText: "hidden")
+        XCTAssertEqual(evidence.map(\.location), [.unavailable])
+
+        // The excerpt helper: window around the first match, ellipses, marks shifted.
+        let long = String(repeating: "x ", count: 200) + "needle in the haystack" + String(repeating: " y", count: 200)
+        let cut = SQLiteEmailStore.excerpt(from: long, words: ["needle"], literal: nil, radius: 20)
+        XCTAssertTrue(cut.text.hasPrefix("…") && cut.text.hasSuffix("…"), cut.text)
+        XCTAssertEqual((cut.text as NSString).substring(with: NSRange(location: cut.marks[0].lowerBound, length: cut.marks[0].count)), "needle")
+        XCTAssertEqual(SQLiteEmailStore.nearestLabel(in: "[Sheet: Q3]\nGross margin", before: 15), "Sheet: Q3")
+        XCTAssertNil(SQLiteEmailStore.nearestLabel(in: "no label here", before: 5))
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

@@ -80,6 +80,7 @@ struct ArchiveThreePaneView: View {
                                 detail: detail,
                                 selectedID: $selectedID,
                                 matchTerms: SearchMatchTerms(searchText: searchText),
+                                evidenceProvider: evidenceProvider,
                                 isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !(spec?.isEmpty ?? true))
             }
                 .navigationTitle(selection?.title ?? "Archive")
@@ -191,6 +192,17 @@ struct ArchiveThreePaneView: View {
         } else {
             unresolved = 0
         }
+    }
+
+    /// FIND-05: with the search model on and a search active, each row asks
+    /// the index why it is listed; otherwise the previous heuristic strip.
+    private var evidenceProvider: ((EmailID) async -> [MatchEvidence])? {
+        guard modules?.isOn(.searchQueryModel) ?? false else { return nil }
+        let freeText = model.query.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let applied = spec
+        guard !(applied?.isEmpty ?? true) || !(freeText?.isEmpty ?? true) else { return nil }
+        let archive = model.archive
+        return { id in (try? await archive.matchEvidence(emailID: id, spec: applied, freeText: freeText)) ?? [] }
     }
 
     /// What the sidebar and date scope limit the list to, in words.

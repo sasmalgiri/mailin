@@ -3944,7 +3944,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
     }
 
-    private func bindQueryValues(_ stmt: OpaquePointer?, _ binds: [QueryBind], startingAt index: Int32) -> Int32 {
+    func bindQueryValues(_ stmt: OpaquePointer?, _ binds: [QueryBind], startingAt index: Int32) -> Int32 {
         var idx = index
         for bind in binds {
             switch bind {
