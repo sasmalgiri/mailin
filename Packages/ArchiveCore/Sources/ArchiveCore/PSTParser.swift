@@ -58,14 +58,20 @@ struct PSTParser {
     /// order as `parse`, so a checkpoint written by either path resumes under
     /// the other. Files mailin itself wrote in the pre-spec layout have no
     /// message nodes and still take the heuristic reader's array path.
-    /// Returns how many messages were handed out.
+    /// Returns how many messages were handed out and the folders the file
+    /// lists (FOLD-02), empty ones included.
+    struct StreamResult: Sendable {
+        let count: Int
+        let declaredFolders: [String]
+    }
+
     static func parseStreaming(
         fileURL: URL,
         senderEmail: String,
         batchSize: Int,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
-    ) async throws -> Int {
+    ) async throws -> StreamResult {
         let size = max(1, batchSize)
         let data = try mappedData(for: fileURL)
         guard let spec = specReader(for: data) else {
@@ -76,7 +82,7 @@ struct PSTParser {
                 try await onBatch(Array(parsed[start..<end]))
                 start = end
             }
-            return parsed.count
+            return StreamResult(count: parsed.count, declaredFolders: [])
         }
         let isoFormatter = ISO8601DateFormatter()
         let nodes = spec.messageNodes
@@ -123,7 +129,14 @@ struct PSTParser {
             }
         }
         onProgress?(1)
-        return emitted
+        return StreamResult(count: emitted, declaredFolders: spec.folderPaths())
+    }
+
+    /// FOLD-02: the folders a PST lists, for the array path (the streaming
+    /// path returns them with its result).
+    static func declaredFolders(fileURL: URL) -> [String] {
+        guard let data = try? mappedData(for: fileURL), let spec = specReader(for: data) else { return [] }
+        return spec.folderPaths()
     }
 
     /// The spec reader for this file, when it applies (see `parse`).
@@ -190,7 +203,7 @@ struct PSTParser {
 
             let domains = MBOXParser.extractDomains(from: headers)
 
-            return MBOXParser.RawEmail(
+            var email = MBOXParser.RawEmail(
                 id: UUID(),
                 headers: headers,
                 rawSource: "",
@@ -210,6 +223,9 @@ struct PSTParser {
                 anomalies: MBOXParser.findAnomalies(headers: headers, body: msg.bodyText, attachments: msg.attachments)
                     + (msg.unreadable ? ["PST item whose properties could not be read; imported empty"] : [])
             ).withRecovery(msg.recovery)
+            // FOLD-02: the folder as a path of its own, not only a tag.
+            email.folderPath = msg.folderPath.isEmpty ? nil : msg.folderPath
+            return email
     }
 
     private static func mergeTransportHeaders(_ raw: String, into headers: inout [String: String]) {

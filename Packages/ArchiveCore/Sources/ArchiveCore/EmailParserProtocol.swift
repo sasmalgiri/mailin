@@ -343,7 +343,11 @@ struct ParserFactory {
             }
             var total = 0, parsed = 0, failed = 0
             var categories: [String: Int] = [:]
+            var declaredFolders = Set<String>()
             for (index, member) in members.enumerated() {
+                // FOLD-02: the mailbox this member belongs to, from the layout.
+                let folder = SourceFormatClassifier.folderPath(member: member, root: fileURL, format: classification.format)
+                if let folder { declaredFolders.insert(folder) }
                 if classification.format == .appleMailLibrary {
                     // One mailbox folder at a time, in batches.
                     try Task.checkCancellation()
@@ -355,7 +359,7 @@ struct ParserFactory {
                     failed += result.failedFiles
                     if result.failedFiles > 0 { categories["emlx_damaged", default: 0] += result.failedFiles }
                     for start in stride(from: 0, to: result.emails.count, by: max(1, batchSize)) {
-                        try await onBatch(Array(result.emails[start..<min(start + max(1, batchSize), result.emails.count)]))
+                        try await onBatch(Self.stamp(Array(result.emails[start..<min(start + max(1, batchSize), result.emails.count)]), folder: folder))
                     }
                     continue
                 }
@@ -369,16 +373,18 @@ struct ParserFactory {
                     onProgress: { fraction in
                         onProgress?((Double(index) + fraction) / Double(members.count))
                     },
-                    onBatch: onBatch
+                    onBatch: { batch in try await onBatch(Self.stamp(batch, folder: folder)) }
                 )
                 total += report.totalMessages
                 parsed += report.successfullyParsed
                 failed += report.failed
                 for (key, count) in report.errorCategories { categories[key, default: 0] += count }
             }
-            return MBOXParser.ParseRecoveryReport(
+            var report = MBOXParser.ParseRecoveryReport(
                 totalMessages: total, successfullyParsed: parsed,
                 failed: failed, errorCategories: categories)
+            report.declaredFolders = declaredFolders.sorted()
+            return report
         }
 
         let ext = classification.format.parserToken
@@ -399,12 +405,14 @@ struct ParserFactory {
             // when the switch is on — memory follows the batch, not the file.
             if ext == "pst" || ext == "ost", StreamingParserPolicy.binaryStreaming {
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
-                let total = try await PSTParser.parseStreaming(
+                let result = try await PSTParser.parseStreaming(
                     fileURL: fileURL, senderEmail: senderEmail,
                     batchSize: max(1, min(batchSize, chunkLimit)),
                     onProgress: onProgress, onBatch: onBatch)
-                return MBOXParser.ParseRecoveryReport(
-                    totalMessages: total, successfullyParsed: total, failed: 0, errorCategories: [:])
+                var report = MBOXParser.ParseRecoveryReport(
+                    totalMessages: result.count, successfullyParsed: result.count, failed: 0, errorCategories: [:])
+                report.declaredFolders = result.declaredFolders
+                return report
             }
             if ext == "nsf", StreamingParserPolicy.binaryStreaming {
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
@@ -426,9 +434,24 @@ struct ParserFactory {
             for chunk in parsed.chunked(into: chunkLimit) {
                 try await onBatch(chunk)
             }
-            return MBOXParser.ParseRecoveryReport(
+            var report = MBOXParser.ParseRecoveryReport(
                 totalMessages: parsed.count, successfullyParsed: parsed.count,
                 failed: 0, errorCategories: [:])
+            // FOLD-02: a PST lists its folders itself, empty ones included.
+            if ext == "pst" || ext == "ost" { report.declaredFolders = PSTParser.declaredFolders(fileURL: fileURL) }
+            return report
+        }
+    }
+
+    /// FOLD-02: give every message of a directory member the mailbox the
+    /// directory layout says it is in, unless its parser already did.
+    static func stamp(_ batch: [MBOXParser.RawEmail], folder: String?) -> [MBOXParser.RawEmail] {
+        guard let folder, !folder.isEmpty else { return batch }
+        return batch.map { email in
+            guard email.folderPath == nil else { return email }
+            var stamped = email
+            stamped.folderPath = folder
+            return stamped
         }
     }
 }

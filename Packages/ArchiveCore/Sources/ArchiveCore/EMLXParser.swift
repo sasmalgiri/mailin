@@ -118,12 +118,18 @@ struct EMLXParser {
         var email = try MBOXParser.processRawMessage(rfc822Message, senderEmail: senderEmail)
 
         if let flags = plistFlags["flags"] as? Int {
-            if flags & 0x01 != 0 { email.tags.append("Read") }
-            if flags & 0x02 != 0 { email.tags.append("Deleted") }
-            if flags & 0x04 != 0 { email.tags.append("Answered") }
-            if flags & 0x10 != 0 { email.tags.append("Flagged") }
-            if flags & 0x80 != 0 { email.tags.append("Draft") }
+            var set: [String] = []
+            if flags & 0x01 != 0 { set.append("Read") }
+            if flags & 0x02 != 0 { set.append("Deleted") }
+            if flags & 0x04 != 0 { set.append("Answered") }
+            if flags & 0x10 != 0 { set.append("Flagged") }
+            if flags & 0x80 != 0 { set.append("Draft") }
+            email.tags.append(contentsOf: set)
+            // FOLD-02: flags stay tags for compatibility but are never folders.
+            email.flags = set
         }
+        // FOLD-02: the mailbox chain from the path ("Inbox.mbox/Clients.mbox").
+        email.folderPath = SourceFormatClassifier.folderPath(member: fileURL, root: fileURL, format: .appleMailLibrary)
         // 3.1 R4: deleted flag → a recovery state (the "Deleted" tag stays for 3.0 compatibility).
         if let r = RecoveryDetector.fromEMLX(flags: plistFlags["flags"] as? Int,
                                                mailboxPath: fileURL.pathComponents.last(where: { $0.hasSuffix(".mbox") }).map { String($0.dropLast(5)) }) {

@@ -461,6 +461,27 @@ enum SourceFormatClassifier {
         }
     }
 
+    /// FOLD-02: the mailbox a member file belongs to, as a "/"-separated
+    /// path, for the formats whose directory layout IS the folder structure.
+    /// Apple Mail: the chain of `.mbox` packages ("Work.mbox/Clients.mbox" →
+    /// "Work/Clients"). Maildir and EML folders: the folder's own name (their
+    /// members are not expanded into sub-folders). Nil for everything else.
+    static func folderPath(member: URL, root: URL, format: SourceFormat) -> String? {
+        switch format {
+        case .appleMailMailbox, .appleMailLibrary:
+            let names = member.standardizedFileURL.pathComponents
+                .filter { $0.lowercased().hasSuffix(".mbox") }
+                .map { String($0.dropLast(5)) }
+                .filter { !$0.isEmpty }
+            return names.isEmpty ? nil : names.joined(separator: "/")
+        case .maildir, .emlFolder:
+            let name = root.lastPathComponent
+            return name.isEmpty ? nil : name
+        default:
+            return nil
+        }
+    }
+
     /// True when `format` needs `expand(_:format:)` before a parser can run.
     static func isDirectoryForm(_ format: SourceFormat) -> Bool {
         format == .appleMailMailbox || format == .maildir || format == .emlFolder || format == .appleMailLibrary

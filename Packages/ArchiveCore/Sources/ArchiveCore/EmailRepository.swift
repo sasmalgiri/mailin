@@ -85,6 +85,10 @@ struct EmailQuery: Sendable, Equatable, Codable {
     var subjects: [String] = []
     var domains: [String] = []
     var tags: [String] = []
+    /// FOLD-02: exactly one folder of one source (`folders.folder_id`) — the
+    /// sidebar's folder tree. Unlike `userTag`, "Inbox" of two archives are
+    /// two different values.
+    var folderID: Int64? = nil
     /// Source file name contains (resolved via `sources`/`forensic_source_hashes`).
     var sourceFileName: String? = nil
     /// Derived-analysis filters (persisted `derived` table — archive-wide AI
@@ -135,7 +139,7 @@ struct EmailQuery: Sendable, Equatable, Codable {
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
             || minSenderMessages != nil || newestLimit != nil || !(exclusions ?? []).isEmpty
-            || recovery != nil
+            || recovery != nil || folderID != nil
     }
 
     var isEmpty: Bool {
@@ -458,7 +462,8 @@ extension EmailStoreRepository: RankedSearchRepository {
             query.evidenceTag ?? "-", query.hasAttachments.map(String.init) ?? "-",
             query.messageType ?? "-", String(query.pinnedOnly),
             String(query.includeTrashed), query.sort.rawValue,
-            query.newestLimit.map(String.init) ?? "-"
+            query.newestLimit.map(String.init) ?? "-",
+            query.folderID.map(String.init) ?? "-"
         ]
         let listFilters: [String] = [
             query.senders.joined(separator: ","), query.recipients.joined(separator: ","),

@@ -779,7 +779,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
     ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
-    static let currentSchemaVersion = 20
+    static let currentSchemaVersion = 21   // v21: FOLD-02 folders (FolderModel.swift)
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1218,6 +1218,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 20;")
             }
             v = 20
+        }
+        if v < 21 {
+            // v21 (five jobs FOLD-02): additive only — folders per source and
+            // memberships in new tables, backfilled from the parser tags.
+            // Snapshot first as for every upgrade (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV21(handle)
+                try exec(handle, "PRAGMA user_version = 21;")
+            }
+            v = 21
         }
     }
 
@@ -2490,10 +2500,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
         let insertDomain = try prepare(db, "INSERT OR IGNORE INTO email_domains(email_id, domain) VALUES (?,?);")
         let occurrenceExists = try prepare(db, "SELECT 1 FROM emails WHERE source_id = ? AND source_ordinal = ?;")
+        // FOLD-02: memberships next to the tags (dual write).
+        let insertFolder = try prepare(db, "INSERT OR IGNORE INTO email_folders(email_id, folder_id) VALUES (?,?);")
+        var folderCache: [String: Int64] = [:]
         defer {
             sqlite3_finalize(insertEmail); sqlite3_finalize(insertBody); sqlite3_finalize(insertDup)
             sqlite3_finalize(insertAttachment); sqlite3_finalize(insertParticipant)
             sqlite3_finalize(insertTag); sqlite3_finalize(insertDomain); sqlite3_finalize(occurrenceExists)
+            sqlite3_finalize(insertFolder)
         }
         let now = Int64(Date().timeIntervalSince1970)
 
@@ -2593,10 +2607,23 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         if let recovery = email.recovery {
                             try insertRecovery(db, emailID: idStr, info: recovery)
                         }
-                        for tag in email.tags where !tag.isEmpty {
+                        // FOLD-02: the folder path is a tag too, so the previous
+                        // sidebar, the tag: operator and a rebuild see it.
+                        let folderPaths = Self.folderPaths(for: email)
+                        var tags = email.tags
+                        for path in folderPaths where !tags.contains(path) { tags.append(path) }
+                        for tag in tags where !tag.isEmpty {
                             sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
                             bindText(insertTag, 1, idStr); bindText(insertTag, 2, tag)
                             guard sqlite3_step(insertTag) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                        for path in folderPaths {
+                            let fid = try folderID(db, sourceID: sourceID ?? 0, path: path, declared: false, cache: &folderCache)
+                            sqlite3_reset(insertFolder); sqlite3_clear_bindings(insertFolder)
+                            bindText(insertFolder, 1, idStr); sqlite3_bind_int64(insertFolder, 2, fid)
+                            guard sqlite3_step(insertFolder) == SQLITE_DONE else {
                                 throw SQLiteStoreError.step(lastError(db))
                             }
                         }
@@ -3714,6 +3741,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 """)
             binds.append(contentsOf: q.tags.map { .text($0) })
             binds.append(contentsOf: q.tags.map { .text($0) })
+        }
+        // FOLD-02: one folder of one source (the sidebar's folder tree).
+        if let folderID = q.folderID {
+            sql.append("EXISTS (SELECT 1 FROM email_folders ef WHERE ef.email_id = e.id AND ef.folder_id = ?)")
+            binds.append(.int(folderID))
         }
         // v1's Min Reply Count: sender-frequency filter as a HAVING subquery —
         // archive-wide, exactly the per-sender counts the sidebar shows.

@@ -459,6 +459,13 @@ final class PSTSpecReader {
         return (Array((lines.joined(separator: "\r\n") + "\r\n\r\n" + body).utf8), subject)
     }
 
+    /// FOLD-02: every folder's path, empty folders included, sorted. The
+    /// root folder (path "") is not a folder of the mailbox and is left out.
+    func folderPaths() -> [String] {
+        Set(nodes.values.filter { $0.nid & 0x1F == Self.nidTypeFolder }
+            .compactMap { folderPath($0.nid) }.filter { !$0.isEmpty }).sorted()
+    }
+
     /// Every message node in NID order — the order `messages()` has always
     /// used, so a streamed import and an array import number messages alike.
     var messageNodes: [Node] {

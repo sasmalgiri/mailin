@@ -36,6 +36,15 @@ struct MBOXParser {
         var bodyPreview: String = ""
         /// 3.1 R1: how the parser found this message (nil = an ordinary, live email).
         var recovery: RecoveryInfo? = nil
+        /// FOLD-02: where the source kept this message — a "/"-separated path
+        /// within the source (PST folder, Apple Mail mailbox chain, Maildir
+        /// name). Nil when the source has no folder structure. Labels (Gmail)
+        /// stay in `tags`; both become folder memberships.
+        var folderPath: String? = nil
+        /// FOLD-02: status flags a source stores next to its labels (Apple
+        /// Mail's Read/Deleted/…). Also in `tags` for compatibility, but never
+        /// a folder.
+        var flags: [String] = []
 
         var bodyLines: [String] {
             (plainBody.isEmpty ? htmlBody : plainBody).components(separatedBy: .newlines)
@@ -51,6 +60,7 @@ struct MBOXParser {
             case domains, plainBody, htmlBody, mimeRoot, mimeSummary
             case mimeDiagnostics, threadID, inReplyTo, references, tags, anomalies
             case bodyLines, fullText, isBodyCompacted, bodyPreview, recovery
+            case folderPath, flags
         }
 
         init(id: UUID = UUID(), headers: [String: String], bodyLines: [String] = [], rawSource: String, messageType: String, attachments: [AttachmentMetadata], timestamp: String, fullText: String = "", domains: [String], plainBody: String, htmlBody: String, mimeRoot: MIMEPart? = nil, mimeSummary: String? = nil, mimeDiagnostics: [String] = [], threadID: String? = nil, inReplyTo: String? = nil, references: [String]? = nil, tags: [String] = [], anomalies: [String] = []) {
@@ -95,6 +105,8 @@ struct MBOXParser {
             isBodyCompacted = try container.decodeIfPresent(Bool.self, forKey: .isBodyCompacted) ?? false
             bodyPreview = try container.decodeIfPresent(String.self, forKey: .bodyPreview) ?? ""
             recovery = try container.decodeIfPresent(RecoveryInfo.self, forKey: .recovery)
+            folderPath = try container.decodeIfPresent(String.self, forKey: .folderPath)
+            flags = try container.decodeIfPresent([String].self, forKey: .flags) ?? []
         }
 
         func encode(to encoder: Encoder) throws {
@@ -175,6 +187,9 @@ struct MBOXParser {
         let successfullyParsed: Int
         let failed: Int
         var errorCategories: [String: Int]
+        /// FOLD-02: folders the source lists itself ("/"-separated paths),
+        /// empty ones included, so the archive keeps them.
+        var declaredFolders: [String] = []
 
         var hasDamage: Bool { failed > 0 }
         var summaryText: String {

@@ -209,6 +209,13 @@ final class ArchiveDataService {
         return try await sqlite.parserTagCounts(limit: limit)
     }
 
+    /// FOLD-02: every folder of every source with its direct message count.
+    func folderNodes() async throws -> [ArchiveFolderNode] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [] }
+        return try await sqlite.folderNodes()
+    }
+
     /// FOLD-01: distinct labels/folders, optionally those containing `filter`.
     func parserTagTotal(matching filter: String? = nil) async throws -> Int {
         guard let repo = repository as? EmailStoreRepository,

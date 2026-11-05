@@ -24,6 +24,8 @@ enum ArchiveSidebarSelection: Hashable, Sendable {
     case trash
     case source(String)
     case label(String)
+    /// FOLD-02: one folder of one source — "Inbox" of two archives are two rows.
+    case folder(id: Int64, name: String)
     case saved(UUID)
 
     /// The archive-wide query this row stands for; the search field and the
@@ -48,6 +50,8 @@ enum ArchiveSidebarSelection: Hashable, Sendable {
             q.sourceFileName = filename
         case .label(let tag):
             q.userTag = tag
+        case .folder(let id, _):
+            q.folderID = id
         case .saved(let id):
             if let saved = savedSearches.first(where: { $0.id == id }) {
                 q = ArchiveQueryCompiler.compile(saved.query)
@@ -66,6 +70,7 @@ enum ArchiveSidebarSelection: Hashable, Sendable {
         case .trash: return String(localized: "Trash")
         case .source(let name): return name
         case .label(let tag): return tag
+        case .folder(_, let name): return name
         case .saved: return String(localized: "Saved Search")
         }
     }
@@ -143,7 +148,38 @@ final class ArchiveSidebarModel: ObservableObject {
     @Published private(set) var labelTotal = 0
     /// FOLD-01: the name filter the folder list is narrowed to.
     @Published private(set) var labelFilter = ""
+    /// FOLD-02: every source's folder tree — declared (possibly empty) folders included.
+    @Published private(set) var folderTrees: [FolderTree] = []
     @Published private(set) var lastRefresh: Date?
+
+    struct FolderItem: Identifiable {
+        let node: ArchiveFolderNode
+        var children: [FolderItem]?
+        var id: Int64 { node.folderID }
+    }
+
+    struct FolderTree: Identifiable {
+        let sourceID: Int64
+        let title: String
+        let items: [FolderItem]
+        var id: Int64 { sourceID }
+    }
+
+    /// Nest the flat folder rows under their parents, one tree per source.
+    static func trees(from nodes: [ArchiveFolderNode], sources: [SQLiteEmailStore.StoredSource]) -> [FolderTree] {
+        let bySource = Dictionary(grouping: nodes, by: \.sourceID)
+        func build(_ group: [ArchiveFolderNode], parent: Int64?) -> [FolderItem]? {
+            let level = group.filter { $0.parentID == parent }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            guard !level.isEmpty else { return nil }
+            return level.map { FolderItem(node: $0, children: build(group, parent: $0.folderID)) }
+        }
+        return bySource.keys.sorted().compactMap { sourceID in
+            guard let group = bySource[sourceID], let items = build(group, parent: nil) else { return nil }
+            let title = sources.first { $0.sourceID == sourceID }?.filename ?? String(localized: "Earlier imports")
+            return FolderTree(sourceID: sourceID, title: title, items: items)
+        }
+    }
 
     private let archive: ArchiveDataService
     static let labelLimit = 200
@@ -205,6 +241,9 @@ final class ArchiveSidebarModel: ObservableObject {
         sources = (try? await archive.sources()) ?? sources
         coverage = (try? await archive.sourceCoverage()) ?? coverage
         await reloadLabels()
+        if completeLabels, let nodes = try? await archive.folderNodes() {
+            folderTrees = Self.trees(from: nodes, sources: sources)
+        }
         lastRefresh = Date()
     }
 }
@@ -223,6 +262,7 @@ struct ArchiveSidebarView: View {
     @State private var saveSearchName = ""
     @State private var sourcesExpanded = true
     @State private var labelsExpanded = true
+    @State private var foldersExpanded = true
     @State private var savedExpanded = true
     /// FOLD-01: what is typed in the folder filter; applied after a short pause.
     @State private var labelFilterText = ""
@@ -262,6 +302,27 @@ struct ArchiveSidebarView: View {
                         .tag(ArchiveSidebarSelection.source(source.filename))
                         .help(sourceHelp(source, cov))
                         .accessibilityIdentifier("archive.sidebar.source")
+                    }
+                }
+            }
+
+            if model.completeLabels, !model.folderTrees.isEmpty {
+                // FOLD-02: each source's own folder tree, empty folders included.
+                Section("Folders", isExpanded: $foldersExpanded) {
+                    ForEach(model.folderTrees) { tree in
+                        DisclosureGroup {
+                            OutlineGroup(tree.items, children: \.children) { item in
+                                row(.folder(id: item.node.folderID, name: item.node.name), item.node.name,
+                                    item.node.declared && item.node.messageCount == 0 ? "folder.badge.minus" : "folder",
+                                    count: item.node.messageCount)
+                                    .help(item.node.path)
+                                    .accessibilityIdentifier("archive.sidebar.folder")
+                            }
+                        } label: {
+                            Label(tree.title, systemImage: "archivebox")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
             }

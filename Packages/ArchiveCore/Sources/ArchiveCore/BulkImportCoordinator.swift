@@ -945,6 +945,10 @@ final class BulkImportCoordinator {
                 if let report = fileReport {
                     summary.damaged += report.failed
                     summary.discovered += report.totalMessages
+                    // FOLD-02: folders the source lists itself, empty ones too.
+                    if !report.declaredFolders.isEmpty {
+                        try await store.registerFolders(sourceID: sourceID, paths: report.declaredFolders)
+                    }
                 } else {
                     summary.discovered += parsedInFile
                 }

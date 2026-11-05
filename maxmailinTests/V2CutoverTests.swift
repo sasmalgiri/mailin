@@ -1425,6 +1425,183 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(plain, mails, "recovery off: stubs are not rows")
     }
 
+    // MARK: - Five jobs FOLD-02 — folders are first-class, per source, empty ones kept
+
+    private func registerSource(_ env: Env, sha: String, name: String, parser: String) async throws -> Int64 {
+        try await env.store.registerSource(SQLiteEmailStore.SourceDescriptor(
+            sha256: sha, filename: name, byteSize: 10, parser: parser, parserVersion: 1, accountID: nil, sourceKind: parser))
+    }
+
+    func testFOLD02_pstFoldersPerSource_emptyOnesKept_sameNamesStayDistinct() async throws {
+        let env = try makeEnv()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-fold02-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        func writePST(_ name: String, salt: Int) throws -> URL {
+            let url = root.appendingPathComponent(name)
+            let w = try PSTSpecWriter(url: url)
+            let inbox = w.appendFolder(name: "Inbox")
+            let clients = w.appendFolder(name: "Clients", parent: inbox)
+            _ = w.appendFolder(name: "Archive 2019")   // declared, holds nothing
+            for i in 0..<6 {
+                var e = makeEmail(i: salt + i, total: 6, body: "b \(i)")
+                e.headers["Subject"] = "\(name) \(i)"
+                try w.append(email: e, folder: i < 4 ? inbox : clients)
+            }
+            XCTAssertEqual(try w.finalize(), 6)
+            return url
+        }
+        let wasStreaming = StreamingParserPolicy.binaryStreaming
+        defer { StreamingParserPolicy.binaryStreaming = wasStreaming }
+        StreamingParserPolicy.binaryStreaming = true
+
+        var sourceIDs: [String: Int64] = [:]
+        for (name, salt, sha) in [("a.pst", 7_000, "aaaa"), ("b.pst", 7_100, "bbbb")] {
+            let url = try writePST(name, salt: salt)
+            let sid = try await registerSource(env, sha: sha, name: name, parser: "pst")
+            sourceIDs[name] = sid
+            var ordinal = 0
+            let report = try await ParserFactory.parseStreamingCallback(
+                fileURL: url, senderEmail: "", batchSize: 4, materializeAttachments: false
+            ) { batch in
+                _ = try await env.store.insertBatch(batch, sourceFileHash: sha, accountID: nil, sourceID: sid,
+                                                    firstOrdinal: ordinal, dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+                ordinal += batch.count
+            }
+            XCTAssertEqual(report.totalMessages, 6)
+            XCTAssertTrue(report.declaredFolders.contains { $0.hasSuffix("Archive 2019") }, "the empty folder is listed: \(report.declaredFolders)")
+            try await env.store.registerFolders(sourceID: sid, paths: report.declaredFolders)
+        }
+
+        let nodes = try await env.store.folderNodes()
+        let inboxes = nodes.filter { $0.name == "Inbox" }
+        XCTAssertEqual(inboxes.count, 2, "one Inbox per source")
+        XCTAssertEqual(Set(inboxes.map(\.sourceID)), Set(sourceIDs.values))
+        XCTAssertTrue(inboxes.allSatisfy { $0.messageCount == 4 && $0.declared }, "\(inboxes)")
+        let clients = nodes.filter { $0.name == "Clients" }
+        XCTAssertEqual(clients.count, 2)
+        for c in clients {
+            XCTAssertEqual(c.messageCount, 2)
+            XCTAssertTrue(c.path.hasSuffix("Inbox/Clients"), c.path)
+            XCTAssertEqual(nodes.first { $0.folderID == c.parentID }?.name, "Inbox", "nested under its own source's Inbox")
+            XCTAssertEqual(nodes.first { $0.folderID == c.parentID }?.sourceID, c.sourceID)
+        }
+        let empty = nodes.filter { $0.name == "Archive 2019" }
+        XCTAssertEqual(empty.count, 2)
+        XCTAssertTrue(empty.allSatisfy { $0.declared && $0.messageCount == 0 }, "kept although empty")
+        let folderTotal = try await env.store.folderTotal()
+        XCTAssertEqual(folderTotal, nodes.count)
+
+        // One source's Inbox is only that source's four messages.
+        for inbox in inboxes {
+            var q = EmailQuery.all
+            q.folderID = inbox.folderID
+            let inFolder = try await env.archive.count(query: q)
+            XCTAssertEqual(inFolder, 4)
+            let sourceName = sourceIDs.first { $0.value == inbox.sourceID }!.key
+            var subjects: [String] = []
+            for try await batch in await env.archive.streamFullEmails(query: q, batchSize: 10) {
+                subjects += batch.map { $0.headers["Subject"] ?? "" }
+            }
+            XCTAssertEqual(subjects.count, 4)
+            XCTAssertTrue(subjects.allSatisfy { $0.hasPrefix(sourceName) }, "\(subjects)")
+        }
+
+        // The sidebar nests them per source, empty folder included.
+        let trees = ArchiveSidebarModel.trees(from: nodes, sources: try await env.store.sources())
+        XCTAssertEqual(trees.map(\.title).sorted(), ["a.pst", "b.pst"])
+        func flatten(_ items: [ArchiveSidebarModel.FolderItem]) -> [ArchiveSidebarModel.FolderItem] {
+            items.flatMap { [$0] + flatten($0.children ?? []) }
+        }
+        for tree in trees {
+            // Outlook's own root ("Top of Personal Folders") stays as the source wrote it.
+            let all = flatten(tree.items)
+            XCTAssertTrue(all.contains { $0.node.name == "Archive 2019" }, "\(all.map(\.node.path))")
+            let inbox = all.first { $0.node.name == "Inbox" }
+            XCTAssertEqual(inbox?.children?.map(\.node.name), ["Clients"])
+            XCTAssertTrue(tree.items.contains { ($0.children ?? []).contains { $0.node.name == "Inbox" } },
+                          "Inbox sits under the PST's root folder: \(tree.items.map(\.node.path))")
+        }
+    }
+
+    func testFOLD02_gmailLabels_areMembershipsOfOneEmail_nestedLabelsHaveParents() async throws {
+        let env = try makeEnv()
+        var e = makeEmail(i: 7_300, total: 1, body: "labelled")
+        e.tags = ["Work", "Receipts/2024"]
+        try await env.store.insertBatch([e], batchSize: 10)
+        let total = try await env.archive.count(query: .all)
+        XCTAssertEqual(total, 1, "one email, not one per label")
+        let nodes = try await env.store.folderNodes()
+        XCTAssertEqual(nodes.map(\.path).sorted(), ["Receipts", "Receipts/2024", "Work"])
+        let receipts = try XCTUnwrap(nodes.first { $0.path == "Receipts" })
+        let year = try XCTUnwrap(nodes.first { $0.path == "Receipts/2024" })
+        XCTAssertEqual(year.parentID, receipts.folderID)
+        XCTAssertEqual(receipts.messageCount, 0, "the parent holds nothing directly")
+        XCTAssertEqual(year.messageCount, 1)
+        for id in [try XCTUnwrap(nodes.first { $0.path == "Work" }).folderID, year.folderID] {
+            var q = EmailQuery.all
+            q.folderID = id
+            let inFolder = try await env.archive.count(query: q)
+            XCTAssertEqual(inFolder, 1)
+        }
+    }
+
+    func testFOLD02_flagsAreNotFolders_andRebuildFromTagsRestoresMemberships() async throws {
+        let env = try makeEnv()
+        let sid = try await registerSource(env, sha: "eeee", name: "Mail", parser: "emlx")
+        var e = makeEmail(i: 7_400, total: 1, body: "apple mail")
+        e.tags = ["Read", "Flagged"]
+        e.flags = ["Read", "Flagged"]
+        e.folderPath = "Inbox/Clients"
+        _ = try await env.store.insertBatch([e], sourceFileHash: "eeee", accountID: nil, sourceID: sid,
+                                            firstOrdinal: 0, dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        func check(_ nodes: [ArchiveFolderNode], file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(nodes.map(\.path).sorted(), ["Inbox", "Inbox/Clients"], file: file, line: line)
+            XCTAssertEqual(nodes.first { $0.path == "Inbox/Clients" }?.messageCount, 1, file: file, line: line)
+            XCTAssertTrue(nodes.allSatisfy { $0.sourceID == sid }, file: file, line: line)
+        }
+        check(try await env.store.folderNodes())
+        // Dual write: the previous path sees the folder as a label too.
+        let tags = try await env.store.parserTagCounts(limit: 10).map(\.value)
+        XCTAssertTrue(tags.contains("Inbox/Clients") && tags.contains("Read"), "\(tags)")
+        // A rebuild from the tags gives the same folders — flags stay out.
+        try await env.store.rebuildFoldersFromTags()
+        check(try await env.store.folderNodes())
+    }
+
+    /// The open guard must equal what the migration chain produces, or a store
+    /// upgraded by this build refuses to reopen (found while adding v21).
+    func testFOLD02_schemaGuardMatchesTheMigrationChain() async throws {
+        let env = try makeEnv()
+        let v = try await env.store.schemaVersion()
+        XCTAssertEqual(v, 21, "v21 adds folders")
+        XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion, "the guard follows the chain")
+        // Reopening the same directory is the real check: a lagging guard refuses here.
+        let reopened = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
+        let reopenedVersion = try await reopened.schemaVersion()
+        XCTAssertEqual(reopenedVersion, 21)
+        let folders = try await reopened.folderTotal()
+        XCTAssertEqual(folders, 0)
+    }
+
+    func testFOLD02_directoryLayoutsNameTheMailbox() {
+        let work = URL(fileURLWithPath: "/tmp/Work.mbox", isDirectory: true)
+        XCTAssertEqual(SourceFormatClassifier.folderPath(member: work.appendingPathComponent("mbox"), root: work, format: .appleMailMailbox), "Work")
+        XCTAssertEqual(SourceFormatClassifier.folderPath(member: work.appendingPathComponent("Clients.mbox/mbox"), root: work, format: .appleMailMailbox), "Work/Clients")
+        let library = URL(fileURLWithPath: "/tmp/Mail", isDirectory: true)
+        let emlx = library.appendingPathComponent("V10/ACC/INBOX.mbox/UUID/Data/1/Messages/1.emlx")
+        XCTAssertEqual(SourceFormatClassifier.folderPath(member: emlx, root: library, format: .appleMailLibrary), "INBOX")
+        let maildir = URL(fileURLWithPath: "/tmp/Maildir", isDirectory: true)
+        XCTAssertEqual(SourceFormatClassifier.folderPath(member: maildir.appendingPathComponent("cur/1.eml"), root: maildir, format: .maildir), "Maildir")
+        let mbox = URL(fileURLWithPath: "/tmp/all.mbox")
+        XCTAssertNil(SourceFormatClassifier.folderPath(member: mbox, root: mbox, format: .mbox), "a single mbox has no folder of its own")
+        // The stamp fills only what the parser left empty.
+        var a = makeEmail(i: 7_500, total: 2, body: "a"); a.folderPath = "Already"
+        let b = makeEmail(i: 7_501, total: 2, body: "b")
+        XCTAssertEqual(ParserFactory.stamp([a, b], folder: "Inbox").map(\.folderPath), ["Already", "Inbox"])
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.
