@@ -2614,6 +2614,80 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs OUT-02 — a filtered export is frozen at its start; occurrences are a disclosed choice
+
+    func testOUT02_querySelectionFrozenAtStart_importDuringTheRunDoesNotDrift() async throws {
+        let env = try makeEnv()
+        let first = (0..<3).map { mail(120 + $0, from: "a@x.com", subject: "Before \($0)", body: "b") }
+        try await env.store.insertBatch(first, batchSize: 10)
+        // The run starts: the selection is frozen to what exists now.
+        let boundValue = try await env.archive.selectionSnapshotBound()
+        let bound = try XCTUnwrap(boundValue)
+        let frozen = ArchiveSelectionScope.query(.all, exclusions: []).snapshotted(bound: bound)
+        XCTAssertTrue(frozen.isFrozen)
+        XCTAssertFalse(ArchiveSelectionScope.query(.all, exclusions: []).isFrozen)
+        // A background import lands while the export is running.
+        let later = (0..<2).map { mail(130 + $0, from: "a@x.com", subject: "During \($0)", body: "b") }
+        try await env.store.insertBatch(later, batchSize: 10)
+
+        let live = try await env.archive.count(scope: .query(.all, exclusions: []))
+        let fixed = try await env.archive.count(scope: frozen)
+        XCTAssertEqual(live, 5, "the live view grew")
+        XCTAssertEqual(fixed, 3, "the frozen selection did not")
+        let folder = env.root.appendingPathComponent("frozen", isDirectory: true)
+        let result = try await ArchiveExportService(archive: env.archive).exportEMLFiles(scope: frozen, to: folder)
+        XCTAssertEqual(result.recordsWritten, 3)
+        let inventory = try ExportInventory.load(folder: folder)
+        XCTAssertEqual(Set(inventory.files.compactMap(\.emailID)), Set(first.map { $0.id.uuidString }), "only the mail that existed at start")
+        // Freezing twice keeps the first bound; the fingerprint is stable under the later import.
+        let again = frozen.snapshotted(bound: bound + 100)
+        XCTAssertEqual(again, frozen)
+        let fp1 = try await env.archive.selectionFingerprint(scope: frozen)
+        try await env.store.insertBatch([mail(140, from: "a@x.com", subject: "Even later", body: "b")], batchSize: 10)
+        let fp2 = try await env.archive.selectionFingerprint(scope: frozen)
+        XCTAssertEqual(fp1, fp2)
+    }
+
+    func testOUT02_folderOccurrences_writeEachMembership_andTheReceiptDisclosesTheCopies() async throws {
+        let env = try makeEnv()
+        var both = mail(150, from: "a@x.com", subject: "In two folders", body: "x"); both.tags = ["Inbox", "Projects/Alpha"]
+        var one = mail(151, from: "a@x.com", subject: "In one", body: "y"); one.tags = ["Inbox"]
+        try await env.store.insertBatch([both, one], batchSize: 10)
+        let service = ArchiveExportService(archive: env.archive)
+
+        // Default: unique messages — one file each, in the first folder.
+        var unique = ExportWriteOptions(); unique.layout = .sourceFolders
+        let uniqueFolder = env.root.appendingPathComponent("unique", isDirectory: true)
+        let uniqueResult = try await service.exportEMLFiles(scope: .explicit([both.id, one.id]), to: uniqueFolder, write: unique)
+        XCTAssertEqual(uniqueResult.recordsWritten, 2)
+        XCTAssertEqual(uniqueResult.extraCopies, 0)
+        XCTAssertEqual(try ExportInventory.load(folder: uniqueFolder).files.filter { $0.emailID == both.id.uuidString }.count, 1)
+
+        // Chosen: every folder occurrence — the second folder gets its copy, counted apart.
+        var each = unique; each.folderOccurrences = true
+        let eachFolder = env.root.appendingPathComponent("each", isDirectory: true)
+        let eachResult = try await service.exportEMLFiles(scope: .explicit([both.id, one.id]), to: eachFolder, write: each)
+        XCTAssertEqual(eachResult.recordsWritten, 3, "three files")
+        XCTAssertEqual(eachResult.extraCopies, 1)
+        let files = try ExportInventory.load(folder: eachFolder).files.filter { $0.emailID == both.id.uuidString }
+        XCTAssertEqual(Set(files.compactMap(\.originalFolder)), ["Inbox", "Projects/Alpha"])
+        XCTAssertTrue(files.allSatisfy { $0.path.hasPrefix("Inbox/") || $0.path.hasPrefix("Projects/Alpha/") })
+        XCTAssertTrue(try ExportInventory.verify(folder: eachFolder).isClean)
+
+        // The receipt keeps messages and files apart and names the choice.
+        var receipt = ExportReceipt(title: "t", destination: eachFolder.path, isFolder: true, requested: 2, written: 3, outcome: .complete,
+                                    startedAt: Date(), completedAt: Date())
+        receipt.checked = 3; receipt.excluded = 0; receipt.extraCopies = 1; receipt.selectionFrozen = true
+        XCTAssertEqual(receipt.reconciliationLine,
+                       "selected 2 · written 2 messages in 3 files · checked 3 of 3 · excluded 0 · failed 0 · 1 extra copies — one file per folder occurrence, as chosen · selection frozen at start")
+        // The request only turns occurrences on under the source-folder layout.
+        var request = ExportRequest(format: .emlFiles, title: "t", scope: .explicit([both.id]), destination: eachFolder.path, isFolder: true, cap: nil)
+        request.options.folderOccurrences = true
+        XCTAssertFalse(request.writeOptions.folderOccurrences, "flat layout: no occurrences")
+        request.options.layout = .sourceFolders
+        XCTAssertTrue(request.writeOptions.folderOccurrences)
+    }
+
     // MARK: - Five jobs OUT-01 — every export format says what it preserves
 
     func testOUT01_everyExportFormatStatesWhatItPreserves() {

@@ -130,6 +130,12 @@ struct EmailQuery: Sendable, Equatable, Codable {
     /// 3.1 R2: "any" = every recovered email, or one `RecoveryState` raw value.
     /// Optional so saved queries from earlier versions still decode.
     var recovery: String? = nil
+    /// Five jobs OUT-02: a selection frozen at a moment. Only rows that
+    /// existed when the bound was taken (`emails.rowid <=`) take part, so a
+    /// filtered export does not drift while a background import adds mail.
+    /// Set by `ArchiveSelectionScope.snapshotted(bound:)` when an export
+    /// starts; optional so saved queries decode.
+    var snapshotMaxRowID: Int64? = nil
 
     static let all = EmailQuery()
 
@@ -142,7 +148,7 @@ struct EmailQuery: Sendable, Equatable, Codable {
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
             || minSenderMessages != nil || newestLimit != nil || !(exclusions ?? []).isEmpty
-            || recovery != nil || folderID != nil || !(spec?.isEmpty ?? true)
+            || recovery != nil || folderID != nil || !(spec?.isEmpty ?? true) || snapshotMaxRowID != nil
     }
 
     var isEmpty: Bool {

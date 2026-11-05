@@ -111,9 +111,20 @@ final class V2ExportTests: XCTestCase {
             XCTFail()
         } catch ExportJobRunner.ResumeError.boundaryMissing {}
 
-        // The archive gains a message → the positions no longer line up.
+        // Five jobs OUT-02: the fresh run froze its query selection to the
+        // rows that existed at its start, so mail imported afterwards is
+        // OUTSIDE the selection — the positions still line up and the
+        // resume is accepted.
+        XCTAssertTrue(bound.scope.isFrozen, "prepare freezes a query scope")
         let store = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
         try await store.insertBatch([makeEmail(i: 777)], batchSize: 10)
+        let afterImport = try await ExportJobRunner.prepare(stopped, archive: env.archive)
+        XCTAssertEqual(afterImport, stopped, "a background import does not change a frozen selection")
+        let frozenCount = try await env.archive.count(scope: bound.scope)
+        XCTAssertEqual(frozenCount, 30)
+
+        // A selected message is removed → the positions no longer line up → refused.
+        try await env.archive.delete(ids: [env.fixtures[3].id])
         do {
             _ = try await ExportJobRunner.prepare(stopped, archive: env.archive)
             XCTFail("a positional resume over a changed selection must be refused")

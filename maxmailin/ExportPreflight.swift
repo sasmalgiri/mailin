@@ -169,6 +169,14 @@ struct ExportPreflightSheet: View {
                     ForEach(ExportFolderLayout.allCases, id: \.self) { Text(LocalizedStringKey($0.label)).tag($0) }
                 }
                 .help("Write every file into one folder, into a subfolder per message year, or into the folders the messages came from (PST folders, labels, mailboxes) — names are made file-system safe and the original names are kept in the inventory")
+                if request.options.layout == .sourceFolders {
+                    // OUT-02: unique messages, or one copy per folder occurrence — the user's choice, disclosed on the receipt.
+                    Toggle("Write a copy in every folder a message belongs to", isOn: Binding(
+                        get: { request.options.folderOccurrences ?? false },
+                        set: { request.options.folderOccurrences = $0 }))
+                        .help("Off: each message once, in its first folder. On: a message in several folders (Gmail labels, copies) is written in each — the receipt says how many extra copies that made")
+                        .accessibilityIdentifier("export.preflight.folderOccurrences")
+                }
                 Picker("If a file already exists", selection: $request.options.collision) {
                     ForEach(ExportCollisionRule.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
@@ -322,7 +330,13 @@ final class ExportJobRunner {
             }
             return request
         }
-        return try await bindSelection(request, archive: archive)
+        // OUT-02: a fresh run freezes a query selection to the rows that exist
+        // now, BEFORE it is fingerprinted or counted, so a background import
+        // during the run cannot add to it. The bound travels in the request,
+        // so a resume continues the same frozen selection.
+        var fresh = request
+        fresh.scope = request.scope.snapshotted(bound: try await archive.selectionSnapshotBound())
+        return try await bindSelection(fresh, archive: archive)
     }
 
     /// The request a receipt should carry so the stopped run can continue:
@@ -574,7 +588,9 @@ final class ExportJobRunner {
             // OUT-04/07: the reconciliation and the inventory, when the writer produced them.
             checked: result?.inventoryURL != nil ? written : nil,
             excluded: result.map { $0.withheld + $0.skipped },
-            inventoryPath: result?.inventoryURL?.path))
+            inventoryPath: result?.inventoryURL?.path,
+            extraCopies: (result?.extraCopies ?? 0) > 0 ? result?.extraCopies : nil,
+            selectionFrozen: request.scope.isFrozen))
         #if os(iOS)
         if !cancelled { share?(request.destinationURL) }
         #endif

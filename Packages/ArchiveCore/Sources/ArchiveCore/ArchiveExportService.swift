@@ -53,6 +53,9 @@ struct ArchiveExportResult: Sendable, Equatable {
     var skipped: Int = 0
     /// Five jobs OUT-07: the durable per-file inventory a finished folder export left beside its files.
     var inventoryURL: URL? = nil
+    /// Five jobs OUT-02: files beyond one per message, written because the
+    /// user chose one copy per folder occurrence. Disclosed on the receipt.
+    var extraCopies: Int = 0
 }
 
 enum ArchiveExportError: LocalizedError {
@@ -426,6 +429,7 @@ final class ArchiveExportService {
         // count comes from the manifest, the INPUT position from `skipFirst`.
         var records = producedBefore, skipped = skippedBefore, bytes = 0, cancelled = false
         var seen = 0
+        var extraCopies = 0
         // Audit F08: files written after the last reported batch boundary are
         // removed on a kept-partial stop, so the folder holds exactly the
         // records the receipt counts and a resume rewrites nothing twice.
@@ -513,78 +517,84 @@ final class ArchiveExportService {
                     }
 
                     // Folder layout: flat, one subfolder per message year, or
-                    // the archive's own folders (OUT-03) with safe names.
-                    var directory = folder
-                    var relative = file.filename
-                    var subdirectory: String? = nil
-                    var originalFolder: String? = nil
+                    // the archive's own folders (OUT-03) with safe names —
+                    // once in the first folder, or (OUT-02, by choice) once
+                    // per folder the message belongs to.
+                    var targets: [(subdirectory: String?, originalFolder: String?)] = []
                     switch options.layout {
                     case .flat:
-                        break
+                        targets = [(nil, nil)]
                     case .byYear:
-                        subdirectory = Self.yearFolderName(for: email)
+                        targets = [(Self.yearFolderName(for: email), nil)]
                     case .sourceFolders:
-                        if let path = SQLiteEmailStore.folderPaths(for: email).first {
-                            originalFolder = path
+                        let paths = SQLiteEmailStore.folderPaths(for: email)
+                        let chosen = options.folderOccurrences ? paths : Array(paths.prefix(1))
+                        targets = chosen.map { path in
                             let safe = ExportInventory.safeRelativeDirectory(forFolderPath: path)
-                            subdirectory = safe.isEmpty ? nil : safe
+                            return (safe.isEmpty ? nil : safe, path)
                         }
+                        if targets.isEmpty { targets = [(nil, nil)] }
                     }
-                    if let subdirectory {
-                        directory = folder.appendingPathComponent(subdirectory, isDirectory: true)
-                        relative = subdirectory + "/" + file.filename
-                        if !fm.fileExists(atPath: directory.path) {
-                            // Every missing ancestor is recorded so a cleanup removes what this run made.
-                            var ancestor = folder
-                            for component in subdirectory.split(separator: "/") {
-                                ancestor = ancestor.appendingPathComponent(String(component), isDirectory: true)
-                                if !fm.fileExists(atPath: ancestor.path) { createdSubfolders.append(ancestor) }
+                    extraCopies += targets.count - 1
+                    for (subdirectory, originalFolder) in targets {
+                        var directory = folder
+                        var relative = file.filename
+                        if let subdirectory {
+                            directory = folder.appendingPathComponent(subdirectory, isDirectory: true)
+                            relative = subdirectory + "/" + file.filename
+                            if !fm.fileExists(atPath: directory.path) {
+                                // Every missing ancestor is recorded so a cleanup removes what this run made.
+                                var ancestor = folder
+                                for component in subdirectory.split(separator: "/") {
+                                    ancestor = ancestor.appendingPathComponent(String(component), isDirectory: true)
+                                    if !fm.fileExists(atPath: ancestor.path) { createdSubfolders.append(ancestor) }
+                                }
+                                try fm.createDirectory(at: directory, withIntermediateDirectories: true)
                             }
-                            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
                         }
-                    }
-                    var target = directory.appendingPathComponent(file.filename)
+                        var target = directory.appendingPathComponent(file.filename)
 
-                    // Collision rule for a destination that already has files.
-                    if fm.fileExists(atPath: target.path) {
-                        switch options.collision {
-                        case .skipExisting:
-                            // Q5: an existing file accepted as output is
-                            // fingerprinted in the manifest like a produced
-                            // one (so produced == listed files and a resume
-                            // re-verifies it), but never created or removed
-                            // by this export.
-                            let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.intValue ?? 0
-                            let digest = try Self.sha256(ofFile: target).map { String(format: "%02x", $0) }.joined()
-                            try manifest.appendFile(name: relative, bytes: size, sha256: digest, existing: true,
-                                                    emailID: email.id.uuidString, messageID: email.headers["Message-ID"],
-                                                    originalFolder: originalFolder)
-                            records += 1
-                            continue
-                        case .overwrite:
-                            break
-                        case .keepBoth:
-                            target = Self.uniqueURL(for: target)
-                            relative = (subdirectory.map { $0 + "/" } ?? "") + target.lastPathComponent
+                        // Collision rule for a destination that already has files.
+                        if fm.fileExists(atPath: target.path) {
+                            switch options.collision {
+                            case .skipExisting:
+                                // Q5: an existing file accepted as output is
+                                // fingerprinted in the manifest like a produced
+                                // one (so produced == listed files and a resume
+                                // re-verifies it), but never created or removed
+                                // by this export.
+                                let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.intValue ?? 0
+                                let digest = try Self.sha256(ofFile: target).map { String(format: "%02x", $0) }.joined()
+                                try manifest.appendFile(name: relative, bytes: size, sha256: digest, existing: true,
+                                                        emailID: email.id.uuidString, messageID: email.headers["Message-ID"],
+                                                        originalFolder: originalFolder)
+                                records += 1
+                                continue
+                            case .overwrite:
+                                break
+                            case .keepBoth:
+                                target = Self.uniqueURL(for: target)
+                                relative = (subdirectory.map { $0 + "/" } ?? "") + target.lastPathComponent
+                            }
                         }
+                        let fileBytes: Int
+                        let fileHash: String
+                        if let data = file.data {
+                            try data.write(to: target, options: .atomic)
+                            fileBytes = data.count
+                            fileHash = ExportFolderManifest.hex(data)
+                        } else {
+                            let streamed = try await archive.writeRawMessage(for: email, to: target, ledger: sourceLedger)
+                            fileBytes = streamed.bytes
+                            fileHash = streamed.sha256Hex
+                        }
+                        bytes += fileBytes
+                        written.append(relative)
+                        try manifest.appendFile(name: relative, bytes: fileBytes, sha256: fileHash,
+                                                emailID: email.id.uuidString, messageID: email.headers["Message-ID"],
+                                                originalFolder: originalFolder)
+                        records += 1
                     }
-                    let fileBytes: Int
-                    let fileHash: String
-                    if let data = file.data {
-                        try data.write(to: target, options: .atomic)
-                        fileBytes = data.count
-                        fileHash = ExportFolderManifest.hex(data)
-                    } else {
-                        let streamed = try await archive.writeRawMessage(for: email, to: target, ledger: sourceLedger)
-                        fileBytes = streamed.bytes
-                        fileHash = streamed.sha256Hex
-                    }
-                    bytes += fileBytes
-                    written.append(relative)
-                    try manifest.appendFile(name: relative, bytes: fileBytes, sha256: fileHash,
-                                            emailID: email.id.uuidString, messageID: email.headers["Message-ID"],
-                                            originalFolder: originalFolder)
-                    records += 1
                 }
                 // T3: progress is the INPUT position (what a resume skips);
                 // the produced count travels separately. Q2: a replay-only
@@ -612,7 +622,7 @@ final class ArchiveExportService {
                                        completed: false, cancelled: true, withheld: withheld,
                                        unverifiedSources: sourceLedger.unverifiedPaths.count,
                                        positionsConsumed: options.keepPartialOnCancel ? positionsAtBoundary : seen,
-                                       skipped: skipped)
+                                       skipped: skipped, extraCopies: extraCopies)
         }
         // OUT-07: a finished run keeps its per-file record — the manifest is
         // finalised into the portable inventory beside the files. Only when
@@ -624,7 +634,7 @@ final class ArchiveExportService {
         if inventoryURL != nil { manifest.remove() }
         return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes, completed: true, cancelled: false,
                                    withheld: withheld, unverifiedSources: sourceLedger.unverifiedPaths.count,
-                                   positionsConsumed: seen, skipped: skipped, inventoryURL: inventoryURL)
+                                   positionsConsumed: seen, skipped: skipped, inventoryURL: inventoryURL, extraCopies: extraCopies)
     }
 
     /// `2019`, or `undated` when the Date header is missing or unparseable.

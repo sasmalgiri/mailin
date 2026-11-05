@@ -113,12 +113,19 @@ struct ExportWriteOptions: Codable, Equatable, Sendable {
     /// Third review T2: the SHA-256 the partial artifact must hash to; length
     /// alone does not distinguish a same-length edit.
     var expectedAppendSHA256: String? = nil
+    /// OUT-02: with the source-folder layout, write a message that belongs to
+    /// several folders into each of them (one file per occurrence) instead
+    /// of once in its first folder. The extra copies are counted and disclosed.
+    var folderOccurrences: Bool = false
 }
 
 /// The user's pre-flight choices.
 struct ExportOptions: Codable, Equatable, Sendable {
     var layout: ExportFolderLayout = .flat
     var collision: ExportCollisionRule = .overwrite
+    /// OUT-02: source-folder layout — each folder occurrence, not each unique message.
+    /// Optional-defaulted so receipts written before it decode.
+    var folderOccurrences: Bool? = nil
     /// Folder formats: also copy every attachment into `Attachments/`.
     var includeAttachmentsFolder: Bool = false
     /// mbox: split into ≤ 2 GB partitions (exFAT-safe, Apple Mail imports a folder).
@@ -179,7 +186,8 @@ struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
                            layout: options.layout,
                            collision: options.collision,
                            expectedAppendOffset: skipFirst > 0 ? resumeArtifactBytes : nil,
-                           expectedAppendSHA256: skipFirst > 0 ? resumeArtifactSHA256 : nil)
+                           expectedAppendSHA256: skipFirst > 0 ? resumeArtifactSHA256 : nil,
+                           folderOccurrences: options.layout == .sourceFolders && options.folderOccurrences == true)
     }
 }
 

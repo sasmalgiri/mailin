@@ -53,22 +53,33 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     var excluded: Int? = nil
     /// The per-file inventory a finished folder export left beside its files.
     var inventoryPath: String? = nil
+    /// OUT-02: files beyond one per message, written because the user chose
+    /// one copy per folder occurrence. Disclosed, never hidden in `written`.
+    var extraCopies: Int? = nil
+    /// OUT-02: true when the selection was frozen at the start of the run
+    /// (a query scope bound to the rows that existed then).
+    var selectionFrozen: Bool? = nil
 
     var durationSeconds: Double { completedAt.timeIntervalSince(startedAt) }
 
     /// OUT-04: selected / written / checked / excluded / failed — distinct,
-    /// never double-counted ("checked" is coverage over the written files).
+    /// never double-counted ("checked" is coverage over the written files;
+    /// intentional extra copies are taken out before "failed" is derived).
     var reconciliationLine: String? {
         guard checked != nil || excluded != nil else { return nil }
+        let copies = extraCopies ?? 0
+        let messagesWritten = max(0, written - copies)
         var parts: [String] = []
         if let requested { parts.append("selected \(requested)") }
-        parts.append("written \(written)")
+        parts.append(copies > 0 ? "written \(messagesWritten) messages in \(written) files" : "written \(written)")
         if let checked { parts.append("checked \(checked) of \(written)") }
         if let excluded { parts.append("excluded \(excluded)") }
         if let requested {
-            let failed = max(0, requested - written - (excluded ?? 0))
+            let failed = max(0, requested - messagesWritten - (excluded ?? 0))
             parts.append("failed \(failed)")
         }
+        if copies > 0 { parts.append("\(copies) extra copies — one file per folder occurrence, as chosen") }
+        if selectionFrozen == true { parts.append("selection frozen at start") }
         return parts.joined(separator: " · ")
     }
 

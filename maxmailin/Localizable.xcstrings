@@ -65744,9 +65744,7 @@
         }
       }
     },
-    "Build a search from conditions: all / any / exclude, dates, attachments" : {
-
-    },
+    "Build a search from conditions: all / any / exclude, dates, attachments" : {},
     "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft." : {
       "localizations" : {
         "de" : {
@@ -375011,6 +375009,134 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "非真實 PII 項目的從零開始編號 — Unix 時間戳記、訂單/參照/追蹤/序號、訊息 ID、版本字串。若所有項目均為真實則為空。"
+          }
+        }
+      }
+    },
+    "Write a copy in every folder a message belongs to" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In jeden Ordner, zu dem eine Nachricht gehört, eine Kopie schreiben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir una copia en cada carpeta a la que pertenece un mensaje"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Écrire une copie dans chaque dossier auquel un message appartient"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संदेश जिन-जिन फ़ोल्डरों में है, हर एक में एक प्रति लिखें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scrivi una copia in ogni cartella a cui appartiene un messaggio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージが属するすべてのフォルダにコピーを書き出す"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지가 속한 모든 폴더에 복사본 쓰기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar uma cópia em cada pasta a que uma mensagem pertence"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在邮件所属的每个文件夹中写入一份副本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在郵件所屬的每個資料夾中寫入一份副本"
+          }
+        }
+      }
+    },
+    "Off: each message once, in its first folder. On: a message in several folders (Gmail labels, copies) is written in each — the receipt says how many extra copies that made" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus: jede Nachricht einmal, in ihrem ersten Ordner. Ein: eine Nachricht in mehreren Ordnern (Gmail-Labels, Kopien) wird in jeden geschrieben – die Quittung nennt die Zahl der zusätzlichen Kopien"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivado: cada mensaje una vez, en su primera carpeta. Activado: un mensaje en varias carpetas (etiquetas de Gmail, copias) se escribe en cada una; el recibo indica cuántas copias adicionales se crearon"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Désactivé : chaque message une fois, dans son premier dossier. Activé : un message présent dans plusieurs dossiers (libellés Gmail, copies) est écrit dans chacun — le reçu indique le nombre de copies supplémentaires"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बंद: हर संदेश एक बार, उसके पहले फ़ोल्डर में। चालू: कई फ़ोल्डरों वाला संदेश (Gmail लेबल, प्रतियाँ) हर एक में लिखा जाता है — रसीद बताती है कि कितनी अतिरिक्त प्रतियाँ बनीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disattivato: ogni messaggio una volta, nella sua prima cartella. Attivato: un messaggio in più cartelle (etichette Gmail, copie) viene scritto in ciascuna; la ricevuta indica quante copie in più sono state create"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフ：各メッセージを最初のフォルダに1回だけ。オン：複数のフォルダ（Gmailラベル、コピー）にあるメッセージをそれぞれに書き出します。追加コピーの数は受領書に記載されます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "끔: 각 메시지를 첫 번째 폴더에 한 번만. 켬: 여러 폴더(Gmail 라벨, 복사본)에 있는 메시지를 각 폴더에 씁니다. 추가 복사본 수는 영수증에 표시됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desligado: cada mensagem uma vez, na sua primeira pasta. Ligado: uma mensagem em várias pastas (marcadores do Gmail, cópias) é gravada em cada uma — o recibo informa quantas cópias extras isso gerou"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭：每封邮件只写入其第一个文件夹一次。开启：位于多个文件夹（Gmail 标签、副本）的邮件会写入每个文件夹——回执会说明由此产生了多少额外副本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉：每封郵件只寫入其第一個資料夾一次。開啟：位於多個資料夾（Gmail 標籤、副本）的郵件會寫入每個資料夾——回條會說明由此產生了多少額外副本"
           }
         }
       }

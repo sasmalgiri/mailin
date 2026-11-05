@@ -3702,6 +3702,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 """)
             binds.append(.int(Int64(max(0, newest))))
         }
+        // OUT-02: a frozen selection sees only rows that existed at its start.
+        if let bound = q.snapshotMaxRowID {
+            sql.append("e.rowid <= ?")
+            binds.append(.int(bound))
+        }
         if let sender = q.sender, !sender.isEmpty {
             sql.append("instr(lower(e.from_addr), lower(?)) > 0")
             binds.append(.text(sender))
