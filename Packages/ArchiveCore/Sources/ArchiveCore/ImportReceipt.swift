@@ -116,6 +116,30 @@ struct ImportReceipt: Codable, Sendable, Equatable {
         var sha256: String
         var parser: String
         var parserVersion: Int
+        // Five jobs OPEN-05: this file's own accounting. All optional so
+        // receipts from earlier builds decode; nil = not known, never 0.
+        /// Messages the parser saw in this file (read + damaged). Nil when the
+        /// read stopped before the end — an unknown total stays unknown.
+        var discovered: Int? = nil
+        /// Messages read from this file.
+        var parsed: Int? = nil
+        /// Rows persisted from this file in THIS run (a resumed file counts
+        /// only what this run added).
+        var committed: Int? = nil
+        /// Messages the parser could not read and skipped with a report.
+        var damaged: Int? = nil
+        /// Items imported but marked unreadable or partial by the parser (a
+        /// PST item whose properties could not be read, a deletion stub).
+        var unreadable: Int? = nil
+        /// Container members that were not mail, were encrypted or refused, or
+        /// were nested archives — counted, never imported.
+        var unresolved: Int? = nil
+        /// The whole file was already imported (same hash) and skipped.
+        var skippedAlreadyImported: Bool? = nil
+        /// Rows committed before a stop or an error ended the file.
+        var stoppedAtMessage: Int? = nil
+        /// Why the file did not finish.
+        var error: String? = nil
     }
 
     /// One source file that failed mid-import (Part B3/g): recorded so a bad

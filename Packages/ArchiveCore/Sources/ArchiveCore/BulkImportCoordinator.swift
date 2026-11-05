@@ -585,7 +585,15 @@ final class BulkImportCoordinator {
             // Per-file parse/persist state, visible to the batch closure.
             var parsedInFile = 0            // parsed-message ordinal within this file
             var committedOrdinal = 0        // leading messages persisted+indexed
+            var unreadableInFile = 0        // OPEN-05: items the parser marked unreadable/partial
+            var resumedFrom = 0             // OPEN-05: rows an earlier run had already committed
             var fileError: Error? = nil
+            // OPEN-05: this file's record in the receipt, filled as the file goes.
+            func noteSource(_ change: (inout ImportReceipt.SourceRecord) -> Void) {
+                if let last = sources.indices.last, sources[last].filename == sourceName, sources[last].parser != "" {
+                    change(&sources[last])
+                }
+            }
 
             do {
                 // 1. Hash this file for chain of custody + checkpoint lookup.
@@ -641,6 +649,7 @@ final class BulkImportCoordinator {
                 // 2. Skip if we have already fully ingested this file.
                 if await checkpoints.isImported(sha256: hash) {
                     summary.skippedFiles += 1
+                    noteSource { $0.skippedAlreadyImported = true }
                     continue
                 }
                 try Task.checkCancellation()
@@ -658,6 +667,7 @@ final class BulkImportCoordinator {
                     summary.resumedDetail = "Resumed \(sourceName) at message \(resumeFrom) (identity-verified checkpoint)."
                 }
                 committedOrdinal = resumeFrom
+                resumedFrom = resumeFrom
 
                 // 4. Streaming parse → persist → index → checkpoint, one
                 //    bounded batch at a time. §7.7: the recovery report is
@@ -719,6 +729,11 @@ final class BulkImportCoordinator {
                         var pending = Array(batch[range])
                         for i in pending.indices {
                             pending[i].headers["sourceFile"] = sourceName
+                            // OPEN-05: imported, but not whole — said so per source.
+                            if pending[i].recovery?.partial == true
+                                || pending[i].anomalies.contains(where: { $0.hasPrefix("PST item whose properties could not be read") }) {
+                                unreadableInFile += 1
+                            }
                         }
 
                         // (1c) Free-tier cap on committed emails this run.
@@ -963,8 +978,25 @@ final class BulkImportCoordinator {
                     if !report.declaredFolders.isEmpty {
                         try await store.registerFolders(sourceID: sourceID, paths: report.declaredFolders)
                     }
+                    // OPEN-05: this file's own accounting; container members that
+                    // were not mail, encrypted or nested are "unresolved".
+                    let unresolved = report.errorCategories.filter { $0.key.hasPrefix("container_") }.values.reduce(0, +)
+                    noteSource {
+                        $0.discovered = report.totalMessages
+                        $0.parsed = parsedInFile
+                        $0.committed = max(0, committedOrdinal - resumedFrom)
+                        $0.damaged = report.failed
+                        $0.unreadable = unreadableInFile
+                        $0.unresolved = unresolved
+                    }
                 } else {
                     summary.discovered += parsedInFile
+                    // The read did not finish: the total stays unknown.
+                    noteSource {
+                        $0.parsed = parsedInFile
+                        $0.committed = max(0, committedOrdinal - resumedFrom)
+                        $0.unreadable = unreadableInFile
+                    }
                 }
                 summary.parsed += parsedInFile
 
@@ -993,21 +1025,22 @@ final class BulkImportCoordinator {
                 break fileLoop
             } catch let error as PersistFailureSignal {
                 // (1g) One bad file must not abort the rest.
-                summary.fileErrors.append(FileError(
-                    filename: sourceName,
-                    message: "Could not save emails to the archive: \(error.underlying.localizedDescription)"
-                ))
+                let message = "Could not save emails to the archive: \(error.underlying.localizedDescription)"
+                summary.fileErrors.append(FileError(filename: sourceName, message: message))
+                noteSource { $0.stoppedAtMessage = committedOrdinal; $0.error = message }
             } catch is SkipSourceSignal {
                 // A4: stopped by the user after a committed batch. Not an
                 // error — the checkpoint stays, so importing the file again
                 // resumes exactly here. The run moves on to the next file.
                 summary.stoppedByUser.append(StoppedSource(filename: sourceName, messagesCommitted: committedOrdinal))
                 summary.warnings.append("\(sourceName) was stopped by you after \(committedOrdinal) messages; import it again to resume from there.")
+                noteSource { $0.stoppedAtMessage = committedOrdinal; $0.error = "Stopped by you; import again to resume." }
             } catch {
                 summary.fileErrors.append(FileError(
                     filename: sourceName,
                     message: error.localizedDescription
                 ))
+                noteSource { $0.stoppedAtMessage = committedOrdinal; $0.error = error.localizedDescription }
             }
         }
 

@@ -148,6 +148,30 @@ struct ImportReceiptView: View {
 
     // MARK: Sources
 
+    /// OPEN-05: one source's own accounting, or nil for receipts written
+    /// before per-source counts existed.
+    static func accountingLine(for source: ImportReceipt.SourceRecord) -> String? {
+        if source.skippedAlreadyImported == true {
+            return String(localized: "Already imported earlier (same file) — skipped.")
+        }
+        guard let parsed = source.parsed else { return nil }
+        var parts: [String] = []
+        if let discovered = source.discovered {
+            parts.append(String(localized: "\(discovered) found, \(parsed) read"))
+        } else {
+            parts.append(String(localized: "\(parsed) read — how many the file holds is not known, the read stopped early"))
+        }
+        if let committed = source.committed { parts.append(String(localized: "\(committed) saved this run")) }
+        if let damaged = source.damaged, damaged > 0 { parts.append(String(localized: "\(damaged) damaged")) }
+        if let unreadable = source.unreadable, unreadable > 0 { parts.append(String(localized: "\(unreadable) imported but not whole")) }
+        if let unresolved = source.unresolved, unresolved > 0 { parts.append(String(localized: "\(unresolved) members not mail or not readable")) }
+        var line = parts.joined(separator: " · ")
+        if let stopped = source.stoppedAtMessage, let error = source.error {
+            line += " — " + String(localized: "stopped after \(stopped) messages: \(error)")
+        }
+        return line
+    }
+
     private var sourcesSection: some View {
         section("Source files") {
             if receipt.sources.isEmpty {
@@ -163,6 +187,14 @@ struct ImportReceiptView: View {
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundColor(AppColors.secondary)
                         .textSelection(.enabled)
+                    // OPEN-05: what happened to THIS file, not only the run.
+                    if let line = Self.accountingLine(for: source) {
+                        Text(line)
+                            .font(Typography.caption2)
+                            .foregroundColor(source.error == nil ? AppColors.secondary : .orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("receipt.source.accounting")
+                    }
                 }
                 .padding(.vertical, 2)
             }
@@ -407,6 +439,7 @@ struct ImportReceiptView: View {
         for source in receipt.sources {
             lines.append("  \(source.filename) — \(byteText(source.sizeBytes)), \(source.parser) v\(source.parserVersion)")
             lines.append("    SHA-256 \(source.sha256)")
+            if let accounting = Self.accountingLine(for: source) { lines.append("    \(accounting)") }
         }
         lines.append("")
         lines.append("Accounting")

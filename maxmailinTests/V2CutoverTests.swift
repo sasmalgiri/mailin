@@ -1847,6 +1847,61 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(plan.items.first { $0.name == "locked.mbox" }?.preflight.condition, .inaccessible)
     }
 
+    // MARK: - Five jobs OPEN-05 — the receipt accounts per source
+
+    func testOPEN05_receiptAccountsPerSource_andSkippedFilesSaySo() async throws {
+        let env = try makeEnv()
+        let first = env.root.appendingPathComponent("First.mbox")
+        _ = try writeDeferredMbox(to: first)
+        // The same bytes under another name: already imported, skipped.
+        let again = env.root.appendingPathComponent("Again.mbox")
+        try FileManager.default.copyItem(at: first, to: again)
+        let wasOn = SourceCopyPolicy.isEnabled
+        defer { SourceCopyPolicy.isEnabled = wasOn }
+        SourceCopyPolicy.isEnabled = false
+
+        let checkpoints = ImportCheckpointStore(store: env.store)
+        let coordinator = await BulkImportCoordinator(store: env.store, fts: env.fts, checkpoints: checkpoints,
+                                                      requiresStorageActivation: false)
+        var options = BulkImportCoordinator.Options()
+        options.useOffsetEngine = true
+        options.recordLocators = true
+        options.enforceStoragePreflight = false
+        options.fullParseCeilingBytes = 64 * 1024
+        let summary = try await coordinator.runImport(urls: [first, again], options: options)
+        let receipt = try XCTUnwrap(summary.receipt)
+        XCTAssertEqual(receipt.sources.map(\.filename), ["First.mbox", "Again.mbox"])
+
+        let a = receipt.sources[0]
+        XCTAssertEqual(a.discovered, 3)
+        XCTAssertEqual(a.parsed, 3)
+        XCTAssertEqual(a.committed, 3)
+        XCTAssertEqual(a.damaged, 0)
+        XCTAssertEqual(a.unreadable, 0)
+        XCTAssertEqual(a.unresolved, 0)
+        XCTAssertNil(a.skippedAlreadyImported)
+        XCTAssertNil(a.error)
+        let b = receipt.sources[1]
+        XCTAssertEqual(b.skippedAlreadyImported, true)
+        XCTAssertNil(b.committed, "nothing was counted for a skipped file — nil, not 0")
+        XCTAssertEqual(summary.skippedFiles, 1)
+
+        XCTAssertEqual(ImportReceiptView.accountingLine(for: a), "3 found, 3 read · 3 saved this run")
+        XCTAssertEqual(ImportReceiptView.accountingLine(for: b), "Already imported earlier (same file) — skipped.")
+        var stopped = a
+        stopped.discovered = nil; stopped.committed = 2; stopped.stoppedAtMessage = 2; stopped.error = "disk full"
+        let line = try XCTUnwrap(ImportReceiptView.accountingLine(for: stopped))
+        XCTAssertTrue(line.contains("not known") && line.contains("stopped after 2 messages: disk full"), line)
+
+        // A receipt from an earlier build, without per-source counts, still decodes.
+        let legacy = """
+        {"filename":"Old.mbox","sizeBytes":10,"sha256":"ab","parser":"mbox","parserVersion":2}
+        """
+        let decoded = try JSONDecoder().decode(ImportReceipt.SourceRecord.self, from: Data(legacy.utf8))
+        XCTAssertNil(decoded.parsed)
+        XCTAssertNil(ImportReceiptView.accountingLine(for: decoded))
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.
