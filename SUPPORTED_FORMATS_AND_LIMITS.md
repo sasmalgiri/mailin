@@ -102,11 +102,13 @@ same bytes (FTS shard eviction thrash between members) — a 3.1 tuning item.
 | ZIP | `ZIPArchiveReader` → member's own parser | Yes | **Container (2.1):** each member streams to a scratch file (64 KiB window), is classified on its own bytes, parsed, and deleted before the next member is touched. Stored and deflate methods; ZIP64 records and extra fields honoured (Google Takeout > 4 GB). Size and CRC-32 verified per member | The only ceiling is the scratch volume's free space (+64 MiB margin) — there is no arbitrary member cap. Refused and counted, never imported: encrypted members, other compression methods, a member whose output exceeds or falls short of its declared size, CRC mismatch. Skipped and counted: non-mail members, nested archives, `__MACOSX/` and dot-files. Executed: `ContainerImportTests` (9) |
 | gzip | `ZIPArchiveReader.gunzip` → payload's parser | Yes | **Container (2.1):** RFC 1952 header parsed (FEXTRA/FNAME/FCOMMENT/FHCRC), raw deflate streamed, trailer CRC-32 and size verified | Single payload; name taken from the archive's own name minus `.gz` |
 
-Non-streaming parsers (`pst`, `ost`, `nsf`, `msg`, `emlx`) materialise the whole
-result before draining it in bounded chunks. The adaptive batch envelope's
-*message* bound is honoured on that path; its *byte* bound is not, because the
-messages already exist by then. Wiring those parsers to the envelope is tracked
-as P3.2.
+With "Streaming PST and NSF import" on (default since five jobs OPEN-02, 2026-11-05),
+`pst`, `ost` and `nsf` hand messages out in batches as they are read; only one
+batch is resident. With it off, and always for `msg` and `emlx`, the parser
+materialises the whole result before draining it in bounded chunks. The adaptive
+batch envelope's *message* bound is honoured on every path; its *byte* bound only
+on the streaming ones (`msg` is one message per file, so a whole message is the
+smallest unit anyway).
 
 ### Memory behaviour by format (audit F16, stated rather than implied)
 
@@ -114,8 +116,9 @@ as P3.2.
 |---|---|---|
 | mbox, eml, gzip/ZIP of those | **Bounded**: peak does not grow with the file. Offset engine: headers per batch, bodies parsed per batch; streaming parser: one batch resident | 1.5 GB mbox: peak Δ 450–790 MiB (`SCALE_RESULTS.md` rows 1–3); 1 GB format rows executed |
 | EML folder, Maildir, Apple Mail package, `.emlx` folder | **Bounded per file**; the member list (paths only) is resident | 1 GB rows executed |
-| pst, ost | **Bounded** with "Streaming PST import" on (default, five jobs OPEN-02, 2026-11-05): messages leave the node tree in batches, one batch resident; the node table (≈ 32 bytes per node) and the mmap'd file pages are the only per-file residents. Off: the previous path, proportional to the file | 100 MB PST, 2,000 messages, batches of 100: footprint grew by less than half the file (`V2CutoverTests.testOPEN02_*`); 1 GB PST row executed earlier on the array path; larger files are **not tested** and are not claimed |
-| nsf, msg | **Proportional to the file**: the parser materialises the whole result before batching, so peak ≈ file size × decode expansion. There is no product cap; the ceiling is the Mac's memory | 1 GB MSG row executed; NSF never on a real file; larger files are **not tested** and are not claimed |
+| pst, ost | **Bounded** with "Streaming PST and NSF import" on (default, five jobs OPEN-02, 2026-11-05): messages leave the node tree in batches, one batch resident; the node table (≈ 32 bytes per node) and the mmap'd file pages are the only per-file residents. Off: the previous path, proportional to the file | 100 MB PST, 2,000 messages, batches of 100: footprint grew by less than half the file (`V2CutoverTests.testOPEN02_pst*`); 1 GB PST row executed earlier on the array path; larger files are **not tested** and are not claimed |
+| nsf | **Bounded** with the same switch: note records are read one at a time from the mapped file and handed out in batches; no note cap on this path (the previous path stops at 500,000 notes). The text-scan fallback (no structured record found) still reads the file as one string, bounded to 200 MB by its own guard | 100 MB synthetic NSF, 2,000 memos, batches of 100: footprint grew by less than half the file (`V2CutoverTests.testOPEN02_nsf*`); **never executed on a real Notes database** — no fixture exists |
+| msg | **Proportional to the message** — one message per file, read whole | 1 GB MSG row executed |
 | ZIP container itself | Central directory resident (≈ 80 bytes per member); each member streams to a scratch file | `ContainerImportTests` |
 
 "Bounded memory" in this document therefore means the first two rows. A

@@ -204,8 +204,8 @@ struct EngineSpec: Sendable {
             // the process footprint growing by less than half the file, same
             // order as the array path (V2CutoverTests.testOPEN02_*). Promoted.
             return EngineSpec(.archive, requires: [.v3PSTSpecReader], maturity: .stable,
-                name: String(localized: "Streaming PST import"),
-                detail: String(localized: "Reads Outlook PST and OST files message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored."))
+                name: String(localized: "Streaming PST and NSF import"),
+                detail: String(localized: "Reads Outlook PST and OST files and Notes NSF databases message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored."))
         case .v3PSTSpecReader:
             // Gate passed 2026-10-13: 15 public Outlook PSTs (Digital Corpora) read
             // with the same messages, Message-IDs, subjects and deleted-items

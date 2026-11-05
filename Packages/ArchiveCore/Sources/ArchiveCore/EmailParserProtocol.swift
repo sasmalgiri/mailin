@@ -406,6 +406,15 @@ struct ParserFactory {
                 return MBOXParser.ParseRecoveryReport(
                     totalMessages: total, successfullyParsed: total, failed: 0, errorCategories: [:])
             }
+            if ext == "nsf", StreamingParserPolicy.binaryStreaming {
+                let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+                let total = try await NSFParser.parseStreaming(
+                    fileURL: fileURL, senderEmail: senderEmail,
+                    batchSize: max(1, min(batchSize, chunkLimit)),
+                    onProgress: onProgress, onBatch: onBatch)
+                return MBOXParser.ParseRecoveryReport(
+                    totalMessages: total, successfullyParsed: total, failed: 0, errorCategories: [:])
+            }
             // Non-streamable format: the array parser runs (rejecting
             // unsupported extensions) and the result drains in bounded
             // chunks. These parsers throw on damage rather than recover,

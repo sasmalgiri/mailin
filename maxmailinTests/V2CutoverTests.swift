@@ -1295,6 +1295,136 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(array.first?.headers["Subject"], firstStreamed, "both paths hand out messages in the same order")
     }
 
+    /// One Notes item record: type, name length, value length, name, value.
+    private static func nsfItem(_ name: String, _ value: String) -> Data {
+        var d = Data()
+        let n = Data(name.utf8), v = Data(value.utf8)
+        withUnsafeBytes(of: UInt16(0x0500).littleEndian) { d.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt16(n.count).littleEndian) { d.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(v.count).littleEndian) { d.append(contentsOf: $0) }
+        d.append(n); d.append(v)
+        return d
+    }
+
+    func testOPEN02_nsfStreamsInBatches_andTheFootprintFollowsTheBatch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-open02-nsf-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("hundred-megabytes.nsf")
+
+        // ~100 MB synthetic Notes database: 2,000 memos with ~50 KB bodies,
+        // written record by record so the fixture itself never sits in memory.
+        let n = 2_000
+        let body = String(repeating: "Streaming body text for the open-archive test. ", count: 1_100)
+        var header = Data([0x1A, 0x00]); header.append(Data(repeating: 0, count: 254))
+        withUnsafeBytes(of: UInt32(256).littleEndian) { header.replaceSubrange(0x28..<0x2C, with: $0) }
+        FileManager.default.createFile(atPath: url.path, contents: header)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        for i in 0..<n {
+            var record = Data()
+            record.append(Self.nsfItem("Subject", "Stream \(i)"))
+            record.append(Self.nsfItem("From", "CN=Sender \(i % 25)/O=Acme"))
+            record.append(Self.nsfItem("SendTo", "CN=Team/O=Acme"))
+            record.append(Self.nsfItem("DeliveredDate", String(format: "02/%02d/2024 09:%02d:00", 1 + i % 28, i % 60)))
+            record.append(Self.nsfItem("$MessageID", "<nsf-open02-\(i)@acme.example>"))
+            record.append(Self.nsfItem("Body", body + "\nTail \(i)"))
+            record.append(Self.nsfItem("Form", "Memo"))
+            try handle.write(contentsOf: record)
+        }
+        try handle.write(contentsOf: Data(repeating: 0, count: 128))
+        try handle.close()
+        let fileSize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
+        XCTAssertGreaterThan(fileSize, 90_000_000, "the fixture is about 100 MB")
+
+        let wasStreaming = StreamingParserPolicy.binaryStreaming
+        defer { StreamingParserPolicy.binaryStreaming = wasStreaming }
+        StreamingParserPolicy.binaryStreaming = true
+
+        let before = Self.physFootprint()
+        var peak = before
+        var batches = 0, largestBatch = 0, total = 0
+        var subjects = Set<String>()
+        let report = try await ParserFactory.parseStreamingCallback(
+            fileURL: url, senderEmail: "", batchSize: 100, materializeAttachments: false
+        ) { batch in
+            batches += 1
+            largestBatch = max(largestBatch, batch.count)
+            total += batch.count
+            for email in batch { subjects.insert(email.headers["Subject"] ?? "") }
+            peak = max(peak, Self.physFootprint())
+        }
+        XCTAssertEqual(report.totalMessages, n)
+        XCTAssertEqual(total, n)
+        XCTAssertEqual(largestBatch, 100)
+        XCTAssertEqual(batches, n / 100)
+        XCTAssertEqual(subjects.count, n, "every memo arrived once")
+        let grewBy = peak - before
+        XCTAssertLessThan(grewBy, fileSize / 2,
+                          "footprint grew \(grewBy / 1_048_576) MB while streaming a \(fileSize / 1_048_576) MB file")
+
+        // The previous path reads the same memos in the same order.
+        var firstStreamed: String?
+        _ = try await NSFParser.parseStreaming(fileURL: url, senderEmail: "", batchSize: 5) { batch in
+            if firstStreamed == nil { firstStreamed = batch.first?.headers["Subject"] }
+        }
+        let array = try NSFParser.parse(fileURL: url, senderEmail: "")
+        XCTAssertEqual(array.count, n)
+        XCTAssertEqual(array.first?.headers["Subject"], firstStreamed)
+    }
+
+    /// Streaming keeps B3: with recovery on, a deletion stub between memos is a
+    /// marked partial row on both paths, in the same order.
+    func testOPEN02_nsfStreaming_keepsDeletionStubs_sameAsTheArrayPath() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-open02-nsfstub-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("stubs.nsf")
+        var file = Data([0x1A, 0x00]); file.append(Data(repeating: 0, count: 254))
+        withUnsafeBytes(of: UInt32(256).littleEndian) { file.replaceSubrange(0x28..<0x2C, with: $0) }
+        var noteID: UInt32 = 0x0000_0102
+        let mails = 200, stubs = 7
+        for i in 0..<mails {
+            if i % (mails / stubs) == 0 && i / (mails / stubs) < stubs {
+                file.append(Self.nsfItem("UNID", String(format: "%016X%016X", 0xA1B2_0001, i)))
+                file.append(Self.nsfItem("$Seq", "3"))
+                file.append(Self.nsfItem("$Modified", "03/01/2024 10:15:00"))
+                file.append(Self.nsfItem("$NoteID", String(format: "0x%08X", noteID | NSFDeletionStub.rrvDeleted)))
+                noteID += 4
+            }
+            file.append(Self.nsfItem("Subject", "Report \(i)"))
+            file.append(Self.nsfItem("From", "CN=Sender/O=Acme"))
+            file.append(Self.nsfItem("SendTo", "CN=Team/O=Acme"))
+            file.append(Self.nsfItem("$MessageID", "<nsf-stub-\(i)@acme.example>"))
+            file.append(Self.nsfItem("UNID", String(format: "%016X%016X", 0xA1B2_0000, i)))
+            file.append(Self.nsfItem("Body", "Body \(i)."))
+            file.append(Self.nsfItem("Form", "Memo"))
+            noteID += 4
+        }
+        file.append(Data(repeating: 0, count: 128))
+        try file.write(to: url)
+
+        let wasRecovery = RecoveryPolicy.isEnabled
+        defer { RecoveryPolicy.isEnabled = wasRecovery }
+        RecoveryPolicy.isEnabled = true
+
+        var streamed: [MBOXParser.RawEmail] = []
+        _ = try await NSFParser.parseStreaming(fileURL: url, senderEmail: "", batchSize: 50) { streamed += $0 }
+        let array = try NSFParser.parse(fileURL: url, senderEmail: "")
+        XCTAssertEqual(streamed.count, mails + stubs)
+        XCTAssertEqual(array.count, streamed.count)
+        XCTAssertEqual(streamed.filter { $0.recovery?.state == .deletionStub }.count, stubs)
+        XCTAssertEqual(streamed.map { $0.headers["Subject"] ?? $0.headers["X-Notes-UNID"] ?? "" },
+                       array.map { $0.headers["Subject"] ?? $0.headers["X-Notes-UNID"] ?? "" }, "same records, same order")
+
+        RecoveryPolicy.isEnabled = false
+        var plain = 0
+        _ = try await NSFParser.parseStreaming(fileURL: url, senderEmail: "", batchSize: 50) { plain += $0.count }
+        XCTAssertEqual(plain, mails, "recovery off: stubs are not rows")
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

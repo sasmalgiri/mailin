@@ -366017,130 +366017,130 @@
         }
       }
     },
-    "Streaming PST import" : {
+    "Streaming PST and NSF import" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Streaming-PST-Import"
+            "value" : "Streaming-Import für PST und NSF"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Importación PST en flujo"
+            "value" : "Importación PST y NSF en flujo"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Importation PST en continu"
+            "value" : "Importation PST et NSF en continu"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "स्ट्रीमिंग PST आयात"
+            "value" : "स्ट्रीमिंग PST और NSF आयात"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Importazione PST in streaming"
+            "value" : "Importazione PST e NSF in streaming"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "PSTストリーミング読み込み"
+            "value" : "PSTおよびNSFのストリーミング読み込み"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "스트리밍 PST 가져오기"
+            "value" : "스트리밍 PST 및 NSF 가져오기"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Importação PST em fluxo"
+            "value" : "Importação PST e NSF em fluxo"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "流式 PST 导入"
+            "value" : "流式 PST 和 NSF 导入"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "串流 PST 匯入"
+            "value" : "串流 PST 與 NSF 匯入"
           }
         }
       }
     },
-    "Reads Outlook PST and OST files message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored." : {
+    "Reads Outlook PST and OST files and Notes NSF databases message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Liest Outlook-PST- und -OST-Dateien Nachricht für Nachricht in Stapeln, sodass der Speicherbedarf dem Stapel folgt, nicht der Datei. Aus: alle Nachrichten der Datei werden zuerst gelesen, dann gespeichert."
+            "value" : "Liest Outlook-PST- und -OST-Dateien sowie Notes-NSF-Datenbanken Nachricht für Nachricht in Stapeln, sodass der Speicherbedarf dem Stapel folgt, nicht der Datei. Aus: alle Nachrichten der Datei werden zuerst gelesen, dann gespeichert."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lee archivos PST y OST de Outlook mensaje a mensaje en lotes, de modo que la memoria sigue al lote y no al archivo. Desactivado: primero se leen todos los mensajes del archivo y después se guardan."
+            "value" : "Lee archivos PST y OST de Outlook y bases de datos NSF de Notes mensaje a mensaje en lotes, de modo que la memoria sigue al lote y no al archivo. Desactivado: primero se leen todos los mensajes del archivo y después se guardan."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lit les fichiers PST et OST d'Outlook message par message, par lots, de sorte que la mémoire suit le lot et non le fichier. Désactivé : tous les messages du fichier sont lus d'abord, puis enregistrés."
+            "value" : "Lit les fichiers PST et OST d'Outlook et les bases NSF de Notes message par message, par lots, de sorte que la mémoire suit le lot et non le fichier. Désactivé : tous les messages du fichier sont lus d'abord, puis enregistrés."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Outlook PST और OST फ़ाइलों को बैच में एक-एक संदेश पढ़ता है, ताकि मेमोरी फ़ाइल के बजाय बैच के अनुसार रहे। बंद: पहले फ़ाइल के सभी संदेश पढ़े जाते हैं, फिर संग्रहीत होते हैं।"
+            "value" : "Outlook PST और OST फ़ाइलों और Notes NSF डेटाबेस को बैच में एक-एक संदेश पढ़ता है, ताकि मेमोरी फ़ाइल के बजाय बैच के अनुसार रहे। बंद: पहले फ़ाइल के सभी संदेश पढ़े जाते हैं, फिर संग्रहीत होते हैं।"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Legge i file PST e OST di Outlook messaggio per messaggio, a lotti, così la memoria segue il lotto e non il file. Disattivato: tutti i messaggi del file vengono letti prima, poi archiviati."
+            "value" : "Legge i file PST e OST di Outlook e i database NSF di Notes messaggio per messaggio, a lotti, così la memoria segue il lotto e non il file. Disattivato: tutti i messaggi del file vengono letti prima, poi archiviati."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "OutlookのPSTおよびOSTファイルをメッセージ単位でバッチ読み込みするため、メモリ使用量はファイルではなくバッチに比例します。オフ：ファイル内の全メッセージを先に読み込んでから保存します。"
+            "value" : "OutlookのPST/OSTファイルとNotesのNSFデータベースをメッセージ単位でバッチ読み込みするため、メモリ使用量はファイルではなくバッチに比例します。オフ：ファイル内の全メッセージを先に読み込んでから保存します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Outlook PST 및 OST 파일을 메시지 단위로 일괄 읽어, 메모리가 파일이 아닌 일괄 처리 단위를 따릅니다. 끄면: 파일의 모든 메시지를 먼저 읽은 뒤 저장합니다."
+            "value" : "Outlook PST 및 OST 파일과 Notes NSF 데이터베이스를 메시지 단위로 일괄 읽어, 메모리가 파일이 아닌 일괄 처리 단위를 따릅니다. 끄면: 파일의 모든 메시지를 먼저 읽은 뒤 저장합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lê arquivos PST e OST do Outlook mensagem por mensagem, em lotes, para que a memória acompanhe o lote e não o arquivo. Desligado: todas as mensagens do arquivo são lidas primeiro e depois armazenadas."
+            "value" : "Lê arquivos PST e OST do Outlook e bancos NSF do Notes mensagem por mensagem, em lotes, para que a memória acompanhe o lote e não o arquivo. Desligado: todas as mensagens do arquivo são lidas primeiro e depois armazenadas."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "按批次逐条读取 Outlook PST 和 OST 文件，内存占用随批次而非文件大小变化。关闭时：先读取文件中的全部邮件，再存储。"
+            "value" : "按批次逐条读取 Outlook PST、OST 文件和 Notes NSF 数据库，内存占用随批次而非文件大小变化。关闭时：先读取文件中的全部邮件，再存储。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "按批次逐封讀取 Outlook PST 和 OST 檔案，記憶體佔用隨批次而非檔案大小變化。關閉時：先讀取檔案中的全部郵件，再儲存。"
+            "value" : "按批次逐封讀取 Outlook PST、OST 檔案和 Notes NSF 資料庫，記憶體佔用隨批次而非檔案大小變化。關閉時：先讀取檔案中的全部郵件，再儲存。"
           }
         }
       }

@@ -13,6 +13,90 @@ struct NSFParser {
         senderEmail: String,
         onProgress: ((Double) -> Void)? = nil
     ) throws -> [MBOXParser.RawEmail] {
+        let data = try mappedData(for: fileURL)
+        let reader = NSFReader(data: data)
+        let notes = try reader.readNotes(onProgress: onProgress)
+
+        var emails: [MBOXParser.RawEmail] = []
+        let total = Double(notes.count)
+
+        for (idx, note) in notes.enumerated() {
+            if let email = email(for: note, senderEmail: senderEmail) { emails.append(email) }
+            onProgress?(Double(idx + 1) / max(total, 1))
+        }
+
+        logger.info("Parsed \(emails.count) emails from NSF file (\(notes.count) notes total)")
+        return emails
+    }
+
+    /// Five jobs OPEN-02 (switch: `streamingBinaryParsers`). Notes are read
+    /// one record at a time from the mapped file and handed out in batches,
+    /// so memory follows the batch, not the database. Same checks, same
+    /// reader, same record order as `parse`. When the structured read finds
+    /// no note at all, the text-scan fallback runs as before (it reads the
+    /// file as one string and is bounded to 200 MB by its own guard).
+    /// Returns how many emails were handed out.
+    static func parseStreaming(
+        fileURL: URL,
+        senderEmail: String,
+        batchSize: Int,
+        onProgress: ((Double) -> Void)? = nil,
+        onBatch: ([MBOXParser.RawEmail]) async throws -> Void
+    ) async throws -> Int {
+        let size = max(1, batchSize)
+        let data = try mappedData(for: fileURL)
+        let reader = NSFReader(data: data)
+        var cursor = try reader.structuredStart()
+        var batch: [MBOXParser.RawEmail] = []
+        batch.reserveCapacity(size)
+        var emitted = 0
+        var seen = 0
+        while let note = reader.nextStructuredNote(&cursor) {
+            try Task.checkCancellation()
+            seen += 1
+            if let email = email(for: note, senderEmail: senderEmail) {
+                batch.append(email)
+                if batch.count >= size {
+                    try await onBatch(batch)
+                    emitted += batch.count
+                    batch.removeAll(keepingCapacity: true)
+                }
+            }
+            if seen % 100 == 0 { onProgress?(Double(cursor.offset) / Double(max(data.count, 1)) * 0.9) }
+        }
+        if !batch.isEmpty {
+            try await onBatch(batch)
+            emitted += batch.count
+            batch.removeAll()
+        }
+        if seen == 0 {
+            // Nothing structured: the previous fallback, drained in batches.
+            let notes = try reader.scanNotes(onProgress: onProgress)
+            let emails = notes.compactMap { email(for: $0, senderEmail: senderEmail) }
+            var start = 0
+            while start < emails.count {
+                let end = min(start + size, emails.count)
+                try await onBatch(Array(emails[start..<end]))
+                emitted += end - start
+                start = end
+            }
+        }
+        onProgress?(1)
+        logger.info("Streamed \(emitted) emails from NSF file (\(seen) structured notes)")
+        return emitted
+    }
+
+    /// One note as the archive's email record: a deletion stub becomes a
+    /// marked, partial row (B3) when recovery is on; non-mail notes are nil.
+    private static func email(for note: NSFNote, senderEmail: String) -> MBOXParser.RawEmail? {
+        if RecoveryPolicy.isEnabled, let info = NSFDeletionStub.recovery(for: note) {
+            return NSFDeletionStub.email(for: note, info: info)
+        }
+        return buildEmail(from: note, senderEmail: senderEmail)
+    }
+
+    /// Size policy, then the file mapped (not read) into memory.
+    private static func mappedData(for fileURL: URL) throws -> Data {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = attrs[.size] as? Int64 ?? 0
         // S1: 64 GB is the PRE-ODS-53 limit. HCL documents 256 GB for Domino
@@ -35,25 +119,7 @@ struct NSFParser {
 
         // `.mappedIfSafe` lets the OS page in only what we actually read,
         // so a 30 GB NSF doesn't materialise 30 GB of RSS.
-        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-        let reader = NSFReader(data: data)
-        let notes = try reader.readNotes(onProgress: onProgress)
-
-        var emails: [MBOXParser.RawEmail] = []
-        let total = Double(notes.count)
-
-        for (idx, note) in notes.enumerated() {
-            // B3: with recovery on, a deletion stub becomes a marked, partial row.
-            if RecoveryPolicy.isEnabled, let info = NSFDeletionStub.recovery(for: note) {
-                emails.append(NSFDeletionStub.email(for: note, info: info))
-            } else if let email = buildEmail(from: note, senderEmail: senderEmail) {
-                emails.append(email)
-            }
-            onProgress?(Double(idx + 1) / max(total, 1))
-        }
-
-        logger.info("Parsed \(emails.count) emails from NSF file (\(notes.count) notes total)")
-        return emails
+        return try Data(contentsOf: fileURL, options: .mappedIfSafe)
     }
 
     private static func buildEmail(from note: NSFNote, senderEmail: String) -> MBOXParser.RawEmail? {
@@ -211,6 +277,17 @@ struct NSFReader {
     }
 
     func readNotes(onProgress: ((Double) -> Void)? = nil) throws -> [NSFNote] {
+        try checkSignature()
+
+        // Try structured binary parse first, fall back to scan-based extraction
+        if let notes = try? parseStructured(onProgress: onProgress), !notes.isEmpty {
+            return notes
+        }
+
+        return try parseByScan(onProgress: onProgress)
+    }
+
+    private func checkSignature() throws {
         guard data.count >= 256 else {
             throw NSFParser.NSFError.invalidFormat("File too small")
         }
@@ -221,13 +298,50 @@ struct NSFReader {
         guard validSignatures.contains(signature) || isLikelyNSF() else {
             throw NSFParser.NSFError.invalidFormat("Not a valid NSF file (signature: 0x\(String(format: "%04X", signature)))")
         }
+    }
 
-        // Try structured binary parse first, fall back to scan-based extraction
-        if let notes = try? parseStructured(onProgress: onProgress), !notes.isEmpty {
-            return notes
+    // MARK: - OPEN-02: one note at a time
+
+    /// Where the structured read is: the next byte to try, how many bytes in
+    /// a row held no record, and how many notes were found.
+    struct Cursor {
+        var offset: Int
+        var consecutiveFailures = 0
+        var notes = 0
+    }
+
+    private static let maxConsecutiveFailures = 100_000
+
+    /// Signature and header checks, then the cursor at the first record.
+    func structuredStart() throws -> Cursor {
+        try checkSignature()
+        guard data.count >= 0x2C else {
+            throw NSFParser.NSFError.invalidFormat("Header too small for structured parse")
         }
+        let dbInfoOffset = data.count > 0x30 ? Int(readUInt32(at: 0x28)) : 0
+        return Cursor(offset: max(dbInfoOffset, 256))
+    }
 
-        return try parseByScan(onProgress: onProgress)
+    /// The next note record after the cursor, or nil at the end of the
+    /// database (or after `maxConsecutiveFailures` bytes without a record).
+    /// No note cap: the caller holds one batch, not the database.
+    func nextStructuredNote(_ cursor: inout Cursor) -> NSFNote? {
+        while cursor.offset < data.count - 64 && cursor.consecutiveFailures < Self.maxConsecutiveFailures {
+            if let (note, nextOffset) = try? readNoteRecord(at: cursor.offset), nextOffset > cursor.offset {
+                cursor.offset = nextOffset
+                cursor.consecutiveFailures = 0
+                cursor.notes += 1
+                return note
+            }
+            cursor.offset += 1
+            cursor.consecutiveFailures += 1
+        }
+        return nil
+    }
+
+    /// The text-scan fallback, for the streaming path when no record was found.
+    func scanNotes(onProgress: ((Double) -> Void)? = nil) throws -> [NSFNote] {
+        try parseByScan(onProgress: onProgress)
     }
 
     private func isLikelyNSF() -> Bool {
