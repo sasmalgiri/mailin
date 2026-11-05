@@ -5,7 +5,11 @@ struct DuplicateManagerView: View {
     @ObservedObject var model: ParsedEmailListViewModel
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
-    @State private var duplicateGroups: [[MBOXParser.RawEmail]] = []
+    // Five jobs DUP-01: engine groups are compared in full before they are
+    // shown. Verified groups may be removed in bulk; candidates are decided
+    // one copy at a time.
+    @State private var verifiedGroups: [DuplicateVerification.Group] = []
+    @State private var candidateGroups: [DuplicateVerification.Group] = []
     @State private var nearDuplicateGroups: [[MBOXParser.RawEmail]] = []
     @State private var selectedForRemoval: Set<UUID> = []
     @State private var isScanning = false
@@ -25,7 +29,7 @@ struct DuplicateManagerView: View {
             Divider()
             if isScanning {
                 scanningView
-            } else if duplicateGroups.isEmpty && nearDuplicateGroups.isEmpty {
+            } else if verifiedGroups.isEmpty && candidateGroups.isEmpty && nearDuplicateGroups.isEmpty {
                 emptyView
             } else {
                 resultsList
@@ -127,16 +131,16 @@ struct DuplicateManagerView: View {
 
                 bulkSelectBar
 
-                if !duplicateGroups.isEmpty {
-                    Text("Exact Duplicates (\(duplicateGroups.count) groups)")
+                if !verifiedGroups.isEmpty {
+                    Text("Verified identical (\(verifiedGroups.count) groups)")
                         .font(Typography.headline)
                         .padding(.horizontal, Spacing.medium)
 
                     Label {
-                        Text("Exact duplicates have identical content (subject, body, and headers). Removing duplicates reduces archive size without losing information.")
+                        Text("Every copy in these groups was compared in full — the stored message bytes, or every address, the date, the subject, the whole body and each attachment. Removing the extra copies loses no message content; the removed copy's labels and review state are not kept.")
                             .font(Typography.caption1)
                     } icon: {
-                        Image(systemName: "doc.on.doc.fill")
+                        Image(systemName: "checkmark.seal.fill")
                             .foregroundColor(.blue)
                     }
                     .padding(Spacing.xSmall)
@@ -145,8 +149,32 @@ struct DuplicateManagerView: View {
                     .cornerRadius(CornerRadius.small)
                     .padding(.horizontal, Spacing.medium)
 
-                    ForEach(Array(duplicateGroups.enumerated()), id: \.offset) { _, group in
-                        duplicateGroupView(group, isExact: true)
+                    ForEach(verifiedGroups) { group in
+                        duplicateGroupView(group.members, kind: .verified(group.verdict))
+                    }
+                }
+
+                if !candidateGroups.isEmpty {
+                    Text("Candidates (\(candidateGroups.count) groups)")
+                        .font(Typography.headline)
+                        .padding(.horizontal, Spacing.medium)
+                        .padding(.top, Spacing.small)
+
+                    Label {
+                        Text("These share a Message-ID, an opening passage or a content hash but differ somewhere. They are not proven identical and are left out of bulk selection; tick a copy yourself only after comparing it.")
+                            .font(Typography.caption1)
+                    } icon: {
+                        Image(systemName: "questionmark.circle")
+                            .foregroundColor(.orange)
+                    }
+                    .padding(Spacing.xSmall)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
+                    .padding(.horizontal, Spacing.medium)
+
+                    ForEach(candidateGroups) { group in
+                        duplicateGroupView(group.members, kind: .candidate(group.verdict))
                     }
                 }
 
@@ -170,7 +198,7 @@ struct DuplicateManagerView: View {
                     .padding(.horizontal, Spacing.medium)
 
                     ForEach(Array(nearDuplicateGroups.enumerated()), id: \.offset) { _, group in
-                        duplicateGroupView(group, isExact: false)
+                        duplicateGroupView(group, kind: .near)
                     }
                 }
             }
@@ -178,27 +206,17 @@ struct DuplicateManagerView: View {
         }
     }
 
-    /// The count of redundant copies across every currently-shown group
-    /// (all copies except the one kept per group).
-    private var redundantCount: Int {
-        var n = duplicateGroups.reduce(0) { $0 + max(0, $1.count - 1) }
-        if showNearDuplicates {
-            n += nearDuplicateGroups.reduce(0) { $0 + max(0, $1.count - 1) }
-        }
-        return n
-    }
+    /// The copies a bulk selection may take: every copy after the first in
+    /// each VERIFIED group. Candidates and near-duplicates are similar, not
+    /// identical, so they never enter a bulk selection (DUP-01).
+    private var bulkRemovable: [UUID] { DuplicateVerification.bulkRemovable(verifiedGroups) }
 
-    /// One click to select every redundant copy across ALL groups — so a
+    private var redundantCount: Int { bulkRemovable.count }
+
+    /// One click to select every extra copy in every verified group — so a
     /// user facing hundreds of groups doesn't click each one.
     private func selectAllButFirstEverywhere() {
-        for group in duplicateGroups {
-            for email in group.dropFirst() { selectedForRemoval.insert(email.id) }
-        }
-        if showNearDuplicates {
-            for group in nearDuplicateGroups {
-                for email in group.dropFirst() { selectedForRemoval.insert(email.id) }
-            }
-        }
+        selectedForRemoval.formUnion(bulkRemovable)
     }
 
     private var bulkSelectBar: some View {
@@ -206,12 +224,12 @@ struct DuplicateManagerView: View {
             Button {
                 selectAllButFirstEverywhere()
             } label: {
-                Label("Select all but first (all groups)", systemImage: "checklist")
+                Label("Select all but first (verified groups)", systemImage: "checklist")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(redundantCount == 0)
-            .help("Selects every redundant copy across all \(duplicateGroups.count + (showNearDuplicates ? nearDuplicateGroups.count : 0)) groups, keeping one of each — then press Remove Selected")
+            .help("Selects every extra copy in the \(verifiedGroups.count) verified groups, keeping one of each — then press Remove Selected. Candidates and near-duplicates are never selected in bulk.")
 
             if !selectedForRemoval.isEmpty {
                 Button {
@@ -223,18 +241,59 @@ struct DuplicateManagerView: View {
                 .controlSize(.small)
             }
             Spacer()
-            Text("\(redundantCount) removable")
+            Text("\(redundantCount) removable in verified groups")
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
         }
         .padding(.horizontal, Spacing.medium)
     }
 
-    private func duplicateGroupView(_ group: [MBOXParser.RawEmail], isExact: Bool) -> some View {
+    /// How a group was classified, which decides its badge and whether it
+    /// offers "Select All But First".
+    private enum GroupKind {
+        case verified(DuplicateVerification.Verdict)
+        case candidate(DuplicateVerification.Verdict)
+        case near
+
+        var allowsBulkSelect: Bool { if case .verified = self { return true } else { return false } }
+        var symbol: String {
+            switch self {
+            case .verified: return "checkmark.seal.fill"
+            case .candidate: return "questionmark.circle"
+            case .near: return "doc.on.doc"
+            }
+        }
+        var tint: Color {
+            switch self {
+            case .verified: return AppColors.error
+            case .candidate, .near: return .orange
+            }
+        }
+        var name: String {
+            switch self {
+            case .verified: return String(localized: "Verified identical")
+            case .candidate: return String(localized: "Candidate")
+            case .near: return String(localized: "Near")
+            }
+        }
+        /// The second line under a group's title, when there is something to say.
+        var note: String? {
+            switch self {
+            case .verified(.contentEquivalent(attachmentBytesCompared: false)):
+                return String(localized: "Attachment bytes are not stored for every copy — names, types and sizes matched.")
+            case .candidate(let verdict):
+                return DuplicateVerification.differenceLine(verdict)
+            default:
+                return nil
+            }
+        }
+    }
+
+    private func duplicateGroupView(_ group: [MBOXParser.RawEmail], kind: GroupKind) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             HStack {
-                Image(systemName: isExact ? "doc.on.doc.fill" : "doc.on.doc")
-                    .foregroundColor(isExact ? AppColors.error : .orange)
+                Image(systemName: kind.symbol)
+                    .foregroundColor(kind.tint)
                     .accessibilityHidden(true)
                 Text(group.first?.headers["Subject"] ?? "(No Subject)")
                     .font(Typography.subheadline)
@@ -244,18 +303,26 @@ struct DuplicateManagerView: View {
                 Text("\(group.count) copies")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
-                Button("Select All But First") {
-                    for email in group.dropFirst() {
-                        selectedForRemoval.insert(email.id)
+                if kind.allowsBulkSelect {
+                    Button("Select All But First") {
+                        for email in group.dropFirst() {
+                            selectedForRemoval.insert(email.id)
+                        }
                     }
+                    .font(Typography.caption2)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Select all but first copy for removal")
                 }
-                .font(Typography.caption2)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel("Select all but first copy for removal")
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(isExact ? String(localized: "Exact") : String(localized: "Near")) duplicate group: \(group.first?.headers["Subject"] ?? "No Subject"), \(group.count) copies")
+            .accessibilityLabel("\(kind.name) duplicate group: \(group.first?.headers["Subject"] ?? "No Subject"), \(group.count) copies")
+            if let note = kind.note {
+                Text(note)
+                    .font(Typography.caption2)
+                    .foregroundColor(AppColors.secondary)
+                    .padding(.leading, Spacing.large)
+            }
 
             ForEach(group) { email in
                 HStack(spacing: Spacing.xSmall) {
@@ -344,59 +411,78 @@ struct DuplicateManagerView: View {
     /// stays consistent whether or not it closes. Groups that fall to a single
     /// copy are no longer duplicates and disappear.
     private func stripRemoved(_ ids: Set<UUID>) {
-        duplicateGroups = duplicateGroups
-            .map { $0.filter { !ids.contains($0.id) } }
-            .filter { $0.count > 1 }
+        func strip(_ groups: [DuplicateVerification.Group]) -> [DuplicateVerification.Group] {
+            groups.compactMap { group in
+                var g = group
+                g.members.removeAll { ids.contains($0.id) }
+                return g.members.count > 1 ? g : nil
+            }
+        }
+        verifiedGroups = strip(verifiedGroups)
+        candidateGroups = strip(candidateGroups)
         nearDuplicateGroups = nearDuplicateGroups
             .map { $0.filter { !ids.contains($0.id) } }
             .filter { $0.count > 1 }
         selectedForRemoval.subtract(ids)
     }
 
-    @State private var archiveDupIDs: [UUID] = []
+    /// Archive-wide: the copies verified identical and safe to remove in one click.
+    @State private var archiveRemovable: [UUID] = []
+    /// Archive-wide: same-Message-ID groups whose content differed — never removed here.
+    @State private var archiveCandidateGroups = 0
     @State private var archiveDupChecked = false
     @State private var showArchiveDedupConfirm = false
 
-    /// Archive-wide exact dedup — one click, SQL over the WHOLE store (the
-    /// group list below is window-bounded). Keeps the best copy per
+    /// Archive-wide dedup — one click, SQL over the WHOLE store. Same
+    /// Message-ID groups are loaded a chunk at a time and compared in full
+    /// (DUP-01); only verified copies are offered. Keeps the best copy per
     /// Message-ID (source-identified over migrated, then earliest import).
     private var archiveWideDedupCard: some View {
         // A view that is always there: `.task` on an empty Group never runs,
         // so the content it loads could never appear.
         VStack(alignment: .leading, spacing: 0) {
-            if archiveDupChecked && !archiveDupIDs.isEmpty {
+            if archiveDupChecked && (!archiveRemovable.isEmpty || archiveCandidateGroups > 0) {
                 HStack(spacing: Spacing.small) {
-                    Image(systemName: "doc.on.doc.fill")
+                    Image(systemName: archiveRemovable.isEmpty ? "questionmark.circle" : "checkmark.seal.fill")
                         .foregroundColor(.orange)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(archiveDupIDs.count) exact duplicate\(archiveDupIDs.count == 1 ? "" : "s") across the whole archive")
-                            .font(Typography.callout)
-                            .fontWeight(.semibold)
-                        Text("Same Message-ID stored more than once — typically a migrated archive plus a fresh import of the original file. One copy of each email is kept (the full-fidelity one).")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
+                        if !archiveRemovable.isEmpty {
+                            Text("\(archiveRemovable.count) verified identical copies across the whole archive")
+                                .font(Typography.callout)
+                                .fontWeight(.semibold)
+                            Text("Same Message-ID stored more than once and compared in full — typically a migrated archive plus a fresh import of the original file. One copy of each email is kept (the full-fidelity one).")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                        }
+                        if archiveCandidateGroups > 0 {
+                            Text("\(archiveCandidateGroups) groups share a Message-ID but differ in content — they are listed below as candidates and are not removed here.")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                        }
                     }
                     Spacer()
-                    Button {
-                        showArchiveDedupConfirm = true
-                    } label: {
-                        Label("Remove All", systemImage: "trash")
+                    if !archiveRemovable.isEmpty {
+                        Button {
+                            showArchiveDedupConfirm = true
+                        } label: {
+                            Label("Remove All", systemImage: "trash")
+                        }
+                        .help("Delete every verified extra copy in one step — each email keeps exactly one row")
                     }
-                    .help("Delete every redundant copy in one step — each email keeps exactly one row")
                 }
                 .padding(Spacing.small)
                 .background(Color.orange.opacity(0.1))
                 .cornerRadius(CornerRadius.small)
                 .padding(.horizontal, Spacing.medium)
                 .adaptiveDestructiveConfirmation(
-                    "Remove \(archiveDupIDs.count) Duplicates",
+                    "Remove \(archiveRemovable.count) Duplicates",
                     isPresented: $showArchiveDedupConfirm,
-                    message: "Every email keeps exactly one copy — \(archiveDupIDs.count) redundant row\(archiveDupIDs.count == 1 ? "" : "s") will be deleted. Review state on the removed copies is discarded.",
+                    message: "Every email keeps exactly one copy — \(archiveRemovable.count) redundant row\(archiveRemovable.count == 1 ? "" : "s") will be deleted. Review state on the removed copies is discarded.",
                     actionTitle: String(localized: "Remove Duplicates")
                 ) {
                     // Held emails are never removed — the same protection the
                     // per-group removal applies.
-                    let (ids, blocked) = CustodianManager.shared.filterProtected(Set(archiveDupIDs))
+                    let (ids, blocked) = CustodianManager.shared.filterProtected(Set(archiveRemovable))
                     isRemoving = true
                     Task { @MainActor in
                         let ok = ids.isEmpty ? true : await model.removeDuplicateEmailsAwaiting(ids: ids)
@@ -404,10 +490,10 @@ struct DuplicateManagerView: View {
                             // Record the cleanup only once it has actually happened.
                             if !ids.isEmpty {
                                 _ = await DocumentRegistry.post(
-                                    .cleanup, summary: "Removed \(ids.count) exact duplicate(s) archive-wide")
+                                    .cleanup, summary: "Removed \(ids.count) verified identical duplicate(s) archive-wide")
                             }
                             stripRemoved(ids)
-                            archiveDupIDs = Array(blocked)
+                            archiveRemovable = Array(blocked)
                         }
                         isRemoving = false
                         if !ok {
@@ -421,7 +507,17 @@ struct DuplicateManagerView: View {
         }
         .task {
             guard !archiveDupChecked else { return }
-            archiveDupIDs = (try? await SQLiteEmailStore.shared.exactMessageIDDuplicateIDs()) ?? []
+            do {
+                let groups = try await SQLiteEmailStore.shared.messageIDDuplicateGroups()
+                let result = try await DuplicateVerification.verifyArchiveWide(groups: groups) { ids in
+                    try await ArchiveDataService.shared.fullEmails(ids: ids)
+                }
+                archiveRemovable = result.removable
+                archiveCandidateGroups = result.candidateGroups
+            } catch {
+                archiveRemovable = []
+                archiveCandidateGroups = 0
+            }
             archiveDupChecked = true
         }
     }
@@ -436,7 +532,7 @@ struct DuplicateManagerView: View {
                 defer { isScanning = false }
                 do {
                     let r = try await DuplicatesEngine.exactGroups()
-                    duplicateGroups = r.groups
+                    (verifiedGroups, candidateGroups) = DuplicateVerification.classify(r.groups)
                     var note = String(localized: "Exact duplicates: whole archive — \(r.receipt.coverageLine)")
                     nearDuplicateGroups = []
                     if includeNear {
@@ -486,8 +582,11 @@ struct DuplicateManagerView: View {
                 nearGroups = []
             }
 
+            // The same full comparison as the whole-archive path (DUP-01).
+            let classified = DuplicateVerification.classify(exactGroups)
             await MainActor.run {
-                self.duplicateGroups = exactGroups
+                self.verifiedGroups = classified.verified
+                self.candidateGroups = classified.candidates
                 self.nearDuplicateGroups = nearGroups
                 self.isScanning = false
             }

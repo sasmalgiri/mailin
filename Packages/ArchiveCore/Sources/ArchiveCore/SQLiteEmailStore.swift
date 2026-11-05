@@ -3238,6 +3238,37 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
+    /// Five jobs, DUP-01: the same rows as `exactMessageIDDuplicateIDs`, but
+    /// as whole groups so each can be compared in full before anything is
+    /// removed. Within a group the first id is the copy to keep (the same
+    /// rule: source-identified over migrated, then earliest import).
+    func messageIDDuplicateGroups() throws -> [[EmailID]] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT id, message_id FROM emails
+            WHERE message_id IN (
+                SELECT message_id FROM emails
+                WHERE message_id IS NOT NULL AND trim(message_id) <> ''
+                GROUP BY message_id HAVING COUNT(*) > 1
+            )
+            ORDER BY message_id, (source_id IS NULL) ASC, imported_at ASC, rowid ASC;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var groups: [[EmailID]] = []
+        var currentKey: String?
+        while try stepRow(stmt, db) {
+            guard let id = UUID(uuidString: columnText(stmt, 0)) else { continue }
+            let key = columnText(stmt, 1)
+            if key == currentKey, !groups.isEmpty {
+                groups[groups.count - 1].append(id)
+            } else {
+                groups.append([id])
+                currentKey = key
+            }
+        }
+        return groups.filter { $0.count > 1 }
+    }
+
     static func dedupKey(for email: MBOXParser.RawEmail, messageID: String?, policy: DedupPolicy) -> String? {
         let normalizedMID = messageID?.trimmingCharacters(in: .whitespacesAndNewlines)
         switch policy {

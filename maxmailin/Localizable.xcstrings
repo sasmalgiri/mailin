@@ -12774,6 +12774,7 @@
       }
     },
     "%lld exact duplicate%@ across the whole archive" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -13850,6 +13851,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "來自 %2$lld 對已驗證配對的 %1$lld 個群組；%4$lld 封郵件中的 %3$lld 封已編入索引並比較。"
+          }
+        }
+      }
+    },
+    "%lld groups share a Message-ID but differ in content — they are listed below as candidates and are not removed here." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Gruppen teilen eine Message-ID, unterscheiden sich aber im Inhalt – sie stehen unten als Kandidaten und werden hier nicht entfernt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld grupos comparten un Message-ID pero difieren en contenido: aparecen abajo como candidatos y no se eliminan aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld groupes partagent un Message-ID mais diffèrent par le contenu — ils figurent ci-dessous comme candidats et ne sont pas supprimés ici."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld समूह एक Message-ID साझा करते हैं लेकिन सामग्री में भिन्न हैं — वे नीचे उम्मीदवारों के रूप में सूचीबद्ध हैं और यहाँ नहीं हटाए जाते।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld gruppi condividono un Message-ID ma differiscono nel contenuto: sono elencati sotto come candidati e non vengono rimossi qui."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lldグループはMessage-IDを共有していますが内容が異なります。下に候補として表示され、ここでは削除されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 그룹은 Message-ID를 공유하지만 내용이 다릅니다 — 아래에 후보로 나열되며 여기서는 제거되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld grupos compartilham um Message-ID mas diferem no conteúdo — estão listados abaixo como candidatos e não são removidos aqui."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 组共享 Message-ID 但内容不同——它们在下方列为候选，不会在此删除。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 組共用 Message-ID 但內容不同——它們在下方列為候選，不會在此移除。"
           }
         }
       }
@@ -18093,6 +18158,7 @@
       }
     },
     "%lld removable" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -18152,6 +18218,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 個可移除"
+          }
+        }
+      }
+    },
+    "%lld removable in verified groups" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld entfernbar in geprüften Gruppen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld eliminables en grupos verificados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld supprimables dans les groupes vérifiés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सत्यापित समूहों में %lld हटाने योग्य"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld rimovibili nei gruppi verificati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検証済みグループで%lld件削除可能"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인된 그룹에서 %lld개 제거 가능"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld removíveis em grupos verificados"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已验证组中可删除 %lld 个"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已驗證群組中可移除 %lld 個"
           }
         }
       }
@@ -20140,6 +20270,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "整個封存中有 %lld 個不同標籤"
+          }
+        }
+      }
+    },
+    "%lld verified identical copies across the whole archive" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld geprüft identische Kopien im gesamten Archiv"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld copias verificadas idénticas en todo el archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld copies vérifiées identiques dans toute l'archive"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पूरे संग्रह में %lld सत्यापित समान प्रतियाँ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld copie verificate identiche nell'intero archivio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ全体で%lld件の検証済み同一コピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "전체 아카이브에서 동일함이 확인된 사본 %lld개"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld cópias verificadas idênticas em todo o arquivo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整个归档中有 %lld 个已验证相同的副本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整個封存中有 %lld 個已驗證相同的副本"
           }
         }
       }
@@ -51712,6 +51906,70 @@
         }
       }
     },
+    "Attachment bytes are not stored for every copy — names, types and sizes matched." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anhangsbytes sind nicht für jede Kopie gespeichert – Namen, Typen und Größen stimmen überein."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los bytes de los adjuntos no están almacenados para todas las copias: coinciden nombres, tipos y tamaños."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les octets des pièces jointes ne sont pas enregistrés pour chaque copie — noms, types et tailles correspondent."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर प्रति के लिए अटैचमेंट बाइट्स संग्रहीत नहीं हैं — नाम, प्रकार और आकार मेल खाते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I byte degli allegati non sono memorizzati per ogni copia: nomi, tipi e dimensioni corrispondono."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのコピーで添付ファイルのバイト列が保存されていません。名前・種類・サイズは一致しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 사본에 첨부 파일 바이트가 저장되어 있지 않습니다 — 이름, 유형, 크기는 일치했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os bytes dos anexos não estão armazenados para todas as cópias — nomes, tipos e tamanhos coincidem."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并非每个副本都存储了附件字节——名称、类型和大小已匹配。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並非每個副本都儲存了附件位元組——名稱、類型和大小已相符。"
+          }
+        }
+      }
+    },
     "Attachment count" : {
       "localizations" : {
         "de" : {
@@ -52289,6 +52547,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "附件類型（共 %lld 個）"
+          }
+        }
+      }
+    },
+    "attachments" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anhänge"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "adjuntos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pièces jointes"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अटैचमेंट"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "allegati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添付ファイル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부 파일"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "anexos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件"
           }
         }
       }
@@ -60400,6 +60722,70 @@
         }
       }
     },
+    "Bcc" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bcc"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cco"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cci"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bcc"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ccn"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bcc"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "숨은 참조"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cco"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密送"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密件副本"
+          }
+        }
+      }
+    },
     "BCC" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -61231,6 +61617,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "BM25 相關性排名"
+          }
+        }
+      }
+    },
+    "body" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Text"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cuerpo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "corps"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मुख्य पाठ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "corpo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本文"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "본문"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "corpo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正文"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內文"
           }
         }
       }
@@ -66773,6 +67223,70 @@
         }
       }
     },
+    "Candidate" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kandidat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidato"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidat"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "उम्मीदवार"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候補"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "후보"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidato"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候选"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候選"
+          }
+        }
+      }
+    },
     "Candidate cause…" : {
       "localizations" : {
         "de" : {
@@ -66833,6 +67347,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "候選原因…"
+          }
+        }
+      }
+    },
+    "Candidates (%lld groups)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kandidaten (%lld Gruppen)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidatos (%lld grupos)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidats (%lld groupes)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "उम्मीदवार (%lld समूह)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidati (%lld gruppi)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候補（%lldグループ）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "후보 (%lld개 그룹)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Candidatos (%lld grupos)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候选（%lld 组）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "候選（%lld 組）"
           }
         }
       }
@@ -68915,6 +69493,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此項所針對的原因 / 發現（必填）"
+          }
+        }
+      }
+    },
+    "Cc" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cc"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cc"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cc"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cc"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cc"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cc"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "참조"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cc"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抄送"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "副本"
           }
         }
       }
@@ -100488,6 +101130,70 @@
         }
       }
     },
+    "date" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Datum"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "fecha"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "date"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "तारीख़"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "data"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日付"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "날짜"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日期"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日期"
+          }
+        }
+      }
+    },
     "Date" : {
       "localizations" : {
         "de" : {
@@ -103534,6 +104240,7 @@
       }
     },
     "Delete every redundant copy in one step — each email keeps exactly one row" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -103593,6 +104300,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一步刪除所有多餘副本——每封郵件僅保留一列"
+          }
+        }
+      }
+    },
+    "Delete every verified extra copy in one step — each email keeps exactly one row" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jede geprüfte zusätzliche Kopie in einem Schritt löschen – jede E-Mail behält genau eine Zeile"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar todas las copias sobrantes verificadas en un paso: cada correo conserva exactamente una fila"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer toutes les copies en trop vérifiées en une étape — chaque e-mail conserve exactement une ligne"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर सत्यापित अतिरिक्त प्रति एक चरण में हटाएँ — हर ईमेल की ठीक एक पंक्ति रहती है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elimina ogni copia in eccesso verificata in un solo passaggio: ogni email mantiene esattamente una riga"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検証済みの余分なコピーをすべて一度に削除します。各メールは1行だけ残ります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인된 여분의 사본을 한 번에 모두 삭제합니다 — 각 이메일은 정확히 한 행만 유지됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Excluir todas as cópias extras verificadas em um passo — cada e-mail mantém exatamente uma linha"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一步删除所有已验证的多余副本——每封邮件只保留一行"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一步刪除所有已驗證的多餘副本——每封郵件只保留一列"
           }
         }
       }
@@ -106892,6 +107663,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不同"
+          }
+        }
+      }
+    },
+    "Differs in %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unterschiede: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Difiere en %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diffère par %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ में अंतर"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Differisce in %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@が異なります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@이(가) 다릅니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Difere em %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@不同"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@不同"
           }
         }
       }
@@ -123769,6 +124604,70 @@
         }
       }
     },
+    "Every copy in these groups was compared in full — the stored message bytes, or every address, the date, the subject, the whole body and each attachment. Removing the extra copies loses no message content; the removed copy's labels and review state are not kept." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jede Kopie in diesen Gruppen wurde vollständig verglichen – die gespeicherten Nachrichtenbytes oder jede Adresse, das Datum, der Betreff, der gesamte Text und jeder Anhang. Das Entfernen der zusätzlichen Kopien verliert keinen Nachrichteninhalt; Labels und Prüfstatus der entfernten Kopie bleiben nicht erhalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada copia de estos grupos se comparó por completo: los bytes almacenados del mensaje o cada dirección, la fecha, el asunto, el cuerpo entero y cada adjunto. Eliminar las copias sobrantes no pierde contenido del mensaje; las etiquetas y el estado de revisión de la copia eliminada no se conservan."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque copie de ces groupes a été comparée intégralement : les octets du message enregistré, ou chaque adresse, la date, l'objet, tout le corps et chaque pièce jointe. Supprimer les copies en trop ne perd aucun contenu ; les libellés et l'état de relecture de la copie supprimée ne sont pas conservés."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इन समूहों की हर प्रति की पूरी तुलना की गई — संग्रहीत संदेश बाइट्स, या हर पता, तारीख़, विषय, पूरा मुख्य पाठ और हर अटैचमेंट। अतिरिक्त प्रतियाँ हटाने से संदेश की कोई सामग्री नहीं खोती; हटाई गई प्रति के लेबल और समीक्षा स्थिति नहीं रखे जाते।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ogni copia di questi gruppi è stata confrontata per intero: i byte del messaggio memorizzato, oppure ogni indirizzo, la data, l'oggetto, l'intero corpo e ogni allegato. Rimuovere le copie in eccesso non perde alcun contenuto; le etichette e lo stato di revisione della copia rimossa non vengono conservati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これらのグループの各コピーは完全に比較されました（保存されたメッセージのバイト列、またはすべてのアドレス・日付・件名・本文全体・各添付ファイル）。余分なコピーを削除してもメッセージの内容は失われませんが、削除されたコピーのラベルとレビュー状態は保持されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 그룹의 모든 사본을 전체 비교했습니다 — 저장된 메시지 바이트 또는 모든 주소, 날짜, 제목, 본문 전체, 각 첨부 파일. 여분의 사본을 제거해도 메시지 내용은 사라지지 않지만, 제거된 사본의 레이블과 검토 상태는 유지되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada cópia destes grupos foi comparada por completo — os bytes armazenados da mensagem, ou cada endereço, a data, o assunto, o corpo inteiro e cada anexo. Remover as cópias extras não perde conteúdo da mensagem; os rótulos e o estado de revisão da cópia removida não são mantidos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些组中的每个副本都经过了完整比较——已存储的邮件字节，或每个地址、日期、主题、完整正文和每个附件。删除多余副本不会丢失邮件内容；被删除副本的标签和审阅状态不会保留。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這些群組中的每個副本都經過完整比較——已儲存的郵件位元組，或每個地址、日期、主旨、完整內文和每個附件。移除多餘副本不會遺失郵件內容；被移除副本的標籤和審閱狀態不會保留。"
+          }
+        }
+      }
+    },
     "Every email in scope with a hash-tree proof to the archive fingerprint — verifiable with SHA-256 alone" : {
       "comment" : "A description of the export functionality.",
       "isCommentAutoGenerated" : true,
@@ -126605,6 +127504,7 @@
       }
     },
     "Exact" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -126863,6 +127763,7 @@
       }
     },
     "Exact Duplicates (%lld groups)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -126927,6 +127828,7 @@
       }
     },
     "Exact duplicates have identical content (subject, body, and headers). Removing duplicates reduces archive size without losing information." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -248905,6 +249807,70 @@
         }
       }
     },
+    "recipients" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empfänger"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "destinatarios"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "destinataires"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्राप्तकर्ता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "destinatari"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "宛先"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받는 사람"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "destinatários"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件人"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件者"
+          }
+        }
+      }
+    },
     "Recipients" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -256767,6 +257733,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已從 %2$lld 封郵件中移除「%1$@」"
+          }
+        }
+      }
+    },
+    "Removed %lld verified identical duplicate(s) archive-wide" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld geprüft identische Duplikate archivweit entfernt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se eliminaron %lld duplicados verificados idénticos en todo el archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld doublons vérifiés identiques supprimés dans toute l'archive"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पूरे संग्रह में %lld सत्यापित समान डुप्लिकेट हटाए गए"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rimossi %lld duplicati verificati identici nell'intero archivio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ全体で検証済みの同一重複%lld件を削除しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "전체 아카이브에서 동일함이 확인된 중복 %lld개를 제거했습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld duplicatas verificadas idênticas removidas em todo o arquivo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在整个归档中删除 %lld 个已验证相同的重复项"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在整個封存中移除 %lld 個已驗證相同的重複項"
           }
         }
       }
@@ -272289,6 +273319,7 @@
       }
     },
     "Same Message-ID stored more than once — typically a migrated archive plus a fresh import of the original file. One copy of each email is kept (the full-fidelity one)." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -272348,6 +273379,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "同一 Message-ID 被儲存了多次 — 通常是移轉的封存加上原始檔案的重新匯入。每封郵件保留一份副本（保真度最高的那份）。"
+          }
+        }
+      }
+    },
+    "Same Message-ID stored more than once and compared in full — typically a migrated archive plus a fresh import of the original file. One copy of each email is kept (the full-fidelity one)." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieselbe Message-ID mehrfach gespeichert und vollständig verglichen – typischerweise ein migriertes Archiv plus ein neuer Import der Originaldatei. Eine Kopie jeder E-Mail wird behalten (die vollständige)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El mismo Message-ID almacenado más de una vez y comparado por completo: normalmente un archivo migrado más una nueva importación del archivo original. Se conserva una copia de cada correo (la de máxima fidelidad)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Même Message-ID enregistré plusieurs fois et comparé intégralement — généralement une archive migrée plus une nouvelle importation du fichier d'origine. Une copie de chaque e-mail est conservée (celle de pleine fidélité)."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "एक ही Message-ID एक से अधिक बार संग्रहीत और पूरी तरह तुलना की गई — आमतौर पर एक माइग्रेट किया गया संग्रह और मूल फ़ाइल का नया आयात। हर ईमेल की एक प्रति रखी जाती है (पूर्ण-निष्ठा वाली)।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stesso Message-ID memorizzato più volte e confrontato per intero: di solito un archivio migrato più una nuova importazione del file originale. Viene conservata una copia di ogni email (quella a piena fedeltà)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同じMessage-IDが複数回保存され、完全に比較されました。通常は移行済みアーカイブと元ファイルの再読み込みによるものです。各メールは1通（完全な方）が保持されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "같은 Message-ID가 여러 번 저장되어 전체 비교되었습니다 — 보통 마이그레이션된 아카이브에 원본 파일을 새로 가져온 경우입니다. 각 이메일의 사본 하나(완전한 사본)가 유지됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mesmo Message-ID armazenado mais de uma vez e comparado por completo — normalmente um arquivo migrado mais uma nova importação do arquivo original. Uma cópia de cada e-mail é mantida (a de fidelidade total)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相同的 Message-ID 被多次存储并经过完整比较——通常是已迁移的归档加上原始文件的重新导入。每封邮件保留一个副本（完整保真的那个）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相同的 Message-ID 被多次儲存並經過完整比較——通常是已遷移的封存加上原始檔案的重新匯入。每封郵件保留一個副本（完整保真的那個）。"
           }
         }
       }
@@ -287059,6 +288154,7 @@
       }
     },
     "Select all but first (all groups)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -287118,6 +288214,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇除第一個外的全部（所有群組）"
+          }
+        }
+      }
+    },
+    "Select all but first (verified groups)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle außer der ersten auswählen (geprüfte Gruppen)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleccionar todas menos la primera (grupos verificados)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout sélectionner sauf la première (groupes vérifiés)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहली को छोड़कर सभी चुनें (सत्यापित समूह)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleziona tutte tranne la prima (gruppi verificati)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最初以外をすべて選択（検証済みグループ）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첫 번째 제외 모두 선택 (확인된 그룹)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecionar todas menos a primeira (grupos verificados)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择除第一个外的全部（已验证组）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選取除第一個外的全部（已驗證群組）"
           }
         }
       }
@@ -288274,7 +289434,72 @@
         }
       }
     },
+    "Selects every extra copy in the %lld verified groups, keeping one of each — then press Remove Selected. Candidates and near-duplicates are never selected in bulk." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählt jede zusätzliche Kopie in den %lld geprüften Gruppen aus und behält je eine – dann „Ausgewählte entfernen“ drücken. Kandidaten und Beinahe-Duplikate werden nie massenhaft ausgewählt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecciona cada copia sobrante de los %lld grupos verificados, conservando una de cada uno; después pulse Eliminar seleccionados. Los candidatos y casi duplicados nunca se seleccionan en masa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sélectionne chaque copie en trop des %lld groupes vérifiés, en gardant une de chaque — puis appuyez sur Supprimer la sélection. Les candidats et quasi-doublons ne sont jamais sélectionnés en bloc."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld सत्यापित समूहों में हर अतिरिक्त प्रति चुनता है, हर एक की एक प्रति रखते हुए — फिर “चयनित हटाएँ” दबाएँ। उम्मीदवार और लगभग-डुप्लिकेट कभी थोक में नहीं चुने जाते।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleziona ogni copia in eccesso nei %lld gruppi verificati, conservandone una per gruppo; poi premi Rimuovi selezionati. Candidati e quasi-duplicati non vengono mai selezionati in blocco."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件の検証済みグループで余分なコピーをすべて選択し、各1通を残します。その後「選択項目を削除」を押してください。候補と類似メールは一括選択されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인된 %lld개 그룹에서 여분의 사본을 모두 선택하고 각 하나씩 남깁니다 — 그런 다음 '선택 항목 제거'를 누르세요. 후보와 유사 중복은 일괄 선택되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleciona cada cópia extra nos %lld grupos verificados, mantendo uma de cada — depois pressione Remover selecionados. Candidatos e quase duplicados nunca são selecionados em massa."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择 %lld 个已验证组中的每个多余副本，每组保留一个，然后按“删除所选”。候选和近似重复永远不会被批量选择。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選取 %lld 個已驗證群組中的每個多餘副本，每組保留一個，然後按「移除所選」。候選和近似重複永遠不會被批次選取。"
+          }
+        }
+      }
+    },
     "Selects every redundant copy across all %lld groups, keeping one of each — then press Remove Selected" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -289238,6 +290463,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "傳送與接收"
+          }
+        }
+      }
+    },
+    "sender" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Absender"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "remitente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "expéditeur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रेषक"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mittente"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信者"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보낸 사람"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "remetente"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发件人"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄件者"
           }
         }
       }
@@ -309476,6 +310765,70 @@
         }
       }
     },
+    "subject" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Betreff"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "asunto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "objet"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "विषय"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "oggetto"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "件名"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제목"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "assunto"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主旨"
+          }
+        }
+      }
+    },
     "Subject" : {
       "localizations" : {
         "de" : {
@@ -327978,6 +329331,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這些不能同時選擇：%@。"
+          }
+        }
+      }
+    },
+    "These share a Message-ID, an opening passage or a content hash but differ somewhere. They are not proven identical and are left out of bulk selection; tick a copy yourself only after comparing it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese teilen eine Message-ID, einen Anfangsabschnitt oder einen Inhalts-Hash, unterscheiden sich aber irgendwo. Sie sind nicht nachweislich identisch und bleiben von der Massenauswahl ausgenommen; markieren Sie eine Kopie erst, nachdem Sie sie verglichen haben."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comparten un Message-ID, un pasaje inicial o un hash de contenido, pero difieren en algo. No está probado que sean idénticos y quedan fuera de la selección masiva; marque una copia solo después de compararla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ils partagent un Message-ID, un passage d'ouverture ou un hachage de contenu, mais diffèrent quelque part. Ils ne sont pas prouvés identiques et sont exclus de la sélection groupée ; cochez une copie seulement après l'avoir comparée."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ये एक Message-ID, शुरुआती अंश या सामग्री हैश साझा करते हैं लेकिन कहीं भिन्न हैं। ये समान सिद्ध नहीं हैं और थोक चयन से बाहर रखे गए हैं; किसी प्रति को तुलना करने के बाद ही स्वयं चुनें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Condividono un Message-ID, un passaggio iniziale o un hash del contenuto, ma differiscono in qualcosa. Non sono dimostrati identici e restano esclusi dalla selezione in blocco; spunta una copia solo dopo averla confrontata."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これらはMessage-ID、冒頭の一節、または内容ハッシュを共有していますが、どこかが異なります。同一とは証明されていないため一括選択から除外されています。比較したうえでご自身でコピーにチェックを入れてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이들은 Message-ID, 첫 구절 또는 내용 해시를 공유하지만 어딘가 다릅니다. 동일함이 증명되지 않아 일괄 선택에서 제외됩니다. 직접 비교한 뒤에만 사본을 선택하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estes compartilham um Message-ID, um trecho inicial ou um hash de conteúdo, mas diferem em algo. Não está provado que sejam idênticos e ficam fora da seleção em massa; marque uma cópia apenas depois de compará-la."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些邮件共享 Message-ID、开头段落或内容哈希，但在某处有差异。它们未被证明相同，不会进入批量选择；请在比较之后再自行勾选副本。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這些郵件共用 Message-ID、開頭段落或內容雜湊，但在某處有差異。它們未被證明相同，不會列入批次選取；請在比較之後再自行勾選副本。"
           }
         }
       }
@@ -347833,6 +349250,134 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已針對此組建驗證"
+          }
+        }
+      }
+    },
+    "Verified identical" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geprüft identisch"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificado idéntico"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifié identique"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सत्यापित समान"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificato identico"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検証済みの同一"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동일함 확인됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificado idêntico"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已验证相同"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已驗證相同"
+          }
+        }
+      }
+    },
+    "Verified identical (%lld groups)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geprüft identisch (%lld Gruppen)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificados idénticos (%lld grupos)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifiés identiques (%lld groupes)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सत्यापित समान (%lld समूह)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificati identici (%lld gruppi)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検証済みの同一メール（%lldグループ）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동일함 확인됨 (%lld개 그룹)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificados idênticos (%lld grupos)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已验证相同（%lld 组）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已驗證相同（%lld 組）"
           }
         }
       }

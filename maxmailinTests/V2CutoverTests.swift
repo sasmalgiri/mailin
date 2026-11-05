@@ -842,6 +842,161 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(after.isEmpty, "idempotent — nothing left to remove")
     }
 
+    // MARK: - Five jobs DUP-01 — a clue is not a comparison
+
+    /// A fresh copy (new id) of `email` with `change` applied.
+    private func copy(of email: MBOXParser.RawEmail,
+                      _ change: (inout MBOXParser.RawEmail) -> Void = { _ in }) -> MBOXParser.RawEmail {
+        var e = MBOXParser.RawEmail(
+            headers: email.headers, rawSource: email.rawSource, messageType: email.messageType,
+            attachments: email.attachments, timestamp: email.timestamp, domains: email.domains,
+            plainBody: email.plainBody, htmlBody: email.htmlBody)
+        change(&e)
+        return e
+    }
+
+    func testDUP01_identicalStoredBytesAreByteIdentical() {
+        let a = makeEmail(i: 1, total: 2, body: "the same body")
+        let b = copy(of: a)
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .byteIdentical)
+        // CRLF and LF forms of the same message are the same message.
+        let lf = copy(of: a) { $0.rawSource = "Subject: s\n\nline one\nline two" }
+        let crlf = copy(of: a) { $0.rawSource = "Subject: s\r\n\r\nline one\r\nline two" }
+        XCTAssertEqual(DuplicateVerification.verify([lf, crlf]), .byteIdentical)
+    }
+
+    func testDUP01_sameMessageIDDifferentAttachmentIsACandidate() {
+        let pdfA = Data("%PDF-1.4 version one".utf8).base64EncodedString()
+        let pdfB = Data("%PDF-1.4 version two".utf8).base64EncodedString()
+        let a = copy(of: makeEmail(i: 2, total: 2, body: "see attached")) {
+            $0.attachments = [AttachmentMetadata(filename: "contract.pdf", mimeType: "application/pdf", size: 20, base64: pdfA)]
+        }
+        let b = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [AttachmentMetadata(filename: "contract.pdf", mimeType: "application/pdf", size: 20, base64: pdfB)]
+        }
+        XCTAssertEqual(a.headers["Message-ID"], b.headers["Message-ID"], "the clue the engines group on")
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .candidate(differences: [.attachments]))
+        XCTAssertFalse(DuplicateVerification.verify([a, b]).isVerified)
+    }
+
+    func testDUP01_bodyThatDiffersAfterTheFingerprintPrefixIsACandidate() {
+        let prefix = String(repeating: "x", count: 300)
+        let a = makeEmail(i: 3, total: 2, body: prefix + " ends one way")
+        let b = copy(of: a) { $0.rawSource = "raw other"; $0.plainBody = prefix + " ends another way" }
+        // The engines' SHA-1 of the first 200 characters cannot tell these apart.
+        XCTAssertEqual(String(a.plainBody.prefix(200)), String(b.plainBody.prefix(200)))
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .candidate(differences: [.body]))
+    }
+
+    func testDUP01_transportHeadersAloneDoNotMakeACandidate() {
+        // RFC 5322 §3.6.4: the same message may gain Received/transport headers
+        // without changing its Message-ID. Different raw bytes, same content.
+        let a = makeEmail(i: 4, total: 2, body: "identical content")
+        let b = copy(of: a) {
+            $0.rawSource = "Received: from relay.example\n" + $0.rawSource
+            $0.headers["Received"] = "from relay.example"
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .contentEquivalent(attachmentBytesCompared: true))
+        // A changed recipient display name is not content either; a changed address is.
+        let renamed = copy(of: a) { $0.rawSource = "raw other"; $0.headers["To"] = "Me Myself <me@example.com>" }
+        XCTAssertEqual(DuplicateVerification.verify([a, renamed]), .contentEquivalent(attachmentBytesCompared: true))
+        let other = copy(of: a) { $0.rawSource = "raw other"; $0.headers["To"] = "you@example.com" }
+        XCTAssertEqual(DuplicateVerification.verify([a, other]), .candidate(differences: [.to]))
+    }
+
+    func testDUP01_attachmentsWithoutStoredBytesAreCompareByMetadataAndSaySo() {
+        let a = copy(of: makeEmail(i: 5, total: 2, body: "b")) {
+            $0.attachments = [AttachmentMetadata(filename: "a.txt", mimeType: "text/plain", size: 9)]
+        }
+        let b = copy(of: a) { $0.rawSource = "raw other" }
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .contentEquivalent(attachmentBytesCompared: false))
+    }
+
+    func testDUP01_bulkRemovalNeverTakesFromCandidateGroups() {
+        let a = makeEmail(i: 6, total: 4, body: "same")
+        let a2 = copy(of: a)
+        let b = makeEmail(i: 7, total: 4, body: "first version")
+        let b2 = copy(of: b) { $0.rawSource = "raw other"; $0.plainBody = "second version" }
+        let (verified, candidates) = DuplicateVerification.classify([[a, a2], [b, b2]])
+        XCTAssertEqual(verified.map(\.id), [a.id])
+        XCTAssertEqual(candidates.map(\.id), [b.id])
+        XCTAssertEqual(DuplicateVerification.bulkRemovable(verified + candidates), [a2.id],
+                       "only the verified group's extra copy; b2 is a different message")
+        XCTAssertEqual(DuplicateVerification.differenceLine(candidates[0].verdict), "Differs in body")
+    }
+
+    func testDUP01_archiveWideVerificationLoadsInChunksAndSkipsCandidates() async throws {
+        // 600 same-Message-ID pairs: 599 identical, one whose body changed.
+        var byID: [UUID: MBOXParser.RawEmail] = [:]
+        var groups: [[UUID]] = []
+        var changedKeep: UUID?
+        for i in 0..<600 {
+            let keep = makeEmail(i: 1000 + i, total: 600, body: "body \(i)")
+            let extra = copy(of: keep) {
+                if i == 123 { $0.rawSource = "raw other"; $0.plainBody = "body \(i) — edited later" }
+            }
+            if i == 123 { changedKeep = keep.id }
+            byID[keep.id] = keep; byID[extra.id] = extra
+            groups.append([keep.id, extra.id])
+        }
+        var loads = 0
+        let result = try await DuplicateVerification.verifyArchiveWide(groups: groups) { ids in
+            loads += 1
+            XCTAssertLessThanOrEqual(ids.count, 502, "a chunk is bounded, never the whole archive")
+            return ids.compactMap { byID[$0] }
+        }
+        XCTAssertGreaterThan(loads, 1, "600 pairs need more than one chunk")
+        XCTAssertEqual(result.verifiedGroups, 599)
+        XCTAssertEqual(result.candidateGroups, 1)
+        XCTAssertEqual(result.removable.count, 599)
+        let keepIDs = Set(groups.map { $0[0] })
+        XCTAssertTrue(Set(result.removable).isDisjoint(with: keepIDs), "the kept copy is never removable")
+        let changedExtra = try XCTUnwrap(groups.first { $0[0] == changedKeep }?[1])
+        XCTAssertFalse(result.removable.contains(changedExtra), "the edited copy stays")
+    }
+
+    /// The store hands back whole same-Message-ID groups, first id = the copy to
+    /// keep (source-identified before migrated), so the view can compare each
+    /// group in full before offering a removal.
+    func testDUP01_messageIDDuplicateGroups_keepsSourceIdentifiedCopyFirst() async throws {
+        let env = try makeEnv()
+        var migrated: [MBOXParser.RawEmail] = []
+        for i in 0..<3 {
+            var e = makeEmail(i: i, total: 10, body: "body \(i)")
+            e.headers["Message-ID"] = "<shared-\(i)@test>"
+            migrated.append(e)
+        }
+        try await env.store.insertBatch(
+            migrated, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .preserveAll,
+            batchSize: 10, progress: nil)
+        let sid = try await env.store.registerSource(SQLiteEmailStore.SourceDescriptor(
+            sha256: "ffff", filename: "Sent.mbox", byteSize: 10,
+            parser: "mbox", parserVersion: 3, accountID: nil, sourceKind: "mbox"))
+        var imported: [MBOXParser.RawEmail] = []
+        for i in 0..<4 {   // one email only in the fresh import: not a group
+            var e = makeEmail(i: 100 + i, total: 10, body: "body \(i)")
+            e.headers["Message-ID"] = "<shared-\(i)@test>"
+            imported.append(e)
+        }
+        try await env.store.insertBatch(
+            imported, sourceFileHash: "ffff", accountID: nil,
+            sourceID: sid, firstOrdinal: 0, dedupPolicy: .preserveAll,
+            batchSize: 10, progress: nil)
+
+        let groups = try await env.store.messageIDDuplicateGroups()
+        XCTAssertEqual(groups.count, 3, "three Message-IDs stored twice; the fourth once")
+        let importedIDs = Set(imported.map(\.id))
+        for group in groups {
+            XCTAssertEqual(group.count, 2)
+            XCTAssertTrue(importedIDs.contains(group[0]), "the source-identified copy is kept")
+        }
+        // Same rows as the id-only resolver, now with their partner.
+        let redundant = try await env.store.exactMessageIDDuplicateIDs()
+        XCTAssertEqual(Set(groups.flatMap { $0.dropFirst() }), Set(redundant))
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.
