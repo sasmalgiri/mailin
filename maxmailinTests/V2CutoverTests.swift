@@ -1751,6 +1751,102 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(missing.isEmpty)
     }
 
+    // MARK: - Five jobs OPEN-01 — preflight tells unsupported, inaccessible, damaged and encrypted apart
+
+    /// A PST header: "!BDN", the version word, the encoding byte and the two
+    /// table roots — enough for the preflight, not for a parse.
+    private func pstHeader(unicode: Bool = true, crypt: UInt8, nbt: UInt64, bbt: UInt64, length: Int = 4096) -> Data {
+        var d = Data(repeating: 0, count: length)
+        d.replaceSubrange(0..<4, with: [0x21, 0x42, 0x44, 0x4E])
+        let version: UInt16 = unicode ? 23 : 14
+        d[10] = UInt8(version & 0xFF); d[11] = UInt8(version >> 8)
+        d[unicode ? 513 : 461] = crypt
+        func put(_ value: UInt64, at offset: Int, bytes: Int) {
+            for i in 0..<bytes { d[offset + i] = UInt8((value >> (8 * UInt64(i))) & 0xFF) }
+        }
+        if unicode { put(nbt, at: 224, bytes: 8); put(bbt, at: 240, bytes: 8) } else { put(nbt, at: 188, bytes: 4); put(bbt, at: 196, bytes: 4) }
+        return d
+    }
+
+    /// A ZIP with stored, empty members; `encrypted` sets general-purpose bit 0.
+    private func zipBytes(_ members: [(name: String, encrypted: Bool)]) -> Data {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: Int) -> [UInt8] { le16(v & 0xFFFF) + le16((v >> 16) & 0xFFFF) }
+        var local = Data(), central = Data()
+        for m in members {
+            let name = Array(m.name.utf8)
+            let flags = m.encrypted ? 1 : 0
+            let offset = local.count
+            local.append(contentsOf: le32(0x04034b50) + le16(20) + le16(flags) + le16(0) + le16(0) + le16(0)
+                         + le32(0) + le32(0) + le32(0) + le16(name.count) + le16(0) + name)
+            central.append(contentsOf: le32(0x02014b50) + le16(20) + le16(20) + le16(flags) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(0) + le32(0) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(offset) + name)
+        }
+        var file = local
+        file.append(central)
+        file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(members.count) + le16(members.count)
+                    + le32(central.count) + le32(local.count) + le16(0))
+        return file
+    }
+
+    func testOPEN01_preflightTellsTheFourObstaclesApart() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-open01-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        func write(_ name: String, _ data: Data) throws -> URL {
+            let url = root.appendingPathComponent(name); try data.write(to: url); return url
+        }
+        func condition(_ url: URL) -> SourceCondition { SourceFormatClassifier.preflight(url: url).condition }
+
+        // Ready: a real mbox.
+        let mbox = try write("ok.mbox", Data("From a@b Mon Jan  1 00:00:00 2024\nFrom: a@b\nSubject: s\n\nbody\n".utf8))
+        XCTAssertEqual(SourceFormatClassifier.preflight(url: mbox), .ready)
+
+        // Unsupported: text that is not mail.
+        XCTAssertEqual(condition(try write("notes.txt", Data("just some notes, nothing like a header block\n".utf8))), .unsupported)
+
+        // Inaccessible: missing, and unreadable.
+        XCTAssertEqual(condition(root.appendingPathComponent("gone.mbox")), .inaccessible)
+        let locked = try write("locked.mbox", Data("From a@b Mon Jan  1 00:00:00 2024\nFrom: a@b\n\nx\n".utf8))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked.path) }
+        XCTAssertEqual(condition(locked), .inaccessible)
+
+        // Damaged: empty, a PST shorter than its header, a PST whose tables lie past the end, a ZIP without a directory.
+        XCTAssertEqual(condition(try write("empty.pst", Data())), .damaged)
+        XCTAssertEqual(condition(try write("short.pst", Data([0x21, 0x42, 0x44, 0x4E]) + Data(repeating: 0, count: 300))), .damaged)
+        let truncated = try write("truncated.pst", pstHeader(crypt: 1, nbt: 1 << 40, bbt: 1 << 40))
+        let truncatedPreflight = SourceFormatClassifier.preflight(url: truncated)
+        XCTAssertEqual(truncatedPreflight.condition, .damaged)
+        XCTAssertTrue(truncatedPreflight.detail.contains("beyond the end"), truncatedPreflight.detail)
+        XCTAssertEqual(condition(try write("nodir.zip", Data([0x50, 0x4B, 0x03, 0x04]) + Data(repeating: 0, count: 200))), .damaged)
+        XCTAssertFalse(SourceCondition.damaged.blocksImport, "a damaged file still starts; the parser reports what it could not read")
+
+        // Encrypted: an undocumented PST encoding; a ZIP whose every file is encrypted.
+        let encryptedPST = try write("locked-encoding.pst", pstHeader(crypt: 3, nbt: 512, bbt: 1024))
+        XCTAssertEqual(condition(encryptedPST), .encrypted)
+        XCTAssertEqual(condition(try write("ansi-ok.pst", pstHeader(unicode: false, crypt: 2, nbt: 512, bbt: 1024))), .ready,
+                       "cyclic encoding is decoded by the reader — not 'encrypted'")
+        let allEncrypted = try write("all.zip", zipBytes([("a.mbox", true), ("b.eml", true)]))
+        let allPreflight = SourceFormatClassifier.preflight(url: allEncrypted)
+        XCTAssertEqual(allPreflight.condition, .encrypted)
+        XCTAssertEqual(allPreflight.encryptedMembers, 2)
+        let someEncrypted = try write("some.zip", zipBytes([("a.mbox", true), ("b.eml", false)]))
+        let somePreflight = SourceFormatClassifier.preflight(url: someEncrypted)
+        XCTAssertEqual(somePreflight.condition, .ready, "the readable member imports; the encrypted one is skipped and counted")
+        XCTAssertEqual(somePreflight.encryptedMembers, 1)
+        XCTAssertTrue(SourceCondition.encrypted.blocksImport && SourceCondition.inaccessible.blocksImport && SourceCondition.unsupported.blocksImport)
+
+        // The sheet's plan takes only what can start and keeps the reason for the rest.
+        let plan = ImportPlan.build(urls: [mbox, encryptedPST, truncated, locked], destination: root, copiesOriginals: false)
+        XCTAssertEqual(plan.supported.map(\.name).sorted(), ["ok.mbox", "truncated.pst"])
+        XCTAssertEqual(plan.unsupported.map(\.name).sorted(), ["locked-encoding.pst", "locked.mbox"])
+        XCTAssertEqual(plan.items.first { $0.name == "locked-encoding.pst" }?.preflight.condition, .encrypted)
+        XCTAssertEqual(plan.items.first { $0.name == "locked.mbox" }?.preflight.condition, .inaccessible)
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

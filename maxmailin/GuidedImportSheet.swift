@@ -33,9 +33,43 @@ struct ImportPlanItem: Identifiable, Sendable {
     let url: URL
     let sizeBytes: Int64
     let classification: SourceClassification
+    /// OPEN-01: readable? damaged? encrypted? — decided before Start.
+    var preflight: SourcePreflight = .ready
 
     var name: String { url.lastPathComponent }
-    var isSupported: Bool { classification.isSupported }
+    /// The import takes this file: a known format that is readable and not
+    /// encrypted. A damaged file still starts — the parser reports what it
+    /// could not read.
+    var isSupported: Bool { classification.isSupported && !preflight.condition.blocksImport }
+
+    /// What the sheet shows for the file's condition.
+    var conditionLabel: String {
+        switch preflight.condition {
+        case .ready: return String(localized: "Ready")
+        case .unsupported: return String(localized: "Unsupported")
+        case .inaccessible: return String(localized: "Not accessible")
+        case .damaged: return String(localized: "Damaged — imports what can be read")
+        case .encrypted: return String(localized: "Encrypted — cannot be opened without its password")
+        }
+    }
+
+    var conditionSymbol: String {
+        switch preflight.condition {
+        case .ready: return "checkmark.circle.fill"
+        case .unsupported: return "xmark.circle.fill"
+        case .inaccessible: return "eye.slash.circle.fill"
+        case .damaged: return "exclamationmark.triangle.fill"
+        case .encrypted: return "lock.circle.fill"
+        }
+    }
+
+    var conditionTint: Color {
+        switch preflight.condition {
+        case .ready: return .green
+        case .damaged: return .orange
+        case .unsupported, .inaccessible, .encrypted: return .red
+        }
+    }
 }
 
 struct ImportPlan: Sendable {
@@ -57,10 +91,12 @@ struct ImportPlan: Sendable {
         for url in urls {
             let size = (try? FileManager.default
                 .attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+            let classification = SourceFormatClassifier.classify(url: url)
             plan.items.append(ImportPlanItem(
                 url: url,
                 sizeBytes: size,
-                classification: SourceFormatClassifier.classify(url: url)))
+                classification: classification,
+                preflight: SourceFormatClassifier.preflight(url: url, classification: classification)))
         }
         // Only supported sources count toward the requirement: refusing an
         // import because of bytes we are not going to read would be wrong.
@@ -233,10 +269,10 @@ struct GuidedImportSheet: View {
             ForEach(plan.items) { item in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Image(systemName: item.isSupported
-                              ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundStyle(item.isSupported ? .green : .red)
+                        Image(systemName: item.conditionSymbol)
+                            .foregroundStyle(item.conditionTint)
                             .font(.caption)
+                            .accessibilityLabel(item.conditionLabel)
                         Text(item.name)
                             .font(.callout.weight(.medium))
                             .lineLimit(1)
@@ -245,6 +281,15 @@ struct GuidedImportSheet: View {
                         Text(ByteCountFormatter.string(fromByteCount: item.sizeBytes, countStyle: .file))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                    }
+                    // OPEN-01: the four conditions that are not "ready", each
+                    // with its reason, before anything is written.
+                    if item.preflight.condition != .ready || !item.preflight.detail.isEmpty {
+                        Text(item.preflight.detail.isEmpty ? item.conditionLabel : "\(item.conditionLabel): \(item.preflight.detail)")
+                            .font(.caption2)
+                            .foregroundStyle(item.conditionTint)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("import.sheet.condition")
                     }
                     // The classifier's own evidence sentence: "detected X —
                     // PST/OST signature !BDN at offset 0". A name/content
