@@ -1090,6 +1090,122 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(model.labels.count, 2 * ArchiveSidebarModel.labelPage)
     }
 
+    // MARK: - Five jobs FIND-03 — every attachment has a state, not "attempted"
+
+    private func mimeAttachment(_ filename: String, _ mime: String, _ data: Data) -> String {
+        """
+        --B
+        Content-Type: \(mime); name="\(filename)"
+        Content-Disposition: attachment; filename="\(filename)"
+        Content-Transfer-Encoding: base64
+
+        \(data.base64EncodedString())
+        """
+    }
+
+    private func lockedPDF() throws -> Data {
+        let document = PDFDocument()
+        document.insert(PDFPage(), at: 0)
+        let options: [PDFDocumentWriteOption: Any] = [
+            PDFDocumentWriteOption.userPasswordOption: "secret",
+            PDFDocumentWriteOption.ownerPasswordOption: "secret"]
+        return try XCTUnwrap(document.dataRepresentation(options: options))
+    }
+
+    func testFIND03_everyAttachmentGetsAStateAndANewExtractorRetriesWhatItCould() async throws {
+        let env = try makeEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer {
+            AttachmentTextIndexJob.testStoreOverride = nil
+            AttachmentTextIndexJob.testSuppressKicks = false
+        }
+        let long = String(repeating: "word ", count: 120_000)   // 600,000 characters
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Five attachments
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <find03@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see attached
+        \(mimeAttachment("notes.txt", "text/plain", Data("the xylophone clause".utf8)))
+        \(mimeAttachment("blank.txt", "text/plain", Data("   \n  ".utf8)))
+        \(mimeAttachment("report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Data("PK\u{03}\u{04}not really".utf8)))
+        \(mimeAttachment("locked.pdf", "application/pdf", try lockedPDF()))
+        \(mimeAttachment("big.txt", "text/plain", Data(long.utf8)))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        XCTAssertEqual(email.attachments.count, 5, "fixture parses with five attachments")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+        XCTAssertEqual(outcome.extractedTexts, 2, "notes.txt and the cut big.txt carry text")
+
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        let rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.filename), ["notes.txt", "blank.txt", "report.docx", "locked.pdf", "big.txt"])
+        XCTAssertEqual(rows.map(\.state), [.extracted, .noText, .unsupported, .locked, .truncated])
+        XCTAssertEqual(rows[4].characters, AttachmentTextIndexJob.maxTextPerAttachment)
+        XCTAssertTrue(rows.allSatisfy { $0.extractorVersion == AttachmentTextIndexJob.extractorVersion })
+        XCTAssertNotNil(rows[3].note)
+
+        let summary = try coverage.summary(currentExtractorVersion: AttachmentTextIndexJob.extractorVersion)
+        XCTAssertEqual(summary.total, 5)
+        XCTAssertEqual(summary.searchable, 2)
+        XCTAssertEqual(summary.unsupportedKinds.map(\.kind), ["docx"])
+        XCTAssertEqual(summary.staleRows, 0)
+        let hits = try await env.store.attachmentTextSearch("xylophone")
+        XCTAssertEqual(hits, [email.id])
+
+        // Nothing is stale for the current extractor; a newer one would retry
+        // the unsupported, locked-out and cut-short attachments' email.
+        var requeued = try await AttachmentTextIndexJob.requeueStale(store: env.store, coverage: coverage)
+        XCTAssertEqual(requeued, 0)
+        let staleForNext = try coverage.emailIDs(staleBelow: AttachmentTextIndexJob.extractorVersion + 1, limit: 10)
+        XCTAssertEqual(staleForNext, [email.id])
+
+        // Rows left by an older extractor are re-queued without a reimport.
+        try coverage.record(emailID: email.id, rows: rows.map {
+            AttachmentCoverageRow(emailID: $0.emailID, ordinal: $0.ordinal, filename: $0.filename, mimeType: $0.mimeType,
+                                  state: $0.state, extractor: $0.extractor, extractorVersion: 1, characters: $0.characters, note: $0.note)
+        })
+        requeued = try await AttachmentTextIndexJob.requeueStale(store: env.store, coverage: coverage)
+        XCTAssertEqual(requeued, 1)
+        let pending = try await env.store.attachmentTextProgress().pending
+        XCTAssertEqual(pending, 1, "back on the work list")
+        XCTAssertTrue(try coverage.rows(for: email.id).isEmpty)
+        let again = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(again.indexedEmails, 1)
+        XCTAssertEqual(try coverage.rows(for: email.id).map(\.state), [.extracted, .noText, .unsupported, .locked, .truncated])
+    }
+
+    func testFIND03_noMatchNoticeNamesWhatWasNotSearchable() {
+        var summary = AttachmentCoverageSummary()
+        summary.counts = [.extracted: 1, .truncated: 1, .noText: 1, .unsupported: 1, .locked: 1]
+        summary.unsupportedKinds = [("docx", 1)]
+        let notice = AttachmentTextIndexJob.noMatchNotice(summary)
+        XCTAssertTrue(notice.contains("2 of 5"), notice)
+        XCTAssertTrue(notice.contains("1 unsupported (docx)"), notice)
+        XCTAssertTrue(notice.contains("1 locked"), notice)
+        XCTAssertTrue(notice.contains("1 cut short"), notice)
+        XCTAssertTrue(notice.contains("1 with no text"), notice)
+
+        var complete = AttachmentCoverageSummary()
+        complete.counts = [.extracted: 3]
+        XCTAssertEqual(AttachmentTextIndexJob.noMatchNotice(complete), "No attachments matched. Searchable text covers all 3 attachments.")
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

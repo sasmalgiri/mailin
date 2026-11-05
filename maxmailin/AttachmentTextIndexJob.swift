@@ -14,6 +14,12 @@
 //  recorded as attempted (state row) so the work list converges and the UI
 //  can report progress honestly. Kicked at launch and after every import.
 //
+//  Five jobs FIND-03: "attempted" is per email; what happened to EACH
+//  attachment (searchable, cut short, no text, unsupported, locked, failed)
+//  is recorded in `AttachmentCoverageStore` with the extractor version, so
+//  the person sees what was not searchable and a newer extractor retries
+//  what an older one could not read — without a reimport.
+//
 
 import Foundation
 import PDFKit
@@ -53,7 +59,13 @@ final class AttachmentTextIndexJob {
     var currentRun: Task<Void, Never>? { task }
 
     /// Extracted text cap per attachment — plenty for search, never unbounded.
+    /// Text beyond it is recorded as `truncated` (FIND-07 removes the cap).
     nonisolated static let maxTextPerAttachment = 500_000
+
+    /// FIND-03: bump when an extractor is added or improved. Coverage rows
+    /// below this version in unsupported/failed/truncated are re-queued at
+    /// the start of the next pass. 1 = before per-attachment coverage.
+    nonisolated static let extractorVersion = 2
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -62,6 +74,25 @@ final class AttachmentTextIndexJob {
         /// E1: emails read again for scanned text by the OCR second pass, and how many it covers.
         var ocrEmails = 0
         var ocrTotal = 0
+    }
+
+    /// FIND-03: what one attachment yielded.
+    struct Extraction: Sendable {
+        let ordinal: Int
+        let filename: String
+        let mimeType: String
+        /// Text to index, when there is any (already cut at the cap).
+        let text: String?
+        let state: AttachmentCoverageState
+        let extractor: String
+        let note: String?
+
+        func coverageRow(emailID: UUID) -> AttachmentCoverageRow {
+            AttachmentCoverageRow(
+                emailID: emailID, ordinal: ordinal, filename: filename, mimeType: mimeType,
+                state: state, extractor: extractor, extractorVersion: AttachmentTextIndexJob.extractorVersion,
+                characters: text?.count ?? 0, note: note)
+        }
     }
 
     init() {
@@ -143,13 +174,24 @@ final class AttachmentTextIndexJob {
             let stateURL = await store.attachmentOCRStateURL
             ocrState = try? AttachmentOCRState(url: stateURL)
         }
+        // FIND-03: per-attachment coverage beside the archive.
+        let coverage = try? AttachmentCoverageStore(url: await store.attachmentCoverageURL)
         do {
+            if let coverage {
+                let requeued = try await Self.requeueStale(store: store, coverage: coverage)
+                if requeued > 0 { Self.logger.info("attachment index: \(requeued) email(s) re-queued for extractor v\(Self.extractorVersion)") }
+            }
             while true {
                 if Task.isCancelled { break }
                 let page = try await store.attachmentTextCandidates(limit: batchSize)
                 if !page.rawless.isEmpty {
-                    // No raw source → nothing to extract; mark attempted.
-                    for id in page.rawless { try await store.attachmentTextIndex(emailID: id, texts: []) }
+                    // No raw source → nothing to extract; mark attempted, and
+                    // say so for each attachment the side table knows.
+                    for id in page.rawless {
+                        try await store.attachmentTextIndex(emailID: id, texts: [])
+                        await recordCoverage(coverage, emailID: id, extractions: nil,
+                                             unreadable: String(localized: "message source not stored"))
+                    }
                 }
                 if page.candidates.isEmpty {
                     if page.rawless.isEmpty { break }
@@ -160,11 +202,14 @@ final class AttachmentTextIndexJob {
                     if Task.isCancelled { break }
                     // Whole extraction chain off the main actor — MIME decode,
                     // temp-file write, PDF/text parse.
-                    let texts: [(filename: String, content: String)] = await Task.detached(priority: .utility) {
-                        Self.extractTexts(fromRaw: candidate.raw, ocr: ocr)
+                    let extractions: [Extraction]? = await Task.detached(priority: .utility) {
+                        Self.extractCoverage(fromRaw: candidate.raw, ocr: ocr)
                     }.value
+                    let texts = Self.texts(extractions ?? [])
                     do {
                         try await store.attachmentTextIndex(emailID: candidate.id, texts: texts)
+                        await recordCoverage(coverage, emailID: candidate.id, extractions: extractions,
+                                             unreadable: String(localized: "message could not be parsed"))
                         // Read with OCR already: the second pass need not come back to it.
                         try? ocrState?.markDone([candidate.id])
                         outcome.indexedEmails += 1
@@ -179,7 +224,7 @@ final class AttachmentTextIndexJob {
                 report(outcome)
             }
             if let ocrState, !Task.isCancelled {
-                try await ocrSecondPass(state: ocrState, batchSize: batchSize, outcome: &outcome)
+                try await ocrSecondPass(state: ocrState, coverage: coverage, batchSize: batchSize, outcome: &outcome)
             }
             if outcome.indexedEmails > 0 || outcome.ocrEmails > 0 {
                 Self.logger.info("attachment text indexed: \(outcome.indexedEmails) email(s), \(outcome.extractedTexts) text(s)")
@@ -196,7 +241,8 @@ final class AttachmentTextIndexJob {
     /// IDs are paged without loading messages; only emails not yet read are loaded, in
     /// byte-capped pages. A finished pass clears the cursor, so mail indexed while OCR was off
     /// is found on a later run.
-    private func ocrSecondPass(state: AttachmentOCRState, batchSize: Int, outcome: inout Outcome) async throws {
+    private func ocrSecondPass(state: AttachmentOCRState, coverage: AttachmentCoverageStore?,
+                               batchSize: Int, outcome: inout Outcome) async throws {
         outcome.ocrTotal = try await store.attachmentOCRCandidateCount()
         outcome.ocrEmails = min(outcome.ocrTotal, (try? state.doneCount()) ?? 0)
         report(outcome)
@@ -211,11 +257,13 @@ final class AttachmentTextIndexJob {
                 if !page.rawless.isEmpty { try state.markDone(page.rawless) }
                 for candidate in page.candidates {
                     if Task.isCancelled { break }
-                    let texts: [(filename: String, content: String)] = await Task.detached(priority: .utility) {
-                        Self.extractTexts(fromRaw: candidate.raw, ocr: true)
+                    let extractions: [Extraction]? = await Task.detached(priority: .utility) {
+                        Self.extractCoverage(fromRaw: candidate.raw, ocr: true)
                     }.value
                     do {
-                        try await store.attachmentTextIndex(emailID: candidate.id, texts: texts)
+                        try await store.attachmentTextIndex(emailID: candidate.id, texts: Self.texts(extractions ?? []))
+                        await recordCoverage(coverage, emailID: candidate.id, extractions: extractions,
+                                             unreadable: String(localized: "message could not be parsed"))
                         try state.markDone([candidate.id])
                         outcome.ocrEmails += 1
                     } catch {
@@ -234,24 +282,124 @@ final class AttachmentTextIndexJob {
         }
     }
 
+    // MARK: - FIND-03: coverage
+
+    /// Write what happened to each attachment. `extractions == nil` means the
+    /// message itself could not be read: every attachment the side table
+    /// lists is then `failed` with `unreadable` as the reason.
+    private func recordCoverage(_ coverage: AttachmentCoverageStore?, emailID: UUID,
+                                extractions: [Extraction]?, unreadable: String) async {
+        guard let coverage else { return }
+        let rows: [AttachmentCoverageRow]
+        if let extractions {
+            rows = extractions.map { $0.coverageRow(emailID: emailID) }
+        } else {
+            let metadata = (try? await store.attachmentMetadata(forEmailID: emailID)) ?? []
+            rows = metadata.enumerated().map { item in
+                AttachmentCoverageRow(
+                    emailID: emailID, ordinal: item.offset, filename: item.element.filename,
+                    mimeType: item.element.mimeType, state: .failed, extractor: "none",
+                    extractorVersion: Self.extractorVersion, characters: 0, note: unreadable)
+            }
+        }
+        do { try coverage.record(emailID: emailID, rows: rows) } catch {
+            Self.logger.error("attachment coverage not recorded for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Emails an older extractor left unsupported, failed or cut short go back
+    /// on the work list, a page at a time. Returns how many were re-queued.
+    static func requeueStale(store: SQLiteEmailStore, coverage: AttachmentCoverageStore) async throws -> Int {
+        var total = 0
+        while !Task.isCancelled {
+            let ids = try coverage.emailIDs(staleBelow: extractorVersion, limit: 500)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            try coverage.remove(emailIDs: ids)
+            total += ids.count
+        }
+        return total
+    }
+
+    /// The archive's attachment coverage, for notices. Nil when nothing has been recorded yet.
+    nonisolated static func coverageSummary(store: SQLiteEmailStore) async -> AttachmentCoverageSummary? {
+        let url = await store.attachmentCoverageURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? AttachmentCoverageStore(url: url).summary(currentExtractorVersion: extractorVersion)
+    }
+
+    /// "No attachments matched" that says what was not searchable.
+    nonisolated static func noMatchNotice(_ summary: AttachmentCoverageSummary) -> String {
+        var parts: [String] = []
+        if let n = summary.counts[.unsupported], n > 0 {
+            let kinds = summary.unsupportedKinds.prefix(4).map(\.kind).filter { !$0.isEmpty }
+            parts.append(kinds.isEmpty
+                ? String(localized: "\(n) unsupported")
+                : String(localized: "\(n) unsupported (\(kinds.joined(separator: ", ")))"))
+        }
+        if let n = summary.counts[.locked], n > 0 { parts.append(String(localized: "\(n) locked")) }
+        if let n = summary.counts[.failed], n > 0 { parts.append(String(localized: "\(n) failed")) }
+        if let n = summary.counts[.truncated], n > 0 { parts.append(String(localized: "\(n) cut short")) }
+        if let n = summary.counts[.noText], n > 0 { parts.append(String(localized: "\(n) with no text")) }
+        if parts.isEmpty {
+            return String(localized: "No attachments matched. Searchable text covers all \(summary.total) attachments.")
+        }
+        return String(localized: "No attachments matched. Searchable text covers \(summary.searchable) of \(summary.total) attachments — \(parts.joined(separator: ", ")).")
+    }
+
     // MARK: - Extraction (nonisolated, bounded)
 
     /// Text from every extractable attachment of one raw MIME message.
     /// Temp files created by the extractor are removed before returning.
     nonisolated static func extractTexts(fromRaw raw: String, ocr: Bool = false) -> [(filename: String, content: String)] {
-        guard let extraction = try? EmailBodyExtractor.extractContents(from: raw) else { return [] }
-        var out: [(String, String)] = []
-        for attachment in extraction.attachments {
+        texts(extractCoverage(fromRaw: raw, ocr: ocr) ?? [])
+    }
+
+    nonisolated static func texts(_ extractions: [Extraction]) -> [(filename: String, content: String)] {
+        extractions.compactMap { e in e.text.map { (filename: e.filename, content: $0) } }
+    }
+
+    /// FIND-03: every attachment of one raw MIME message with its state. Nil
+    /// when the message itself cannot be parsed.
+    nonisolated static func extractCoverage(fromRaw raw: String, ocr: Bool = false) -> [Extraction]? {
+        guard let extraction = try? EmailBodyExtractor.extractContents(from: raw) else { return nil }
+        var out: [Extraction] = []
+        for (ordinal, attachment) in extraction.attachments.enumerated() {
             defer {
                 if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) }
             }
-            guard let text = extractText(from: attachment, ocr: ocr), !text.isEmpty else { continue }
-            out.append((attachment.filename, String(text.prefix(maxTextPerAttachment))))
+            out.append(classify(attachment, ordinal: ordinal, ocr: ocr))
         }
         return out
     }
 
+    /// The extracted text of one attachment, if any (whole, not cut at the cap).
     nonisolated static func extractText(from attachment: AttachmentMetadata, ocr: Bool = false) -> String? {
+        read(attachment, ocr: ocr).text
+    }
+
+    /// FIND-03: read one attachment and say what happened. Text longer than
+    /// the cap is cut and the state says so.
+    nonisolated static func classify(_ attachment: AttachmentMetadata, ordinal: Int, ocr: Bool) -> Extraction {
+        let result = read(attachment, ocr: ocr)
+        var text = result.text
+        var state = result.state
+        if let full = text {
+            if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                text = nil
+                state = .noText
+            } else if full.count > maxTextPerAttachment {
+                text = String(full.prefix(maxTextPerAttachment))
+                state = .truncated
+            }
+        }
+        return Extraction(ordinal: ordinal, filename: attachment.filename, mimeType: attachment.mimeType,
+                          text: text, state: state, extractor: result.extractor, note: result.note)
+    }
+
+    /// One attachment through the extractor that fits it.
+    nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool)
+        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
         let data: Data?
         if let url = attachment.fileURL {
             data = try? Data(contentsOf: url)
@@ -260,43 +408,72 @@ final class AttachmentTextIndexJob {
         } else {
             data = nil
         }
-        guard let data, !data.isEmpty else { return nil }
+        guard let data, !data.isEmpty else {
+            return (nil, .failed, "none", String(localized: "attachment has no stored bytes"))
+        }
 
         let mime = attachment.mimeType.lowercased()
         let ext = (attachment.filename as NSString).pathExtension.lowercased()
 
         if mime.contains("pdf") || ext == "pdf" {
-            guard let document = PDFDocument(data: data) else { return nil }
+            guard let document = PDFDocument(data: data) else {
+                return (nil, .failed, "pdfkit", String(localized: "PDF could not be opened"))
+            }
+            if document.isLocked {
+                return (nil, .locked, "pdfkit", String(localized: "password-protected PDF"))
+            }
             let layer = document.string
             // E1: a scanned PDF (no real text layer) is read by OCR, page by page.
             if ocr, AttachmentOCR.pdfNeedsOCR(text: layer, pageCount: document.pageCount),
                let scanned = AttachmentOCR.text(fromPDF: document) {
                 let stamp = layer?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return stamp.isEmpty ? scanned : stamp + "\n" + scanned
+                return (stamp.isEmpty ? scanned : stamp + "\n" + scanned, .extracted, "ocr", nil)
             }
-            return layer
+            if !ocr, AttachmentOCR.pdfNeedsOCR(text: layer, pageCount: document.pageCount) {
+                return (nil, .unsupported, "pdfkit", String(localized: "scanned PDF — turn on attachment OCR to read it"))
+            }
+            return (layer, .extracted, "pdfkit", nil)
         }
-        if ocr, AttachmentOCR.isImage(mimeType: mime, filename: attachment.filename) {
-            return AttachmentOCR.text(fromImageData: data)
+        if AttachmentOCR.isImage(mimeType: mime, filename: attachment.filename) {
+            guard ocr else {
+                return (nil, .unsupported, "none", String(localized: "image — turn on attachment OCR to read it"))
+            }
+            return (AttachmentOCR.text(fromImageData: data), .extracted, "ocr", nil)
+        }
+        // Office and compressed containers before the text families: their
+        // MIME types contain "xml" ("…officedocument.wordprocessingml…") and
+        // were decoded as Latin-1 text, indexing bytes as words.
+        let containerExts: Set<String> = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+                                          "pages", "numbers", "key", "zip", "gz", "tgz", "7z", "rar", "tar"]
+        if mime.contains("officedocument") || mime.contains("opendocument") || mime.contains("msword")
+            || mime.contains("ms-excel") || mime.contains("ms-powerpoint") || mime.contains("zip")
+            || mime.contains("compressed") || containerExts.contains(ext) {
+            return (nil, .unsupported, "none", nil)
         }
         if mime.contains("rtf") || ext == "rtf" {
-            return (try? NSAttributedString(
+            guard let text = (try? NSAttributedString(
                 data: data, options: [.documentType: NSAttributedString.DocumentType.rtf],
-                documentAttributes: nil))?.string
+                documentAttributes: nil))?.string else {
+                return (nil, .failed, "rtf", String(localized: "RTF could not be read"))
+            }
+            return (text, .extracted, "rtf", nil)
         }
         if mime.contains("html") || ext == "html" || ext == "htm" {
             // Regex strip instead of NSAttributedString(html:) — the latter
             // requires the main thread (WebKit) and this runs detached.
             let html = String(data: data, encoding: .utf8) ?? ""
-            return html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            return (html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression), .extracted, "html", nil)
         }
         let textualExts: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "ics", "vcf", "eml", "yml", "yaml"]
         if mime.hasPrefix("text/") || mime.contains("json") || mime.contains("xml") || textualExts.contains(ext) {
-            return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+            guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
+                return (nil, .failed, "text", String(localized: "text encoding not recognised"))
+            }
+            return (text, .extracted, "text", nil)
         }
-        // Binary formats without an extractor (docx/xlsx/images/…): recorded
-        // as attempted with no text — honest, and a future extractor can
-        // re-run by clearing attachment_text_state.
-        return nil
+        // Binary formats without an extractor (docx/xlsx/pptx/zip/…): recorded
+        // as unsupported; FIND-01 adds Office extraction and bumps the version
+        // so these are retried.
+        return (nil, .unsupported, "none", nil)
     }
 }

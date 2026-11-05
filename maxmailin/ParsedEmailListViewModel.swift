@@ -593,6 +593,8 @@ class ParsedEmailListViewModel: ObservableObject {
     /// the honest notice. Cache clears when the index job reports new data.
     private var attachmentSearchCache: [String: Set<UUID>] = [:]
     private var attachmentIndexProgress: (attempted: Int, pending: Int)?
+    /// FIND-03: per-attachment coverage, so "no attachments matched" says what was not searchable.
+    private var attachmentCoverage: AttachmentCoverageSummary?
     /// Test-visible: awaitable handle for the async attachment lookup.
     var lastAttachmentSearchTask: Task<Void, Never>?
     private var attachmentIndexObserver: NSObjectProtocol?
@@ -1262,7 +1264,12 @@ class ParsedEmailListViewModel: ObservableObject {
                 if let progress = attachmentIndexProgress, progress.pending > 0 {
                     searchNotice = "Searching attachment names + contents — \(progress.pending) email(s) still being indexed."
                 } else if searchNotice == nil && cached.isEmpty {
-                    searchNotice = "No attachments matched. Contents of PDF and text files are searched; other binary formats match by filename."
+                    // FIND-03: name what could not be searched, never imply every attachment was.
+                    if let coverage = attachmentCoverage, coverage.total > 0 {
+                        searchNotice = AttachmentTextIndexJob.noMatchNotice(coverage)
+                    } else {
+                        searchNotice = "No attachments matched. Contents of PDF and text files are searched; other binary formats match by filename."
+                    }
                 }
             } else {
                 advancedMatchIDs = advancedMatchIDs ?? []   // empty until the lookup lands
@@ -1273,6 +1280,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     let ids = (try? await SQLiteEmailStore.shared.attachmentTextSearch(ftsQuery)) ?? []
                     self.attachmentSearchCache[cacheKey] = ids
                     self.attachmentIndexProgress = try? await SQLiteEmailStore.shared.attachmentTextProgress()
+                    self.attachmentCoverage = await AttachmentTextIndexJob.coverageSummary(store: SQLiteEmailStore.shared)
                     self.applyFilters()
                 }
             }

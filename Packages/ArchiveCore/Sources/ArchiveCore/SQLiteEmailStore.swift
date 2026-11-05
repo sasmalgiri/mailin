@@ -5064,6 +5064,24 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// schema does not change: an earlier build opens the archive as before and ignores this file.
     var attachmentOCRStateURL: URL { directory.appendingPathComponent("attachment-ocr.sqlite") }
 
+    /// FIND-03: per-attachment coverage states, beside the archive like the OCR state.
+    var attachmentCoverageURL: URL { directory.appendingPathComponent("attachment-coverage.sqlite") }
+
+    /// FIND-03: forget that these emails' attachment text was attempted, so the
+    /// work list offers them again (a newer extractor retrying what an older
+    /// one could not read). Their indexed text, if any, stays until replaced.
+    func attachmentTextStateReset(emailIDs: [UUID]) throws {
+        guard !emailIDs.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in emailIDs.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "DELETE FROM attachment_text_state WHERE email_id IN (\(marks));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
     /// IDs (ascending, after `cursor`) of emails whose attachment text was already extracted and
     /// that hold an image or PDF — the OCR second pass's work list, without loading any message.
     func attachmentOCRCandidateIDs(after cursor: String?, limit: Int) throws -> [UUID] {
@@ -5091,6 +5109,27 @@ actor SQLiteEmailStore: EmailArchiveStore {
               AND EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
               AND \(Self.ocrAttachmentPredicate);
         """)
+    }
+
+    /// FIND-03: one email's attachment list from the side table (name, type,
+    /// size), in position order — what the coverage record falls back on when
+    /// the message itself cannot be read.
+    func attachmentMetadata(forEmailID id: UUID) throws -> [AttachmentMetadata] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT filename, mime_type, size_bytes, content_id, is_inline
+            FROM attachments WHERE email_id = ? ORDER BY position;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        var out: [AttachmentMetadata] = []
+        while try stepRow(stmt, db) {
+            out.append(AttachmentMetadata(
+                filename: columnText(stmt, 0), mimeType: columnText(stmt, 1),
+                size: Int(sqlite3_column_int64(stmt, 2)),
+                isInline: sqlite3_column_int(stmt, 4) != 0, contentID: columnTextOptional(stmt, 3)))
+        }
+        return out
     }
 
     /// Raw MIME for the given emails, in byte-capped pages like the extraction job's work list;
