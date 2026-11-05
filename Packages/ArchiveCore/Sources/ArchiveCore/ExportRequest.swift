@@ -25,11 +25,17 @@ enum ExportHandOff: String, Codable, Sendable {
 enum ExportFolderLayout: String, Codable, CaseIterable, Sendable {
     case flat
     case byYear
+    /// Five jobs OUT-03 / FOLD-05: the folders the messages came from
+    /// (PST folders, Gmail labels, mailbox names), one directory per folder
+    /// path, names made safe for the file system with the original kept in
+    /// the inventory.
+    case sourceFolders
 
     var label: String {
         switch self {
         case .flat: return "One folder"
         case .byYear: return "A folder per year"
+        case .sourceFolders: return "The folders they came from"
         }
     }
 }

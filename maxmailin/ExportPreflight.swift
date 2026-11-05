@@ -160,9 +160,9 @@ struct ExportPreflightSheet: View {
             Text("Options").font(.caption).foregroundStyle(.secondary)
             if request.format.writesFolder && request.format != .portableHTML {
                 Picker("Folder layout", selection: $request.options.layout) {
-                    ForEach(ExportFolderLayout.allCases, id: \.self) { Text($0.label).tag($0) }
+                    ForEach(ExportFolderLayout.allCases, id: \.self) { Text(LocalizedStringKey($0.label)).tag($0) }
                 }
-                .help("Write every file into one folder, or into a subfolder per message year")
+                .help("Write every file into one folder, into a subfolder per message year, or into the folders the messages came from (PST folders, labels, mailboxes) — names are made file-system safe and the original names are kept in the inventory")
                 Picker("If a file already exists", selection: $request.options.collision) {
                     ForEach(ExportCollisionRule.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
@@ -564,7 +564,11 @@ final class ExportJobRunner {
             errorMessage: outcome == .failed ? "The writer stopped before every requested message was written." : note,
             startedAt: ExportRunCenter.shared.startedAt,
             completedAt: Date(),
-            resumeRequest: resume))
+            resumeRequest: resume,
+            // OUT-04/07: the reconciliation and the inventory, when the writer produced them.
+            checked: result?.inventoryURL != nil ? written : nil,
+            excluded: result.map { $0.withheld + $0.skipped },
+            inventoryPath: result?.inventoryURL?.path))
         #if os(iOS)
         if !cancelled { share?(request.destinationURL) }
         #endif

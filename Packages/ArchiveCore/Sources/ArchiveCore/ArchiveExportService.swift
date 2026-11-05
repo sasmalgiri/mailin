@@ -49,6 +49,10 @@ struct ArchiveExportResult: Sendable, Equatable {
     /// to its last durable boundary — what a resume must skip. Differs from
     /// `recordsWritten` whenever a message was skipped or withheld.
     var positionsConsumed: Int = 0
+    /// Five jobs OUT-07: messages the renderer produced nothing for (reported apart from withheld).
+    var skipped: Int = 0
+    /// Five jobs OUT-07: the durable per-file inventory a finished folder export left beside its files.
+    var inventoryURL: URL? = nil
 }
 
 enum ArchiveExportError: LocalizedError {
@@ -508,16 +512,35 @@ final class ArchiveExportService {
                         continue
                     }
 
-                    // Folder layout: flat, or one subfolder per message year.
+                    // Folder layout: flat, one subfolder per message year, or
+                    // the archive's own folders (OUT-03) with safe names.
                     var directory = folder
                     var relative = file.filename
-                    if options.layout == .byYear {
-                        let year = Self.yearFolderName(for: email)
-                        directory = folder.appendingPathComponent(year, isDirectory: true)
-                        relative = year + "/" + file.filename
+                    var subdirectory: String? = nil
+                    var originalFolder: String? = nil
+                    switch options.layout {
+                    case .flat:
+                        break
+                    case .byYear:
+                        subdirectory = Self.yearFolderName(for: email)
+                    case .sourceFolders:
+                        if let path = SQLiteEmailStore.folderPaths(for: email).first {
+                            originalFolder = path
+                            let safe = ExportInventory.safeRelativeDirectory(forFolderPath: path)
+                            subdirectory = safe.isEmpty ? nil : safe
+                        }
+                    }
+                    if let subdirectory {
+                        directory = folder.appendingPathComponent(subdirectory, isDirectory: true)
+                        relative = subdirectory + "/" + file.filename
                         if !fm.fileExists(atPath: directory.path) {
+                            // Every missing ancestor is recorded so a cleanup removes what this run made.
+                            var ancestor = folder
+                            for component in subdirectory.split(separator: "/") {
+                                ancestor = ancestor.appendingPathComponent(String(component), isDirectory: true)
+                                if !fm.fileExists(atPath: ancestor.path) { createdSubfolders.append(ancestor) }
+                            }
                             try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-                            createdSubfolders.append(directory)
                         }
                     }
                     var target = directory.appendingPathComponent(file.filename)
@@ -533,16 +556,16 @@ final class ArchiveExportService {
                             // by this export.
                             let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.intValue ?? 0
                             let digest = try Self.sha256(ofFile: target).map { String(format: "%02x", $0) }.joined()
-                            try manifest.appendFile(name: relative, bytes: size, sha256: digest, existing: true)
+                            try manifest.appendFile(name: relative, bytes: size, sha256: digest, existing: true,
+                                                    emailID: email.id.uuidString, messageID: email.headers["Message-ID"],
+                                                    originalFolder: originalFolder)
                             records += 1
                             continue
                         case .overwrite:
                             break
                         case .keepBoth:
                             target = Self.uniqueURL(for: target)
-                            relative = options.layout == .byYear
-                                ? Self.yearFolderName(for: email) + "/" + target.lastPathComponent
-                                : target.lastPathComponent
+                            relative = (subdirectory.map { $0 + "/" } ?? "") + target.lastPathComponent
                         }
                     }
                     let fileBytes: Int
@@ -558,7 +581,9 @@ final class ArchiveExportService {
                     }
                     bytes += fileBytes
                     written.append(relative)
-                    try manifest.appendFile(name: relative, bytes: fileBytes, sha256: fileHash)
+                    try manifest.appendFile(name: relative, bytes: fileBytes, sha256: fileHash,
+                                            emailID: email.id.uuidString, messageID: email.headers["Message-ID"],
+                                            originalFolder: originalFolder)
                     records += 1
                 }
                 // T3: progress is the INPUT position (what a resume skips);
@@ -586,14 +611,20 @@ final class ArchiveExportService {
                                        bytesWritten: options.keepPartialOnCancel ? bytes : 0,
                                        completed: false, cancelled: true, withheld: withheld,
                                        unverifiedSources: sourceLedger.unverifiedPaths.count,
-                                       positionsConsumed: options.keepPartialOnCancel ? positionsAtBoundary : seen)
+                                       positionsConsumed: options.keepPartialOnCancel ? positionsAtBoundary : seen,
+                                       skipped: skipped)
         }
-        // A finished run needs no manifest: the receipt is the record.
+        // OUT-07: a finished run keeps its per-file record — the manifest is
+        // finalised into the portable inventory beside the files. Only when
+        // that succeeded is the working manifest removed; otherwise it stays
+        // as the record rather than nothing.
         manifest.close()
-        manifest.remove()
+        let inventoryURL = try? ExportInventory.finalize(folder: folder, manifestURL: manifest.url, layout: options.layout.rawValue,
+                                                         written: records, withheld: withheld, skipped: skipped, positionsConsumed: seen)
+        if inventoryURL != nil { manifest.remove() }
         return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes, completed: true, cancelled: false,
                                    withheld: withheld, unverifiedSources: sourceLedger.unverifiedPaths.count,
-                                   positionsConsumed: seen)
+                                   positionsConsumed: seen, skipped: skipped, inventoryURL: inventoryURL)
     }
 
     /// `2019`, or `undated` when the Date header is missing or unparseable.

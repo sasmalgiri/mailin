@@ -1220,6 +1220,11 @@ final class V2VerificationTests: XCTestCase {
 
         // Sender rollups: count / bytes / latest date per sender, top-N bounded.
         let bySender = Dictionary(grouping: fixtures, by: { $0.headers["From"] ?? "" })
+        // The paged-lists capability (on in the test host) lifts the limit on
+        // purpose; this assertion is about the bounded path, so pin it off.
+        let savedUnbounded = SQLiteEmailStore.unboundedIDLookups
+        SQLiteEmailStore.unboundedIDLookups = false
+        defer { SQLiteEmailStore.unboundedIDLookups = savedUnbounded }
         let rollups = try await svc.senderRollups(limit: 3)
         XCTAssertEqual(rollups.count, 3, "bounded to limit")
         let top = try XCTUnwrap(rollups.first)

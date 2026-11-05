@@ -2528,6 +2528,92 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertNil(model.lastError)
     }
 
+    // MARK: - Five jobs OUT-07 / OUT-04 / OUT-03 — a finished export keeps its per-file record
+
+    func testOUT07_finishedFolderExportLeavesAVerifiableInventory() async throws {
+        let env = try makeEnv()
+        let emails = (0..<3).map { mail(100 + $0, from: "a@x.com", subject: "Export \($0)", body: "body \($0)") }
+        try await env.store.insertBatch(emails, batchSize: 10)
+        let folder = env.root.appendingPathComponent("out", isDirectory: true)
+        let service = ArchiveExportService(archive: env.archive)
+        let result = try await service.exportEMLFiles(scope: .explicit(Set(emails.map(\.id))), to: folder)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 3)
+        let inventoryURL = try XCTUnwrap(result.inventoryURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(ExportFolderManifest.filename).path),
+                       "the working manifest became the inventory")
+
+        let inventory = try ExportInventory.load(folder: folder)
+        XCTAssertEqual(inventory.files.count, 3)
+        XCTAssertEqual(inventory.written, 3)
+        XCTAssertEqual(Set(inventory.files.compactMap(\.emailID)), Set(emails.map { $0.id.uuidString }), "each file names its record")
+        for file in inventory.files {
+            let data = try Data(contentsOf: folder.appendingPathComponent(file.path))
+            XCTAssertEqual(data.count, file.bytes)
+            XCTAssertEqual(ExportFolderManifest.hex(data), file.sha256, "the inventory hash is the file's hash")
+        }
+        XCTAssertEqual(inventoryURL.lastPathComponent, ExportInventory.filename)
+
+        // Full verification: clean; then a changed file, a missing file and a stray file are each named.
+        var verification = try ExportInventory.verify(folder: folder)
+        XCTAssertTrue(verification.isClean, "\(verification)")
+        XCTAssertEqual(verification.matching, 3)
+        let first = folder.appendingPathComponent(inventory.files[0].path)
+        try Data("tampered".utf8).write(to: first)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent(inventory.files[1].path))
+        try Data("extra".utf8).write(to: folder.appendingPathComponent("stray.txt"))
+        verification = try ExportInventory.verify(folder: folder)
+        XCTAssertFalse(verification.isClean)
+        XCTAssertEqual(verification.changed, [inventory.files[0].path])
+        XCTAssertEqual(verification.missing, [inventory.files[1].path])
+        XCTAssertEqual(verification.unlisted, ["stray.txt"])
+        XCTAssertEqual(verification.matching, 1)
+
+        // The receipt's reconciliation line keeps the five counts apart.
+        var receipt = ExportReceipt(title: "t", destination: folder.path, isFolder: true, requested: 5, written: 3, outcome: .partial,
+                                    startedAt: Date(), completedAt: Date())
+        receipt.checked = 3; receipt.excluded = 1; receipt.inventoryPath = inventoryURL.path
+        XCTAssertEqual(receipt.reconciliationLine, "selected 5 · written 3 · checked 3 of 3 · excluded 1 · failed 1")
+        let plain = ExportReceipt(title: "t", destination: "x", isFolder: false, requested: nil, written: 2, outcome: .complete,
+                                  startedAt: Date(), completedAt: Date())
+        XCTAssertNil(plain.reconciliationLine, "older receipts show nothing they do not know")
+    }
+
+    func testOUT03_sourceFolderLayoutReproducesTheTree_withSafeNamesAndTheOriginalKept() async throws {
+        let env = try makeEnv()
+        var inbox = mail(110, from: "a@x.com", subject: "In inbox", body: "a"); inbox.tags = ["Top of Personal Folders/Inbox"]
+        var clients = mail(111, from: "a@x.com", subject: "For a client", body: "b"); clients.tags = ["Top of Personal Folders/Inbox/Clients"]
+        var odd = mail(112, from: "a@x.com", subject: "Odd folder", body: "c"); odd.tags = ["Re: urgent?/../Résumé|draft"]
+        var loose = mail(113, from: "a@x.com", subject: "No folder", body: "d")
+        loose.tags = []
+        try await env.store.insertBatch([inbox, clients, odd, loose], batchSize: 10)
+        let folder = env.root.appendingPathComponent("tree", isDirectory: true)
+        var options = ExportWriteOptions()
+        options.layout = .sourceFolders
+        let service = ArchiveExportService(archive: env.archive)
+        let result = try await service.exportEMLFiles(scope: .explicit([inbox.id, clients.id, odd.id, loose.id]), to: folder, write: options)
+        XCTAssertEqual(result.recordsWritten, 4)
+
+        let inventory = try ExportInventory.load(folder: folder)
+        XCTAssertEqual(inventory.layout, "sourceFolders")
+        func entry(_ id: UUID) -> ExportInventory.File? { inventory.files.first { $0.emailID == id.uuidString } }
+        XCTAssertTrue(try XCTUnwrap(entry(inbox.id)).path.hasPrefix("Top of Personal Folders/Inbox/"), entry(inbox.id)?.path ?? "")
+        XCTAssertTrue(try XCTUnwrap(entry(clients.id)).path.hasPrefix("Top of Personal Folders/Inbox/Clients/"))
+        let oddEntry = try XCTUnwrap(entry(odd.id))
+        XCTAssertTrue(oddEntry.path.hasPrefix("Re- urgent-/_/Résumé-draft/"), "safe components, Unicode kept, '..' neutralised: \(oddEntry.path)")
+        XCTAssertEqual(oddEntry.originalFolder, "Re: urgent?/../Résumé|draft", "the original name travels in the inventory")
+        XCTAssertFalse(try XCTUnwrap(entry(loose.id)).path.contains("/"), "no folder → the export root")
+        // Nothing escaped the export folder, and every listed file is there.
+        let verification = try ExportInventory.verify(folder: folder)
+        XCTAssertTrue(verification.isClean, "\(verification)")
+        for file in inventory.files {
+            XCTAssertTrue(folder.appendingPathComponent(file.path).standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path))
+        }
+        XCTAssertEqual(ExportInventory.safeComponent("  ..  "), "_")
+        XCTAssertEqual(ExportInventory.safeComponent("a:b*c?d"), "a-b-c-d")
+        XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

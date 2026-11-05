@@ -265,6 +265,21 @@ struct ExportProgressOverlayView: View {
                 .foregroundColor(color(for: receipt.outcome))
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("export.receipt.verdict")
+            // OUT-04/07: what was selected, written, checked, excluded, failed — and where the inventory is.
+            if let reconciliation = receipt.reconciliationLine {
+                Text(reconciliation)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .accessibilityIdentifier("export.receipt.reconciliation")
+            }
+            if let inventory = receipt.inventoryPath {
+                Text(String(localized: "Inventory: \((inventory as NSString).lastPathComponent) — every file with its SHA-256, beside the files"))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .help(inventory)
+                    .accessibilityIdentifier("export.receipt.inventory")
+            }
 
             if let error = receipt.errorMessage {
                 Text(error)

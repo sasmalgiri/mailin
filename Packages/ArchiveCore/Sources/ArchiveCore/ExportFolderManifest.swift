@@ -51,6 +51,12 @@ struct ExportFolderManifest {
         /// output under "skip existing files" — fingerprinted like a produced
         /// file, but never created or removed by the export.
         var existing: Bool? = nil
+        // Five jobs OUT-07: which record this file is, so the final inventory
+        // links output files to source records (optional: older manifests decode).
+        var emailID: String? = nil
+        var messageID: String? = nil
+        /// OUT-03: the folder path as imported, when the layout followed it.
+        var originalFolder: String? = nil
     }
 
     struct Boundary: Codable, Equatable {
@@ -143,8 +149,10 @@ struct ExportFolderManifest {
         boundaryOffset = try handle?.seekToEnd() ?? 0
     }
 
-    mutating func appendFile(name: String, bytes: Int, sha256: String, existing: Bool = false) throws {
-        try write(FileEntry(name: name, bytes: bytes, sha256: sha256, existing: existing ? true : nil))
+    mutating func appendFile(name: String, bytes: Int, sha256: String, existing: Bool = false,
+                             emailID: String? = nil, messageID: String? = nil, originalFolder: String? = nil) throws {
+        try write(FileEntry(name: name, bytes: bytes, sha256: sha256, existing: existing ? true : nil,
+                            emailID: emailID, messageID: messageID, originalFolder: originalFolder))
     }
 
     /// Records a batch boundary; everything up to here is durable.

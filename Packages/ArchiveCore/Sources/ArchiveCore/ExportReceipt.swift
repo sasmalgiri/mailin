@@ -46,8 +46,31 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     /// the request that continues it from where it stopped. Optional and
     /// defaulted, so receipts written before this field decode unchanged.
     var resumeRequest: ExportRequest? = nil
+    // Five jobs OUT-04/OUT-07: the reconciliation and the durable inventory.
+    /// Files whose bytes were hashed as they were written and listed in the inventory.
+    var checked: Int? = nil
+    /// Messages in the selection intentionally not produced (withheld with a reason, or skipped by the renderer).
+    var excluded: Int? = nil
+    /// The per-file inventory a finished folder export left beside its files.
+    var inventoryPath: String? = nil
 
     var durationSeconds: Double { completedAt.timeIntervalSince(startedAt) }
+
+    /// OUT-04: selected / written / checked / excluded / failed — distinct,
+    /// never double-counted ("checked" is coverage over the written files).
+    var reconciliationLine: String? {
+        guard checked != nil || excluded != nil else { return nil }
+        var parts: [String] = []
+        if let requested { parts.append("selected \(requested)") }
+        parts.append("written \(written)")
+        if let checked { parts.append("checked \(checked) of \(written)") }
+        if let excluded { parts.append("excluded \(excluded)") }
+        if let requested {
+            let failed = max(0, requested - written - (excluded ?? 0))
+            parts.append("failed \(failed)")
+        }
+        return parts.joined(separator: " · ")
+    }
 
     /// True when Resume can pick this export up.
     var isResumable: Bool { resumeRequest != nil && outcome != .complete }

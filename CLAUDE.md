@@ -15,7 +15,9 @@ not "verified": a row is verified only when its named test has run on the candid
 fix the tracker first and tell the owner.
 
 **Working mode:** one item at a time, each with its failing-then-passing test, build green, commit. Stage A
-items ship with their tests; no "implement everything then test" pass this time.
+items ship with their tests; no "implement everything then test" pass this time. **Tests (owner, 2026-11-05):
+run only the five-jobs tests and the classes a change touches (`RunSomeTests`); do not run the full suite or
+the AI / Professional test classes in this release.**
 
 The 3.0 plan `SCALE_TODO_3_0.md` is history — read it for what was built and why, don't work from it.
 
