@@ -185,6 +185,10 @@ final class ArchiveSidebarModel: ObservableObject {
     static let labelLimit = 200
     /// FOLD-01: how many folders one "Show more" adds.
     static let labelPage = 200
+    /// FOLD-03: folder counts are occurrences; the archive counts messages once.
+    static var occurrenceCountsNote: String {
+        String(localized: "Folder counts are occurrences: a message kept in two folders or labels counts in each of them. The archive total, search results and exports count every message once — a message in several folders is one message with several locations, never two messages.")
+    }
     /// FOLD-01: how many folders the list currently reaches; grows with "Show more".
     private var labelReach = labelPage
 
@@ -308,7 +312,8 @@ struct ArchiveSidebarView: View {
 
             if model.completeLabels, !model.folderTrees.isEmpty {
                 // FOLD-02: each source's own folder tree, empty folders included.
-                Section("Folders", isExpanded: $foldersExpanded) {
+                // FOLD-03: the counts are occurrences, said on the header.
+                Section(isExpanded: $foldersExpanded) {
                     ForEach(model.folderTrees) { tree in
                         DisclosureGroup {
                             OutlineGroup(tree.items, children: \.children) { item in
@@ -324,6 +329,10 @@ struct ArchiveSidebarView: View {
                                 .truncationMode(.middle)
                         }
                     }
+                } header: {
+                    Text("Folders")
+                        .help(ArchiveSidebarModel.occurrenceCountsNote)
+                        .accessibilityHint(ArchiveSidebarModel.occurrenceCountsNote)
                 }
             }
 

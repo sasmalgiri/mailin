@@ -375652,6 +375652,70 @@
           }
         }
       }
+    },
+    "Folder counts are occurrences: a message kept in two folders or labels counts in each of them. The archive total, search results and exports count every message once — a message in several folders is one message with several locations, never two messages." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordnerzahlen sind Vorkommen: Eine Nachricht, die in zwei Ordnern oder Labels liegt, zählt in jedem davon. Die Archivsumme, Suchergebnisse und Exporte zählen jede Nachricht einmal – eine Nachricht in mehreren Ordnern ist eine Nachricht mit mehreren Orten, nie zwei Nachrichten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los recuentos de carpetas son apariciones: un mensaje guardado en dos carpetas o etiquetas cuenta en cada una. El total del archivo, los resultados de búsqueda y las exportaciones cuentan cada mensaje una vez; un mensaje en varias carpetas es un mensaje con varias ubicaciones, nunca dos mensajes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les nombres par dossier sont des occurrences : un message rangé dans deux dossiers ou libellés compte dans chacun. Le total de l'archive, les résultats de recherche et les exports comptent chaque message une fois — un message dans plusieurs dossiers est un seul message avec plusieurs emplacements, jamais deux messages."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ोल्डर की गिनती उपस्थितियाँ हैं: दो फ़ोल्डरों या लेबलों में रखा संदेश हर एक में गिना जाता है। संग्रह का कुल, खोज परिणाम और निर्यात हर संदेश को एक बार गिनते हैं — कई फ़ोल्डरों वाला संदेश कई स्थानों वाला एक संदेश है, कभी दो संदेश नहीं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I conteggi delle cartelle sono occorrenze: un messaggio conservato in due cartelle o etichette conta in ciascuna. Il totale dell'archivio, i risultati di ricerca e le esportazioni contano ogni messaggio una volta: un messaggio in più cartelle è un solo messaggio con più posizioni, mai due messaggi."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダの数は出現回数です。2つのフォルダやラベルにあるメッセージはそれぞれで数えられます。アーカイブの合計、検索結果、書き出しでは各メッセージを1回だけ数えます。複数のフォルダにあるメッセージは、複数の場所を持つ1つのメッセージであり、2つのメッセージではありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "폴더 개수는 나타난 횟수입니다. 두 폴더나 라벨에 있는 메시지는 각각에서 셉니다. 보관함 합계, 검색 결과, 내보내기는 각 메시지를 한 번만 셉니다. 여러 폴더에 있는 메시지는 위치가 여러 개인 하나의 메시지이지 두 개의 메시지가 아닙니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As contagens de pastas são ocorrências: uma mensagem guardada em duas pastas ou marcadores conta em cada uma. O total do arquivo, os resultados de pesquisa e as exportações contam cada mensagem uma vez — uma mensagem em várias pastas é uma mensagem com vários locais, nunca duas mensagens."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹计数是出现次数：保存在两个文件夹或标签中的邮件会在每个中各计一次。归档总数、搜索结果和导出对每封邮件只计一次——位于多个文件夹的邮件是一封有多个位置的邮件，而不是两封邮件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "資料夾計數是出現次數：保存在兩個資料夾或標籤中的郵件會在每個中各計一次。封存總數、搜尋結果和匯出對每封郵件只計一次——位於多個資料夾的郵件是一封有多個位置的郵件，而不是兩封郵件。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

@@ -2614,6 +2614,75 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs FOLD-03 / FOLD-04 — one message, several locations; origin stays immutable
+
+    func testFOLD03_aMessageInTwoLabelsIsOneMessageWithTwoLocations() async throws {
+        let env = try makeEnv()
+        var labelled = mail(170, from: "a@x.com", subject: "Two labels", body: "x")
+        labelled.tags = ["Inbox", "Projects/Alpha"]
+        var plain = mail(171, from: "a@x.com", subject: "One label", body: "y")
+        plain.tags = ["Inbox"]
+        try await env.store.insertBatch([labelled, plain], batchSize: 10)
+
+        // Unique count: two messages, even though there are three memberships.
+        let total = try await env.archive.count(query: .all)
+        XCTAssertEqual(total, 2)
+        let nodes = try await env.store.folderNodes()
+        let inbox = try XCTUnwrap(nodes.first { $0.path == "Inbox" })
+        let alpha = try XCTUnwrap(nodes.first { $0.path == "Projects/Alpha" })
+        XCTAssertEqual(inbox.messageCount, 2, "occurrence count in Inbox")
+        XCTAssertEqual(alpha.messageCount, 1, "occurrence count in Projects/Alpha")
+        XCTAssertEqual(inbox.messageCount + alpha.messageCount, 3, "occurrences exceed unique messages — the header says so")
+        // The same message answers from both folders — one row, two locations.
+        var inInbox = EmailQuery.all; inInbox.folderID = inbox.folderID
+        var inAlpha = EmailQuery.all; inAlpha.folderID = alpha.folderID
+        let fromInbox = try await ids(env, SearchSpec(), scope: inInbox)
+        let fromAlpha = try await ids(env, SearchSpec(), scope: inAlpha)
+        XCTAssertEqual(fromInbox, ["Two labels", "One label"])
+        XCTAssertEqual(fromAlpha, ["Two labels"])
+        let stored = try await env.archive.fullEmails(ids: [labelled.id])
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(Set(SQLiteEmailStore.folderPaths(for: try XCTUnwrap(stored.first))), ["Inbox", "Projects/Alpha"])
+        // Not a duplicate of itself: the Message-ID groups hold no group for it.
+        let groups = try await env.store.messageIDDuplicateGroups()
+        XCTAssertFalse(groups.contains { $0.contains(labelled.id) }, "\(groups)")
+        XCTAssertTrue(ArchiveSidebarModel.occurrenceCountsNote.contains("counts in each"))
+    }
+
+    func testFOLD04_userTagsNeverRewriteTheSourcePath_andAttachmentsStayLinked() async throws {
+        let env = try makeEnv()
+        let att = AttachmentMetadata(filename: "brief.pdf", mimeType: "application/pdf", size: 4, base64: Data("%PDF".utf8).base64EncodedString())
+        var email = mail(180, from: "a@x.com", subject: "Origin", body: "b", attachments: [att])
+        email.tags = ["Top of Personal Folders/Inbox/Clients"]
+        try await env.store.insertBatch([email], batchSize: 10)
+        let nodesBefore = try await env.store.folderNodes()
+
+        // The user tags, untags and re-tags; the source path and folders are untouched.
+        try await env.store.userTagAdd("Clients — renamed by me", ids: [email.id])
+        try await env.store.userTagAdd("Follow up", ids: [email.id])
+        try await env.store.userTagRemove("Follow up", ids: [email.id])
+        let storedList = try await env.archive.fullEmails(ids: [email.id])
+        let stored = try XCTUnwrap(storedList.first)
+        XCTAssertEqual(SQLiteEmailStore.folderPaths(for: stored), ["Top of Personal Folders/Inbox/Clients"])
+        XCTAssertFalse(stored.tags.contains("Clients — renamed by me"), "a user tag is never a source tag")
+        let nodesAfter = try await env.store.folderNodes()
+        XCTAssertEqual(nodesAfter, nodesBefore, "no folder was created, renamed or moved by user tagging")
+        // A user-tag query finds it; the source folder still answers for it too.
+        var byUserTag = EmailQuery.all; byUserTag.userTag = "Clients — renamed by me"
+        let byTag = try await env.archive.count(query: byUserTag)
+        XCTAssertEqual(byTag, 1)
+        // Export under the source-folder layout writes the ORIGINAL path, not the user's label.
+        var options = ExportWriteOptions(); options.layout = .sourceFolders
+        let folder = env.root.appendingPathComponent("origin", isDirectory: true)
+        _ = try await ArchiveExportService(archive: env.archive).exportEMLFiles(scope: .explicit([email.id]), to: folder, write: options)
+        let file = try XCTUnwrap(try ExportInventory.load(folder: folder).files.first)
+        XCTAssertTrue(file.path.hasPrefix("Top of Personal Folders/Inbox/Clients/"), file.path)
+        XCTAssertEqual(file.originalFolder, "Top of Personal Folders/Inbox/Clients")
+        // The attachment is still the message's attachment.
+        let attachments = try await env.store.attachmentMetadata(forEmailID: email.id)
+        XCTAssertEqual(attachments.map(\.filename), ["brief.pdf"])
+    }
+
     // MARK: - Five jobs OPEN-04 — progress says what is known; mail imported ≠ attachment text indexed
 
     func testOPEN04_progressTextNeverInventsAPercentage_andKeepsMailAndAttachmentsApart() async throws {
