@@ -375716,6 +375716,1030 @@
           }
         }
       }
+    },
+    "Back up archive…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archiv sichern …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacer copia de seguridad del archivo…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarder l'archive…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रह का बैकअप लें…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esegui backup dell'archivio…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブをバックアップ…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관함 백업…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fazer backup do arquivo…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份归档…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份封存…"
+          }
+        }
+      }
+    },
+    "Restore from backup…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus Backup wiederherstellen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurar desde copia de seguridad…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurer depuis une sauvegarde…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बैकअप से पुनर्स्थापित करें…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ripristina da backup…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップから復元…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업에서 복원…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurar de um backup…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从备份恢复…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從備份還原…"
+          }
+        }
+      }
+    },
+    "Writes the database, attachment-text states, message files, source copies and receipts into a new folder with an inventory of every file's SHA-256. The search index is rebuilt on restore, not copied." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schreibt Datenbank, Anhangstext-Zustände, Nachrichtendateien, Quellkopien und Quittungen in einen neuen Ordner mit einem Inventar der SHA-256 jeder Datei. Der Suchindex wird beim Wiederherstellen neu aufgebaut, nicht kopiert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribe la base de datos, los estados del texto de adjuntos, los archivos de mensajes, las copias de origen y los recibos en una carpeta nueva con un inventario del SHA-256 de cada archivo. El índice de búsqueda se reconstruye al restaurar, no se copia."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Écrit la base de données, les états du texte des pièces jointes, les fichiers de messages, les copies des sources et les reçus dans un nouveau dossier avec un inventaire du SHA-256 de chaque fichier. L'index de recherche est reconstruit à la restauration, pas copié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डेटाबेस, अनुलग्नक-पाठ की स्थितियाँ, संदेश फ़ाइलें, स्रोत प्रतियाँ और रसीदें एक नए फ़ोल्डर में लिखता है, साथ में हर फ़ाइल के SHA-256 की सूची। खोज अनुक्रमणिका पुनर्स्थापना पर फिर से बनाई जाती है, कॉपी नहीं होती।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scrive database, stati del testo degli allegati, file dei messaggi, copie delle origini e ricevute in una nuova cartella con un inventario dello SHA-256 di ogni file. L'indice di ricerca viene ricostruito al ripristino, non copiato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "データベース、添付ファイル本文の状態、メッセージファイル、ソースのコピー、受領書を新しいフォルダに書き出し、各ファイルの SHA-256 のインベントリを添えます。検索インデックスは復元時に再構築され、コピーされません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "데이터베이스, 첨부 파일 텍스트 상태, 메시지 파일, 원본 사본, 영수증을 새 폴더에 쓰고 각 파일의 SHA-256 인벤토리를 함께 저장합니다. 검색 색인은 복사되지 않고 복원 시 다시 만들어집니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grava o banco de dados, os estados de texto dos anexos, os arquivos de mensagens, as cópias de origem e os recibos em uma nova pasta com um inventário do SHA-256 de cada arquivo. O índice de pesquisa é reconstruído na restauração, não copiado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将数据库、附件文本状态、邮件文件、来源副本和回执写入一个新文件夹，并附上每个文件 SHA-256 的清单。搜索索引在恢复时重建，不会复制。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將資料庫、附件文字狀態、郵件檔案、來源副本和回條寫入一個新資料夾，並附上每個檔案 SHA-256 的清單。搜尋索引在還原時重建，不會複製。"
+          }
+        }
+      }
+    },
+    "Verifies every file of a backup folder against its inventory, keeps the current database as a snapshot, then restores. Nothing already in the archive is deleted." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prüft jede Datei eines Backup-Ordners gegen sein Inventar, bewahrt die aktuelle Datenbank als Snapshot und stellt dann wieder her. Nichts, was bereits im Archiv ist, wird gelöscht."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica cada archivo de una carpeta de copia de seguridad contra su inventario, conserva la base de datos actual como instantánea y luego restaura. No se elimina nada que ya esté en el archivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifie chaque fichier d'un dossier de sauvegarde par rapport à son inventaire, conserve la base de données actuelle comme instantané, puis restaure. Rien de ce qui est déjà dans l'archive n'est supprimé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बैकअप फ़ोल्डर की हर फ़ाइल को उसकी सूची से जाँचता है, वर्तमान डेटाबेस को स्नैपशॉट के रूप में रखता है, फिर पुनर्स्थापित करता है। संग्रह में पहले से मौजूद कुछ भी हटाया नहीं जाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica ogni file di una cartella di backup rispetto al suo inventario, conserva il database attuale come istantanea, poi ripristina. Nulla di già presente nell'archivio viene eliminato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップフォルダの各ファイルをインベントリと照合し、現在のデータベースをスナップショットとして保持してから復元します。アーカイブに既にあるものは削除されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 폴더의 모든 파일을 인벤토리와 대조해 확인하고, 현재 데이터베이스를 스냅샷으로 보관한 뒤 복원합니다. 보관함에 이미 있는 것은 삭제되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica cada arquivo de uma pasta de backup contra seu inventário, mantém o banco de dados atual como instantâneo e então restaura. Nada que já esteja no arquivo é apagado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "根据清单核对备份文件夹中的每个文件，将当前数据库保留为快照，然后恢复。归档中已有的内容不会被删除。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "根據清單核對備份資料夾中的每個檔案，將目前資料庫保留為快照，然後還原。封存中已有的內容不會被刪除。"
+          }
+        }
+      }
+    },
+    "Choose where to save the backup. A new folder named mailin-backup-<date> is created there." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählen Sie, wo das Backup gespeichert wird. Dort wird ein neuer Ordner mailin-backup-<Datum> angelegt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elija dónde guardar la copia de seguridad. Allí se crea una carpeta nueva llamada mailin-backup-<fecha>."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez où enregistrer la sauvegarde. Un nouveau dossier nommé mailin-backup-<date> y est créé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "चुनें कि बैकअप कहाँ सहेजना है। वहाँ mailin-backup-<तारीख> नाम का नया फ़ोल्डर बनाया जाता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli dove salvare il backup. Lì viene creata una nuova cartella mailin-backup-<data>."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップの保存先を選びます。そこに mailin-backup-<日付> という新しいフォルダが作成されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업을 저장할 위치를 선택하세요. 그곳에 mailin-backup-<날짜> 폴더가 새로 만들어집니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha onde salvar o backup. Uma nova pasta chamada mailin-backup-<data> é criada lá."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择备份的保存位置。将在那里创建名为 mailin-backup-<日期> 的新文件夹。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇備份的儲存位置。將在那裡建立名為 mailin-backup-<日期> 的新資料夾。"
+          }
+        }
+      }
+    },
+    "Back Up Here" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hier sichern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar copia aquí"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarder ici"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यहाँ बैकअप लें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esegui backup qui"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここにバックアップ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여기에 백업"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fazer backup aqui"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份到此处"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份到此處"
+          }
+        }
+      }
+    },
+    "Backup cancelled." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup abgebrochen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copia de seguridad cancelada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde annulée."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बैकअप रद्द किया गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup annullato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップをキャンセルしました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업이 취소되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup cancelado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消备份。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消備份。"
+          }
+        }
+      }
+    },
+    "Backed up %lld emails, %lld files (%@) to %@. Every file is listed with its SHA-256 in the inventory." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld E-Mails, %2$lld Dateien (%3$@) nach %4$@ gesichert. Jede Datei ist mit ihrer SHA-256 im Inventar aufgeführt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se guardaron %1$lld correos, %2$lld archivos (%3$@) en %4$@. Cada archivo figura con su SHA-256 en el inventario."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld courriels, %2$lld fichiers (%3$@) sauvegardés dans %4$@. Chaque fichier figure avec son SHA-256 dans l'inventaire."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld ईमेल, %2$lld फ़ाइलें (%3$@) %4$@ में बैकअप की गईं। हर फ़ाइल उसके SHA-256 के साथ सूची में दर्ज है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup di %1$lld email, %2$lld file (%3$@) in %4$@. Ogni file è elencato con il suo SHA-256 nell'inventario."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 件のメール、%2$lld 個のファイル（%3$@）を %4$@ にバックアップしました。各ファイルは SHA-256 とともにインベントリに記載されています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 %1$lld개, 파일 %2$lld개(%3$@)를 %4$@에 백업했습니다. 모든 파일이 SHA-256과 함께 인벤토리에 기록되어 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup de %1$lld e-mails, %2$lld arquivos (%3$@) em %4$@. Cada arquivo consta no inventário com seu SHA-256."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将 %1$lld 封邮件、%2$lld 个文件（%3$@）备份到 %4$@。每个文件及其 SHA-256 均列在清单中。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已將 %1$lld 封郵件、%2$lld 個檔案（%3$@）備份到 %4$@。每個檔案及其 SHA-256 均列在清單中。"
+          }
+        }
+      }
+    },
+    "%lld original files are still read from outside the archive (linked mode); they are listed in the inventory, not copied." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Originaldateien werden weiterhin von außerhalb des Archivs gelesen (verknüpfter Modus); sie sind im Inventar aufgeführt, nicht kopiert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld archivos originales se siguen leyendo desde fuera del archivo (modo vinculado); figuran en el inventario, no se copian."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld fichiers d'origine sont encore lus hors de l'archive (mode lié) ; ils figurent dans l'inventaire, non copiés."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld मूल फ़ाइलें अभी भी संग्रह के बाहर से पढ़ी जाती हैं (लिंक्ड मोड); वे सूची में दर्ज हैं, कॉपी नहीं की गईं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld file originali vengono ancora letti dall'esterno dell'archivio (modalità collegata); sono elencati nell'inventario, non copiati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個の元ファイルは引き続きアーカイブの外から読み込まれます（リンクモード）。インベントリに記載され、コピーはされません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원본 파일 %lld개는 여전히 보관함 밖에서 읽습니다(연결 모드). 인벤토리에 기록되며 복사되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld arquivos originais ainda são lidos de fora do arquivo (modo vinculado); constam no inventário, não são copiados."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍有 %lld 个原始文件从归档外部读取（链接模式）；它们列在清单中，未被复制。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍有 %lld 個原始檔案從封存外部讀取（連結模式）；它們列在清單中，未被複製。"
+          }
+        }
+      }
+    },
+    "Choose a mailin backup folder (it contains mailin-backup-inventory.json)." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählen Sie einen mailin-Backup-Ordner (er enthält mailin-backup-inventory.json)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elija una carpeta de copia de seguridad de mailin (contiene mailin-backup-inventory.json)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez un dossier de sauvegarde mailin (il contient mailin-backup-inventory.json)."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "एक mailin बैकअप फ़ोल्डर चुनें (इसमें mailin-backup-inventory.json होती है)।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli una cartella di backup di mailin (contiene mailin-backup-inventory.json)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin のバックアップフォルダ（mailin-backup-inventory.json を含む）を選びます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 백업 폴더(mailin-backup-inventory.json 포함)를 선택하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha uma pasta de backup do mailin (ela contém mailin-backup-inventory.json)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择一个 mailin 备份文件夹（其中包含 mailin-backup-inventory.json）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇一個 mailin 備份資料夾（其中包含 mailin-backup-inventory.json）。"
+          }
+        }
+      }
+    },
+    "Verify and Restore" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prüfen und wiederherstellen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificar y restaurar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifier et restaurer"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जाँचें और पुनर्स्थापित करें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica e ripristina"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検証して復元"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인 후 복원"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificar e restaurar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "验证并恢复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "驗證並還原"
+          }
+        }
+      }
+    },
+    "Restoring from a backup folder is done on the Mac." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Wiederherstellung aus einem Backup-Ordner erfolgt auf dem Mac."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La restauración desde una carpeta de copia de seguridad se hace en el Mac."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La restauration depuis un dossier de sauvegarde se fait sur le Mac."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बैकअप फ़ोल्डर से पुनर्स्थापना Mac पर की जाती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il ripristino da una cartella di backup si esegue sul Mac."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップフォルダからの復元は Mac で行います。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 폴더에서의 복원은 Mac에서 합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A restauração de uma pasta de backup é feita no Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从备份文件夹恢复需在 Mac 上进行。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從備份資料夾還原需在 Mac 上進行。"
+          }
+        }
+      }
+    },
+    "The backup did not verify: %@. Nothing was changed." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Backup konnte nicht verifiziert werden: %@. Nichts wurde geändert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La copia de seguridad no se pudo verificar: %@. No se cambió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La sauvegarde n'a pas pu être vérifiée : %@. Rien n'a été modifié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बैकअप सत्यापित नहीं हुआ: %@। कुछ भी बदला नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il backup non è stato verificato: %@. Nulla è stato modificato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップを検証できませんでした：%@。何も変更されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업을 확인하지 못했습니다: %@. 아무것도 변경되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O backup não foi verificado: %@. Nada foi alterado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份未通过验证：%@。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份未通過驗證：%@。未做任何變更。"
+          }
+        }
+      }
+    },
+    "Restore the archive from this backup (%lld emails, %lld files, made %@)?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archiv aus diesem Backup wiederherstellen (%1$lld E-Mails, %2$lld Dateien, erstellt %3$@)?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Restaurar el archivo desde esta copia de seguridad (%1$lld correos, %2$lld archivos, creada el %3$@)?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurer l'archive depuis cette sauvegarde (%1$lld courriels, %2$lld fichiers, créée le %3$@) ?"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस बैकअप से संग्रह पुनर्स्थापित करें (%1$lld ईमेल, %2$lld फ़ाइलें, %3$@ को बनाया गया)?"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ripristinare l'archivio da questo backup (%1$lld email, %2$lld file, creato il %3$@)?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このバックアップ（%1$lld 件のメール、%2$lld 個のファイル、%3$@ 作成）からアーカイブを復元しますか？"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 백업(메일 %1$lld개, 파일 %2$lld개, %3$@ 생성)에서 보관함을 복원하시겠습니까?"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurar o arquivo a partir deste backup (%1$lld e-mails, %2$lld arquivos, feito em %3$@)?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从此备份恢复归档（%1$lld 封邮件、%2$lld 个文件，创建于 %3$@）？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從此備份還原封存（%1$lld 封郵件、%2$lld 個檔案，建立於 %3$@）？"
+          }
+        }
+      }
+    },
+    "The current database is kept as a before-restore snapshot first. The database and attachment-text states are replaced by the backup's; message files the backup has and the archive lacks are added; nothing already here is deleted. Rebuild the search index afterwards." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die aktuelle Datenbank wird zuerst als Snapshot vor der Wiederherstellung aufbewahrt. Datenbank und Anhangstext-Zustände werden durch die des Backups ersetzt; Nachrichtendateien, die das Backup hat und das Archiv nicht, werden hinzugefügt; nichts, was bereits hier ist, wird gelöscht. Bauen Sie anschließend den Suchindex neu auf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La base de datos actual se conserva primero como instantánea previa a la restauración. La base de datos y los estados del texto de adjuntos se sustituyen por los de la copia; se añaden los archivos de mensajes que tiene la copia y faltan en el archivo; no se elimina nada de lo que ya está aquí. Reconstruya después el índice de búsqueda."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La base de données actuelle est d'abord conservée comme instantané avant restauration. La base de données et les états du texte des pièces jointes sont remplacés par ceux de la sauvegarde ; les fichiers de messages présents dans la sauvegarde et absents de l'archive sont ajoutés ; rien de ce qui est déjà ici n'est supprimé. Reconstruisez ensuite l'index de recherche."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "वर्तमान डेटाबेस पहले पुनर्स्थापना-पूर्व स्नैपशॉट के रूप में रखा जाता है। डेटाबेस और अनुलग्नक-पाठ की स्थितियाँ बैकअप वाली से बदल दी जाती हैं; जो संदेश फ़ाइलें बैकअप में हैं और संग्रह में नहीं, वे जोड़ी जाती हैं; यहाँ पहले से मौजूद कुछ भी हटाया नहीं जाता। बाद में खोज अनुक्रमणिका फिर से बनाएँ।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il database attuale viene prima conservato come istantanea pre-ripristino. Il database e gli stati del testo degli allegati vengono sostituiti con quelli del backup; i file dei messaggi presenti nel backup e assenti nell'archivio vengono aggiunti; nulla di già presente viene eliminato. Ricostruisci poi l'indice di ricerca."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のデータベースはまず復元前スナップショットとして保持されます。データベースと添付ファイル本文の状態はバックアップのものに置き換えられ、バックアップにあってアーカイブにないメッセージファイルは追加されます。既にあるものは削除されません。その後、検索インデックスを再構築してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 데이터베이스는 먼저 복원 전 스냅샷으로 보관됩니다. 데이터베이스와 첨부 파일 텍스트 상태는 백업의 것으로 바뀌고, 백업에는 있고 보관함에는 없는 메시지 파일은 추가되며, 이미 있는 것은 삭제되지 않습니다. 그 후 검색 색인을 다시 만드세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O banco de dados atual é mantido primeiro como instantâneo pré-restauração. O banco de dados e os estados de texto dos anexos são substituídos pelos do backup; arquivos de mensagens que o backup tem e o arquivo não tem são adicionados; nada que já esteja aqui é apagado. Reconstrua o índice de pesquisa em seguida."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前数据库会先保留为恢复前快照。数据库和附件文本状态将替换为备份中的内容；备份中有而归档中没有的邮件文件将被添加；此处已有的内容不会被删除。之后请重建搜索索引。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前資料庫會先保留為還原前快照。資料庫和附件文字狀態將替換為備份中的內容；備份中有而封存中沒有的郵件檔案將被加入；此處已有的內容不會被刪除。之後請重建搜尋索引。"
+          }
+        }
+      }
+    },
+    "Restored %lld emails from %@. Rebuild the search index next." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld E-Mails aus %2$@ wiederhergestellt. Bauen Sie als Nächstes den Suchindex neu auf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se restauraron %1$lld correos desde %2$@. Reconstruya ahora el índice de búsqueda."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld courriels restaurés depuis %2$@. Reconstruisez ensuite l'index de recherche."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ से %1$lld ईमेल पुनर्स्थापित किए गए। अब खोज अनुक्रमणिका फिर से बनाएँ।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ripristinate %1$lld email da %2$@. Ricostruisci ora l'indice di ricerca."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ から %1$lld 件のメールを復元しました。次に検索インデックスを再構築してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@에서 메일 %1$lld개를 복원했습니다. 다음으로 검색 색인을 다시 만드세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld e-mails restaurados de %2$@. Reconstrua o índice de pesquisa em seguida."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已从 %2$@ 恢复 %1$lld 封邮件。接下来请重建搜索索引。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已從 %2$@ 還原 %1$lld 封郵件。接下來請重建搜尋索引。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

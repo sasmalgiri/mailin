@@ -89,6 +89,30 @@ struct ArchiveHealthView: View {
                     }
                     .disabled(working || snapshots.isEmpty)
                 }
+                // LIFE-02: a full backup — database, attachment-text states,
+                // message files, source copies, receipts — with an inventory;
+                // restorable on a clean Mac.
+                HStack {
+                    Button(String(localized: "Back up archive…")) {
+                        Task { @MainActor in
+                            working = true; defer { working = false }
+                            note = await ArchiveBackups.backUpInteractively()
+                        }
+                    }
+                    .disabled(working)
+                    .help("Writes the database, attachment-text states, message files, source copies and receipts into a new folder with an inventory of every file's SHA-256. The search index is rebuilt on restore, not copied.")
+                    .accessibilityIdentifier("health.backup")
+                    Button(String(localized: "Restore from backup…")) {
+                        Task { @MainActor in
+                            working = true; defer { working = false }
+                            note = await ArchiveBackups.restoreInteractively()
+                            reload()
+                        }
+                    }
+                    .disabled(working)
+                    .help("Verifies every file of a backup folder against its inventory, keeps the current database as a snapshot, then restores. Nothing already in the archive is deleted.")
+                    .accessibilityIdentifier("health.restoreBackup")
+                }
                 // §3-S1: an external location, e.g. a backup disk.
                 LabeledContent(String(localized: "Snapshot folder")) {
                     if let snapshotFolder {

@@ -2614,6 +2614,168 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs LIFE-03 — jobs that run together stay consistent
+
+    func testLIFE03_importDuringSearchDuplicateReviewAndExport_staysConsistent() async throws {
+        let env = try makeEnv()
+        // First batch holds five byte-identical pairs; the rest arrives while the other jobs run.
+        var first: [MBOXParser.RawEmail] = []
+        for i in 0..<20 {
+            let e = mail(200 + i, from: "a@x.com", subject: "First \(i)", body: "body \(i)")
+            first.append(e)
+            if i < 5 { first.append(copy(of: e)) }
+        }
+        // Stored copies need the preserve-all policy (the default policy skips a repeated Message-ID at import).
+        _ = try await env.store.insertBatch(first, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .preserveAll, batchSize: 50, progress: nil)
+        let boundValue = try await env.archive.selectionSnapshotBound()
+        let frozen = ArchiveSelectionScope.query(.all, exclusions: []).snapshotted(bound: try XCTUnwrap(boundValue))
+        let frozenIDs = Set(first.map(\.id))
+
+        // The import: 10 more batches of 25, spaced out.
+        let importer = Task { @MainActor in
+            for batch in 0..<10 {
+                let emails = (0..<25).map { mail(1000 + batch * 25 + $0, from: "b@x.com", subject: "Later \(batch)-\($0)", body: "later") }
+                try await env.store.insertBatch(emails, batchSize: 25)
+                try await Task.sleep(for: .milliseconds(15))
+            }
+        }
+        // Search during import: never fails, never shrinks.
+        let searcher = Task { @MainActor in
+            var last = 0
+            for _ in 0..<30 {
+                let n = try await env.archive.count(query: .all)
+                XCTAssertGreaterThanOrEqual(n, last, "a later count is never smaller during an append-only import")
+                last = n
+                _ = try await env.archive.page(query: .all, cursor: nil, limit: 20)
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            return last
+        }
+        // Duplicate review during import: the five pairs verify; nothing else is removable.
+        let reviewer = Task { @MainActor in
+            let groups = try await env.store.messageIDDuplicateGroups()
+            return try await DuplicateVerification.verifyArchiveWide(groups: groups) { ids in try await env.archive.fullEmails(ids: ids) }
+        }
+        // Two exports at once, both over the frozen selection, into two folders.
+        let service = ArchiveExportService(archive: env.archive)
+        let folderA = env.root.appendingPathComponent("exportA", isDirectory: true)
+        let folderB = env.root.appendingPathComponent("exportB", isDirectory: true)
+        async let exportA = service.exportEMLFiles(scope: frozen, to: folderA)
+        async let exportB = service.exportEMLFiles(scope: frozen, to: folderB)
+        let (resultA, resultB) = try await (exportA, exportB)
+        try await importer.value
+        let lastCount = try await searcher.value
+        let review = try await reviewer.value
+
+        XCTAssertEqual(resultA.recordsWritten, frozenIDs.count)
+        XCTAssertEqual(resultB.recordsWritten, frozenIDs.count)
+        for folder in [folderA, folderB] {
+            let inventory = try ExportInventory.load(folder: folder)
+            XCTAssertEqual(Set(inventory.files.compactMap(\.emailID)), Set(frozenIDs.map(\.uuidString)), "exactly the selection frozen at start")
+            XCTAssertTrue(try ExportInventory.verify(folder: folder).isClean)
+        }
+        XCTAssertEqual(review.verifiedGroups, 5)
+        XCTAssertEqual(review.candidateGroups, 0)
+        XCTAssertEqual(review.removable.count, 5)
+        XCTAssertTrue(review.removable.allSatisfy { frozenIDs.contains($0) })
+        let total = try await env.archive.count(query: .all)
+        XCTAssertEqual(total, first.count + 250, "the import landed in full")
+        XCTAssertLessThanOrEqual(lastCount, total)
+    }
+
+    // MARK: - Five jobs LIFE-02 — full backup restores on a clean profile
+
+    func testLIFE02_backupRestoresOnACleanProfile_andRefusesATamperedBackup() async throws {
+        let env = try makeEnv()
+        let att = AttachmentMetadata(filename: "deed.pdf", mimeType: "application/pdf", size: 4, base64: Data("%PDF".utf8).base64EncodedString())
+        var inbox = mail(210, from: "a@x.com", subject: "Kept", body: "with attachment", attachments: [att]); inbox.tags = ["Inbox"]
+        var alpha = mail(211, from: "a@x.com", subject: "Project", body: "in a nested folder"); alpha.tags = ["Projects/Alpha"]
+        // A raw message above the inline threshold lives in the blob tier.
+        var big = mail(212, from: "a@x.com", subject: "Big", body: "big")
+        big.rawSource = "Subject: Big\n\n" + String(repeating: "x", count: BlobStore.inlineThresholdBytes + 1_024)
+        try await env.store.insertBatch([inbox, alpha, big], batchSize: 10)
+        try await env.store.userTagAdd("Follow up", ids: [inbox.id])
+        try await env.store.annotationSet("Check the deed", id: inbox.id)
+        _ = try await env.store.legalHoldsAdd([alpha.id], matter: "Matter 7")
+        // A sidecar present beside the database.
+        let coverageURL = await env.store.attachmentCoverageURL
+        _ = try AttachmentCoverageStore(url: coverageURL)
+        let blobsDir = env.store.storeDirectory.appendingPathComponent("blobs")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: blobsDir.path), "the big message went to the blob tier")
+
+        // Receipts are verification records: they travel too.
+        let receipts = env.root.appendingPathComponent("receipts-import", isDirectory: true)
+        try FileManager.default.createDirectory(at: receipts, withIntermediateDirectories: true)
+        try Data("{\"receipt\":1}".utf8).write(to: receipts.appendingPathComponent("import-1.json"))
+
+        let backup = env.root.appendingPathComponent("backup", isDirectory: true)
+        let inventory = try await ArchiveBackup.create(store: env.store, to: backup, receiptDirectories: [("import", receipts)])
+        XCTAssertEqual(inventory.counts.emails, 3)
+        XCTAssertEqual(inventory.counts.attachments, 1)
+        XCTAssertEqual(inventory.counts.userTags, 1)
+        XCTAssertEqual(inventory.counts.annotations, 1)
+        XCTAssertEqual(inventory.counts.legalHolds, 1)
+        XCTAssertEqual(inventory.counts.folderMemberships, 2)
+        XCTAssertEqual(Set(inventory.files.map(\.kind)), ["database", "sidecar", "blob", "receipt"])
+        XCTAssertTrue(inventory.omitted.first?.contains("fts5") == true, "what is left out is said")
+        XCTAssertTrue(inventory.linkedSources.isEmpty)
+        XCTAssertTrue(try ArchiveBackup.verify(backup: backup).isClean)
+        // A second backup into the same folder is refused — never overwritten.
+        do {
+            _ = try await ArchiveBackup.create(store: env.store, to: backup)
+            XCTFail("a non-empty destination must be refused")
+        } catch ArchiveBackupError.destinationNotEmpty {}
+
+        // Restore on a clean profile: a fresh directory, nothing from the old paths.
+        let cleanRoot = env.root.appendingPathComponent("clean-profile", isDirectory: true)
+        let cleanStoreDir = cleanRoot.appendingPathComponent("store", isDirectory: true)
+        let restoredReceipts = cleanRoot.appendingPathComponent("receipts", isDirectory: true)
+        let restored = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: cleanStoreDir, mode: .cleanProfile,
+                                                 receiptDirectories: [("import", restoredReceipts)])
+        XCTAssertEqual(restored.files, inventory.files)
+        XCTAssertEqual(restored.counts, inventory.counts)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: restoredReceipts.appendingPathComponent("import-1.json").path))
+        let restoredStore = SQLiteEmailStore(directory: cleanStoreDir)
+        let total = try await restoredStore.totalCount()
+        XCTAssertEqual(total, 3)
+        let restoredBig = try await restoredStore.fullEmail(id: big.id)
+        XCTAssertEqual(restoredBig?.rawSource, big.rawSource, "the blob-tier message reads back from the restored blobs")
+        let restoredInboxValue = try await restoredStore.fullEmail(id: inbox.id)
+        let restoredInbox = try XCTUnwrap(restoredInboxValue)
+        XCTAssertEqual(SQLiteEmailStore.folderPaths(for: restoredInbox), ["Inbox"])
+        let tags = try await restoredStore.userTags(ids: [inbox.id])
+        XCTAssertEqual(tags[inbox.id], ["Follow up"])
+        let notes = try await restoredStore.annotations(ids: [inbox.id])
+        XCTAssertEqual(notes[inbox.id], "Check the deed")
+        let holds = try await restoredStore.legalHoldIDs()
+        XCTAssertEqual(holds, [alpha.id])
+        let nodes = try await restoredStore.folderNodes()
+        XCTAssertEqual(Set(nodes.map(\.path)), ["Inbox", "Projects", "Projects/Alpha"])
+        let attachments = try await restoredStore.attachmentMetadata(forEmailID: inbox.id)
+        XCTAssertEqual(attachments.map(\.filename), ["deed.pdf"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cleanStoreDir.appendingPathComponent("attachment-coverage.sqlite").path))
+        // Restoring over an existing archive in clean-profile mode is refused.
+        do {
+            _ = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: cleanStoreDir, mode: .cleanProfile)
+            XCTFail("a clean-profile restore must not replace an archive")
+        } catch ArchiveBackupError.targetNotClean {}
+
+        // A tampered backup is refused before anything is written.
+        let tamperedTarget = env.root.appendingPathComponent("never", isDirectory: true)
+        let blobEntry = try XCTUnwrap(inventory.files.first { $0.kind == "blob" })
+        try Data("not the blob".utf8).write(to: backup.appendingPathComponent(blobEntry.path))
+        XCTAssertFalse(try ArchiveBackup.verify(backup: backup).isClean)
+        do {
+            _ = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: tamperedTarget, mode: .cleanProfile)
+            XCTFail("a damaged backup must be refused")
+        } catch ArchiveBackupError.hashMismatch(let path) { XCTAssertEqual(path, blobEntry.path) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tamperedTarget.appendingPathComponent("emails.db").path), "nothing was written")
+        // And a backup without its inventory cannot be trusted at all.
+        try FileManager.default.removeItem(at: backup.appendingPathComponent(ArchiveBackupInventory.filename))
+        XCTAssertThrowsError(try ArchiveBackup.verify(backup: backup)) { XCTAssertEqual($0 as? ArchiveBackupError, .inventoryMissing) }
+    }
+
     // MARK: - Five jobs FOLD-03 / FOLD-04 — one message, several locations; origin stays immutable
 
     func testFOLD03_aMessageInTwoLabelsIsOneMessageWithTwoLocations() async throws {
