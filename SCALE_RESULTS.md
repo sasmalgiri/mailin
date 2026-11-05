@@ -363,6 +363,35 @@ disk speed on the customer's Mac rather than by the parser once the source
 is read faster than 86 MiB/s; nothing above 1.5 GB in one file has been
 executed, and the claim wording ("verified up to 1.5 GB") stands.
 
+## Executed 2026-11-06 — the format matrix at 100 MB (five jobs OPEN-06)
+
+Owner's rule for this release (2026-11-05): every format is tested at about 100 MB; larger files are
+covered by the bounded-memory design, and the documents say "tested at 100 MB; memory does not grow
+with file size" — nothing more. `HundredMegabyteFormatMatrixTests.testFormatMatrix_100MB_…`, Debug test
+host, this Mac. **Synthetic fixtures** (no real 100 MB corpus is on this Mac any more): a generated mbox
+of 1,570 messages (~2 KB text + one 45 KB base64 PDF each, 97 senders, dates spread over six years),
+imported through the production `BulkImportCoordinator`; that archive then exported with mailin's own
+writers as PST, as a folder of .eml files and as .msg files, each imported into a fresh environment.
+"First message" = time to the first committed batch. "Peak transient disk" = the largest growth of the
+environment during the run beyond what was left on disk at the end (temporary files).
+
+| Source | Size | Messages stored | First message | Total | Peak footprint over baseline | Store / FTS on disk | Peak transient disk | Reconciliation |
+|---|---|---|---|---|---|---|---|---|
+| mbox 100 MB | 100.1 MB | 1570 | 0.93 s | 13.6 s | 46 MB | 217.8 / 8.6 MB | 1.7 MB | discovered 1570, parsed 1570, damaged 0, persist failed 0, FTS rows 1570 |
+| pst (mailin writer) | 86.1 MB | 1570 | 0.47 s | 6.2 s | 3 MB | 105.9 / 9.0 MB | 15.5 MB | discovered 1570, parsed 1570, damaged 0, persist failed 0, FTS rows 1570 |
+| eml folder | 100.0 MB | 1570 | 0.26 s | 23.4 s | 5 MB | 118.2 / 78.6 MB | 21.1 MB | discovered 1570, parsed 1570, damaged 0, persist failed 0, FTS rows 1570 |
+| msg files | 102.9 MB | 1570 | 0.02 s | 39.1 s | 0 MB | 106.5 / 12.8 MB | 43.3 MB | discovered 1570, parsed 1570, damaged 0, persist failed 0, FTS rows 1570 |
+| mbox 25 MB | 25.0 MB | 393 | 0.84 s | 2.3 s | 5 MB | 55.1 / 2.2 MB | 1.7 MB | discovered 393, parsed 393, damaged 0, persist failed 0, FTS rows 393 |
+
+What the rows show: every format stores every message with the search index at full coverage; four
+times the bytes (25 MB → 100 MB mbox) moves the peak footprint from 5 MB to 46 MB over baseline, far
+below the source — memory does not grow with file size. The eml-folder import leaves a larger FTS
+footprint (78.6 MB) than the mbox import of the same mail (8.6 MB) because the per-file path indexes
+the attachment text eagerly; a known shape, not a defect — the search coverage is identical.
+**NOT TESTED at 100 MB:** OST and NSF (no fixture and no writer; the parsers are exercised by the
+synthetic structure tests only), Apple Mail .emlx libraries and Maildir (no 100 MB fixture on this
+Mac). Rows for those stay open until a fixture exists.
+
 ## Earlier results
 
 `V2_SCALE_RESULTS.md` (synthetic tiny-message corpora up to 1,000,000

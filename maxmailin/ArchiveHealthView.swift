@@ -32,6 +32,10 @@ struct ArchiveHealthView: View {
     @State private var relinking: MissingLocatorSource?
     @State private var sourceCopyBytes: Int64 = 0
 
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
+
     private static let lastIntegrityKey = "archiveHealth.lastIntegrity"
     private static let lastIntegrityDateKey = "archiveHealth.lastIntegrityDate"
 
@@ -48,6 +52,29 @@ struct ArchiveHealthView: View {
                     LabeledContent(String(localized: "Free disk space"),
                                    value: ByteCountFormatter.string(fromByteCount: freeBytes, countStyle: .file))
                 }
+            }
+
+            // LIFE-05: every recovery action in one place, each saying what it
+            // does before it runs; none of them deletes data.
+            Section("Recovery") {
+                Text("What to do when something went wrong — each action keeps the archive as it is until it has finished, and nothing here deletes data.")
+                    .font(.caption).foregroundStyle(.secondary)
+                #if os(macOS)
+                Button(String(localized: "Retry failed imports…")) { openWindow(id: "import-receipt") }
+                    .help("Opens the latest import receipt; its “Retry failed sources” imports again only the files that failed, from their checkpoints")
+                    .accessibilityIdentifier("health.retryFailedImports")
+                #endif
+                Button(String(localized: "Rebuild search index")) {
+                    Task { @MainActor in
+                        working = true; defer { working = false }
+                        note = await SafeModeActions.rebuildSearchIndex()
+                    }
+                }
+                .disabled(working)
+                .help("Rebuilds the full-text index from the stored emails, batch by batch; the archive itself is not modified")
+                .accessibilityIdentifier("health.rebuildIndex")
+                Text("Original files that moved: use “Relink…” in Original files below. A detached archive volume: reconnect it and relaunch (Archive location).")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
 
             Section("Snapshots") {
@@ -165,6 +192,7 @@ struct ArchiveHealthView: View {
                             }
                             Spacer()
                             Button(String(localized: "Relink…")) { relinking = missing }
+                                .accessibilityIdentifier("health.relink")
                                 .disabled(working || missing.sourceDigest.isEmpty)
                                 .help(missing.sourceDigest.isEmpty
                                       ? String(localized: "Imported before file digests were recorded; the file cannot be verified.")

@@ -98,6 +98,8 @@ struct BlobStore: Sendable {
 
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // LIFE-04: the tier's root and its fan-out folders are owner-only, like the store.
+        ArtifactProtection.applyBackgroundReadable(to: root)
         ArtifactProtection.applyBackgroundReadable(to: destination.deletingLastPathComponent())
 
         let temp = destination.deletingLastPathComponent()
@@ -125,6 +127,7 @@ struct BlobStore: Sendable {
         defer { try? input.close() }
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        ArtifactProtection.applyBackgroundReadable(to: root)
         let staging = root.appendingPathComponent(".tmp-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: staging.path, contents: nil)
         guard let output = try? FileHandle(forWritingTo: staging) else {
@@ -158,6 +161,7 @@ struct BlobStore: Sendable {
         do {
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            ArtifactProtection.applyBackgroundReadable(to: destination.deletingLastPathComponent())
             try FileManager.default.moveItem(at: staging, to: destination)
         } catch {
             try? FileManager.default.removeItem(at: staging)

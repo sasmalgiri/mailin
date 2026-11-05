@@ -119,6 +119,9 @@ enum ArchiveBackup {
             throw ArchiveBackupError.destinationNotEmpty(destination.path)
         }
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        // LIFE-04: a backup is the whole archive in one folder — owner-only
+        // on macOS (0700), protected until first unlock on iOS, like the store.
+        ArtifactProtection.applyBackgroundReadable(to: destination)
         var files: [ArchiveBackupInventory.File] = []
 
         // 1. The database, consistent.
@@ -275,6 +278,7 @@ enum ArchiveBackup {
     }
 
     private static func entry(for url: URL, relative: String, kind: String) throws -> ArchiveBackupInventory.File {
+        ArtifactProtection.applyBackgroundReadable(to: url)
         let bytes = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.int64Value ?? 0
         return ArchiveBackupInventory.File(path: relative, bytes: bytes, sha256: try ExportInventory.sha256(of: url), kind: kind)
     }

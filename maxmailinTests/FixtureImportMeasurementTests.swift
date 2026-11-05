@@ -417,3 +417,252 @@ final class ScaleFixtureImportTests: XCTestCase {
         try await report(run, source: zip, label: "zip 1.5 GB (stored member)")
     }
 }
+
+// MARK: - Five jobs OPEN-06 — the format matrix at 100 MB (owner, 2026-11-05)
+
+/// The owner's rule for this release: test every format at about 100 MB;
+/// the bounded-memory design is the evidence for larger files, and the
+/// documents say "tested at 100 MB; memory does not grow with file size" —
+/// never more than that.
+///
+/// No real 100 MB fixtures live on this Mac any more, so the matrix generates
+/// its own: a ~100 MB mbox of synthetic messages with a base64 attachment
+/// each, imported through the PRODUCTION coordinator; then that archive is
+/// exported as PST (mailin's own MS-PST writer), as a folder of .eml files
+/// and as .msg files, and each export is imported into a fresh environment.
+/// For every run the figures asked for are recorded separately: time to the
+/// first committed message, total time, peak footprint over baseline, final
+/// store + search index size, and the largest transient growth of the
+/// environment while the run was going (temporary disk).
+///
+/// A 25 MB mbox runs last so "memory does not grow with file size" is a
+/// comparison between two sizes, not a feeling. Rows are printed in the
+/// SCALE_RESULTS.md format. Set MAILIN_SKIP_MATRIX=1 to skip (≈ 5–10 min).
+final class HundredMegabyteFormatMatrixTests: XCTestCase {
+
+    private struct Run {
+        let label: String
+        let sourceBytes: Int64
+        let expectedMessages: Int
+        let firstMessageSeconds: Double
+        let seconds: Double
+        let baselineBytes: UInt64
+        let peakBytes: UInt64
+        let storeBytes: Int64
+        let ftsBytes: Int64
+        let peakTransientBytes: Int64
+        let stored: Int
+        let ftsRows: Int
+        let summary: BulkImportCoordinator.RunSummary
+        let root: URL
+        let store: SQLiteEmailStore
+        let fts: FTSSearchIndex
+        var peakDeltaMB: Double { Double(peakBytes) - Double(baselineBytes) > 0 ? (Double(peakBytes) - Double(baselineBytes)) / 1_048_576 : 0 }
+    }
+
+    /// Per-batch sampling: footprint and the environment's size on disk.
+    private final class Sampler: @unchecked Sendable {
+        private let lock = NSLock()
+        private let root: URL
+        private let start: ContinuousClock.Instant
+        private let clock = ContinuousClock()
+        private(set) var firstMessageSeconds: Double?
+        private(set) var peakFootprint: UInt64
+        private(set) var peakRootBytes: Int64 = 0
+        private(set) var batches = 0
+        init(root: URL, baseline: UInt64, start: ContinuousClock.Instant) { self.root = root; self.peakFootprint = baseline; self.start = start }
+        func record(count: Int) {
+            let now = clock.now
+            let footprint = currentFootprintBytes()
+            let bytes = HundredMegabyteFormatMatrixTests.directoryBytes(root)
+            lock.lock(); defer { lock.unlock() }
+            batches += 1
+            if firstMessageSeconds == nil, count > 0 {
+                let d = start.duration(to: now).components
+                firstMessageSeconds = Double(d.seconds) + Double(d.attoseconds) / 1e18
+            }
+            peakFootprint = max(peakFootprint, footprint)
+            peakRootBytes = max(peakRootBytes, bytes)
+        }
+    }
+
+    static func directoryBytes(_ url: URL) -> Int64 {
+        guard let walker = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in walker { total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+        return total
+    }
+
+    // MARK: Fixture generation
+
+    /// Deterministic pseudo-random bytes (no real randomness, so every run makes the same file).
+    private struct LCG {
+        var state: UInt64
+        mutating func next() -> UInt8 { state = state &* 6364136223846793005 &+ 1442695040888963407; return UInt8(truncatingIfNeeded: state >> 33) }
+    }
+
+    private static let words = ["invoice", "contract", "meeting", "quarter", "review", "attached", "please", "regards", "project", "alpha",
+                                "deadline", "budget", "approved", "draft", "signature", "client", "schedule", "update", "summary", "thanks"]
+
+    /// Writes an mbox of about `targetBytes`: ~2 KB of text and one ~45 KB base64 attachment per message.
+    static func generateMBOX(at url: URL, targetBytes: Int64) throws -> (url: URL, messages: Int) {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        var rng = LCG(state: 0x5EED)
+        var written: Int64 = 0
+        var index = 0
+        let attachmentBytes = 45_000
+        var raw = [UInt8](repeating: 0, count: attachmentBytes)
+        while written < targetBytes {
+            index += 1
+            for i in 0..<attachmentBytes { raw[i] = rng.next() }
+            let base64 = Data(raw).base64EncodedString(options: [.lineLength76Characters, .endLineWithLineFeed])
+            var text = ""
+            var w = index
+            for _ in 0..<300 { text += words[w % words.count] + " "; w = (w &* 31 &+ 7) % 1_000_003; if text.utf8.count % 70 < 8 { text += "\n" } }
+            let day = 1 + (index % 28), month = 1 + (index / 28) % 12, year = 2019 + (index / 336) % 6
+            let date = String(format: "%02d", day) + " " + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][month - 1] + " \(year) 09:\(String(format: "%02d", index % 60)):00 +0000"
+            let message = """
+            From sender\(index % 97)@matrix.test Mon Jan  1 00:00:00 \(year)
+            From: Sender \(index % 97) <sender\(index % 97)@matrix.test>
+            To: me@matrix.test
+            Cc: cc\(index % 11)@matrix.test
+            Subject: Synthetic message \(index) about \(words[index % words.count])
+            Date: Mon, \(date)
+            Message-ID: <synthetic-\(index)@matrix.test>
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="matrix-\(index)"
+
+            --matrix-\(index)
+            Content-Type: text/plain; charset=utf-8
+
+            \(text)
+
+            --matrix-\(index)
+            Content-Type: application/pdf; name="doc-\(index).pdf"
+            Content-Disposition: attachment; filename="doc-\(index).pdf"
+            Content-Transfer-Encoding: base64
+
+            \(base64)
+            --matrix-\(index)--
+
+
+            """
+            let data = Data(message.utf8)
+            handle.write(data)
+            written += Int64(data.count)
+        }
+        return (url, index)
+    }
+
+    // MARK: Production-path import, measured
+
+    private func importMeasured(urls: [URL], sourceBytes: Int64, expectedMessages: Int, label: String) async throws -> Run {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("matrix-\(label)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try MailinStorageEnvironment.assertNotProduction(root)
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let checkpoints = ImportCheckpointStore(store: store)
+        let coordinator = await BulkImportCoordinator(store: store, fts: fts, checkpoints: checkpoints, requiresStorageActivation: false)
+        var options = BulkImportCoordinator.Options()
+        options.enforceStoragePreflight = false
+        let clock = ContinuousClock()
+        let baseline = currentFootprintBytes()
+        let start = clock.now
+        let sampler = Sampler(root: root, baseline: baseline, start: start)
+        var callbacks = BulkImportCoordinator.Callbacks()
+        callbacks.onCommittedBatch = { batch in sampler.record(count: batch.count) }
+        let summary = try await coordinator.runImport(urls: urls, options: options, callbacks: callbacks)
+        let elapsed = start.duration(to: clock.now).components
+        let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+        try? await store.checkpoint()
+        let stored = try await store.totalCount()
+        let ftsRows = try await fts.rowCount()
+        let storeBytes = Self.directoryBytes(root.appendingPathComponent("store", isDirectory: true))
+        let ftsBytes = Self.directoryBytes(root.appendingPathComponent("fts", isDirectory: true))
+        let finalRoot = Self.directoryBytes(root)
+        return Run(label: label, sourceBytes: sourceBytes, expectedMessages: expectedMessages,
+                   firstMessageSeconds: sampler.firstMessageSeconds ?? seconds, seconds: seconds,
+                   baselineBytes: baseline, peakBytes: sampler.peakFootprint, storeBytes: storeBytes, ftsBytes: ftsBytes,
+                   peakTransientBytes: max(0, sampler.peakRootBytes - finalRoot), stored: stored, ftsRows: ftsRows,
+                   summary: summary, root: root, store: store, fts: fts)
+    }
+
+    private func row(_ run: Run) -> String {
+        let mb = { (b: Int64) in String(format: "%.1f", Double(b) / 1_000_000) }
+        return "| \(run.label) | \(mb(run.sourceBytes)) MB | \(run.stored) | \(String(format: "%.2f", run.firstMessageSeconds)) s | \(String(format: "%.1f", run.seconds)) s | \(String(format: "%.0f", run.peakDeltaMB)) MB | \(mb(run.storeBytes)) / \(mb(run.ftsBytes)) MB | \(mb(run.peakTransientBytes)) MB | discovered \(run.summary.discovered), parsed \(run.summary.parsed), damaged \(run.summary.damaged), persist failed \(run.summary.persistFailed), FTS rows \(run.ftsRows) |"
+    }
+
+    func testFormatMatrix_100MB_mbox_pst_emlFolder_msgFiles_memoryFlatAgainst25MB() async throws {
+        try XCTSkipIf(ProcessInfo.processInfo.environment["MAILIN_SKIP_MATRIX"] == "1", "MAILIN_SKIP_MATRIX=1")
+        try TestPreconditions.requireFreeSpace(2_500_000_000)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("matrix-fixtures-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var runs: [Run] = []
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            for run in runs { try? FileManager.default.removeItem(at: run.root) }
+        }
+
+        // 1. mbox, ~100 MB.
+        let mbox = try Self.generateMBOX(at: root.appendingPathComponent("synthetic-100mb.mbox"), targetBytes: 100_000_000)
+        let mboxBytes = Int64((try FileManager.default.attributesOfItem(atPath: mbox.url.path)[.size] as? NSNumber)?.intValue ?? 0)
+        XCTAssertGreaterThan(mboxBytes, 100_000_000)
+        let mboxRun = try await importMeasured(urls: [mbox.url], sourceBytes: mboxBytes, expectedMessages: mbox.messages, label: "mbox 100 MB")
+        runs.append(mboxRun)
+
+        // 2. The same archive as PST, an .eml folder and .msg files — mailin's own writers.
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: mboxRun.store, fts: mboxRun.fts))
+        let service = await ArchiveExportService(archive: archive)
+        let scope = ArchiveSelectionScope.query(.all, exclusions: [])
+        let pst = root.appendingPathComponent("synthetic.pst")
+        let pstWritten = try await service.exportPST(scope: scope, to: pst)
+        XCTAssertEqual(pstWritten, mbox.messages)
+        let emlFolder = root.appendingPathComponent("eml", isDirectory: true)
+        let emlResult = try await service.exportEMLFiles(scope: scope, to: emlFolder)
+        XCTAssertEqual(emlResult.recordsWritten, mbox.messages)
+        let msgFolder = root.appendingPathComponent("msg", isDirectory: true)
+        let msgResult = try await service.exportMSGFiles(scope: scope, to: msgFolder)
+        XCTAssertEqual(msgResult.recordsWritten, mbox.messages)
+        // Export inventories do not belong to the source folders being imported.
+        try? FileManager.default.removeItem(at: emlFolder.appendingPathComponent(ExportInventory.filename))
+        try? FileManager.default.removeItem(at: msgFolder.appendingPathComponent(ExportInventory.filename))
+
+        let pstBytes = Int64((try FileManager.default.attributesOfItem(atPath: pst.path)[.size] as? NSNumber)?.intValue ?? 0)
+        runs.append(try await importMeasured(urls: [pst], sourceBytes: pstBytes, expectedMessages: mbox.messages, label: "pst (mailin writer)"))
+        runs.append(try await importMeasured(urls: [emlFolder], sourceBytes: Self.directoryBytes(emlFolder), expectedMessages: mbox.messages, label: "eml folder"))
+        let msgFiles = try FileManager.default.contentsOfDirectory(at: msgFolder, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension.lowercased() == "msg" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        XCTAssertEqual(msgFiles.count, mbox.messages)
+        runs.append(try await importMeasured(urls: msgFiles, sourceBytes: Self.directoryBytes(msgFolder), expectedMessages: mbox.messages, label: "msg files"))
+
+        // 3. The size comparison.
+        let small = try Self.generateMBOX(at: root.appendingPathComponent("synthetic-25mb.mbox"), targetBytes: 25_000_000)
+        let smallBytes = Int64((try FileManager.default.attributesOfItem(atPath: small.url.path)[.size] as? NSNumber)?.intValue ?? 0)
+        let smallRun = try await importMeasured(urls: [small.url], sourceBytes: smallBytes, expectedMessages: small.messages, label: "mbox 25 MB")
+        runs.append(smallRun)
+
+        print("""
+
+        ## Executed \(Date().formatted(.iso8601.year().month().day())) — the format matrix at 100 MB (OPEN-06, synthetic fixtures, Debug test host)
+
+        | Source | Size | Messages stored | First message | Total | Peak footprint over baseline | Store / FTS on disk | Peak transient disk | Reconciliation |
+        |---|---|---|---|---|---|---|---|---|
+        \(runs.map(row).joined(separator: "\n"))
+
+        """)
+
+        for run in runs {
+            XCTAssertEqual(run.stored, run.expectedMessages, "\(run.label): every message stored")
+            XCTAssertEqual(run.ftsRows, run.stored, "\(run.label): search coverage equals stored rows")
+            XCTAssertEqual(run.summary.damaged, 0, "\(run.label): nothing damaged")
+            XCTAssertEqual(run.summary.persistFailed, 0, "\(run.label)")
+            XCTAssertLessThan(run.peakDeltaMB, 600, "\(run.label): the footprint never approaches the source size")
+        }
+        // Memory does not grow with file size: four times the bytes, the same order of peak.
+        XCTAssertLessThan(mboxRun.peakDeltaMB, smallRun.peakDeltaMB + 150,
+                          "100 MB peak \(mboxRun.peakDeltaMB) MB vs 25 MB peak \(smallRun.peakDeltaMB) MB")
+    }
+}

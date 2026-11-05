@@ -66326,9 +66326,7 @@
         }
       }
     },
-    "Build a search from conditions: all / any / exclude, dates, attachments" : {
-
-    },
+    "Build a search from conditions: all / any / exclude, dates, attachments" : {},
     "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft." : {
       "localizations" : {
         "de" : {
@@ -378163,6 +378161,326 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "非真實 PII 項目的從零開始編號 — Unix 時間戳記、訂單/參照/追蹤/序號、訊息 ID、版本字串。若所有項目均為真實則為空。"
+          }
+        }
+      }
+    },
+    "What to do when something went wrong — each action keeps the archive as it is until it has finished, and nothing here deletes data." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Was zu tun ist, wenn etwas schiefging – jede Aktion lässt das Archiv unverändert, bis sie abgeschlossen ist, und nichts hier löscht Daten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qué hacer cuando algo salió mal: cada acción deja el archivo como está hasta terminar, y nada aquí elimina datos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Que faire quand quelque chose a mal tourné — chaque action laisse l'archive telle quelle jusqu'à ce qu'elle soit terminée, et rien ici ne supprime de données."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कुछ गलत होने पर क्या करें — हर क्रिया पूरी होने तक संग्रह को जैसा है वैसा रखती है, और यहाँ कुछ भी डेटा नहीं हटाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cosa fare quando qualcosa è andato storto: ogni azione lascia l'archivio com'è finché non ha finito, e nulla qui elimina dati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "問題が起きたときの対処です。各操作は完了するまでアーカイブをそのままにし、ここではデータを削除しません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "문제가 생겼을 때 할 일입니다. 각 작업은 끝날 때까지 보관함을 그대로 두며, 여기서는 데이터를 삭제하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que fazer quando algo deu errado — cada ação mantém o arquivo como está até terminar, e nada aqui apaga dados."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出现问题时该怎么做——每项操作在完成前都保持归档不变，这里没有任何操作会删除数据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出現問題時該怎麼做——每項操作在完成前都保持封存不變，這裡沒有任何操作會刪除資料。"
+          }
+        }
+      }
+    },
+    "Retry failed imports…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fehlgeschlagene Importe wiederholen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reintentar importaciones fallidas…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réessayer les imports échoués…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "विफल आयात फिर से आज़माएँ…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Riprova le importazioni non riuscite…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失敗した取り込みを再試行…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실패한 가져오기 다시 시도…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentar novamente importações com falha…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试失败的导入…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重試失敗的匯入…"
+          }
+        }
+      }
+    },
+    "Opens the latest import receipt; its “Retry failed sources” imports again only the files that failed, from their checkpoints" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnet die letzte Importquittung; ihr „Fehlgeschlagene Quellen wiederholen“ importiert nur die fehlgeschlagenen Dateien erneut, ab ihren Prüfpunkten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre el último recibo de importación; su «Reintentar orígenes fallidos» vuelve a importar solo los archivos que fallaron, desde sus puntos de control"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvre le dernier reçu d'import ; son « Réessayer les sources échouées » réimporte uniquement les fichiers qui ont échoué, depuis leurs points de reprise"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नवीनतम आयात रसीद खोलता है; उसका “विफल स्रोत फिर से आज़माएँ” केवल विफल फ़ाइलों को उनके चेकपॉइंट से दोबारा आयात करता है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apre l'ultima ricevuta di importazione; il suo \"Riprova origini non riuscite\" reimporta solo i file falliti, dai loro checkpoint"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新の取り込み受領書を開きます。その「失敗したソースを再試行」は失敗したファイルだけをチェックポイントから再取り込みします"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최신 가져오기 영수증을 엽니다. 그 안의 \"실패한 소스 다시 시도\"는 실패한 파일만 체크포인트부터 다시 가져옵니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre o último recibo de importação; o seu “Tentar novamente origens com falha” reimporta só os arquivos que falharam, a partir dos seus pontos de verificação"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开最新的导入回执；其中的“重试失败的来源”只会从检查点重新导入失败的文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟最新的匯入回條；其中的「重試失敗的來源」只會從檢查點重新匯入失敗的檔案"
+          }
+        }
+      }
+    },
+    "Rebuilds the full-text index from the stored emails, batch by batch; the archive itself is not modified" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baut den Volltextindex aus den gespeicherten E-Mails Stapel für Stapel neu auf; das Archiv selbst wird nicht verändert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconstruye el índice de texto completo a partir de los correos almacenados, lote a lote; el archivo en sí no se modifica"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconstruit l'index plein texte à partir des courriels stockés, lot par lot ; l'archive elle-même n'est pas modifiée"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रहीत ईमेल से पूर्ण-पाठ अनुक्रमणिका को बैच दर बैच फिर से बनाता है; संग्रह स्वयं नहीं बदला जाता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricostruisce l'indice full-text dalle email memorizzate, un lotto alla volta; l'archivio stesso non viene modificato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存されたメールから全文インデックスをバッチごとに再構築します。アーカイブ自体は変更されません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 메일에서 전체 텍스트 색인을 배치 단위로 다시 만듭니다. 보관함 자체는 변경되지 않습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconstrói o índice de texto completo a partir dos e-mails armazenados, lote a lote; o arquivo em si não é modificado"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从已存储的邮件逐批重建全文索引；归档本身不会被修改"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從已儲存的郵件逐批重建全文索引；封存本身不會被修改"
+          }
+        }
+      }
+    },
+    "Original files that moved: use “Relink…” in Original files below. A detached archive volume: reconnect it and relaunch (Archive location)." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verschobene Originaldateien: „Neu verknüpfen …“ unter Originaldateien unten. Ein getrenntes Archivvolume: wieder anschließen und neu starten (Archivort)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivos originales que se movieron: use «Volver a vincular…» en Archivos originales, abajo. Un volumen de archivo desconectado: vuelva a conectarlo y reinicie (Ubicación del archivo)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichiers d'origine déplacés : utilisez « Relier… » dans Fichiers d'origine ci-dessous. Un volume d'archive déconnecté : reconnectez-le et relancez (Emplacement de l'archive)."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्थानांतरित मूल फ़ाइलें: नीचे मूल फ़ाइलों में “फिर से लिंक करें…” का उपयोग करें। अलग हुआ संग्रह वॉल्यूम: उसे फिर से जोड़ें और ऐप दोबारा शुरू करें (संग्रह स्थान)।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File originali spostati: usa \"Ricollega…\" in File originali qui sotto. Un volume dell'archivio scollegato: ricollegalo e riavvia (Posizione archivio)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移動した元ファイル：下の「元のファイル」で「再リンク…」を使います。切断されたアーカイブボリューム：再接続して再起動します（アーカイブの場所）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이동된 원본 파일: 아래 원본 파일에서 \"다시 연결…\"을 사용하세요. 분리된 보관함 볼륨: 다시 연결한 뒤 재실행하세요(보관함 위치)."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivos originais que foram movidos: use “Religar…” em Arquivos originais abaixo. Um volume de arquivo desconectado: reconecte-o e reinicie (Local do arquivo)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移动的原始文件：使用下方“原始文件”中的“重新链接…”。已断开的归档卷：重新连接后重新启动（归档位置）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移動的原始檔案：使用下方「原始檔案」中的「重新連結…」。已中斷的封存磁碟區：重新連接後重新啟動（封存位置）。"
           }
         }
       }

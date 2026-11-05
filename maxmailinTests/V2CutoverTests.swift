@@ -2614,6 +2614,107 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs DUP-02 — the whole scope, with a receipt that says what was read
+
+    func testDUP02_wholeScopeFindsCopiesBeyondTheOldWindow_andTheReceiptSaysWhatWasRead() async throws {
+        let env = try makeEnv()
+        // 5,300 emails; 20 byte-identical pairs sit entirely beyond the previous engine's 5,000 window.
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<5_300 {
+            let e = mail(10_000 + i, from: "s\(i % 13)@x.com", subject: "Bulk \(i)", body: "body \(i)",
+                         date: "Wed, 01 Mar 2023 \(String(format: "%02d:%02d:%02d", (i / 3600) % 24, (i / 60) % 60, i % 60)) +0000")
+            emails.append(e)
+            if i >= 5_200 && i < 5_220 { emails.append(copy(of: e)) }
+        }
+        for start in stride(from: 0, to: emails.count, by: 500) {
+            let batch = Array(emails[start..<min(start + 500, emails.count)])
+            _ = try await env.store.insertBatch(batch, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                                dedupPolicy: .preserveAll, batchSize: 500, progress: nil)
+        }
+        let total = try await env.store.totalCount()
+        XCTAssertEqual(total, 5_320)
+
+        let environment = ScopeJobEnvironment(archive: env.archive, store: env.store, root: env.root)
+        let (groups, receipt) = try await ScopeJobEnvironment.$current.withValue(environment) {
+            try await DuplicatesEngine.exactGroups()
+        }
+        XCTAssertEqual(groups.count, 20, "every pair beyond the old window is found")
+        XCTAssertTrue(groups.allSatisfy { $0.count == 2 })
+        XCTAssertEqual(receipt.processed, 5_320)
+        XCTAssertEqual(receipt.totalInScope, 5_320)
+        XCTAssertEqual(receipt.unreadable, 0)
+        XCTAssertFalse(receipt.cancelled)
+        XCTAssertTrue(receipt.coverageLine.hasPrefix("All 5"), receipt.coverageLine)
+        // A partial read is never dressed up as complete: the wording names what could not be read, or where it stopped.
+        let partial = ScopeJobReceipt(jobKey: "duplicates.exact", title: "t", capability: "v3Duplicates", scope: "all", archiveRevision: 1,
+                                      totalInScope: 5_320, processed: 5_300, unreadable: 20, resumed: false, cancelled: false,
+                                      startedAt: Date(), finishedAt: Date(), fingerprint: "x")
+        XCTAssertTrue(partial.coverageLine.contains("20 could not be read"), partial.coverageLine)
+        let stopped = ScopeJobReceipt(jobKey: "duplicates.exact", title: "t", capability: "v3Duplicates", scope: "all", archiveRevision: 1,
+                                      totalInScope: 5_320, processed: 1_000, unreadable: 0, resumed: false, cancelled: true,
+                                      startedAt: Date(), finishedAt: Date(), fingerprint: "x")
+        XCTAssertTrue(stopped.coverageLine.contains("Stopped after 1,000 of 5,320") || stopped.coverageLine.contains("Stopped after 1000 of 5320"), stopped.coverageLine)
+        // The previous engine states its window whenever it is the one that ran.
+        XCTAssertTrue(DuplicateManagerView.previousEngineScopeNote(appendedTo: nil).contains("5,000"))
+    }
+
+    // MARK: - Five jobs LIFE-04 / LIFE-05 — artifacts protected; diagnostics carry no mail; recovery in one place
+
+    func testLIFE04_archiveArtifactsAreOwnerOnly_andDiagnosticsNameNoMailContent() async throws {
+        let env = try makeEnv()
+        var big = mail(330, from: "a@x.com", subject: "Big", body: "big")
+        big.rawSource = "Subject: Big\n\n" + String(repeating: "z", count: BlobStore.inlineThresholdBytes + 100)
+        try await env.store.insertBatch([mail(331, from: "a@x.com", subject: "Plain", body: "p"), big], batchSize: 10)
+        try await env.fts.index(big)
+        _ = try await env.store.snapshot(reason: "manual")
+        let backup = env.root.appendingPathComponent("backup", isDirectory: true)
+        _ = try await ArchiveBackup.create(store: env.store, to: backup)
+
+        func perms(_ url: URL) throws -> Int {
+            try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int)
+        }
+        func assertOwnerOnly(_ url: URL, _ what: String, file: StaticString = #filePath, line: UInt = #line) throws {
+            let mode = try perms(url)
+            XCTAssertEqual(mode & 0o077, 0, "\(what) must be owner-only, got \(String(mode, radix: 8))", file: file, line: line)
+        }
+        let storeDir = env.store.storeDirectory
+        try assertOwnerOnly(storeDir, "store directory")
+        try assertOwnerOnly(storeDir.appendingPathComponent("blobs"), "blob tier")
+        try assertOwnerOnly(env.store.snapshotDirectory, "snapshot directory")
+        let snapshotFile = try XCTUnwrap(env.store.snapshots().first?.url)
+        try assertOwnerOnly(snapshotFile, "snapshot file")
+        try assertOwnerOnly(env.root.appendingPathComponent("fts"), "search shards")
+        try assertOwnerOnly(backup, "backup folder")
+        for file in try ArchiveBackup.load(from: backup).files {
+            try assertOwnerOnly(backup.appendingPathComponent(file.path), "backup file \(file.path)")
+        }
+
+        // Diagnostics are built from trips, metrics and counts — never from message fields.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        for name in ["maxmailin/EngineGuard.swift", "maxmailin/DiagnosticsCenter.swift"] {
+            let source = try String(contentsOf: repo.appendingPathComponent(name), encoding: .utf8)
+            for forbidden in ["plainBody", "htmlBody", "rawSource", "headers[\"Subject\"]", "headers[\"From\"]", "bodyPreview"] {
+                XCTAssertFalse(source.contains(forbidden), "\(name) reads \(forbidden) — diagnostics must not carry mail content")
+            }
+        }
+        let diagnostics = EngineTripCenter.shared.diagnosticsText()
+        XCTAssertFalse(diagnostics.contains("Subject:"), "no message headers in diagnostics")
+    }
+
+    func testLIFE05_everyRecoveryActionIsReachableFromHealth() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let health = try String(contentsOf: repo.appendingPathComponent("maxmailin/ArchiveHealthView.swift"), encoding: .utf8)
+        for identifier in ["health.retryFailedImports", "health.rebuildIndex", "health.restoreBackup", "health.backup", "health.relink"] {
+            XCTAssertTrue(health.contains("\"\(identifier)\""), "Health must offer \(identifier)")
+        }
+        XCTAssertTrue(health.contains("Restore latest…"), "the snapshot restore stays reachable")
+        // The retry path really exists end to end: receipt button → notification → ContentView handler.
+        let receiptView = try String(contentsOf: repo.appendingPathComponent("maxmailin/ImportReceiptView.swift"), encoding: .utf8)
+        let contentView = try String(contentsOf: repo.appendingPathComponent("maxmailin/ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(receiptView.contains("Retry failed sources"))
+        XCTAssertTrue(contentView.contains(".retryImportSources"))
+    }
+
     // MARK: - Five jobs DUP-03 / DUP-04 / DUP-05 — classes kept apart; removal keeps everything and is reversible
 
     func testDUP03_fourClassesAreDistinct_andOnlyTheIdenticalOnesAreBulkRemovable() {
