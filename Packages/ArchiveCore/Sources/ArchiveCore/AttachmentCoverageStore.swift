@@ -33,11 +33,14 @@ import SQLite3
 
 enum AttachmentCoverageState: String, CaseIterable, Sendable {
     case extracted, truncated, noText, unsupported, locked, failed
+    /// FIND-01: some text-bearing parts of the file were read, others not
+    /// (listed in the note) — searchable, but not whole.
+    case partial
 
     /// Text that can be searched exists for this attachment.
-    var isSearchable: Bool { self == .extracted || self == .truncated }
+    var isSearchable: Bool { self == .extracted || self == .truncated || self == .partial }
     /// A newer extractor may do better; the retry pass takes these.
-    var retriesOnNewExtractor: Bool { self == .unsupported || self == .failed || self == .truncated }
+    var retriesOnNewExtractor: Bool { self == .unsupported || self == .failed || self == .truncated || self == .partial }
 }
 
 struct AttachmentCoverageRow: Sendable, Equatable {
@@ -198,7 +201,7 @@ final class AttachmentCoverageStore {
             summary.unsupportedKinds.append((text(kinds, 0) ?? "", Int(sqlite3_column_int64(kinds, 1))))
         }
         let stale = try prepare("""
-            SELECT COUNT(*) FROM coverage WHERE extractor_version < ? AND state IN ('unsupported', 'failed', 'truncated');
+            SELECT COUNT(*) FROM coverage WHERE extractor_version < ? AND state IN ('unsupported', 'failed', 'truncated', 'partial');
         """)
         defer { sqlite3_finalize(stale) }
         sqlite3_bind_int64(stale, 1, Int64(currentExtractorVersion))
@@ -211,7 +214,7 @@ final class AttachmentCoverageStore {
     func emailIDs(staleBelow version: Int, limit: Int) throws -> [UUID] {
         let stmt = try prepare("""
             SELECT DISTINCT email_id FROM coverage
-            WHERE extractor_version < ? AND state IN ('unsupported', 'failed', 'truncated')
+            WHERE extractor_version < ? AND state IN ('unsupported', 'failed', 'truncated', 'partial')
             ORDER BY extractor_version, email_id LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }

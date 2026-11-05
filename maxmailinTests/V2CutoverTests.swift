@@ -1138,7 +1138,7 @@ final class V2CutoverTests: XCTestCase {
         see attached
         \(mimeAttachment("notes.txt", "text/plain", Data("the xylophone clause".utf8)))
         \(mimeAttachment("blank.txt", "text/plain", Data("   \n  ".utf8)))
-        \(mimeAttachment("report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Data("PK\u{03}\u{04}not really".utf8)))
+        \(mimeAttachment("report.doc", "application/msword", Data("\u{D0}\u{CF}legacy word".utf8)))
         \(mimeAttachment("locked.pdf", "application/pdf", try lockedPDF()))
         \(mimeAttachment("big.txt", "text/plain", Data(long.utf8)))
         --B--
@@ -1154,7 +1154,7 @@ final class V2CutoverTests: XCTestCase {
 
         let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
         let rows = try coverage.rows(for: email.id)
-        XCTAssertEqual(rows.map(\.filename), ["notes.txt", "blank.txt", "report.docx", "locked.pdf", "big.txt"])
+        XCTAssertEqual(rows.map(\.filename), ["notes.txt", "blank.txt", "report.doc", "locked.pdf", "big.txt"])
         XCTAssertEqual(rows.map(\.state), [.extracted, .noText, .unsupported, .locked, .truncated])
         XCTAssertEqual(rows[4].characters, AttachmentTextIndexJob.maxTextPerAttachment)
         XCTAssertTrue(rows.allSatisfy { $0.extractorVersion == AttachmentTextIndexJob.extractorVersion })
@@ -1163,7 +1163,7 @@ final class V2CutoverTests: XCTestCase {
         let summary = try coverage.summary(currentExtractorVersion: AttachmentTextIndexJob.extractorVersion)
         XCTAssertEqual(summary.total, 5)
         XCTAssertEqual(summary.searchable, 2)
-        XCTAssertEqual(summary.unsupportedKinds.map(\.kind), ["docx"])
+        XCTAssertEqual(summary.unsupportedKinds.map(\.kind), ["doc"])
         XCTAssertEqual(summary.staleRows, 0)
         let hits = try await env.store.attachmentTextSearch("xylophone")
         XCTAssertEqual(hits, [email.id])
@@ -1188,6 +1188,7 @@ final class V2CutoverTests: XCTestCase {
         let again = await AttachmentTextIndexJob.shared.run()
         XCTAssertEqual(again.indexedEmails, 1)
         XCTAssertEqual(try coverage.rows(for: email.id).map(\.state), [.extracted, .noText, .unsupported, .locked, .truncated])
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
     /// Stage A: the previous duplicate engine's 5,000-email window is stated on
@@ -2168,6 +2169,164 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(SearchChunker.chunks(of: "short"), ["short"])
         XCTAssertEqual(SearchTextTokens.words(in: "C++ and PO-4471, \"quoted\"!"), ["C", "and", "PO", "4471", "quoted"])
         XCTAssertEqual(SearchTextTokens.quoted("a\"b"), "\"a\"\"b\"")
+    }
+
+    // MARK: - Five jobs FIND-01 — DOCX, XLSX, PPTX text with component context
+
+    private static func crc32(_ data: Data) -> UInt32 {
+        var table = [UInt32](repeating: 0, count: 256)
+        for i in 0..<256 {
+            var c = UInt32(i)
+            for _ in 0..<8 { c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1 }
+            table[i] = c
+        }
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in data { crc = table[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8) }
+        return crc ^ 0xFFFFFFFF
+    }
+
+    /// A stored (uncompressed) ZIP with correct CRCs — an Office package is one.
+    private static func zipPackage(_ members: [(name: String, data: Data)]) -> Data {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        var local = Data(), central = Data()
+        for m in members {
+            let name = Array(m.name.utf8)
+            let crc = crc32(m.data)
+            let size = UInt32(m.data.count)
+            let offset = UInt32(local.count)
+            local.append(contentsOf: le32(0x04034b50) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                         + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + name)
+            local.append(m.data)
+            central.append(contentsOf: le32(0x02014b50) + le16(20) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(offset) + name)
+        }
+        var file = local
+        file.append(central)
+        file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(members.count) + le16(members.count)
+                    + le32(UInt32(central.count)) + le32(UInt32(local.count)) + le16(0))
+        return file
+    }
+
+    private static func docx(body: String, header: String) -> Data {
+        zipPackage([
+            ("[Content_Types].xml", Data("<Types/>".utf8)),
+            ("word/document.xml", Data("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+                <w:p><w:r><w:t>\(body)</w:t></w:r></w:p>
+                <w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell one</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>cell two</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+                </w:body></w:document>
+                """.utf8)),
+            ("word/header1.xml", Data("<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p><w:r><w:t>\(header)</w:t></w:r></w:p></w:hdr>".utf8)),
+            ("word/media/image1.png", Data([0x89, 0x50, 0x4E, 0x47])),
+        ])
+    }
+
+    private static func xlsx(sheetName: String, sharedText: String, inlineText: String) -> Data {
+        zipPackage([
+            ("xl/workbook.xml", Data("<workbook xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"\(sheetName)\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>".utf8)),
+            ("xl/_rels/workbook.xml.rels", Data("<Relationships><Relationship Id=\"rId1\" Type=\"x\" Target=\"worksheets/sheet1.xml\"/></Relationships>".utf8)),
+            ("xl/sharedStrings.xml", Data("<sst><si><t>\(sharedText)</t></si><si><r><t>rich </t></r><r><t>run</t></r></si></sst>".utf8)),
+            ("xl/worksheets/sheet1.xml", Data("""
+                <worksheet><sheetData>
+                <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="inlineStr"><is><t>\(inlineText)</t></is></c></row>
+                <row r="2"><c r="A2"><v>42</v></c><c r="B2"><f>SUM(A1:A2)</f><v>84</v></c><c r="C2" t="s"><v>1</v></c></row>
+                </sheetData></worksheet>
+                """.utf8)),
+        ])
+    }
+
+    private static func pptx(slide: String, notes: String) -> Data {
+        zipPackage([
+            ("ppt/slides/slide1.xml", Data("<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:txBody><a:p><a:r><a:t>\(slide)</a:t></a:r></a:p></p:txBody></p:sld>".utf8)),
+            ("ppt/slides/slide2.xml", Data("<p:sld xmlns:a=\"x\"><a:p><a:r><a:t>second slide</a:t></a:r></a:p></p:sld>".utf8)),
+            ("ppt/notesSlides/notesSlide1.xml", Data("<p:notes xmlns:a=\"x\"><a:p><a:r><a:t>\(notes)</a:t></a:r></a:p></p:notes>".utf8)),
+        ])
+    }
+
+    func testFIND01_officeTextIsExtractedWithComponentLabels() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-find01-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        func write(_ name: String, _ data: Data) throws -> URL { let u = root.appendingPathComponent(name); try data.write(to: u); return u }
+
+        let docx = try OfficeTextExtractor.extract(fileURL: try write("a.docx", Self.docx(body: "The quorum clause applies.", header: "Confidential header")), kind: .docx)
+        XCTAssertEqual(docx.components, ["Document", "Header"])
+        XCTAssertTrue(docx.text.contains("[Document]\nThe quorum clause applies.") && docx.text.contains("cell one \tcell two") && docx.text.contains("[Header]\nConfidential header"), docx.text)
+        XCTAssertEqual(docx.notText, ["word/media/image1.png"])
+        XCTAssertFalse(docx.partial)
+
+        let xlsx = try OfficeTextExtractor.extract(fileURL: try write("b.xlsx", Self.xlsx(sheetName: "Budget", sharedText: "Gross margin", inlineText: "inline note")), kind: .xlsx)
+        XCTAssertEqual(xlsx.components, ["Sheet: Budget"])
+        XCTAssertTrue(xlsx.text.contains("[Sheet: Budget]\nGross margin\tinline note\n42\t84 {=SUM(A1:A2)}\trich run"), xlsx.text)
+
+        let pptx = try OfficeTextExtractor.extract(fileURL: try write("c.pptx", Self.pptx(slide: "Roadmap overview", notes: "remember the demo")), kind: .pptx)
+        XCTAssertEqual(pptx.components, ["Slide 1", "Slide 2", "Notes 1"])
+        XCTAssertTrue(pptx.text.contains("[Slide 1]\nRoadmap overview") && pptx.text.contains("[Notes 1]\nremember the demo"), pptx.text)
+
+        // An encrypted package is an OLE file: locked, not garbage.
+        let ole = try write("locked.docx", Data(OfficeTextExtractor.oleSignature) + Data(repeating: 0, count: 600))
+        XCTAssertThrowsError(try OfficeTextExtractor.extract(fileURL: ole, kind: .docx)) { error in
+            XCTAssertEqual(error as? OfficeTextExtractor.ExtractError, .encrypted)
+        }
+        XCTAssertEqual(OfficeTextExtractor.Kind.detect(mimeType: "application/octet-stream", filename: "x.XLSX"), .xlsx)
+        XCTAssertNil(OfficeTextExtractor.Kind.detect(mimeType: "application/msword", filename: "old.doc"))
+    }
+
+    func testFIND01_officeAttachmentsAreSearchableByContent_andLegacyOnesSaySo() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Office files
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <find01@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see attached
+        \(mimeAttachment("minutes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Self.docx(body: "The quorum clause applies.", header: "Board")))
+        \(mimeAttachment("budget.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Self.xlsx(sheetName: "Q3", sharedText: "Gross margin", inlineText: "note")))
+        \(mimeAttachment("deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", Self.pptx(slide: "Roadmap overview", notes: "demo")))
+        \(mimeAttachment("old.doc", "application/msword", Data("not readable here".utf8)))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        let rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted, .extracted, .unsupported])
+        XCTAssertEqual(rows.map(\.extractorVersion), Array(repeating: 3, count: 4))
+        XCTAssertTrue(rows[3].note?.contains("older Office") == true, rows[3].note ?? "")
+
+        // Found only through the attachment's text, with the component label in the chunk.
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "docx", contentMatch: .phrase, content: "quorum clause")])]), ["Office files"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "xlsx", contentMatch: .allWords, content: "gross margin")])]), ["Office files"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "deck", contentMatch: .phrase, content: "roadmap overview")])]), ["Office files"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "docx", contentMatch: .phrase, content: "roadmap overview")])]), [], "the phrase is in the PPTX, not the DOCX")
+        let chunks = try await env.store.searchChunks(emailID: email.id, kind: .attachmentText, ordinal: 1)
+        XCTAssertTrue(chunks.joined().contains("[Sheet: Q3]"), "sheet context travels with the text")
+        // The legacy .doc is an attachment whose text is not evaluable: an exclusion on attachment text leaves this email unresolved.
+        var q = EmailQuery.all
+        q.spec = SearchSpec(groups: [SearchGroup(.exclude, attachments: [AttachmentConditionGroup(contentMatch: .phrase, content: "nothing here")])])
+        try await expectUnresolved(env, q, 1)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
     /// Deletion tombstones (schema v13): deleting emails records their identity

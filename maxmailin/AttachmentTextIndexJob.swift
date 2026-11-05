@@ -64,8 +64,9 @@ final class AttachmentTextIndexJob {
 
     /// FIND-03: bump when an extractor is added or improved. Coverage rows
     /// below this version in unsupported/failed/truncated are re-queued at
-    /// the start of the next pass. 1 = before per-attachment coverage.
-    nonisolated static let extractorVersion = 2
+    /// the start of the next pass. 1 = before per-attachment coverage;
+    /// 2 = per-attachment states; 3 = DOCX/XLSX/PPTX (FIND-01).
+    nonisolated static let extractorVersion = 3
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -94,12 +95,13 @@ final class AttachmentTextIndexJob {
             let docState: SearchDocState
             switch state {
             case .extracted, .truncated: docState = .complete   // the chunk index holds the whole text
+            case .partial: docState = .partial                   // some text-bearing parts were not read
             case .noText: docState = .noText
             case .unsupported: docState = .unsupported
             case .locked: docState = .locked
             case .failed: docState = .failed
             }
-            return AttachmentSearchDocument(ordinal: ordinal, filename: filename, text: docState == .complete ? fullText : nil,
+            return AttachmentSearchDocument(ordinal: ordinal, filename: filename, text: (docState == .complete || docState == .partial) ? fullText : nil,
                                             state: docState, extractorVersion: AttachmentTextIndexJob.extractorVersion, ocr: extractor == "ocr")
         }
 
@@ -384,6 +386,7 @@ final class AttachmentTextIndexJob {
         if let n = summary.counts[.locked], n > 0 { parts.append(String(localized: "\(n) locked")) }
         if let n = summary.counts[.failed], n > 0 { parts.append(String(localized: "\(n) failed")) }
         if let n = summary.counts[.truncated], n > 0 { parts.append(String(localized: "\(n) cut short")) }
+        if let n = summary.counts[.partial], n > 0 { parts.append(String(localized: "\(n) partly read")) }
         if let n = summary.counts[.noText], n > 0 { parts.append(String(localized: "\(n) with no text")) }
         if parts.isEmpty {
             return String(localized: "No attachments matched. Searchable text covers all \(summary.total) attachments.")
@@ -433,14 +436,40 @@ final class AttachmentTextIndexJob {
             if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 text = nil
                 fullText = nil
-                state = .noText
+                state = state == .partial ? .partial : .noText
             } else if full.count > maxTextPerAttachment {
                 text = String(full.prefix(maxTextPerAttachment))
-                state = .truncated
+                if state != .partial { state = .truncated }
             }
         }
         return Extraction(ordinal: ordinal, filename: attachment.filename, mimeType: attachment.mimeType,
                           text: text, fullText: fullText, state: state, extractor: result.extractor, note: result.note)
+    }
+
+    /// FIND-01: an Office Open XML package. Needs a file: the extractor's
+    /// temp file when there is one, otherwise the bytes written to one.
+    nonisolated private static func readOffice(_ attachment: AttachmentMetadata, kind: OfficeTextExtractor.Kind, data: Data)
+        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        var url = attachment.fileURL
+        var temporary: URL?
+        if url == nil {
+            let t = FileManager.default.temporaryDirectory.appendingPathComponent("office-\(UUID().uuidString).\(kind.rawValue)")
+            do { try data.write(to: t) } catch { return (nil, .failed, "office", error.localizedDescription) }
+            temporary = t; url = t
+        }
+        defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
+        do {
+            let result = try OfficeTextExtractor.extract(fileURL: url!, kind: kind)
+            var note: String? = nil
+            if !result.skipped.isEmpty {
+                note = String(localized: "not read: \(result.skipped.joined(separator: "; "))")
+            }
+            return (result.text, result.partial ? .partial : .extracted, "office", note)
+        } catch OfficeTextExtractor.ExtractError.encrypted {
+            return (nil, .locked, "office", String(localized: "password-protected Office file"))
+        } catch {
+            return (nil, .failed, "office", error.localizedDescription)
+        }
     }
 
     /// One attachment through the extractor that fits it.
@@ -486,14 +515,20 @@ final class AttachmentTextIndexJob {
             }
             return (AttachmentOCR.text(fromImageData: data), .extracted, "ocr", nil)
         }
-        // Office and compressed containers before the text families: their
-        // MIME types contain "xml" ("…officedocument.wordprocessingml…") and
-        // were decoded as Latin-1 text, indexing bytes as words.
-        let containerExts: Set<String> = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
-                                          "pages", "numbers", "key", "zip", "gz", "tgz", "7z", "rar", "tar"]
-        if mime.contains("officedocument") || mime.contains("opendocument") || mime.contains("msword")
-            || mime.contains("ms-excel") || mime.contains("ms-powerpoint") || mime.contains("zip")
-            || mime.contains("compressed") || containerExts.contains(ext) {
+        // FIND-01: DOCX / XLSX / PPTX through the Office Open XML extractor.
+        if let kind = OfficeTextExtractor.Kind.detect(mimeType: mime, filename: attachment.filename) {
+            return readOffice(attachment, kind: kind, data: data)
+        }
+        // Other Office and compressed containers before the text families:
+        // their MIME types contain "xml" ("…officedocument…") and were once
+        // decoded as Latin-1 text, indexing bytes as words.
+        let legacyOffice: Set<String> = ["doc", "xls", "ppt", "odt", "ods", "odp", "pages", "numbers", "key"]
+        if legacyOffice.contains(ext) || mime.contains("msword") || mime.contains("ms-excel") || mime.contains("ms-powerpoint")
+            || mime.contains("opendocument") {
+            return (nil, .unsupported, "none", String(localized: "older Office or iWork format — only DOCX, XLSX and PPTX are read"))
+        }
+        let containerExts: Set<String> = ["zip", "gz", "tgz", "7z", "rar", "tar"]
+        if mime.contains("zip") || mime.contains("compressed") || containerExts.contains(ext) {
             return (nil, .unsupported, "none", nil)
         }
         if mime.contains("rtf") || ext == "rtf" {
