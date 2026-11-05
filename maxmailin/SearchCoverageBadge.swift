@@ -38,6 +38,8 @@ struct SearchCoverageBadge: View {
     let isQueryActive: Bool
 
     @State private var partialCount: Int?
+    /// FIND-03: the counter could not be read — said, not shown as "nothing to warn about".
+    @State private var unavailable = false
     @State private var isDismissed = false
     @State private var showDetail = false
 
@@ -45,8 +47,23 @@ struct SearchCoverageBadge: View {
         // A view that is always there: `.task` on an empty Group never runs,
         // so the content it loads could never appear.
         VStack(alignment: .leading, spacing: 0) {
-            if isQueryActive, !isDismissed, let partialCount, partialCount > 0 {
-                content(partialCount: partialCount)
+            if isQueryActive, !isDismissed {
+                if unavailable {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle").font(.caption2).foregroundStyle(.red)
+                        Text("Search coverage could not be checked.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Button(String(localized: "Retry")) { Task { await refresh() } }
+                            .buttonStyle(.plain).font(.caption2).foregroundStyle(.tint)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityIdentifier("search.coverage.unavailable")
+                } else if let partialCount, partialCount > 0 {
+                    content(partialCount: partialCount)
+                }
             }
         }
         .task(id: isQueryActive) {
@@ -139,18 +156,22 @@ struct SearchCoverageBadge: View {
     }
 
     private func refresh() async {
-        let count: Int? = await Task.detached(priority: .utility) {
-            do {
-                return try FTSSearchIndex.partiallyIndexedCountSnapshot()
-            } catch {
-                // A missing or unopenable index is not something to shout
-                // about in the search bar — it just means there is nothing
-                // to warn about yet.
-                coverageLog.debug("coverage snapshot unavailable: \(error.localizedDescription, privacy: .public)")
-                return nil
-            }
+        let result: Result<Int, Error> = await Task.detached(priority: .utility) {
+            do { return .success(try FTSSearchIndex.partiallyIndexedCountSnapshot()) }
+            catch { return .failure(error) }
         }.value
-        await MainActor.run { partialCount = count }
+        await MainActor.run {
+            switch result {
+            case .success(let count):
+                partialCount = count
+                unavailable = false
+            case .failure(let error):
+                // FIND-03: a counter that cannot be read is unknown, not zero.
+                coverageLog.error("coverage snapshot unavailable: \(error.localizedDescription, privacy: .public)")
+                partialCount = nil
+                unavailable = true
+            }
+        }
     }
 }
 

@@ -133,7 +133,7 @@ struct ArchiveListPane: View {
                 if isSearching || !model.query.isEmpty {
                     // A6: a search with no hits never reads as a bare zero — it
                     // says what the index covered when it answered.
-                    ArchiveNoResultsState(coverage: coverage.snapshot)
+                    ArchiveNoResultsState(coverage: coverage.snapshot, onRetry: { Task { await coverage.refresh() } })
                         .task { await coverage.refresh() }
                 } else {
                     ArchiveEmptyState()
@@ -146,8 +146,8 @@ struct ArchiveListPane: View {
 
     private var list: some View {
         List(selection: $selectedID) {
-            if isSearching, let snapshot = coverage.snapshot, snapshot.isPartial {
-                SearchCoverageLine(coverage: snapshot)
+            if isSearching, let snapshot = coverage.snapshot, snapshot.needsNotice {
+                SearchCoverageLine(coverage: snapshot, onRetry: { Task { await coverage.refresh() } })
                     .listRowSeparator(.hidden)
             }
             if model.hasPrevious {
@@ -358,17 +358,34 @@ struct ArchiveEmptyState: View {
 /// how much of the archive the index covered when it answered.
 struct ArchiveNoResultsState: View {
     var coverage: SearchCoverageSnapshot?
+    var onRetry: (() -> Void)? = nil
 
     var body: some View {
         ContentUnavailableView {
-            Label("No matching emails", systemImage: "magnifyingglass")
-        } description: {
-            if let coverage, coverage.isPartial {
-                Text("Searched the \(coverage.indexedMessages.formatted()) of \(coverage.storedMessages.formatted()) messages indexed so far — \(coverage.pendingMessages.formatted()) still indexing. Results may change as indexing finishes.")
-            } else if let coverage, coverage.partiallyIndexedMessages > 0 {
-                Text("Searched every message. \(coverage.partiallyIndexedMessages.formatted()) very large messages are indexed only in their first \(coverage.budgetLabel).")
+            // FIND-03: four different empty states, never one bare zero.
+            if let coverage, coverage.isUnavailable {
+                Label("No matches — coverage could not be checked", systemImage: "exclamationmark.triangle")
+            } else if let coverage, coverage.isPartial || coverage.chunkPendingBodies > 0 || coverage.attachmentsNotEvaluable > 0 {
+                Label("No matches found yet — indexing is incomplete", systemImage: "hourglass")
             } else {
-                Text("Nothing in the archive matches this search.")
+                Label("No matching emails", systemImage: "magnifyingglass")
+            }
+        } description: {
+            if let coverage, coverage.isUnavailable {
+                Text("The index counters could not be read, so whether every message was searched is not known.")
+            } else if let coverage, coverage.isPartial {
+                Text("Searched the \((coverage.indexedMessages ?? 0).formatted()) of \((coverage.storedMessages ?? 0).formatted()) messages indexed so far — \(coverage.pendingMessages.formatted()) still indexing. Results may change as indexing finishes.")
+            } else if let coverage, coverage.chunkPendingBodies > 0 || coverage.attachmentsNotEvaluable > 0 {
+                Text(coverage.summaryLine)
+            } else if let coverage, let partial = coverage.partiallyIndexedMessages, partial > 0 {
+                Text("Searched every message. \(partial.formatted()) very large messages are indexed only in their first \(coverage.budgetLabel).")
+            } else {
+                Text("Nothing in the fully indexed scope matches this search.")
+            }
+        } actions: {
+            if let coverage, coverage.isUnavailable, let onRetry {
+                Button(String(localized: "Retry"), action: onRetry)
+                    .accessibilityIdentifier("archive.list.noResults.retry")
             }
         }
         .accessibilityIdentifier("archive.list.noResults")

@@ -2445,6 +2445,68 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertNil(SQLiteEmailStore.nearestLabel(in: "no label here", before: 5))
     }
 
+    // MARK: - Five jobs FIND-03 — coverage states; a failed counter is unknown, not zero
+
+    func testFIND03_coverageSnapshot_statesAreDistinct_andUnknownIsNeverZero() {
+        let chunksBehind = SQLiteEmailStore.SearchDocCoverage(bodiesEvaluable: 7, emails: 10, attachmentsEvaluable: 2, attachments: 5, bodyChunks: 9)
+        var attachments = AttachmentCoverageSummary()
+        attachments.counts = [.extracted: 2, .unsupported: 2, .locked: 1]
+
+        let unavailable = SearchCoverageSnapshot(storedMessages: nil, indexedMessages: 10, partiallyIndexedMessages: 0)
+        XCTAssertTrue(unavailable.isUnavailable)
+        XCTAssertFalse(unavailable.isPartial, "an unknown count is not a pending count")
+        XCTAssertTrue(unavailable.needsNotice)
+        XCTAssertTrue(unavailable.summaryLine.contains("could not be checked"), unavailable.summaryLine)
+
+        let partial = SearchCoverageSnapshot(storedMessages: 10, indexedMessages: 6, partiallyIndexedMessages: 0)
+        XCTAssertTrue(partial.isPartial)
+        XCTAssertEqual(partial.pendingMessages, 4)
+        XCTAssertTrue(partial.summaryLine.contains("6 of 10") && partial.summaryLine.contains("4 still indexing"), partial.summaryLine)
+
+        let chunked = SearchCoverageSnapshot(storedMessages: 10, indexedMessages: 10, partiallyIndexedMessages: 0, chunks: chunksBehind, attachments: attachments)
+        XCTAssertFalse(chunked.isPartial)
+        XCTAssertEqual(chunked.chunkPendingBodies, 3)
+        XCTAssertEqual(chunked.attachmentsNotEvaluable, 3)
+        XCTAssertTrue(chunked.needsNotice)
+        XCTAssertTrue(chunked.summaryLine.contains("7 of 10 message bodies") && chunked.summaryLine.contains("2 of 5 attachments")
+                      && chunked.summaryLine.contains("2 unsupported") && chunked.summaryLine.contains("1 locked"), chunked.summaryLine)
+
+        let complete = SearchCoverageSnapshot(storedMessages: 10, indexedMessages: 10, partiallyIndexedMessages: 0,
+                                              chunks: SQLiteEmailStore.SearchDocCoverage(bodiesEvaluable: 10, emails: 10, attachmentsEvaluable: 5, attachments: 5, bodyChunks: 12))
+        XCTAssertFalse(complete.needsNotice)
+        XCTAssertEqual(complete.summaryLine, "Index covers every message")
+
+        let budget = SearchCoverageSnapshot(storedMessages: 10, indexedMessages: 10, partiallyIndexedMessages: 2)
+        XCTAssertTrue(budget.needsNotice)
+        XCTAssertTrue(budget.summaryLine.contains("2 very large messages"), budget.summaryLine)
+    }
+
+    func testFIND03_coverageModelReadsTheChunkIndexWhenTheSearchModelIsOn() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        let indexed = mail(80, from: "a@x.com", subject: "Indexed", body: "words",
+                           attachments: [AttachmentMetadata(filename: "a.pdf", mimeType: "application/pdf", size: 1)])
+        try await env.store.insertBatch([indexed], batchSize: 10)
+        try await env.fts.indexBatch([indexed])
+        SearchChunkPolicy.isEnabled = false
+        try await env.store.insertBatch([mail(81, from: "b@x.com", subject: "Not yet", body: "later")], batchSize: 10)
+        SearchChunkPolicy.isEnabled = true
+
+        let model = SearchCoverageModel(archive: env.archive, fts: env.fts)
+        await model.refresh()
+        let snapshot = try XCTUnwrap(model.snapshot)
+        XCTAssertFalse(snapshot.isUnavailable)
+        XCTAssertEqual(snapshot.storedMessages, 2)
+        XCTAssertEqual(snapshot.indexedMessages, 1, "the previous index saw one of them")
+        XCTAssertEqual(snapshot.chunks?.emails, 2)
+        XCTAssertEqual(snapshot.chunks?.bodiesEvaluable, 1)
+        XCTAssertEqual(snapshot.chunkPendingBodies, 1)
+        XCTAssertEqual(snapshot.attachmentsNotEvaluable, 1, "a.pdf has no text document yet")
+        XCTAssertTrue(snapshot.needsNotice)
+        XCTAssertNil(model.lastError)
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

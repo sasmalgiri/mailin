@@ -54228,6 +54228,134 @@
         }
       }
     },
+    "attachment text evaluable for %@ of %@ attachments" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anhangstext auswertbar für %@ von %@ Anhängen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "texto de adjuntos evaluable en %@ de %@ adjuntos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "texte évaluable pour %@ pièces jointes sur %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ में से %@ अटैचमेंट का पाठ मूल्यांकन योग्य"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "testo degli allegati valutabile per %@ allegati su %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@件中%@件の添付ファイルのテキストを評価可能"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부 파일 %@개 중 %@개의 텍스트 평가 가능"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "texto de anexos avaliável em %@ de %@ anexos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ / %@ 个附件的文本可评估"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ / %@ 個附件的文字可評估"
+          }
+        }
+      }
+    },
+    "Attachment text: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anhangstext: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto del adjunto: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texte de la pièce jointe : %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अटैचमेंट पाठ: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testo dell'allegato: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添付ファイルのテキスト：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부 파일 텍스트: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto do anexo: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件文本：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件文字：%@"
+          }
+        }
+      }
+    },
     "Attachment Transfer" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -65293,7 +65421,9 @@
         }
       }
     },
-    "Build a search from conditions: all / any / exclude, dates, attachments" : {},
+    "Build a search from conditions: all / any / exclude, dates, attachments" : {
+
+    },
     "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft." : {
       "localizations" : {
         "de" : {
@@ -97506,6 +97636,70 @@
         }
       }
     },
+    "Coverage could not be checked — whether every message was searched is not known." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abdeckung konnte nicht geprüft werden – ob jede Nachricht durchsucht wurde, ist unbekannt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo comprobar la cobertura: no se sabe si se buscó en todos los mensajes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La couverture n'a pas pu être vérifiée — on ignore si chaque message a été cherché."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कवरेज की जाँच नहीं हो सकी — हर संदेश खोजा गया या नहीं, पता नहीं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile verificare la copertura: non è noto se ogni messaggio sia stato cercato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カバレッジを確認できませんでした — すべてのメッセージが検索されたかは不明です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "범위를 확인할 수 없음 — 모든 메시지를 검색했는지 알 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A cobertura não pôde ser verificada — não se sabe se todas as mensagens foram pesquisadas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查覆盖范围——是否搜索了每封邮件未知。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法檢查涵蓋範圍——是否搜尋了每封郵件未知。"
+          }
+        }
+      }
+    },
     "Crash reports" : {
       "comment" : "A heading for the number of crash reports.",
       "isCommentAutoGenerated" : true,
@@ -127501,6 +127695,70 @@
         }
       }
     },
+    "Every message indexed; %@ very large messages only in their first %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jede Nachricht indiziert; %@ sehr große Nachrichten nur in ihren ersten %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos los mensajes indexados; %@ mensajes muy grandes solo en sus primeros %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tous les messages indexés ; %@ très grands messages seulement dans leurs premiers %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर संदेश अनुक्रमित; %@ बहुत बड़े संदेश केवल अपने पहले %@ में"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ogni messaggio indicizzato; %@ messaggi molto grandi solo nei primi %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのメッセージをインデックス化済み。%@件の非常に大きなメッセージは先頭%@のみ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 메시지 색인됨; 매우 큰 메시지 %@개는 처음 %@만"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todas as mensagens indexadas; %@ mensagens muito grandes só nos primeiros %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已索引所有邮件；%@ 封超大邮件仅索引前 %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已索引所有郵件；%@ 封超大郵件僅索引前 %@"
+          }
+        }
+      }
+    },
     "Every movement into the archive." : {
       "localizations" : {
         "de" : {
@@ -129944,6 +130202,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "帶簽署 PDF 的證據追蹤。"
+          }
+        }
+      }
+    },
+    "Evidence unavailable — text not indexed yet" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Nachweis – Text noch nicht indiziert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Evidencia no disponible: texto aún no indexado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preuve indisponible — texte pas encore indexé"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रमाण उपलब्ध नहीं — पाठ अभी अनुक्रमित नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prova non disponibile: testo non ancora indicizzato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "根拠なし — テキストが未インデックス"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "근거 없음 — 텍스트가 아직 색인되지 않음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Evidência indisponível — texto ainda não indexado"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无依据——文本尚未索引"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無依據——文字尚未索引"
           }
         }
       }
@@ -155431,6 +155753,70 @@
         }
       }
     },
+    "Full text indexed for %@ of %@ message bodies" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volltext indiziert für %@ von %@ Nachrichtentexten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto completo indexado en %@ de %@ cuerpos de mensaje"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texte intégral indexé pour %@ corps de message sur %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ में से %@ संदेश मुख्य पाठों का पूरा पाठ अनुक्रमित"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testo completo indicizzato per %@ corpi di messaggio su %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@件中%@件の本文を全文インデックス化"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지 본문 %@개 중 %@개 전체 텍스트 색인됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto completo indexado em %@ de %@ corpos de mensagem"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已为 %@ / %@ 封邮件正文建立全文索引"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已為 %@ / %@ 封郵件內文建立全文索引"
+          }
+        }
+      }
+    },
     "Gap register" : {
       "localizations" : {
         "de" : {
@@ -175961,6 +176347,70 @@
         }
       }
     },
+    "Index covers %@ of %@ messages — %@ still indexing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Index deckt %@ von %@ Nachrichten ab – %@ werden noch indiziert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El índice cubre %@ de %@ mensajes: %@ aún indexándose"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'index couvre %@ messages sur %@ — %@ en cours d'indexation"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अनुक्रमणिका %@ में से %@ संदेशों को कवर करती है — %@ अभी अनुक्रमित हो रहे हैं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'indice copre %@ messaggi su %@: %@ ancora in indicizzazione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インデックスは%@件中%@件のメッセージをカバー — %@件はインデックス作成中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "색인은 메시지 %@개 중 %@개를 포함 — %@개 색인 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O índice cobre %@ de %@ mensagens — %@ ainda indexando"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "索引覆盖 %@ / %@ 封邮件——%@ 封仍在索引"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "索引涵蓋 %@ / %@ 封郵件——%@ 封仍在索引"
+          }
+        }
+      }
+    },
     "Index covers every message" : {
       "localizations" : {
         "de" : {
@@ -196333,6 +196783,70 @@
         }
       }
     },
+    "Matched text: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gefundener Text: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto coincidente: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texte correspondant : %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल खाता पाठ: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testo corrispondente: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致したテキスト：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일치한 텍스트: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto correspondente: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匹配的文本：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相符的文字：%@"
+          }
+        }
+      }
+    },
     "Matches" : {
       "comment" : "A description of whether the comparison matches the expected result.",
       "isCommentAutoGenerated" : true,
@@ -196395,6 +196909,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一致"
+          }
+        }
+      }
+    },
+    "Matches filters" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erfüllt die Filter"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cumple los filtros"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Correspond aux filtres"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़िल्टर से मेल खाता है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soddisfa i filtri"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フィルタに一致"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "필터와 일치"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corresponde aos filtros"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "符合筛选条件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "符合篩選條件"
           }
         }
       }
@@ -214304,6 +214882,70 @@
         }
       }
     },
+    "No matches — coverage could not be checked" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Treffer – Abdeckung konnte nicht geprüft werden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin coincidencias: no se pudo comprobar la cobertura"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune correspondance — couverture non vérifiable"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई मेल नहीं — कवरेज की जाँच नहीं हो सकी"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessuna corrispondenza: copertura non verificabile"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致なし — カバレッジを確認できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일치 없음 — 범위를 확인할 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem correspondências — a cobertura não pôde ser verificada"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无匹配——无法检查覆盖范围"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無相符——無法檢查涵蓋範圍"
+          }
+        }
+      }
+    },
     "No matches for “%@”." : {
       "localizations" : {
         "de" : {
@@ -214364,6 +215006,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有符合「%@」的結果。"
+          }
+        }
+      }
+    },
+    "No matches found yet — indexing is incomplete" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Treffer – Indizierung unvollständig"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún sin coincidencias: la indexación está incompleta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune correspondance pour l'instant — indexation incomplète"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अभी कोई मेल नहीं — अनुक्रमण अधूरा है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessuna corrispondenza finora: indicizzazione incompleta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだ一致なし — インデックス作成が未完了"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 일치 없음 — 색인이 불완전함"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma correspondência ainda — indexação incompleta"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未找到匹配——索引未完成"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未找到相符——索引未完成"
           }
         }
       }
@@ -220748,6 +221454,7 @@
       }
     },
     "Nothing in the archive matches this search." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -220807,6 +221514,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "封存中沒有與此搜尋相符的內容。"
+          }
+        }
+      }
+    },
+    "Nothing in the fully indexed scope matches this search." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nichts im vollständig indizierten Bereich passt zu dieser Suche."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada en el ámbito totalmente indexado coincide con esta búsqueda."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien dans la portée entièrement indexée ne correspond à cette recherche."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पूरी तरह अनुक्रमित दायरे में कुछ भी इस खोज से मेल नहीं खाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nulla nell'ambito completamente indicizzato corrisponde a questa ricerca."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完全にインデックス化された範囲内に一致するものはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "완전히 색인된 범위 안에 이 검색과 일치하는 것이 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada no escopo totalmente indexado corresponde a esta busca."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完全索引范围内没有符合此搜索的内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完全索引範圍內沒有符合此搜尋的內容。"
           }
         }
       }
@@ -255583,6 +256354,70 @@
         }
       }
     },
+    "Recognised text: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erkannter Text: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto reconocido: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texte reconnu : %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहचाना गया पाठ: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testo riconosciuto: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "認識されたテキスト：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인식된 텍스트: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto reconhecido: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "识别的文本：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "辨識的文字：%@"
+          }
+        }
+      }
+    },
     "Recommendations" : {
       "localizations" : {
         "de" : {
@@ -288059,6 +288894,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜尋涵蓋範圍"
+          }
+        }
+      }
+    },
+    "Search coverage could not be checked." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suchabdeckung konnte nicht geprüft werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo comprobar la cobertura de la búsqueda."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La couverture de la recherche n'a pas pu être vérifiée."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "खोज कवरेज की जाँच नहीं हो सकी।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile verificare la copertura della ricerca."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索カバレッジを確認できませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색 범위를 확인할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A cobertura da busca não pôde ser verificada."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查搜索覆盖范围。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法檢查搜尋涵蓋範圍。"
           }
         }
       }
@@ -331364,6 +332263,134 @@
         }
       }
     },
+    "The index counters could not be read, so whether every message was searched is not known." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Indexzähler konnten nicht gelesen werden, daher ist unbekannt, ob jede Nachricht durchsucht wurde."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer los contadores del índice, así que no se sabe si se buscó en todos los mensajes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les compteurs de l'index n'ont pas pu être lus ; on ignore donc si chaque message a été cherché."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अनुक्रमणिका गणक पढ़े नहीं जा सके, इसलिए हर संदेश खोजा गया या नहीं, पता नहीं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I contatori dell'indice non sono leggibili, quindi non è noto se ogni messaggio sia stato cercato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インデックスのカウンタを読み取れなかったため、すべてのメッセージが検索されたかは不明です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "색인 카운터를 읽을 수 없어 모든 메시지를 검색했는지 알 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os contadores do índice não puderam ser lidos, por isso não se sabe se todas as mensagens foram pesquisadas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取索引计数器，因此是否搜索了每封邮件未知。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取索引計數器，因此是否搜尋了每封郵件未知。"
+          }
+        }
+      }
+    },
+    "The index counters could not be read; the result list is still correct for what was searched, but completeness is unknown" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Indexzähler konnten nicht gelesen werden; die Ergebnisliste ist für das Durchsuchte korrekt, die Vollständigkeit ist aber unbekannt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer los contadores del índice; la lista de resultados sigue siendo correcta para lo buscado, pero la completitud es desconocida"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les compteurs de l'index n'ont pas pu être lus ; la liste des résultats reste correcte pour ce qui a été cherché, mais la complétude est inconnue"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अनुक्रमणिका गणक पढ़े नहीं जा सके; जो खोजा गया उसके लिए परिणाम सूची सही है, पर पूर्णता अज्ञात है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I contatori dell'indice non sono leggibili; l'elenco dei risultati è corretto per quanto cercato, ma la completezza non è nota"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インデックスのカウンタを読み取れませんでした。検索した範囲の結果は正しいですが、完全性は不明です"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "색인 카운터를 읽을 수 없습니다. 검색된 범위의 결과 목록은 정확하지만 완전성은 알 수 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os contadores do índice não puderam ser lidos; a lista de resultados continua correta para o que foi pesquisado, mas a completude é desconhecida"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取索引计数器；结果列表对已搜索的内容仍然正确，但完整性未知"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取索引計數器；結果列表對已搜尋的內容仍然正確，但完整性未知"
+          }
+        }
+      }
+    },
     "The index fell behind during this run (%lld batch(es)). It needs rebuilding before search is complete." : {
       "localizations" : {
         "de" : {
@@ -371540,326 +372567,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "非真實 PII 項目的從零開始編號 — Unix 時間戳記、訂單/參照/追蹤/序號、訊息 ID、版本字串。若所有項目均為真實則為空。"
-          }
-        }
-      }
-    },
-    "Recognised text: %@" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Erkannter Text: %@"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto reconocido: %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texte reconnu : %@"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "पहचाना गया पाठ: %@"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Testo riconosciuto: %@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "認識されたテキスト：%@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "인식된 텍스트: %@"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto reconhecido: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "识别的文本：%@"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "辨識的文字：%@"
-          }
-        }
-      }
-    },
-    "Attachment text: %@" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anhangstext: %@"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto del adjunto: %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texte de la pièce jointe : %@"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "अटैचमेंट पाठ: %@"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Testo dell'allegato: %@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添付ファイルのテキスト：%@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "첨부 파일 텍스트: %@"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto do anexo: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "附件文本：%@"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "附件文字：%@"
-          }
-        }
-      }
-    },
-    "Matches filters" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Erfüllt die Filter"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cumple los filtros"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Correspond aux filtres"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "फ़िल्टर से मेल खाता है"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Soddisfa i filtri"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "フィルタに一致"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "필터와 일치"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Corresponde aos filtros"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "符合筛选条件"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "符合篩選條件"
-          }
-        }
-      }
-    },
-    "Evidence unavailable — text not indexed yet" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Kein Nachweis – Text noch nicht indiziert"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Evidencia no disponible: texto aún no indexado"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Preuve indisponible — texte pas encore indexé"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "प्रमाण उपलब्ध नहीं — पाठ अभी अनुक्रमित नहीं"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Prova non disponibile: testo non ancora indicizzato"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "根拠なし — テキストが未インデックス"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "근거 없음 — 텍스트가 아직 색인되지 않음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Evidência indisponível — texto ainda não indexado"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无依据——文本尚未索引"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無依據——文字尚未索引"
-          }
-        }
-      }
-    },
-    "Matched text: %@" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gefundener Text: %@"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto coincidente: %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texte correspondant : %@"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "मेल खाता पाठ: %@"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Testo corrispondente: %@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一致したテキスト：%@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "일치한 텍스트: %@"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Texto correspondente: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "匹配的文本：%@"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "相符的文字：%@"
           }
         }
       }

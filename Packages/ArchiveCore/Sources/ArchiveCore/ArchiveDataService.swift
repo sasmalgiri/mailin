@@ -209,6 +209,19 @@ final class ArchiveDataService {
         return try await sqlite.parserTagCounts(limit: limit)
     }
 
+    /// The SQLite store behind this service, when that is what it is.
+    var sqliteStore: SQLiteEmailStore? {
+        (repository as? EmailStoreRepository)?.store as? SQLiteEmailStore
+    }
+
+    /// FIND-03/07: how far the chunk index reaches (bodies and attachments with an evaluable document).
+    func searchDocCoverage() async throws -> SQLiteEmailStore.SearchDocCoverage {
+        guard let sqlite = sqliteStore else {
+            return SQLiteEmailStore.SearchDocCoverage(bodiesEvaluable: 0, emails: 0, attachmentsEvaluable: 0, attachments: 0, bodyChunks: 0)
+        }
+        return try await sqlite.searchDocCoverage()
+    }
+
     /// FIND-05: why one row is in the results — from the chunk index, never guessed.
     func matchEvidence(emailID: EmailID, spec: SearchSpec?, freeText: String?) async throws -> [MatchEvidence] {
         guard let repo = repository as? EmailStoreRepository,
