@@ -1216,6 +1216,85 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(AttachmentTextIndexJob.noMatchNotice(complete), "No attachments matched. Searchable text covers all 3 attachments.")
     }
 
+    // MARK: - Five jobs OPEN-02 — PST streams in batches; memory follows the batch, not the file
+
+    /// Anonymous + compressed memory of this process (what Xcode's gauge
+    /// shows); clean file-backed pages from mmap are not counted.
+    private static func physFootprint() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Int(info.phys_footprint) : 0
+    }
+
+    func testOPEN02_pstStreamsInBatches_andTheFootprintFollowsTheBatch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-open02-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("hundred-megabytes.pst")
+
+        // ~100 MB: 2,000 messages with ~50 KB bodies, in a named folder.
+        let n = 2_000
+        let body = String(repeating: "Streaming body text for the open-archive test. ", count: 1_100)
+        let writer = try PSTSpecWriter(url: url)
+        let inbox = writer.appendFolder(name: "Inbox")
+        for i in 0..<n {
+            var e = makeEmail(i: 5_000 + i, total: n, body: body + "\nTail \(i)")
+            e.headers["Subject"] = "Stream \(i)"
+            try writer.append(email: e, folder: inbox)
+        }
+        XCTAssertEqual(try writer.finalize(), n)
+        let fileSize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
+        XCTAssertGreaterThan(fileSize, 90_000_000, "the fixture is about 100 MB")
+
+        let wasStreaming = StreamingParserPolicy.binaryStreaming
+        defer { StreamingParserPolicy.binaryStreaming = wasStreaming }
+        StreamingParserPolicy.binaryStreaming = true
+
+        let before = Self.physFootprint()
+        var peak = before
+        var batches = 0, largestBatch = 0, total = 0
+        var subjects = Set<String>()
+        var folders = Set<String>()
+        // Through the factory: the seam every import uses.
+        let report = try await ParserFactory.parseStreamingCallback(
+            fileURL: url, senderEmail: "", batchSize: 100, materializeAttachments: false
+        ) { batch in
+            batches += 1
+            largestBatch = max(largestBatch, batch.count)
+            total += batch.count
+            for email in batch {
+                subjects.insert(email.headers["Subject"] ?? "")
+                folders.formUnion(email.tags)
+            }
+            peak = max(peak, Self.physFootprint())
+        }
+        XCTAssertEqual(report.totalMessages, n)
+        XCTAssertEqual(total, n)
+        XCTAssertEqual(largestBatch, 100, "never more than one batch in hand")
+        XCTAssertEqual(batches, n / 100)
+        XCTAssertEqual(subjects.count, n, "every message arrived once")
+        XCTAssertTrue(folders.contains { $0.hasSuffix("Inbox") }, "folder path preserved: \(folders)")
+        let grewBy = peak - before
+        XCTAssertLessThan(grewBy, fileSize / 2,
+                          "footprint grew \(grewBy / 1_048_576) MB while streaming a \(fileSize / 1_048_576) MB file")
+
+        // Off: the previous path, unchanged — same messages, same order.
+        StreamingParserPolicy.binaryStreaming = false
+        var firstStreamed: String?
+        _ = try await PSTParser.parseStreaming(fileURL: url, senderEmail: "", batchSize: 7) { batch in
+            if firstStreamed == nil { firstStreamed = batch.first?.headers["Subject"] }
+        }
+        let array = try PSTParser.parse(fileURL: url, senderEmail: "")
+        XCTAssertEqual(array.count, n)
+        XCTAssertEqual(array.first?.headers["Subject"], firstStreamed, "both paths hand out messages in the same order")
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

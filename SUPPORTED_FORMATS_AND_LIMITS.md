@@ -114,7 +114,8 @@ as P3.2.
 |---|---|---|
 | mbox, eml, gzip/ZIP of those | **Bounded**: peak does not grow with the file. Offset engine: headers per batch, bodies parsed per batch; streaming parser: one batch resident | 1.5 GB mbox: peak Δ 450–790 MiB (`SCALE_RESULTS.md` rows 1–3); 1 GB format rows executed |
 | EML folder, Maildir, Apple Mail package, `.emlx` folder | **Bounded per file**; the member list (paths only) is resident | 1 GB rows executed |
-| pst, ost, nsf, msg | **Proportional to the file**: the parser materialises the whole result before batching, so peak ≈ file size × decode expansion. There is no product cap; the ceiling is the Mac's memory | 1 GB PST/MSG rows executed; larger files are **not tested** and are not claimed |
+| pst, ost | **Bounded** with "Streaming PST import" on (default, five jobs OPEN-02, 2026-11-05): messages leave the node tree in batches, one batch resident; the node table (≈ 32 bytes per node) and the mmap'd file pages are the only per-file residents. Off: the previous path, proportional to the file | 100 MB PST, 2,000 messages, batches of 100: footprint grew by less than half the file (`V2CutoverTests.testOPEN02_*`); 1 GB PST row executed earlier on the array path; larger files are **not tested** and are not claimed |
+| nsf, msg | **Proportional to the file**: the parser materialises the whole result before batching, so peak ≈ file size × decode expansion. There is no product cap; the ceiling is the Mac's memory | 1 GB MSG row executed; NSF never on a real file; larger files are **not tested** and are not claimed |
 | ZIP container itself | Central directory resident (≈ 80 bytes per member); each member streams to a scratch file | `ContainerImportTests` |
 
 "Bounded memory" in this document therefore means the first two rows. A

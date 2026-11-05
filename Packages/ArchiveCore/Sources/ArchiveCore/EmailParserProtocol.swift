@@ -395,6 +395,17 @@ struct ParserFactory {
                 onBatch: onBatch
             )
         default:
+            // Five jobs OPEN-02: PST/OST stream from the node tree in batches
+            // when the switch is on — memory follows the batch, not the file.
+            if ext == "pst" || ext == "ost", StreamingParserPolicy.binaryStreaming {
+                let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+                let total = try await PSTParser.parseStreaming(
+                    fileURL: fileURL, senderEmail: senderEmail,
+                    batchSize: max(1, min(batchSize, chunkLimit)),
+                    onProgress: onProgress, onBatch: onBatch)
+                return MBOXParser.ParseRecoveryReport(
+                    totalMessages: total, successfullyParsed: total, failed: 0, errorCategories: [:])
+            }
             // Non-streamable format: the array parser runs (rejecting
             // unsupported extensions) and the result drains in bounded
             // chunks. These parsers throw on damage rather than recover,

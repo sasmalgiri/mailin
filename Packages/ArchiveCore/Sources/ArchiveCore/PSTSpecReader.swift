@@ -459,16 +459,32 @@ final class PSTSpecReader {
         return (Array((lines.joined(separator: "\r\n") + "\r\n\r\n" + body).utf8), subject)
     }
 
+    /// Every message node in NID order — the order `messages()` has always
+    /// used, so a streamed import and an array import number messages alike.
+    var messageNodes: [Node] {
+        nodes.values.filter { $0.nid & 0x1F == Self.nidTypeMessage }.sorted { $0.nid < $1.nid }
+    }
+
     func messages() -> [PSTReader.PSTMessage] {
         var folderCache: [UInt32: String?] = [:]
         var out: [PSTReader.PSTMessage] = []
-        for node in nodes.values.sorted(by: { $0.nid < $1.nid }) where node.nid & 0x1F == Self.nidTypeMessage {
+        for node in messageNodes {
             autoreleasepool {
+                if let m = message(for: node, folderCache: &folderCache) { out.append(m) }
+            }
+        }
+        return out
+    }
+
+    /// OPEN-02: one message node → one message, or nil when the item is not
+    /// mail. `folderCache` saves the parent walk between messages. The
+    /// streaming parser calls this per node, so no whole-file array is built.
+    func message(for node: Node, folderCache: inout [UInt32: String?]) -> PSTReader.PSTMessage? {
                 let pc = propertyContext(dataBid: node.dataBid, subBid: node.subBid)
                 let messageClass = pc[0x001A]?.string ?? "IPM.Note"
                 // Mail only: contacts, calendar, tasks, notes, journal, feeds and
                 // configuration items are not emails (stated in the limits doc).
-                guard Self.isMail(messageClass) else { return }
+                guard Self.isMail(messageClass) else { return nil }
                 var m = PSTReader.PSTMessage()
                 // An item whose properties cannot be read is still imported — empty,
                 // marked — never dropped without a word.
@@ -555,10 +571,7 @@ final class PSTSpecReader {
                                                   evidence: String(format: "node 0x%08X, parent 0x%08X is not a folder", node.nid, node.parent))
                     }
                 }
-                out.append(m)
-            }
-        }
-        return out
+                return m
     }
 
     /// Message classes that are mail ([MS-OXCMSG] 2.2.1.3): notes, posts,
@@ -581,14 +594,24 @@ final class PSTSpecReader {
 
     /// Property contexts in space no block uses (64-byte steps), read as
     /// single-page heaps; carved and partial, with their byte offsets.
+    /// A copy is the same message only if its Message-ID and delivery time
+    /// match too: identical test messages or alerts are separate evidence.
+    static func carveKey(_ subject: String, _ body: String, _ id: String?, _ time: Date?) -> String {
+        [subject, id ?? "", time.map { String(Int($0.timeIntervalSince1970)) } ?? "", String(body.prefix(64))].joined(separator: "|")
+    }
+
+    static func carveKey(_ m: PSTReader.PSTMessage) -> String {
+        carveKey(m.subject, m.bodyText, m.internetMessageId, m.deliveryTime)
+    }
+
     func carveUnallocated(listed: [PSTReader.PSTMessage]) -> [PSTReader.PSTMessage] {
-        // A copy is the same message only if its Message-ID and delivery time
-        // match too: identical test messages or alerts are separate evidence.
-        func key(_ subject: String, _ body: String, _ id: String?, _ time: Date?) -> String {
-            [subject, id ?? "", time.map { String(Int($0.timeIntervalSince1970)) } ?? "", String(body.prefix(64))].joined(separator: "|")
-        }
-        let listedKeys = Set(listed.map { key($0.subject, $0.bodyText, $0.internetMessageId, $0.deliveryTime) })
-        let listedSubjects = Set(listed.map(\.subject))
+        carveUnallocated(listedKeys: Set(listed.map(Self.carveKey)), listedSubjects: Set(listed.map(\.subject)))
+    }
+
+    /// OPEN-02: the streaming parser keeps only these two small sets while it
+    /// reads, instead of every message, and carves afterwards.
+    func carveUnallocated(listedKeys: Set<String>, listedSubjects: Set<String>) -> [PSTReader.PSTMessage] {
+        let key: (String, String, String?, Date?) -> String = Self.carveKey
         var allocated = blocks.values.map { (Int($0.ib), Int($0.ib) + $0.cb + (unicode ? 16 : 12)) }
         allocated.sort { $0.0 < $1.0 }
         var out: [PSTReader.PSTMessage] = []

@@ -27,6 +27,115 @@ struct PSTParser {
         senderEmail: String,
         onProgress: ((Double) -> Void)? = nil
     ) throws -> [MBOXParser.RawEmail] {
+        let data = try mappedData(for: fileURL)
+        var messages: [PSTReader.PSTMessage] = []
+        var specRead = false
+        // A cyclic-encoded file stays with the spec reader even when it holds
+        // no mail (contacts or calendar only): the earlier reader cannot decode
+        // cyclic blocks and would refuse the file instead of reading zero mail.
+        if let spec = specReader(for: data) {
+            specRead = true
+            messages = spec.messages()
+            if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled && !messages.isEmpty {
+                messages += spec.carveUnallocated(listed: messages)
+            }
+            onProgress?(1)
+        }
+        // PSTs written by mailin itself use an earlier layout with no
+        // NID_TYPE_NORMAL_MESSAGE nodes; only those go to the heuristic reader.
+        if !specRead {
+            let reader = try PSTReader(data: data)
+            messages = try reader.readAllMessages(onProgress: onProgress)
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        return messages.map { rawEmail(from: $0, senderEmail: senderEmail, isoFormatter: isoFormatter) }
+    }
+
+    /// Five jobs OPEN-02 (switch: `streamingBinaryParsers`). Messages are
+    /// handed out in batches as they are read from the node tree, so memory
+    /// follows the batch, not the file. Same checks, same reader, same NID
+    /// order as `parse`, so a checkpoint written by either path resumes under
+    /// the other. Files mailin itself wrote in the pre-spec layout have no
+    /// message nodes and still take the heuristic reader's array path.
+    /// Returns how many messages were handed out.
+    static func parseStreaming(
+        fileURL: URL,
+        senderEmail: String,
+        batchSize: Int,
+        onProgress: ((Double) -> Void)? = nil,
+        onBatch: ([MBOXParser.RawEmail]) async throws -> Void
+    ) async throws -> Int {
+        let size = max(1, batchSize)
+        let data = try mappedData(for: fileURL)
+        guard let spec = specReader(for: data) else {
+            let parsed = try parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            var start = 0
+            while start < parsed.count {
+                let end = min(start + size, parsed.count)
+                try await onBatch(Array(parsed[start..<end]))
+                start = end
+            }
+            return parsed.count
+        }
+        let isoFormatter = ISO8601DateFormatter()
+        let nodes = spec.messageNodes
+        let deep = RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled
+        var folderCache: [UInt32: String?] = [:]
+        var carveKeys = Set<String>()
+        var carveSubjects = Set<String>()
+        var batch: [MBOXParser.RawEmail] = []
+        batch.reserveCapacity(size)
+        var emitted = 0
+        for (index, node) in nodes.enumerated() {
+            try Task.checkCancellation()
+            let message: PSTReader.PSTMessage? = autoreleasepool { spec.message(for: node, folderCache: &folderCache) }
+            if let message {
+                if deep {
+                    carveKeys.insert(PSTSpecReader.carveKey(message))
+                    carveSubjects.insert(message.subject)
+                }
+                batch.append(rawEmail(from: message, senderEmail: senderEmail, isoFormatter: isoFormatter))
+                if batch.count >= size {
+                    try await onBatch(batch)
+                    emitted += batch.count
+                    batch.removeAll(keepingCapacity: true)
+                }
+            }
+            if index % 64 == 0 {
+                onProgress?(Double(index + 1) / Double(max(nodes.count, 1)) * (deep ? 0.9 : 1))
+            }
+        }
+        if !batch.isEmpty {
+            try await onBatch(batch)
+            emitted += batch.count
+            batch.removeAll()
+        }
+        if deep, emitted > 0 {
+            let carved = spec.carveUnallocated(listedKeys: carveKeys, listedSubjects: carveSubjects)
+                .map { rawEmail(from: $0, senderEmail: senderEmail, isoFormatter: isoFormatter) }
+            var start = 0
+            while start < carved.count {
+                let end = min(start + size, carved.count)
+                try await onBatch(Array(carved[start..<end]))
+                emitted += end - start
+                start = end
+            }
+        }
+        onProgress?(1)
+        return emitted
+    }
+
+    /// The spec reader for this file, when it applies (see `parse`).
+    private static func specReader(for data: Data) -> PSTSpecReader? {
+        guard PSTReaderPolicy.useSpecReader, let spec = try? PSTSpecReader(data: data),
+              spec.crypt == 2 || spec.nodes.values.contains(where: { $0.nid & 0x1F == PSTSpecReader.nidTypeMessage })
+        else { return nil }
+        return spec
+    }
+
+    /// Size policy, then the file mapped (not read) into memory.
+    private static func mappedData(for fileURL: URL) throws -> Data {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = attrs[.size] as? Int64 ?? 0
         // S1: 50 GB was Outlook's DEFAULT MaxLargeFileSize, not the format's
@@ -52,30 +161,11 @@ struct PSTParser {
         // pages in only the bytes our B-tree reader actually touches, so
         // a 10 GB PST never has 10 GB resident. Random-access B-tree
         // patterns benefit massively from this vs `Data(contentsOf:)`.
-        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-        var messages: [PSTReader.PSTMessage] = []
-        var specRead = false
-        // A cyclic-encoded file stays with the spec reader even when it holds
-        // no mail (contacts or calendar only): the earlier reader cannot decode
-        // cyclic blocks and would refuse the file instead of reading zero mail.
-        if PSTReaderPolicy.useSpecReader, let spec = try? PSTSpecReader(data: data),
-           spec.crypt == 2 || spec.nodes.values.contains(where: { $0.nid & 0x1F == PSTSpecReader.nidTypeMessage }) {
-            specRead = true
-            messages = spec.messages()
-            if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled && !messages.isEmpty {
-                messages += spec.carveUnallocated(listed: messages)
-            }
-            onProgress?(1)
-        }
-        // PSTs written by mailin itself use an earlier layout with no
-        // NID_TYPE_NORMAL_MESSAGE nodes; only those go to the heuristic reader.
-        if !specRead {
-            let reader = try PSTReader(data: data)
-            messages = try reader.readAllMessages(onProgress: onProgress)
-        }
+        return try Data(contentsOf: fileURL, options: .mappedIfSafe)
+    }
 
-        let isoFormatter = ISO8601DateFormatter()
-        return messages.compactMap { msg in
+    /// One read message as the archive's email record.
+    static func rawEmail(from msg: PSTReader.PSTMessage, senderEmail: String, isoFormatter: ISO8601DateFormatter) -> MBOXParser.RawEmail {
             let from = msg.senderEmail.isEmpty ? msg.senderName : "\(msg.senderName) <\(msg.senderEmail)>"
             let timestamp = isoFormatter.string(from: msg.deliveryTime ?? msg.creationTime ?? .distantPast)
             let messageType = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
@@ -120,7 +210,6 @@ struct PSTParser {
                 anomalies: MBOXParser.findAnomalies(headers: headers, body: msg.bodyText, attachments: msg.attachments)
                     + (msg.unreadable ? ["PST item whose properties could not be read; imported empty"] : [])
             ).withRecovery(msg.recovery)
-        }
     }
 
     private static func mergeTransportHeaders(_ raw: String, into headers: inout [String: String]) {
@@ -150,6 +239,13 @@ struct PSTParser {
 /// Which PST reader runs (pushed by CapabilityWiring, `v3PSTSpecReader`).
 public enum PSTReaderPolicy {
     nonisolated(unsafe) public static var useSpecReader = true
+}
+
+/// Five jobs OPEN-02: whether binary formats stream in batches (pushed by
+/// CapabilityWiring, `streamingBinaryParsers`). Off = the previous path, which
+/// reads the whole file's messages into an array before storing them.
+public enum StreamingParserPolicy {
+    nonisolated(unsafe) public static var binaryStreaming = false
 }
 
 struct PSTReader {

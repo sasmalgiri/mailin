@@ -198,6 +198,14 @@ struct EngineSpec: Sendable {
 
         // MARK: 3.1 — promoted (A4, owner 2026-10-15: "promote all"). Each is on by default and
         // stays a switch in the matrix with the earlier engine one switch away (rule 14).
+        case .streamingBinaryParsers:
+            // Five jobs OPEN-02. Gate passed 2026-11-05: a ~100 MB PST (2,000
+            // messages) streamed in batches of 100 through the factory with
+            // the process footprint growing by less than half the file, same
+            // order as the array path (V2CutoverTests.testOPEN02_*). Promoted.
+            return EngineSpec(.archive, requires: [.v3PSTSpecReader], maturity: .stable,
+                name: String(localized: "Streaming PST import"),
+                detail: String(localized: "Reads Outlook PST and OST files message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored."))
         case .v3PSTSpecReader:
             // Gate passed 2026-10-13: 15 public Outlook PSTs (Digital Corpora) read
             // with the same messages, Message-IDs, subjects and deleted-items

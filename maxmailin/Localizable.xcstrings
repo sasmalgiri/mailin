@@ -366016,6 +366016,134 @@
           }
         }
       }
+    },
+    "Streaming PST import" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Streaming-PST-Import"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importación PST en flujo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importation PST en continu"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्ट्रीमिंग PST आयात"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importazione PST in streaming"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PSTストリーミング読み込み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스트리밍 PST 가져오기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importação PST em fluxo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "流式 PST 导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "串流 PST 匯入"
+          }
+        }
+      }
+    },
+    "Reads Outlook PST and OST files message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liest Outlook-PST- und -OST-Dateien Nachricht für Nachricht in Stapeln, sodass der Speicherbedarf dem Stapel folgt, nicht der Datei. Aus: alle Nachrichten der Datei werden zuerst gelesen, dann gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lee archivos PST y OST de Outlook mensaje a mensaje en lotes, de modo que la memoria sigue al lote y no al archivo. Desactivado: primero se leen todos los mensajes del archivo y después se guardan."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lit les fichiers PST et OST d'Outlook message par message, par lots, de sorte que la mémoire suit le lot et non le fichier. Désactivé : tous les messages du fichier sont lus d'abord, puis enregistrés."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST और OST फ़ाइलों को बैच में एक-एक संदेश पढ़ता है, ताकि मेमोरी फ़ाइल के बजाय बैच के अनुसार रहे। बंद: पहले फ़ाइल के सभी संदेश पढ़े जाते हैं, फिर संग्रहीत होते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Legge i file PST e OST di Outlook messaggio per messaggio, a lotti, così la memoria segue il lotto e non il file. Disattivato: tutti i messaggi del file vengono letti prima, poi archiviati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OutlookのPSTおよびOSTファイルをメッセージ単位でバッチ読み込みするため、メモリ使用量はファイルではなくバッチに比例します。オフ：ファイル内の全メッセージを先に読み込んでから保存します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST 및 OST 파일을 메시지 단위로 일괄 읽어, 메모리가 파일이 아닌 일괄 처리 단위를 따릅니다. 끄면: 파일의 모든 메시지를 먼저 읽은 뒤 저장합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lê arquivos PST e OST do Outlook mensagem por mensagem, em lotes, para que a memória acompanhe o lote e não o arquivo. Desligado: todas as mensagens do arquivo são lidas primeiro e depois armazenadas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按批次逐条读取 Outlook PST 和 OST 文件，内存占用随批次而非文件大小变化。关闭时：先读取文件中的全部邮件，再存储。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按批次逐封讀取 Outlook PST 和 OST 檔案，記憶體佔用隨批次而非檔案大小變化。關閉時：先讀取檔案中的全部郵件，再儲存。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

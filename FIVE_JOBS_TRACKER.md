@@ -71,6 +71,14 @@ export cancel/keep-partial/resume with 17 tests (`ExportResumeTests.swift`), leg
 | LIFE-05 | E | Sample mbox, help exist | Recovery actions: Reconnect / Retry failed / Rebuild index / Restore | not started | | |
 | LIFE-06 | E | Newest-500 free tier; Pro Lifetime | Owner policy decision on post-expiry reading/export; capability table tested | blocked (owner) | | entitlement matrix |
 
+## Owner decisions taken during the work
+
+- 2026-11-05 — tests: only the five-jobs tests and the classes a change touches; no full suite, no AI /
+  Professional test classes.
+- 2026-11-05 — scale: fixtures of ~100 MB per format are the evidence; the bounded-memory design (streaming
+  parsers, batch writes, no whole-result arrays) is what covers larger files. The plan's 1–100 GB tiers
+  (§8.1) are not run; docs say "tested at 100 MB; memory does not grow with file size".
+
 ## Order of work
 
 Stage A (done 2026-11-05): DUP-01 afd47f5 → FOLD-01 eed9466 → FIND-03 72eb3de → truthful labels (the previous

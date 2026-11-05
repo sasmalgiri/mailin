@@ -67,6 +67,9 @@ enum CapabilityWiring {
         case .v31ShortcutsActions:
             // S1–S4: intents run without a view, so they read a pushed flag.
             ShortcutsPolicy.actionsEnabled = isOn
+        case .streamingBinaryParsers:
+            // Five jobs OPEN-02: read by ParserFactory.parseStreamingCallback for PST/OST.
+            StreamingParserPolicy.binaryStreaming = isOn
         case .v3AlertsAnomalies:
             // §3-A1: background findings over the whole archive.
             BackgroundAnalysisManager.wholeArchiveEnabled = isOn
