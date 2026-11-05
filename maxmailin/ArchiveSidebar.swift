@@ -137,13 +137,55 @@ final class ArchiveSidebarModel: ObservableObject {
     /// A6: per-source committed vs indexed, so a source still indexing says so.
     @Published private(set) var coverage: [Int64: SQLiteEmailStore.SourceCoverage] = [:]
     @Published private(set) var labels: [AggregateBucket] = []
+    /// FOLD-01: how many labels/folders match the current filter — the whole
+    /// archive's, not just the page shown. Equals `labels.count` on the
+    /// previous path, which never knew the total.
+    @Published private(set) var labelTotal = 0
+    /// FOLD-01: the name filter the folder list is narrowed to.
+    @Published private(set) var labelFilter = ""
     @Published private(set) var lastRefresh: Date?
 
     private let archive: ArchiveDataService
     static let labelLimit = 200
+    /// FOLD-01: how many folders one "Show more" adds.
+    static let labelPage = 200
+    /// FOLD-01: how many folders the list currently reaches; grows with "Show more".
+    private var labelReach = labelPage
+
+    /// FOLD-01 follows the "Complete lists (3.0)" switch: on, every folder is
+    /// reachable page by page with the total shown; off, the previous
+    /// busiest-200 list.
+    var completeLabels: Bool { SQLiteEmailStore.unboundedIDLookups }
 
     init(archive: ArchiveDataService = .shared) {
         self.archive = archive
+    }
+
+    /// FOLD-01: reach the next page of folders.
+    func loadMoreLabels() async {
+        guard completeLabels, labels.count < labelTotal else { return }
+        labelReach += Self.labelPage
+        await reloadLabels()
+    }
+
+    /// FOLD-01: narrow the folder list by name; an empty filter shows all.
+    func setLabelFilter(_ filter: String) async {
+        let trimmed = filter.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != labelFilter else { return }
+        labelFilter = trimmed
+        labelReach = Self.labelPage
+        await reloadLabels()
+    }
+
+    private func reloadLabels() async {
+        if completeLabels {
+            let filter: String? = labelFilter.isEmpty ? nil : labelFilter
+            labelTotal = (try? await archive.parserTagTotal(matching: filter)) ?? labelTotal
+            labels = (try? await archive.parserTagCounts(matching: filter, offset: 0, limit: labelReach)) ?? labels
+        } else {
+            labels = (try? await archive.parserTagCounts(limit: Self.labelLimit)) ?? labels
+            labelTotal = labels.count
+        }
     }
 
     /// One pass of bounded aggregates. Each is an O(1)-memory SQL count or a
@@ -162,7 +204,7 @@ final class ArchiveSidebarModel: ObservableObject {
         }
         sources = (try? await archive.sources()) ?? sources
         coverage = (try? await archive.sourceCoverage()) ?? coverage
-        labels = (try? await archive.parserTagCounts(limit: Self.labelLimit)) ?? labels
+        await reloadLabels()
         lastRefresh = Date()
     }
 }
@@ -182,6 +224,9 @@ struct ArchiveSidebarView: View {
     @State private var sourcesExpanded = true
     @State private var labelsExpanded = true
     @State private var savedExpanded = true
+    /// FOLD-01: what is typed in the folder filter; applied after a short pause.
+    @State private var labelFilterText = ""
+    @State private var labelFilterTask: Task<Void, Never>?
 
     var body: some View {
         List(selection: $selection) {
@@ -221,7 +266,47 @@ struct ArchiveSidebarView: View {
                 }
             }
 
-            if !model.labels.isEmpty {
+            if model.completeLabels {
+                // FOLD-01: every folder reachable — filter by name, page with
+                // "Show more", total always shown.
+                if !model.labels.isEmpty || !model.labelFilter.isEmpty {
+                    Section(isExpanded: $labelsExpanded) {
+                        if model.labelTotal > Self.labelFilterThreshold || !model.labelFilter.isEmpty {
+                            TextField("Filter folders", text: $labelFilterText)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("archive.sidebar.folderFilter")
+                                .onChange(of: labelFilterText) { _, text in
+                                    labelFilterTask?.cancel()
+                                    labelFilterTask = Task {
+                                        try? await Task.sleep(for: .milliseconds(250))
+                                        guard !Task.isCancelled else { return }
+                                        await model.setLabelFilter(text)
+                                    }
+                                }
+                        }
+                        ForEach(model.labels) { bucket in
+                            row(.label(bucket.value), bucket.value, "folder", count: bucket.count)
+                        }
+                        if model.labels.isEmpty, !model.labelFilter.isEmpty {
+                            Text("No folder matches “\(model.labelFilter)”")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if model.labels.count < model.labelTotal {
+                            Button {
+                                Task { await model.loadMoreLabels() }
+                            } label: {
+                                Label("Show more (\(model.labels.count) of \(model.labelTotal) folders)", systemImage: "ellipsis.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Lists the next \(ArchiveSidebarModel.labelPage) folders, busiest first. Every folder in the archive can be reached this way or through the filter.")
+                            .accessibilityIdentifier("archive.sidebar.moreFolders")
+                        }
+                    } header: {
+                        Text("Labels & Folders (\(model.labelTotal))")
+                    }
+                }
+            } else if !model.labels.isEmpty {
                 Section("Labels & Folders", isExpanded: $labelsExpanded) {
                     ForEach(model.labels) { bucket in
                         row(.label(bucket.value), bucket.value, "folder", count: bucket.count)
@@ -280,6 +365,9 @@ struct ArchiveSidebarView: View {
             Text("Saves “\(currentSearchText)” so it can be run again from the sidebar.")
         }
     }
+
+    /// FOLD-01: the filter field appears once there are more folders than fit a glance.
+    private static let labelFilterThreshold = 12
 
     private func row(_ target: ArchiveSidebarSelection, _ title: String, _ symbol: String, count: Int) -> some View {
         Label {

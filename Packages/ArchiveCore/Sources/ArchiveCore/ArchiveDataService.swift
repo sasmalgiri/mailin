@@ -209,6 +209,20 @@ final class ArchiveDataService {
         return try await sqlite.parserTagCounts(limit: limit)
     }
 
+    /// FOLD-01: distinct labels/folders, optionally those containing `filter`.
+    func parserTagTotal(matching filter: String? = nil) async throws -> Int {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return 0 }
+        return try await sqlite.parserTagTotal(matching: filter)
+    }
+
+    /// FOLD-01: one page of labels/folders, busiest first, optionally filtered.
+    func parserTagCounts(matching filter: String?, offset: Int, limit: Int) async throws -> [AggregateBucket] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [] }
+        return try await sqlite.parserTagCounts(matching: filter, offset: offset, limit: limit)
+    }
+
     /// sent / received / other counts.
     func messageTypeCounts() async throws -> [String: Int] {
         guard let repo = repository as? EmailStoreRepository,

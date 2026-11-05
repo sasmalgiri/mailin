@@ -997,6 +997,99 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(Set(groups.flatMap { $0.dropFirst() }), Set(redundant))
     }
 
+    // MARK: - Five jobs FOLD-01 — every folder reachable, no 200 ceiling
+
+    /// 10,000 distinct labels over 20 emails (500 each).
+    private func seedManyFolders(_ env: Env) async throws -> Int {
+        let total = 10_000
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<20 {
+            var e = makeEmail(i: 2000 + i, total: 20, body: "folders \(i)")
+            e.tags = (0..<500).map { String(format: "Folder/%05d", i * 500 + $0) }
+            if i == 0 { e.tags[0] = "Sales 100%" }   // a LIKE wildcard in a real name
+            emails.append(e)
+        }
+        try await env.store.insertBatch(emails, batchSize: 20)
+        return total
+    }
+
+    func testFOLD01_storePagesAndFiltersEveryFolder() async throws {
+        let env = try makeEnv()
+        let total = try await seedManyFolders(env)
+
+        let storeTotal = try await env.store.parserTagTotal()
+        XCTAssertEqual(storeTotal, total)
+        let previous = try await env.store.parserTagCounts(limit: 200)
+        XCTAssertEqual(previous.count, 200, "the previous path still answers")
+
+        var reached = Set<String>()
+        var offset = 0
+        while true {
+            let page = try await env.store.parserTagCounts(matching: nil, offset: offset, limit: 200)
+            if page.isEmpty { break }
+            XCTAssertLessThanOrEqual(page.count, 200)
+            reached.formUnion(page.map(\.value))
+            offset += page.count
+        }
+        XCTAssertEqual(reached.count, total, "paging reaches every folder exactly once")
+
+        let oneTotal = try await env.store.parserTagTotal(matching: "00999")
+        XCTAssertEqual(oneTotal, 1)
+        let one = try await env.store.parserTagCounts(matching: "00999", offset: 0, limit: 50)
+        XCTAssertEqual(one.map(\.value), ["Folder/00999"])
+        let lower = try await env.store.parserTagCounts(matching: "folder/0099", offset: 0, limit: 50)
+        XCTAssertEqual(lower.count, 10, "case-insensitive")
+        let literal = try await env.store.parserTagCounts(matching: "100%", offset: 0, limit: 50)
+        XCTAssertEqual(literal.map(\.value), ["Sales 100%"], "a wildcard in the filter is a literal character")
+        let blank = try await env.store.parserTagTotal(matching: "   ")
+        XCTAssertEqual(blank, total, "blank filter means no filter")
+    }
+
+    func testFOLD01_sidebarReachesEveryFolderPageByPageWithTheTotalShown() async throws {
+        let env = try makeEnv()
+        let total = try await seedManyFolders(env)
+        let saved = SQLiteEmailStore.unboundedIDLookups
+        defer { SQLiteEmailStore.unboundedIDLookups = saved }
+
+        // Previous path (switch off): busiest 200, no claim about the rest.
+        SQLiteEmailStore.unboundedIDLookups = false
+        let old = ArchiveSidebarModel(archive: env.archive)
+        await old.refresh()
+        XCTAssertFalse(old.completeLabels)
+        XCTAssertEqual(old.labels.count, 200)
+        XCTAssertEqual(old.labelTotal, 200)
+        await old.loadMoreLabels()
+        XCTAssertEqual(old.labels.count, 200, "the previous path does not page")
+
+        // Complete lists (3.0) on: the total is the archive's, and paging reaches it all.
+        SQLiteEmailStore.unboundedIDLookups = true
+        let model = ArchiveSidebarModel(archive: env.archive)
+        await model.refresh()
+        XCTAssertTrue(model.completeLabels)
+        XCTAssertEqual(model.labels.count, ArchiveSidebarModel.labelPage)
+        XCTAssertEqual(model.labelTotal, total)
+        var loads = 0
+        while model.labels.count < model.labelTotal {
+            await model.loadMoreLabels()
+            loads += 1
+            XCTAssertLessThan(loads, 100, "paging must terminate")
+        }
+        XCTAssertEqual(Set(model.labels.map(\.value)).count, total, "every folder is reachable")
+        XCTAssertEqual(loads, total / ArchiveSidebarModel.labelPage - 1)
+
+        await model.setLabelFilter("Folder/0042")
+        XCTAssertEqual(model.labelTotal, 10)
+        XCTAssertEqual(model.labels.count, 10)
+        XCTAssertTrue(model.labels.allSatisfy { $0.value.hasPrefix("Folder/0042") })
+        await model.setLabelFilter("")
+        XCTAssertEqual(model.labelTotal, total)
+        XCTAssertEqual(model.labels.count, ArchiveSidebarModel.labelPage, "clearing the filter starts at the first page again")
+        // A refresh keeps the reach the person had opened.
+        await model.loadMoreLabels()
+        await model.refresh()
+        XCTAssertEqual(model.labels.count, 2 * ArchiveSidebarModel.labelPage)
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

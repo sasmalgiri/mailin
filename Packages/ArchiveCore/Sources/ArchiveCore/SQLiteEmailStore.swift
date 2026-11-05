@@ -3508,6 +3508,60 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
+    /// Five jobs FOLD-01: how many distinct labels/folders the archive has,
+    /// optionally only those whose name contains `filter` (case-insensitive).
+    /// The sidebar shows this total so a page of folders never looks like all
+    /// of them.
+    func parserTagTotal(matching filter: String? = nil) throws -> Int {
+        let db = try ensureDB()
+        let pattern = Self.likePattern(containing: filter)
+        let stmt = try prepare(db, """
+            SELECT COUNT(DISTINCT t.tag) FROM email_tags t
+            JOIN emails e ON e.id = t.email_id
+            \(pattern == nil ? "" : "WHERE t.tag LIKE ? ESCAPE '\\'");
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if let pattern { sqlite3_bind_text(stmt, 1, pattern, -1, Self.staticSQLiteTransient) }
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Five jobs FOLD-01: one page of labels/folders, busiest first, optionally
+    /// filtered by name. Paging from `offset` with `limit` rows lets the sidebar
+    /// reach every folder without rendering them all at once.
+    func parserTagCounts(matching filter: String?, offset: Int, limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let pattern = Self.likePattern(containing: filter)
+        let stmt = try prepare(db, """
+            SELECT t.tag, COUNT(*) AS c FROM email_tags t
+            JOIN emails e ON e.id = t.email_id
+            \(pattern == nil ? "" : "WHERE t.tag LIKE ? ESCAPE '\\'")
+            GROUP BY t.tag ORDER BY c DESC, t.tag ASC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var index: Int32 = 1
+        if let pattern { sqlite3_bind_text(stmt, index, pattern, -1, Self.staticSQLiteTransient); index += 1 }
+        sqlite3_bind_int(stmt, index, Int32(clamping: limit)); index += 1
+        sqlite3_bind_int(stmt, index, Int32(clamping: offset))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// `%filter%` with the LIKE wildcards in the filter itself escaped, so a
+    /// folder called "100%" is searched for literally. Nil for an empty filter.
+    static func likePattern(containing filter: String?) -> String? {
+        guard let filter = filter?.trimmingCharacters(in: .whitespacesAndNewlines), !filter.isEmpty else { return nil }
+        var escaped = ""
+        for ch in filter {
+            if ch == "\\" || ch == "%" || ch == "_" { escaped.append("\\") }
+            escaped.append(ch)
+        }
+        return "%" + escaped + "%"
+    }
+
     /// Archive-wide sent/received/unknown counts (folder tree Inbox/Sent).
     func messageTypeCounts() throws -> [String: Int] {
         let db = try ensureDB()
