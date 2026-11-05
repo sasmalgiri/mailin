@@ -779,7 +779,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
     ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
-    static let currentSchemaVersion = 22   // v21: FOLD-02 folders; v22: FIND-07 search chunks (SearchChunkIndex.swift)
+    static let currentSchemaVersion = 23   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks (SearchChunkIndex.swift)
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1237,6 +1237,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 22;")
             }
             v = 22
+        }
+        if v < 23 {
+            // v23 (five jobs FIND-04): the chunk tokeniser keeps combining
+            // marks, so Hindi and Bengali words stay whole. v22 never shipped;
+            // its tables are recreated and the backfill refills them.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV23(handle)
+                try exec(handle, "PRAGMA user_version = 23;")
+            }
+            v = 23
         }
     }
 

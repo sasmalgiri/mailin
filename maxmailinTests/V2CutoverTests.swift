@@ -1576,7 +1576,7 @@ final class V2CutoverTests: XCTestCase {
     func testFOLD02_schemaGuardMatchesTheMigrationChain() async throws {
         let env = try makeEnv()
         let v = try await env.store.schemaVersion()
-        XCTAssertEqual(v, 22, "v21 adds folders, v22 the search chunks")
+        XCTAssertEqual(v, 23, "v21 adds folders, v22/v23 the search chunks")
         XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion, "the guard follows the chain")
         // Reopening the same directory is the real check: a lagging guard refuses here.
         let reopened = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
@@ -2129,6 +2129,27 @@ final class V2CutoverTests: XCTestCase {
         try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.subject, .contains, injection)])]), [])
         try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "OR NOT (\"x\") AND *")])]), [], "FTS syntax in a value is just words")
         try await expectCount(env, .all, 3, "the table is still there")
+    }
+
+    func testFIND04_englishBengaliAndHindiWordsStayWhole() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        try await env.store.insertBatch([
+            mail(90, from: "a@x.com", subject: "English", body: "The quarterly review is on Monday."),
+            mail(91, from: "b@x.com", subject: "Hindi", body: "यह एक परीक्षण संदेश है। बैठक सोमवार को है।"),
+            mail(92, from: "c@x.com", subject: "Bengali", body: "এটি একটি পরীক্ষা বার্তা। সভা সোমবার।"),
+        ], batchSize: 10)
+        // Words with vowel signs are matched whole, not as fragments.
+        XCTAssertEqual(SearchTextTokens.words(in: "परीक्षण संदेश"), ["परीक्षण", "संदेश"])
+        XCTAssertEqual(SearchTextTokens.words(in: "পরীক্ষা বার্তা।"), ["পরীক্ষা", "বার্তা"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "परीक्षण")])]), ["Hindi"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, "পরীক্ষা বার্তা")])]), ["Bengali"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "सोमवार")])]), ["Hindi"], "the Hindi Monday, not the Bengali one")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "সোমবার")])]), ["Bengali"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "review monday")])]), ["English"])
+        // A fragment of a Hindi word is not a word.
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "परीक्ष")])]), [])
     }
 
     func testFIND04_scopeIsEnforcedOutsideUserLogic() async throws {

@@ -107,6 +107,21 @@ struct AttachmentSearchDocument: Sendable {
 
 extension SQLiteEmailStore {
 
+    /// The chunk tokeniser. unicode61 with diacritics folded and NO stemming;
+    /// `categories` adds the mark classes (M*) to the token characters, which
+    /// the default leaves out — without them a Hindi or Bengali word is split
+    /// at every vowel sign and can never be matched whole.
+    static let chunkTokenizer = "unicode61 remove_diacritics 2 categories 'L* N* Co M*'"
+
+    /// v23: the v22 tables were created with the default tokeniser (marks as
+    /// separators); v22 never shipped, so they are dropped and recreated and
+    /// the backfill refills them.
+    func createSchemaV23(_ handle: OpaquePointer) throws {
+        try exec(handle, "DROP TABLE IF EXISTS search_chunks;")
+        try exec(handle, "DROP TABLE IF EXISTS search_docs;")
+        try createSchemaV22(handle)
+    }
+
     /// v22 tables (additive, IF NOT EXISTS).
     func createSchemaV22(_ handle: OpaquePointer) throws {
         try exec(handle, """
@@ -131,7 +146,7 @@ extension SQLiteEmailStore {
                 ordinal UNINDEXED,
                 chunk UNINDEXED,
                 text,
-                tokenize='unicode61 remove_diacritics 2'
+                tokenize="\(Self.chunkTokenizer)"
             );
         """)
     }
