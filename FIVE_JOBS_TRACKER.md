@@ -40,14 +40,14 @@ export cancel/keep-partial/resume with 17 tests (`ExportResumeTests.swift`), leg
 | OPEN-04 | B | Browsing during import exists; "mail imported" vs "attachments indexing" partly shown | Verify; show processed counts/bytes when total unknown | not started | | UI check on PST (unknown total) |
 | OPEN-05 | B | Receipt per run with discovered/parsed/inserted/duplicates/damaged/skipped/persistFailed; per-source only identity | Per-source counts; add `unreadable` and `unresolvedRegions` | not started | | receipt reconciles to fixture ground truth |
 | OPEN-06 | E | 15 real PSTs; 1 GB rows; OST/NSF no fixture; ≤50 GB | Run §8.1 matrix on candidate; record first-message/total/peak RSS/temp disk | not started | | `SCALE_RESULTS.md` rows tied to commit |
-| FOLD-01 | A | `labelLimit = 200`, flat ForEach | Remove cap: folder tree query without LIMIT, lazy `OutlineGroup`/paged rows, folder search field | not started | | 10,000 folders all reachable |
+| FOLD-01 | A | `labelLimit = 200`, flat ForEach | Under "Complete lists (3.0)": folder total shown, 200 per page with Show more, server-side name filter (LIKE, wildcards escaped); switch off = previous busiest-200. Tree view waits for FOLD-02's folder table | verified | eed9466 | `V2CutoverTests.testFOLD01_*` (2): 10,000 folders paged to completion once, filter/case/literal-%, sidebar model both paths |
 | FOLD-02 | B | Folders are flat tag strings; sources table exists; no parent/child, no empty folders | Folder table `(source_id, path, parent, is_empty)` dual-written from parsers; same name in two sources distinct | not started | | two sources, same folder name; empty folder from PST |
 | FOLD-03 | B | `email_tags` many-to-many | Verify; UI explains unique vs occurrence counts; dedup must keep memberships (see DUP-04) | not started | | Gmail multi-label fixture |
 | FOLD-04 | B | `email_tags` (source) vs `email_user_tags` (user) separate | Verify immutability: rename shows display label only | not started | | rename then export shows original path |
 | FOLD-05 | D | No tree layout on export | With OUT-03: safe names + mapping file for collisions/Unicode/long paths | not started | | adversarial names fixture |
 | FIND-01 | C | PDF text, RTF, HTML, plain; no Office | DOCX/XLSX/PPTX extraction (ZIP + XML, no macros) with sheet/slide context | not started | | target string only inside each Office type |
 | FIND-02 | C | OCR → `attachment_search` when switch on | Verify in v3 search path; label recognised vs original text; query Vision supported languages at runtime | in progress | 4d95577, 5b79600 | labelled scan set, per language |
-| FIND-03 | A | `attachment_text_state` = indexed_at + text_count | Per-attachment coverage table: queued/processing/extracted/noText/unsupported/locked/failed/cancelled/truncated + extractor version; retry by version | not started | | state after each fixture class |
+| FIND-03 | A | `attachment_text_state` = indexed_at + text_count | `AttachmentCoverageStore` (sidecar SQLite) records per attachment extracted/truncated/noText/unsupported/locked/failed + extractor version + reason; queued is derived, processing is the in-flight email; stale rows re-queued at pass start (`extractorVersion`); "no attachments matched" notice names what was not searchable. Also fixed: Office MIME ("…xml…") bytes were indexed as Latin-1 text. Per-attachment badge in the detail view comes with FIND-05 | verified | 72eb3de | `V2CutoverTests.testFIND03_*` (2): five-attachment fixture states/characters/summary/search, stale re-queue + re-index, notice wording; OCR + attachment-search suites green |
 | FIND-04 | C | FTS over subject/sender/recipients(To+Cc)/body; attachment content only via `in:attachments` in old list | Attachment content in the v3 search path by default; Bcc indexed; literal default; Bengali/Hindi tests | not started | | 3-language fixture |
 | FIND-05 | C | Attachment hit returns email_id only; no snippet | Hit → attachment id + filename + snippet (FTS5 `snippet()`), opens attachment and parent | not started | | same filename twice |
 | FIND-06 | C | Budgets exist (timeout/decompression); encrypted handling implicit | Verify; encrypted → `locked` state, never "no text" | not started | | encrypted PDF/ZIP |
@@ -73,8 +73,11 @@ export cancel/keep-partial/resume with 17 tests (`ExportResumeTests.swift`), leg
 
 ## Order of work
 
-Stage A (now): DUP-01 → FOLD-01 → FIND-03 → truthful labels (duplicate fallback, attachment-search notice).
-Stage B: OPEN-02, FOLD-02, LIFE-01, OPEN-01, OPEN-05, LIFE-02, LIFE-03, OPEN-03/04 verify.
+Stage A (done 2026-11-05): DUP-01 afd47f5 → FOLD-01 eed9466 → FIND-03 72eb3de → truthful labels (the previous
+duplicate engine states its 5,000-email window, alone or after a fallback; the attachment-search notice names
+what was not searchable — see commit after 72eb3de). Exit evidence: candidate groups cannot drive bulk removal;
+every folder reachable; an attempted attachment without text is shown as such.
+Stage B (now): OPEN-02, FOLD-02, LIFE-01, OPEN-01, OPEN-05, LIFE-02, LIFE-03, OPEN-03/04 verify.
 Stage C: FIND-07, FIND-01, FIND-04, FIND-05, FIND-02/06 verify, DUP-03, DUP-04, DUP-05, DUP-02 verify.
 Stage D: OUT-07, OUT-04, OUT-03 + FOLD-05, OUT-01, OUT-02, OUT-06 test.
 Stage E: OPEN-06, LIFE-04/05/06, OUT-05 (owner), gates.

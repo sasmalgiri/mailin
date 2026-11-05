@@ -588,9 +588,19 @@ struct DuplicateManagerView: View {
                 self.verifiedGroups = classified.verified
                 self.candidateGroups = classified.candidates
                 self.nearDuplicateGroups = nearGroups
+                // Stage A: the window is stated on screen, after a fallback too.
+                self.v3Note = Self.previousEngineScopeNote(appendedTo: previousEngine ? self.v3Note : nil)
                 self.isScanning = false
             }
         }
+    }
+
+    /// What the previous engine's list covers — never left unsaid (plan §1.1).
+    /// `existing` is the fallback note when the new engine stopped.
+    nonisolated static func previousEngineScopeNote(appendedTo existing: String?) -> String {
+        let scope = String(localized: "Groups found among the newest 5,000 emails only (previous engine). The whole archive needs “Whole-archive duplicate groups (3.0)” in Settings ▸ Modules.")
+        guard let existing, !existing.isEmpty else { return scope }
+        return existing + " " + scope
     }
 
     nonisolated static func findExactDuplicates(in emails: [MBOXParser.RawEmail]) -> [[MBOXParser.RawEmail]] {

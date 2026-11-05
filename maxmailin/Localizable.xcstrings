@@ -365952,6 +365952,70 @@
           }
         }
       }
+    },
+    "Groups found among the newest 5,000 emails only (previous engine). The whole archive needs “Whole-archive duplicate groups (3.0)” in Settings ▸ Modules." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gruppen nur unter den neuesten 5.000 E-Mails gefunden (vorherige Engine). Das ganze Archiv braucht „Archivweite Duplikatgruppen (3.0)“ in Einstellungen ▸ Module."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos encontrados solo entre los 5.000 correos más recientes (motor anterior). Todo el archivo necesita “Grupos de duplicados de todo el archivo (3.0)” en Ajustes ▸ Módulos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Groupes trouvés parmi les 5 000 e-mails les plus récents seulement (ancien moteur). L'archive entière nécessite « Groupes de doublons sur toute l'archive (3.0) » dans Réglages ▸ Modules."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "समूह केवल नवीनतम 5,000 ईमेल में मिले (पिछला इंजन)। पूरे संग्रह के लिए सेटिंग्स ▸ मॉड्यूल में “पूरे संग्रह के डुप्लिकेट समूह (3.0)” चाहिए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gruppi trovati solo tra le 5.000 email più recenti (motore precedente). L'intero archivio richiede “Gruppi di duplicati su tutto l'archivio (3.0)” in Impostazioni ▸ Moduli."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新の5,000通のメールの中でのみグループを検出しました（以前のエンジン）。アーカイブ全体には、設定 ▸ モジュールの「アーカイブ全体の重複グループ（3.0）」が必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최신 5,000개 이메일에서만 그룹을 찾았습니다(이전 엔진). 전체 아카이브에는 설정 ▸ 모듈의 '전체 아카이브 중복 그룹(3.0)'이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos encontrados apenas entre os 5.000 e-mails mais recentes (mecanismo anterior). O arquivo inteiro precisa de “Grupos de duplicatas em todo o arquivo (3.0)” em Ajustes ▸ Módulos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在最新的 5,000 封邮件中找到了重复组（旧引擎）。整个归档需要在“设置 ▸ 模块”中开启“整个归档的重复组（3.0）”。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅在最新的 5,000 封郵件中找到了重複群組（舊引擎）。整個封存需要在「設定 ▸ 模組」中開啟「整個封存的重複群組（3.0）」。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

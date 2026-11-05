@@ -1190,6 +1190,16 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(try coverage.rows(for: email.id).map(\.state), [.extracted, .noText, .unsupported, .locked, .truncated])
     }
 
+    /// Stage A: the previous duplicate engine's 5,000-email window is stated on
+    /// screen, alone or after the "new engine stopped" fallback note.
+    func testStageA_previousDuplicateEngineStatesItsWindow() {
+        let alone = DuplicateManagerView.previousEngineScopeNote(appendedTo: nil)
+        XCTAssertTrue(alone.contains("5,000"), alone)
+        let after = DuplicateManagerView.previousEngineScopeNote(appendedTo: "The new engine stopped.")
+        XCTAssertTrue(after.hasPrefix("The new engine stopped. "), after)
+        XCTAssertTrue(after.hasSuffix(alone), after)
+    }
+
     func testFIND03_noMatchNoticeNamesWhatWasNotSearchable() {
         var summary = AttachmentCoverageSummary()
         summary.counts = [.extracted: 1, .truncated: 1, .noText: 1, .unsupported: 1, .locked: 1]
