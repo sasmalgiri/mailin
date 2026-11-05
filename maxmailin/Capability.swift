@@ -169,6 +169,9 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// LIFE-01: single-file sources are copied into the archive (verified) and
     /// imported from the copy, so the original is never needed again.
     case selfContainedArchive
+    /// FIND-04/07: the typed search model over the chunked in-database index
+    /// (whole bodies and attachment texts, no cutoff; groups; honest unknowns).
+    case searchQueryModel
 
     var id: String { rawValue }
 

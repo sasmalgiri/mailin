@@ -215,6 +215,17 @@ struct EngineSpec: Sendable {
             return EngineSpec(.archive, maturity: .stable,
                 name: String(localized: "Self-contained archive"),
                 detail: String(localized: "Copies each imported mailbox file into the archive, checks the copy byte for byte, and imports from the copy — so the archive stays complete when the original file is moved, renamed or deleted. Uses as much extra space as the files themselves. Off: messages above the full-parse ceiling are read from the original file, which must stay where it was imported from."))
+        case .searchQueryModel:
+            // Five jobs FIND-04/07. Gate passed 2026-11-05: the acceptance
+            // cases in V2CutoverTests.testFIND04_*/testFIND06_*/testFIND07_*
+            // (groups and repeated fields, exclusion-only with unknowns,
+            // same-attachment correlation, inclusive days in the displayed
+            // zone, punctuation and SQL-looking input, a 5 MB body with a
+            // phrase across a chunk boundary, scope outside OR/exclude).
+            // Promoted: on by default; the previous search one switch away.
+            return EngineSpec(.archive, maturity: .stable,
+                name: String(localized: "Search model (whole text, no cutoffs)"),
+                detail: String(localized: "Indexes every message body and attachment text in full, in chunks, inside the archive, and runs Advanced Search as one query: all / any / exclude groups, conditions that must hold for the same attachment, and an honest “may still match” count for mail whose text is not indexed yet. Off: the previous search, which indexes the first 4 MB of a body and the first 500,000 characters of an attachment."))
         case .v3PSTSpecReader:
             // Gate passed 2026-10-13: 15 public Outlook PSTs (Digital Corpora) read
             // with the same messages, Message-IDs, subjects and deleted-items

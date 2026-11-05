@@ -278,25 +278,213 @@ Use the engineering benchmark matrix in section 8.1, beginning with small ground
 
 ### 5.3. Search messages and attachment contents
 
-**Customer outcome:** “I can find the actual document, even if I forgot which email contained it.”
+**Customer outcome:** “I can find the actual message or document, understand why it matched, and see whether the search covered everything relevant.”
+
+**Owner-adopted implementation direction, 5 November 2026:** make FIND-04's advanced search builder explicit while completing FIND-01 through FIND-07. SQL and full-text indexing remain internal implementation tools. Ordinary users get simple search and a visual builder. Active filters, evidence for each match and incomplete-indexing disclosure are required. This amendment changes only the search workstream; the other four jobs, format decisions, entitlement policy and ten release gates remain unchanged.
+
+#### 5.3.1 Reuse the existing search foundation
+
+The following observations are from the already reviewed commit, `a8e875883b7888fb59efc093402996370ad37594`. Reconcile them against the actual release branch before changing code. They are source observations, not newly executed runtime results.
+
+| Existing component | What to retain and what to address |
+|---|---|
+| [GuidedSearchView.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailin/GuidedSearchView.swift) | Already offers sender, recipient, subject, dates, phrase, any/none words, attachment name, source and tag inputs. Extend this form. Its composer only adds excluded words when positive free text exists; a sender/subject-only search can therefore leave a populated exclusion unused. Make every visible condition executable or visibly invalid. |
+| [ArchiveQueryCompiler.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/ArchiveQueryCompiler.swift) and [EmailRepository.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/EmailRepository.swift) | Existing operator parsing, `EmailQuery`, structured fields and paginated execution are the starting point. Repeated scalar operators currently assign the same field again; grouped conditions need a representation that preserves every condition rather than overwriting one. |
+| [FTSSearchIndex.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/FTSSearchIndex.swift) | Reuse indexing, sharding, reconciliation and ranked pagination where correct. The current free-text builder splits on whitespace and adds a prefix to its last term. Verify/rework phrase, grouping and literal-input semantics; do not assume the UI's wording already matches execution. |
+| [SearchMatchFields.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/SearchMatchFields.swift) and [SearchMatchFieldChips.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailin/SearchMatchFieldChips.swift) | Retain the useful match-label interface. Replace heuristic attribution, including the fallback that labels an unexplained free-text result as Body. Retrieve the actual matching field/document/chunk instead. |
+| [SearchCoverage.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailin/SearchCoverage.swift) and [SearchCoverageBadge.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailin/SearchCoverageBadge.swift) | Coverage UI already exists. Extend it to relevant message fields and attachments, selected scope and extractor versions. Failed counter reads currently become zero or no badge in these paths; failure must become “Coverage unavailable,” never a complete-looking result. Collapsing details must retain the incomplete-status indicator. |
+| [AttachmentTextIndexJob.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailin/AttachmentTextIndexJob.swift) | Extend the existing job with required Office extraction, OCR, durable per-item states and complete chunked indexing. A new query interface alone cannot expose text absent from the index. |
+| [ArchiveDataService.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/ArchiveDataService.swift) and [ArchiveListViewModel.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailin/ArchiveListViewModel.swift) | Keep central access scope, list paging and query-revision handling. New conditions must use the same archive service and adopted entitlement policy, with no parallel access path or revival of superseded numeric trial limits. |
+
+**Scope decision:** no raw SQL console, natural-language-to-SQL dependency, new AI model project or cloud search service for this release. Existing optional AI remains separate and retains customer commitments. Core search must pass with AI disabled and without network access. This does not disable on-device OCR needed for attachment search.
+
+#### 5.3.2 The seven implementation requirements
+
+These remain the same seven FIND identifiers; the following detail is their implementation specification, not a separate product backlog. “Fix” and “Complete or verify” describe the reviewed baseline, not completed work.
 
 | ID | Status | Required work |
 |---|---|---|
-| FIND-01 | Fix | Extend the ordinary attachment index beyond its current PDF-text/RTF/HTML/plain-text paths to DOCX, XLSX and PPTX as required release coverage. Extract useful document text and spreadsheet/slide context without executing macros or embedded content. |
-| FIND-02 | Fix | Connect image and image-only PDF OCR results to ordinary archive search. Reuse existing OCR services where sound. Preserve the original bytes and distinguish recognised text from original document text. Do not advertise unsupported OCR languages. |
-| FIND-03 | Fix | Replace a simple “attempted” state with meaningful coverage: queued, processing, searchable text extracted, processed with no text found, unsupported, locked, failed, cancelled and truncated. Retain extractor version so newly supported types can be retried without reimporting mail. |
-| FIND-04 | Complete or verify | Search sender, recipients, subject, body, attachment filename and extracted content with source/folder/date/type filters. Provide a usable literal-search default; advanced syntax must not turn ordinary punctuation into confusing errors. Test English, Bengali and Hindi text independently of OCR coverage. |
-| FIND-05 | Complete or verify | Each result identifies the matching email or attachment and opens the correct parent message. Show a snippet and, where the extractor supports it, page/sheet/slide context. Two attachments with the same filename must remain distinguishable. |
-| FIND-06 | Complete or verify | Run extraction in bounded jobs with timeout, memory, decompression and nesting budgets. Make work resumable where possible; an interrupted or guarded extraction stays explicitly incomplete. Keep encrypted-file handling explicit; never treat failure to unlock as proof of no matching content. |
-| FIND-07 | Fix | Remove permanent prefix-only indexing, including the 500,000-character attachment cutoff. Store/index bounded chunks with stable parent/page offsets and query across all chunks. Test the end of long documents and words/phrases crossing chunk boundaries; changing chunk size must not change recall. |
+| FIND-01 | Fix | Complete ordinary content extraction for TXT/CSV, HTML, RTF, text PDF, DOCX, XLSX and PPTX; retain supported nested-email handling. Store each attachment's extracted text with its stable parent, part/document identity, version and available page/sheet/slide context. Do not execute macros, formulas or remote content. |
+| FIND-02 | Fix | Connect OCR for supported JPEG/PNG/TIFF and scanned PDF pages to ordinary search. Process mixed text/scan PDFs without duplicating equivalent text; label OCR results, record language/model revision where available and retain original bytes. Test actual advertised languages/image classes. |
+| FIND-03 | Fix | Persist honest processing/coverage states per message field and attachment, including queued, running, text extracted, processed with no text found, unsupported, locked, failed, cancelled, paused, partial and stale. Show scope-relevant coverage and recovery actions. A missing counter or failed coverage query is unknown, not zero. |
+| FIND-04 | Complete or verify | Extend the existing guided form into the visual advanced search builder specified below. Support field filters, all/any/exclude conditions, clear source/folder scope, active editable filters, defined dates and attachment predicates through one validated query model. All visible conditions must reach execution. |
+| FIND-05 | Fix | Return actual match evidence with results: field, matched condition, parent message, attachment identity and available location/snippet. Show truthful highlights and open the correct matching content. Remove invented Body attribution. Filter-only results explain which filters passed without inventing a text hit. |
+| FIND-06 | Complete or verify | Keep extraction and queries bounded, cancellable and recoverable. Validate typed conditions, bind SQL values, safely compile text expressions and retain central scope enforcement. Enforce resource budgets visibly; never substitute a bounded first-page scan for complete search. |
+| FIND-07 | Fix | Replace permanent prefix-only indexing with complete logical-document/chunk indexing for supported message and attachment text. Remove the 500,000-character attachment cutoff and former body cutoff. Verify phrase matches across chunk boundaries without matching across unrelated documents, attachments or messages. |
 
-Apple documents on-device OCR through Vision and says supported languages depend on the recognition path/revision. Query actual runtime support rather than assuming every language is available. [Apple Vision](https://developer.apple.com/documentation/vision/recognizing-text-in-images?changes=_9)
+#### 5.3.3 What the user sees
 
-SQLite FTS5 already supports useful building blocks including phrase/prefix queries, Boolean combinations, snippets and highlighting. Reuse the existing database/search architecture where practical; these building blocks do not themselves prove correctness of mailin's extraction, multilingual tokenisation or UI. [SQLite FTS5](https://sqlite.org/fts5.html)
+**Simple search:** one familiar search box, Search/Return action, current source/folder scope and an Advanced Search button. Ordinary text is treated as user text, not SQL or implicit Boolean commands. Existing expert operator syntax remains available through an explicit compatible syntax path; display its recognised filters. Preserve existing saved queries, but do not silently reinterpret an old advanced query as a different simple query.
 
-**Later:** saved searches, “search within these results,” attachment-only browsing, safe indexing inside supported compressed attachments, typo-tolerant suggestions and optional natural-language query assistance. Plain deterministic search remains independently usable.
+**Advanced Search:** open the existing guided sheet/panel with the current query populated. Use normal labels, date pickers and source/folder selectors. The form offers “Match all,” “Match any” and “Exclude” condition groups. An empty group has no effect. The group structure and a plain-language summary make the effective logic visible; multiple populated groups combine with AND. Exclude means none of the excluded conditions may match. If nested groups are exposed, preserve their structure explicitly in the query model and summary.
 
-**Acceptance:** place known target strings only inside attachments, not their filenames or parent messages. Verify retrieval in each advertised format, and separately measure OCR retrieval on a labelled scan set. Check unsupported/encrypted/truncated items are visible. An OCR job completing is not proof that every word was recognised. Test query correctness and performance on the same scale matrix used for import.
+| Field/control | Required behavior |
+|---|---|
+| Sources and folders | Select exact source/folder identities from the existing complete hierarchy. Keep identical names in different sources distinguishable; nested-folder inclusion is explicit. Do not use a source filename substring as a substitute for a folder selection. |
+| Sender and recipients | Search names or addresses with a labelled matching mode. Support any recipient and, where data is available, To/Cc/Bcc selection. Retain original header values; an unavailable Bcc field must not be invented. |
+| Subject and message body | Offer word/phrase conditions with defined behavior. Search the whole supported body, including content beyond former indexing limits. |
+| Message date | Show the date basis and time zone. Use “On or after” and “On or before” calendar dates with inclusive user-facing boundaries. Define behavior for missing/invalid dates; never silently replace sent date with import date. |
+| Has attachments | Any / Yes / No, so an unchecked toggle cannot ambiguously mean either Any or No. |
+| Attachment name | Match the original filename using a labelled text rule, including repeated names, Unicode and punctuation. |
+| Attachment type | Choose a declared file-type/MIME classification. Treat a filename extension as supporting metadata, not proof of file contents; disclose unknown/conflicting classification where relevant. |
+| Attachment content | Search extracted/OCR text separately from the filename. Type/name/content conditions inside one attachment group apply to the same attachment. |
+| Tags/labels and existing filters | Retain currently supported non-AI filters and original source memberships. Do not add new analytics fields to deliver this builder. |
+| Sort | Keep useful existing sorts and stable pagination. Relevance may be used for text searches; a filter-only query uses a clearly stated order. |
+
+The basic form should cover common work without requiring nested expressions or operator knowledge. Complex conditions that cannot be represented in the current form must remain visibly represented in an advanced condition view, or require explicit editing; opening the builder must never discard them.
+
+**Active filters:** show removable/editable chips for the applied conditions and a separate visible scope indicator. Preserve group meaning when summarising chips: a row of flat chips must not hide whether conditions are AND, OR or excluded. Removing a chip reruns the resulting query; Cancel in the editor leaves the applied query unchanged. “Clear filters” clears conditions while retaining the visibly selected archive/folder scope; “Search all sources” is a separate deliberate action. Prevent a stale result from a cancelled query replacing the latest results.
+
+**Example — a document inside an email:**
+
+| User selection | Value |
+|---|---|
+| Source | Work archive |
+| Sender | supplier@example.com |
+| Date | 1 January through 31 March 2026, displayed time zone |
+| One attachment group | Type is PDF **and** content contains the phrase “purchase order” |
+| Exclude | Subject contains newsletter |
+
+Expected result: a message whose qualifying PDF actually contains the phrase. A message with an unrelated PDF plus a DOCX containing the phrase must not pass that attachment group. The result shows the matching PDF and available page context; its parent email opens directly.
+
+**Empty states:** distinguish “No matches in the fully indexed searchable scope,” “No matches found yet; indexing is incomplete,” “Search failed” and “Some conditions could not be evaluated.” Never show an indexing failure as an ordinary empty archive. “Fully indexed” describes coverage of the declared search representation, not guaranteed perfect OCR recognition or support for arbitrary attachment types.
+
+#### 5.3.4 One query model, with explicit meaning
+
+Extend the existing structured query and repository rather than building another search engine. Use a typed expression representation for fields, operators, values and groups; the builder must not depend on concatenating a display string and hoping it reparses identically. An expression tree is an implementation option, not a new user-facing concept.
+
+The same validated model must drive the applied chips, plain-language summary, query execution, coverage scope, match explanations, count calculation and the existing export-selection handoff. Keep a versioned representation for compatibility with existing saved queries. Code names for any new internal types are implementation choices.
+
+Required rules:
+
+1. **Scope is enforced outside user Boolean groups.** Archive/source access, selected folder membership, trash visibility and adopted entitlement restrictions apply to all branches of an OR or exclusion. Apply the same scope to rows, counts, snippets, attachment opening and exports. Do not change pricing/access policy as part of this work.
+2. **Preserve every condition.** Multiple sender conditions must remain multiple conditions with the selected grouping. Reject invalid dates/operators inline; never run a different query by dropping an unsupported condition. Empty search with no filters returns ordinary browsing.
+3. **Define the search unit.** Default rows represent stored message identities and retain source occurrences; search does not perform deduplication. Multiple matching chunks or attachments do not multiply one message into unexplained duplicate rows. A match drawer/list may show each attachment separately.
+4. **Correlate attachment conditions.** Type, filename and content in one attachment group must match one attachment ID. For a positive group, one qualifying attachment is enough. For an excluded attachment group, no qualifying attachment may match; incomplete relevant attachments can leave that test unknown.
+5. **Define text semantics.** Separate ordinary words from phrase mode and deliberate expert syntax. A phrase must occur in order in the same logical text document. All words in an attachment-content condition may span chunks of that attachment, but cannot be assembled from different attachments. General “anywhere in this message” word searches may use the declared message-plus-attachment scope; label that scope.
+6. **Do not call a stemmed/prefix result exact.** Decide and test case, accent, word-boundary, punctuation and normalisation behavior for English, Bengali and Hindi. Keep original text for rendering. Automatic prefix/stemming must not silently change an explicit literal or phrase condition. If tokenisation loses meaningful punctuation, use verified candidate matching or a bounded, cancellable fallback for the promised mode; do not silently return a different meaning. Phrase wording must state whether it uses token adjacency or literal substring equality.
+7. **Use correct date boundaries.** Convert the chosen start day and the start of the day after the chosen end into the displayed time zone's instants; use an inclusive start and exclusive end internally. Preserve original date/time-zone evidence. Test daylight-saving boundaries and missing dates.
+8. **Keep negative conditions honest.** “Text does not contain X” is established only when the relevant content has been evaluated sufficiently to rule out X under the declared matching rules. A positive hit can establish a match before all unrelated content finishes indexing; a missing hit in incomplete content cannot establish absence.
+9. **Use three outcomes for uncertain conditions:** match, no match, and not yet evaluable. NOT of an unknown condition remains unknown. An ALL group is false if any member is false, true if all are true, otherwise unknown. An ANY group is true if any member is true, false if all are false, otherwise unknown. Use these rules for unsupported, locked, stale or unfinished relevant content rather than treating missing index rows as negative evidence.
+10. **Expose confirmed matches and unresolved coverage separately.** Do not present unresolved exclusions as confirmed matches. State when more results may appear after indexing. Count at message level; label unfinished counts “matches found so far” or “counting” instead of presenting a final total. For metadata-only queries, unrelated attachment indexing does not make the metadata query incomplete.
+11. **Handle concurrent work.** Capture query identity and scope/index generation for paging. Do not mix pages or explanations from different queries. When new imports/indexing change results, show an update state and refresh consistently; use the existing stable-selection contract for export. Do not hold a long database snapshot that causes unbounded journal growth merely to keep the screen stable.
+
+**Query safety and responsiveness:** SQL structure, columns and operators come from an allowlist; bind all user values. Escape literal text for the text-search grammar separately—parameter binding does not itself prevent text from being interpreted as search operators. Preserve existing scope enforcement rather than allowing direct user SQL. Use indexed metadata filters, bounded pages and streaming set operations; do not materialise all matching IDs or full message bodies in RAM. An explicit content verifier may stream candidate content, but must not operate only on visible rows. Cancellation must target the requesting query without aborting an unrelated import.
+
+SQLite documents bound parameters and interruptible progress callbacks; use the appropriate mechanisms through the existing repository/connection ownership. These are implementation building blocks, not evidence that mailin already implements every rule above. [SQLite parameters](https://www.sqlite.org/c3ref/bind_blob.html) · [SQLite progress callbacks](https://www.sqlite.org/c3ref/progress_handler.html)
+
+#### 5.3.5 Extraction, complete indexing and safe migration
+
+Use existing tables/jobs where sound. The following are required data relationships, not a demand for a second database or a wholesale schema rewrite.
+
+| Record/relationship | Information needed |
+|---|---|
+| Searchable document | Stable message/attachment/MIME-part identity, parent relationship, field kind, source identity and original content revision/hash |
+| Text chunks | Document ID, chunk order, complete searchable text, global positions/offsets and available page/sheet/slide/section context; distinguish extracted text from OCR |
+| Processing state | Extractor/OCR/tokeniser revision, attempted/completed revision, queued/running/final state, processed units/known totals, failure reason and retry/checkpoint information |
+| Search generation | Query/scope identity and index revision sufficient to prevent stale result, count or cursor reuse |
+| Match evidence | Matched clause, document/field, relevant span and parent/attachment location; enough to explain the actual result |
+
+**FIND-01:** DOCX extraction should address the agreed text-bearing components, including main body/tables and available headers, footers, notes and text boxes. XLSX needs sheet identity and stored cell values/shared strings; distinguish formula text and stored results without evaluating formulas. PPTX needs slide text/tables and supported speaker-note text with location labels. Inventory known skipped text-bearing components and keep coverage partial where the promised component scope was not completed. Do not infer support for DOC/XLS/PPT, macros or embedded binary objects from DOCX/XLSX/PPTX support.
+
+**FIND-02:** detect text-bearing versus image-only PDF pages; use OCR where required and supported. Keep OCR text separate from source bytes and record actual runtime language availability. A processed OCR page may still have recognition errors; execution coverage and recognition accuracy are different measurements. If exact image highlight coordinates are unavailable, show a labelled recognised-text snippet/page instead of fabricating a box. Reuse existing OCR services if suitable. [Apple Vision](https://developer.apple.com/documentation/vision/recognizing-text-in-images?changes=_9)
+
+**FIND-07:** chunking is a work/memory boundary, never a permanent content cutoff. Preserve token/Unicode boundaries and logical document order. Find words at document ends and phrases crossing chunks. Fixed overlap alone is insufficient for an arbitrarily longer phrase: use positions or a streamed adjacent-chunk verification path that cannot prefilter the true match away. Do not allow phrases to bridge two attachments or two messages. No normal required-format item may finish as fully indexed while a known text tail remains unprocessed.
+
+**Atomicity and resume:** publish a completed document revision only when its required chunks and state agree. Partial indexing may return confirmed hits if labelled; unfinished content remains visible. Stop obsolete jobs from publishing over a changed source/attachment revision. Keep query results tied to the correct content generation. Extracted/indexed data must not outlive a deleted parent incorrectly, and cleanup must not invalidate active jobs.
+
+**Migration:** add compatible schema/index revisions and run resumable backfill over existing archives. Do not require reimporting all mail merely to obtain newly supported extraction. Reuse available original/managed bytes and the existing missing-source/relink behavior. Preflight additional disk space; preserve a working old index where safe while labelling stale/incomplete coverage until replacement is ready. Interrupted migration/backfill must resume without duplicate documents. Test current archives, professional records, holds and saved queries through upgrade.
+
+**FIND-06:** use bounded memory, task concurrency, decompression/nesting limits and cancellable time budgets. Resource-paused, locked, unsupported or failed items remain visible with actionable next steps. A guard stopping an extraction cannot count as successful full processing. This release still has the same supported attachment families and deferred extraction formats as section 4.
+
+SQLite FTS5 provides phrase/Boolean querying and snippet/highlight primitives. The document/chunk relationships, coverage rules and cross-boundary correctness above are mailin requirements to implement and test, not automatic guarantees supplied by the engine. [SQLite FTS5](https://sqlite.org/fts5.html)
+
+#### 5.3.6 Match explanations and indexing disclosure
+
+**For each result, show enough to answer “Why is this here?”**
+
+- Label the actual matched field: Subject, Message body, Attachment filename, Attachment text or OCR text. Display other satisfied metadata filters separately.
+- Include a short safely rendered snippet from the matching text and highlight actual spans. Do not highlight excluded words or a condition that did not contribute to the successful OR branch.
+- For an attachment, show its name, parent message and available page/sheet/slide/section. Distinguish two attachments with the same filename by stable identity and context.
+- Open the matching attachment/location where supported, with a reliable route to its parent email and source folder. If a precise location cannot be shown, say so and still open the correct document.
+- A filter-only result can say “Matches sender and date filters.” It must not fabricate a text highlight. If stored match evidence is unavailable, show an explanation-unavailable state and recover it; never guess Body.
+- Render snippets as escaped/attributed text. Keep safe-viewer protections; a highlighted HTML fragment must not activate script, macros, tracking URLs or remote images.
+
+**Coverage is a property of the current query and scope.** Reuse the current coverage UI, adding the relevant body/attachment states. Keep the summary available above both results and empty states, with a detail action and per-item status. Do not put it behind the AI or Professional module.
+
+| Coverage state | User-facing meaning and action |
+|---|---|
+| Complete for the declared searchable scope | All required processing for this query's relevant content has finished. No unsupported/blocked part is silently counted as searched. OCR accuracy remains separately qualified. |
+| Queued / indexing | Show known processed/remaining counts and the affected scope; search confirmed indexed content now. If the denominator is unknown, show activity/counts rather than an invented percentage. |
+| Partial / stale / resource-paused | Explain that some content or a newer revision remains unsearched; offer Resume/Retry or rebuild actions appropriate to the cause. |
+| Processed with no text found | Explain that the extractor/OCR returned no text, not that the file is empty or proves the absence of all human-readable content. |
+| Unsupported | Retain filename/metadata search and original-file access; identify that internal contents are not searchable with current support. |
+| Locked / missing source / failed / cancelled | Identify affected items, retain the reason and offer supported actions such as Reconnect, Retry or Resume. Do not imply the app can decrypt every protected format. |
+| Coverage unavailable | Show that completeness could not be checked, with Retry/details. Never convert the error into zero pending items or suppress the warning. |
+
+Counts must refer to the selected source/folder/access scope or clearly label a broader denominator when exact query-specific coverage cannot yet be calculated. For complex Boolean queries, do not pretend a simple global percentage is exact query coverage. Relevant unknown parts make absence/exclusion conclusions uncertain under section 5.3.4.
+
+Use stage-specific wording such as “Messages imported; attachment indexing continues.” A small persistent incomplete-state indicator remains even if the user collapses details. Errors describe what is safe and the next action. Add VoiceOver labels and keyboard focus behavior for chips, groups, highlights, coverage and recovery actions; help cannot depend on hovering or colour alone.
+
+#### 5.3.7 Implementation sequence within FIND-01–07
+
+| Step | Work and existing components | Exit evidence |
+|---|---|---|
+| 1. Define the executable contract | Reconcile actual branch; inventory query fields and source/attachment identities. Write fixtures for date boundaries, grouping, exclusions and same-attachment matching. Extend existing query/repository types only as needed. | Every form condition has a defined execution rule, coverage requirement and expected test result. |
+| 2. Make execution and state truthful | Update query compiler, repository/FTS paths, central scope and coverage models. Fix dropped conditions, exclusion-only behavior, failed coverage counters and stale-query replacement. | Query conditions are preserved; no scope escape or complete-looking error state; tests pass with AI off. |
+| 3. Complete the searchable corpus | Implement required Office extraction/OCR, per-item state/versioning, full chunk indexing and resumable backfill. Work on small real fixtures before scale tiers. | Required supported text, document tails and cross-chunk phrases are found with correct parent identity and honest OCR/unsupported states. |
+| 4. Finish the builder and active filters | Extend GuidedSearchView and list integration; bind form, chips, summary and execution to one model. Preserve existing expert queries and saved-query compatibility. | Apply, Cancel, edit, remove and clear operations change exactly the intended query; keyboard/VoiceOver flows work. |
+| 5. Return evidence with every match | Extend result records and match-field UI; retrieve actual spans/locations, apply safe highlights and open correct attachments. | Every highlighted/labelled hit is supported by executed-query evidence; repeated names and filter-only searches are correct. |
+| 6. Verify migration, scale and user success | Exercise the acceptance matrix below, existing search regression suites, real formats and master-plan benchmarks. Test offline/AI-disabled use, interruption, upgrade and existing export handoff. | All FIND requirements have candidate-specific evidence and no search-caused regression in the other four workflows. |
+
+Reuse and extend the existing [V2SearchTests.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailinTests/V2SearchTests.swift) and [SearchMatchFieldsTests.swift](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/maxmailinTests/SearchMatchFieldsTests.swift) where applicable. Add integration/UI tests for behavior the unit suites cannot establish. These are proposed execution steps; this planning update did not run the app or its tests.
+
+#### 5.3.8 Required acceptance cases
+
+These are test cases attached to the existing FIND IDs, not extra release-scope identifiers. Expected result IDs and content locations must come from independently constructed fixtures or a trusted independent oracle, not from the same search implementation being tested.
+
+| Case | Requirement mapping | Pass condition |
+|---|---|---|
+| Basic text and field filtering | FIND-04 | Simple and builder queries with equivalent declared semantics return the same expected message set across the full selected archive. |
+| Group logic and repeated fields | FIND-04 | All/Any/Exclude combinations, repeated senders and parentheses/group boundaries preserve meaning. No condition is overwritten or ignored. |
+| Exclusion with no positive text | FIND-03/04 | Sender/date/subject-only filters plus an exclusion work. An exclusion-only query uses the scoped universe and does not drop the exclusion or admit unknown content as verified absence. |
+| Incomplete negative evidence | FIND-03/04 | Locked, unsupported, stale and not-yet-indexed relevant text produce unknown exclusion outcomes. Completing indexing updates the confirmed result set correctly. |
+| Scope protection | FIND-04/06 | OR, exclusion and text-only queries cannot escape selected sources/folders, trash rules or adopted access scope; counts/snippets/open/export agree. |
+| Same-attachment correlation | FIND-04/05 | A PDF plus an unrelated DOCX containing the term fails a PDF-content group; a matching PDF passes. One message with several hits is not accidentally multiplied. |
+| Dates and missing metadata | FIND-04 | End-date inclusivity, time zones, daylight-saving transitions and missing dates match the documented rule. Absent Bcc is not fabricated. |
+| Punctuation and deliberate syntax | FIND-04/06 | Quotes, apostrophes, parentheses, colons, percent/underscore characters, paths and SQL-looking input cannot change query structure or cause silent broadening. Test meaningful punctuation such as C++ and invoice identifiers under the declared matching mode. |
+| Phrase correctness | FIND-04/07 | Ordered phrase, nonadjacent words, stemming/prefix differences and reversed words are distinguished according to the stated mode. A phrase never bridges unrelated attachments/messages. |
+| Required extraction types | FIND-01 | Known strings appearing only inside each required supported attachment type are found with correct parent and available component context. |
+| Scans and mixed PDFs | FIND-02/05 | OCR hits reach ordinary search, open the correct page/document and are labelled. No duplicate equivalent hit is caused by both OCR and embedded text; measured OCR failures remain visible. |
+| Languages and Unicode | FIND-01/02/04/07 | English, Bengali and Hindi extracted text pass deterministic fixtures; OCR language coverage is tested separately. Combining marks and chunk boundaries do not corrupt matching or highlight ranges. |
+| Former cutoffs and long phrases | FIND-07 | Targets beyond 500,000 attachment characters, the former body budget and cross-chunk boundaries are found. A phrase longer than the chosen overlap still works. Large source-locator messages participate once their content is processed. |
+| Match explanation truth | FIND-05 | Attachment-only, body-only, subject-only, metadata-only and OR-branch cases name actual evidence; no unexplained hit is guessed to be Body. Excluded words are not highlighted as reasons for inclusion. |
+| Repeated names and navigation | FIND-05 | Two same-named attachments and same-named folders in different sources open the right identities; highlights/snippets correspond to the selected result. |
+| Safe rendering | FIND-05/06 | HTML/script-like content stays inert in snippets and previews; highlights do not fetch remote resources or execute embedded content. |
+| Coverage/error states | FIND-03 | Pending, no-text, unsupported, failed, locked, stale, cancelled and unavailable coverage are visibly distinct. Counter errors cannot yield “complete” or a misleading ordinary zero-result screen. |
+| Query-relevant coverage | FIND-03/04 | A metadata-only query remains complete when its metadata is complete despite unrelated attachment jobs; attachment-content queries disclose the relevant gaps and denominator. |
+| Paging, count and cancellation | FIND-04/06 | Every expected match is reachable without hidden first-N truncation; paging/counts agree at a stable generation. Cancelling an old query cannot replace new results or abort an unrelated import. |
+| Upgrade and backfill | FIND-01/02/03/07 | Existing archives and saved queries remain usable; interrupted reindexing resumes without duplicate parts, lost originals or false full-coverage states. |
+| Scale and responsiveness | FIND-04/06/07 | Run the master's declared datasets/hardware, record p95 warm search and cold/background performance, peak memory and index disk cost. Existing performance targets remain targets until measured; heavy fallbacks show cancellable progress. |
+| AI independence and privacy | FIND-01–07 | All core cases pass offline with AI disabled; there is no model/network dependency and no message/attachment/query-text telemetry introduced. |
+| Existing export handoff | FIND-04/05 | Export receives the intended stable message selection, with known search incompleteness disclosed. Exporting all found rows does not imply the search found every possible match. Existing OUT requirements remain unchanged. |
+| User task | FIND-03/04/05 | Representative users build the supplied sender/date/PDF-content search, edit/remove a filter, open the correct attachment and recognise a deliberately incomplete search without developer coaching. Use the master's pilot target; fix misleading or destructive outcomes. |
+
+#### 5.3.9 Completion and boundaries
+
+Search is complete for this release only when all seven FIND rows have executed evidence tied to the actual candidate, the required supported content is searchable in full, every applied condition is honoured, match explanations are grounded and incomplete coverage remains visible. Test AI-disabled operation, compatibility with existing queries and the other four archive workflows. Source code presence, a successful compile or a demonstration on a few messages is insufficient.
+
+Deliver within the existing master-plan release package:
+
+1. Updated guided form, active filters, query model/compiler and repository integration.
+2. Required extractors/OCR integration, versioned coverage states and complete resumable indexing/backfill.
+3. Evidence-backed result explanations, safe highlights and correct parent/attachment navigation.
+4. Automated/integration/UI results for the acceptance cases, measured scale evidence, and any remaining blocker.
+5. Updated in-app search help and advertised coverage consistent with the tested implementation.
+
+**Later:** new saved-search management, search-within-results, a separate attachment-only browser, typo/synonym expansion, new extraction formats, searching inside compressed attachments and optional natural-language assistance. Retain existing working features. Raw SQL editing and AI-generated SQL are not required to deliver this plan.
+
+This amendment expands FIND-04 and its dependencies within FIND-01–07. It does not add formats, change entitlement policy, expand AI/analytics, or change OPEN, FOLD, DUP, OUT, LIFE or the ten master release gates.
 
 ### 5.4. Identify duplicates without losing information
 

@@ -209,6 +209,14 @@ final class ArchiveDataService {
         return try await sqlite.parserTagCounts(limit: limit)
     }
 
+    /// FIND-04: rows that pass the search's positive part but whose relevant
+    /// text is not indexed yet — "may still match", counted apart.
+    func unresolvedCount(query: EmailQuery) async throws -> Int {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return 0 }
+        return try await sqlite.specUnresolvedCount(query)
+    }
+
     /// FOLD-02: every folder of every source with its direct message count.
     func folderNodes() async throws -> [ArchiveFolderNode] {
         guard let repo = repository as? EmailStoreRepository,

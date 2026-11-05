@@ -1575,12 +1575,12 @@ final class V2CutoverTests: XCTestCase {
     func testFOLD02_schemaGuardMatchesTheMigrationChain() async throws {
         let env = try makeEnv()
         let v = try await env.store.schemaVersion()
-        XCTAssertEqual(v, 21, "v21 adds folders")
+        XCTAssertEqual(v, 22, "v21 adds folders, v22 the search chunks")
         XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion, "the guard follows the chain")
         // Reopening the same directory is the real check: a lagging guard refuses here.
         let reopened = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
         let reopenedVersion = try await reopened.schemaVersion()
-        XCTAssertEqual(reopenedVersion, 21)
+        XCTAssertEqual(reopenedVersion, SQLiteEmailStore.currentSchemaVersion)
         let folders = try await reopened.folderTotal()
         XCTAssertEqual(folders, 0)
     }
@@ -1900,6 +1900,274 @@ final class V2CutoverTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ImportReceipt.SourceRecord.self, from: Data(legacy.utf8))
         XCTAssertNil(decoded.parsed)
         XCTAssertNil(ImportReceiptView.accountingLine(for: decoded))
+    }
+
+    // MARK: - Five jobs FIND-04 / FIND-07 — one typed search model over the chunk index
+
+    private func chunkedEnv() throws -> Env {
+        SearchChunkPolicy.isEnabled = true
+        return try makeEnv()
+    }
+
+    private func mail(_ i: Int, from: String, to: String = "me@example.com", subject: String, body: String,
+                      date: String = "Wed, 01 Mar 2023 12:00:00 +0000", attachments: [AttachmentMetadata] = []) -> MBOXParser.RawEmail {
+        var e = makeEmail(i: i, total: 1, body: body)
+        e.headers["From"] = from
+        e.headers["To"] = to
+        e.headers["Subject"] = subject
+        e.headers["Date"] = date
+        e.attachments = attachments
+        return e
+    }
+
+    private func ids(_ env: Env, _ spec: SearchSpec, scope: EmailQuery = .all) async throws -> Set<String> {
+        var q = scope
+        q.spec = spec
+        var subjects = Set<String>()
+        for try await batch in await env.archive.streamFullEmails(query: q, batchSize: 50) {
+            for e in batch { subjects.insert(e.headers["Subject"] ?? "") }
+        }
+        let count = try await env.archive.count(query: q)
+        XCTAssertEqual(count, subjects.count, "count and rows agree for \(spec)")
+        return subjects
+    }
+
+    private func expectIDs(_ env: Env, _ spec: SearchSpec, scope: EmailQuery = .all, _ expected: Set<String>,
+                           _ message: String = "", file: StaticString = #filePath, line: UInt = #line) async throws {
+        let found = try await ids(env, spec, scope: scope)
+        XCTAssertEqual(found, expected, message, file: file, line: line)
+    }
+
+    private func expectUnresolved(_ env: Env, _ query: EmailQuery, _ expected: Int,
+                                  _ message: String = "", file: StaticString = #filePath, line: UInt = #line) async throws {
+        let n = try await env.archive.unresolvedCount(query: query)
+        XCTAssertEqual(n, expected, message, file: file, line: line)
+    }
+
+    private func expectCount(_ env: Env, _ query: EmailQuery, _ expected: Int,
+                             _ message: String = "", file: StaticString = #filePath, line: UInt = #line) async throws {
+        let n = try await env.archive.count(query: query)
+        XCTAssertEqual(n, expected, message, file: file, line: line)
+    }
+
+    func testFIND04_groupsRepeatedFieldsAndExclusionsAreAllHonoured() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        try await env.store.insertBatch([
+            mail(1, from: "alice@example.com", subject: "Budget", body: "the quarterly numbers"),
+            mail(2, from: "bob@example.com", subject: "Budget newsletter", body: "unsubscribe below"),
+            mail(3, from: "carol@example.com", subject: "Picnic", body: "bring a blanket"),
+        ], batchSize: 10)
+
+        // Groups combine with AND; any-group ORs; exclude removes.
+        let spec = SearchSpec(groups: [
+            SearchGroup(.all, [SearchCondition(.sender, .contains, "example.com")]),
+            SearchGroup(.any, [SearchCondition(.sender, .contains, "alice"), SearchCondition(.sender, .contains, "bob")]),
+            SearchGroup(.exclude, [SearchCondition(.subject, .contains, "newsletter")]),
+        ])
+        try await expectIDs(env, spec, ["Budget"])
+
+        // Two sender conditions in one all-group are BOTH required — neither overwrites the other.
+        let both = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "alice"), SearchCondition(.sender, .contains, "bob")])])
+        try await expectIDs(env, both, [])
+        let either = SearchSpec(groups: [SearchGroup(.any, [SearchCondition(.sender, .contains, "alice"), SearchCondition(.sender, .contains, "bob")])])
+        try await expectIDs(env, either, ["Budget", "Budget newsletter"])
+
+        // Empty groups and empty conditions have no effect.
+        let padded = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "   ")]), SearchGroup(.exclude), SearchGroup(.any, [SearchCondition(.subject, .contains, "Picnic")])])
+        try await expectIDs(env, padded, ["Picnic"])
+        XCTAssertTrue(SearchSpec(groups: [SearchGroup(.exclude)]).isEmpty)
+    }
+
+    func testFIND04_exclusionWithNoPositiveText_usesTheScopedUniverse_andUnknownsAreNotAbsent() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        try await env.store.insertBatch([
+            mail(10, from: "a@x.com", subject: "Offer", body: "click to unsubscribe from this list"),
+            mail(11, from: "b@x.com", subject: "Minutes", body: "the meeting notes"),
+        ], batchSize: 10)
+        // One email stored with the switch OFF: its body is not in the chunk index.
+        SearchChunkPolicy.isEnabled = false
+        try await env.store.insertBatch([mail(12, from: "c@x.com", subject: "Unknown body", body: "whatever it says")], batchSize: 10)
+        SearchChunkPolicy.isEnabled = true
+
+        // Exclusion only: the universe is the scope, the exclusion is applied —
+        // and the un-indexed email is neither confirmed nor excluded.
+        let spec = SearchSpec(groups: [SearchGroup(.exclude, [SearchCondition(.body, .phrase, "unsubscribe")])])
+        try await expectIDs(env, spec, ["Minutes"], "confirmed: evaluated and not excluded")
+        var q = EmailQuery.all; q.spec = spec
+        let unresolved = try await env.archive.unresolvedCount(query: q)
+        XCTAssertEqual(unresolved, 1, "the email whose body is not indexed may still match")
+
+        // Indexing it resolves it.
+        let job = SearchDocBackfillJob.shared
+        SearchDocBackfillJob.testStoreOverride = env.store
+        defer { SearchDocBackfillJob.testStoreOverride = nil }
+        let outcome = await job.run(pageSize: 1)
+        XCTAssertEqual(outcome.indexed, 1)
+        XCTAssertEqual(outcome.remaining, 0)
+        try await expectIDs(env, spec, ["Minutes", "Unknown body"])
+        let after = try await env.archive.unresolvedCount(query: q)
+        XCTAssertEqual(after, 0)
+
+        // A positive text condition in an all-group is never "unknown": a hit is a hit.
+        let positive = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "meeting notes")])])
+        try await expectIDs(env, positive, ["Minutes"])
+        XCTAssertFalse(positive.hasUncertainTextConditions)
+    }
+
+    func testFIND04_attachmentConditionsMustHoldForTheSameAttachment() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        let x = mail(20, from: "s@x.com", subject: "X", body: "see files", attachments: [
+            AttachmentMetadata(filename: "report.pdf", mimeType: "application/pdf", size: 10),
+            AttachmentMetadata(filename: "notes.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 10)])
+        let y = mail(21, from: "s@x.com", subject: "Y", body: "see files", attachments: [
+            AttachmentMetadata(filename: "brief.pdf", mimeType: "application/pdf", size: 10),
+            AttachmentMetadata(filename: "memo.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 10)])
+        try await env.store.insertBatch([x, y], batchSize: 10)
+        // The attachment job's documents, as it would write them.
+        try await env.store.indexAttachmentSearchDocuments(emailID: x.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "report.pdf", text: "Purchase Order 4471 approved", state: .complete, extractorVersion: 2, ocr: false),
+            AttachmentSearchDocument(ordinal: 1, filename: "notes.docx", text: "other text", state: .complete, extractorVersion: 2, ocr: false)])
+        try await env.store.indexAttachmentSearchDocuments(emailID: y.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "brief.pdf", text: "nothing relevant", state: .complete, extractorVersion: 2, ocr: false),
+            AttachmentSearchDocument(ordinal: 1, filename: "memo.docx", text: "the purchase order is attached", state: .complete, extractorVersion: 2, ocr: false)])
+
+        let pdfWithPhrase = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "PDF", contentMatch: .phrase, content: "purchase order")])])
+        try await expectIDs(env, pdfWithPhrase, ["X"], "Y's phrase is in a DOCX, not its PDF")
+        let anyAttachment = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(contentMatch: .phrase, content: "purchase order")])])
+        try await expectIDs(env, anyAttachment, ["X", "Y"])
+        let named = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "memo", type: "docx", contentMatch: .allWords, content: "purchase")])])
+        try await expectIDs(env, named, ["Y"])
+
+        // Excluding a PDF phrase: X is excluded, Y confirmed; nothing unknown (every attachment evaluated).
+        let excluded = SearchSpec(groups: [SearchGroup(.exclude, attachments: [AttachmentConditionGroup(type: "PDF", contentMatch: .phrase, content: "purchase order")])])
+        try await expectIDs(env, excluded, ["Y"])
+        var q = EmailQuery.all; q.spec = excluded
+        try await expectUnresolved(env, q, 0)
+        // A third email whose attachment text was never extracted is unresolved under that exclusion.
+        let z = mail(22, from: "s@x.com", subject: "Z", body: "see file", attachments: [AttachmentMetadata(filename: "scan.pdf", mimeType: "application/pdf", size: 10)])
+        try await env.store.insertBatch([z], batchSize: 10)
+        try await expectIDs(env, excluded, ["Y"], "Z cannot be confirmed")
+        try await expectUnresolved(env, q, 1)
+    }
+
+    func testFIND07_wholeBodyIsIndexed_tailAndCrossChunkPhraseAreFound() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        // ~5 MB body: far beyond the previous 4 MiB budget. A phrase is planted
+        // exactly across the first chunk boundary, and a word at the very end.
+        let filler = String(repeating: "lorem ipsum dolor sit amet ", count: 190_000)   // ~5.1 M characters
+        let chunks = SearchChunker.chunks(of: filler)
+        XCTAssertGreaterThan(chunks.count, 1)
+        // The phrase starts at the last word boundary before chunk 0 ends, so
+        // it straddles the boundary and must be whole in chunk 1's overlap.
+        var boundary = chunks[0].count - 3
+        while boundary > 0, filler[filler.index(filler.startIndex, offsetBy: boundary)] != " " { boundary -= 1 }
+        var body = filler
+        let phrase = "zephyr quantum ledger"
+        let planted = " " + phrase + " "
+        body.replaceSubrange(body.index(body.startIndex, offsetBy: boundary)..<body.index(body.startIndex, offsetBy: boundary + planted.count), with: planted)
+        XCTAssertTrue(SearchChunker.chunks(of: body)[0].count < boundary + planted.count, "the phrase really crosses the first boundary")
+        body += " tailmarker"
+        try await env.store.insertBatch([mail(30, from: "long@x.com", subject: "Long", body: body),
+                                         mail(31, from: "short@x.com", subject: "Short", body: "zephyr elsewhere, quantum apart, ledger alone")], batchSize: 10)
+
+        let coverage = try await env.store.searchDocCoverage()
+        XCTAssertGreaterThan(coverage.bodyChunks, 100, "the body is in many chunks: \(coverage.bodyChunks)")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "tailmarker")])]), ["Long"], "the end of the document is searchable")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, phrase)])]), ["Long"], "the phrase across the chunk boundary is found, and the scattered words are not")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, phrase)])]), ["Long", "Short"], "all-words is a different, stated mode")
+        // Chunk verification: the stored chunks reassemble to the text.
+        let stored = try await env.store.searchChunks(emailID: UUID(), kind: .body, ordinal: 0)
+        XCTAssertTrue(stored.isEmpty)
+    }
+
+    func testFIND04_dateDaysAreInclusiveInTheDisplayedZone() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        // 23:30 and 00:30 Kolkata around midnight 31 March → 1 April 2024.
+        try await env.store.insertBatch([
+            mail(40, from: "a@x.com", subject: "Late March", body: "a", date: "Sun, 31 Mar 2024 23:30:00 +0530"),
+            mail(41, from: "a@x.com", subject: "Early April", body: "b", date: "Mon, 01 Apr 2024 00:30:00 +0530"),
+        ], batchSize: 10)
+        let kolkata = "Asia/Kolkata"
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.dateOnOrBefore, .equals, "2024-03-31", timeZone: kolkata)])]), ["Late March"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.dateOnOrAfter, .equals, "2024-04-01", timeZone: kolkata)])]), ["Early April"])
+        // In UTC both instants fall on 31 March.
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.dateOnOrBefore, .equals, "2024-03-31", timeZone: "UTC")])]), ["Late March", "Early April"])
+        // An invalid date is a validation problem, not a different query.
+        let bad = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.dateOnOrAfter, .equals, "yesterday")])])
+        XCTAssertEqual(bad.problems().count, 1)
+        try await expectIDs(env, bad, [], "it matches nothing rather than everything")
+    }
+
+    func testFIND06_punctuationAndSQLLookingInputCannotChangeTheQuery() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        try await env.store.insertBatch([
+            mail(50, from: "dev@x.com", subject: "Compilers", body: "We moved the parser from C to C++ last week."),
+            mail(51, from: "dev@x.com", subject: "Plain C", body: "Still writing C here, and some Rust."),
+            mail(52, from: "ops@x.com", subject: "Invoice", body: "Reference PO-4471 and \"quoted\" words; 100% done."),
+        ], batchSize: 10)
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .contains, "C++")])]), ["Compilers"], "the ++ is required, not dropped")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .contains, "pars")])]), ["Compilers"], "contains matches word starts")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .contains, "arser")])]), [], "…but not the inside of a word (stated)")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "parsers")])]), [], "no stemming: the plural does not find the singular")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .contains, "PO-4471")])]), ["Invoice"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .contains, "\"quoted\" words")])]), ["Invoice"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .contains, "100%")])]), ["Invoice"])
+        let injection = "'; DROP TABLE emails; --"
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.subject, .contains, injection)])]), [])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "OR NOT (\"x\") AND *")])]), [], "FTS syntax in a value is just words")
+        try await expectCount(env, .all, 3, "the table is still there")
+    }
+
+    func testFIND04_scopeIsEnforcedOutsideUserLogic() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        var inbox = mail(60, from: "a@x.com", subject: "In folder", body: "topic alpha"); inbox.tags = ["Inbox"]
+        var other = mail(61, from: "a@x.com", subject: "Elsewhere", body: "topic alpha"); other.tags = ["Archive"]
+        try await env.store.insertBatch([inbox, other], batchSize: 10)
+        let folderNodes = try await env.store.folderNodes()
+        let folder = try XCTUnwrap(folderNodes.first { $0.path == "Inbox" })
+        var scope = EmailQuery.all
+        scope.folderID = folder.folderID
+        // An OR over everything cannot leave the folder.
+        let wide = SearchSpec(groups: [SearchGroup(.any, [SearchCondition(.body, .allWords, "alpha"), SearchCondition(.sender, .contains, "a@x.com")])])
+        try await expectIDs(env, wide, scope: scope, ["In folder"])
+        // Nor can an exclusion.
+        let exclusion = SearchSpec(groups: [SearchGroup(.exclude, [SearchCondition(.subject, .contains, "zzz")])])
+        try await expectIDs(env, exclusion, scope: scope, ["In folder"])
+        var q = scope; q.spec = exclusion
+        try await expectUnresolved(env, q, 0)
+    }
+
+    func testFIND07_chunkerKeepsWordsWholeAndOverlaps() {
+        let words = (0..<20_000).map { "w\($0)" }.joined(separator: " ")
+        let chunks = SearchChunker.chunks(of: words, chunk: 4_000, overlap: 200)
+        XCTAssertGreaterThan(chunks.count, 20)
+        for (i, c) in chunks.enumerated() {
+            XCTAssertLessThanOrEqual(c.count, 4_000)
+            XCTAssertFalse(c.hasPrefix(" ") && i == 0)
+            // No word is cut: every chunk boundary word reappears whole in the next chunk's overlap.
+            if i + 1 < chunks.count {
+                let lastWord = c.split(separator: " ").last.map(String.init) ?? ""
+                XCTAssertTrue(chunks[i + 1].contains(lastWord), "chunk \(i) ends with \(lastWord), missing from the overlap")
+            }
+        }
+        XCTAssertEqual(SearchChunker.chunks(of: ""), [])
+        XCTAssertEqual(SearchChunker.chunks(of: "short"), ["short"])
+        XCTAssertEqual(SearchTextTokens.words(in: "C++ and PO-4471, \"quoted\"!"), ["C", "and", "PO", "4471", "quoted"])
+        XCTAssertEqual(SearchTextTokens.quoted("a\"b"), "\"a\"\"b\"")
     }
 
     /// Deletion tombstones (schema v13): deleting emails records their identity

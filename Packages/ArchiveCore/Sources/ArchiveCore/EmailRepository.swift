@@ -89,6 +89,9 @@ struct EmailQuery: Sendable, Equatable, Codable {
     /// sidebar's folder tree. Unlike `userTag`, "Inbox" of two archives are
     /// two different values.
     var folderID: Int64? = nil
+    /// FIND-04: the typed search model (groups, conditions, attachment
+    /// groups). Compiled into SQL with the other fields; scope stays outside it.
+    var spec: SearchSpec? = nil
     /// Source file name contains (resolved via `sources`/`forensic_source_hashes`).
     var sourceFileName: String? = nil
     /// Derived-analysis filters (persisted `derived` table — archive-wide AI
@@ -139,7 +142,7 @@ struct EmailQuery: Sendable, Equatable, Codable {
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
             || minSenderMessages != nil || newestLimit != nil || !(exclusions ?? []).isEmpty
-            || recovery != nil || folderID != nil
+            || recovery != nil || folderID != nil || !(spec?.isEmpty ?? true)
     }
 
     var isEmpty: Bool {
@@ -463,7 +466,8 @@ extension EmailStoreRepository: RankedSearchRepository {
             query.messageType ?? "-", String(query.pinnedOnly),
             String(query.includeTrashed), query.sort.rawValue,
             query.newestLimit.map(String.init) ?? "-",
-            query.folderID.map(String.init) ?? "-"
+            query.folderID.map(String.init) ?? "-",
+            query.spec.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? "-"
         ]
         let listFilters: [String] = [
             query.senders.joined(separator: ","), query.recipients.joined(separator: ","),

@@ -81,11 +81,27 @@ final class AttachmentTextIndexJob {
         let ordinal: Int
         let filename: String
         let mimeType: String
-        /// Text to index, when there is any (already cut at the cap).
+        /// Text to index in the previous (capped) table, when there is any.
         let text: String?
+        /// FIND-07: the whole text, for the chunk index — never cut.
+        let fullText: String?
         let state: AttachmentCoverageState
         let extractor: String
         let note: String?
+
+        /// The chunk index's document for this attachment.
+        var searchDocument: AttachmentSearchDocument {
+            let docState: SearchDocState
+            switch state {
+            case .extracted, .truncated: docState = .complete   // the chunk index holds the whole text
+            case .noText: docState = .noText
+            case .unsupported: docState = .unsupported
+            case .locked: docState = .locked
+            case .failed: docState = .failed
+            }
+            return AttachmentSearchDocument(ordinal: ordinal, filename: filename, text: docState == .complete ? fullText : nil,
+                                            state: docState, extractorVersion: AttachmentTextIndexJob.extractorVersion, ocr: extractor == "ocr")
+        }
 
         func coverageRow(emailID: UUID) -> AttachmentCoverageRow {
             AttachmentCoverageRow(
@@ -180,6 +196,12 @@ final class AttachmentTextIndexJob {
             if let coverage {
                 let requeued = try await Self.requeueStale(store: store, coverage: coverage)
                 if requeued > 0 { Self.logger.info("attachment index: \(requeued) email(s) re-queued for extractor v\(Self.extractorVersion)") }
+            }
+            // FIND-07: attachments indexed before the chunk index existed go
+            // back on the work list so their whole text is indexed too.
+            if SearchChunkPolicy.isEnabled {
+                let requeued = try await Self.requeueForChunkIndex(store: store)
+                if requeued > 0 { Self.logger.info("attachment index: \(requeued) email(s) re-queued for the chunk index") }
             }
             while true {
                 if Task.isCancelled { break }
@@ -289,6 +311,14 @@ final class AttachmentTextIndexJob {
     /// lists is then `failed` with `unreadable` as the reason.
     private func recordCoverage(_ coverage: AttachmentCoverageStore?, emailID: UUID,
                                 extractions: [Extraction]?, unreadable: String) async {
+        // FIND-07: the chunk index gets each attachment's whole text (or its state).
+        if SearchChunkPolicy.isEnabled, let extractions {
+            do {
+                try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: extractions.map(\.searchDocument))
+            } catch {
+                Self.logger.error("attachment search documents not written for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
         guard let coverage else { return }
         let rows: [AttachmentCoverageRow]
         if let extractions {
@@ -317,6 +347,20 @@ final class AttachmentTextIndexJob {
             try await store.attachmentTextStateReset(emailIDs: ids)
             try coverage.remove(emailIDs: ids)
             total += ids.count
+        }
+        return total
+    }
+
+    /// FIND-07: emails whose attachments were attempted before the chunk
+    /// index existed are re-queued, a page at a time. Returns how many.
+    static func requeueForChunkIndex(store: SQLiteEmailStore) async throws -> Int {
+        var total = 0
+        while !Task.isCancelled {
+            let ids = try await store.attachmentEmailsWithoutSearchDocs(limit: 500)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            total += ids.count
+            if ids.count < 500 { break }
         }
         return total
     }
@@ -383,10 +427,12 @@ final class AttachmentTextIndexJob {
     nonisolated static func classify(_ attachment: AttachmentMetadata, ordinal: Int, ocr: Bool) -> Extraction {
         let result = read(attachment, ocr: ocr)
         var text = result.text
+        var fullText = result.text
         var state = result.state
         if let full = text {
             if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 text = nil
+                fullText = nil
                 state = .noText
             } else if full.count > maxTextPerAttachment {
                 text = String(full.prefix(maxTextPerAttachment))
@@ -394,7 +440,7 @@ final class AttachmentTextIndexJob {
             }
         }
         return Extraction(ordinal: ordinal, filename: attachment.filename, mimeType: attachment.mimeType,
-                          text: text, state: state, extractor: result.extractor, note: result.note)
+                          text: text, fullText: fullText, state: state, extractor: result.extractor, note: result.note)
     }
 
     /// One attachment through the extractor that fits it.

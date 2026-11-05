@@ -73,6 +73,12 @@ enum CapabilityWiring {
         case .selfContainedArchive:
             // Five jobs LIFE-01: read by BulkImportCoordinator before each file is parsed.
             SourceCopyPolicy.isEnabled = isOn
+        case .searchQueryModel:
+            // Five jobs FIND-07: new inserts write the chunk index; the backfill
+            // job fills it for what is already stored; the attachment job adds
+            // attachment documents.
+            SearchChunkPolicy.isEnabled = isOn
+            if isOn { Task { @MainActor in try? await Task.sleep(for: .seconds(3)); SearchDocBackfillJob.shared.kickIfNeeded() } }
         case .v3AlertsAnomalies:
             // §3-A1: background findings over the whole archive.
             BackgroundAnalysisManager.wholeArchiveEnabled = isOn

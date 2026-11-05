@@ -779,7 +779,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
     ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
-    static let currentSchemaVersion = 21   // v21: FOLD-02 folders (FolderModel.swift)
+    static let currentSchemaVersion = 22   // v21: FOLD-02 folders; v22: FIND-07 search chunks (SearchChunkIndex.swift)
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1228,6 +1228,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 21;")
             }
             v = 21
+        }
+        if v < 22 {
+            // v22 (five jobs FIND-07): additive only — the chunked search
+            // index and its per-document state, filled by the backfill job.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV22(handle)
+                try exec(handle, "PRAGMA user_version = 22;")
+            }
+            v = 22
         }
     }
 
@@ -2627,6 +2636,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                 throw SQLiteStoreError.step(lastError(db))
                             }
                         }
+                        // FIND-07: the message's searchable documents, whole, in chunks.
+                        if SearchChunkPolicy.isEnabled {
+                            try indexEmailSearchDocuments(db, email: email)
+                        }
                         for domain in email.domains where !domain.isEmpty {
                             sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
                             bindText(insertDomain, 1, idStr); bindText(insertDomain, 2, domain)
@@ -3650,7 +3663,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - §13 filtered queries (SQL-compiled; no field silently ignored)
 
-    private enum QueryBind {
+    enum QueryBind {
         case text(String)
         case int(Int64)
     }
@@ -3746,6 +3759,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
         if let folderID = q.folderID {
             sql.append("EXISTS (SELECT 1 FROM email_folders ef WHERE ef.email_id = e.id AND ef.folder_id = ?)")
             binds.append(.int(folderID))
+        }
+        // FIND-04: the typed search model, compiled as asked, confirmed only.
+        if let spec = q.spec, !spec.isEmpty {
+            let compiled = specClauses(spec)
+            sql.append(contentsOf: compiled.sql)
+            binds.append(contentsOf: compiled.binds)
         }
         // v1's Min Reply Count: sender-frequency filter as a HAVING subquery —
         // archive-wide, exactly the per-sender counts the sidebar shows.
@@ -3885,6 +3904,23 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
         }
         return (sql, binds)
+    }
+
+    /// FIND-04 (plan rule 10): rows that pass the positive part of the search
+    /// but cannot be confirmed yet because relevant text is not indexed —
+    /// shown as "may still match", never counted as matches or as absent.
+    func specUnresolvedCount(_ query: EmailQuery) throws -> Int {
+        guard let spec = query.spec, let unresolved = Self.unresolvedClauses(spec) else { return 0 }
+        var scoped = query
+        scoped.spec = nil
+        let (scopeSQL, scopeBinds) = Self.filterClauses(scoped)
+        let db = try ensureDB()
+        let clauses = scopeSQL + unresolved.sql
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM emails e" + (clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND ")) + ";")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, scopeBinds + unresolved.binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
     }
 
     /// ORDER BY + keyset predicate for each §16 sort. `sortKey` is the cursor
