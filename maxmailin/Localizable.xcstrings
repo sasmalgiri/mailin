@@ -375140,6 +375140,518 @@
           }
         }
       }
+    },
+    "%@ processed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ verarbeitet"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ procesados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ traités"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ संसाधित"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ elaborati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 処理済み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 처리됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ processados"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已处理 %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已處理 %@"
+          }
+        }
+      }
+    },
+    "%lld messages saved" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Nachrichten gespeichert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld mensajes guardados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld messages enregistrés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld संदेश सहेजे गए"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld messaggi salvati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件のメッセージを保存"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지 %lld개 저장됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld mensagens salvas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存 %lld 封邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存 %lld 封郵件"
+          }
+        }
+      }
+    },
+    "starting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "wird gestartet"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iniciando"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "démarrage"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "शुरू हो रहा है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "avvio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시작 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iniciando"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在开始"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在開始"
+          }
+        }
+      }
+    },
+    "Imported mail is searchable now. No attachment text is waiting to be indexed." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importierte E-Mails sind jetzt durchsuchbar. Kein Anhangstext wartet auf die Indizierung."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El correo importado ya se puede buscar. No hay texto de adjuntos pendiente de indexar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le courrier importé est déjà consultable. Aucun texte de pièce jointe n'attend d'être indexé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आयात किया गया मेल अब खोजा जा सकता है। कोई अनुलग्नक पाठ अनुक्रमण की प्रतीक्षा में नहीं है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La posta importata è già ricercabile. Nessun testo di allegati in attesa di indicizzazione."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り込んだメールは今すぐ検索できます。インデックス待ちの添付ファイルの本文はありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져온 메일은 지금 검색할 수 있습니다. 인덱싱을 기다리는 첨부 파일 텍스트가 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O e-mail importado já pode ser pesquisado. Nenhum texto de anexo está aguardando indexação."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入的邮件现在即可搜索。没有等待索引的附件文本。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已匯入的郵件現在即可搜尋。沒有等待建立索引的附件文字。"
+          }
+        }
+      }
+    },
+    "Imported mail is searchable now. Attachment text is indexed for every email with attachments (%lld)." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importierte E-Mails sind jetzt durchsuchbar. Der Anhangstext ist für jede E-Mail mit Anhängen indiziert (%lld)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El correo importado ya se puede buscar. El texto de los adjuntos está indexado para todos los correos con adjuntos (%lld)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le courrier importé est déjà consultable. Le texte des pièces jointes est indexé pour chaque courriel avec pièces jointes (%lld)."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आयात किया गया मेल अब खोजा जा सकता है। अनुलग्नक वाले हर ईमेल (%lld) का अनुलग्नक पाठ अनुक्रमित है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La posta importata è già ricercabile. Il testo degli allegati è indicizzato per ogni email con allegati (%lld)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り込んだメールは今すぐ検索できます。添付ファイルのあるすべてのメール（%lld 件）で添付ファイルの本文がインデックス済みです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져온 메일은 지금 검색할 수 있습니다. 첨부 파일이 있는 모든 메일(%lld개)의 첨부 파일 텍스트가 인덱싱되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O e-mail importado já pode ser pesquisado. O texto dos anexos está indexado para todos os e-mails com anexos (%lld)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入的邮件现在即可搜索。所有带附件的邮件（%lld 封）的附件文本均已建立索引。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已匯入的郵件現在即可搜尋。所有含附件的郵件（%lld 封）的附件文字均已建立索引。"
+          }
+        }
+      }
+    },
+    "indexing in the background — attachment contents become searchable as it goes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indizierung im Hintergrund – Anhangsinhalte werden nach und nach durchsuchbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "indexando en segundo plano: el contenido de los adjuntos se vuelve buscable sobre la marcha"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "indexation en arrière-plan — le contenu des pièces jointes devient consultable au fur et à mesure"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पृष्ठभूमि में अनुक्रमण जारी — अनुलग्नकों की सामग्री क्रमशः खोजने योग्य होती जाती है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "indicizzazione in background: il contenuto degli allegati diventa ricercabile man mano"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドでインデックス作成中 — 添付ファイルの内容は順次検索できるようになります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드에서 인덱싱 중 — 첨부 파일 내용은 진행되는 대로 검색할 수 있게 됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "indexando em segundo plano — o conteúdo dos anexos vai ficando pesquisável"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在后台建立索引——附件内容会随之逐步可搜索"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在背景建立索引——附件內容會隨之逐步可搜尋"
+          }
+        }
+      }
+    },
+    "waiting for the next indexing pass" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "wartet auf den nächsten Indizierungslauf"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en espera de la siguiente pasada de indexación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en attente de la prochaine passe d'indexation"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अगले अनुक्रमण चरण की प्रतीक्षा में"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "in attesa del prossimo passaggio di indicizzazione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次のインデックス作成を待機中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음 인덱싱 작업을 기다리는 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aguardando a próxima passagem de indexação"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待下一轮索引"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待下一輪索引"
+          }
+        }
+      }
+    },
+    "Imported mail is searchable now (headers and bodies). Attachment text: %lld emails still to index, %lld done — %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importierte E-Mails sind jetzt durchsuchbar (Kopfzeilen und Inhalte). Anhangstext: %1$lld E-Mails noch zu indizieren, %2$lld erledigt – %3$@."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El correo importado ya se puede buscar (encabezados y cuerpos). Texto de adjuntos: %1$lld correos pendientes de indexar, %2$lld listos; %3$@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le courrier importé est déjà consultable (en-têtes et corps). Texte des pièces jointes : %1$lld courriels encore à indexer, %2$lld faits — %3$@."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आयात किया गया मेल अब खोजा जा सकता है (हेडर और संदेश-पाठ)। अनुलग्नक पाठ: %1$lld ईमेल अभी अनुक्रमित होने बाकी, %2$lld पूर्ण — %3$@।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La posta importata è già ricercabile (intestazioni e corpi). Testo degli allegati: %1$lld email ancora da indicizzare, %2$lld fatte; %3$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り込んだメールは今すぐ検索できます（ヘッダと本文）。添付ファイルの本文：残り %1$lld 件、完了 %2$lld 件 — %3$@。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져온 메일은 지금 검색할 수 있습니다(헤더와 본문). 첨부 파일 텍스트: 남은 메일 %1$lld개, 완료 %2$lld개 — %3$@."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O e-mail importado já pode ser pesquisado (cabeçalhos e corpos). Texto dos anexos: %1$lld e-mails ainda por indexar, %2$lld concluídos — %3$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入的邮件现在即可搜索（邮件头和正文）。附件文本：还有 %1$lld 封待索引，已完成 %2$lld 封——%3$@。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已匯入的郵件現在即可搜尋（郵件標頭和內文）。附件文字：還有 %1$lld 封待索引，已完成 %2$lld 封——%3$@。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

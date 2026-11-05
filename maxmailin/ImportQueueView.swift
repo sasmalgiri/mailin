@@ -184,13 +184,41 @@ struct ImportQueueView: View {
                     row(entry)
                 }
                 .listStyle(.inset)
+                // OPEN-04: imported mail versus attachment text still indexing — two facts, both shown.
+                if let attachmentProgress {
+                    Divider()
+                    HStack(spacing: 8) {
+                        Image(systemName: attachmentProgress.pending == 0 ? "doc.text.magnifyingglass" : "clock.arrow.circlepath")
+                            .foregroundStyle(.secondary)
+                        Text(ImportProgressText.attachmentIndexing(attempted: attachmentProgress.attempted,
+                                                                   pending: attachmentProgress.pending,
+                                                                   running: AttachmentTextIndexJob.shared.isRunning))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .accessibilityIdentifier("import.queue.attachmentIndexing")
+                }
             }
         }
         #if os(macOS)
         .frame(minWidth: 520, minHeight: 340)
         #endif
         .accessibilityIdentifier("import.queue")
+        .task(id: queue.isActive) {
+            // Polled at a slow cadence while something runs; once when idle.
+            repeat {
+                attachmentProgress = try? await SQLiteEmailStore.shared.attachmentTextProgress()
+                guard queue.isActive || (attachmentProgress?.pending ?? 0) > 0 else { return }
+                try? await Task.sleep(for: .seconds(3))
+            } while !Task.isCancelled
+        }
     }
+
+    @State private var attachmentProgress: (attempted: Int, pending: Int)?
 
     // MARK: Header and controls
 
@@ -333,7 +361,10 @@ struct ImportQueueView: View {
         let isCurrent = coordinator?.live.currentPath == entry.path
         let live = isCurrent ? coordinator?.live : nil
         HStack(spacing: 6) {
-            Text("\(Int(fraction * 100))%")
+            // OPEN-04: the percentage is the parser's own fraction; bytes are
+            // shown against the file size only when that total is reliable.
+            Text(ImportProgressText.fileProgress(fraction: fraction, bytesDone: live?.bytesCommittedThisFile ?? 0,
+                                                 fileBytes: entry.sizeBytes, messagesSaved: live?.messagesThisFile ?? 0))
                 .font(.caption2.monospacedDigit())
             if let stage = isCurrent ? stageText(coordinator?.status) : nil {
                 Text("·").foregroundStyle(.secondary)

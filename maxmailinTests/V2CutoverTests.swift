@@ -2614,6 +2614,46 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs OPEN-04 — progress says what is known; mail imported ≠ attachment text indexed
+
+    func testOPEN04_progressTextNeverInventsAPercentage_andKeepsMailAndAttachmentsApart() async throws {
+        // A grounded fraction shows a percentage, with bytes against a reliable total.
+        XCTAssertEqual(ImportProgressText.fileProgress(fraction: 0.42, bytesDone: 0, fileBytes: 100, messagesSaved: 0), "42%")
+        let withBytes = ImportProgressText.fileProgress(fraction: 0.5, bytesDone: 50 * 1_000_000, fileBytes: 100 * 1_000_000, messagesSaved: 10)
+        XCTAssertTrue(withBytes.hasPrefix("50% · "), withBytes)
+        XCTAssertTrue(withBytes.contains(" of "), withBytes)
+        // No reliable total (unknown size, or already past it): bytes processed, no "of".
+        let unknown = ImportProgressText.fileProgress(fraction: 0.5, bytesDone: 5_000_000, fileBytes: 0, messagesSaved: 0)
+        XCTAssertTrue(unknown.contains("processed") && !unknown.contains(" of "), unknown)
+        let past = ImportProgressText.fileProgress(fraction: 0.9, bytesDone: 200, fileBytes: 100, messagesSaved: 0)
+        XCTAssertTrue(past.contains("processed") && !past.contains(" of "), past)
+        // No fraction at all: counts and bytes only — never a percent sign.
+        let noFraction = ImportProgressText.fileProgress(fraction: nil, bytesDone: 2_048, fileBytes: 0, messagesSaved: 7)
+        XCTAssertFalse(noFraction.contains("%"), noFraction)
+        XCTAssertTrue(noFraction.contains("7 messages saved"), noFraction)
+        XCTAssertEqual(ImportProgressText.fileProgress(fraction: nil, bytesDone: 0, fileBytes: 0, messagesSaved: 0), "starting")
+        XCTAssertEqual(ImportProgressText.fileProgress(fraction: 1.7, bytesDone: 0, fileBytes: 0, messagesSaved: 0), "100%", "clamped")
+
+        // Imported mail and attachment text are two statements.
+        let waiting = ImportProgressText.attachmentIndexing(attempted: 40, pending: 12, running: true)
+        XCTAssertTrue(waiting.contains("searchable now") && waiting.contains("12 emails still to index") && waiting.contains("40 done"), waiting)
+        XCTAssertTrue(waiting.contains("background"))
+        let idle = ImportProgressText.attachmentIndexing(attempted: 40, pending: 12, running: false)
+        XCTAssertTrue(idle.contains("next indexing pass"), idle)
+        let done = ImportProgressText.attachmentIndexing(attempted: 52, pending: 0, running: false)
+        XCTAssertTrue(done.contains("every email with attachments (52)"), done)
+        XCTAssertFalse(ImportProgressText.attachmentIndexing(attempted: 0, pending: 0, running: false).contains("still"))
+
+        // The store's figures behind the line: emails with attachments not yet attempted are pending.
+        let env = try makeEnv()
+        let att = AttachmentMetadata(filename: "a.txt", mimeType: "text/plain", size: 3, base64: Data("abc".utf8).base64EncodedString())
+        try await env.store.insertBatch([mail(160, from: "a@x.com", subject: "With", body: "b", attachments: [att]),
+                                         mail(161, from: "a@x.com", subject: "Without", body: "b")], batchSize: 10)
+        let progress = try await env.store.attachmentTextProgress()
+        XCTAssertEqual(progress.pending, 1)
+        XCTAssertEqual(progress.attempted, 0)
+    }
+
     // MARK: - Five jobs OUT-02 — a filtered export is frozen at its start; occurrences are a disclosed choice
 
     func testOUT02_querySelectionFrozenAtStart_importDuringTheRunDoesNotDrift() async throws {

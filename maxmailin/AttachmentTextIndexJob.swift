@@ -147,6 +147,9 @@ final class AttachmentTextIndexJob {
         registry?.finish(id: Self.jobID)
     }
 
+    /// OPEN-04: a pass is kicked or in progress right now.
+    var isRunning: Bool { task != nil || activeRun != nil }
+
     private func report(_ outcome: Outcome) {
         var parts = ["\(outcome.indexedEmails.formatted()) emails indexed"]
         if outcome.extractedTexts > 0 { parts.append("\(outcome.extractedTexts.formatted()) texts") }
