@@ -1,0 +1,93 @@
+# Five jobs — requirement tracker
+
+Governing plan: [`FIVE_JOBS_MASTER_PLAN.md`](FIVE_JOBS_MASTER_PLAN.md) (owner, 2026-11-05). Branch `v3-architecture`.
+Baseline reconciled against HEAD `4788ed0` (2026-10-22, 3.0.2 build 903) on 2026-11-05 — Stage 0 done.
+The plan's findings were taken at `a8e8758` (2026-10-09); the "Source state" column below is what the code
+does **now**, not then.
+
+States: `not started` · `in progress` · `implemented` · `verified` · `failed` · `blocked`.
+"Implemented" is not "verified": verified needs the test/fixture named in "Test" to have run on the candidate.
+Rules from `CLAUDE.md` still apply (never destroy data, counts before whole-archive actions, no hidden caps,
+every string in 10 languages, test with each change, new engines behind a `Capability`, commit per step).
+
+## Stage 0 — baseline (done 2026-11-05)
+
+| Plan finding (at a8e8758) | At HEAD 4788ed0 | Evidence |
+|---|---|---|
+| PST/OST/NSF/MSG materialise whole result before batching | **still true** | `EmailParserProtocol.swift:250,397-408`; `PSTSpecReader.messages()`; `NSFParser.swift:11`; `MSGParser.swift:8` |
+| Sidebar caps labels at 200 | **still true** | `ArchiveSidebar.swift:143,165`; `SQLiteEmailStore.swift:3464-3478`; not covered by `v3PagedLists` |
+| No DOCX/XLSX/PPTX extraction; OCR not in search | **partly fixed** — OCR of images and scanned PDFs feeds `attachment_search` (4d95577, 5b79600); no Office extraction | `AttachmentTextIndexJob.swift:254-301` |
+| "Attempted" without searchable text | **still true** — `attachment_text_state(email_id, indexed_at, text_count)` only; no extractor version | `SQLiteEmailStore.swift:850-854`; `AttachmentTextIndexJob.swift:151-152` |
+| 500,000-char attachment cutoff; 4 MiB body budget | **still true**, no chunking; body truncation is at least recorded and shown | `AttachmentTextIndexJob.swift:56,249`; `FTSSearchIndex.swift:1127,1144-1158` |
+| Duplicate content scan stops at 5,000 | **partly fixed** — `DuplicatesEngine` streams whole archive behind `.v3Duplicates` (on by default); old 5,000 path remains as fallback | `DuplicatesEngine.swift`; `DuplicateManagerView.swift:479-480` |
+| "Exact" = Message-ID or 200-char body prefix | **still true** (+ EDRM MIH normalised hash, 67da27e); all three keys → one "exact" bucket, FNV-64 shortened; no raw-byte SHA-256, attachments not compared | `DuplicatesEngine.swift:38-57`; `FeatureIndex.swift:130-156` |
+| Folder export only flat / by-year | **still true** | `ExportRequest.swift:25-27` |
+| Per-file manifest removed on success | **still true** — receipt has one optional whole-output sha256, no per-file hashes, no verified/failed counts | `ArchiveExportService.swift:591-593`; `ExportReceipt.swift:32-48` |
+| >100 MiB messages are locators into the uncopied original | **still true**; `copiesOriginals` only affects the storage estimate | `OffsetImportEngine.swift:56,245`; `BulkImportCoordinator.swift:133-138` |
+| Real OST/NSF never executed; drive-removal-during-write untested | **still true** — 15 real PSTs pass vs readpst; OST/NSF "no fixture"; mid-write detach kills the process (SIGBUS), recovery not tested from outside | `SUPPORTED_FORMATS_AND_LIMITS.md:98,244`; `SCALE_RESULTS.md:170,213-240` |
+
+Already solid (reuse): import checkpoints bound to source SHA-256/size/parser (`ImportCheckpointStore.swift`),
+export cancel/keep-partial/resume with 17 tests (`ExportResumeTests.swift`), legal-hold check inside delete
+(`deleteReportingHeld`), source identity table, many-to-many `email_tags`.
+
+## Requirement matrix
+
+| ID | Stage | Source state at HEAD | Required change | State | Change ref | Test |
+|---|---|---|---|---|---|---|
+| OPEN-01 | B | Classifier (64 KB sample) + Guided Import sheet + storage preflight; encryption only detected while parsing; no corrupt/inaccessible preflight | Preflight pass per file: readable, format, encrypted (PST crypt type, ZIP members), corrupt header; four distinct states shown before import | not started | | fixtures: encrypted PST, truncated PST, unreadable file, unknown format |
+| OPEN-02 | B | Only mbox/eml/"" stream; PST/NSF/MSG return full arrays | Streaming PST reader (node-table walk emitting messages in batches), NSF and MSG batch emitters; `EmailParserProtocol` streaming for all; new capability `v3StreamingBinaryParsers` | not started | | peak RSS on 1 GB PST < 1/5 of file; count = readpst |
+| OPEN-03 | B | Checkpoints bound to SHA-256/size/parser; resume tested incl. eject at batch boundary | Verify only; add process-restart-after-mid-write test from outside the process | implemented | existing | `FaultVolumeTests` + new out-of-process kill test |
+| OPEN-04 | B | Browsing during import exists; "mail imported" vs "attachments indexing" partly shown | Verify; show processed counts/bytes when total unknown | not started | | UI check on PST (unknown total) |
+| OPEN-05 | B | Receipt per run with discovered/parsed/inserted/duplicates/damaged/skipped/persistFailed; per-source only identity | Per-source counts; add `unreadable` and `unresolvedRegions` | not started | | receipt reconciles to fixture ground truth |
+| OPEN-06 | E | 15 real PSTs; 1 GB rows; OST/NSF no fixture; ≤50 GB | Run §8.1 matrix on candidate; record first-message/total/peak RSS/temp disk | not started | | `SCALE_RESULTS.md` rows tied to commit |
+| FOLD-01 | A | `labelLimit = 200`, flat ForEach | Remove cap: folder tree query without LIMIT, lazy `OutlineGroup`/paged rows, folder search field | not started | | 10,000 folders all reachable |
+| FOLD-02 | B | Folders are flat tag strings; sources table exists; no parent/child, no empty folders | Folder table `(source_id, path, parent, is_empty)` dual-written from parsers; same name in two sources distinct | not started | | two sources, same folder name; empty folder from PST |
+| FOLD-03 | B | `email_tags` many-to-many | Verify; UI explains unique vs occurrence counts; dedup must keep memberships (see DUP-04) | not started | | Gmail multi-label fixture |
+| FOLD-04 | B | `email_tags` (source) vs `email_user_tags` (user) separate | Verify immutability: rename shows display label only | not started | | rename then export shows original path |
+| FOLD-05 | D | No tree layout on export | With OUT-03: safe names + mapping file for collisions/Unicode/long paths | not started | | adversarial names fixture |
+| FIND-01 | C | PDF text, RTF, HTML, plain; no Office | DOCX/XLSX/PPTX extraction (ZIP + XML, no macros) with sheet/slide context | not started | | target string only inside each Office type |
+| FIND-02 | C | OCR → `attachment_search` when switch on | Verify in v3 search path; label recognised vs original text; query Vision supported languages at runtime | in progress | 4d95577, 5b79600 | labelled scan set, per language |
+| FIND-03 | A | `attachment_text_state` = indexed_at + text_count | Per-attachment coverage table: queued/processing/extracted/noText/unsupported/locked/failed/cancelled/truncated + extractor version; retry by version | not started | | state after each fixture class |
+| FIND-04 | C | FTS over subject/sender/recipients(To+Cc)/body; attachment content only via `in:attachments` in old list | Attachment content in the v3 search path by default; Bcc indexed; literal default; Bengali/Hindi tests | not started | | 3-language fixture |
+| FIND-05 | C | Attachment hit returns email_id only; no snippet | Hit → attachment id + filename + snippet (FTS5 `snippet()`), opens attachment and parent | not started | | same filename twice |
+| FIND-06 | C | Budgets exist (timeout/decompression); encrypted handling implicit | Verify; encrypted → `locked` state, never "no text" | not started | | encrypted PDF/ZIP |
+| FIND-07 | C | 500,000-char attachment prefix; 4 MiB body prefix | Chunked FTS rows with parent id + offset/page; query across chunks; remove both ceilings | not started | | word at end of 2 MB doc; phrase across chunk boundary |
+| DUP-01 | A | Message-ID / 200-char prefix / MIH all labelled "exact" | Relabel to **candidate** until byte or full-content compared; bulk delete refuses unverified groups | not started | | adversarial set: same ID, different attachment |
+| DUP-02 | C | Streaming engine on by default; old 5,000 path as fallback | Verify whole scope; surface scan errors; fallback must say so on screen | in progress | b285a7c, 20306fd | identical copies beyond 5,000 |
+| DUP-03 | C | One bucket | Classes: byte-identical (SHA-256 raw), content-equivalent (full body + attachment hashes), similar (MinHash), candidate | not started | | adversarial set, zero false identical |
+| DUP-04 | C | Delete drops tags/annotations of removed copy | Merge memberships/annotations into survivor before hide/remove; hide-as-duplicate before delete | not started | | memberships preserved after cleanup |
+| DUP-05 | C | Holds respected; no undo; minimal receipt | Diff view, survivor preview, recoverable removal (tombstone + restore), durable receipt, honest bytes estimate | not started | | undo restores memberships |
+| OUT-01 | D | Many formats; PDF/CSV not flagged as non-restorable | Format picker labels: mail-preserving / attachments / report | not started | | UI strings |
+| OUT-02 | D | Selection snapshot for resume exists | Verify drift-free under concurrent import; unique vs per-occurrence choice | not started | | import during export |
+| OUT-03 | D | Headers/bodies/attachments exported; no source-tree layout | `ExportLayout.sourceFolders`; record format-induced changes | not started | | tree fixture round trip |
+| OUT-04 | D | Receipt: requested/written/outcome; no verified/failed; handoff only counts messages | Reconciliation: selected/written/checked/excluded/failed; full reparse + SHA-256 vs source; "sampled" when sampled | not started | | tamper one file → fails |
+| OUT-05 | E | Automated 526/526; Apple Mail/Thunderbird rows NOT TESTED | Owner runs Apple Mail import (and Thunderbird if claimed); record versions | blocked (owner) | | `MAIL_CLIENT_HANDOFF_TESTS.md` |
+| OUT-06 | D | Cancel/partial/resume with 17 tests; free-space preflight; no mid-write ENOSPC test | Add export ENOSPC-mid-write test (disk image) | implemented | ca6dc9e, 98b8b46 | `DiskImageFaultTests` export row |
+| OUT-07 | D | Manifest deleted on success | Finalise manifest into durable `inventory.json` (per file: source id, sha256, bytes, attachments) next to output; receipt links it | not started | | inventory present after success |
+| LIFE-01 | B | Linked-source only (locators) | Self-contained mode copies original into managed storage with verify; linked mode detects missing/changed source and relinks | not started | | detach source → read/search/export |
+| LIFE-02 | B | Snapshots before migration exist | SQLite online backup + blobs + inventory; restore on clean profile | not started | | clean-profile restore |
+| LIFE-03 | B | Field contract implicit | Write field contract doc; concurrent-job test | not started | | import during dedup + export |
+| LIFE-04 | E | Safe HTML, bounded extraction exist | Verify protection of indexes/temp/logs; diagnostic export omits bodies | not started | | |
+| LIFE-05 | E | Sample mbox, help exist | Recovery actions: Reconnect / Retry failed / Rebuild index / Restore | not started | | |
+| LIFE-06 | E | Newest-500 free tier; Pro Lifetime | Owner policy decision on post-expiry reading/export; capability table tested | blocked (owner) | | entitlement matrix |
+
+## Order of work
+
+Stage A (now): DUP-01 → FOLD-01 → FIND-03 → truthful labels (duplicate fallback, attachment-search notice).
+Stage B: OPEN-02, FOLD-02, LIFE-01, OPEN-01, OPEN-05, LIFE-02, LIFE-03, OPEN-03/04 verify.
+Stage C: FIND-07, FIND-01, FIND-04, FIND-05, FIND-02/06 verify, DUP-03, DUP-04, DUP-05, DUP-02 verify.
+Stage D: OUT-07, OUT-04, OUT-03 + FOLD-05, OUT-01, OUT-02, OUT-06 test.
+Stage E: OPEN-06, LIFE-04/05/06, OUT-05 (owner), gates.
+
+## Gates (§9) — all open
+
+| # | Gate | State |
+|---|---|---|
+| 1–10 | see plan §9 | open |
+
+## Owner decisions needed
+
+- OLM reader and TAR/TGZ wrapper: proposed additions, not adopted. Adopt or defer?
+- LIFE-06 post-expiry policy (plan recommends: reading + basic export stay available).
+- OUT-05 Apple Mail / Thunderbird interactive import runs.
+- OST and NSF real fixtures (none exist; without them those rows stay "partially supported").

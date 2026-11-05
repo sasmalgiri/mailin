@@ -1,18 +1,23 @@
 # mailin — instructions for every coding session
 
-## Current goal (owner decision 2026-10-10)
+## Current goal (owner decision 2026-11-05)
 
-Ship **3.0** so it needs no structural revision for a long time: every tool works on the **whole archive at
-any size**, memory stays flat, work survives interruptions, legal results are provable, nothing claims more
-than it did.
+The next release makes the **five archive jobs** fully functional end to end: **open large archives,
+preserve folders, search messages and attachments, identify duplicates safely, verify exports.** Nothing
+else expands — no live mail, cloud AI, analytics, studios or personas (online 4.0 was proposed and
+cancelled the same day; see `FIVE_JOBS_MASTER_PLAN.md` §3).
 
-**The plan and progress tracker is [`SCALE_TODO_3_0.md`](SCALE_TODO_3_0.md). Read its §0–§2 and §4 before
-any work.** Work the first unchecked item in §4 order, to its "done means", then tick it there with the
-commit hash. Do not start a later step while an earlier gate is red. If the plan is wrong, fix the plan
-first and tell the owner.
+**The governing plan is [`FIVE_JOBS_MASTER_PLAN.md`](FIVE_JOBS_MASTER_PLAN.md) (36 IDs: OPEN/FOLD/FIND/DUP/
+OUT/LIFE, stages 0–E, ten gates). The progress tracker is [`FIVE_JOBS_TRACKER.md`](FIVE_JOBS_TRACKER.md) —
+read its Stage 0 table and "Order of work" before any work.** Work items in stage order, move the row's
+state (`not started → in progress → implemented → verified`) and record the commit hash. "Implemented" is
+not "verified": a row is verified only when its named test has run on the candidate. If the plan is wrong,
+fix the tracker first and tell the owner.
 
-**Working mode (owner, 2026-10-10): implement the whole plan first behind OFF switches, keeping it compiling;
-then one full test-and-fix pass.** Don't run test suites per item during the implementation pass.
+**Working mode:** one item at a time, each with its failing-then-passing test, build green, commit. Stage A
+items ship with their tests; no "implement everything then test" pass this time.
+
+The 3.0 plan `SCALE_TODO_3_0.md` is history — read it for what was built and why, don't work from it.
 
 ## Rules that are never broken
 
