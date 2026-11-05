@@ -3059,6 +3059,70 @@
         }
       }
     },
+    "%@ — unlocked with Pro" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ – mit Pro freigeschaltet"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: se desbloquea con Pro"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — débloqué avec Pro"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — Pro के साथ अनलॉक"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: si sblocca con Pro"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — Pro で利用可能"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — Pro에서 사용 가능"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — desbloqueado com o Pro"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@——Pro 解锁"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@——Pro 解鎖"
+          }
+        }
+      }
+    },
     "%@ — view purchase options" : {
       "localizations" : {
         "de" : {
@@ -25212,6 +25276,71 @@
         }
       }
     },
+    "A mail-preserving format: these files can be re-imported by mailin and by other mail apps." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein E-Mail-erhaltendes Format: Diese Dateien können von mailin und anderen Mail-Apps wieder importiert werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un formato que conserva el correo: mailin y otras apps de correo pueden volver a importar estos archivos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un format qui préserve le courrier : ces fichiers peuvent être réimportés par mailin et par d'autres apps de messagerie."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सुरक्षित रखने वाला प्रारूप: इन फ़ाइलों को mailin और अन्य मेल ऐप दोबारा आयात कर सकते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un formato che conserva la posta: questi file possono essere reimportati da mailin e da altre app di posta."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールを保持する形式：これらのファイルは mailin や他のメールアプリで再取り込みできます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일을 보존하는 형식: 이 파일은 mailin과 다른 메일 앱에서 다시 가져올 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um formato que preserva o e-mail: estes arquivos podem ser reimportados pelo mailin e por outros apps de e-mail."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留邮件的格式：这些文件可以由 mailin 和其他邮件应用重新导入。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留郵件的格式：這些檔案可由 mailin 和其他郵件 App 重新匯入。"
+          }
+        }
+      }
+    },
     "A phrase longer than %lld characters is matched as all its words in the same text." : {
       "localizations" : {
         "de" : {
@@ -25400,6 +25529,71 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜尋引擎使用的相關性排名演算法。依郵件與搜尋詞的相符強度評分，而不只是是否包含。"
+          }
+        }
+      }
+    },
+    "A report, not a mail archive: this output cannot be re-imported as email. Keep an mbox or .eml export for a restorable copy." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein Bericht, kein E-Mail-Archiv: Diese Ausgabe kann nicht als E-Mail wieder importiert werden. Bewahren Sie für eine wiederherstellbare Kopie einen mbox- oder .eml-Export auf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un informe, no un archivo de correo: esta salida no se puede volver a importar como correo. Conserve una exportación mbox o .eml como copia restaurable."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un rapport, pas une archive de courrier : cette sortie ne peut pas être réimportée comme courrier. Conservez un export mbox ou .eml pour une copie restaurable."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यह रिपोर्ट है, मेल संग्रह नहीं: इस आउटपुट को ईमेल के रूप में दोबारा आयात नहीं किया जा सकता। पुनर्स्थापित होने वाली प्रति के लिए mbox या .eml निर्यात रखें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un report, non un archivio di posta: questo output non può essere reimportato come email. Conserva un'esportazione mbox o .eml come copia ripristinabile."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これはレポートでありメールアーカイブではありません：この出力はメールとして再取り込みできません。復元可能なコピーとして mbox または .eml の書き出しを残してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 보관함이 아닌 보고서입니다. 이 출력은 이메일로 다시 가져올 수 없습니다. 복원 가능한 사본으로 mbox 또는 .eml 내보내기를 보관하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um relatório, não um arquivo de e-mail: esta saída não pode ser reimportada como e-mail. Guarde uma exportação mbox ou .eml como cópia restaurável."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是报告，不是邮件归档：此输出无法作为邮件重新导入。请保留 mbox 或 .eml 导出作为可恢复副本。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這是報告，不是郵件封存：此輸出無法作為郵件重新匯入。請保留 mbox 或 .eml 匯出作為可還原副本。"
           }
         }
       }
@@ -61303,6 +61497,70 @@
         }
       }
     },
+    "Batch Print Text (.txt)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sammeldruck-Text (.txt)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto para impresión en lote (.txt)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texte pour impression groupée (.txt)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बैच प्रिंट टेक्स्ट (.txt)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testo per stampa in serie (.txt)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一括印刷用テキスト (.txt)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일괄 인쇄용 텍스트(.txt)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto para impressão em lote (.txt)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "批量打印文本 (.txt)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "批次列印文字 (.txt)"
+          }
+        }
+      }
+    },
     "Batch processing" : {
       "localizations" : {
         "de" : {
@@ -68445,6 +68703,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "C — 相當可靠"
+          }
+        }
+      }
+    },
+    "Calendar Events (.ics)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kalenderereignisse (.ics)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eventos de calendario (.ics)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Événements de calendrier (.ics)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कैलेंडर इवेंट (.ics)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eventi di calendario (.ics)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カレンダーイベント (.ics)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "캘린더 이벤트(.ics)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eventos de calendário (.ics)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日历事件 (.ics)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行事曆事件 (.ics)"
           }
         }
       }
@@ -91012,6 +91334,70 @@
         }
       }
     },
+    "Contacts (vCard)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kontakte (vCard)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contactos (vCard)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contacts (vCard)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संपर्क (vCard)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contatti (vCard)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連絡先 (vCard)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연락처(vCard)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contatos (vCard)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "联系人 (vCard)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聯絡人 (vCard)"
+          }
+        }
+      }
+    },
     "Contacts ranked by communication frequency. Click to see email history." : {
       "localizations" : {
         "de" : {
@@ -97505,6 +97891,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "法庭證物套件"
+          }
+        }
+      }
+    },
+    "Court-friendly image per email — not re-importable as email" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gerichtstaugliches Bild pro E-Mail – nicht als E-Mail wieder importierbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imagen por correo apta para tribunales: no reimportable como correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Image par courriel adaptée aux tribunaux — non réimportable comme courrier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर ईमेल की अदालत-योग्य छवि — ईमेल के रूप में दोबारा आयात नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Immagine per email adatta ai tribunali: non reimportabile come email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールごとの裁判向け画像 — メールとして再取り込みできません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일당 법원 제출용 이미지 — 이메일로 다시 가져올 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imagem por e-mail adequada a tribunais — não reimportável como e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封邮件一张适合法庭的图像——不能作为邮件重新导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封郵件一張適合法庭的影像——不能作為郵件重新匯入"
           }
         }
       }
@@ -108235,6 +108685,71 @@
         }
       }
     },
+    "Derived from the mail, not a copy of it: the messages themselves are not in this output." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus der E-Mail abgeleitet, keine Kopie davon: Die Nachrichten selbst sind nicht in dieser Ausgabe enthalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Derivado del correo, no una copia: los mensajes en sí no están en esta salida."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dérivé du courrier, pas une copie : les messages eux-mêmes ne figurent pas dans cette sortie."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल से निकाला गया, उसकी प्रति नहीं: संदेश स्वयं इस आउटपुट में नहीं हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Derivato dalla posta, non una copia: i messaggi stessi non sono in questo output."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールから抽出したもので、コピーではありません：メッセージ自体はこの出力に含まれません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일에서 추출한 것이며 사본이 아닙니다. 메시지 자체는 이 출력에 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Derivado do e-mail, não uma cópia: as próprias mensagens não estão nesta saída."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从邮件中提取而来，不是邮件副本：此输出不包含邮件本身。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從郵件中擷取而來，不是郵件副本：此輸出不包含郵件本身。"
+          }
+        }
+      }
+    },
     "Describe a corrective action…" : {
       "localizations" : {
         "de" : {
@@ -109133,6 +109648,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "偵測此集合中的社會安全號碼、信用卡、電話號碼和其他個人資料——附帶供特權審閱使用的 CSV 報告"
+          }
+        }
+      }
+    },
+    "Detected events as a calendar file" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erkannte Termine als Kalenderdatei"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eventos detectados como archivo de calendario"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Événements détectés en fichier de calendrier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहचाने गए इवेंट कैलेंडर फ़ाइल के रूप में"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eventi rilevati come file di calendario"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検出したイベントをカレンダーファイルとして"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "감지된 이벤트를 캘린더 파일로"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eventos detectados como arquivo de calendário"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检测到的事件作为日历文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偵測到的事件作為行事曆檔案"
           }
         }
       }
@@ -127246,6 +127825,70 @@
         }
       }
     },
+    "Every address as importable contacts" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jede Adresse als importierbare Kontakte"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada dirección como contactos importables"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque adresse en contacts importables"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर पता आयात योग्य संपर्कों के रूप में"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ogni indirizzo come contatti importabili"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのアドレスを取り込める連絡先として"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 주소를 가져올 수 있는 연락처로"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada endereço como contatos importáveis"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个地址作为可导入的联系人"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每個地址作為可匯入的聯絡人"
+          }
+        }
+      }
+    },
     "Every AI answer lists the emails it came from; counts, dates and amounts are read from your archive, not written by the model." : {
       "localizations" : {
         "de" : {
@@ -142637,6 +143280,71 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "擷取與編碼（編碼手冊）"
+          }
+        }
+      }
+    },
+    "Extracts from the mail" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auszüge aus der E-Mail"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extractos del correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extraits du courrier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल से निकाले गए अंश"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estratti dalla posta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールからの抽出"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일에서 추출한 항목"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extratos do e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从邮件中提取的内容"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從郵件中擷取的內容"
           }
         }
       }
@@ -163018,6 +163726,70 @@
         }
       }
     },
+    "Headers-Only CSV" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CSV nur mit Kopfzeilen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CSV solo con encabezados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CSV en-têtes uniquement"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "केवल हेडर वाली CSV"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CSV solo intestazioni"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘッダのみのCSV"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "헤더만 있는 CSV"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CSV só com cabeçalhos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅含邮件头的 CSV"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅含郵件標頭的 CSV"
+          }
+        }
+      }
+    },
     "Headers, authentication, routing, MIME structure" : {
       "comment" : "A description of the features available to the \"IT admin\" persona.",
       "isCommentAutoGenerated" : true,
@@ -176926,6 +177698,70 @@
         }
       }
     },
+    "Individual .eml Files" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einzelne .eml-Dateien"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivos .eml individuales"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichiers .eml individuels"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अलग-अलग .eml फ़ाइलें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File .eml singoli"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "個別の .eml ファイル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "개별 .eml 파일"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivos .eml individuais"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "单独的 .eml 文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "個別的 .eml 檔案"
+          }
+        }
+      }
+    },
     "Ineffective — did not resolve the cause" : {
       "localizations" : {
         "de" : {
@@ -181900,6 +182736,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "記者"
+          }
+        }
+      }
+    },
+    "JSON Archive" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JSON-Archiv"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivo JSON"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive JSON"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JSON संग्रह"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivio JSON"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JSONアーカイブ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JSON 보관본"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivo JSON"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JSON 归档"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JSON 封存"
           }
         }
       }
@@ -192120,6 +193020,135 @@
         }
       }
     },
+    "Machine-readable full archive — for other software, not re-importable as email" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maschinenlesbares Gesamtarchiv – für andere Software, nicht als E-Mail wieder importierbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivo completo legible por máquina: para otro software, no reimportable como correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive complète lisible par machine — pour d'autres logiciels, non réimportable comme courrier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मशीन-पठनीय पूर्ण संग्रह — अन्य सॉफ़्टवेयर के लिए, ईमेल के रूप में दोबारा आयात नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivio completo leggibile da macchina: per altri software, non reimportabile come email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "機械可読の完全アーカイブ — 他のソフトウェア向けで、メールとして再取り込みできません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기계가 읽을 수 있는 전체 보관본 — 다른 소프트웨어용이며 이메일로 다시 가져올 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivo completo legível por máquina — para outros softwares, não reimportável como e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "机器可读的完整归档——供其他软件使用，不能作为邮件重新导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "機器可讀的完整封存——供其他軟體使用，不能作為郵件重新匯入"
+          }
+        }
+      }
+    },
+    "Mail — reimportable" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E-Mail – wieder importierbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Correo: reimportable"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Courrier — réimportable"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल — दोबारा आयात योग्य"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posta: reimportabile"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メール — 再取り込み可能"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 — 다시 가져오기 가능"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E-mail — reimportável"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邮件——可重新导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "郵件——可重新匯入"
+          }
+        }
+      }
+    },
     "Mail client" : {
       "localizations" : {
         "de" : {
@@ -196524,6 +197553,70 @@
         }
       }
     },
+    "Markdown (.md)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown(.md)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown (.md)"
+          }
+        }
+      }
+    },
     "Markdown for your draft and your fact-checker." : {
       "comment" : "Text of a tip in the FeatureTutorial.",
       "isCommentAutoGenerated" : true,
@@ -197618,6 +198711,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "MBOX / ZIP"
+          }
+        }
+      }
+    },
+    "mbox Archive" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mbox-Archiv"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivo mbox"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive mbox"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mbox संग्रह"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivio mbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mboxアーカイブ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mbox 보관본"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivo mbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mbox 归档"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mbox 封存"
           }
         }
       }
@@ -200778,6 +201935,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "中繼資料異常"
+          }
+        }
+      }
+    },
+    "Metadata only, no bodies — safe to share" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nur Metadaten, keine Inhalte – unbedenklich weiterzugeben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo metadatos, sin cuerpos: seguro para compartir"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Métadonnées uniquement, sans corps — partage sans risque"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "केवल मेटाडेटा, कोई संदेश-पाठ नहीं — साझा करने में सुरक्षित"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo metadati, nessun corpo: sicuro da condividere"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メタデータのみ、本文なし — 安全に共有できます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메타데이터만, 본문 없음 — 안전하게 공유 가능"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só metadados, sem corpos — seguro para compartilhar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅元数据，无正文——可安全分享"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅中繼資料，無內文——可安全分享"
           }
         }
       }
@@ -221388,6 +222609,70 @@
         }
       }
     },
+    "Notes-friendly document — Obsidian, GitHub" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizfreundliches Dokument – Obsidian, GitHub"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Documento apto para notas: Obsidian, GitHub"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Document adapté aux notes — Obsidian, GitHub"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नोट्स के अनुकूल दस्तावेज़ — Obsidian, GitHub"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Documento adatto alle note: Obsidian, GitHub"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ノート向けの書類 — Obsidian、GitHub"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "노트용 문서 — Obsidian, GitHub"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Documento para notas — Obsidian, GitHub"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适合笔记的文档——Obsidian、GitHub"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適合筆記的文件——Obsidian、GitHub"
+          }
+        }
+      }
+    },
     "notes: %lld" : {
       "comment" : "A description of a column value. The argument is the column name.",
       "isCommentAutoGenerated" : true,
@@ -224866,6 +226151,70 @@
         }
       }
     },
+    "One HTML document Word opens as .doc, one page per email" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein HTML-Dokument, das Word als .doc öffnet, eine Seite pro E-Mail"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un documento HTML que Word abre como .doc, una página por correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un document HTML que Word ouvre comme .doc, une page par courriel"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "एक HTML दस्तावेज़ जिसे Word .doc के रूप में खोलता है, हर ईमेल का एक पृष्ठ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un documento HTML che Word apre come .doc, una pagina per email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Word が .doc として開く1つのHTML書類、メールごとに1ページ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Word가 .doc로 여는 HTML 문서 하나, 메일당 한 페이지"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um documento HTML que o Word abre como .doc, uma página por e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个 Word 可作为 .doc 打开的 HTML 文档，每封邮件一页"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一個 Word 可作為 .doc 開啟的 HTML 文件，每封郵件一頁"
+          }
+        }
+      }
+    },
     "One job = one numbered record." : {
       "localizations" : {
         "de" : {
@@ -225056,6 +226405,262 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一個包含資料夾、收件者和附件的 Outlook 資料檔"
+          }
+        }
+      }
+    },
+    "One Outlook-compatible file per email" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Outlook-kompatible Datei pro E-Mail"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un archivo compatible con Outlook por correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un fichier compatible Outlook par courriel"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर ईमेल की एक Outlook-संगत फ़ाइल"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un file compatibile con Outlook per email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールごとに1つのOutlook互換ファイル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일당 Outlook 호환 파일 하나"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um arquivo compatível com Outlook por e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封邮件一个 Outlook 兼容文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封郵件一個 Outlook 相容檔案"
+          }
+        }
+      }
+    },
+    "One PDF per email — a readable rendering, not re-importable as email" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein PDF pro E-Mail – eine lesbare Darstellung, nicht als E-Mail wieder importierbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un PDF por correo: una representación legible, no reimportable como correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un PDF par courriel — un rendu lisible, non réimportable comme courrier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर ईमेल की एक PDF — पढ़ने योग्य प्रस्तुति, ईमेल के रूप में दोबारा आयात नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un PDF per email: una resa leggibile, non reimportabile come email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールごとに1つのPDF — 閲覧用の表示で、メールとして再取り込みできません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일당 PDF 하나 — 읽기용 렌더링이며 이메일로 다시 가져올 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um PDF por e-mail — uma renderização legível, não reimportável como e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封邮件一个 PDF——可阅读的呈现，不能作为邮件重新导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封郵件一個 PDF——可閱讀的呈現，不能作為郵件重新匯入"
+          }
+        }
+      }
+    },
+    "One row per email — opens in Excel/Numbers; a report, not a mail archive" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Zeile pro E-Mail – öffnet sich in Excel/Numbers; ein Bericht, kein E-Mail-Archiv"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una fila por correo: se abre en Excel/Numbers; un informe, no un archivo de correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une ligne par courriel — s'ouvre dans Excel/Numbers ; un rapport, pas une archive de courrier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर ईमेल की एक पंक्ति — Excel/Numbers में खुलती है; रिपोर्ट, मेल संग्रह नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una riga per email: si apre in Excel/Numbers; un report, non un archivio di posta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールごとに1行 — Excel/Numbers で開けます。レポートでありメールアーカイブではありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일당 한 행 — Excel/Numbers에서 열림. 보고서이며 메일 보관함이 아님"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma linha por e-mail — abre no Excel/Numbers; um relatório, não um arquivo de e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封邮件一行——可在 Excel/Numbers 中打开；是报告，不是邮件归档"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封郵件一列——可在 Excel/Numbers 中開啟；是報告，不是郵件封存"
+          }
+        }
+      }
+    },
+    "One standard email file each — reimportable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Je eine Standard-E-Mail-Datei – wieder importierbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un archivo de correo estándar por mensaje: reimportable"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un fichier de courriel standard chacun — réimportable"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर संदेश की एक मानक ईमेल फ़ाइल — दोबारा आयात योग्य"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un file email standard ciascuno: reimportabile"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールごとに標準のメールファイル — 再取り込み可能"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일당 표준 이메일 파일 하나 — 다시 가져오기 가능"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um arquivo de e-mail padrão cada — reimportável"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封一个标准邮件文件——可重新导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封一個標準郵件檔案——可重新匯入"
           }
         }
       }
@@ -230204,6 +231809,70 @@
         }
       }
     },
+    "Outlook Messages (.msg)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook-Nachrichten (.msg)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensajes de Outlook (.msg)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages Outlook (.msg)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook संदेश (.msg)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messaggi Outlook (.msg)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlookメッセージ (.msg)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook 메시지(.msg)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensagens do Outlook (.msg)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook 邮件 (.msg)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook 郵件 (.msg)"
+          }
+        }
+      }
+    },
     "Outlook PST Export, Rebuilt" : {
       "localizations" : {
         "de" : {
@@ -233306,6 +234975,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "PDF 文件"
+          }
+        }
+      }
+    },
+    "PDF Files (one per email)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF-Dateien (eine pro E-Mail)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivos PDF (uno por correo)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichiers PDF (un par courriel)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF फ़ाइलें (हर ईमेल की एक)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File PDF (uno per email)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDFファイル（メールごとに1つ）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF 파일(메일당 하나)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivos PDF (um por e-mail)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF 文件（每封邮件一个）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF 檔案（每封郵件一個）"
           }
         }
       }
@@ -238330,6 +240063,70 @@
         }
       }
     },
+    "Plain text ready for printing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reiner Text, druckfertig"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto sin formato listo para imprimir"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texte brut prêt à imprimer"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रिंट के लिए तैयार सादा टेक्स्ट"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testo semplice pronto per la stampa"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "印刷用のプレーンテキスト"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인쇄할 수 있는 일반 텍스트"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto simples pronto para impressão"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可直接打印的纯文本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可直接列印的純文字"
+          }
+        }
+      }
+    },
     "Plain-language definitions for the legal, forensic, and technical terms used in mailin. Tap any entry to expand." : {
       "localizations" : {
         "de" : {
@@ -239030,6 +240827,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "將其指向 iCloud 雲碟、Dropbox、Google 雲端硬碟或任何共享位置中的檔案夾。mailin 將監看其他審閱人的審閱狀態檔案。"
+          }
+        }
+      }
+    },
+    "Portable HTML Viewer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Portabler HTML-Viewer"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visor HTML portátil"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visionneuse HTML portable"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पोर्टेबल HTML व्यूअर"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visualizzatore HTML portatile"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ポータブルHTMLビューア"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "휴대용 HTML 뷰어"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visualizador HTML portátil"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "便携 HTML 查看器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可攜式 HTML 檢視器"
           }
         }
       }
@@ -267310,6 +269171,71 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "報告"
+          }
+        }
+      }
+    },
+    "Reports and documents — readable, not restorable mail" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Berichte und Dokumente – lesbar, keine wiederherstellbare E-Mail"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Informes y documentos: legibles, no correo restaurable"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rapports et documents — lisibles, pas du courrier restaurable"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "रिपोर्ट और दस्तावेज़ — पढ़ने योग्य, पुनर्स्थापित होने वाला मेल नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Report e documenti: leggibili, non posta ripristinabile"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レポートと書類 — 閲覧用、復元可能なメールではありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보고서와 문서 — 읽기용, 복원 가능한 메일 아님"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relatórios e documentos — legíveis, não são e-mail restaurável"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告和文档——可阅读，但不是可恢复的邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "報告和文件——可閱讀，但不是可還原的郵件"
           }
         }
       }
@@ -296887,6 +298813,70 @@
         }
       }
     },
+    "Self-contained browser viewer folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eigenständiger Browser-Viewer-Ordner"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carpeta de visor para navegador autónoma"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dossier de visionneuse autonome pour navigateur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्वतः-पूर्ण ब्राउज़र व्यूअर फ़ोल्डर"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cartella visualizzatore autonoma per browser"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブラウザで開ける自己完結型ビューアフォルダ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "브라우저로 보는 독립 뷰어 폴더"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta de visualizador autônoma para navegador"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可在浏览器中打开的独立查看器文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可在瀏覽器中開啟的獨立檢視器資料夾"
+          }
+        }
+      }
+    },
     "Semantic index" : {
       "localizations" : {
         "de" : {
@@ -314072,6 +316062,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "發布前為每一項說法提供支撐 — 獨立佐證、給當事人答辯的機會，然後核准。"
+          }
+        }
+      }
+    },
+    "Standard mailbox file — reimportable anywhere" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standard-Mailboxdatei – überall wieder importierbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivo de buzón estándar: reimportable en cualquier parte"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichier de boîte aux lettres standard — réimportable partout"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मानक मेलबॉक्स फ़ाइल — कहीं भी दोबारा आयात योग्य"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File mailbox standard: reimportabile ovunque"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標準のメールボックスファイル — どこでも再取り込み可能"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "표준 메일함 파일 — 어디서나 다시 가져오기 가능"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivo de caixa de correio padrão — reimportável em qualquer lugar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标准邮箱文件——可在任何地方重新导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標準信箱檔案——可在任何地方重新匯入"
           }
         }
       }
@@ -341683,6 +343737,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "TIFF 影像 (.tiff)"
+          }
+        }
+      }
+    },
+    "TIFF Images (one per email)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TIFF-Bilder (eines pro E-Mail)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imágenes TIFF (una por correo)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Images TIFF (une par courriel)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TIFF छवियाँ (हर ईमेल की एक)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Immagini TIFF (una per email)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TIFF画像（メールごとに1つ）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TIFF 이미지(메일당 하나)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imagens TIFF (uma por e-mail)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TIFF 图像（每封邮件一个）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TIFF 影像（每封郵件一個）"
           }
         }
       }

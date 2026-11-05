@@ -2614,6 +2614,27 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs OUT-01 — every export format says what it preserves
+
+    func testOUT01_everyExportFormatStatesWhatItPreserves() {
+        // Only standard mail files are called mail-preserving; every rendering is a report.
+        let mail = Set(UnifiedExportFormat.allCases.filter { $0.fidelity == .mailPreserving })
+        XCTAssertEqual(mail, [.mbox, .emlFiles, .msgFiles])
+        for format in [UnifiedExportFormat.pdfFiles, .tiffFiles, .csv, .headersCSV, .word, .json, .printText, .markdown, .portableHTML] {
+            XCTAssertEqual(format.fidelity, .report, "\(format)")
+        }
+        XCTAssertEqual(UnifiedExportFormat.vcard.fidelity, .extract)
+        XCTAssertEqual(UnifiedExportFormat.ics.fidelity, .extract)
+        // The report note says, in words, that the output is not restorable mail.
+        XCTAssertTrue(ExportFidelity.report.note.contains("cannot be re-imported as email"))
+        XCTAssertTrue(ExportFidelity.report.label.contains("not restorable mail"))
+        XCTAssertTrue(ExportFidelity.mailPreserving.note.contains("re-imported"))
+        XCTAssertTrue(ExportFidelity.extract.note.contains("not a copy"))
+        for fidelity in ExportFidelity.allCases {
+            XCTAssertFalse(fidelity.label.isEmpty); XCTAssertFalse(fidelity.note.isEmpty)
+        }
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.

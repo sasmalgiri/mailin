@@ -122,6 +122,12 @@ struct ExportPreflightSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(request.title).font(.headline)
                 Text(countLine).font(.caption).foregroundStyle(.secondary)
+                // OUT-01: what this format preserves, before Start.
+                Text(LocalizedStringKey(request.format.fidelity.note))
+                    .font(.caption2)
+                    .foregroundStyle(request.format.fidelity == .mailPreserving ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("export.preflight.fidelity")
             }
         }
     }

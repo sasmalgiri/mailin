@@ -57,76 +57,94 @@ struct UnifiedExportSections: View {
         if let headline = countHeadline {
             Section(headline) { EmptyView() }
         }
-        if included(.word) {
-            button("Word-compatible Document (.doc)", icon: "doc.richtext",
-                   help: "One HTML document Word opens as .doc, one page per email") { exportWord() }
-        }
-        if included(.csv) {
-            button("Spreadsheet (.csv)", icon: "tablecells",
-                   help: "One row per email — opens in Excel/Numbers") { exportCSV() }
-        }
-        if included(.json) {
-            button("JSON Archive", icon: "curlybraces",
-                   help: "Machine-readable full archive") { exportJSON() }
-        }
-        if included(.printText) {
-            button("Batch Print Text (.txt)", icon: "printer",
-                   help: "Plain text ready for printing") { exportPrintText() }
-        }
-        if included(.markdown) {
-            button("Markdown (.md)", icon: "number",
-                   help: "Notes-friendly document — Obsidian, GitHub") { exportMarkdown() }
-        }
-        if included(.headersCSV) {
-            button("Headers-Only CSV", icon: "list.bullet.rectangle",
-                   help: "Metadata only, no bodies — safe to share") { exportHeadersOnly() }
-        }
-        if included(.mbox) {
-            button("mbox Archive", icon: "archivebox",
-                   help: "Standard mailbox file — reimportable anywhere") { exportMBOX() }
-        }
-        if !omit.isSuperset(of: [.emlFiles, .pdfFiles, .tiffFiles]) { Divider() }
-        if included(.emlFiles) {
-            button("Individual .eml Files", icon: "envelope",
-                   help: "One standard email file each — reimportable") { exportEML() }
-        }
-        #if os(macOS)
-        if DEVONthinkHandOff.isEnabled {
-            button(String(localized: "Send to DEVONthink"), icon: "tray.and.arrow.up",
-                   help: String(localized: "Exports these emails as .eml files and opens them in DEVONthink, which imports them")) { sendToDEVONthink() }
-        }
-        #endif
-        if included(.pdfFiles) {
-            button("PDF Files (one per email)", icon: "doc.viewfinder",
-                   help: "One PDF per email") { exportPDFs() }
-        }
-        if included(.tiffFiles) {
-            button("TIFF Images (one per email)", icon: "photo",
-                   help: "Court-friendly image per email") { exportTIFFs() }
-        }
-        if included(.msgFiles) {
-            button("Outlook Messages (.msg)", icon: "envelope.badge",
-                   help: "One Outlook-compatible file per email") { exportMSGs() }
-        }
-        if let exportPST {
-            button(String(localized: "Outlook Archive (.pst)"), icon: "archivebox.fill",
-                   help: String(localized: "One Outlook data file with folders, recipients and attachments")) {
-                if gate() { exportPST() }
+        // OUT-01: formats grouped by what they preserve — mail that can be
+        // re-imported first, then readable reports (not restorable mail),
+        // then extracts — so the choice says what the user will get back.
+        if anyIncluded(.mailPreserving) || exportPST != nil {
+            Section(LocalizedStringKey(ExportFidelity.mailPreserving.label)) {
+                if included(.mbox) {
+                    button("mbox Archive", icon: "archivebox",
+                           help: "Standard mailbox file — reimportable anywhere") { exportMBOX() }
+                }
+                if included(.emlFiles) {
+                    button("Individual .eml Files", icon: "envelope",
+                           help: "One standard email file each — reimportable") { exportEML() }
+                }
+                #if os(macOS)
+                if DEVONthinkHandOff.isEnabled {
+                    button(String(localized: "Send to DEVONthink"), icon: "tray.and.arrow.up",
+                           help: String(localized: "Exports these emails as .eml files and opens them in DEVONthink, which imports them")) { sendToDEVONthink() }
+                }
+                #endif
+                if included(.msgFiles) {
+                    button("Outlook Messages (.msg)", icon: "envelope.badge",
+                           help: "One Outlook-compatible file per email") { exportMSGs() }
+                }
+                if let exportPST {
+                    button(String(localized: "Outlook Archive (.pst)"), icon: "archivebox.fill",
+                           help: String(localized: "One Outlook data file with folders, recipients and attachments")) {
+                        if gate() { exportPST() }
+                    }
+                }
             }
         }
-        Divider()
-        if included(.portableHTML) {
-            button("Portable HTML Viewer", icon: "globe",
-                   help: "Self-contained browser viewer folder") { exportHTML() }
+        if anyIncluded(.report) {
+            Section(LocalizedStringKey(ExportFidelity.report.label)) {
+                if included(.pdfFiles) {
+                    button("PDF Files (one per email)", icon: "doc.viewfinder",
+                           help: "One PDF per email — a readable rendering, not re-importable as email") { exportPDFs() }
+                }
+                if included(.tiffFiles) {
+                    button("TIFF Images (one per email)", icon: "photo",
+                           help: "Court-friendly image per email — not re-importable as email") { exportTIFFs() }
+                }
+                if included(.word) {
+                    button("Word-compatible Document (.doc)", icon: "doc.richtext",
+                           help: "One HTML document Word opens as .doc, one page per email") { exportWord() }
+                }
+                if included(.csv) {
+                    button("Spreadsheet (.csv)", icon: "tablecells",
+                           help: "One row per email — opens in Excel/Numbers; a report, not a mail archive") { exportCSV() }
+                }
+                if included(.headersCSV) {
+                    button("Headers-Only CSV", icon: "list.bullet.rectangle",
+                           help: "Metadata only, no bodies — safe to share") { exportHeadersOnly() }
+                }
+                if included(.json) {
+                    button("JSON Archive", icon: "curlybraces",
+                           help: "Machine-readable full archive — for other software, not re-importable as email") { exportJSON() }
+                }
+                if included(.printText) {
+                    button("Batch Print Text (.txt)", icon: "printer",
+                           help: "Plain text ready for printing") { exportPrintText() }
+                }
+                if included(.markdown) {
+                    button("Markdown (.md)", icon: "number",
+                           help: "Notes-friendly document — Obsidian, GitHub") { exportMarkdown() }
+                }
+                if included(.portableHTML) {
+                    button("Portable HTML Viewer", icon: "globe",
+                           help: "Self-contained browser viewer folder") { exportHTML() }
+                }
+            }
         }
-        if included(.vcard) {
-            button("Contacts (vCard)", icon: "person.crop.rectangle.stack",
-                   help: "Every address as importable contacts") { exportVCard() }
+        if anyIncluded(.extract) {
+            Section(LocalizedStringKey(ExportFidelity.extract.label)) {
+                if included(.vcard) {
+                    button("Contacts (vCard)", icon: "person.crop.rectangle.stack",
+                           help: "Every address as importable contacts") { exportVCard() }
+                }
+                if included(.ics) {
+                    button("Calendar Events (.ics)", icon: "calendar",
+                           help: "Detected events as a calendar file") { exportICS() }
+                }
+            }
         }
-        if included(.ics) {
-            button("Calendar Events (.ics)", icon: "calendar",
-                   help: "Detected events as a calendar file") { exportICS() }
-        }
+    }
+
+    /// At least one format of this fidelity is offered by this host.
+    private func anyIncluded(_ fidelity: ExportFidelity) -> Bool {
+        UnifiedExportFormat.allCases.contains { $0.fidelity == fidelity && included($0) }
     }
 
     /// "Export 222 emails (current filter)" — plus the free-tier bound when
@@ -145,10 +163,13 @@ struct UnifiedExportSections: View {
     private func button(_ title: String, icon: String, help: String,
                         action: @escaping () -> Void) -> some View {
         let locked = requiresPremium && !storeManager.isPremium
+        // The English literals are the catalog keys (OUT-01: this menu is translated like the rest).
+        let localizedTitle = String(localized: String.LocalizationValue(title))
+        let localizedHelp = String(localized: String.LocalizationValue(help))
         return Button(action: action) {
-            Label(locked ? "\(title) (Pro)" : title, systemImage: locked ? "lock" : icon)
+            Label(locked ? String(localized: "\(localizedTitle) (Pro)") : localizedTitle, systemImage: locked ? "lock" : icon)
         }
-        .help(locked ? "\(help) — unlocked with Pro" : help)
+        .help(locked ? String(localized: "\(localizedHelp) — unlocked with Pro") : localizedHelp)
     }
 
     // MARK: - Shared plumbing

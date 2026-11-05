@@ -20,6 +20,48 @@ enum ExportHandOff: String, Codable, Sendable {
     case devonthink
 }
 
+/// Five jobs OUT-01: what a format preserves, said before the export runs.
+/// A PDF or a spreadsheet is a readable report of the mail; it cannot be
+/// re-imported as email. Only the mail formats are restorable copies.
+enum ExportFidelity: String, Codable, Sendable, CaseIterable {
+    /// Standard mail files: re-importable by mailin and other mail apps.
+    case mailPreserving
+    /// Human- or machine-readable renderings: not a restorable mail archive.
+    case report
+    /// Derived from the mail (addresses, events): not a copy of the mail at all.
+    case extract
+
+    var label: String {
+        switch self {
+        case .mailPreserving: return "Mail — reimportable"
+        case .report: return "Reports and documents — readable, not restorable mail"
+        case .extract: return "Extracts from the mail"
+        }
+    }
+
+    /// The one-line explanation shown on the pre-flight sheet.
+    var note: String {
+        switch self {
+        case .mailPreserving:
+            return "A mail-preserving format: these files can be re-imported by mailin and by other mail apps."
+        case .report:
+            return "A report, not a mail archive: this output cannot be re-imported as email. Keep an mbox or .eml export for a restorable copy."
+        case .extract:
+            return "Derived from the mail, not a copy of it: the messages themselves are not in this output."
+        }
+    }
+}
+
+extension UnifiedExportFormat {
+    var fidelity: ExportFidelity {
+        switch self {
+        case .mbox, .emlFiles, .msgFiles: return .mailPreserving
+        case .word, .csv, .json, .printText, .markdown, .headersCSV, .pdfFiles, .tiffFiles, .portableHTML: return .report
+        case .vcard, .ics: return .extract
+        }
+    }
+}
+
 // MARK: - Options
 
 enum ExportFolderLayout: String, Codable, CaseIterable, Sendable {
