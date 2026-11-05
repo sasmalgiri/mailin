@@ -166,6 +166,9 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     // Five jobs (FIVE_JOBS_TRACKER.md) — preview until each gate passes.
     /// OPEN-02: PST/OST read message by message in batches instead of all at once.
     case streamingBinaryParsers
+    /// LIFE-01: single-file sources are copied into the archive (verified) and
+    /// imported from the copy, so the original is never needed again.
+    case selfContainedArchive
 
     var id: String { rawValue }
 

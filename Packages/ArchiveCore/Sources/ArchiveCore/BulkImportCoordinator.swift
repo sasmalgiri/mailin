@@ -593,6 +593,20 @@ final class BulkImportCoordinator {
                 callbacks.onFileProgress?(sourceName, fileIndex, urls.count, 0)
                 let hash = try await Self.sha256(of: url)
                 let sizeBytes: Int = Self.sourceByteSize(of: url)
+                // LIFE-01: self-contained archive — a single-file source is
+                // copied into managed storage (verified against the hash just
+                // computed) and parsed FROM THE COPY, so every byte locator
+                // points inside the archive and the original is not needed
+                // again. Directory sources hold no locators and are not copied.
+                var importURL = url
+                var isDirectory: ObjCBool = false
+                if SourceCopyPolicy.isEnabled,
+                   FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+                    let storeDirectory = store.storeDirectory
+                    importURL = try await Task.detached(priority: .utility) {
+                        try SourceCopies.copyIntoArchive(original: url, sha256: hash, storeDirectory: storeDirectory)
+                    }.value
+                }
                 // The identity of the engine that will ACTUALLY run, not the
                 // one the filename implies. Two reasons, both load-bearing:
                 //
@@ -885,7 +899,7 @@ final class BulkImportCoordinator {
                     // through `ParserFactory` even when the capability is on —
                     // it is an mbox/eml engine, and claiming otherwise would
                     // route binary formats into a byte scanner.
-                    let classification = SourceFormatClassifier.classify(url: url)
+                    let classification = SourceFormatClassifier.classify(url: importURL)
                     let offsetEligible = options.useOffsetEngine
                         && ParserFactory.streamableExtensions.contains(classification.format.parserToken)
                         && !SourceFormatClassifier.isDirectoryForm(classification.format)
@@ -911,7 +925,7 @@ final class BulkImportCoordinator {
                             try await persistBatch(imported.map(\.email))
                         }
                         fileReport = try await engine.importMessages(
-                            fileURL: url,
+                            fileURL: importURL,
                             senderEmail: options.senderEmail,
                             batchSize: batchSize,
                             envelopeProvider: envelopeProvider,
@@ -928,7 +942,7 @@ final class BulkImportCoordinator {
                         }
                         let batchSink = MainActorSink<[MBOXParser.RawEmail]> { batch in try await persistBatch(batch) }
                         fileReport = try await ParserFactory.parseStreamingCallback(
-                            fileURL: url,
+                            fileURL: importURL,
                             senderEmail: options.senderEmail,
                             batchSize: batchSize,
                             envelopeProvider: envelopeProvider,

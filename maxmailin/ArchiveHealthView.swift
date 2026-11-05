@@ -27,6 +27,10 @@ struct ArchiveHealthView: View {
     @State private var legalCounts: SQLiteEmailStore.LegalStateCounts?
     @State private var choosingSnapshotFolder = false
     @State private var snapshotFolder: URL?
+    /// LIFE-01: original files that locator-backed messages still need and that are not where they were.
+    @State private var missingSources: [MissingLocatorSource] = []
+    @State private var relinking: MissingLocatorSource?
+    @State private var sourceCopyBytes: Int64 = 0
 
     private static let lastIntegrityKey = "archiveHealth.lastIntegrity"
     private static let lastIntegrityDateKey = "archiveHealth.lastIntegrityDate"
@@ -113,6 +117,57 @@ struct ArchiveHealthView: View {
                 }
             }
 
+            Section("Original files") {
+                // LIFE-01: what the archive still depends on outside itself.
+                if modules.isOn(.selfContainedArchive) {
+                    LabeledContent(String(localized: "Copies of imported files"),
+                                   value: ByteCountFormatter.string(fromByteCount: sourceCopyBytes, countStyle: .file))
+                    Text("New imports are copied into the archive and checked byte for byte, so the archive stays complete when the original file is moved or deleted.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Messages above the full-parse ceiling are read from the original file. Turn on “Self-contained archive” in Modules to copy imported files into the archive instead.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if missingSources.isEmpty {
+                    LabeledContent(String(localized: "Original files not found"), value: String(localized: "None"))
+                } else {
+                    ForEach(missingSources) { missing in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(missing.filename)
+                                Text("\(missing.messages) messages are read from this file, \(missing.deferredMessages) have no other copy — \(missing.sourcePath)")
+                                    .font(.caption).foregroundStyle(.orange)
+                                    .lineLimit(2).truncationMode(.middle)
+                            }
+                            Spacer()
+                            Button(String(localized: "Relink…")) { relinking = missing }
+                                .disabled(working || missing.sourceDigest.isEmpty)
+                                .help(missing.sourceDigest.isEmpty
+                                      ? String(localized: "Imported before file digests were recorded; the file cannot be verified.")
+                                      : String(localized: "Choose the moved file. It is accepted only if its contents match what was imported."))
+                        }
+                    }
+                }
+            }
+            .fileImporter(isPresented: Binding(get: { relinking != nil }, set: { if !$0 { relinking = nil } }),
+                          allowedContentTypes: [.data, .item]) { result in
+                guard let missing = relinking else { return }
+                relinking = nil
+                guard case .success(let url) = result else { return }
+                Task { @MainActor in
+                    working = true; defer { working = false }
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    do {
+                        let moved = try await SQLiteEmailStore.shared.relinkLocators(sourceDigest: missing.sourceDigest, to: url)
+                        note = String(localized: "\(missing.filename) relinked: \(moved) messages read from \(url.lastPathComponent) again.")
+                    } catch {
+                        note = error.localizedDescription
+                    }
+                    await loadSources()
+                }
+            }
+
             Section("Analysis index") {
                 let pct = coverage.total > 0 ? Double(coverage.analyzed) / Double(coverage.total) : 0
                 LabeledContent(String(localized: "Emails analysed"),
@@ -181,7 +236,14 @@ struct ArchiveHealthView: View {
             }
         }
         .formStyle(.grouped)
-        .task { reload(); await loadCoverage() }
+        .task { reload(); await loadCoverage(); await loadSources() }
+    }
+
+    /// LIFE-01: which originals are missing, and how much the archive's own copies hold.
+    private func loadSources() async {
+        let store = SQLiteEmailStore.shared
+        missingSources = (try? await store.missingLocatorSources()) ?? []
+        sourceCopyBytes = SourceCopies.totalBytes(storeDirectory: store.storeDirectory)
     }
 
     private var integrityText: String {

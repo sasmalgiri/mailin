@@ -5829,6 +5829,76 @@
         }
       }
     },
+    "%@ relinked: %lld messages read from %@ again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ relinked: %2$lld messages read from %3$@ again."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ neu verknüpft: %lld Nachrichten werden wieder aus %@ gelesen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ vinculado de nuevo: %lld mensajes se leen otra vez de %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ relié : %lld messages sont de nouveau lus depuis %@."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ फिर से लिंक हुआ: %lld संदेश फिर से %@ से पढ़े जा रहे हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ricollegato: %lld messaggi vengono di nuovo letti da %@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@を再リンクしました：%lld件のメッセージを再び%@から読み取ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 다시 연결됨: %lld개 메시지를 %@에서 다시 읽습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ revinculado: %lld mensagens lidas de %@ novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已重新链接：%lld 封邮件重新从 %@ 读取。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已重新連結：%lld 封郵件重新從 %@ 讀取。"
+          }
+        }
+      }
+    },
     "%@ risk" : {
       "localizations" : {
         "de" : {
@@ -9215,6 +9285,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 個副本"
+          }
+        }
+      }
+    },
+    "%lld cut short" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld gekürzt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld recortados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld tronquées"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld अधूरे"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld troncati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件が途中まで"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 일부만"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld truncados"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个被截断"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個被截斷"
           }
         }
       }
@@ -13048,6 +13182,70 @@
         }
       }
     },
+    "%lld failed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld fehlgeschlagen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld con error"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld en échec"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld विफल"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld non riusciti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件が失敗"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 실패"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld com falha"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个失败"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個失敗"
+          }
+        }
+      }
+    },
     "%lld fields" : {
       "localizations" : {
         "de" : {
@@ -14515,6 +14713,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 封關聯郵件"
+          }
+        }
+      }
+    },
+    "%lld locked" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld gesperrt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld bloqueados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld verrouillées"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld लॉक"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld bloccati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件がロック済み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 잠김"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld bloqueados"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个已加密"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個已加密"
           }
         }
       }
@@ -20274,6 +20536,134 @@
         }
       }
     },
+    "%lld unsupported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld nicht unterstützt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld no admitidos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld non pris en charge"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld असमर्थित"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld non supportati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件が未対応"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 미지원"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sem suporte"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个不支持"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個不支援"
+          }
+        }
+      }
+    },
+    "%lld unsupported (%@)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld nicht unterstützt (%@)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld no admitidos (%@)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld non pris en charge (%@)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld असमर्थित (%@)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld non supportati (%@)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件が未対応（%@）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 미지원 (%@)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sem suporte (%@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个不支持（%@）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個不支援（%@）"
+          }
+        }
+      }
+    },
     "%lld verified identical copies across the whole archive" : {
       "localizations" : {
         "de" : {
@@ -20404,6 +20794,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已驗證 %lld 筆，接著：%@"
+          }
+        }
+      }
+    },
+    "%lld with no text" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ohne Text"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sin texto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sans texte"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld बिना पाठ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld senza testo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件はテキストなし"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 텍스트 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sem texto"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个无文本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個無文字"
           }
         }
       }
@@ -52228,6 +52682,70 @@
         }
       }
     },
+    "attachment has no stored bytes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anhang hat keine gespeicherten Bytes"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el adjunto no tiene bytes almacenados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la pièce jointe n'a pas d'octets enregistrés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अटैचमेंट में कोई संग्रहीत बाइट नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "l'allegato non ha byte memorizzati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添付ファイルに保存されたバイトがありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부 파일에 저장된 바이트가 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o anexo não tem bytes armazenados"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件没有已存储的字节"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件沒有已儲存的位元組"
+          }
+        }
+      }
+    },
     "Attachment name" : {
       "comment" : "Name of the attachment.",
       "isCommentAutoGenerated" : true,
@@ -73108,6 +73626,70 @@
         }
       }
     },
+    "Choose the moved file. It is accepted only if its contents match what was imported." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählen Sie die verschobene Datei. Sie wird nur akzeptiert, wenn ihr Inhalt dem Importierten entspricht."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elija el archivo movido. Solo se acepta si su contenido coincide con lo importado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez le fichier déplacé. Il n'est accepté que si son contenu correspond à ce qui a été importé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्थानांतरित फ़ाइल चुनें। यह तभी स्वीकार होगी जब इसकी सामग्री आयातित सामग्री से मेल खाए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli il file spostato. Viene accettato solo se il contenuto corrisponde a quanto importato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移動したファイルを選択してください。内容が読み込み時と一致する場合のみ受け付けます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이동된 파일을 선택하세요. 내용이 가져온 것과 일치할 때만 허용됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha o arquivo movido. Ele só é aceito se o conteúdo corresponder ao que foi importado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择被移动的文件。只有当其内容与导入时一致才会被接受。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇被移動的檔案。只有當其內容與匯入時一致才會被接受。"
+          }
+        }
+      }
+    },
     "Choose what happens to matching emails." : {
       "localizations" : {
         "de" : {
@@ -91136,6 +91718,70 @@
         }
       }
     },
+    "Copies each imported mailbox file into the archive, checks the copy byte for byte, and imports from the copy — so the archive stays complete when the original file is moved, renamed or deleted. Uses as much extra space as the files themselves. Off: messages above the full-parse ceiling are read from the original file, which must stay where it was imported from." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kopiert jede importierte Postfachdatei ins Archiv, prüft die Kopie Byte für Byte und importiert aus der Kopie – so bleibt das Archiv vollständig, wenn die Originaldatei verschoben, umbenannt oder gelöscht wird. Benötigt so viel zusätzlichen Platz wie die Dateien selbst. Aus: Nachrichten über der Vollanalyse-Grenze werden aus der Originaldatei gelesen, die dort bleiben muss, wo sie importiert wurde."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copia cada archivo de buzón importado en el archivo, comprueba la copia byte a byte e importa desde la copia, de modo que el archivo sigue completo si el original se mueve, renombra o elimina. Ocupa tanto espacio adicional como los propios archivos. Desactivado: los mensajes que superan el límite de análisis completo se leen del archivo original, que debe permanecer donde se importó."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copie chaque fichier de boîte aux lettres importé dans l'archive, vérifie la copie octet par octet et importe depuis la copie — l'archive reste ainsi complète si le fichier d'origine est déplacé, renommé ou supprimé. Occupe autant d'espace supplémentaire que les fichiers eux-mêmes. Désactivé : les messages au-dessus du plafond d'analyse complète sont lus dans le fichier d'origine, qui doit rester là où il a été importé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर आयातित मेलबॉक्स फ़ाइल को संग्रह में कॉपी करता है, कॉपी की बाइट-दर-बाइट जाँच करता है और कॉपी से आयात करता है — ताकि मूल फ़ाइल के स्थानांतरित, नाम बदलने या हटाए जाने पर भी संग्रह पूरा रहे। फ़ाइलों जितनी ही अतिरिक्त जगह लेता है। बंद: पूर्ण-विश्लेषण सीमा से बड़े संदेश मूल फ़ाइल से पढ़े जाते हैं, जो वहीं रहनी चाहिए जहाँ से आयात हुई थी।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copia ogni file di casella importato nell'archivio, verifica la copia byte per byte e importa dalla copia, così l'archivio resta completo se il file originale viene spostato, rinominato o eliminato. Occupa tanto spazio aggiuntivo quanto i file stessi. Disattivato: i messaggi oltre il limite di analisi completa vengono letti dal file originale, che deve restare dove è stato importato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み込んだ各メールボックスファイルをアーカイブにコピーし、コピーをバイト単位で検証してからコピーから読み込みます。元のファイルが移動・名称変更・削除されてもアーカイブは完全なままです。ファイルと同じだけの追加容量を使います。オフ：完全解析の上限を超えるメッセージは元のファイルから読み取るため、ファイルは読み込み時の場所に置いたままにする必要があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져온 각 사서함 파일을 아카이브에 복사하고 복사본을 바이트 단위로 검사한 뒤 복사본에서 가져옵니다 — 원본 파일이 이동, 이름 변경 또는 삭제되어도 아카이브는 완전하게 유지됩니다. 파일 크기만큼의 추가 공간을 사용합니다. 끄면: 전체 분석 한도를 넘는 메시지는 원본 파일에서 읽으므로, 파일은 가져온 위치에 그대로 있어야 합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copia cada arquivo de caixa de correio importado para o arquivo, verifica a cópia byte a byte e importa a partir da cópia — assim o arquivo permanece completo quando o original é movido, renomeado ou excluído. Usa tanto espaço extra quanto os próprios arquivos. Desligado: mensagens acima do limite de análise completa são lidas do arquivo original, que deve permanecer onde foi importado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将每个导入的邮箱文件复制到归档中，逐字节校验副本，并从副本导入——即使原始文件被移动、重命名或删除，归档仍保持完整。额外占用与文件本身相同的空间。关闭时：超过完整解析上限的邮件从原始文件读取，该文件必须留在导入时的位置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將每個匯入的信箱檔案複製到封存中，逐位元組檢查副本，並從副本匯入——即使原始檔案被移動、重新命名或刪除，封存仍保持完整。額外佔用與檔案本身相同的空間。關閉時：超過完整解析上限的郵件會從原始檔案讀取，該檔案必須留在匯入時的位置。"
+          }
+        }
+      }
+    },
     "Copies every attachment file next to the messages, in Attachments/" : {
       "localizations" : {
         "de" : {
@@ -91196,6 +91842,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "將每個附件檔案拷貝到郵件旁的 Attachments/ 中"
+          }
+        }
+      }
+    },
+    "Copies of imported files" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kopien importierter Dateien"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copias de archivos importados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copies des fichiers importés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आयातित फ़ाइलों की प्रतियाँ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copie dei file importati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み込んだファイルのコピー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져온 파일의 복사본"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópias de arquivos importados"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入文件的副本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入檔案的副本"
           }
         }
       }
@@ -115839,6 +116549,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "每一步都經確認並有證明。"
+          }
+        }
+      }
+    },
+    "Earlier imports" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frühere Importe"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importaciones anteriores"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importations antérieures"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहले के आयात"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importazioni precedenti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以前の読み込み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 가져오기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importações anteriores"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "早期导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先前匯入"
           }
         }
       }
@@ -142379,6 +143153,70 @@
         }
       }
     },
+    "Filter folders" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner filtern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filtrar carpetas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filtrer les dossiers"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ोल्डर फ़िल्टर करें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filtra cartelle"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダを絞り込む"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "폴더 필터"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filtrar pastas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "篩選資料夾"
+          }
+        }
+      }
+    },
     "Filter presets" : {
       "localizations" : {
         "de" : {
@@ -157669,6 +158507,70 @@
         }
       }
     },
+    "Groups found among the newest 5,000 emails only (previous engine). The whole archive needs “Whole-archive duplicate groups (3.0)” in Settings ▸ Modules." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gruppen nur unter den neuesten 5.000 E-Mails gefunden (vorherige Engine). Das ganze Archiv braucht „Archivweite Duplikatgruppen (3.0)“ in Einstellungen ▸ Module."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos encontrados solo entre los 5.000 correos más recientes (motor anterior). Todo el archivo necesita “Grupos de duplicados de todo el archivo (3.0)” en Ajustes ▸ Módulos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Groupes trouvés parmi les 5 000 e-mails les plus récents seulement (ancien moteur). L'archive entière nécessite « Groupes de doublons sur toute l'archive (3.0) » dans Réglages ▸ Modules."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "समूह केवल नवीनतम 5,000 ईमेल में मिले (पिछला इंजन)। पूरे संग्रह के लिए सेटिंग्स ▸ मॉड्यूल में “पूरे संग्रह के डुप्लिकेट समूह (3.0)” चाहिए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gruppi trovati solo tra le 5.000 email più recenti (motore precedente). L'intero archivio richiede “Gruppi di duplicati su tutto l'archivio (3.0)” in Impostazioni ▸ Moduli."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新の5,000通のメールの中でのみグループを検出しました（以前のエンジン）。アーカイブ全体には、設定 ▸ モジュールの「アーカイブ全体の重複グループ（3.0）」が必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최신 5,000개 이메일에서만 그룹을 찾았습니다(이전 엔진). 전체 아카이브에는 설정 ▸ 모듈의 '전체 아카이브 중복 그룹(3.0)'이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos encontrados apenas entre os 5.000 e-mails mais recentes (mecanismo anterior). O arquivo inteiro precisa de “Grupos de duplicatas em todo o arquivo (3.0)” em Ajustes ▸ Módulos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在最新的 5,000 封邮件中找到了重复组（旧引擎）。整个归档需要在“设置 ▸ 模块”中开启“整个归档的重复组（3.0）”。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅在最新的 5,000 封郵件中找到了重複群組（舊引擎）。整個封存需要在「設定 ▸ 模組」中開啟「整個封存的重複群組（3.0）」。"
+          }
+        }
+      }
+    },
     "Groups the archive by topic" : {
       "localizations" : {
         "de" : {
@@ -167913,6 +168815,70 @@
         }
       }
     },
+    "image — turn on attachment OCR to read it" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bild – Anhang-OCR einschalten, um es zu lesen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "imagen: active el OCR de adjuntos para leerla"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "image — activez l'OCR des pièces jointes pour la lire"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "छवि — इसे पढ़ने के लिए अटैचमेंट OCR चालू करें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "immagine: attiva l'OCR degli allegati per leggerla"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像 — 読み取るには添付ファイルOCRをオンにしてください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미지 — 읽으려면 첨부 파일 OCR을 켜세요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "imagem — ative o OCR de anexos para lê-la"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片——开启附件 OCR 以读取"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "圖片——開啟附件 OCR 以讀取"
+          }
+        }
+      }
+    },
     "Image preview of %@" : {
       "localizations" : {
         "de" : {
@@ -171443,6 +172409,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已匯入 %@。執行前請先閱讀。"
+          }
+        }
+      }
+    },
+    "Imported before file digests were recorded; the file cannot be verified." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importiert, bevor Dateiprüfsummen aufgezeichnet wurden; die Datei kann nicht verifiziert werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importado antes de que se registraran las huellas de archivo; el archivo no se puede verificar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importé avant l'enregistrement des empreintes de fichier ; le fichier ne peut pas être vérifié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ाइल डाइजेस्ट दर्ज होने से पहले आयात किया गया; फ़ाइल सत्यापित नहीं की जा सकती।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importato prima che venissero registrate le impronte dei file; il file non può essere verificato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルのダイジェストが記録される前に読み込まれたため、ファイルを検証できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 다이제스트가 기록되기 전에 가져와서 파일을 확인할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importado antes de os resumos de arquivo serem registrados; o arquivo não pode ser verificado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在记录文件摘要之前导入；无法验证该文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在記錄檔案摘要之前匯入；無法驗證該檔案。"
           }
         }
       }
@@ -180421,6 +181451,70 @@
         }
       }
     },
+    "Labels & Folders (%lld)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Labels & Ordner (%lld)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etiquetas y carpetas (%lld)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Libellés et dossiers (%lld)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "लेबल और फ़ोल्डर (%lld)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etichette e cartelle (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ラベルとフォルダ（%lld）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "레이블 및 폴더 (%lld)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcadores e pastas (%lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签和文件夹（%lld）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標籤與資料夾（%lld）"
+          }
+        }
+      }
+    },
     "Labels become one-click filters." : {
       "localizations" : {
         "de" : {
@@ -185677,6 +186771,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "把每封內文中找到的郵件位址、電話號碼和網址分別列入 emails_in_body、phones 和 urls 欄位，用於建立聯絡人或連結目錄。不加標籤。"
+          }
+        }
+      }
+    },
+    "Lists the next %lld folders, busiest first. Every folder in the archive can be reached this way or through the filter." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listet die nächsten %lld Ordner, die vollsten zuerst. Jeder Ordner im Archiv ist so oder über den Filter erreichbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muestra las siguientes %lld carpetas, las más llenas primero. Cada carpeta del archivo se puede alcanzar así o mediante el filtro."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affiche les %lld dossiers suivants, les plus remplis d'abord. Chaque dossier de l'archive est accessible ainsi ou par le filtre."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अगले %lld फ़ोल्डर सूचीबद्ध करता है, सबसे व्यस्त पहले। संग्रह का हर फ़ोल्डर इस तरह या फ़िल्टर से पहुँचा जा सकता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elenca le prossime %lld cartelle, le più piene per prime. Ogni cartella dell'archivio è raggiungibile così o tramite il filtro."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次の%lldフォルダを、件数の多い順に表示します。アーカイブ内のすべてのフォルダにこの方法または絞り込みで到達できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음 %lld개 폴더를 많은 순으로 나열합니다. 아카이브의 모든 폴더는 이 방법 또는 필터로 찾을 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lista as próximas %lld pastas, as mais cheias primeiro. Toda pasta do arquivo pode ser alcançada assim ou pelo filtro."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出接下来的 %lld 个文件夹，邮件最多的在前。归档中的每个文件夹都可以通过这种方式或筛选到达。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出接下來的 %lld 個資料夾，郵件最多的在前。封存中的每個資料夾都可以透過這種方式或篩選到達。"
           }
         }
       }
@@ -195260,6 +196418,70 @@
         }
       }
     },
+    "message could not be parsed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nachricht konnte nicht gelesen werden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo analizar el mensaje"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le message n'a pas pu être analysé"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संदेश पढ़ा नहीं जा सका"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "impossibile analizzare il messaggio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージを解析できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지를 분석할 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "não foi possível analisar a mensagem"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法解析邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法解析郵件"
+          }
+        }
+      }
+    },
     "Message Integrity" : {
       "localizations" : {
         "de" : {
@@ -195320,6 +196542,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "郵件完整性"
+          }
+        }
+      }
+    },
+    "message source not stored" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nachrichtenquelle nicht gespeichert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "origen del mensaje no almacenado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "source du message non enregistrée"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संदेश स्रोत संग्रहीत नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sorgente del messaggio non memorizzata"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージのソースが保存されていません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지 원본이 저장되지 않음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "origem da mensagem não armazenada"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未存储邮件源"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未儲存郵件來源"
           }
         }
       }
@@ -195512,6 +196798,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "郵件"
+          }
+        }
+      }
+    },
+    "Messages above the full-parse ceiling are read from the original file. Turn on “Self-contained archive” in Modules to copy imported files into the archive instead." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nachrichten über der Vollanalyse-Grenze werden aus der Originaldatei gelesen. Schalten Sie „Eigenständiges Archiv“ in Module ein, um importierte Dateien stattdessen ins Archiv zu kopieren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los mensajes que superan el límite de análisis completo se leen del archivo original. Active “Archivo autónomo” en Módulos para copiar los archivos importados al archivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les messages au-dessus du plafond d'analyse complète sont lus dans le fichier d'origine. Activez « Archive autonome » dans Modules pour copier les fichiers importés dans l'archive."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पूर्ण-विश्लेषण सीमा से बड़े संदेश मूल फ़ाइल से पढ़े जाते हैं। आयातित फ़ाइलों को संग्रह में कॉपी करने के लिए मॉड्यूल में “स्व-निहित संग्रह” चालू करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I messaggi oltre il limite di analisi completa vengono letti dal file originale. Attiva “Archivio autonomo” in Moduli per copiare i file importati nell'archivio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完全解析の上限を超えるメッセージは元のファイルから読み取られます。読み込んだファイルをアーカイブにコピーするには、モジュールで「自己完結型アーカイブ」をオンにしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "전체 분석 한도를 넘는 메시지는 원본 파일에서 읽습니다. 가져온 파일을 아카이브에 복사하려면 모듈에서 '독립형 아카이브'를 켜세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensagens acima do limite de análise completa são lidas do arquivo original. Ative “Arquivo autossuficiente” em Módulos para copiar os arquivos importados para o arquivo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超过完整解析上限的邮件从原始文件读取。在“模块”中开启“自包含归档”可将导入的文件复制到归档中。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超過完整解析上限的郵件會從原始檔案讀取。在「模組」中開啟「自含式封存」可將匯入的檔案複製到封存中。"
           }
         }
       }
@@ -202399,6 +203749,70 @@
         }
       }
     },
+    "New imports are copied into the archive and checked byte for byte, so the archive stays complete when the original file is moved or deleted." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Importe werden ins Archiv kopiert und Byte für Byte geprüft, sodass das Archiv vollständig bleibt, wenn die Originaldatei verschoben oder gelöscht wird."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las nuevas importaciones se copian en el archivo y se comprueban byte a byte, de modo que el archivo sigue completo si el original se mueve o elimina."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les nouvelles importations sont copiées dans l'archive et vérifiées octet par octet ; l'archive reste complète si le fichier d'origine est déplacé ou supprimé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नए आयात संग्रह में कॉपी होकर बाइट-दर-बाइट जाँचे जाते हैं, ताकि मूल फ़ाइल हटने या स्थानांतरित होने पर भी संग्रह पूरा रहे।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le nuove importazioni vengono copiate nell'archivio e verificate byte per byte, così l'archivio resta completo se il file originale viene spostato o eliminato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しい読み込みはアーカイブにコピーされバイト単位で検証されるため、元のファイルが移動・削除されてもアーカイブは完全なままです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새로 가져온 파일은 아카이브에 복사되어 바이트 단위로 검사되므로, 원본 파일이 이동되거나 삭제되어도 아카이브는 완전하게 유지됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Novas importações são copiadas para o arquivo e verificadas byte a byte, assim o arquivo permanece completo quando o original é movido ou excluído."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新导入的文件会被复制到归档中并逐字节校验，即使原始文件被移动或删除，归档仍保持完整。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新匯入的檔案會被複製到封存中並逐位元組檢查，即使原始檔案被移動或刪除，封存仍保持完整。"
+          }
+        }
+      }
+    },
     "New issue tag..." : {
       "localizations" : {
         "de" : {
@@ -205303,6 +206717,134 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未找到附件"
+          }
+        }
+      }
+    },
+    "No attachments matched. Searchable text covers %lld of %lld attachments — %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Anhänge passen. Durchsuchbarer Text deckt %lld von %lld Anhängen ab – %@."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ningún adjunto coincide. El texto buscable cubre %lld de %lld adjuntos: %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune pièce jointe ne correspond. Le texte interrogeable couvre %lld pièces jointes sur %lld — %@."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई अटैचमेंट मेल नहीं खाया। खोजने योग्य पाठ %lld में से %lld अटैचमेंट को कवर करता है — %@।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun allegato corrisponde. Il testo ricercabile copre %lld allegati su %lld: %@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致する添付ファイルはありません。検索可能なテキストは%lld件中%lld件の添付ファイルをカバーしています（%@）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일치하는 첨부 파일이 없습니다. 검색 가능한 텍스트는 첨부 파일 %lld개 중 %lld개를 포함합니다 — %@."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum anexo correspondeu. O texto pesquisável cobre %lld de %lld anexos — %@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的附件。可搜索文本覆盖 %lld / %lld 个附件——%@。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有符合的附件。可搜尋文字涵蓋 %lld / %lld 個附件——%@。"
+          }
+        }
+      }
+    },
+    "No attachments matched. Searchable text covers all %lld attachments." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Anhänge passen. Durchsuchbarer Text deckt alle %lld Anhänge ab."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ningún adjunto coincide. El texto buscable cubre los %lld adjuntos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune pièce jointe ne correspond. Le texte interrogeable couvre les %lld pièces jointes."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई अटैचमेंट मेल नहीं खाया। खोजने योग्य पाठ सभी %lld अटैचमेंट को कवर करता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun allegato corrisponde. Il testo ricercabile copre tutti i %lld allegati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致する添付ファイルはありません。検索可能なテキストは%lld件すべての添付ファイルをカバーしています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일치하는 첨부 파일이 없습니다. 검색 가능한 텍스트가 첨부 파일 %lld개 전체를 포함합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum anexo correspondeu. O texto pesquisável cobre todos os %lld anexos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的附件。可搜索文本覆盖全部 %lld 个附件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有符合的附件。可搜尋文字涵蓋全部 %lld 個附件。"
           }
         }
       }
@@ -208835,6 +210377,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有正在監看的檔案夾——請選擇使用者轉寄可疑郵件的檔案夾。"
+          }
+        }
+      }
+    },
+    "No folder matches “%@”" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Ordner passt zu „%@“"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguna carpeta coincide con “%@”"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun dossier ne correspond à « %@ »"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई फ़ोल्डर “%@” से मेल नहीं खाता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessuna cartella corrisponde a “%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」に一致するフォルダはありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”와(과) 일치하는 폴더가 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma pasta corresponde a “%@”"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有与“%@”匹配的文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有符合「%@」的資料夾"
           }
         }
       }
@@ -223396,6 +225002,134 @@
         }
       }
     },
+    "Original files" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Originaldateien"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivos originales"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichiers d'origine"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मूल फ़ाइलें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File originali"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元のファイル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원본 파일"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivos originais"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始檔案"
+          }
+        }
+      }
+    },
+    "Original files not found" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht gefundene Originaldateien"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivos originales no encontrados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichiers d'origine introuvables"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मूल फ़ाइलें नहीं मिलीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File originali non trovati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "見つからない元のファイル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "찾을 수 없는 원본 파일"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivos originais não encontrados"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到的原始文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到的原始檔案"
+          }
+        }
+      }
+    },
     "Originals" : {
       "localizations" : {
         "de" : {
@@ -226114,6 +227848,70 @@
         }
       }
     },
+    "password-protected PDF" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "passwortgeschütztes PDF"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF protegido con contraseña"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF protégé par mot de passe"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पासवर्ड-सुरक्षित PDF"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF protetto da password"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワード保護されたPDF"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "암호로 보호된 PDF"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF protegido por senha"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受密码保护的 PDF"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受密碼保護的 PDF"
+          }
+        }
+      }
+    },
     "Pattern Break" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -226825,6 +228623,70 @@
     },
     "PDF" : {
       "shouldTranslate" : false
+    },
+    "PDF could not be opened" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF konnte nicht geöffnet werden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo abrir el PDF"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le PDF n'a pas pu être ouvert"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF खोला नहीं जा सका"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "impossibile aprire il PDF"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDFを開けませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF를 열 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "não foi possível abrir o PDF"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开 PDF"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開啟 PDF"
+          }
+        }
+      }
     },
     "PDF Document" : {
       "localizations" : {
@@ -247931,6 +249793,70 @@
         }
       }
     },
+    "Reads Outlook PST and OST files and Notes NSF databases message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liest Outlook-PST- und -OST-Dateien sowie Notes-NSF-Datenbanken Nachricht für Nachricht in Stapeln, sodass der Speicherbedarf dem Stapel folgt, nicht der Datei. Aus: alle Nachrichten der Datei werden zuerst gelesen, dann gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lee archivos PST y OST de Outlook y bases de datos NSF de Notes mensaje a mensaje en lotes, de modo que la memoria sigue al lote y no al archivo. Desactivado: primero se leen todos los mensajes del archivo y después se guardan."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lit les fichiers PST et OST d'Outlook et les bases NSF de Notes message par message, par lots, de sorte que la mémoire suit le lot et non le fichier. Désactivé : tous les messages du fichier sont lus d'abord, puis enregistrés."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST और OST फ़ाइलों और Notes NSF डेटाबेस को बैच में एक-एक संदेश पढ़ता है, ताकि मेमोरी फ़ाइल के बजाय बैच के अनुसार रहे। बंद: पहले फ़ाइल के सभी संदेश पढ़े जाते हैं, फिर संग्रहीत होते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Legge i file PST e OST di Outlook e i database NSF di Notes messaggio per messaggio, a lotti, così la memoria segue il lotto e non il file. Disattivato: tutti i messaggi del file vengono letti prima, poi archiviati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OutlookのPST/OSTファイルとNotesのNSFデータベースをメッセージ単位でバッチ読み込みするため、メモリ使用量はファイルではなくバッチに比例します。オフ：ファイル内の全メッセージを先に読み込んでから保存します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST 및 OST 파일과 Notes NSF 데이터베이스를 메시지 단위로 일괄 읽어, 메모리가 파일이 아닌 일괄 처리 단위를 따릅니다. 끄면: 파일의 모든 메시지를 먼저 읽은 뒤 저장합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lê arquivos PST e OST do Outlook e bancos NSF do Notes mensagem por mensagem, em lotes, para que a memória acompanhe o lote e não o arquivo. Desligado: todas as mensagens do arquivo são lidas primeiro e depois armazenadas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按批次逐条读取 Outlook PST、OST 文件和 Notes NSF 数据库，内存占用随批次而非文件大小变化。关闭时：先读取文件中的全部邮件，再存储。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按批次逐封讀取 Outlook PST、OST 檔案和 Notes NSF 資料庫，記憶體佔用隨批次而非檔案大小變化。關閉時：先讀取檔案中的全部郵件，再儲存。"
+          }
+        }
+      }
+    },
     "Reads Outlook PST and OST files by Microsoft's published format: every folder, message, recipient and attachment, ANSI and Unicode files, all encodings. Off: the earlier reader, which reads mailin's own PST exports." : {
       "localizations" : {
         "de" : {
@@ -255288,6 +257214,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "可靠性…"
+          }
+        }
+      }
+    },
+    "Relink…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neu verknüpfen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volver a vincular…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relier à nouveau…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फिर से लिंक करें…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricollega…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再リンク…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다시 연결…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revincular…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新链接…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新連結…"
           }
         }
       }
@@ -269828,6 +271818,70 @@
         }
       }
     },
+    "RTF could not be read" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RTF konnte nicht gelesen werden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo leer el RTF"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le RTF n'a pas pu être lu"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RTF पढ़ा नहीं जा सका"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "impossibile leggere l'RTF"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RTFを読み取れませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RTF를 읽을 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "não foi possível ler o RTF"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 RTF"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取 RTF"
+          }
+        }
+      }
+    },
     "Rule category" : {
       "localizations" : {
         "de" : {
@@ -278155,6 +280209,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "掃描列表中的律師-客戶及法律特權訊號 — 被標記的郵件隨後會顯示在「特權」標籤下"
+          }
+        }
+      }
+    },
+    "scanned PDF — turn on attachment OCR to read it" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "gescanntes PDF – Anhang-OCR einschalten, um es zu lesen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF escaneado: active el OCR de adjuntos para leerlo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF numérisé — activez l'OCR des pièces jointes pour le lire"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्कैन किया गया PDF — इसे पढ़ने के लिए अटैचमेंट OCR चालू करें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF scansionato: attiva l'OCR degli allegati per leggerlo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキャンPDF — 読み取るには添付ファイルOCRをオンにしてください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스캔된 PDF — 읽으려면 첨부 파일 OCR을 켜세요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PDF digitalizado — ative o OCR de anexos para lê-lo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫描版 PDF——开启附件 OCR 以读取"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "掃描版 PDF——開啟附件 OCR 以讀取"
           }
         }
       }
@@ -289563,6 +291681,70 @@
         }
       }
     },
+    "Self-contained archive" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eigenständiges Archiv"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivo autónomo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive autonome"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्व-निहित संग्रह"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivio autonomo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自己完結型アーカイブ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "독립형 아카이브"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivo autossuficiente"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自包含归档"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自含式封存"
+          }
+        }
+      }
+    },
     "Semantic index" : {
       "localizations" : {
         "de" : {
@@ -296668,6 +298850,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顯示較少"
+          }
+        }
+      }
+    },
+    "Show more (%lld of %lld folders)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehr anzeigen (%lld von %lld Ordnern)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar más (%lld de %lld carpetas)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher plus (%lld dossiers sur %lld)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "और दिखाएँ (%lld में से %lld फ़ोल्डर)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra altre (%lld di %lld cartelle)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "さらに表示（%lld / %lldフォルダ）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "더 보기 (%lld / %lld개 폴더)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar mais (%lld de %lld pastas)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示更多（%lld / %lld 个文件夹）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示更多（%lld / %lld 個資料夾）"
           }
         }
       }
@@ -310380,6 +312626,70 @@
         }
       }
     },
+    "Streaming PST and NSF import" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Streaming-Import für PST und NSF"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importación PST y NSF en flujo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importation PST et NSF en continu"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्ट्रीमिंग PST और NSF आयात"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importazione PST e NSF in streaming"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PSTおよびNSFのストリーミング読み込み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스트리밍 PST 및 NSF 가져오기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importação PST e NSF em fluxo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "流式 PST 和 NSF 导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "串流 PST 與 NSF 匯入"
+          }
+        }
+      }
+    },
     "Strip anything that could identify a source, verify the set is clean, and prepare a publish-safe export." : {
       "localizations" : {
         "de" : {
@@ -321104,6 +323414,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "測試並啟用"
+          }
+        }
+      }
+    },
+    "text encoding not recognised" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textkodierung nicht erkannt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "codificación de texto no reconocida"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "encodage du texte non reconnu"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पाठ एन्कोडिंग पहचानी नहीं गई"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "codifica del testo non riconosciuta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "テキストのエンコーディングを認識できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "텍스트 인코딩을 인식할 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "codificação de texto não reconhecida"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法识别文本编码"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法辨識文字編碼"
           }
         }
       }
@@ -364545,1666 +366919,66 @@
         }
       }
     },
-    "Filter folders" : {
+    "%lld messages are read from this file, %lld have no other copy — %@" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ordner filtern"
+            "value" : "%lld Nachrichten werden aus dieser Datei gelesen, %lld haben keine andere Kopie – %@"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Filtrar carpetas"
+            "value" : "%lld mensajes se leen de este archivo, %lld no tienen otra copia: %@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Filtrer les dossiers"
+            "value" : "%lld messages sont lus depuis ce fichier, %lld n'ont aucune autre copie — %@"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "फ़ोल्डर फ़िल्टर करें"
+            "value" : "%lld संदेश इस फ़ाइल से पढ़े जाते हैं, %lld की कोई अन्य प्रति नहीं है — %@"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Filtra cartelle"
+            "value" : "%lld messaggi vengono letti da questo file, %lld non hanno altra copia: %@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "フォルダを絞り込む"
+            "value" : "%lld件のメッセージがこのファイルから読み取られ、%lld件は他にコピーがありません — %@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "폴더 필터"
+            "value" : "%lld개 메시지를 이 파일에서 읽으며, %lld개는 다른 복사본이 없습니다 — %@"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Filtrar pastas"
+            "value" : "%lld mensagens são lidas deste arquivo, %lld não têm outra cópia — %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "筛选文件夹"
+            "value" : "%lld 封邮件从此文件读取，其中 %lld 封没有其他副本——%@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "篩選資料夾"
-          }
-        }
-      }
-    },
-    "No folder matches “%@”" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Kein Ordner passt zu „%@“"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ninguna carpeta coincide con “%@”"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aucun dossier ne correspond à « %@ »"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "कोई फ़ोल्डर “%@” से मेल नहीं खाता"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nessuna cartella corrisponde a “%@”"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "「%@」に一致するフォルダはありません"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "“%@”와(과) 일치하는 폴더가 없습니다"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nenhuma pasta corresponde a “%@”"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有与“%@”匹配的文件夹"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "沒有符合「%@」的資料夾"
-          }
-        }
-      }
-    },
-    "Show more (%lld of %lld folders)" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mehr anzeigen (%lld von %lld Ordnern)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mostrar más (%lld de %lld carpetas)"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Afficher plus (%lld dossiers sur %lld)"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "और दिखाएँ (%lld में से %lld फ़ोल्डर)"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mostra altre (%lld di %lld cartelle)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "さらに表示（%lld / %lldフォルダ）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "더 보기 (%lld / %lld개 폴더)"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mostrar mais (%lld de %lld pastas)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示更多（%lld / %lld 个文件夹）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "顯示更多（%lld / %lld 個資料夾）"
-          }
-        }
-      }
-    },
-    "Lists the next %lld folders, busiest first. Every folder in the archive can be reached this way or through the filter." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Listet die nächsten %lld Ordner, die vollsten zuerst. Jeder Ordner im Archiv ist so oder über den Filter erreichbar."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muestra las siguientes %lld carpetas, las más llenas primero. Cada carpeta del archivo se puede alcanzar así o mediante el filtro."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Affiche les %lld dossiers suivants, les plus remplis d'abord. Chaque dossier de l'archive est accessible ainsi ou par le filtre."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "अगले %lld फ़ोल्डर सूचीबद्ध करता है, सबसे व्यस्त पहले। संग्रह का हर फ़ोल्डर इस तरह या फ़िल्टर से पहुँचा जा सकता है।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Elenca le prossime %lld cartelle, le più piene per prime. Ogni cartella dell'archivio è raggiungibile così o tramite il filtro."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "次の%lldフォルダを、件数の多い順に表示します。アーカイブ内のすべてのフォルダにこの方法または絞り込みで到達できます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "다음 %lld개 폴더를 많은 순으로 나열합니다. 아카이브의 모든 폴더는 이 방법 또는 필터로 찾을 수 있습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lista as próximas %lld pastas, as mais cheias primeiro. Toda pasta do arquivo pode ser alcançada assim ou pelo filtro."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "列出接下来的 %lld 个文件夹，邮件最多的在前。归档中的每个文件夹都可以通过这种方式或筛选到达。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "列出接下來的 %lld 個資料夾，郵件最多的在前。封存中的每個資料夾都可以透過這種方式或篩選到達。"
-          }
-        }
-      }
-    },
-    "Labels & Folders (%lld)" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Labels & Ordner (%lld)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Etiquetas y carpetas (%lld)"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Libellés et dossiers (%lld)"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "लेबल और फ़ोल्डर (%lld)"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Etichette e cartelle (%lld)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ラベルとフォルダ（%lld）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "레이블 및 폴더 (%lld)"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Marcadores e pastas (%lld)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "标签和文件夹（%lld）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "標籤與資料夾（%lld）"
-          }
-        }
-      }
-    },
-    "No attachments matched. Searchable text covers %lld of %lld attachments — %@." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Keine Anhänge passen. Durchsuchbarer Text deckt %lld von %lld Anhängen ab – %@."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ningún adjunto coincide. El texto buscable cubre %lld de %lld adjuntos: %@."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aucune pièce jointe ne correspond. Le texte interrogeable couvre %lld pièces jointes sur %lld — %@."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "कोई अटैचमेंट मेल नहीं खाया। खोजने योग्य पाठ %lld में से %lld अटैचमेंट को कवर करता है — %@।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nessun allegato corrisponde. Il testo ricercabile copre %lld allegati su %lld: %@."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一致する添付ファイルはありません。検索可能なテキストは%lld件中%lld件の添付ファイルをカバーしています（%@）。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "일치하는 첨부 파일이 없습니다. 검색 가능한 텍스트는 첨부 파일 %lld개 중 %lld개를 포함합니다 — %@."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nenhum anexo correspondeu. O texto pesquisável cobre %lld de %lld anexos — %@."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有匹配的附件。可搜索文本覆盖 %lld / %lld 个附件——%@。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "沒有符合的附件。可搜尋文字涵蓋 %lld / %lld 個附件——%@。"
-          }
-        }
-      }
-    },
-    "No attachments matched. Searchable text covers all %lld attachments." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Keine Anhänge passen. Durchsuchbarer Text deckt alle %lld Anhänge ab."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ningún adjunto coincide. El texto buscable cubre los %lld adjuntos."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aucune pièce jointe ne correspond. Le texte interrogeable couvre les %lld pièces jointes."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "कोई अटैचमेंट मेल नहीं खाया। खोजने योग्य पाठ सभी %lld अटैचमेंट को कवर करता है।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nessun allegato corrisponde. Il testo ricercabile copre tutti i %lld allegati."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一致する添付ファイルはありません。検索可能なテキストは%lld件すべての添付ファイルをカバーしています。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "일치하는 첨부 파일이 없습니다. 검색 가능한 텍스트가 첨부 파일 %lld개 전체를 포함합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nenhum anexo correspondeu. O texto pesquisável cobre todos os %lld anexos."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有匹配的附件。可搜索文本覆盖全部 %lld 个附件。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "沒有符合的附件。可搜尋文字涵蓋全部 %lld 個附件。"
-          }
-        }
-      }
-    },
-    "%lld unsupported (%@)" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld nicht unterstützt (%@)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld no admitidos (%@)"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld non pris en charge (%@)"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld असमर्थित (%@)"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld non supportati (%@)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld件が未対応（%@）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld개 미지원 (%@)"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld sem suporte (%@)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个不支持（%@）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 個不支援（%@）"
-          }
-        }
-      }
-    },
-    "%lld unsupported" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld nicht unterstützt"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld no admitidos"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld non pris en charge"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld असमर्थित"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld non supportati"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld件が未対応"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld개 미지원"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld sem suporte"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个不支持"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 個不支援"
-          }
-        }
-      }
-    },
-    "%lld locked" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld gesperrt"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld bloqueados"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld verrouillées"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld लॉक"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld bloccati"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld件がロック済み"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld개 잠김"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld bloqueados"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个已加密"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 個已加密"
-          }
-        }
-      }
-    },
-    "%lld failed" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld fehlgeschlagen"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld con error"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld en échec"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld विफल"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld non riusciti"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld件が失敗"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld개 실패"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld com falha"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个失败"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 個失敗"
-          }
-        }
-      }
-    },
-    "%lld cut short" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld gekürzt"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld recortados"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld tronquées"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld अधूरे"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld troncati"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld件が途中まで"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld개 일부만"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld truncados"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个被截断"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 個被截斷"
-          }
-        }
-      }
-    },
-    "%lld with no text" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld ohne Text"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld sin texto"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld sans texte"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld बिना पाठ"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld senza testo"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld件はテキストなし"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld개 텍스트 없음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld sem texto"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个无文本"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 個無文字"
-          }
-        }
-      }
-    },
-    "message source not stored" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nachrichtenquelle nicht gespeichert"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "origen del mensaje no almacenado"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "source du message non enregistrée"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "संदेश स्रोत संग्रहीत नहीं"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "sorgente del messaggio non memorizzata"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "メッセージのソースが保存されていません"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "메시지 원본이 저장되지 않음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "origem da mensagem não armazenada"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未存储邮件源"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未儲存郵件來源"
-          }
-        }
-      }
-    },
-    "message could not be parsed" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nachricht konnte nicht gelesen werden"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "no se pudo analizar el mensaje"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "le message n'a pas pu être analysé"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "संदेश पढ़ा नहीं जा सका"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "impossibile analizzare il messaggio"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "メッセージを解析できませんでした"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "메시지를 분석할 수 없음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "não foi possível analisar a mensagem"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法解析邮件"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無法解析郵件"
-          }
-        }
-      }
-    },
-    "attachment has no stored bytes" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anhang hat keine gespeicherten Bytes"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "el adjunto no tiene bytes almacenados"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "la pièce jointe n'a pas d'octets enregistrés"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "अटैचमेंट में कोई संग्रहीत बाइट नहीं"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "l'allegato non ha byte memorizzati"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添付ファイルに保存されたバイトがありません"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "첨부 파일에 저장된 바이트가 없음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "o anexo não tem bytes armazenados"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "附件没有已存储的字节"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "附件沒有已儲存的位元組"
-          }
-        }
-      }
-    },
-    "PDF could not be opened" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF konnte nicht geöffnet werden"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "no se pudo abrir el PDF"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "le PDF n'a pas pu être ouvert"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF खोला नहीं जा सका"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "impossibile aprire il PDF"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDFを開けませんでした"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF를 열 수 없음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "não foi possível abrir o PDF"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法打开 PDF"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無法開啟 PDF"
-          }
-        }
-      }
-    },
-    "password-protected PDF" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "passwortgeschütztes PDF"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF protegido con contraseña"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF protégé par mot de passe"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "पासवर्ड-सुरक्षित PDF"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF protetto da password"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "パスワード保護されたPDF"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "암호로 보호된 PDF"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF protegido por senha"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "受密码保护的 PDF"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "受密碼保護的 PDF"
-          }
-        }
-      }
-    },
-    "scanned PDF — turn on attachment OCR to read it" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "gescanntes PDF – Anhang-OCR einschalten, um es zu lesen"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF escaneado: active el OCR de adjuntos para leerlo"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF numérisé — activez l'OCR des pièces jointes pour le lire"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "स्कैन किया गया PDF — इसे पढ़ने के लिए अटैचमेंट OCR चालू करें"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF scansionato: attiva l'OCR degli allegati per leggerlo"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "スキャンPDF — 読み取るには添付ファイルOCRをオンにしてください"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "스캔된 PDF — 읽으려면 첨부 파일 OCR을 켜세요"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PDF digitalizado — ative o OCR de anexos para lê-lo"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "扫描版 PDF——开启附件 OCR 以读取"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "掃描版 PDF——開啟附件 OCR 以讀取"
-          }
-        }
-      }
-    },
-    "image — turn on attachment OCR to read it" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bild – Anhang-OCR einschalten, um es zu lesen"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "imagen: active el OCR de adjuntos para leerla"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "image — activez l'OCR des pièces jointes pour la lire"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "छवि — इसे पढ़ने के लिए अटैचमेंट OCR चालू करें"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "immagine: attiva l'OCR degli allegati per leggerla"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "画像 — 読み取るには添付ファイルOCRをオンにしてください"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이미지 — 읽으려면 첨부 파일 OCR을 켜세요"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "imagem — ative o OCR de anexos para lê-la"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "图片——开启附件 OCR 以读取"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "圖片——開啟附件 OCR 以讀取"
-          }
-        }
-      }
-    },
-    "RTF could not be read" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "RTF konnte nicht gelesen werden"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "no se pudo leer el RTF"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "le RTF n'a pas pu être lu"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "RTF पढ़ा नहीं जा सका"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "impossibile leggere l'RTF"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "RTFを読み取れませんでした"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "RTF를 읽을 수 없음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "não foi possível ler o RTF"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法读取 RTF"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無法讀取 RTF"
-          }
-        }
-      }
-    },
-    "text encoding not recognised" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Textkodierung nicht erkannt"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "codificación de texto no reconocida"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "encodage du texte non reconnu"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "पाठ एन्कोडिंग पहचानी नहीं गई"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "codifica del testo non riconosciuta"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "テキストのエンコーディングを認識できません"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "텍스트 인코딩을 인식할 수 없음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "codificação de texto não reconhecida"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法识别文本编码"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無法辨識文字編碼"
-          }
-        }
-      }
-    },
-    "Groups found among the newest 5,000 emails only (previous engine). The whole archive needs “Whole-archive duplicate groups (3.0)” in Settings ▸ Modules." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gruppen nur unter den neuesten 5.000 E-Mails gefunden (vorherige Engine). Das ganze Archiv braucht „Archivweite Duplikatgruppen (3.0)“ in Einstellungen ▸ Module."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Grupos encontrados solo entre los 5.000 correos más recientes (motor anterior). Todo el archivo necesita “Grupos de duplicados de todo el archivo (3.0)” en Ajustes ▸ Módulos."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Groupes trouvés parmi les 5 000 e-mails les plus récents seulement (ancien moteur). L'archive entière nécessite « Groupes de doublons sur toute l'archive (3.0) » dans Réglages ▸ Modules."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "समूह केवल नवीनतम 5,000 ईमेल में मिले (पिछला इंजन)। पूरे संग्रह के लिए सेटिंग्स ▸ मॉड्यूल में “पूरे संग्रह के डुप्लिकेट समूह (3.0)” चाहिए।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gruppi trovati solo tra le 5.000 email più recenti (motore precedente). L'intero archivio richiede “Gruppi di duplicati su tutto l'archivio (3.0)” in Impostazioni ▸ Moduli."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最新の5,000通のメールの中でのみグループを検出しました（以前のエンジン）。アーカイブ全体には、設定 ▸ モジュールの「アーカイブ全体の重複グループ（3.0）」が必要です。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "최신 5,000개 이메일에서만 그룹을 찾았습니다(이전 엔진). 전체 아카이브에는 설정 ▸ 모듈의 '전체 아카이브 중복 그룹(3.0)'이 필요합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Grupos encontrados apenas entre os 5.000 e-mails mais recentes (mecanismo anterior). O arquivo inteiro precisa de “Grupos de duplicatas em todo o arquivo (3.0)” em Ajustes ▸ Módulos."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅在最新的 5,000 封邮件中找到了重复组（旧引擎）。整个归档需要在“设置 ▸ 模块”中开启“整个归档的重复组（3.0）”。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "僅在最新的 5,000 封郵件中找到了重複群組（舊引擎）。整個封存需要在「設定 ▸ 模組」中開啟「整個封存的重複群組（3.0）」。"
-          }
-        }
-      }
-    },
-    "Streaming PST and NSF import" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Streaming-Import für PST und NSF"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importación PST y NSF en flujo"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importation PST et NSF en continu"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "स्ट्रीमिंग PST और NSF आयात"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importazione PST e NSF in streaming"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PSTおよびNSFのストリーミング読み込み"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "스트리밍 PST 및 NSF 가져오기"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importação PST e NSF em fluxo"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "流式 PST 和 NSF 导入"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "串流 PST 與 NSF 匯入"
-          }
-        }
-      }
-    },
-    "Reads Outlook PST and OST files and Notes NSF databases message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Liest Outlook-PST- und -OST-Dateien sowie Notes-NSF-Datenbanken Nachricht für Nachricht in Stapeln, sodass der Speicherbedarf dem Stapel folgt, nicht der Datei. Aus: alle Nachrichten der Datei werden zuerst gelesen, dann gespeichert."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lee archivos PST y OST de Outlook y bases de datos NSF de Notes mensaje a mensaje en lotes, de modo que la memoria sigue al lote y no al archivo. Desactivado: primero se leen todos los mensajes del archivo y después se guardan."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lit les fichiers PST et OST d'Outlook et les bases NSF de Notes message par message, par lots, de sorte que la mémoire suit le lot et non le fichier. Désactivé : tous les messages du fichier sont lus d'abord, puis enregistrés."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Outlook PST और OST फ़ाइलों और Notes NSF डेटाबेस को बैच में एक-एक संदेश पढ़ता है, ताकि मेमोरी फ़ाइल के बजाय बैच के अनुसार रहे। बंद: पहले फ़ाइल के सभी संदेश पढ़े जाते हैं, फिर संग्रहीत होते हैं।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Legge i file PST e OST di Outlook e i database NSF di Notes messaggio per messaggio, a lotti, così la memoria segue il lotto e non il file. Disattivato: tutti i messaggi del file vengono letti prima, poi archiviati."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "OutlookのPST/OSTファイルとNotesのNSFデータベースをメッセージ単位でバッチ読み込みするため、メモリ使用量はファイルではなくバッチに比例します。オフ：ファイル内の全メッセージを先に読み込んでから保存します。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Outlook PST 및 OST 파일과 Notes NSF 데이터베이스를 메시지 단위로 일괄 읽어, 메모리가 파일이 아닌 일괄 처리 단위를 따릅니다. 끄면: 파일의 모든 메시지를 먼저 읽은 뒤 저장합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lê arquivos PST e OST do Outlook e bancos NSF do Notes mensagem por mensagem, em lotes, para que a memória acompanhe o lote e não o arquivo. Desligado: todas as mensagens do arquivo são lidas primeiro e depois armazenadas."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "按批次逐条读取 Outlook PST、OST 文件和 Notes NSF 数据库，内存占用随批次而非文件大小变化。关闭时：先读取文件中的全部邮件，再存储。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "按批次逐封讀取 Outlook PST、OST 檔案和 Notes NSF 資料庫，記憶體佔用隨批次而非檔案大小變化。關閉時：先讀取檔案中的全部郵件，再儲存。"
-          }
-        }
-      }
-    },
-    "Earlier imports" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Frühere Importe"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importaciones anteriores"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importations antérieures"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "पहले के आयात"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importazioni precedenti"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "以前の読み込み"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이전 가져오기"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Importações anteriores"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "早期导入"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "先前匯入"
+            "value" : "%lld 封郵件從此檔案讀取，其中 %lld 封沒有其他副本——%@"
           }
         }
       }

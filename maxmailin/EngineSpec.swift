@@ -206,6 +206,15 @@ struct EngineSpec: Sendable {
             return EngineSpec(.archive, requires: [.v3PSTSpecReader], maturity: .stable,
                 name: String(localized: "Streaming PST and NSF import"),
                 detail: String(localized: "Reads Outlook PST and OST files and Notes NSF databases message by message in batches, so memory follows the batch rather than the file. Off: every message in the file is read first, then stored."))
+        case .selfContainedArchive:
+            // Five jobs LIFE-01. Gate passed 2026-11-05: an import with the
+            // switch on reads and digest-verifies its deferred message after
+            // the original file is deleted; a tampered copy is discarded
+            // (V2CutoverTests.testLIFE01_*). Promoted: on by default — the
+            // archive should not depend on a file it does not own.
+            return EngineSpec(.archive, maturity: .stable,
+                name: String(localized: "Self-contained archive"),
+                detail: String(localized: "Copies each imported mailbox file into the archive, checks the copy byte for byte, and imports from the copy — so the archive stays complete when the original file is moved, renamed or deleted. Uses as much extra space as the files themselves. Off: messages above the full-parse ceiling are read from the original file, which must stay where it was imported from."))
         case .v3PSTSpecReader:
             // Gate passed 2026-10-13: 15 public Outlook PSTs (Digital Corpora) read
             // with the same messages, Message-IDs, subjects and deleted-items

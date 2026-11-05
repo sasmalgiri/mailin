@@ -1602,6 +1602,155 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ParserFactory.stamp([a, b], folder: "Inbox").map(\.folderPath), ["Already", "Inbox"])
     }
 
+    // MARK: - Five jobs LIFE-01 — self-contained archive; linked mode names what is missing
+
+    /// An mbox whose third message is far above a small full-parse ceiling,
+    /// so the offset engine keeps it as a byte locator.
+    private func writeDeferredMbox(to url: URL) throws -> String {
+        let big = String(repeating: "deferred body line for the self-contained test\n", count: 4_000)   // ~190 KB
+        var text = ""
+        for i in 0..<3 {
+            text += """
+            From sender@example.com Mon Jan  1 00:00:0\(i) 2024
+            From: sender@example.com
+            To: me@example.com
+            Subject: Life \(i)
+            Date: Mon, 01 Jan 2024 00:00:0\(i) +0000
+            Message-ID: <life01-\(i)@test>
+
+            \(i == 2 ? big : "small body \(i)")
+
+            """
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        return big
+    }
+
+    private func importForLife01(_ env: Env, _ url: URL) async throws -> BulkImportCoordinator.RunSummary {
+        let checkpoints = ImportCheckpointStore(store: env.store)
+        let coordinator = await BulkImportCoordinator(store: env.store, fts: env.fts, checkpoints: checkpoints,
+                                                      requiresStorageActivation: false)
+        var options = BulkImportCoordinator.Options()
+        options.useOffsetEngine = true
+        options.recordLocators = true
+        options.enforceStoragePreflight = false
+        options.fullParseCeilingBytes = 64 * 1024
+        return try await coordinator.runImport(urls: [url], options: options)
+    }
+
+    private func deferredLocator(_ env: Env) async throws -> MessageLocator {
+        var q = EmailQuery.all
+        q.subjectContains = "Life 2"
+        var ids: [UUID] = []
+        for try await batch in await env.archive.streamFullEmails(query: q, batchSize: 10) { ids += batch.map(\.id) }
+        XCTAssertEqual(ids.count, 1)
+        let locator = try await env.store.locator(forEmailID: ids[0])
+        return try XCTUnwrap(locator)
+    }
+
+    func testLIFE01_copyIntoArchive_verifiesBytes_andDiscardsATamperedCopy() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-life01-copy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("Sent.mbox")
+        try Data((0..<300_000).map { UInt8(truncatingIfNeeded: $0 &* 31) }).write(to: original)
+        let sha = try SourceCopies.sha256(of: original)
+        let store = root.appendingPathComponent("store", isDirectory: true)
+
+        let copy = try SourceCopies.copyIntoArchive(original: original, sha256: sha, storeDirectory: store, chunkSize: 4096)
+        XCTAssertEqual(copy, SourceCopies.copyURL(sha256: sha, filename: "Sent.mbox", storeDirectory: store))
+        XCTAssertEqual(try Data(contentsOf: copy), try Data(contentsOf: original))
+        XCTAssertEqual(SourceCopies.existingCopy(sha256: sha, filename: "Sent.mbox", storeDirectory: store), copy)
+        XCTAssertEqual(SourceCopies.totalBytes(storeDirectory: store), 300_000)
+        // Same file again: the existing copy is reused, nothing rewritten.
+        XCTAssertEqual(try SourceCopies.copyIntoArchive(original: original, sha256: sha, storeDirectory: store), copy)
+
+        // A digest that does not match leaves nothing behind.
+        let other = root.appendingPathComponent("Other.mbox")
+        try Data("not the same bytes".utf8).write(to: other)
+        XCTAssertThrowsError(try SourceCopies.copyIntoArchive(original: other, sha256: sha, storeDirectory: store)) { error in
+            guard case SourceCopyError.digestMismatch = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertNil(SourceCopies.existingCopy(sha256: sha, filename: "Other.mbox", storeDirectory: store))
+        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: SourceCopies.directory(in: store).appendingPathComponent(sha).path)) ?? []
+        XCTAssertEqual(leftovers, ["Sent.mbox"], "no temporary file survives a failed copy")
+    }
+
+    func testLIFE01_selfContained_deferredMessagesReadAfterTheOriginalIsDeleted() async throws {
+        let env = try makeEnv()
+        let original = env.root.appendingPathComponent("Archive.mbox")
+        let big = try writeDeferredMbox(to: original)
+        let wasOn = SourceCopyPolicy.isEnabled
+        defer { SourceCopyPolicy.isEnabled = wasOn }
+        SourceCopyPolicy.isEnabled = true
+
+        let summary = try await importForLife01(env, original)
+        XCTAssertEqual(summary.parsed, 3, "\(summary.fileErrors)")
+        let locator = try await deferredLocator(env)
+        XCTAssertTrue(locator.sourcePath.hasPrefix(env.store.storeDirectory.path),
+                      "the locator points inside the archive: \(locator.sourcePath)")
+        XCTAssertNotEqual(locator.sourcePath, original.path)
+        XCTAssertNotNil(SourceCopies.existingCopy(sha256: try XCTUnwrap(locator.sourceDigest), filename: "Archive.mbox",
+                                                  storeDirectory: env.store.storeDirectory))
+
+        // Detach the original: reading, verifying and exporting still work.
+        try FileManager.default.removeItem(at: original)
+        let bytes = try LocatorReader().read(locator.messageRange, from: locator.sourcePath)
+        let text = String(decoding: bytes, as: UTF8.self)
+        XCTAssertTrue(text.contains("Subject: Life 2") && text.contains(big.prefix(60)), "the whole message is read from the copy")
+        XCTAssertNoThrow(try LocatorReader().verifySource(locator), "the copy's digest is the original's")
+        let missing = try await env.store.missingLocatorSources()
+        XCTAssertTrue(missing.isEmpty, "nothing depends on the deleted original: \(missing)")
+    }
+
+    func testLIFE01_linked_missingOriginalIsNamed_andRelinkVerifiesTheFile() async throws {
+        let env = try makeEnv()
+        let original = env.root.appendingPathComponent("Linked.mbox")
+        _ = try writeDeferredMbox(to: original)
+        let wasOn = SourceCopyPolicy.isEnabled
+        defer { SourceCopyPolicy.isEnabled = wasOn }
+        SourceCopyPolicy.isEnabled = false
+
+        let summary = try await importForLife01(env, original)
+        XCTAssertEqual(summary.parsed, 3)
+        let locator = try await deferredLocator(env)
+        XCTAssertEqual(locator.sourcePath, original.path, "linked mode reads the original where it is")
+        XCTAssertNil(SourceCopies.existingCopy(sha256: try XCTUnwrap(locator.sourceDigest), filename: "Linked.mbox",
+                                               storeDirectory: env.store.storeDirectory), "nothing copied with the switch off")
+        var missing = try await env.store.missingLocatorSources()
+        XCTAssertTrue(missing.isEmpty)
+
+        // The person moves the file: the archive names it and counts what depends on it.
+        let moved = env.root.appendingPathComponent("Moved").appendingPathComponent("Linked.mbox")
+        try FileManager.default.createDirectory(at: moved.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: original, to: moved)
+        missing = try await env.store.missingLocatorSources()
+        XCTAssertEqual(missing.map(\.filename), ["Linked.mbox"])
+        XCTAssertEqual(missing.first?.messages, 3, "every message has a locator (attachments are served from the file)")
+        XCTAssertEqual(missing.first?.deferredMessages, 1, "one message has no other copy")
+        XCTAssertThrowsError(try LocatorReader().read(locator.messageRange, from: locator.sourcePath))
+
+        // Relinking to a different file is refused; to the real one, verified and applied.
+        let impostor = env.root.appendingPathComponent("Impostor.mbox")
+        try Data("From x\nSubject: not it\n\nbody\n".utf8).write(to: impostor)
+        let digest = try XCTUnwrap(locator.sourceDigest)
+        do {
+            _ = try await env.store.relinkLocators(sourceDigest: digest, to: impostor)
+            XCTFail("an impostor must be refused")
+        } catch RelinkError.digestMismatch {
+            // refused, nothing changed
+        }
+        let moved2 = try await env.store.relinkLocators(sourceDigest: digest, to: moved)
+        XCTAssertEqual(moved2, 3, "every locator of the file follows it")
+        let relinked = try await deferredLocator(env)
+        XCTAssertEqual(relinked.sourcePath, moved.path)
+        XCTAssertNoThrow(try LocatorReader().read(relinked.messageRange, from: relinked.sourcePath))
+        missing = try await env.store.missingLocatorSources()
+        XCTAssertTrue(missing.isEmpty)
+    }
+
     /// Deletion tombstones (schema v13): deleting emails records their identity
     /// so re-importing the same source never silently resurrects them — until
     /// the user explicitly forgets the deletion history.
