@@ -90,8 +90,10 @@ enum ArchiveBackups {
             let inventory = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: target, mode: .replaceDatabaseKeepFiles,
                                                       receiptDirectories: receiptDirectories)
             _ = try await store.schemaVersion()   // reopens; runs migrations if the backup predates an upgrade
+            // Self-contained copies now live under THIS store's sources/; point the locators there.
+            let relocated = try await store.relocateSelfContainedLocators()
             ForensicManager.shared.logAction("Archive restored from backup",
-                                             detail: "\(backup.lastPathComponent); the previous database was kept as a before-restore snapshot")
+                                             detail: "\(backup.lastPathComponent); the previous database was kept as a before-restore snapshot; \(relocated) locator paths moved to the restored copies")
             return String(localized: "Restored \(inventory.counts.emails) emails from \(backup.lastPathComponent). Rebuild the search index next.")
         } catch {
             return error.localizedDescription

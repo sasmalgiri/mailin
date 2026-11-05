@@ -342,6 +342,50 @@ extension SQLiteEmailStore {
         return counts
     }
 
+    /// After a restore on another machine or into another folder, locators of
+    /// self-contained copies still name the OLD store's `sources/…` path.
+    /// Every such path whose file now exists under this store's `sources/` is
+    /// rewritten to it. Returns how many locator rows were moved. Linked
+    /// originals outside the archive are left for Relink (LIFE-01).
+    @discardableResult
+    func relocateSelfContainedLocators() throws -> Int {
+        let db = try ensureDB()
+        let sourcesDir = storeDirectory.appendingPathComponent(ArchiveBackup.sourcesFolder, isDirectory: true).standardizedFileURL
+        let marker = "/" + ArchiveBackup.sourcesFolder + "/"
+        var moves: [(old: String, new: String)] = []
+        do {
+            guard let stmt = try prepare(db, "SELECT DISTINCT source_path FROM message_locators WHERE instr(source_path, ?) > 0;") else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, marker)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let old = columnText(stmt, 0)
+                guard !URL(fileURLWithPath: old).standardizedFileURL.path.hasPrefix(sourcesDir.path),
+                      let range = old.range(of: marker, options: .backwards) else { continue }
+                let candidate = sourcesDir.appendingPathComponent(String(old[range.upperBound...])).path
+                if FileManager.default.fileExists(atPath: candidate) { moves.append((old, candidate)) }
+            }
+        }
+        guard !moves.isEmpty else { return 0 }
+        var moved = 0
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let update = try prepare(db, "UPDATE message_locators SET source_path = ? WHERE source_path = ?;")
+            defer { sqlite3_finalize(update) }
+            for move in moves {
+                sqlite3_reset(update); sqlite3_clear_bindings(update)
+                bindText(update, 1, move.new)
+                bindText(update, 2, move.old)
+                guard sqlite3_step(update) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                moved += Int(sqlite3_changes(db))
+            }
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+        return moved
+    }
+
     /// Originals the archive still reads from outside its own folder, with how many messages depend on each.
     func linkedSourceInventory() throws -> [ArchiveBackupInventory.LinkedSource] {
         let db = try ensureDB()

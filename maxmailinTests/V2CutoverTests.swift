@@ -2614,6 +2614,151 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs §6 — the one combined preservation rehearsal
+
+    /// Plan §6: import into self-contained mode; verify counts; detach the
+    /// original; restart; find a document inside an attachment; identify a
+    /// changed version correctly; back up; restore on a clean profile; rebuild
+    /// the index; export and verify the selected mail. Disposable sources only.
+    func testCombinedPreservationRehearsal_importDetachSearchChangedVersionBackupRestoreExport() async throws {
+        let wasChunk = SearchChunkPolicy.isEnabled, wasCopy = SourceCopyPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasChunk; SourceCopyPolicy.isEnabled = wasCopy }
+        SearchChunkPolicy.isEnabled = true
+        SourceCopyPolicy.isEnabled = true
+        let env = try makeEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+
+        // 1. A representative source: a contract with a DOCX, a changed version of it, and a large deferred message.
+        let docx = Self.docx(body: "The quorum clause applies to every board vote.", header: "Board")
+        func message(_ i: Int, subject: String, body: String, attachment: Bool) -> String {
+            var text = """
+            From sender@example.com Mon Jan  1 00:00:0\(i) 2024
+            From: sender@example.com
+            To: me@example.com
+            Subject: \(subject)
+            Date: Mon, 01 Jan 2024 00:00:00 +0000
+            Message-ID: <rehearsal-\(i)@test>
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="B"
+
+            --B
+            Content-Type: text/plain
+
+            \(body)
+
+            """
+            if attachment { text += mimeAttachment("minutes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", docx) + "\n" }
+            return text + "--B--\n\n"
+        }
+        let opening = String(repeating: "Terms agreed in the January meeting. ", count: 8)   // > 200 chars: the fingerprint clue cannot tell the versions apart
+        let big = String(repeating: "deferred body line for the rehearsal\n", count: 6_000)
+        let source = env.root.appendingPathComponent("Rehearsal.mbox")
+        try FileManager.default.createDirectory(at: env.root, withIntermediateDirectories: true)
+        try (message(0, subject: "Contract", body: opening + "Payment within 30 days.", attachment: true)
+             + message(1, subject: "Contract", body: opening + "Payment within 45 days.", attachment: true)
+             + message(2, subject: "Large deferred", body: big, attachment: false)).write(to: source, atomically: true, encoding: .utf8)
+
+        // 2. Import (self-contained, locators for the large message) and verify counts.
+        let summary = try await importForLife01(env, source)
+        XCTAssertEqual(summary.parsed, 3, "\(summary.fileErrors)")
+        let count = try await env.archive.count(query: .all)
+        XCTAssertEqual(count, 3)
+
+        // 3. Detach the original and "restart": a fresh store and service on the same directory.
+        try FileManager.default.removeItem(at: source)
+        let restarted = SQLiteEmailStore(directory: env.store.storeDirectory)
+        let restartedArchive = ArchiveDataService(repository: EmailStoreRepository(store: restarted, fts: env.fts))
+        var deferredQuery = EmailQuery.all; deferredQuery.subjectContains = "Large deferred"
+        var deferredIDs: [UUID] = []
+        for try await batch in await restartedArchive.streamFullEmails(query: deferredQuery, batchSize: 10) { deferredIDs += batch.map(\.id) }
+        let deferredID = try XCTUnwrap(deferredIDs.first)
+        let locatorValue = try await restarted.locator(forEmailID: deferredID)
+        let locator = try XCTUnwrap(locatorValue)
+        let deferredBytes = try LocatorReader().read(locator.messageRange, from: locator.sourcePath)
+        XCTAssertTrue(String(decoding: deferredBytes, as: UTF8.self).contains(big.prefix(80)), "the large message reads from the archive's own copy")
+        let missing = try await restarted.missingLocatorSources()
+        XCTAssertTrue(missing.isEmpty)
+
+        // 4. Find the document inside the attachment.
+        AttachmentTextIndexJob.testStoreOverride = restarted
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 2)
+        var attachmentQuery = EmailQuery.all
+        attachmentQuery.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "docx", contentMatch: .phrase, content: "quorum clause")])])
+        let foundCount = try await restartedArchive.count(query: attachmentQuery)
+        XCTAssertEqual(foundCount, 2, "both versions carry the document")
+        var foundSubjects: [String] = []
+        for try await batch in await restartedArchive.streamFullEmails(query: attachmentQuery, batchSize: 10) { foundSubjects += batch.map { $0.headers["Subject"] ?? "" } }
+        XCTAssertEqual(foundSubjects, ["Contract", "Contract"])
+
+        // 5. The changed version is a candidate, never an identical copy.
+        let environment = ScopeJobEnvironment(archive: restartedArchive, store: restarted, root: env.root)
+        let (groups, receipt) = try await ScopeJobEnvironment.$current.withValue(environment) { try await DuplicatesEngine.exactGroups() }
+        XCTAssertEqual(receipt.processed, 3)
+        XCTAssertEqual(groups.count, 1, "the two versions share sender, subject, date and opening")
+        let classified = DuplicateVerification.classify(groups)
+        XCTAssertTrue(classified.verified.isEmpty)
+        XCTAssertEqual(classified.candidates.count, 1)
+        if case .candidate(let differences) = try XCTUnwrap(classified.candidates.first).verdict { XCTAssertTrue(differences.contains(.body)) } else { XCTFail() }
+        XCTAssertTrue(DuplicateVerification.bulkRemovable(classified.verified).isEmpty)
+
+        // 6. Back up; restore on a clean profile; the copies travel and the locators follow.
+        let backup = env.root.appendingPathComponent("rehearsal-backup", isDirectory: true)
+        let inventory = try await ArchiveBackup.create(store: restarted, to: backup)
+        XCTAssertEqual(inventory.counts.emails, 3)
+        XCTAssertTrue(inventory.files.contains { $0.kind == "source" }, "the self-contained copy is in the backup")
+        XCTAssertTrue(inventory.linkedSources.isEmpty)
+        let cleanRoot = env.root.appendingPathComponent("clean", isDirectory: true)
+        let cleanStoreDir = cleanRoot.appendingPathComponent("store", isDirectory: true)
+        _ = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: cleanStoreDir, mode: .cleanProfile)
+        let restored = SQLiteEmailStore(directory: cleanStoreDir)
+        let relocated = try await restored.relocateSelfContainedLocators()
+        XCTAssertEqual(relocated, 3, "every locator row (the offset engine records one per message) now names the restored copy")
+        // The old archive is gone, as on a new machine: everything still reads from the restored folder.
+        try FileManager.default.removeItem(at: env.store.storeDirectory)
+        let restoredLocatorValue = try await restored.locator(forEmailID: deferredIDs[0])
+        let restoredLocator = try XCTUnwrap(restoredLocatorValue)
+        XCTAssertTrue(restoredLocator.sourcePath.hasPrefix(cleanStoreDir.path), restoredLocator.sourcePath)
+        XCTAssertNoThrow(try LocatorReader().verifySource(restoredLocator))
+        let restoredMissing = try await restored.missingLocatorSources()
+        XCTAssertTrue(restoredMissing.isEmpty, "\(restoredMissing)")
+        let restoredTotal = try await restored.totalCount()
+        XCTAssertEqual(restoredTotal, 3)
+
+        // 7. Rebuild the search index for the restored archive, then search and export from it.
+        let restoredFTS = FTSSearchIndex(shardsDirectory: cleanRoot.appendingPathComponent("fts", isDirectory: true))
+        let restoredArchive = ArchiveDataService(repository: EmailStoreRepository(store: restored, fts: restoredFTS))
+        for try await batch in await restoredArchive.streamFullEmails(query: .all, batchSize: 50) { try await restoredFTS.indexBatch(batch) }
+        let ftsRows = try await restoredFTS.rowCount()
+        XCTAssertEqual(ftsRows, 3)
+        var textQuery = EmailQuery.all; textQuery.text = "Contract"
+        let byText = try await restoredArchive.count(query: textQuery)
+        XCTAssertEqual(byText, 2, "the rebuilt full-text index answers")
+        let foundAgain = try await restoredArchive.count(query: attachmentQuery)
+        XCTAssertEqual(foundAgain, 2, "the attachment text came back with the database (chunk index inside it), no re-extraction needed")
+
+        let exportFolder = cleanRoot.appendingPathComponent("export", isDirectory: true)
+        let boundValue = try await restoredArchive.selectionSnapshotBound()
+        let frozen = ArchiveSelectionScope.query(.all, exclusions: []).snapshotted(bound: try XCTUnwrap(boundValue))
+        let export = try await ArchiveExportService(archive: restoredArchive).exportEMLFiles(scope: frozen, to: exportFolder)
+        XCTAssertEqual(export.recordsWritten, 3)
+        XCTAssertTrue(try ExportInventory.verify(folder: exportFolder).isClean)
+        // Independent check: the exported files parse back to the same three subjects, large message intact.
+        var subjects: [String] = []
+        var largeBytes = 0
+        for file in try ExportInventory.load(folder: exportFolder).files {
+            let raw = try String(contentsOf: exportFolder.appendingPathComponent(file.path), encoding: .utf8)
+            let parsed = try MBOXParser.processRawMessage(raw, senderEmail: "")
+            subjects.append(parsed.headers["Subject"] ?? "")
+            if parsed.headers["Subject"] == "Large deferred" { largeBytes = raw.utf8.count }
+        }
+        XCTAssertEqual(subjects.sorted(), ["Contract", "Contract", "Large deferred"])
+        XCTAssertGreaterThan(largeBytes, big.utf8.count, "the deferred message was exported whole from the restored copy")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     // MARK: - Five jobs DUP-02 — the whole scope, with a receipt that says what was read
 
     func testDUP02_wholeScopeFindsCopiesBeyondTheOldWindow_andTheReceiptSaysWhatWasRead() async throws {
