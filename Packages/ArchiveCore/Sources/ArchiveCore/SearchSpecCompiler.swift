@@ -54,21 +54,36 @@ extension SQLiteEmailStore {
 
     // MARK: Groups
 
+    /// R01: an "any" group is an OR over its branches, each branch an AND of
+    /// its conditions; a negated condition is wrapped in NOT. No expansion —
+    /// the Boolean shape is compiled as written.
     private static func groupClause(_ group: SearchGroup) -> (String, [QueryBind]) {
-        var parts: [String] = []
         var binds: [QueryBind] = []
-        for condition in group.liveConditions {
-            let (sql, b) = conditionClause(condition)
-            parts.append(sql); binds.append(contentsOf: b)
+        func clause(_ condition: SearchCondition) -> String {
+            let (sql, b) = conditionClause(condition); binds.append(contentsOf: b)
+            return condition.isNegated ? "NOT \(sql)" : sql
         }
-        for attachment in group.liveAttachmentGroups {
-            let (sql, b) = attachmentGroupClause(attachment)
-            parts.append(sql); binds.append(contentsOf: b)
+        func clause(_ attachment: AttachmentConditionGroup) -> String {
+            let (sql, b) = attachmentGroupClause(attachment); binds.append(contentsOf: b)
+            return attachment.isNegated ? "NOT \(sql)" : sql
         }
         switch group.kind {
-        case .all: return ("(" + parts.joined(separator: " AND ") + ")", binds)
-        case .any: return ("(" + parts.joined(separator: " OR ") + ")", binds)
-        case .exclude: return ("NOT (" + parts.joined(separator: " OR ") + ")", binds)
+        case .all:
+            let parts = group.liveConditions.map(clause) + group.liveAttachmentGroups.map(clause)
+            return ("(" + parts.joined(separator: " AND ") + ")", binds)
+        case .any:
+            let alternatives = group.branches.map { branch -> String in
+                let parts = branch.conditions.map(clause) + branch.attachmentGroups.map(clause)
+                return parts.count == 1 ? parts[0] : "(" + parts.joined(separator: " AND ") + ")"
+            }
+            return ("(" + alternatives.joined(separator: " OR ") + ")", binds)
+        case .exclude:
+            // Inside an exclusion every condition is already a "not"; a negated
+            // flag there would be a double negative and is read as plain.
+            var plain: [String] = []
+            for condition in group.liveConditions { let (sql, b) = conditionClause(condition); binds.append(contentsOf: b); plain.append(sql) }
+            for attachment in group.liveAttachmentGroups { let (sql, b) = attachmentGroupClause(attachment); binds.append(contentsOf: b); plain.append(sql) }
+            return ("NOT (" + plain.joined(separator: " OR ") + ")", binds)
         }
     }
 
@@ -167,60 +182,61 @@ extension SQLiteEmailStore {
     private static func textClause(kinds: [SearchDocKind], match: SearchCondition.Match, value: String) -> (String, [QueryBind]) {
         let kindList = kinds.map { "'\($0.rawValue)'" }.joined(separator: ",")
         let words = SearchTextTokens.words(in: value)
-        let literalMode = match == .contains || match == .phrase || match == .equals
         let prefix = match == .contains
-        if words.isEmpty || match == .anyWords || (literalMode && value.count <= SearchSpec.phraseVerificationLimit) {
+        if words.isEmpty {
+            // No indexable word at all ("++"): the literal alone, on any chunk of these kinds.
+            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND instr(lower(sc.text), lower(?)) > 0)",
+                    [.text(SearchTextTokens.collapsed(value))])
+        }
+        switch match {
+        case .anyWords:
+            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND search_chunks MATCH ?)",
+                    [.text(words.map(SearchTextTokens.quoted).joined(separator: " OR "))])
+        case .allWords:
+            // Each word somewhere in the message's text of these kinds.
+            var parts: [String] = []
             var binds: [QueryBind] = []
-            var inner: [String] = ["sc.kind IN (\(kindList))"]
-            if !words.isEmpty {
-                let fts: String
-                switch match {
-                case .anyWords: fts = words.map(SearchTextTokens.quoted).joined(separator: " OR ")
-                case .contains: fts = words.map { SearchTextTokens.quoted($0) + "*" }.joined(separator: " AND ")   // word starts
-                default: fts = words.map(SearchTextTokens.quoted).joined(separator: " AND ")
-                }
-                inner.append("search_chunks MATCH ?")
-                binds.append(.text(fts))
+            for word in words {
+                parts.append("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND search_chunks MATCH ?)")
+                binds.append(.text(SearchTextTokens.quoted(word)))
             }
-            if literalMode || words.isEmpty {
-                // Literal substring, verified on the chunk text (also the only
-                // test when the value has no indexable word at all, e.g. "++").
-                inner.append("instr(lower(sc.text), lower(?)) > 0")
-                binds.append(.text(SearchTextTokens.collapsed(value)))
-            }
-            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE \(inner.joined(separator: " AND ")))", binds)
+            return ("(" + parts.joined(separator: " AND ") + ")", binds)
+        case .contains, .phrase, .equals:
+            return literalClause(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(value),
+                                 sameDocument: "c1.email_id = e.id", mayExceedChunk: value.count > SearchChunker.chunkCharacters)
         }
-        if literalMode, value.count <= SearchSpec.phraseWholeTextLimit {
-            return wholeTextLiteral(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(value),
-                                    sameDocument: "c1.email_id = e.id")
-        }
-        // allWords, or a literal longer than a chunk: each word somewhere in the message's text of these kinds.
-        var parts: [String] = []
-        var binds: [QueryBind] = []
-        for word in words {
-            parts.append("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND search_chunks MATCH ?)")
-            binds.append(.text(SearchTextTokens.quoted(word) + (prefix ? "*" : "")))
-        }
-        return ("(" + parts.joined(separator: " AND ") + ")", binds)
     }
 
-    /// A literal longer than the overlap, verified on the exact text: on
-    /// one chunk, or on two adjacent chunks of the same document joined with
-    /// the next chunk's leading overlap removed (chunk k+1 begins exactly
-    /// `overlap` characters before chunk k ends — `SearchChunker`). FTS
-    /// prefilters through the table-valued form `search_chunks(?)`: the
-    /// first word in the first chunk, the last word in the second.
-    /// `sameDocument` correlates `c1` with the outer row.
-    static func wholeTextLiteral(kindList: String, words: [String], prefix: Bool, literal: String, sameDocument: String) -> (String, [QueryBind]) {
-        let first = SearchTextTokens.quoted(words[0]) + (prefix ? "*" : "")
-        let last = SearchTextTokens.quoted(words[words.count - 1]) + (prefix ? "*" : "")
+    /// R02: a literal verified on the stored text, whatever its length.
+    /// Chunks are contiguous, so the text IS the chunks joined in order:
+    ///  - within one chunk (FTS prefilter: every word in that chunk);
+    ///  - across two adjacent chunks joined (first word in the first, last
+    ///    word in the second);
+    ///  - longer than a chunk: the document from the first word's chunk
+    ///    onward, joined in chunk order (SQLite ≥ 3.44 orders inside
+    ///    group_concat) — exact, and only compiled when the literal is that long.
+    /// The table-valued form `search_chunks(?)` carries the FTS query;
+    /// `sameDocument` correlates `c1` with the outer row. Nothing ever falls
+    /// back to "all the words".
+    static func literalClause(kindList: String, words: [String], prefix: Bool, literal: String,
+                              sameDocument: String, mayExceedChunk: Bool) -> (String, [QueryBind]) {
+        func token(_ word: String) -> String { SearchTextTokens.quoted(word) + (prefix ? "*" : "") }
+        let all = words.map(token).joined(separator: " AND ")
+        let first = token(words[0]), last = token(words[words.count - 1])
         let single = "EXISTS (SELECT 1 FROM search_chunks(?) c1 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
             + " AND instr(lower(c1.text), lower(?)) > 0)"
         let pair = "EXISTS (SELECT 1 FROM search_chunks(?) c1, search_chunks(?) c2 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
             + " AND c2.email_id = c1.email_id AND c2.kind = c1.kind AND c2.ordinal = c1.ordinal AND c2.chunk = c1.chunk + 1"
-            + " AND instr(lower(c1.text || substr(c2.text, ?)), lower(?)) > 0)"
-        return ("(" + single + " OR " + pair + ")",
-                [.text(first), .text(literal), .text(first), .text(last), .int(Int64(SearchChunker.overlapCharacters + 1)), .text(literal)])
+            + " AND instr(lower(c1.text || c2.text), lower(?)) > 0)"
+        var parts = [single, pair]
+        var binds: [QueryBind] = [.text(all), .text(literal), .text(first), .text(last), .text(literal)]
+        if mayExceedChunk {
+            parts.append("EXISTS (SELECT 1 FROM search_chunks(?) c1 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
+                + " AND instr(lower((SELECT group_concat(c.text, '' ORDER BY c.chunk) FROM search_chunks c"
+                + " WHERE c.email_id = c1.email_id AND c.kind = c1.kind AND c.ordinal = c1.ordinal AND c.chunk >= c1.chunk)), lower(?)) > 0)")
+            binds.append(contentsOf: [.text(first), .text(literal)])
+        }
+        return ("(" + parts.joined(separator: " OR ") + ")", binds)
     }
 
     // MARK: Attachments — one file must satisfy everything in the group
@@ -241,33 +257,25 @@ extension SQLiteEmailStore {
             // Audit A02: the same four forms as `textClause`, correlated on the file.
             let words = SearchTextTokens.words(in: content)
             let kindList = SearchDocKind.attachmentContentSQL
-            let literalMode = g.contentMatch == .contains || g.contentMatch == .phrase
             let prefix = g.contentMatch == .contains
-            if words.isEmpty || g.contentMatch == .anyWords || (literalMode && content.count <= SearchSpec.phraseVerificationLimit) {
-                var inner: [String] = ["ac.kind IN (\(kindList))"]
-                if !words.isEmpty {
-                    let fts: String
-                    switch g.contentMatch {
-                    case .anyWords: fts = words.map(SearchTextTokens.quoted).joined(separator: " OR ")
-                    case .contains: fts = words.map { SearchTextTokens.quoted($0) + "*" }.joined(separator: " AND ")
-                    default: fts = words.map(SearchTextTokens.quoted).joined(separator: " AND ")
-                    }
-                    inner.append("search_chunks MATCH ?")
-                    binds.append(.text(fts))
-                }
-                if literalMode || words.isEmpty {
-                    inner.append("instr(lower(ac.text), lower(?)) > 0")
-                    binds.append(.text(SearchTextTokens.collapsed(content)))
-                }
-                tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE \(inner.joined(separator: " AND ")))")
-            } else if literalMode, content.count <= SearchSpec.phraseWholeTextLimit {
-                let (sql, b) = wholeTextLiteral(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(content),
-                                                sameDocument: "c1.email_id = ag.email_id AND c1.ordinal = ag.position")
-                tests.append(sql); binds.append(contentsOf: b)
+            if words.isEmpty {
+                tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND instr(lower(ac.text), lower(?)) > 0)")
+                binds.append(.text(SearchTextTokens.collapsed(content)))
             } else {
-                for word in words {
+                switch g.contentMatch {
+                case .anyWords:
                     tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND search_chunks MATCH ?)")
-                    binds.append(.text(SearchTextTokens.quoted(word) + (prefix ? "*" : "")))
+                    binds.append(.text(words.map(SearchTextTokens.quoted).joined(separator: " OR ")))
+                case .allWords:
+                    for word in words {
+                        tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND search_chunks MATCH ?)")
+                        binds.append(.text(SearchTextTokens.quoted(word)))
+                    }
+                case .contains, .phrase, .equals:
+                    let (sql, b) = literalClause(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(content),
+                                                 sameDocument: "c1.email_id = ag.email_id AND c1.ordinal = ag.position",
+                                                 mayExceedChunk: content.count > SearchChunker.chunkCharacters)
+                    tests.append(sql); binds.append(contentsOf: b)
                 }
             }
         }

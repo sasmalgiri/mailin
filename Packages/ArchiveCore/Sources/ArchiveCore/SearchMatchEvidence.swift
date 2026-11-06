@@ -54,11 +54,12 @@ extension SQLiteEmailStore {
     func matchEvidence(emailID: UUID, spec: SearchSpec?, freeText: String?) throws -> [MatchEvidence] {
         var out: [MatchEvidence] = []
         if let spec {
+            // R01: a negated condition is evidence of absence — nothing to point at.
             for group in spec.liveGroups where group.kind != .exclude {
-                for condition in group.liveConditions {
+                for condition in group.liveConditions where !condition.isNegated {
                     out.append(contentsOf: try evidence(emailID: emailID, condition: condition))
                 }
-                for attachment in group.liveAttachmentGroups {
+                for attachment in group.liveAttachmentGroups where !attachment.isNegated {
                     out.append(contentsOf: try evidence(emailID: emailID, attachment: attachment))
                 }
             }
@@ -97,8 +98,7 @@ extension SQLiteEmailStore {
                 return [MatchEvidence(location: .subject, condition: label, excerpt: nil)]
             }
             let words = SearchTextTokens.words(in: c.trimmedValue)
-            let literal = (c.match == .contains || c.match == .phrase) && c.trimmedValue.count <= SearchSpec.phraseVerificationLimit
-                ? SearchTextTokens.collapsed(c.trimmedValue) : nil
+            let literal = (c.match == .contains || c.match == .phrase) ? SearchTextTokens.collapsed(c.trimmedValue) : nil
             var hits = try textHits(emailID: emailID, kinds: kinds, words: words, literal: literal,
                                     prefix: c.match == .contains, anyWord: c.match == .anyWords, limit: 2)
             // Audit A02: the words may sit in different chunks (or the literal
@@ -127,8 +127,7 @@ extension SQLiteEmailStore {
             return [MatchEvidence(location: .attachmentName, condition: label, excerpt: nil)]
         }
         let words = SearchTextTokens.words(in: content)
-        let literal = (g.contentMatch == .contains || g.contentMatch == .phrase) && content.count <= SearchSpec.phraseVerificationLimit
-            ? SearchTextTokens.collapsed(content) : nil
+        let literal = (g.contentMatch == .contains || g.contentMatch == .phrase) ? SearchTextTokens.collapsed(content) : nil
         var hits = try textHits(emailID: emailID, kinds: SearchDocKind.attachmentContent, words: words, literal: literal,
                                 prefix: g.contentMatch == .contains, anyWord: g.contentMatch == .anyWords, limit: 3)
         if hits.isEmpty, let first = words.first, words.count > 1 || literal != nil {

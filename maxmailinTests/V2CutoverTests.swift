@@ -1607,7 +1607,7 @@ final class V2CutoverTests: XCTestCase {
     func testFOLD02_schemaGuardMatchesTheMigrationChain() async throws {
         let env = try makeEnv()
         let v = try await env.store.schemaVersion()
-        XCTAssertEqual(v, 23, "v21 adds folders, v22/v23 the search chunks")
+        XCTAssertEqual(v, 24, "v21 adds folders, v22/v23 the search chunks, v24 contiguous chunks (R02)")
         XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion, "the guard follows the chain")
         // Reopening the same directory is the real check: a lagging guard refuses here.
         let reopened = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
@@ -2150,6 +2150,117 @@ final class V2CutoverTests: XCTestCase {
         try await expectIDs(env, mixed, ["Together"], "(\"alphawitness alone\" AND omegawitness) OR together: OnlyAlpha lacks omegawitness")
     }
 
+    /// R01 (handoff 7481852): the Boolean shape is compiled as written — 63
+    /// alternatives are 63 branches of one group, phrases stay phrases,
+    /// negation is local to its alternative — judged by result sets.
+    func testR01_booleanStructureCompiledAsWritten_63Branches_branchLocalNot() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<63 {
+            emails.append(mail(300 + i, from: "s@x.com", subject: "B\(i)", body: "the phrase\(i)a phrase\(i)b is here and word\(i) too"))
+        }
+        // Decoys: the phrase of one alternative with the word of another; the words of a phrase out of order.
+        emails.append(mail(400, from: "s@x.com", subject: "Decoy1", body: "phrase1a phrase1b with word2"))
+        emails.append(mail(401, from: "s@x.com", subject: "Decoy2", body: "phrase3b phrase3a word3"))
+        try await env.store.insertBatch(emails, batchSize: 50)
+        let typed = (0..<63).map { "\"phrase\($0)a phrase\($0)b\" word\($0)" }.joined(separator: " OR ")
+        let spec = try XCTUnwrap(PlainSearchTranslator.spec(from: typed))
+        XCTAssertEqual(spec.groups.count, 1, "no expansion")
+        XCTAssertEqual(spec.groups[0].branches.count, 63)
+        try await expectIDs(env, spec, Set((0..<63).map { "B\($0)" }), "every alternative, no decoy")
+        // The same through the browse state (the ordinary box), and 7 / 20 alternatives are just prefixes of it.
+        for n in [7, 20] {
+            let fewer = try XCTUnwrap(PlainSearchTranslator.spec(from: (0..<n).map { "\"phrase\($0)a phrase\($0)b\" word\($0)" }.joined(separator: " OR ")))
+            try await expectIDs(env, fewer, Set((0..<n).map { "B\($0)" }))
+        }
+        // Branch-local negation: alpha without draft, or gamma.
+        let a1 = mail(410, from: "s@x.com", subject: "AlphaDraft", body: "alpha draft")
+        let a2 = mail(411, from: "s@x.com", subject: "AlphaFinal", body: "alpha final")
+        let g = mail(412, from: "s@x.com", subject: "GammaDraft", body: "gamma draft")
+        try await env.store.insertBatch([a1, a2, g], batchSize: 10)
+        let local = try XCTUnwrap(PlainSearchTranslator.spec(from: "alpha -draft OR gamma"))
+        try await expectIDs(env, local, ["AlphaFinal", "GammaDraft"], "draft is excluded only from the alpha alternative")
+        XCTAssertTrue(SearchSpecDescriber.summary(local).contains("not"), SearchSpecDescriber.summary(local))
+        // Same-attachment conditions keep their branch too.
+        let f = mail(420, from: "s@x.com", subject: "Files", body: "-", attachments: [AttachmentMetadata(filename: "a.txt", mimeType: "text/plain", size: 1)])
+        try await env.store.insertBatch([f], batchSize: 10)
+        try await env.store.indexAttachmentSearchDocuments(emailID: f.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "a.txt", text: "quorum reached in the file", state: .complete, extractorVersion: 4, ocr: false)])
+        let inside = try XCTUnwrap(PlainSearchTranslator.spec(from: "in:attachments quorum reached OR nothingatall"))
+        try await expectIDs(env, inside, ["Files"])
+    }
+
+    /// R02 (handoff 7481852): literals are verified on the stored text at any
+    /// length and across any script — chunks are contiguous, so no offset
+    /// arithmetic can disagree between Swift Characters and SQLite code points.
+    func testR02_literalsVerifiedAcrossChunks_unicodeAndBeyondAChunk_noFallback() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        // Hindi, Bengali, decomposed accents and emoji sequences in the lead text make Characters ≠ code points.
+        let unit = "नमस्ते दुनिया বাংলা ভাষা cafe\u{0301} résumé 👨‍👩‍👧‍👦 🇮🇳 "
+        var lead = ""
+        while lead.count < SearchChunker.chunkCharacters - 300 { lead += unit }
+        let phraseWords = (0..<80).map { "सीमाशब्द\($0) boundaryword\($0)" }
+        let phrase = phraseWords.joined(separator: " ")          // ~2,000 characters, crosses the first boundary
+        let tail = String(repeating: "trailing words after the phrase ", count: 400)
+        let crossing = mail(500, from: "s@x.com", subject: "Unicode", body: lead + phrase + " " + tail,
+                            attachments: [AttachmentMetadata(filename: "u.txt", mimeType: "text/plain", size: 1)])
+        try await env.store.insertBatch([crossing], batchSize: 10)
+        let chunks = SearchChunker.chunks(of: crossing.plainBody)
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertFalse(chunks.contains { $0.contains(phrase) }, "the phrase spans a boundary")
+        XCTAssertNotEqual(chunks[1].unicodeScalars.count, chunks[1].count, "the fixture really has multi-scalar Characters")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, phrase)])]), ["Unicode"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, phraseWords.reversed().joined(separator: " "))])]), [])
+        // The same literal inside one attachment.
+        try await env.store.indexAttachmentSearchDocuments(emailID: crossing.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "u.txt", text: lead + phrase + " end", state: .complete, extractorVersion: 4, ocr: false)])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(contentMatch: .phrase, content: phrase)])]), ["Unicode"])
+
+        // A literal longer than a whole chunk: still the exact text, never its words.
+        let long = (0..<9_000).map { "longword\($0)" }.joined(separator: " ")   // ≈ 110 K characters, three chunks
+        XCTAssertGreaterThan(long.count, SearchChunker.chunkCharacters)
+        let huge = mail(501, from: "s@x.com", subject: "Huge", body: "start " + long + " finish")
+        try await env.store.insertBatch([huge], batchSize: 10)
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, long)])]), ["Huge"])
+        let shuffled = (0..<9_000).map { "longword\((($0 * 7) % 9_000))" }.joined(separator: " ")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, shuffled)])]), [], "the words in another order are not the phrase")
+        XCTAssertFalse(SearchSpecDescriber.summary(SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, long)])])).contains("all its words"), "no fallback is announced because none happens")
+
+        // Migration: a document stored in the old overlapped layout is re-chunked to the contiguous one and still searches.
+        let text = (0..<4_000).map { "legacyword\($0)" }.joined(separator: " ")   // two chunks
+        let oldChunks = legacyOverlappedChunks(text)
+        XCTAssertGreaterThan(oldChunks.count, 1)
+        let legacyMail = mail(502, from: "s@x.com", subject: "Legacy", body: "x")
+        try await env.store.insertBatch([legacyMail], batchSize: 10)
+        try await env.store.plantLegacyChunksForTesting(emailID: legacyMail.id.uuidString, kind: "body", chunks: oldChunks)
+        try await env.store.rechunkOverlappedDocumentsForTesting()
+        let joined = try await env.store.chunkTextsForTesting(emailID: legacyMail.id.uuidString, kind: "body").joined()
+        XCTAssertEqual(joined, text, "the migration reproduced the original text exactly")
+        let crossingLegacy = "legacyword2499 legacyword2500 legacyword2501"
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, crossingLegacy)])]), ["Legacy"])
+    }
+
+    /// The pre-v24 chunk layout, for the migration test: each later chunk begins with the previous one's last 512 Characters.
+    private func legacyOverlappedChunks(_ text: String, chunk: Int = SearchChunker.chunkCharacters) -> [String] {
+        var out: [String] = []
+        var start = text.startIndex
+        while start < text.endIndex {
+            guard let hardEnd = text.index(start, offsetBy: chunk, limitedBy: text.endIndex) else { out.append(String(text[start...])); break }
+            var end = hardEnd, probe = hardEnd, steps = 0
+            while probe > start, steps < 256 { probe = text.index(before: probe); if text[probe].isWhitespace { end = text.index(after: probe); break }; steps += 1 }
+            out.append(String(text[start..<end]))
+            var next = text.index(end, offsetBy: -SearchChunker.legacyOverlapCharacters, limitedBy: start) ?? start
+            if next <= start { next = end }
+            start = next
+            if end == text.endIndex { break }
+        }
+        return out
+    }
+
     func testFIND07_wholeBodyIsIndexed_tailAndCrossChunkPhraseAreFound() async throws {
         let wasOn = SearchChunkPolicy.isEnabled
         defer { SearchChunkPolicy.isEnabled = wasOn }
@@ -2267,18 +2378,19 @@ final class V2CutoverTests: XCTestCase {
     }
 
     func testFIND07_chunkerKeepsWordsWholeAndOverlaps() {
+        // R02: contiguous chunks — joined, they ARE the text; no word is cut in two.
         let words = (0..<20_000).map { "w\($0)" }.joined(separator: " ")
-        let chunks = SearchChunker.chunks(of: words, chunk: 4_000, overlap: 200)
+        let chunks = SearchChunker.chunks(of: words, chunk: 4_000)
         XCTAssertGreaterThan(chunks.count, 20)
+        XCTAssertEqual(chunks.joined(), words, "nothing repeated, nothing dropped")
         for (i, c) in chunks.enumerated() {
             XCTAssertLessThanOrEqual(c.count, 4_000)
             XCTAssertFalse(c.hasPrefix(" ") && i == 0)
-            // No word is cut: every chunk boundary word reappears whole in the next chunk's overlap.
-            if i + 1 < chunks.count {
-                let lastWord = c.split(separator: " ").last.map(String.init) ?? ""
-                XCTAssertTrue(chunks[i + 1].contains(lastWord), "chunk \(i) ends with \(lastWord), missing from the overlap")
-            }
+            if i + 1 < chunks.count { XCTAssertTrue(c.hasSuffix(" "), "chunk \(i) ends at a word boundary") }
         }
+        // The pre-v24 layout joins back to the original text by dropping each later chunk's repeated head.
+        let legacy = ["alpha beta gamma", String(repeating: "x", count: SearchChunker.legacyOverlapCharacters) + " delta"]
+        XCTAssertEqual(SearchChunker.joinLegacyOverlapped(legacy), "alpha beta gamma delta")
         XCTAssertEqual(SearchChunker.chunks(of: ""), [])
         XCTAssertEqual(SearchChunker.chunks(of: "short"), ["short"])
         XCTAssertEqual(SearchTextTokens.words(in: "C++ and PO-4471, \"quoted\"!"), ["C", "and", "PO", "4471", "quoted"])
@@ -2862,14 +2974,20 @@ final class V2CutoverTests: XCTestCase {
         let simple = try XCTUnwrap(PlainSearchTranslator.spec(from: "invoice purchase ord"))
         XCTAssertEqual(simple.groups, [SearchGroup(.all, [SearchCondition(.anyText, .contains, "ord"), SearchCondition(.anyText, .allWords, "invoice purchase")])])
         // Phrases, OR, NOT and -.
-        // Audit A09: ("purchase order" AND alpha) OR receipt ≡ ("purchase order" OR receipt) AND (alpha OR receipt) — the phrase stays a phrase.
+        // R01: ("purchase order" AND alpha) OR (receipt AND NOT newsletter AND NOT spam) — one group, two branches, no expansion.
         let rich = try XCTUnwrap(PlainSearchTranslator.spec(from: "\"purchase order\" alpha OR receipt NOT newsletter -spam"))
-        XCTAssertEqual(rich.groups.count, 3)
-        XCTAssertEqual(rich.groups[0], SearchGroup(.any, [SearchCondition(.anyText, .phrase, "purchase order"), SearchCondition(.anyText, .allWords, "receipt")]))
-        XCTAssertEqual(rich.groups[1], SearchGroup(.any, [SearchCondition(.anyText, .allWords, "alpha"), SearchCondition(.anyText, .allWords, "receipt")]))
-        XCTAssertEqual(rich.groups[2], SearchGroup(.exclude, [SearchCondition(.anyText, .anyWords, "newsletter spam")]))
+        XCTAssertEqual(rich.groups.count, 1)
+        XCTAssertEqual(rich.groups[0].kind, .any)
+        XCTAssertEqual(rich.groups[0].branches.count, 2)
+        XCTAssertEqual(rich.groups[0].branches[0].conditions, [SearchCondition(.anyText, .phrase, "purchase order", branch: 0), SearchCondition(.anyText, .allWords, "alpha", branch: 0)])
+        XCTAssertEqual(rich.groups[0].branches[1].conditions, [SearchCondition(.anyText, .allWords, "receipt", branch: 1),
+                                                                SearchCondition(.anyText, .anyWords, "newsletter", branch: 1, negated: true),
+                                                                SearchCondition(.anyText, .anyWords, "spam", branch: 1, negated: true)])
         let plainOr = try XCTUnwrap(PlainSearchTranslator.spec(from: "invoice OR receipt"))
-        XCTAssertEqual(plainOr.groups, [SearchGroup(.any, [SearchCondition(.anyText, .allWords, "invoice"), SearchCondition(.anyText, .allWords, "receipt")])])
+        XCTAssertEqual(plainOr.groups, [SearchGroup(.any, [SearchCondition(.anyText, .allWords, "invoice", branch: 0), SearchCondition(.anyText, .allWords, "receipt", branch: 1)])])
+        XCTAssertEqual(PlainSearchTranslator.spec(from: "alpha -draft"), SearchSpec(groups: [
+            SearchGroup(.all, [SearchCondition(.anyText, .contains, "alpha")]), SearchGroup(.exclude, [SearchCondition(.anyText, .anyWords, "draft")])]),
+            "one alternative: its not-terms are the global exclusion, as before")
         // in:attachments turns the words into conditions on one attachment's text.
         let inside = try XCTUnwrap(PlainSearchTranslator.spec(from: "in:attachments quorum \"board vote\""))
         XCTAssertEqual(inside.groups, [SearchGroup(.all, [], attachments: [
@@ -3106,7 +3224,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(listed(bytes(SourceSizePolicy.pstTestedCeilingBytes)) && listed("Notes NSF") && listed("FAT32"))
         XCTAssertTrue(listed(bytes(OfficeTextExtractor.maxPartBytes)), "the Office part budget is named")
         XCTAssertTrue(listed("\(Int(AttachmentOCR.maxPixels)) px"))
-        XCTAssertTrue(listed("\(SearchChunker.overlapCharacters) characters"))
+        XCTAssertFalse(listed("Phrase verification"), "R02: phrases of any length are verified on the stored text — no limit row")
         XCTAssertTrue(listed("\(AppLimits.previousEngineDuplicateWindow)"))
         XCTAssertTrue(listed("\(FTSSearchIndex.indexedBodyCharacters)"), "the previous search index's body prefix is named")
         for job in ["Opening archives", "Folders", "Search", "Duplicates", "Exports"] {

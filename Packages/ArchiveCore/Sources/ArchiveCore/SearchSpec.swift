@@ -26,11 +26,11 @@
 //                singular.
 //  allWords is evaluated over the whole text of the message (every word
 //  somewhere in it — audit 2026-11-06 A02: words in different chunks of one
-//  long text still match). Phrases and contains are verified literally:
-//  within one chunk up to the overlap (`SearchSpec.phraseVerificationLimit`),
-//  on two adjacent chunks joined for anything up to a chunk's length
-//  (`SearchSpec.phraseWholeTextLimit`); only a phrase longer than a whole
-//  chunk is evaluated as all its words, and the summary says so.
+//  long text still match). Phrases and contains are verified literally on
+//  the stored text, whatever their length (R02): within one chunk, on two
+//  adjacent chunks joined, or on the whole document joined from the first
+//  word's chunk onward — chunks are contiguous, so the join IS the text.
+//  There is no fallback from a phrase to its words.
 //
 
 import Foundation
@@ -73,14 +73,27 @@ struct SearchCondition: Codable, Equatable, Hashable, Sendable {
     var value: String
     /// For date fields: the identifier of the zone the day is shown in.
     var timeZone: String? = nil
+    /// R01 (handoff 7481852): inside an "any" group, conditions that share a
+    /// branch number are required TOGETHER (and) and the branches are the
+    /// alternatives (or); nil = a branch of its own. Lets the ordinary box
+    /// keep `"purchase order" urgent OR receipt` as (phrase AND word) OR word
+    /// without expanding it. Ignored by all/exclude groups.
+    var branch: Int? = nil
+    /// R01: a branch-local "not" — the branch requires this to be absent.
+    /// Optional so saved searches written before it decode.
+    var negated: Bool? = nil
 
-    init(_ field: Field, _ match: Match = .contains, _ value: String, timeZone: String? = nil) {
+    init(_ field: Field, _ match: Match = .contains, _ value: String, timeZone: String? = nil,
+         branch: Int? = nil, negated: Bool? = nil) {
         self.field = field
         self.match = match
         self.value = value
         self.timeZone = timeZone
+        self.branch = branch
+        self.negated = negated
     }
 
+    var isNegated: Bool { negated == true }
     var trimmedValue: String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
     var isEmpty: Bool { trimmedValue.isEmpty }
 
@@ -104,7 +117,11 @@ struct AttachmentConditionGroup: Codable, Equatable, Hashable, Sendable {
     /// Extracted or recognised text of THIS attachment.
     var contentMatch: SearchCondition.Match = .phrase
     var content: String? = nil
+    /// R01: see `SearchCondition.branch` / `negated`.
+    var branch: Int? = nil
+    var negated: Bool? = nil
 
+    var isNegated: Bool { negated == true }
     var isEmpty: Bool {
         (nameContains?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
             && (type?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
@@ -131,16 +148,42 @@ struct SearchGroup: Codable, Equatable, Hashable, Sendable {
     var liveAttachmentGroups: [AttachmentConditionGroup] { attachmentGroups.filter { !$0.isEmpty } }
     var isEmpty: Bool { liveConditions.isEmpty && liveAttachmentGroups.isEmpty }
     var readsText: Bool { liveConditions.contains(where: \.readsText) || liveAttachmentGroups.contains(where: \.readsText) }
+    /// R01: a branch-local negation reads text that must be absent.
+    var hasNegatedText: Bool {
+        liveConditions.contains { $0.isNegated && $0.readsText } || liveAttachmentGroups.contains { $0.isNegated && $0.readsText }
+    }
+
+    /// R01: the alternatives of an "any" group — conditions sharing a branch
+    /// number together, every unnumbered one alone — in first-appearance order.
+    struct Branch: Equatable, Sendable {
+        var conditions: [SearchCondition] = []
+        var attachmentGroups: [AttachmentConditionGroup] = []
+    }
+    var branches: [Branch] {
+        var order: [Int] = []
+        var byKey: [Int: Branch] = [:]
+        var next = -1
+        func key(_ branch: Int?) -> Int {
+            if let branch { return branch }
+            defer { next -= 1 }
+            return next
+        }
+        for condition in liveConditions {
+            let k = key(condition.branch)
+            if byKey[k] == nil { order.append(k); byKey[k] = Branch() }
+            byKey[k]!.conditions.append(condition)
+        }
+        for group in liveAttachmentGroups {
+            let k = key(group.branch)
+            if byKey[k] == nil { order.append(k); byKey[k] = Branch() }
+            byKey[k]!.attachmentGroups.append(group)
+        }
+        return order.compactMap { byKey[$0] }
+    }
 }
 
 struct SearchSpec: Codable, Equatable, Hashable, Sendable {
     static let currentVersion = 1
-    /// Phrases up to this many characters are verified across chunk
-    /// boundaries (the chunk overlap); longer ones fall back to all-words.
-    static var phraseVerificationLimit: Int { SearchChunker.overlapCharacters }
-    /// The longest literal that is still verified on the exact text (two
-    /// adjacent chunks joined); beyond it, all words in the same text.
-    static var phraseWholeTextLimit: Int { SearchChunker.chunkCharacters }
 
     var version: Int = SearchSpec.currentVersion
     var groups: [SearchGroup] = []
@@ -157,25 +200,32 @@ struct SearchSpec: Codable, Equatable, Hashable, Sendable {
         liveGroups.contains { group in
             switch group.kind {
             case .exclude: return group.readsText
-            case .any: return group.readsText && (group.liveConditions.count + group.liveAttachmentGroups.count) > 1
-            case .all: return false
+            case .any: return group.readsText && (group.branches.count > 1 || group.hasNegatedText)
+            case .all: return group.hasNegatedText   // R01: a branch-local "not" is an exclusion
             }
         }
     }
 
     /// Which content the uncertainty is about.
     var uncertainBodyText: Bool {
-        liveGroups.contains { g in (g.kind == .exclude || g.kind == .any) && g.liveConditions.contains { $0.readsText } }
+        liveGroups.contains { g in (g.kind == .exclude || g.kind == .any || g.hasNegatedText) && g.liveConditions.contains { $0.readsText } }
     }
     var uncertainAttachmentText: Bool {
-        liveGroups.contains { g in (g.kind == .exclude || g.kind == .any)
+        liveGroups.contains { g in (g.kind == .exclude || g.kind == .any || g.hasNegatedText)
             && (g.liveAttachmentGroups.contains(where: \.readsText) || g.liveConditions.contains { $0.field == .anyText }) }
     }
 
     /// The spec without its exclusions — what a row has to match before an
     /// exclusion can be asked about it (used to count "unresolved" rows).
+    /// R01: branch-local negations are exclusions too and are left out.
     var positivePart: SearchSpec {
-        SearchSpec(groups: liveGroups.filter { $0.kind != .exclude })
+        let groups = liveGroups.filter { $0.kind != .exclude }.map { group -> SearchGroup in
+            var copy = group
+            copy.conditions = group.liveConditions.filter { !$0.isNegated }
+            copy.attachmentGroups = group.liveAttachmentGroups.filter { !$0.isNegated }
+            return copy
+        }
+        return SearchSpec(groups: groups.filter { !$0.isEmpty })
     }
 
     // MARK: Editing (the chips remove exactly one thing)

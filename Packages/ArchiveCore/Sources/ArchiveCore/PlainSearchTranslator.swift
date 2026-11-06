@@ -12,8 +12,8 @@
 //  Grammar, kept as small as the old box:
 //    word word        every word (the last one as typed so far — a prefix)
 //    "a phrase"       the words in order
-//    a OR b           either
-//    NOT word, -word  leave out
+//    a OR b           either (each side may be several words and phrases)
+//    NOT word, -word  leave out — within the alternative it is typed in
 //    AND              ignored (the default)
 //    in:attachments   the words must be inside one attachment's text
 //
@@ -59,6 +59,10 @@ enum PlainSearchTranslator {
         alternatives.removeAll(where: \.isEmpty)
         guard !alternatives.isEmpty else { return nil }
 
+        // One alternative: its "not" terms are a global exclusion. Several
+        // alternatives (R01): each "not" belongs to the alternative it was
+        // typed in — `"purchase order" -draft OR receipt` leaves out drafts
+        // only from the first alternative.
         let excluded = alternatives.flatMap { $0.filter(\.negated) }
         let positives = alternatives.map { $0.filter { !$0.negated } }.filter { !$0.isEmpty }
         var groups: [SearchGroup] = []
@@ -66,33 +70,31 @@ enum PlainSearchTranslator {
         if positives.count == 1 {
             groups.append(group(.all, terms: positives[0], lastIsPrefix: true, inAttachments: inAttachments))
         } else if positives.count > 1 {
-            // Audit 2026-11-06 A09: an OR alternative may itself be a
-            // conjunction ("purchase order" AND urgent). The model nests no
-            // groups, so the OR of conjunctions is written in its conjunctive
-            // form — one "any" group per way of picking one condition from
-            // each alternative — which is exactly equivalent and keeps every
-            // quoted phrase a phrase. Alternatives yield at most two
-            // conditions each (phrases, then the plain words as all-words).
-            let alternatives: [[(SearchCondition.Match, String)]] = positives.map { branch in
-                var out: [(SearchCondition.Match, String)] = branch.filter(\.isPhrase).map { (.phrase, $0.text) }
-                let plain = branch.filter { !$0.isPhrase }.map(\.text)
-                if !plain.isEmpty { out.append((.allWords, plain.joined(separator: " "))) }
-                return out
-            }
-            let expandable = alternatives.reduce(1) { $0 * $1.count } <= maxExpandedGroups
-            var anyGroups: [[(SearchCondition.Match, String)]] = [[]]
-            if expandable {
-                for options in alternatives { anyGroups = anyGroups.flatMap { prefix in options.map { prefix + [$0] } } }
-            } else {
-                anyGroups = [alternatives.map { options in options.count == 1 ? options[0] : (.allWords, options.map(\.1).joined(separator: " ")) }]
-            }
-            for picks in anyGroups {
-                if inAttachments {
-                    groups.append(SearchGroup(.any, [], attachments: picks.map { AttachmentConditionGroup(contentMatch: $0.0, content: $0.1) }))
-                } else {
-                    groups.append(SearchGroup(.any, picks.map { SearchCondition(.anyText, $0.0, $0.1) }))
+            // R01 (handoff 7481852): one "any" group whose branches ARE the
+            // alternatives — each branch holds its phrases, its plain words
+            // (all-words) and its own "not" terms — compiled as written, with
+            // no expansion and no cap, so a query of 63 alternatives is 63
+            // branches, not 2⁶³ groups.
+            var conditions: [SearchCondition] = []
+            var attachmentGroups: [AttachmentConditionGroup] = []
+            for (index, branch) in alternatives.enumerated() where !branch.filter({ !$0.negated }).isEmpty {
+                func add(_ match: SearchCondition.Match, _ text: String, negated: Bool) {
+                    if inAttachments {
+                        attachmentGroups.append(AttachmentConditionGroup(contentMatch: match, content: text, branch: index, negated: negated ? true : nil))
+                    } else {
+                        conditions.append(SearchCondition(.anyText, match, text, branch: index, negated: negated ? true : nil))
+                    }
+                }
+                for term in branch where term.isPhrase && !term.negated { add(.phrase, term.text, negated: false) }
+                let plain = branch.filter { !$0.isPhrase && !$0.negated }.map(\.text)
+                if !plain.isEmpty { add(.allWords, plain.joined(separator: " "), negated: false) }
+                for term in branch where term.negated {
+                    add(term.isPhrase ? .phrase : .anyWords, term.text, negated: true)
                 }
             }
+            groups.append(SearchGroup(.any, conditions, attachments: attachmentGroups))
+            let spec = SearchSpec(groups: groups)
+            return spec.isEmpty ? nil : spec
         }
         if !excluded.isEmpty {
             groups.append(group(.exclude, terms: excluded, lastIsPrefix: false, inAttachments: inAttachments))
@@ -129,9 +131,6 @@ enum PlainSearchTranslator {
         return SearchGroup(kind, conditions, attachments: attachmentGroups)
     }
 
-    /// Beyond this many expanded groups (2⁶ alternatives each mixing a phrase
-    /// and words), the alternatives are folded to all-words instead.
-    static let maxExpandedGroups = 64
 
     /// `typed` merged on top of the Advanced Search spec the user applied.
     static func merge(_ typed: SearchSpec, into applied: SearchSpec?) -> SearchSpec {

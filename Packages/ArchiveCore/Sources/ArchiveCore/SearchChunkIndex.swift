@@ -64,13 +64,18 @@ enum SearchDocState: String, Sendable {
 enum SearchChunker {
     /// Characters per chunk (about 48 KB of ASCII).
     static let chunkCharacters = 48 * 1024
-    /// Characters repeated at the start of the next chunk, so a phrase that
-    /// crosses the boundary is wholly inside one chunk.
-    static let overlapCharacters = 512
+    /// R02 (handoff 7481852): chunks are CONTIGUOUS — a document is exactly
+    /// its chunks in order, nothing repeated. A literal of any length is then
+    /// verified on the chunks joined as stored (`c1.text || c2.text || …`),
+    /// with no offset arithmetic and so no Character-versus-code-point
+    /// mismatch between Swift and SQLite. Until 2026-11-06 chunk k ≥ 1
+    /// repeated the last `legacyOverlapCharacters` Characters of chunk k−1;
+    /// `SQLiteEmailStore.migrateSearchChunksToContiguous` (schema v24)
+    /// rewrites those documents.
+    static let legacyOverlapCharacters = 512
 
-    static func chunks(of text: String, chunk: Int = chunkCharacters, overlap: Int = overlapCharacters) -> [String] {
+    static func chunks(of text: String, chunk: Int = chunkCharacters) -> [String] {
         guard text.count > chunk else { return text.isEmpty ? [] : [text] }
-        precondition(overlap < chunk)
         var out: [String] = []
         var start = text.startIndex
         while start < text.endIndex {
@@ -78,7 +83,8 @@ enum SearchChunker {
                 out.append(String(text[start...]))
                 break
             }
-            // Back up to a whitespace so a word is never cut in two.
+            // Back up to a whitespace so a word is never cut in two; the next
+            // chunk begins exactly where this one ends.
             var end = hardEnd
             var probe = hardEnd
             var steps = 0
@@ -88,13 +94,19 @@ enum SearchChunker {
                 steps += 1
             }
             out.append(String(text[start..<end]))
-            // Next chunk starts `overlap` characters before this one ended.
-            var next = text.index(end, offsetBy: -overlap, limitedBy: start) ?? start
-            if next <= start { next = end }   // cannot make progress otherwise
-            start = next
+            start = end
             if end == text.endIndex { break }
         }
         return out
+    }
+
+    /// The text of a document stored in the overlapped layout (before v24):
+    /// every chunk after the first began with the previous chunk's last
+    /// `legacyOverlapCharacters` Characters, which are dropped here.
+    static func joinLegacyOverlapped(_ chunks: [String]) -> String {
+        var text = chunks.first ?? ""
+        for chunk in chunks.dropFirst() { text += String(chunk.dropFirst(legacyOverlapCharacters)) }
+        return text
     }
 }
 
@@ -124,6 +136,97 @@ extension SQLiteEmailStore {
     /// v23: the v22 tables were created with the default tokeniser (marks as
     /// separators); v22 never shipped, so they are dropped and recreated and
     /// the backfill refills them.
+    /// v24 (R02): every multi-chunk document is rewritten from the overlapped
+    /// layout to the contiguous one; single-chunk documents are already
+    /// contiguous and are left alone. States, revisions and extractor
+    /// versions are kept; only the chunk rows and the counts change. Runs
+    /// inside the migration's exclusive transaction.
+    func migrateSearchChunksToContiguous(_ handle: OpaquePointer) throws {
+        var targets: [(emailID: String, kind: String, ordinal: Int)] = []
+        let docs = try prepare(handle, "SELECT email_id, kind, ordinal FROM search_docs WHERE chunk_count > 1;")
+        while try stepRow(docs, handle) {
+            targets.append((columnText(docs, 0), columnText(docs, 1), Int(sqlite3_column_int64(docs, 2))))
+        }
+        sqlite3_finalize(docs)
+        for target in targets {
+            let read = try prepare(handle, "SELECT text FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = ? ORDER BY chunk;")
+            bindText(read, 1, target.emailID); bindText(read, 2, target.kind); sqlite3_bind_int64(read, 3, Int64(target.ordinal))
+            var chunks: [String] = []
+            while try stepRow(read, handle) { chunks.append(columnText(read, 0)) }
+            sqlite3_finalize(read)
+            try rewriteChunks(handle, emailID: target.emailID, kind: target.kind, ordinal: target.ordinal,
+                              text: SearchChunker.joinLegacyOverlapped(chunks))
+        }
+    }
+
+    /// Replaces one document's chunk rows with the contiguous chunks of `text`.
+    func rewriteChunks(_ handle: OpaquePointer, emailID: String, kind: String, ordinal: Int, text: String) throws {
+        let clear = try prepare(handle, "DELETE FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = ?;")
+        defer { sqlite3_finalize(clear) }
+        bindText(clear, 1, emailID); bindText(clear, 2, kind); sqlite3_bind_int64(clear, 3, Int64(ordinal))
+        guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(handle)) }
+        let insert = try prepare(handle, "INSERT INTO search_chunks(email_id, kind, ordinal, chunk, text) VALUES (?,?,?,?,?);")
+        defer { sqlite3_finalize(insert) }
+        var count = 0
+        for (index, chunk) in SearchChunker.chunks(of: text).enumerated() {
+            sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+            bindText(insert, 1, emailID); bindText(insert, 2, kind)
+            sqlite3_bind_int64(insert, 3, Int64(ordinal)); sqlite3_bind_int64(insert, 4, Int64(index))
+            bindText(insert, 5, chunk)
+            guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(handle)) }
+            count += 1
+        }
+        let update = try prepare(handle, "UPDATE search_docs SET chunk_count = ?, text_chars = ? WHERE email_id = ? AND kind = ? AND ordinal = ?;")
+        defer { sqlite3_finalize(update) }
+        sqlite3_bind_int64(update, 1, Int64(count)); sqlite3_bind_int64(update, 2, Int64(text.count))
+        bindText(update, 3, emailID); bindText(update, 4, kind); sqlite3_bind_int64(update, 5, Int64(ordinal))
+        guard sqlite3_step(update) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(handle)) }
+    }
+
+    // MARK: Test seams for the v24 migration (plant the old layout, migrate, read back)
+
+    func plantLegacyChunksForTesting(emailID: String, kind: String, chunks: [String]) throws {
+        let db = try ensureDB()
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let clear = try prepare(db, "DELETE FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = 0;")
+            bindText(clear, 1, emailID); bindText(clear, 2, kind)
+            _ = sqlite3_step(clear); sqlite3_finalize(clear)
+            let insert = try prepare(db, "INSERT INTO search_chunks(email_id, kind, ordinal, chunk, text) VALUES (?,?,0,?,?);")
+            for (index, chunk) in chunks.enumerated() {
+                sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+                bindText(insert, 1, emailID); bindText(insert, 2, kind); sqlite3_bind_int64(insert, 3, Int64(index)); bindText(insert, 4, chunk)
+                guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            sqlite3_finalize(insert)
+            let doc = try prepare(db, """
+                INSERT INTO search_docs(email_id, kind, ordinal, revision, chunk_count, text_chars, state, extractor_version, ocr)
+                VALUES (?,?,0,1,?,0,'complete',0,0)
+                ON CONFLICT(email_id, kind, ordinal) DO UPDATE SET chunk_count = excluded.chunk_count, state = 'complete';
+            """)
+            bindText(doc, 1, emailID); bindText(doc, 2, kind); sqlite3_bind_int64(doc, 3, Int64(chunks.count))
+            guard sqlite3_step(doc) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            sqlite3_finalize(doc)
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func rechunkOverlappedDocumentsForTesting() throws {
+        let db = try ensureDB()
+        try exec(db, SQLiteHygiene.beginWrite)
+        do { try migrateSearchChunksToContiguous(db); try exec(db, "COMMIT;") } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func chunkTextsForTesting(emailID: String, kind: String) throws -> [String] {
+        let db = try ensureDB()
+        let read = try prepare(db, "SELECT text FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = 0 ORDER BY chunk;")
+        defer { sqlite3_finalize(read) }
+        bindText(read, 1, emailID); bindText(read, 2, kind)
+        var out: [String] = []
+        while try stepRow(read, db) { out.append(columnText(read, 0)) }
+        return out
+    }
+
     func createSchemaV23(_ handle: OpaquePointer) throws {
         try exec(handle, "DROP TABLE IF EXISTS search_chunks;")
         try exec(handle, "DROP TABLE IF EXISTS search_docs;")

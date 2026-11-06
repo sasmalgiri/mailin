@@ -90,14 +90,24 @@ enum SearchSpecDescriber {
         guard !groups.isEmpty else { return String(localized: "No conditions — the list shows the selected scope.") }
         var sentences: [String] = []
         for group in groups {
-            let items = group.liveConditions.map(chip) + group.liveAttachmentGroups.map(chip)
-            let joiner: String
+            // R01: an "any" group reads branch by branch — "(a and b) or c" —
+            // and a branch-local negation reads "not …", exactly as it runs.
+            let andWord = " " + String(localized: "and") + " "
+            let orWord = " " + String(localized: "or") + " "
+            func text(_ c: SearchCondition) -> String { (c.isNegated ? String(localized: "not") + " " : "") + chip(c) }
+            func text(_ a: AttachmentConditionGroup) -> String { (a.isNegated ? String(localized: "not") + " " : "") + chip(a) }
+            let list: String
             switch group.kind {
-            case .all: joiner = " " + String(localized: "and") + " "
-            case .any: joiner = " " + String(localized: "or") + " "
-            case .exclude: joiner = " " + String(localized: "or") + " "
+            case .all:
+                list = (group.liveConditions.map(text) + group.liveAttachmentGroups.map(text)).joined(separator: andWord)
+            case .any:
+                list = group.branches.map { branch -> String in
+                    let parts = branch.conditions.map(text) + branch.attachmentGroups.map(text)
+                    return parts.count == 1 ? parts[0] : "(" + parts.joined(separator: andWord) + ")"
+                }.joined(separator: orWord)
+            case .exclude:
+                list = (group.liveConditions.map(chip) + group.liveAttachmentGroups.map(chip)).joined(separator: orWord)
             }
-            let list = items.joined(separator: joiner)
             switch group.kind {
             case .all: sentences.append(String(localized: "Messages where \(list)."))
             case .any: sentences.append(String(localized: "Messages where \(list)."))
@@ -107,9 +117,6 @@ enum SearchSpecDescriber {
         var text = sentences.joined(separator: " ")
         if spec.hasUncertainTextConditions {
             text += " " + String(localized: "Messages whose text is not indexed yet are counted apart as “may still match”.")
-        }
-        if groups.contains(where: { g in g.liveConditions.contains { $0.match == .phrase && $0.trimmedValue.count > SearchSpec.phraseWholeTextLimit } }) {
-            text += " " + String(localized: "A phrase longer than \(SearchSpec.phraseWholeTextLimit) characters is matched as all its words in the same text.")
         }
         return text
     }

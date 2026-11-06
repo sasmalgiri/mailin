@@ -779,7 +779,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
     ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
-    static let currentSchemaVersion = 23   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks (SearchChunkIndex.swift)
+    static let currentSchemaVersion = 24   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks; v24: contiguous chunks (R02)
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1247,6 +1247,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 23;")
             }
             v = 23
+        }
+        if v == 23 {
+            // v24 (R02, handoff 7481852): search chunks become contiguous so
+            // a literal of any length is verified on the stored text with no
+            // offset arithmetic; multi-chunk documents are re-chunked.
+            try inExclusiveTransaction(handle) {
+                try migrateSearchChunksToContiguous(handle)
+                try exec(handle, "PRAGMA user_version = 24;")
+            }
+            v = 24
         }
     }
 

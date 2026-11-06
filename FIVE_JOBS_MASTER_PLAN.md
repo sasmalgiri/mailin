@@ -813,3 +813,54 @@ Release the complete five-job product when the remaining functionality and requi
 The release record must distinguish **implemented**, **executed and passed**, **not executed**, **observed limitation** and **owner-approved validation scope**. A final release label is not proof that every conceivable file/device combination has been tested.
 
 Apple asks for tested device/OS information and accurate, complete feature and purchase information during review. Prepare that information for the actual candidate. [Complete review information](https://developer.apple.com/help/app-review/before-submitting-for-review/complete-review) · [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
+
+## 13. Completion contract — COMP-01…20 and the R01…R07 regressions (6 November 2026)
+
+Transcribed into the repository from the owner's handoff `Mailin_Product_Completion_Instructions_7481852_2026-11-06.md`
+(§4 "Acceptance cases", §2 "Immediate remaining defects"), which reproduces the scope of the consolidated plan
+version 7 §13. The consolidated plan file itself was not supplied to the repository; this section is the
+authoritative copy of its acceptance cases until it is. These cases extend the 30 job rows and six LIFE checks;
+they do not replace them. Decision in force: preserve completed work; finish architecture, format coverage,
+recovery and verification; the five jobs remain the product. The owner has approved the five-job identity and
+LIFE-06 — neither is asked again.
+
+### 13.1 Regressions found at 7481852
+
+| ID | Defect | Instruction |
+|---|---|---|
+| R01 | The ordinary-search translator expands OR alternatives into conjunctive groups (exponential; 64-group cap then folds to all-words; unchecked multiplication) | Represent Boolean structure without expansion; preserve phrases, branch-local negation and same-document conditions; checked arithmetic; never silently run a different query |
+| R02 | Literal verification removes 512 SQLite code points where the chunker overlapped 512 Swift Characters (Unicode mismatch); literals longer than a chunk change mode; Limits text stale | One offset unit across storage, SQL, snippets; verify long phrases without changing mode; Unicode boundary tests |
+| R03 | GZip payload name derived from the temporary file URL; dispatch trusts temporary extensions | Pass an immutable logical filename; sniff the payload; preserve `.tar.gz` / `.txt.gz` semantics |
+| R04 | EML and RTF inside archives decoded as raw strings before their readers | Route EML/MSG/TNEF/embedded packages through semantic adapters producing children; RTF through the decoder |
+| R05 | Budgets are stopping rules; the gzip budget is checked after full decompression | Enforce budgets inside the production of bytes; turn exhaustion into a paused, resumable state; never call paused work complete |
+| R06 | An unverified export (inventory failed) has no repair or Verify action | "Finish inventory" / "Verify export" from the retained manifest; keep written / hashes recorded / rehash checked / content reconciled distinct |
+| R07 | LIFE-06 archive-access record has no production clean-profile transition test; refresh after restore/switch missing | Explicit initialisation; refresh after restore and archive change; visible failures; sandbox journeys |
+
+### 13.2 Acceptance cases
+
+| ID | Required customer outcome |
+|---|---|
+| COMP-01 | Real ANSI/Unicode PST: empty/deep/repeated/Unicode folders, varied bodies/attachments/properties and non-mail inventory reconcile. |
+| COMP-02 | Real OST: accessible content works; cache-only headers and missing server content remain distinct. |
+| COMP-03 | Real OLM: hierarchy, categories, dates and embedded documents survive import and search. |
+| COMP-04 | MSG/OFT/TNEF/embedded messages: correct recipients, body variants, CID and complete child tree with original hashes. |
+| COMP-05 | Actual legacy Word/Excel/PowerPoint: known section/cell/annotation terms are found without Office installed. |
+| COMP-06 | Declared macros/templates/shows/XLSB and Strict/Transitional variants: correct detection/extraction; active content never runs. |
+| COMP-07 | Excel hidden/comment/late-cell/formula-result-only matches: accurate location, raw/displayed/formula classification and no invented result. |
+| COMP-08 | Word header/text-box/footnote/comment/deleted-revision-only matches: correct section/revision labels. |
+| COMP-09 | PowerPoint notes/hidden slides/tables/chart labels: accurate evidence and navigation. |
+| COMP-10 | Declared OneNote/Visio/Project/Publisher/Access versions: stored content searchable with appropriate location; linked-only content distinct. |
+| COMP-11 | Real ODF and old/new iWork: actual document content found; thumbnail-only extraction fails this case. |
+| COMP-12 | Nested ZIP/7z/RAR/TAR/GZip: full tree, repeated filenames, encrypted members and missing volumes handled; no path escape. |
+| COMP-13 | Protected PDF/Office/container: correct/wrong password, cancel/retry/restart and chosen credential retention work. |
+| COMP-14 | Mail encryption/signatures/IRM/cloud references: authorized paths work; unavailable credentials/rights/content never become false no-matches or complete exports. |
+| COMP-15 | PST/OLM/EML equivalents and changed attachments/revisions: correct duplicate classes, preserved memberships/notes/holds, undo. |
+| COMP-16 | EML/MBOX/PST/MSG consumed independently: selection, folder, content and attachment reconciliation with durable inventory. |
+| COMP-17 | Ordinary/advanced equivalent searches, incomplete negative queries and same-child predicates: identical semantics and honest coverage. Includes R01/R02. |
+| COMP-18 | Import → detach original → restart → find nested Office file → backup → clean-profile restore → export: originals/relationships survive. |
+| COMP-19 | Malformed documents, expansion attacks, worker crash, disk-full and external interruption: contained failure, checkpoints and recovery. Includes R03–R06. |
+| COMP-20 | Clean install, entitlement changes and human five-job pilot: ordinary work needs no Office installation, existing-data access survives, people notice partial results. |
+
+For each case the tracker records: implemented / test executed / passed or failed / evidence location / known
+limitation / external dependency. A synthetic-fixture pass never implies real-origin compatibility. Expected
+unsupported or locked states are conditional cases, not successful extraction of healthy required content.

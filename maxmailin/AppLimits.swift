@@ -79,8 +79,6 @@ enum AppLimits {
                      why: String(localized: "A part larger than this inside a .docx/.xlsx/.pptx is listed and the document marked partial, never silently dropped.")),
             AppLimit(kind: .safety, what: String(localized: "OCR image size"), value: String(localized: "\(Int(AttachmentOCR.maxPixels)) px on the long side"),
                      why: String(localized: "Larger images are scaled down before recognition; every image is still read.")),
-            AppLimit(kind: .safety, what: String(localized: "Phrase verification"), value: String(localized: "\(SearchChunker.overlapCharacters) characters"),
-                     why: String(localized: "Phrases up to this length are verified across chunk boundaries; longer ones match as all-words and the result says so.")),
             AppLimit(kind: .safety, what: String(localized: "Single message above"), value: bytes(Int64(MBOXParser.maxMessageBytes)),
                      why: String(localized: "A message larger than this is kept by byte range and exported byte for byte, but its text is not searchable; the import receipt counts such messages.")),
             // Previous engines.

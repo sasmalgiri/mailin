@@ -167,9 +167,51 @@ fixed with a test that fails on the old behaviour. "verified" = the named test r
 | A11 (P2) | exFAT 4 GiB warning factually wrong | verified — file-system type from the mount table; FAT32 warns about 4 GiB, exFAT about its missing journal; Limits row, audit and docs corrected | 189b87e | `testCAP06_*` (Limits lists FAT32), location tests |
 | §4 | Plan §13 / COMP-01…20 not in the repository plan | **open — owner**: the repository holds plan v3 (ends at §12); the consolidated plan with §13 was not supplied. Attach it and the tracker gets a COMP table | — | — |
 
-## Owner decisions needed
+## Completion contract (handoff 7481852, 6 November 2026) — R01…R07 and COMP-01…20
 
-- **The consolidated plan with §13 / COMP-01…20** (the audit refers to it; the repository has plan v3, which ends at §12). Attach the file and the COMP acceptance table is added to this tracker.
+Plan §13 (transcribed from the owner's handoff; the consolidated plan v7 file itself was not supplied).
+Columns: **Implemented** = code on the branch; **Test executed** = the named test ran on this Mac at the commit;
+**Result**; **Evidence**; **Known limitation**; **External dependency** = what only the owner or an environment
+can supply. A synthetic-fixture pass never implies real-origin compatibility.
+
+### R01…R07
+
+| ID | Implemented | Test executed | Result | Evidence | Known limitation | External dependency |
+|---|---|---|---|---|---|---|
+| R01 Boolean structure without expansion | R01_STATE | R01_TEST | R01_RESULT | R01_COMMIT | — | — |
+| R02 Exact literal verification, one offset unit | R02_STATE | R02_TEST | R02_RESULT | R02_COMMIT | R02_LIMIT | — |
+| R03 Logical names and payload sniffing | R03_STATE | R03_TEST | R03_RESULT | R03_COMMIT | — | — |
+| R04 EML/RTF through semantic readers | R04_STATE | R04_TEST | R04_RESULT | R04_COMMIT | MSG/TNEF children not yet a tree (WP2) | — |
+| R05 Budgets enforced in-stream; pause/continue | R05_STATE | R05_TEST | R05_RESULT | R05_COMMIT | Exhaustion is a named partial state, not yet a resumable checkpoint (A10) | — |
+| R06 Finish inventory / Verify export | R06_STATE | R06_TEST | R06_RESULT | R06_COMMIT | Content reconciliation against source records (OUT-04 re-parse) still open | — |
+| R07 Archive-access initialisation and refresh | R07_STATE | R07_TEST | R07_RESULT | R07_COMMIT | — | StoreKit sandbox expiry/refund/restore journeys on a clean profile (owner's Apple ID) |
+
+### COMP-01…20
+
+| ID | Implemented | Test executed | Result | Evidence | Known limitation | External dependency |
+|---|---|---|---|---|---|---|
+| COMP-01 Real PST variants | yes (MS-PST reader) | real PSTs 2026-10-13 (15 files, earlier build); synthetic 100 MB matrix 2026-11-06 | passed then | `SCALE_RESULTS.md`, `PSTSpecReaderTests` | not re-run on this candidate | real small PSTs with empty/deep/Unicode folders |
+| COMP-02 Real OST | reader shares PST code | none on real files | not executed | — | 4 KB-page OST (wVer 36) not read by layout | a real OST |
+| COMP-03 Real OLM | yes (`OLMParser`) | synthetic records (`ContainerImportTests.olm*`) | passed (synthetic) | ee97c52 | categories as tags only | a real Outlook for Mac export |
+| COMP-04 MSG/OFT/TNEF/embedded | MSG yes; embedded PST messages rebuilt as .eml; OFT/TNEF **no** | MSG fixtures (`MSGParserTests`) | passed (MSG) | — | OFT, winmail.dat not read; child tree is flat text | — |
+| COMP-05 Legacy Office | yes (.doc/.xls/.ppt) | `testTYPE01_*`, real .doc fixture | passed | 882f179 | .xls/.ppt on spec-built fixtures only | real Excel/PowerPoint 97–2003 files |
+| COMP-06 Macro/template/show/XLSB/Strict | DOCM/XLSM/PPTM and DOT/XLT/POT/PPS by extension; XLSB **no**; Strict/Transitional: Transitional only | FIND-01 tests | passed (declared subset) | — | XLSB unread; Strict OOXML namespaces unread | — |
+| COMP-07 Excel locations | XLSX: sheet/cell with formulas; XLS: cell addresses, comments, hidden sheets (A03) | `testTYPE01_*`, FIND-01 | passed | 882f179 | displayed (formatted) values not derived; XLSX comments not read | real workbooks |
+| COMP-08 Word sections/revisions | body/tables/headers/footnotes/comments (DOCX); DOC body | FIND-01, TYPE tests | passed | — | text boxes and deleted-revision classification not labelled | — |
+| COMP-09 PowerPoint | slides/notes (PPTX, PPT) | FIND-01, `testTYPE01_*` | passed | — | hidden-slide flag, chart labels not read | — |
+| COMP-10 OneNote/Visio/Project/Publisher/Access | **no reader** | — | not implemented | — | files are kept and listed as unsupported | adapter work (new project) |
+| COMP-11 ODF / iWork | yes | `testTYPE02_*`, real iWork fixtures | passed | c1298d0 | ODF on synthetic packages | real ODF files |
+| COMP-12 Nested archives | ZIP/tar/gzip, three levels, budgets (A04) | `testA04_*` | passed | 882f179 | 7z/RAR/split volumes not opened; children flattened into the parent's text (WP2) | — |
+| COMP-13 Protected files | detection → "locked" state | FIND-01/TYPE tests | passed (detection only) | — | **no password entry / unlock path** | — |
+| COMP-14 Encryption/signatures/IRM/cloud refs | originals kept; S/MIME verify exists for signatures | not executed for decrypt | not implemented (decrypt/IRM) | — | no decrypt-and-index, no rights-aware path | — |
+| COMP-15 Cross-format duplicates | classes, merge, holds, Trash (A01) | DUP tests | passed (synthetic) | 189b87e | PST/OLM/EML same-mail fixtures not run | real cross-format set |
+| COMP-16 Independent export consumption | inventories, re-hash, unverified outcome (A07) | OUT tests | passed | d14f93e | re-parse vs source open; destination clients not run | Apple Mail / Thunderbird / Outlook runs |
+| COMP-17 Equivalent search semantics | A02/A09 + R01/R02 | `testA02_*`, R01/R02 tests | R17_RESULT | — | — | — |
+| COMP-18 Detach → restart → nested find → backup → restore → export | LIFE-01/02 + rehearsal | `testCombinedPreservationRehearsal_*` (00b8b50) | passed then | — | nested-Office step not in the rehearsal | — |
+| COMP-19 Malformed / fault / recovery | A05/A06/A07 fixes; fault tests exist | `testA05_*`, `testA06_*`, `testA07_*` | passed | 882f179 | worker containment and external interruption not executed | disposable volume + external controller run |
+| COMP-20 Clean install / entitlements / pilot | A08/R07 code | unit fixtures | partly | d14f93e | — | sandbox journeys; human pilot (owner) |
+
+## Owner decisions needed
 - OLM reader and TAR/TGZ wrapper: adopted under the 2026-11-06 directive ("support all types") and built (TYPE-06). Still needed from the owner: one real `.olm` export from Outlook for Mac to run against.
 - OUT-05 Apple Mail / Thunderbird interactive import runs.
 - OST and NSF real fixtures (none exist; without them those rows stay "partially supported").
