@@ -59,23 +59,66 @@ struct ExportInventory: Codable, Sendable, Equatable {
     /// after this succeeds, so a failure leaves the manifest as the record.
     static func finalize(folder: URL, manifestURL: URL, layout: String,
                          written: Int, withheld: Int, skipped: Int, positionsConsumed: Int) throws -> URL {
+        let parsed = try parseManifest(at: manifestURL)
+        let inventory = ExportInventory(createdAt: Date(), layout: layout, written: written, withheld: withheld,
+                                        skipped: skipped, positionsConsumed: positionsConsumed, files: parsed.files)
+        return try write(inventory, in: folder)
+    }
+
+    /// R06 (handoff 7481852): a run whose files were all written but whose
+    /// inventory could not be created left its working manifest behind.
+    /// This builds the inventory from that manifest — the files listed up to
+    /// its last durable boundary, the counts from that boundary — writes it
+    /// beside the files and removes the manifest. Nothing already written is
+    /// touched; a manifest that is not the folder's own regular file is refused.
+    static func repair(folder: URL, layout: String = "repaired-from-manifest") throws -> URL {
+        let manifestURL = folder.appendingPathComponent(ExportFolderManifest.filename)
+        let attributes = try FileManager.default.attributesOfItem(atPath: manifestURL.path)
+        guard (attributes[.type] as? FileAttributeType) == .typeRegular else {
+            throw ArchiveExportError.partialManifestInvalid("the export manifest is not a regular file")
+        }
+        let parsed = try parseManifest(at: manifestURL)
+        guard let boundary = parsed.lastBoundary else {
+            throw ArchiveExportError.partialManifestInvalid("the manifest records no completed batch")
+        }
+        let files = Array(parsed.files.prefix(parsed.filesAtBoundary))
+        let inventory = ExportInventory(createdAt: Date(), layout: layout, written: boundary.produced, withheld: boundary.withheld,
+                                        skipped: boundary.skipped, positionsConsumed: boundary.boundary, files: files)
+        let url = try write(inventory, in: folder)
+        ExportFolderManifest(folder: folder).remove()
+        return url
+    }
+
+    private struct ParsedManifest {
+        var files: [File] = []
+        var lastBoundary: ExportFolderManifest.Boundary?
+        var filesAtBoundary = 0
+    }
+
+    /// The manifest's file lines and its last boundary (a torn final line is ignored).
+    private static func parseManifest(at manifestURL: URL) throws -> ParsedManifest {
         let data = try Data(contentsOf: manifestURL)
         let decoder = JSONDecoder()
-        var files: [File] = []
+        var parsed = ParsedManifest()
         var lineStart = 0
         while lineStart < data.count {
-            let lineEnd = data[lineStart...].firstIndex(of: 0x0A) ?? data.count
-            let line = data[lineStart..<lineEnd]
-            lineStart = lineEnd + 1
-            guard !line.isEmpty else { continue }
+            let lineEnd = data[lineStart...].firstIndex(of: 0x0A)
+            let line = data[lineStart..<(lineEnd ?? data.count)]
+            let torn = lineEnd == nil
+            lineStart = (lineEnd ?? data.count) + 1
+            guard !line.isEmpty, !torn else { continue }
             if let entry = try? decoder.decode(ExportFolderManifest.FileEntry.self, from: line) {
-                files.append(File(path: entry.name, bytes: entry.bytes, sha256: entry.sha256, emailID: entry.emailID,
-                                  messageID: entry.messageID, originalFolder: entry.originalFolder, existing: entry.existing))
+                parsed.files.append(File(path: entry.name, bytes: entry.bytes, sha256: entry.sha256, emailID: entry.emailID,
+                                         messageID: entry.messageID, originalFolder: entry.originalFolder, existing: entry.existing))
+            } else if let boundary = try? decoder.decode(ExportFolderManifest.Boundary.self, from: line) {
+                parsed.lastBoundary = boundary
+                parsed.filesAtBoundary = parsed.files.count
             }
-            // Boundary lines carry no file; they are the manifest's own bookkeeping.
         }
-        let inventory = ExportInventory(createdAt: Date(), layout: layout, written: written, withheld: withheld,
-                                        skipped: skipped, positionsConsumed: positionsConsumed, files: files)
+        return parsed
+    }
+
+    private static func write(_ inventory: ExportInventory, in folder: URL) throws -> URL {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601

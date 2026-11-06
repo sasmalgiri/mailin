@@ -72,9 +72,13 @@ struct ZIPArchiveReader {
         case sizeMismatch(member: String, declared: Int64, actual: Int64)
         case crcMismatch(member: String)
         case insufficientDisk(member: String, needed: Int64, available: Int64)
+        /// R05: the caller's byte budget was reached while decompressing —
+        /// decompression stopped there; nothing was invented about the rest.
+        case budgetExceeded(member: String, limit: Int64)
 
         var description: String {
             switch self {
+            case .budgetExceeded(let member, let limit): return "\(member): decompression stopped at the \(limit)-byte budget."
             case .notAZip: return "Not a ZIP archive (no end-of-central-directory record)."
             case .truncated(let what): return "Archive is truncated: \(what)."
             case .malformed(let what): return "Archive is malformed: \(what)."
@@ -282,7 +286,10 @@ struct ZIPArchiveReader {
     /// Decompresses a gzip file (RFC 1952) into `destination`, verifying the
     /// trailer's CRC-32 and size. gzip carries no member name; the caller
     /// derives one from the archive's own name.
-    static func gunzip(_ url: URL, to destination: URL, availableDiskBytes: Int64? = nil) throws {
+    /// - Parameter maxOutputBytes: R05 — a budget enforced INSIDE the inflate
+    ///   sink: decompression stops the moment the output would pass it, the
+    ///   partial file is removed and `budgetExceeded` names the member.
+    static func gunzip(_ url: URL, to destination: URL, availableDiskBytes: Int64? = nil, maxOutputBytes: Int64? = nil) throws {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let fileSize = Int64(try handle.seekToEnd())
@@ -347,6 +354,9 @@ struct ZIPArchiveReader {
         try handle.seek(toOffset: UInt64(offset))
         try inflate(from: handle, count: compressedLength, member: url.lastPathComponent) { chunk in
             written += Int64(chunk.count)
+            if let maxOutputBytes, written > maxOutputBytes {
+                throw ReadError.budgetExceeded(member: url.lastPathComponent, limit: maxOutputBytes)
+            }
             crc.update(chunk)
             try out.write(contentsOf: chunk)
         }

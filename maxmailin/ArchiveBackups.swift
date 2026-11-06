@@ -92,6 +92,9 @@ enum ArchiveBackups {
             _ = try await store.schemaVersion()   // reopens; runs migrations if the backup predates an upgrade
             // Self-contained copies now live under THIS store's sources/; point the locators there.
             let relocated = try await store.relocateSelfContainedLocators()
+            // R07 (LIFE-06): the restored archive carries its own paid-tier record; read it now so a
+            // clean installation keeps the imported mail open without waiting for the next launch.
+            await StoreManager.live?.refreshArchiveAccessRecord()
             ForensicManager.shared.logAction("Archive restored from backup",
                                              detail: "\(backup.lastPathComponent); the previous database was kept as a before-restore snapshot; \(relocated) locator paths moved to the restored copies")
             return String(localized: "Restored \(inventory.counts.emails) emails from \(backup.lastPathComponent). Rebuild the search index next.")

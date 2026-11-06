@@ -84,7 +84,11 @@ enum DocumentKind: String, Sendable, CaseIterable {
 }
 
 enum DocumentTextExtractor {
-    static func extract(fileURL: URL, kind: DocumentKind) throws -> OfficeTextExtractor.Result {
+    /// - Parameter logicalName: R03 — the file's own name (attachment
+    ///   filename or archive member path), independent of the temporary
+    ///   storage URL, so a gzip payload is named `report.txt` and not after
+    ///   a UUID. Falls back to the URL's name.
+    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil) throws -> OfficeTextExtractor.Result {
         switch kind {
         case .docx: return try OfficeTextExtractor.extract(fileURL: fileURL, kind: .docx)
         case .xlsx: return try OfficeTextExtractor.extract(fileURL: fileURL, kind: .xlsx)
@@ -92,8 +96,22 @@ enum DocumentTextExtractor {
         case .odt, .ods, .odp: return try ODFTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .pages, .numbers, .key: return try IWorkTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .doc, .xls, .ppt: return try LegacyOfficeTextExtractor.extract(fileURL: fileURL, kind: kind)
-        case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind)
+        case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent)
         }
+    }
+
+    /// R03: what the bytes say a file is, when the name says nothing
+    /// (ZIP / tar / gzip signatures; an OLE compound file needs its name to
+    /// tell .doc from .xls from .ppt and is reported as nil).
+    static func sniff(fileURL: URL) -> DocumentKind? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 512), head.count >= 4 else { return nil }
+        let bytes = [UInt8](head)
+        if bytes[0] == 0x1F, bytes[1] == 0x8B { return .gzip }
+        if bytes[0] == 0x50, bytes[1] == 0x4B, bytes[2] == 0x03 || bytes[2] == 0x05, bytes[3] == 0x04 || bytes[3] == 0x06 { return .zip }
+        if bytes.count >= 262, Array(bytes[257..<262]) == [0x75, 0x73, 0x74, 0x61, 0x72] { return .tar }
+        return nil
     }
 
     /// Shared: extract one ZIP member into scratch and hand its bytes over, bounded.
@@ -994,7 +1012,10 @@ struct ArchiveChildReading: Sendable {
 /// and per attachment across all levels (`maxTotalBytes`), and each bound
 /// that bites is named in the result.
 enum ContainerTextExtractor {
-    static let textualExtensions: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "html", "htm", "ics", "vcf", "eml", "yml", "yaml", "rtf"]
+    /// Plain-text children read directly. R04: `.eml` and `.rtf` are NOT
+    /// here — a message has MIME parts and encodings, RTF has its own
+    /// encoding; both go to the app's reader through `childReader`.
+    static let textualExtensions: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "html", "htm", "ics", "vcf", "yml", "yaml"]
     /// Archive inside archive inside archive: this many levels are opened.
     static let maxDepth = 3
     /// Bytes extracted from one attachment's archives, all levels together.
@@ -1009,12 +1030,26 @@ enum ContainerTextExtractor {
         let extract: (URL) throws -> Void
     }
 
-    static func extract(fileURL: URL, kind: DocumentKind) throws -> OfficeTextExtractor.Result {
+    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil) throws -> OfficeTextExtractor.Result {
         var budget = maxTotalBytes
-        return try extract(fileURL: fileURL, kind: kind, depth: 1, prefix: "", budget: &budget)
+        return try extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, depth: 1, prefix: "", budget: &budget)
     }
 
-    private static func children(of url: URL, kind: DocumentKind) throws -> [Child] {
+    /// R03: the gzip payload's name comes from the archive's LOGICAL name
+    /// (`report.txt.gz` → `report.txt`, `backup.tgz` → `backup.tar`), never
+    /// from the temporary file it was spooled to.
+    static func gzipPayloadName(for logicalName: String) -> String {
+        let name = (logicalName as NSString).lastPathComponent
+        let ext = (name as NSString).pathExtension.lowercased()
+        if ext == "tgz" { return (name as NSString).deletingPathExtension + ".tar" }
+        if ext == "gz" || ext == "gzip" {
+            let stripped = (name as NSString).deletingPathExtension
+            return stripped.isEmpty ? "payload" : stripped
+        }
+        return name.isEmpty ? "payload" : name
+    }
+
+    private static func children(of url: URL, kind: DocumentKind, logicalName: String, budget: Int64) throws -> [Child] {
         switch kind {
         case .tar:
             let members: [TARReader.Member]
@@ -1022,10 +1057,12 @@ enum ContainerTextExtractor {
             return members.filter { $0.isRegularFile && !$0.isDirectory && !$0.isJunk }
                 .map { member in Child(name: member.name, size: member.size, encrypted: false) { try TARReader.extract(member, from: url, to: $0) } }
         case .gzip:
-            var name = url.deletingPathExtension().lastPathComponent
-            if url.pathExtension.lowercased() == "tgz" { name += ".tar" }
-            if name.isEmpty { name = "payload" }
-            return [Child(name: name, size: nil, encrypted: false) { try ZIPArchiveReader.gunzip(url, to: $0) }]
+            // R05: the uncompressed size is unknown in advance, so the budget
+            // is enforced inside the inflate sink.
+            let limit = min(OfficeTextExtractor.maxPartBytes, max(0, budget))
+            return [Child(name: gzipPayloadName(for: logicalName), size: nil, encrypted: false) {
+                try ZIPArchiveReader.gunzip(url, to: $0, maxOutputBytes: limit)
+            }]
         default:
             let members: [ZIPArchiveReader.Member]
             do { members = try ZIPArchiveReader.members(of: url) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
@@ -1034,8 +1071,8 @@ enum ContainerTextExtractor {
         }
     }
 
-    private static func extract(fileURL: URL, kind: DocumentKind, depth: Int, prefix: String, budget: inout Int64) throws -> OfficeTextExtractor.Result {
-        let children = try children(of: fileURL, kind: kind)
+    private static func extract(fileURL: URL, kind: DocumentKind, logicalName: String, depth: Int, prefix: String, budget: inout Int64) throws -> OfficeTextExtractor.Result {
+        let children = try children(of: fileURL, kind: kind, logicalName: logicalName, budget: budget)
         let scratch = try DocumentTextExtractor.scratchDirectory("archive")
         defer { try? FileManager.default.removeItem(at: scratch) }
         let tag = kind.rawValue.uppercased()
@@ -1059,7 +1096,10 @@ enum ContainerTextExtractor {
                 skipped.append("\(name) (the \(maxTotalBytes)-byte budget for one attachment's archives is used up)"); continue
             }
             let destination = scratch.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : "." + ext))
-            do { try child.extract(destination) } catch {
+            do { try child.extract(destination) } catch ZIPArchiveReader.ReadError.budgetExceeded(_, let limit) {
+                // R05: stopped inside decompression at the budget — stated, not failed.
+                skipped.append("\(name) (decompression stopped at the \(limit)-byte budget)"); continue
+            } catch {
                 unextractable += 1
                 skipped.append("\(name) (\(error))"); continue
             }
@@ -1069,13 +1109,14 @@ enum ContainerTextExtractor {
             if budget < 0 {
                 skipped.append("\(name) (the \(maxTotalBytes)-byte budget for one attachment's archives is used up)"); continue
             }
-            if let innerKind = DocumentKind.detect(mimeType: "", filename: child.name) {
+            // R03: the logical name decides; when it says nothing, the bytes do.
+            if let innerKind = DocumentKind.detect(mimeType: "", filename: child.name) ?? DocumentTextExtractor.sniff(fileURL: destination) {
                 if innerKind.isContainer {
                     guard depth < maxDepth else {
                         skipped.append("\(name) (an archive nested deeper than \(maxDepth) levels)"); continue
                     }
                     do {
-                        let inner = try extract(fileURL: destination, kind: innerKind, depth: depth + 1, prefix: name + " › ", budget: &budget)
+                        let inner = try extract(fileURL: destination, kind: innerKind, logicalName: child.name, depth: depth + 1, prefix: name + " › ", budget: &budget)
                         components.append(contentsOf: inner.components)
                         text += inner.text
                         skipped.append(contentsOf: inner.skipped)
@@ -1090,7 +1131,7 @@ enum ContainerTextExtractor {
                     continue
                 }
                 do {
-                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind)
+                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: child.name)
                     add("\(tag): \(name)", inner.text)
                     skipped.append(contentsOf: inner.skipped.map { "\(name): \($0)" })
                 } catch OfficeTextExtractor.ExtractError.encrypted {

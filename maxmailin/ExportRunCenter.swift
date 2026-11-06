@@ -148,6 +148,65 @@ final class ExportRunCenter {
         showReceipt = false
     }
 
+    // MARK: - R06: finishing and verifying a folder export after the fact
+
+    /// The inventory could not be written when the run ended: build it from the
+    /// retained manifest, re-hash every listed file, and update the receipt.
+    func finishInventory(_ receipt: ExportReceipt) async {
+        var updated = receipt
+        let folder = receipt.destinationURL
+        let outcome: Result<(URL, ExportInventory.Verification), Error> = await Task.detached(priority: .utility) {
+            do {
+                let url = try ExportInventory.repair(folder: folder)
+                return .success((url, try ExportInventory.verify(folder: folder)))
+            } catch { return .failure(error) }
+        }.value
+        switch outcome {
+        case .success(let (url, verification)):
+            updated.inventoryPath = url.path
+            updated.checked = verification.listed
+            updated.verificationLine = Self.verificationText(verification)
+            if verification.isClean {
+                updated.outcome = .complete
+                updated.errorMessage = nil
+            }
+        case .failure(let error):
+            updated.verificationLine = String(localized: "Inventory could not be finished: \(error.localizedDescription)")
+        }
+        replace(updated)
+    }
+
+    /// Re-read every file the inventory lists and compare its hash (full, never sampled).
+    func verifyExport(_ receipt: ExportReceipt) async {
+        var updated = receipt
+        let folder = receipt.destinationURL
+        let outcome: Result<ExportInventory.Verification, Error> = await Task.detached(priority: .utility) {
+            do { return .success(try ExportInventory.verify(folder: folder)) } catch { return .failure(error) }
+        }.value
+        switch outcome {
+        case .success(let verification):
+            updated.verificationLine = Self.verificationText(verification)
+        case .failure(let error):
+            updated.verificationLine = String(localized: "Verification could not run: \(error.localizedDescription)")
+        }
+        replace(updated)
+    }
+
+    /// "written", "hashes recorded while writing" and this re-read stay three different statements.
+    static func verificationText(_ v: ExportInventory.Verification) -> String {
+        var line = String(localized: "rehash checked: \(v.matching) of \(v.listed) files match")
+        if !v.missing.isEmpty { line += " · " + String(localized: "missing \(v.missing.count)") }
+        if !v.changed.isEmpty { line += " · " + String(localized: "changed \(v.changed.count)") }
+        if !v.unlisted.isEmpty { line += " · " + String(localized: "unlisted \(v.unlisted.count)") }
+        return line
+    }
+
+    private func replace(_ receipt: ExportReceipt) {
+        lastReceipt = receipt
+        lastReceiptURL = try? ExportReceiptStore.production.save(receipt)
+        showReceipt = true
+    }
+
     private func finish() {
         // A run that recorded nothing still gets a receipt: silence is not an
         // outcome. It is marked failed with an explicit reason.
@@ -287,6 +346,13 @@ struct ExportProgressOverlayView: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let verification = receipt.verificationLine {
+                Text(verification)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("export.receipt.verification")
+            }
 
             Text(receipt.destinationURL.lastPathComponent)
                 .font(.system(size: 11, design: .monospaced))
@@ -323,6 +389,26 @@ struct ExportProgressOverlayView: View {
                     .font(.system(size: 11))
                     .help("Continue this export from message \((receipt.resumeRequest?.skipFirst ?? 0) + 1); what was written stays")
                     .accessibilityIdentifier("export.receipt.resume")
+                }
+                // R06: the files are there, the record is not — finish it here, from the kept manifest.
+                if receipt.outcome == .unverified {
+                    Button {
+                        Task { await center.finishInventory(receipt) }
+                    } label: {
+                        Label(String(localized: "Finish inventory"), systemImage: "list.bullet.clipboard")
+                    }
+                    .font(.system(size: 11))
+                    .help(String(localized: "Build the inventory from the kept manifest and re-hash every file; nothing is rewritten"))
+                    .accessibilityIdentifier("export.receipt.finishInventory")
+                } else if receipt.isFolder, receipt.inventoryPath != nil {
+                    Button {
+                        Task { await center.verifyExport(receipt) }
+                    } label: {
+                        Label(String(localized: "Verify export"), systemImage: "checkmark.shield")
+                    }
+                    .font(.system(size: 11))
+                    .help(String(localized: "Re-read every listed file and compare its hash with the inventory"))
+                    .accessibilityIdentifier("export.receipt.verify")
                 }
                 #if os(macOS)
                 if receipt.destination != "—" {

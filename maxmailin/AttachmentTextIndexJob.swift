@@ -489,7 +489,8 @@ final class AttachmentTextIndexJob {
         }
         defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
         do {
-            let result = try DocumentTextExtractor.extract(fileURL: url!, kind: kind)
+            // R03: the attachment's own name travels with the bytes, whatever the temp file is called.
+            let result = try DocumentTextExtractor.extract(fileURL: url!, kind: kind, logicalName: attachment.filename)
             var note: String? = nil
             if !result.skipped.isEmpty {
                 note = String(localized: "not read: \(result.skipped.joined(separator: "; "))")
@@ -508,20 +509,66 @@ final class AttachmentTextIndexJob {
     /// itself go through the same reader as a top-level attachment (PDF text
     /// layer, OCR, speech), so a PDF inside a ZIP is read, and a child
     /// nothing can read is listed in the attachment's state, never dropped.
-    nonisolated static let childReaderInstalled: Void = {
-        ContainerTextExtractor.childReader = { url, name in
-            let child = AttachmentMetadata(filename: name, mimeType: "", size: 0, fileURL: url)
-            let reading = read(child, ocr: AttachmentOCR.isEnabled)
-            switch reading.state {
-            case .extracted, .truncated: return ArchiveChildReading(text: reading.text, notRead: nil)
-            case .partial: return ArchiveChildReading(text: reading.text, notRead: reading.note)
-            case .noText: return ArchiveChildReading(text: "", notRead: nil)
-            case .unsupported, .locked, .failed: return ArchiveChildReading(text: nil, notRead: reading.note ?? reading.state.rawValue)
+    nonisolated static let childReaderClosure: @Sendable (URL, String) -> ArchiveChildReading = { url, name in
+        let child = AttachmentMetadata(filename: name, mimeType: "", size: 0, fileURL: url)
+        let reading = read(child, ocr: AttachmentOCR.isEnabled)
+        switch reading.state {
+        case .extracted, .truncated: return ArchiveChildReading(text: reading.text, notRead: nil)
+        case .partial: return ArchiveChildReading(text: reading.text, notRead: reading.note)
+        case .noText: return ArchiveChildReading(text: "", notRead: nil)
+        case .unsupported, .locked, .failed: return ArchiveChildReading(text: nil, notRead: reading.note ?? reading.state.rawValue)
+        }
+    }
+
+    /// Installed once on first use in production; tests that reset the reader
+    /// call `installChildReader()` again, which reinstalls it every time.
+    nonisolated static let childReaderInstalled: Void = { ContainerTextExtractor.childReader = childReaderClosure }()
+
+    nonisolated static func installChildReader() { ContainerTextExtractor.childReader = childReaderClosure }
+
+    /// R04: an attached message (.eml / message/rfc822) is a message, not a
+    /// text file: its MIME parts are decoded (base64, quoted-printable,
+    /// charsets) and its own attachments are read as children, labelled
+    /// "EML: name", through the same reader. Nested messages stop at
+    /// `maxMessageDepth`, stated.
+    nonisolated static let maxMessageDepth = 3
+
+    nonisolated private static func readEmbeddedMessage(_ data: Data, ocr: Bool, depth: Int)
+        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        guard depth < maxMessageDepth else {
+            return (nil, .unsupported, "eml", String(localized: "a message nested deeper than \(maxMessageDepth) levels"))
+        }
+        guard let raw = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
+            return (nil, .failed, "eml", String(localized: "text encoding not recognised"))
+        }
+        let email: MBOXParser.RawEmail
+        do { email = try MBOXParser.processRawMessage(raw, senderEmail: "") } catch {
+            return (nil, .failed, "eml", error.localizedDescription)
+        }
+        defer { for attachment in email.attachments { if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) } } }
+        var text = ""
+        for (key, label) in [("Subject", "Subject"), ("From", "From"), ("To", "To"), ("Date", "Date")] {
+            if let value = email.headers[key], !value.isEmpty { text += "\(label): \(value)\n" }
+        }
+        let body = email.plainBody.isEmpty ? FTSSearchIndex.stripHTMLText(email.htmlBody) : email.plainBody
+        text += "\n" + body + "\n"
+        var notes: [String] = []
+        var partial = false
+        for attachment in email.attachments {
+            let child = attachment.mimeType.lowercased().contains("message/rfc822") || (attachment.filename as NSString).pathExtension.lowercased() == "eml"
+                ? readEmbeddedMessage((attachment.fileURL.flatMap { try? Data(contentsOf: $0) }) ?? Data(), ocr: ocr, depth: depth + 1)
+                : read(attachment, ocr: ocr)
+            if let childText = child.text, !childText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                text += "[EML: \(attachment.filename)]\n" + childText + "\n"
+            }
+            switch child.state {
+            case .extracted, .truncated, .noText: break
+            case .partial: partial = true; if let note = child.note { notes.append("\(attachment.filename): \(note)") }
+            case .unsupported, .locked, .failed: partial = true; notes.append("\(attachment.filename) (\(child.note ?? child.state.rawValue))")
             }
         }
-    }()
-
-    nonisolated static func installChildReader() { _ = childReaderInstalled }
+        return (text, partial ? .partial : .extracted, "eml", notes.isEmpty ? nil : String(localized: "not read: \(notes.joined(separator: "; "))"))
+    }
 
     /// One attachment through the extractor that fits it.
     nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool)
@@ -596,6 +643,10 @@ final class AttachmentTextIndexJob {
         if let kind = DocumentKind.detect(mimeType: mime, filename: attachment.filename) {
             return readDocument(attachment, kind: kind, data: data)
         }
+        // R04: an attached message is decoded as a message, with its own attachments as children.
+        if mime.contains("message/rfc822") || ext == "eml" {
+            return readEmbeddedMessage(data, ocr: ocr, depth: 0)
+        }
         // A04: ZIP, tar and gzip attachments are read above (DocumentKind); these formats are not opened.
         let otherContainers: Set<String> = ["7z", "rar", "bz2", "xz"]
         if otherContainers.contains(ext) || mime.contains("x-7z") || mime.contains("x-rar") || mime.contains("bzip2") || mime.contains("x-xz") {
@@ -615,7 +666,7 @@ final class AttachmentTextIndexJob {
             let html = String(data: data, encoding: .utf8) ?? ""
             return (html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression), .extracted, "html", nil)
         }
-        let textualExts: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "ics", "vcf", "eml", "yml", "yaml"]
+        let textualExts: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "ics", "vcf", "yml", "yaml"]
         if mime.hasPrefix("text/") || mime.contains("json") || mime.contains("xml") || textualExts.contains(ext) {
             guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
                 return (nil, .failed, "text", String(localized: "text encoding not recognised"))

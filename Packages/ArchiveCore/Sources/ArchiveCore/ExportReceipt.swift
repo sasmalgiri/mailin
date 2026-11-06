@@ -64,6 +64,10 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     /// OUT-02: true when the selection was frozen at the start of the run
     /// (a query scope bound to the rows that existed then).
     var selectionFrozen: Bool? = nil
+    /// R06: the result of a later Verify export / Finish inventory action —
+    /// "rehash checked N of M files match · missing k …" — kept apart from
+    /// `checked` (hashes recorded while writing) and from `written`.
+    var verificationLine: String? = nil
 
     var durationSeconds: Double { completedAt.timeIntervalSince(startedAt) }
 

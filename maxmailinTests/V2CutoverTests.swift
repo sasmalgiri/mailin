@@ -2864,6 +2864,170 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(receipt.shortfall, 0)
     }
 
+    /// WP4 (handoff 7481852): one registry says what is read and on what
+    /// evidence; every source format and document kind is in it, every
+    /// "not implemented" row says so, and the public table is generated
+    /// from it and carried verbatim in SUPPORTED_FORMATS_AND_LIMITS.md.
+    func testWP4_formatRegistryCoversEveryKind_andThePublicTableIsGeneratedFromIt() throws {
+        let registry = FormatCapabilityRegistry.all
+        XCTAssertEqual(Set(registry.map(\.id)).count, registry.count, "ids are unique")
+        for format in SourceFormat.allCases where format != .unknown {
+            let token = format.parserToken.isEmpty ? format.rawValue : format.parserToken
+            let covered = registry.contains { c in c.family == .mailSource && (c.id.hasPrefix(token) || c.extensions.contains(token) || c.id == "zip-source" && ["zip", "gzip", "tar"].contains(token)
+                                                                                 || c.id == "applemail" && format.rawValue.hasPrefix("appleMail") || c.id == "maildir" && token == "mbox" || c.id == "eml" && format == .emlFolder) }
+            XCTAssertTrue(covered, "source format \(format) has no registry row")
+        }
+        for kind in DocumentKind.allCases {
+            let covered = registry.contains { c in c.family != .mailSource && c.extensions.contains(kind.rawValue) }
+            XCTAssertTrue(covered, "document kind \(kind) has no registry row")
+        }
+        for row in registry where row.evidence == .notImplemented {
+            XCTAssertNotNil(row.limitation, "\(row.id): a not-implemented row must say so")
+            XCTAssertEqual(row.whatIsRead, "—")
+        }
+        let table = FormatCapabilityRegistry.markdownTable()
+        XCTAssertTrue(table.contains("| Mail source | Outlook for Mac archive | olm |"))
+        XCTAssertTrue(table.contains("**not implemented**"))
+        // The public document carries the generated table verbatim between its markers.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let doc = try String(contentsOf: repo.appendingPathComponent("SUPPORTED_FORMATS_AND_LIMITS.md"), encoding: .utf8)
+        let start = "<!-- format-registry:begin -->", end = "<!-- format-registry:end -->"
+        guard let a = doc.range(of: start), let b = doc.range(of: end) else { return XCTFail("the registry markers are missing from the document") }
+        let carried = doc[a.upperBound..<b.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(carried, table, "SUPPORTED_FORMATS_AND_LIMITS.md must carry FormatCapabilityRegistry.markdownTable() verbatim — regenerate it")
+    }
+
+    /// R06 (handoff 7481852): after the inventory failed, "Finish inventory"
+    /// builds it from the kept manifest without rewriting a file, and the
+    /// re-hash is reported apart from "written" and "hashes recorded".
+    func testR06_finishInventoryFromTheKeptManifest_thenVerify() async throws {
+        let env = try makeEnv()
+        let emails = (0..<3).map { mail(130 + $0, from: "a@x.com", subject: "Fin \($0)", body: "body \($0)") }
+        try await env.store.insertBatch(emails, batchSize: 10)
+        let folder = env.root.appendingPathComponent("out-repair", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let blocker = folder.appendingPathComponent(ExportInventory.filename)
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        let service = ArchiveExportService(archive: env.archive)
+        let result = try await service.exportEMLFiles(scope: .explicit(Set(emails.map(\.id))), to: folder)
+        XCTAssertNotNil(result.inventoryFailure)
+        let hashesBefore = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".eml") }
+            .map { try ExportInventory.sha256(of: folder.appendingPathComponent($0)) }.sorted()
+        // The obstacle goes away (disk freed, permission restored); the user presses Finish inventory.
+        try FileManager.default.removeItem(at: blocker)
+        let url = try ExportInventory.repair(folder: folder)
+        XCTAssertEqual(url.lastPathComponent, ExportInventory.filename)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(ExportFolderManifest.filename).path), "the manifest became the inventory")
+        let inventory = try ExportInventory.load(folder: folder)
+        XCTAssertEqual(inventory.files.count, 3)
+        XCTAssertEqual(inventory.written, 3)
+        XCTAssertEqual(inventory.positionsConsumed, 3)
+        let hashesAfter = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".eml") }
+            .map { try ExportInventory.sha256(of: folder.appendingPathComponent($0)) }.sorted()
+        XCTAssertEqual(hashesBefore, hashesAfter, "nothing was rewritten")
+        var verification = try ExportInventory.verify(folder: folder)
+        XCTAssertTrue(verification.isClean)
+        XCTAssertEqual(ExportRunCenter.verificationText(verification), "rehash checked: 3 of 3 files match")
+        try Data("changed".utf8).write(to: folder.appendingPathComponent(inventory.files[0].path))
+        verification = try ExportInventory.verify(folder: folder)
+        XCTAssertEqual(ExportRunCenter.verificationText(verification), "rehash checked: 2 of 3 files match · changed 1")
+        // A second repair with no manifest refuses instead of inventing an inventory.
+        XCTAssertThrowsError(try ExportInventory.repair(folder: folder))
+        // The receipt keeps the three statements apart.
+        var receipt = ExportReceipt(title: "t", destination: folder.path, isFolder: true, requested: 3, written: 3, outcome: .unverified,
+                                    startedAt: Date(), completedAt: Date())
+        receipt.checked = 3; receipt.inventoryPath = url.path; receipt.verificationLine = ExportRunCenter.verificationText(verification)
+        XCTAssertTrue(receipt.reconciliationLine?.contains("hashes recorded while writing 3 of 3") == true)
+        XCTAssertTrue(receipt.verificationLine?.hasPrefix("rehash checked") == true)
+    }
+
+    /// R03/R04/R05 (handoff 7481852): archive children keep their logical
+    /// names (a gzip inside a ZIP is named after its member, not its temp
+    /// file); an attached message is decoded as a message with its own
+    /// attachments as children; RTF goes through the RTF decoder; the gzip
+    /// budget stops decompression inside the sink.
+    func testR03R04R05_logicalNames_messageAndRTFChildren_gzipBudgetInStream() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("r03-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let previousReader = ContainerTextExtractor.childReader
+        defer { ContainerTextExtractor.childReader = previousReader }
+        AttachmentTextIndexJob.installChildReader()
+
+        let minutes = Data("Gzipped minutes mention the quorum".utf8)
+        let gz = Self.gzipData(minutes)
+        let rtf = Data("{\\rtf1\\ansi Rich text says {\\b hello} world}".utf8)
+        let hidden = "Base64 body hides the keyword zebracorn"
+        let inner = """
+        From: inner@example.com
+        To: me@example.com
+        Subject: Inner message
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain; charset=utf-8
+        Content-Transfer-Encoding: base64
+
+        \(Data(hidden.utf8).base64EncodedString())
+        \(mimeAttachment("terms.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Self.docx(body: "Nested docx payment terms", header: "")))
+        --B--
+        """
+        let bundle = Self.zipPackage([
+            ("report.txt.gz", gz),
+            ("UPPER.TXT.GZ", gz),
+            ("note.rtf", rtf),
+            ("inner.eml", Data(inner.utf8)),
+            ("unnamed-archive", Self.zipPackage([("sniffed.txt", Data("found by its bytes".utf8))])),
+        ])
+        let url = dir.appendingPathComponent("bundle.zip")
+        try bundle.write(to: url)
+        let result = try DocumentTextExtractor.extract(fileURL: url, kind: .zip, logicalName: "bundle.zip")
+        XCTAssertTrue(result.components.contains("GZIP: report.txt.gz › report.txt"), "\(result.components)")
+        XCTAssertTrue(result.components.contains("GZIP: UPPER.TXT.GZ › UPPER.TXT"), "uppercase extensions: \(result.components)")
+        XCTAssertTrue(result.text.contains("Gzipped minutes mention the quorum"))
+        XCTAssertTrue(result.text.contains("Rich text says hello world"), "RTF decoded, not read as control words: \(result.text)")
+        XCTAssertTrue(result.text.contains("zebracorn"), "the base64 body is decoded: \(result.text)")
+        XCTAssertTrue(result.text.contains("Nested docx payment terms"), "the message's own attachment is a child: \(result.text)")
+        XCTAssertTrue(result.components.contains("ZIP: unnamed-archive › sniffed.txt"), "a nameless member is identified by its bytes: \(result.components)")
+        XCTAssertFalse(result.text.contains("\\rtf1"))
+
+        // R03 at the top level: a base64-backed .txt.gz attachment through the indexing path keeps its name.
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Gzip top
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see attached
+        \(mimeAttachment("notes.txt.gz", "application/gzip", gz))
+        --B--
+        """
+        let extractions = try XCTUnwrap(AttachmentTextIndexJob.extractCoverage(fromRaw: raw))
+        XCTAssertEqual(extractions.count, 1)
+        XCTAssertEqual(extractions[0].state, .extracted, extractions[0].note ?? "")
+        XCTAssertTrue(extractions[0].text?.contains("GZIP: notes.txt") == true, extractions[0].text ?? "")
+
+        // R05: the gzip budget is enforced while inflating — nothing is left behind, the reason is named.
+        let gzURL = dir.appendingPathComponent("big.gz")
+        try gz.write(to: gzURL)
+        let out = dir.appendingPathComponent("out.txt")
+        XCTAssertThrowsError(try ZIPArchiveReader.gunzip(gzURL, to: out, maxOutputBytes: 10)) { error in
+            guard case ZIPArchiveReader.ReadError.budgetExceeded(_, let limit) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(limit, 10)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path), "the partial output is removed")
+        XCTAssertEqual(ContainerTextExtractor.gzipPayloadName(for: "backup.tgz"), "backup.tar")
+        XCTAssertEqual(ContainerTextExtractor.gzipPayloadName(for: "deep/report.txt.gz"), "report.txt")
+        XCTAssertEqual(ContainerTextExtractor.gzipPayloadName(for: "x.gz"), "x")
+    }
+
     /// Audit 2026-11-06 A08: the archive itself remembers that it was used
     /// under a plan, so restoring it onto a clean installation keeps the
     /// imported mail open; the record only ever rises.

@@ -14,6 +14,16 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ArchiveHealthView: View {
+    /// WP4: the evidence behind a format row, in the person's words.
+    static func evidenceLabel(_ evidence: FormatCapability.Evidence) -> String {
+        switch evidence {
+        case .realFixtures: return String(localized: "Tested on real files")
+        case .syntheticFixtures: return String(localized: "Tested on spec-built fixtures")
+        case .notExecuted: return String(localized: "Implemented, not yet run on a file")
+        case .notImplemented: return String(localized: "Not implemented")
+        }
+    }
+
     @Environment(ModuleRegistry.self) private var modules
     @State private var integrity: String?
     @State private var checking = false
@@ -79,6 +89,23 @@ struct ArchiveHealthView: View {
 
             // CAP-06: every limit the app enforces, named, with its kind —
             // and the five jobs listed as having no cap of the app's own.
+            // WP4: the one registry of formats, with its evidence — the same list the support table is generated from.
+            Section("Formats") {
+                Text("What mailin reads, and on what evidence. “Spec-built” means tested on fixtures written from the format description, not on files from the program itself.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(FormatCapabilityRegistry.all) { capability in
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent(capability.name) { Text(Self.evidenceLabel(capability.evidence)) }
+                        if !capability.extensions.isEmpty {
+                            Text(capability.extensions.joined(separator: ", "))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .accessibilityIdentifier("health.formats")
+
             Section("Limits") {
                 Text("Every limit mailin enforces, and what kind of limit it is. The five archive jobs have no cap of the app's own; plan rules are shown on the purchase screen too.")
                     .font(.caption).foregroundStyle(.secondary)

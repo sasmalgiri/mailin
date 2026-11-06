@@ -89,6 +89,48 @@ same bytes (FTS shard eviction thrash between members) — a 3.1 tuning item.
 
 ---
 
+## 1a. Format registry (generated — do not edit by hand)
+
+One machine-readable list, `FormatCapabilityRegistry` (ArchiveCore), is the source of this table, of
+Settings ▸ Health ▸ Formats and of the acceptance rows in the tracker. `testWP4_formatRegistryCoversEveryKind_*`
+fails when this table and the registry differ. Evidence is kept apart from implementation: "spec-built
+fixtures" is not "real files", and "not implemented" is said plainly.
+
+<!-- format-registry:begin -->
+| Family | Format | Extensions | What is read | Evidence | Limitation | Still needed |
+|---|---|---|---|---|---|---|
+| Mail source | mbox | mbox | every message, MIME tree, attachments, Gmail labels, thread links; offset engine streams any size | real files | — | — |
+| Mail source | RFC 822 message | eml | single messages and folders of them, with the folder as mailbox | real files | — | — |
+| Mail source | Apple Mail message / library | emlx | messages with flags, the mailbox chain from the library layout | real files | — | — |
+| Mail source | Apple Mail mailbox package | mbox (package) | the mbox inside, mailbox chain | spec-built fixtures | — | a real Apple Mail export (owner) |
+| Mail source | Maildir / Thunderbird folder | cur, new | one message per file, the folder as mailbox | spec-built fixtures | Maildir++ sub-folders flatten to the root name; tmp/ skipped by design | — |
+| Mail source | Outlook message | msg | MAPI properties: sender, recipients, subject, bodies (plain, HTML, RTF), attachments | real files | embedded messages recognised, not expanded; OFT templates not read | — |
+| Mail source | Outlook data file | pst | ANSI and Unicode; folders including empty ones, recipients, bodies, attachments by the MS-PST layers; non-mail items counted out | real files | — | small real PSTs with empty/deep/Unicode folders for the candidate run |
+| Mail source | Outlook offline store | ost | shares the PST reader | not executed | 4 KB-page OST (Outlook 2013+, wVer 36) not read by layout | a real OST |
+| Mail source | Lotus Notes database | nsf | structured notes with LZSS and LMBCS, attachments by item; heuristic text scan as fallback | spec-built fixtures | fallback path is not byte-exact | a real NSF |
+| Mail source | Outlook for Mac archive | olm | every message record rebuilt as RFC 5322 with folder, flags, category, attachments' bytes; contacts/calendar/tasks/notes counted out | spec-built fixtures | — | a real Outlook for Mac export |
+| Mail source | ZIP / gzip / tar of mailboxes | zip, gz, tgz, tar | each member classified on its bytes and imported; one level of nesting followed | spec-built fixtures | encrypted members and other compression methods refused and counted | — |
+| Attachment | Word, Excel, PowerPoint (Office Open XML) | docx, docm, dotx, xlsx, xlsm, xltx, pptx, pptm, ppsx, potx | body, tables, headers/footers, footnotes, comments; sheets with cell addresses, formulas, shared strings; slides and notes | spec-built fixtures | Strict OOXML namespaces, XLSB, text boxes, deleted revisions, chart labels not read | real files from each program for the candidate run |
+| Attachment | Word, Excel, PowerPoint 97–2003 | doc, dot, xls, xlt, ppt, pps, pot | Word text through the piece table; Excel cells with addresses, formula results, comments, hidden sheets; PowerPoint slide text | spec-built fixtures | .doc verified on a real file; .xls/.ppt on spec-built records; number formats not applied | real .xls / .ppt files |
+| Attachment | OpenDocument | odt, ott, ods, ots, odp, otp | text, sheets, slides and notes, headers/footers; encrypted packages reported locked | spec-built fixtures | — | real LibreOffice files |
+| Attachment | Pages, Numbers, Keynote | pages, numbers, key | IWA (snappy + protobuf) and iWork '09 XML: body, table cells, slides | real files | — | — |
+| Attachment | PDF | pdf | text layer; scanned or mixed pages recognised page by page (OCR on); locked files reported | real files | no password entry for locked PDFs | — |
+| Attachment | Images | png, jpg, jpeg, tiff, heic, gif, bmp, webp | recognised text (OCR on), failures named per image | real files | — | — |
+| Attachment | Audio and video | m4a, mp3, wav, aiff, mp4, mov | speech recognised on the device, language named | not executed | the end-to-end test skips until Speech Recognition is allowed for the app | owner: allow Speech Recognition |
+| Attachment | Rich Text | rtf | decoded text | spec-built fixtures | — | — |
+| Attachment | HTML | html, htm | text with tags removed | spec-built fixtures | — | — |
+| Attachment | Plain text families | txt, csv, log, md, json, xml, ics, vcf, yml, yaml | the text, UTF-8 or Latin-1 | spec-built fixtures | — | — |
+| Attachment | Attached message | eml, message/rfc822 | decoded headers and body, its own attachments as children (three levels) | spec-built fixtures | children are read into the parent's text, not as separate search targets | — |
+| Attachment | Excel Binary Workbook | xlsb | — | **not implemented** | no reader; kept and listed as unsupported | — |
+| Attachment | Outlook template / TNEF | oft, winmail.dat | — | **not implemented** | no reader | — |
+| Attachment | OneNote, Visio, Project, Publisher, Access | one, onepkg, vsd, vsdx, mpp, pub, mdb, accdb | — | **not implemented** | no reader; a new adapter project per family | — |
+| Archive attachment | ZIP, tar, gzip attachments | zip, tar, tgz, gz, gzip | every child accounted for: documents, text, PDFs/images/recordings through the same readers; unread children listed; three levels; 1 GiB per attachment | spec-built fixtures | children are flattened into the parent attachment's text; 7z/RAR/split volumes not opened | — |
+| Archive attachment | 7z, RAR, bz2, xz | 7z, rar, bz2, xz | — | **not implemented** | kept as files, stated | — |
+| Protected content | Password-protected PDF / Office / archive members |  | detected and reported as locked | spec-built fixtures | no password entry, retry or credential retention | — |
+| Protected content | S/MIME and OpenPGP |  | originals kept; signatures verified where present | not executed | no decrypt-and-index path | — |
+| Protected content | Rights-managed files, cloud references |  | — | **not implemented** | no rights-aware access; references are kept as references | — |
+<!-- format-registry:end -->
+
 ## 2. What each format delivers
 
 | Format | Parser | Streams? | What is extracted | Known caveats |
