@@ -2614,6 +2614,81 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - Five jobs LIFE-06 — the adopted data-access policy (owner, 2026-11-06)
+
+    func testLIFE06_accessPolicy_keepsImportedDataOpenAfterExpiry_andStopsNewPaidWork() throws {
+        let free = AccessPolicy(state: .free)
+        let active = AccessPolicy(state: .active(.personal))
+        let lifetime = AccessPolicy(state: .lifetime(.professional))
+        let lapsedPersonal = AccessPolicy(state: .lapsed(previous: .personal))
+        let lapsedPro = AccessPolicy(state: .lapsed(previous: .professional))   // expiry, refund and revocation all land here
+
+        // Reading: Free sees the newest 500; everyone who held a plan sees the whole archive.
+        XCTAssertEqual(free.archiveReadLimit, StoreManager.freeEmailLimit)
+        for policy in [active, lifetime, lapsedPersonal, lapsedPro] { XCTAssertNil(policy.archiveReadLimit, "\(policy.state)") }
+        // New paid work: only an active or lifetime plan.
+        XCTAssertFalse(free.allowsPaidWork); XCTAssertFalse(lapsedPersonal.allowsPaidWork); XCTAssertFalse(lapsedPro.allowsPaidWork)
+        XCTAssertTrue(active.allowsPaidWork); XCTAssertTrue(lifetime.allowsPaidWork)
+        // Basic portability: .eml and mbox of imported mail are uncapped after a plan ended; reports keep the Free cap.
+        XCTAssertNil(lapsedPersonal.exportCap(for: .emlFiles))
+        XCTAssertNil(lapsedPersonal.exportCap(for: .mbox))
+        XCTAssertEqual(lapsedPersonal.exportCap(for: .pdfFiles), StoreManager.freeEmailLimit)
+        XCTAssertEqual(lapsedPersonal.exportCap(for: .csv), StoreManager.freeEmailLimit)
+        XCTAssertEqual(free.exportCap(for: .emlFiles), StoreManager.freeEmailLimit)
+        XCTAssertNil(active.exportCap(for: .pdfFiles)); XCTAssertNil(lifetime.exportCap(for: .csv))
+        // Attachments: opening your own is reading.
+        XCTAssertNil(lapsedPersonal.attachmentDownloadLimit(usedToday: 10, freeAllowance: 10))
+        XCTAssertEqual(free.attachmentDownloadLimit(usedToday: 3, freeAllowance: 10), 7)
+        XCTAssertEqual(free.attachmentDownloadLimit(usedToday: 12, freeAllowance: 10), 0)
+        // Maintenance is never gated.
+        for policy in [free, active, lifetime, lapsedPersonal] { XCTAssertTrue(policy.allowsMaintenance) }
+        XCTAssertTrue(AccessPolicy.afterExpiryStatement.contains("Nothing is ever deleted"))
+        XCTAssertTrue(AccessPolicy.lapsedOwnershipText(previous: .personal).contains("Personal"))
+    }
+
+    @MainActor
+    func testLIFE06_storeManagerStates_andExportAuthorization() throws {
+        // Fixtures never touch StoreKit or the live data scope.
+        let never = StoreManager(testTier: .free)
+        XCTAssertEqual(never.entitlementState, .free)
+        XCTAssertEqual(never.accessPolicy.archiveReadLimit, StoreManager.freeEmailLimit)
+        let active = StoreManager(testTier: .personal)
+        XCTAssertEqual(active.entitlementState, .active(.personal))
+        XCTAssertTrue(active.isPremium)
+        let lifetime = StoreManager(testTier: .professional, lifetime: true)
+        XCTAssertEqual(lifetime.entitlementState, .lifetime(.professional))
+        // The plan ended (expired, cancelled, refunded or revoked): Free tier, open archive.
+        let lapsed = StoreManager(testTier: .free, lapsedFrom: .professional)
+        XCTAssertEqual(lapsed.entitlementState, .lapsed(previous: .professional))
+        XCTAssertFalse(lapsed.isPremium, "new paid work stops")
+        XCTAssertNil(lapsed.accessPolicy.archiveReadLimit, "the archive stays open")
+        XCTAssertTrue(lapsed.accessPolicy.readsWholeArchive)
+        // Restoring or re-buying brings paid work back without touching the archive.
+        let restored = StoreManager(testTier: .personal, lapsedFrom: .professional)
+        XCTAssertEqual(restored.entitlementState, .active(.personal))
+        XCTAssertTrue(restored.accessPolicy.allowsPaidWork)
+
+        // The export runner follows the policy and the format.
+        let eml = ExportRequest(format: .emlFiles, title: "t", scope: .explicit([UUID()]), destination: "/tmp/x", isFolder: true, cap: nil)
+        var pdf = eml; pdf.format = .pdfFiles
+        var mboxReq = eml; mboxReq.format = .mbox; mboxReq.isFolder = false
+        XCTAssertNil(try ExportJobRunner.authorized(eml, policy: lapsed.accessPolicy).cap)
+        XCTAssertNil(try ExportJobRunner.authorized(mboxReq, policy: lapsed.accessPolicy).cap)
+        XCTAssertEqual(try ExportJobRunner.authorized(pdf, policy: lapsed.accessPolicy).cap, StoreManager.freeEmailLimit)
+        XCTAssertEqual(try ExportJobRunner.authorized(eml, policy: never.accessPolicy).cap, StoreManager.freeEmailLimit)
+        XCTAssertNil(try ExportJobRunner.authorized(pdf, policy: active.accessPolicy).cap)
+        XCTAssertThrowsError(try ExportJobRunner.authorized(eml, policy: nil), "no policy → no run")
+
+        // Nothing in the store manager or the plan-change handler deletes data.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let storeSource = try String(contentsOf: repo.appendingPathComponent("maxmailin/StoreManager.swift"), encoding: .utf8)
+        for forbidden in ["clearAll(", ".delete(ids", "removeItem(at", "deleteReportingHeld"] {
+            XCTAssertFalse(storeSource.contains(forbidden), "StoreManager must never \(forbidden)")
+        }
+        let paywall = try String(contentsOf: repo.appendingPathComponent("maxmailin/PaywallView.swift"), encoding: .utf8)
+        XCTAssertTrue(paywall.contains("afterExpiryStatement"), "the purchase screen states the policy")
+    }
+
     // MARK: - Five jobs §6 — the one combined preservation rehearsal
 
     /// Plan §6: import into self-contained mode; verify counts; detach the

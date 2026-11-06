@@ -378484,6 +378484,134 @@
           }
         }
       }
+    },
+    "When a subscription ends, everything you imported stays yours: you can still browse, read, search it and export it as .eml or mbox files. New imports beyond the Free rules, OCR, AI and professional tools need an active plan. Nothing is ever deleted because a plan changed." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn ein Abonnement endet, bleibt alles Importierte Ihres: Sie können es weiterhin durchsuchen, lesen, durchsuchen und als .eml- oder mbox-Dateien exportieren. Neue Importe über die Free-Regeln hinaus, OCR, KI und Profi-Werkzeuge brauchen einen aktiven Plan. Nichts wird jemals gelöscht, weil sich ein Plan geändert hat."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuando termina una suscripción, todo lo que importó sigue siendo suyo: puede seguir explorándolo, leyéndolo, buscando en él y exportándolo como archivos .eml o mbox. Las nuevas importaciones más allá de las reglas del plan Free, el OCR, la IA y las herramientas profesionales necesitan un plan activo. Nunca se elimina nada porque un plan cambie."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quand un abonnement prend fin, tout ce que vous avez importé reste à vous : vous pouvez toujours le parcourir, le lire, le rechercher et l'exporter en fichiers .eml ou mbox. Les nouveaux imports au-delà des règles Free, l'OCR, l'IA et les outils professionnels nécessitent un abonnement actif. Rien n'est jamais supprimé parce qu'un abonnement a changé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सदस्यता समाप्त होने पर आपने जो कुछ आयात किया वह आपका ही रहता है: आप उसे अब भी ब्राउज़, पढ़, खोज सकते हैं और .eml या mbox फ़ाइलों के रूप में निर्यात कर सकते हैं। Free नियमों से परे नए आयात, OCR, AI और पेशेवर उपकरणों के लिए सक्रिय योजना चाहिए। योजना बदलने के कारण कभी कुछ नहीं हटाया जाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando un abbonamento termina, tutto ciò che hai importato resta tuo: puoi ancora sfogliarlo, leggerlo, cercarlo ed esportarlo come file .eml o mbox. Nuove importazioni oltre le regole Free, OCR, IA e strumenti professionali richiedono un piano attivo. Nulla viene mai eliminato perché un piano è cambiato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブスクリプションが終了しても、取り込んだものはすべてあなたのものです。引き続き閲覧、読み取り、検索ができ、.eml または mbox ファイルとして書き出せます。Free の範囲を超える新しい取り込み、OCR、AI、プロ向けツールには有効なプランが必要です。プランが変わったことを理由に削除されるものは何もありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "구독이 끝나도 가져온 모든 것은 여러분의 것입니다. 계속 탐색하고 읽고 검색할 수 있으며 .eml 또는 mbox 파일로 내보낼 수 있습니다. Free 규칙을 넘는 새 가져오기, OCR, AI, 전문가 도구에는 활성 플랜이 필요합니다. 플랜이 바뀌었다는 이유로 삭제되는 것은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando uma assinatura termina, tudo o que você importou continua seu: ainda é possível navegar, ler, pesquisar e exportar como arquivos .eml ou mbox. Novas importações além das regras do plano Free, OCR, IA e ferramentas profissionais exigem um plano ativo. Nada é apagado porque um plano mudou."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订阅结束后，您导入的一切仍然属于您：您仍可浏览、阅读、搜索，并导出为 .eml 或 mbox 文件。超出免费规则的新导入、OCR、AI 和专业工具需要有效的套餐。绝不会因为套餐变更而删除任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "訂閱結束後，您匯入的一切仍然屬於您：您仍可瀏覽、閱讀、搜尋，並匯出為 .eml 或 mbox 檔案。超出免費規則的新匯入、OCR、AI 和專業工具需要有效的方案。絕不會因為方案變更而刪除任何內容。"
+          }
+        }
+      }
+    },
+    "Your %@ plan has ended. Your archive stays readable, searchable and exportable as .eml or mbox; new imports, OCR, AI and professional tools need an active plan again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ihr %@-Plan ist beendet. Ihr Archiv bleibt lesbar, durchsuchbar und als .eml oder mbox exportierbar; neue Importe, OCR, KI und Profi-Werkzeuge brauchen wieder einen aktiven Plan."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su plan %@ ha terminado. Su archivo sigue siendo legible, consultable y exportable como .eml o mbox; las nuevas importaciones, el OCR, la IA y las herramientas profesionales vuelven a necesitar un plan activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre abonnement %@ a pris fin. Votre archive reste lisible, consultable et exportable en .eml ou mbox ; les nouveaux imports, l'OCR, l'IA et les outils professionnels nécessitent à nouveau un abonnement actif."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपकी %@ योजना समाप्त हो गई है। आपका संग्रह पढ़ने, खोजने और .eml या mbox के रूप में निर्यात करने योग्य बना रहता है; नए आयात, OCR, AI और पेशेवर उपकरणों के लिए फिर से सक्रिय योजना चाहिए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il tuo piano %@ è terminato. Il tuo archivio resta leggibile, ricercabile ed esportabile come .eml o mbox; nuove importazioni, OCR, IA e strumenti professionali richiedono di nuovo un piano attivo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ プランは終了しました。アーカイブは引き続き閲覧・検索でき、.eml または mbox として書き出せます。新しい取り込み、OCR、AI、プロ向けツールには再び有効なプランが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 플랜이 종료되었습니다. 보관함은 계속 읽고 검색할 수 있으며 .eml 또는 mbox로 내보낼 수 있습니다. 새 가져오기, OCR, AI, 전문가 도구에는 다시 활성 플랜이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seu plano %@ terminou. Seu arquivo continua legível, pesquisável e exportável como .eml ou mbox; novas importações, OCR, IA e ferramentas profissionais exigem novamente um plano ativo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的 %@ 套餐已结束。您的归档仍可阅读、搜索并导出为 .eml 或 mbox；新导入、OCR、AI 和专业工具需要再次启用有效套餐。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的 %@ 方案已結束。您的封存仍可閱讀、搜尋並匯出為 .eml 或 mbox；新匯入、OCR、AI 和專業工具需要再次啟用有效方案。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

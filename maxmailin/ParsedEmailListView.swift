@@ -3299,7 +3299,9 @@ struct ParsedEmailListView: View {
             // array is never the source; premium is unlimited via streaming,
             // not via an Int.max whole-array walk.
             let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
-            let cap: Int? = storeManager.isPremium ? nil : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
+            // LIFE-06: saving your own attachments is reading — unlimited once a plan was held.
+            let cap: Int? = storeManager.accessPolicy.attachmentDownloadLimit(usedToday: freeAttachmentDownloadCount,
+                                                                             freeAllowance: Self.freeAttachmentLimit)
             ExportRunCenter.shared.run(title: String(localized: "Saving attachments")) {
                 do {
                     let outcome = try await ArchiveExportService.shared.exportAttachments(

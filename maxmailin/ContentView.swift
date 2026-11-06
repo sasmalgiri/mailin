@@ -4683,14 +4683,16 @@ private func handleMultipleFiles(_ urls: [URL]) {
     // MARK: - State Change Handlers
     private func handleParseStateChange() {
         if modelVM.isParsed {
-            modelVM.isPremiumUser = storeManager.isPremium
+            modelVM.isPremiumUser = storeManager.accessPolicy.readsWholeArchive   // LIFE-06
             modelVM.applyFilters()
             appState.hasParsedEmails = true
             appState.hasFilteredEmails = !modelVM.visibleEmails.isEmpty
         }
     }
     private func handlePremiumChange() {
-        modelVM.isPremiumUser = storeManager.isPremium
+        // LIFE-06: the list's reach follows the access policy — whole archive
+        // for anyone who held a plan; nothing here ever removes data.
+        modelVM.isPremiumUser = storeManager.accessPolicy.readsWholeArchive
         if storeManager.isPremium {
             UserDefaults.standard.removeObject(forKey: "freeAIQueryCount")
             UserDefaults.standard.removeObject(forKey: "freeAIFilterUsageCount")

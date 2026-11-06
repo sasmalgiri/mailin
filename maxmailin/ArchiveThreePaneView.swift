@@ -45,8 +45,8 @@ struct ArchiveThreePaneView: View {
 
     @EnvironmentObject private var storeManager: StoreManager
 
-    /// nil = the tier covers the whole archive.
-    private var accessLimit: Int? { storeManager.isPremium ? nil : StoreManager.freeEmailLimit }
+    /// nil = the plan covers the whole archive (LIFE-06: also after a plan ended).
+    private var accessLimit: Int? { storeManager.accessPolicy.archiveReadLimit }
 
     init(archive: ArchiveDataService = .shared,
          onHome: (() -> Void)? = nil,

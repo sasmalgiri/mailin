@@ -255,8 +255,38 @@ class StoreManager: ObservableObject {
     @Published private(set) var products: [Product] = []
     #endif
     @Published private(set) var currentTier: PurchaseTier = .free {
-        didSet { publishAccessScope() }
+        didSet {
+            // LIFE-06: remember that a plan was held, so an expiry, refund or
+            // revocation leaves the archive open instead of re-applying the
+            // Free rules to mail that was imported under a paid plan.
+            if currentTier > .free {
+                lastPaidTier = max(lastPaidTier ?? .free, currentTier)
+                if persistsEntitlementHistory {
+                    UserDefaults.standard.set(lastPaidTier?.rawValue, forKey: Self.lastPaidTierKey)
+                }
+            }
+            publishAccessScope()
+        }
     }
+
+    // MARK: - LIFE-06 entitlement history and the access policy
+
+    static let lastPaidTierKey = "entitlement.lastPaidTier"
+    /// The highest paid tier this install ever verified (nil = never paid).
+    private(set) var lastPaidTier: PurchaseTier?
+    /// Test fixtures never write the history; the live manager does.
+    private var persistsEntitlementHistory = false
+
+    /// What the store has proved now, and whether a plan was held before.
+    var entitlementState: EntitlementState {
+        let tier = effectiveTier
+        if tier > .free { return isLifetimePurchase ? .lifetime(tier) : .active(tier) }
+        if let previous = lastPaidTier, previous > .free { return .lapsed(previous: previous) }
+        return .free
+    }
+
+    /// The single access table every gate on existing data consults (§12.2).
+    var accessPolicy: AccessPolicy { AccessPolicy(state: entitlementState) }
     @Published private(set) var purchaseInProgress = false
     @Published private(set) var purchasePending = false
     @Published private(set) var productLoadError: String?
@@ -334,7 +364,9 @@ class StoreManager: ObservableObject {
     /// the whole archive. Called whenever the effective tier can change.
     func publishAccessScope() {
         guard Self.live === self || Self.live == nil else { return }   // test fixtures never reach the live data
-        let limit: Int? = isPremium ? nil : Self.freeEmailLimit
+        // LIFE-06: the read scope comes from the access policy, so a lapsed
+        // plan keeps the whole archive readable and only Free is scoped.
+        let limit: Int? = accessPolicy.archiveReadLimit
         let changed = ArchiveDataService.shared.accessLimit != limit
         ArchiveDataService.shared.accessLimit = limit
         TierAccess.tier = effectiveTier
@@ -407,6 +439,8 @@ class StoreManager: ObservableObject {
         Task { await loadProducts() }
         Task { await checkEntitlements() }
         #endif
+        persistsEntitlementHistory = true
+        lastPaidTier = PurchaseTier(rawValue: UserDefaults.standard.integer(forKey: Self.lastPaidTierKey)).flatMap { $0 > .free ? $0 : nil }
         if Self.live == nil { Self.live = self }
         publishAccessScope()
     }
@@ -415,10 +449,12 @@ class StoreManager: ObservableObject {
     /// Test fixture: a deterministic Free / Personal / Professional manager
     /// that never touches StoreKit and does not take the debug unlock, so a
     /// test can prove that a gate denies.
-    init(testTier: PurchaseTier, lifetime: Bool = false) {
+    init(testTier: PurchaseTier, lifetime: Bool = false, lapsedFrom: PurchaseTier? = nil) {
         currentTier = testTier
         isLifetimePurchase = lifetime
         debugUnlocksAllTiers = false
+        // LIFE-06: a fixture for "the plan ended" — Free now, paid before.
+        if let lapsedFrom, lapsedFrom > .free { lastPaidTier = lapsedFrom }
     }
 
     /// Developer switch: launching with `-mailinSimulateTier free|personal|

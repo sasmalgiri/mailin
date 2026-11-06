@@ -323,6 +323,13 @@ struct PaywallView: View {
             featureRow("Analytics & charts", free: true, personal: true, pro: true)
             featureRow("Export (EML/CSV)", free: "500", personal: true, pro: true)
             featureRow("Download attachments", free: "10", personal: true, pro: true)
+            // LIFE-06: what stays after a plan ends, said before anyone buys.
+            Text(AccessPolicy.afterExpiryStatement)
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, Spacing.xxSmall)
+                .accessibilityIdentifier("paywall.afterExpiry")
 
             Divider().padding(.vertical, Spacing.xxxSmall)
 
@@ -908,7 +915,10 @@ struct PlanAndPurchasesSection: View {
         return store.license.summary
         #else
         switch store.effectiveTier {
-        case .free: return String(localized: "No purchase. Import up to 100 MB and work with the newest 500 emails of your archive; 5 Ask queries a day.")
+        case .free:
+            // LIFE-06: a plan that ended is not "no purchase" — the archive stays open.
+            if case .lapsed(let previous) = store.entitlementState { return AccessPolicy.lapsedOwnershipText(previous: previous) }
+            return String(localized: "No purchase. Import up to 100 MB and work with the newest 500 emails of your archive; 5 Ask queries a day.")
         case .personal, .professional:
             if store.isLifetimePurchase { return String(localized: "Lifetime purchase: yours permanently, never renews.") }
             return String(localized: "Subscription")

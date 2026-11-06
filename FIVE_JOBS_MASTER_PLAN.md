@@ -1,6 +1,7 @@
 # mailin — consolidated next-release master plan
 
 **Prepared:** 5 November 2026  
+**Updated:** 6 November 2026 — LIFE-06 adopted; five-job product identity confirmed; testing scope distinguished from product capacity.  
 **Purpose:** one implementation and acceptance brief for the next archive-focused release.  
 **State:** planning consolidated; app changes and release acceptance are not established by this document.
 
@@ -29,6 +30,7 @@ This replaces the earlier fragmented mailin scope descriptions with one governin
 9. Ten release gates and the evidence tracker
 10. Proposed decisions and deferred expansion
 11. Implementation handoff and release deliverables
+12. Owner decisions and final-release closure, 6 November 2026
 
 ## 1. Release goal and meaning of completion
 
@@ -160,6 +162,60 @@ The core purchase trigger is recovering usable old mail and documents: open, fin
 Keep current Personal/Professional rights, lifetime purchases where applicable, restoration behavior and the adopted trial policy. This plan sets no new prices and does not revive superseded historical purchase-guard instructions. Observe consenting customers doing actual tasks before removing extras or changing the offer. No feature-level evidence established that nobody uses the extras.
 
 Website, onboarding, screenshots, plan descriptions and in-app capabilities must describe the same verified scope. Do not add tracking to a privacy-led product merely to collect feature-use evidence.
+
+### 3.3 Owner-approved identity: the five archive jobs
+
+**Adopted 6 November 2026:** mailin's main identity is an email archive product defined by the five jobs. AI and Professional tools are optional additional capabilities. They do not lead the default workspace, onboarding, screenshots, description or purchase explanation. Preserve existing customer rights, records and protections while changing presentation.
+
+Recommended public identity: **mailin: Email Archive Manager**. This is a proposed display name, not a completed App Store rename or a change to bundle identity/purchases. A proposed subtitle is **Open, search and export email**.
+
+The main product explanation:
+
+> Open your email archives, preserve their folders, find messages and attachments, review duplicates safely, and export with a clear verification record.
+
+| Main promise | What the customer should see |
+|---|---|
+| Open email archives | Import supported files, read mail and see honest progress/recovery. Explain size handling using the qualified capacity wording in section 3.4. |
+| Preserve folders | A complete source/folder tree with original locations and memberships. |
+| Find messages and attachments | Simple search and Advanced Search in the same workspace, with active filters, actual match evidence and coverage states. |
+| Review duplicates safely | Clearly distinguished copy classes, differences and recoverable actions that preserve source relationships and holds. |
+| Export with verification | Clear selection, appropriate format choices, preserved folder mapping and understandable written/verified/partial results. |
+
+Apply this identity consistently:
+
+- **Default app:** open directly into the archive workspace. Keep sources/folders, message list and preview; make Import, Search, Duplicates and Export easy to find. Folder preservation lives in the ordinary archive workflow.
+- **Additional tools:** place existing AI/Professional capabilities in a labelled secondary destination or Settings. No case creation, persona choice, AI setup or professional-workflow selection is needed for the five core jobs. Retain holds and integrity rules even when their interface is hidden.
+- **Onboarding:** show a short first-import path and sample archive, followed by relevant guidance as each job is used. Optional modules are introduced only when requested or useful.
+- **Store and website:** lead with the five jobs. The first five screenshots demonstrate import/read, folder structure, attachment-content search, safe duplicate review and verified export, in that order. Use actual candidate screens and non-private demonstration data.
+- **Description and help:** explain supported formats, searchable attachment types, verification meaning and practical capacity openly. Optional AI and specialist features appear later, with accurate availability and purchase requirements.
+- **Purchase screen:** explain the archive work and existing plan rights clearly. Do not imply that an AI or Professional module is required for ordinary paid archive functionality. This presentation decision does not change prices or existing entitlements.
+- **Review notes and translations:** update the app, screenshots, onboarding, website, descriptions and relevant localisations together. Explain the new search workflow and adopted data-access policy to reviewers.
+
+Before release, a new user must be able to identify the five main jobs and start importing without entering an optional module. Existing specialist users must still find their previously available tools and records.
+
+### 3.4 Capacity claims and the 100 MB test record
+
+**The product goal remains removal of artificial limits in the five core jobs. No new 100 MB product cap has been adopted.** The owner's intent is a final release with complete core workflows, not a special 100 MB edition.
+
+The reported 100 MB runs describe test inputs, not an established maximum supported file size and not a demonstrated MacBook Air hardware limit. The actual Mac model, memory, free disk, app configuration and measured resource use are needed to diagnose a hardware or implementation bottleneck. Apple's profiling guidance supports measuring memory use rather than inferring capacity from one fixture size. [Memory profiling](https://developer.apple.com/documentation/xcode/gathering-information-about-memory-use)
+
+Keep these distinctions:
+
+| Statement | Evidence and treatment |
+|---|---|
+| “The full version has no preset archive-size or message-count cap.” | Permitted proposed wording only after the actual candidate's relevant import, indexing, query, paging and export paths are audited for product-imposed ceilings and regression-tested. State that available resources and supported-format constraints still apply. Existing disclosed trial policy is separate. |
+| “Every selected item is processed and accounted for.” | Requires complete-scope tests and honest partial/blocked states. Do not equate queued work, a first result page or an attempted extraction with completion. |
+| “Tests included 100 MB fixtures.” | Describe exact formats, composition, hardware, build and results. The present report mentions synthetic MBOX/PST/EML-directory/MSG runs; it does not establish every 100 MB archive or every format. |
+| “It can handle unlimited everything.” | Not supported. It implies capacity and coverage beyond finite device resources, format constraints, unavailable credentials and supported content. A statement about testing 100 MB does not substantiate that universal claim. |
+| “Larger archives are not yet validated by this test matrix.” | A transparent statement about evidence. It is not a feature lock, a new billing limit, or a claim that larger archives necessarily fail. |
+
+Recommended capacity wording, **after the cap audit passes**:
+
+> The full version has no preset archive-size or message-count cap. Processing capacity depends on available storage, memory and the supported archive format. See the tested-workload matrix for the files, devices and results we have verified.
+
+Put the test record beside relevant compatibility/capacity information rather than using a distant disclaimer to contradict the main promise. Do not state “100 MB maximum” unless a real adopted product or format constraint establishes it. Keep parser/decompression safety budgets, cancellation and visible resource-paused states.
+
+Apple's metadata rules require descriptions and screenshots to reflect the core experience and prohibit unverifiable claims in subtitles. Use qualified, evidence-backed wording throughout. [App Review Guidelines, section 2.3](https://developer.apple.com/app-store/review/guidelines/#accurate-metadata)
 
 ## 4. Format support: inputs, attachments and outputs
 
@@ -539,7 +595,7 @@ These are required acceptance conditions within the five workstreams. Source-ind
 | LIFE-03: field-level fidelity and consistent jobs | Maintain a named field contract covering available From/To/Cc/Bcc, original and normalised dates/time zones, Message-ID/thread headers, MIME bodies, inline Content-ID links, attachments, original filenames, folder memberships and supported flags. Preserve originals alongside normalised search representations; disclose absent or transformed fields. Test two simultaneous jobs and an import running during search, duplicate review and export. Stable selections and post-run counts must reconcile, and deletion/cleanup must not invalidate another job's inputs. |
 | LIFE-04: privacy and safe handling across the entire archive | Verify the actual protection of databases, search/OCR indexes, blobs, previews, temporary extraction files, backups and logs. Document encryption and key behavior rather than treating local processing as sufficient proof of protection. Default previews must not execute scripts/macros or fetch tracking resources; opening external content is explicit. Test malformed MIME, decompression/path attacks and bounded extraction. Diagnostic exports are user-reviewed and omit message bodies, attachments and identifying metadata by default. |
 | LIFE-05: usable recovery and assistance | Provide a short first-import guide, a sample archive, contextual help, keyboard/VoiceOver support and clear recovery actions such as Reconnect, Retry failed items, Rebuild index and Restore backup where applicable. Show the job's scope, stage and remaining work; do not present a frozen estimate as certainty. Errors should explain what happened, what data is safe and the next useful action. Include these states in the existing usability pilot; a long onboarding carousel is not required. |
-| LIFE-06: ownership and access policy | Define and test reading, searching, new imports, exports, offline entitlement checks, subscription expiry, refund and purchase restoration separately. Imported data must never be automatically deleted because an entitlement changes. Recommended policy for the owner to adopt: keep reading and basic portability export of already imported data available after subscription expiry, while new paid work remains governed by the plan. This recommendation does not change pricing, existing trial rules or existing purchased rights in this document; the final policy must be explicit before release. |
+| LIFE-06: ownership and access policy | **Owner adopted the recommended policy on 6 November 2026:** keep reading and basic portability export of already imported data available after subscription expiry; new paid work remains governed by the plan. Imported data must never be automatically deleted because an entitlement changes. Define and test reading, searching, new imports, exports, offline entitlement checks, expiry, refund and purchase restoration separately using section 12.2. The policy decision is closed; implementation and verification remain required. Preserve existing prices, trial rules and purchased/lifetime rights. |
 
 **Why LIFE-01 matters now:** the reviewed format document says oversized messages can retain byte locators into the original source, and that those originals are referenced rather than copied. The source-independent archive test therefore covers a real documented dependency. [Source-reference behavior](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/SUPPORTED_FORMATS_AND_LIMITS.md#L126)
 
@@ -553,7 +609,7 @@ Each LIFE check needs evidence on the same release candidate as the 30 core work
 
 Keep help attached to the task: a first-import quick start, a sample archive, a searchable guide covering the five jobs and format states, and contextual explanations for incomplete search, duplicate classes and export verification. Hover text supplements clear labels; it cannot be the only instruction available to keyboard, touch or VoiceOver users. A carousel is optional and skippable, not a release goal by itself.
 
-For LIFE-06, maintain one tested capability table covering reading, search, import, export and recovery under active entitlement, trial, offline use, expiry, refund and restored purchase. Preserve data in every state. The proposed post-expiry reading/basic-export policy in section 10 remains a policy choice, not an automatic code change.
+For LIFE-06, maintain one tested capability table covering reading, search, import, export and recovery under active entitlement, trial, offline use, expiry, refund and restored purchase. Preserve data in every state. The owner has adopted post-expiry reading/basic-export access. Apply the implementation defaults and tests in section 12.2; adoption is not evidence that the app has been changed or the tests passed.
 
 ## 7. Delivery sequence and dependencies
 
@@ -574,11 +630,11 @@ Do not spend this release expanding analytics, studios, personas or live mail. P
 
 ### 8.1 Engineering benchmark targets
 
-These are development targets to validate, not existing performance claims or artificial maximums.
+These are development targets to validate, not existing performance claims or artificial maximums. On 6 November 2026 the owner accepted the available testing resources while retaining the goal of a final product without artificial caps. For this release, unexecuted larger-file tiers remain unverified evidence targets; they do not impose a 100 MB app limit or, by themselves, require a reduced-feature edition. They must not be recorded as passed or advertised as demonstrated capacity. Sections 3.4 and 12 govern the qualified claims and remaining release checks. The exception does not waive an observed correctness failure, unsafe resource handling, silent omission or required feature.
 
 | Workload | Target and evidence |
 |---|---|
-| Large Mac archives | Exercise 1, 5, 20, 50 and 100 GB MBOX and valid Unicode PST workloads, recording actual runs and failures. Use a declared 16 GB Apple-silicon Mac/SSD reference configuration with sufficient source, index, temporary and output storage. Larger archives should remain an architectural possibility, not be rejected simply because they exceed the test tier. |
+| Large Mac archives | Retain 1, 5, 20, 50 and 100 GB MBOX/valid Unicode PST as additional validation targets when resources permit. Record available executed runs, including the reported 100 MB matrix, with actual device/RAM/storage and fixture composition; do not imply the proposed 16 GB Apple-silicon reference was used if it was not. Unexecuted larger tiers are not passes and are not a new product ceiling. Removing artificial limits and preserving safe, complete accounting remain required. |
 | Message count | At least 1,000,000 messages, including both small-message and attachment-heavy workloads. Vary message count independently of byte volume. |
 | Folder count | At least 10,000 folders/labels across multiple sources, including collisions, Unicode paths and multiple memberships. |
 | Search completeness | Known targets beyond 500,000 attachment characters and the former 4 MiB body-index budget must be found, including phrases crossing chunk boundaries. Include individual messages beyond the documented 100 MiB source-locator threshold in reading/search/export tests. Require exact expected retrieval for deterministic supported text fixtures. |
@@ -587,7 +643,7 @@ These are development targets to validate, not existing performance claims or ar
 | Recovery | Process termination, low disk, source changes, locked files, removed drives at a batch boundary and during a write, and output tampering are exercised. Confirm correct state after relaunch. |
 | Mobile | iPhone/iPad get separate measured workloads, OS/device records and suspend/relaunch tests; Mac success never substitutes for mobile evidence. |
 
-If a target fails, record the cause and keep the relevant release requirement open. Do not silently convert an unexecuted benchmark into a passed capability claim. Preserve format-specific validity constraints; for example, a size that is valid for one PST variant does not make it valid for every variant.
+If a target fails, record the cause and keep affected correctness, safety and required functionality open. Distinguish an observed failure from a test not run because of the available resource budget. The owner's large-file validation exception is not a pass and does not excuse a known bug. Preserve format-specific validity constraints; for example, a size that is valid for one PST variant does not make it valid for every variant.
 
 ### 8.2 Fixtures and test layers
 
@@ -640,7 +696,7 @@ The next version passes only when:
 6. Fault tests demonstrate recoverable data and honest outcomes, including separate-process testing for drive removal during a write, and the whole-archive restore passes on a clean profile/device.
 7. Existing archive upgrades, saved professional work, holds, purchases and restoration still pass; data-access behavior matches the explicitly adopted entitlement policy.
 8. No unresolved critical/high issue remains that could lose data, misclassify removable copies, omit searchable content without disclosure, misstate completeness or produce incorrect output.
-9. Every claimed benchmark has executed results tied to a commit, build, device/OS and dataset. Unrun tests and projections are not passes.
+9. Every claimed benchmark has executed results tied to a commit, build, device/OS and dataset. Unrun tests and projections are not passes. Under the owner's 6 November validation decision, larger-file tiers not executed with available resources remain explicitly unverified rather than becoming a 100 MB product cap or an “unlimited capacity” claim. The no-artificial-cap claim requires the audit in sections 3.4 and 12.
 10. A representative usability pilot completes the five tasks without developer coaching. Initial target: at least 9 of 10 participants succeed on each ordinary task, and all participants correctly identify deliberately partial/unverified outputs and avoid destructive mistakes. This is an internal acceptance target, not a population-wide marketing statistic.
 
 Maintain one release matrix with: requirement ID, actual current behavior, code change if needed, automated result, manual result, evidence location, unresolved limitation and release decision. A requirement can be “not started,” “in progress,” “implemented,” “verified,” “failed” or “blocked.” “Implemented” is not “verified.” OCR uncertainty and unavailable/decryption-blocked source content must be represented explicitly; they do not become searchable merely because a job finishes.
@@ -672,8 +728,8 @@ These boundaries resolve the differences between earlier recommendations without
 |---|---|
 | OLM input | High-priority proposal for a Mac archive product. No reader was established in reviewed routing. If adopted, add real fixtures and all six dimensions of format acceptance before promising support |
 | TAR/TGZ input | Proposed wrapper addition. GZip alone does not imply TAR extraction. If adopted, test all members, integrity, path safety and supported enclosed mail |
-| Post-expiry reading and basic portability export | Recommended access policy, not yet adopted. Preserve data and existing rights regardless; decide and test the final capability table before release |
-| Exact performance thresholds | Engineering targets in section 8.1, not demonstrated speed claims or artificial maximum archive sizes; measure and record each result |
+| Post-expiry reading and basic portability export | **Adopted by the owner, 6 November 2026.** The policy decision is closed; implement and test the access matrix in section 12.2. Preserve all existing data and purchased rights |
+| Exact performance thresholds | Engineering targets in section 8.1, not demonstrated speed claims or artificial maximums. Record executed results; identify unexecuted larger-file tiers under the owner's resource-budget decision. No 100 MB app cap or universal capacity claim follows |
 | New saved-search tools, search-within-results, typo assistance and richer attachment browsing | Later retrieval improvements; retain existing working conveniences |
 | Batch archive queues, selective mailbox import and incremental snapshot comparison | Later import improvements with stable source identity; not substitutes for reliable current imports |
 | Guided storage relocation and cross-archive comparison | Later convenience work unless needed to make an already advertised workflow safe |
@@ -702,4 +758,58 @@ Deliver the following together:
 
 **Completion means the customer can preserve the archive, find its supported contents, distinguish repeated copies safely, recover after failure and obtain independently checked usable exports—with complete accounting across the declared scope.**
 
+## 12. Owner decisions and final-release closure — 6 November 2026
 
+### 12.1 What has been decided, and what has not been verified
+
+The owner has approved LIFE-06's retention of reading/basic export after expiry, confirmed that the five archive jobs define mailin's main presentation, and insisted on a final product without artificial limits. The current reported 100 MB test matrix is accepted as available scale evidence; it is not an app capacity ceiling. Additional larger-file tests remain unexecuted evidence targets, without limiting the product to that fixture size.
+
+The owner's phrase “unlimited everything” is recorded here as the ambition to remove artificial product restrictions. It must not become an unqualified guarantee of infinite capacity, universal format support or perfect extraction. Use the audited and qualified wording in section 3.4. This is a claim/evidence distinction, not an instruction to add limitations.
+
+The implementation report supplied by the owner describes 17 local commits on `v3-architecture` ending at `e48f556`, not pushed. That report describes substantial implemented work and passing checks. This planning document has not independently inspected those commits or logs. Do not replace the historical code baseline with an invented verified release state.
+
+Two search requirements are expressly still open in the report: the ordinary search box uses the previous engine, and attachment evidence opens only the parent message. Keep FIND-04/FIND-05 partial until these paths meet section 5.3. Implementation of the new LIFE-06 policy and the presentation change also needs evidence.
+
+### 12.2 LIFE-06 policy to implement and test
+
+The approved policy is that users retain access to their imported data and basic portability after subscription expiry, while new paid work stops according to their plan. The following implementation defaults make that policy usable; they do not introduce new prices, free-import limits or restrictions on valid lifetime purchases.
+
+| Capability/state | Required treatment |
+|---|---|
+| Existing archive after expiry | Keep folder browsing, reading, attachment opening and existing deterministic search available so users can locate their data. Search uses existing indexed/extracted content with truthful coverage; this does not promise free new AI/OCR processing. |
+| Basic portability export after expiry | Allow supported mail-preserving EML/MBOX export of already imported data, including original attachments and the appropriate inventory/verification record. Do not reapply trial preview/count limits to lock away previously imported data. Format/resource constraints and honest partial states still apply. |
+| New paid work | Enforce the existing plan for new imports, new paid OCR/enrichment, AI or specialist productions. Preserve separately purchased/lifetime rights and existing professional records/holds. |
+| Necessary access and maintenance | Permit source relinking, safe recovery, index rebuild from retained extracted text and content hydration needed to read/basic-export existing mail. Do not require a new subscription solely to regain access after an app upgrade or restore. |
+| Expiry, refund or entitlement change | Never automatically delete imported mail, attachments, annotations, holds or backups. Revoke affected future paid work according to the entitlement while preserving the adopted data-access path. |
+| Offline or temporarily unavailable store | A failed entitlement refresh is not itself proof of expiry/refund. Handle verified cached entitlement state consistently and preserve existing-data access. |
+| Purchase restoration/reactivation | Restore the relevant paid capabilities without reimporting, duplicating or damaging the archive. Test transition back to the adopted plan. |
+| Paywall/help | State plainly that existing archives remain readable and basically exportable after expiry, and identify what requires an active paid entitlement. |
+
+Test active purchase, trial, confirmed expiry, refund/revocation, offline refresh failure and purchase restoration in the appropriate test environment. Verify both allowed existing-data access and blocked new paid work. The previously skipped entitlement tests are not passes; the policy must be wired and exercised before release. Use sandbox transactions, not real charges, for purchase testing. [Apple sandbox testing guidance](https://developer.apple.com/help/app-review/before-submitting-for-review/configure-in-app-purchases)
+
+### 12.3 Remaining final-release work
+
+Use existing valid evidence rather than repeating completed work without a reason. The following is a closure list based on the supplied report, not a new feature expansion.
+
+| Remaining item | Exact closure condition |
+|---|---|
+| Finish the two search paths | Ordinary search and Advanced Search share the validated model, coverage/unknown rules and scope; attachment evidence opens the specific matching attachment/location where supported. Execute the affected section 5.3 tests, including incomplete negative searches. |
+| Implement and verify LIFE-06 | Apply section 12.2 and run relevant purchase/expiry/offline/refund/restore tests. Owner policy approval is complete; app verification is not inferred from it. |
+| Validate real supported inputs | Add real originating-client fixtures or permitted independent samples for every advertised format/variant, with known content/folders/attachment expectations. These can be small files within available resources; larger file size is not required to establish real-format fidelity. Synthetic fixtures remain useful edge-case tests. |
+| Validate usable exports | Retain reported inventory/re-hash work and prove source-to-output content reconciliation. Complete appropriate Apple Mail/Thunderbird destination tests; independently validate PST output if it is advertised. Record actual client versions, workflows and results, including attachments and folder mapping. |
+| Complete external-process recovery evidence | Run interruption/drive-detachment during a write with an external controller and a disposable test volume, or document the exact environment blocker. Check recovery after relaunch. Retain the reported clean-profile restore test and cross-machine locator fix with regression evidence. |
+| Close the human usability gate | Run the five-task pilot with real participants using the existing acceptance target, including recognition of partial/unverified results. The agent prepares fixtures, instructions and scoring; automated tests do not substitute for people. |
+| Reconcile remaining LIFE/security/help evidence | Confirm the candidate has the required safe previews, protection/key behavior, temporary/log handling, recovery help and keyboard/VoiceOver evidence. Owner-only permissions alone are not the whole LIFE-04 check. Reuse existing passing results where they cover the actual paths. |
+| Finish presentation and the release candidate | Apply sections 3.3–3.4 to the app/listing/website/help, audit product-imposed caps, reconcile all 36 requirement rows and ten gates, and prepare a signed distribution candidate. Record build/commit, fixture hashes, executed results and the truthful tested-workload matrix. Smoke-test installation/update on every platform being released and complete App Store metadata/review information. |
+
+The no-artificial-cap audit must cover paid-product import size/count, folder enumeration, both search paths, attachment/body text scope, duplicate scanning, selected export size/count and paging. Work-unit budgets must not silently discard the remainder. It is acceptable for a task to report a genuine resource or unsupported-format barrier; it is not acceptable to label that task fully complete. Audit scope and results belong in the release record.
+
+The reported uncommitted change to the legacy Xcode project is housekeeping: inspect its diff, preserve a patch if needed, and exclude or discard only confirmed generated changes. Do not blindly reset unrelated local work. No push, merge, release upload or publication is performed by this document update.
+
+### 12.4 The final release claim
+
+Release the complete five-job product when the remaining functionality and required evidence above pass, with the owner's explicit scale-evidence limitation recorded. Do not impose an artificial 100 MB product cap and do not market untested infinity. Keep the planned larger workload matrix available for future verification.
+
+The release record must distinguish **implemented**, **executed and passed**, **not executed**, **observed limitation** and **owner-approved validation scope**. A final release label is not proof that every conceivable file/device combination has been tested.
+
+Apple asks for tested device/OS information and accurate, complete feature and purchase information during review. Prepare that information for the actual candidate. [Complete review information](https://developer.apple.com/help/app-review/before-submitting-for-review/complete-review) · [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)

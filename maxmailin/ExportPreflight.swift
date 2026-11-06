@@ -375,7 +375,7 @@ final class ExportJobRunner {
                 // cap. The current tier decides; a Free resume past the cap
                 // writes nothing further and ends in a truncated receipt. No
                 // tier to check means no run at all (fail closed).
-                request = try Self.authorized(request, isPremium: self.storeManager?.isPremium)
+                request = try Self.authorized(request, policy: self.storeManager?.accessPolicy)
                 request = try await Self.prepare(request)
                 // Fourth review Q2: a validated resume starts AT its
                 // checkpoint. If the writer fails before it reports a new
@@ -421,6 +421,16 @@ final class ExportJobRunner {
     nonisolated static func authorized(_ request: ExportRequest, isPremium: Bool?) throws -> ExportRequest {
         var authorized = request
         authorized.cap = try enforcedCap(savedCap: request.cap, isPremium: isPremium)
+        return authorized
+    }
+
+    /// LIFE-06: the cap comes from the access policy and the format — a lapsed
+    /// plan exports its own mail as .eml / mbox without the Free cap; reports
+    /// and Free keep it. No policy to consult means no run (fail closed).
+    nonisolated static func authorized(_ request: ExportRequest, policy: AccessPolicy?) throws -> ExportRequest {
+        guard let policy else { throw AuthorizationError.tierUnknown }
+        var authorized = request
+        authorized.cap = policy.exportCap(for: request.format)
         return authorized
     }
 
