@@ -2852,6 +2852,69 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(found.count, 10_050)
     }
 
+    // MARK: - CAP-06 — no numeric window in the five-jobs source; every real limit named and shown
+
+    /// The five-jobs source files. A numeric `prefix(N)` or `>= N { break }`
+    /// with N ≥ 500 in any of them is a window and fails this test; a real
+    /// limit must be a named constant listed in `AppLimits`.
+    private static let fiveJobsSources = [
+        "maxmailin/ArchiveThreePaneView.swift", "maxmailin/ArchiveListViewModel.swift", "maxmailin/ArchiveSidebar.swift",
+        "maxmailin/AdvancedSearchView.swift", "maxmailin/DuplicateManagerView.swift", "maxmailin/DuplicateVerification.swift",
+        "maxmailin/DuplicatesEngine.swift", "maxmailin/ExportPreflight.swift", "maxmailin/UnifiedExportMenu.swift",
+        "maxmailin/ImportQueueView.swift", "maxmailin/GuidedImportSheet.swift", "maxmailin/AttachmentTextIndexJob.swift",
+        "maxmailin/FolderTreeView.swift", "maxmailin/ArchiveExportService+Renderers.swift", "maxmailin/SearchDocBackfillJob.swift",
+        "maxmailin/ArchiveBackups.swift", "maxmailin/ArchiveHealthView.swift", "maxmailin/ScopeJob.swift", "maxmailin/MailinAppEntities.swift",
+        "maxmailin/MailinMoreEntities.swift", "maxmailin/ParsedEmailListViewModel.swift",
+    ]
+
+    func testCAP06_noNumericWindowInTheFiveJobsSource_andEveryRealLimitIsListed() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        var files = Self.fiveJobsSources.map { repo.appendingPathComponent($0) }
+        let packageDir = repo.appendingPathComponent("Packages/ArchiveCore/Sources/ArchiveCore")
+        files += try FileManager.default.contentsOfDirectory(at: packageDir, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
+        let window = try NSRegularExpression(pattern: #"\.prefix\(\s*([0-9][0-9_]{2,})\s*\)|>=\s*([0-9][0-9_]{2,})\s*\{\s*break"#)
+        var offenders: [String] = []
+        for file in files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            for line in source.components(separatedBy: "\n") where !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+                let range = NSRange(line.startIndex..., in: line)
+                for match in window.matches(in: line, range: range) {
+                    let digits = (1...2).compactMap { Range(match.range(at: $0), in: line).map { String(line[$0]) } }.first ?? "0"
+                    if (Int(digits.replacingOccurrences(of: "_", with: "")) ?? 0) >= 500 {
+                        offenders.append("\(file.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+                    }
+                }
+            }
+        }
+        // Allowed: a 4 KB sniff of a file's head to tell text from binary is not a result window.
+        offenders.removeAll { $0.contains("data.prefix(4096)") }
+        XCTAssertEqual(offenders, [], "numeric windows in the five-jobs source:\n" + offenders.joined(separator: "\n"))
+
+        // Every known constant is listed, with its kind, and the five jobs are listed as uncapped.
+        let limits = AppLimits.all
+        // Localized interpolation groups digits ("5,000") and uses narrow spaces before units; compare plainly.
+        func plain(_ s: String) -> String {
+            s.replacingOccurrences(of: "\u{202F}", with: " ").replacingOccurrences(of: "\u{00A0}", with: " ").replacingOccurrences(of: ",", with: "")
+        }
+        func listed(_ fragment: String) -> Bool { limits.contains { plain($0.value).contains(fragment) || plain($0.what).contains(fragment) } }
+        let bytes = { (b: Int64) in plain(ByteCountFormatter.string(fromByteCount: b, countStyle: .file)) }
+        XCTAssertTrue(listed("\(StoreManager.freeEmailLimit)"))
+        XCTAssertTrue(listed(bytes(Int64(StoreManager.freeInputByteLimit))), "\(limits.map { plain($0.value) })")
+        XCTAssertTrue(listed("\(StoreManager.freeAttachmentDownloadsPerDay) a day"))
+        XCTAssertTrue(listed("\(AIAssistantView.freeQueryLimit) a day"))
+        XCTAssertTrue(listed(bytes(SourceSizePolicy.pstTestedCeilingBytes)) && listed("Notes NSF") && listed("exFAT"))
+        XCTAssertTrue(listed(bytes(OfficeTextExtractor.maxPartBytes)), "the Office part budget is named")
+        XCTAssertTrue(listed("\(Int(AttachmentOCR.maxPixels)) px"))
+        XCTAssertTrue(listed("\(SearchChunker.overlapCharacters) characters"))
+        XCTAssertTrue(listed("\(AppLimits.previousEngineDuplicateWindow)"))
+        XCTAssertTrue(listed("\(FTSSearchIndex.indexedBodyCharacters)"), "the previous search index's body prefix is named")
+        for job in ["Opening archives", "Folders", "Search", "Duplicates", "Exports"] {
+            XCTAssertEqual(limits.first { $0.what == job }?.kind, AppLimit.Kind.none, "\(job) is listed as uncapped")
+        }
+        let health = try String(contentsOf: repo.appendingPathComponent("maxmailin/ArchiveHealthView.swift"), encoding: .utf8)
+        XCTAssertTrue(health.contains("AppLimits.all") && health.contains("\"health.limits\""), "the list is on screen")
+    }
+
     // MARK: - Five jobs LIFE-06 — the adopted data-access policy (owner, 2026-11-06)
 
     func testLIFE06_accessPolicy_keepsImportedDataOpenAfterExpiry_andStopsNewPaidWork() throws {

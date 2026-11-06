@@ -7877,6 +7877,70 @@
       },
       "shouldTranslate" : false
     },
+    "%lld a day" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pro Tag"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld al día"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld par jour"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रतिदिन %lld"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld al giorno"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1日 %lld 件"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "하루 %lld개"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld por dia"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每天 %lld 个"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每天 %lld 個"
+          }
+        }
+      }
+    },
     "%lld action%@" : {
       "localizations" : {
         "de" : {
@@ -8885,6 +8949,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld 處更改%2$@"
+          }
+        }
+      }
+    },
+    "%lld characters" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Zeichen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld caracteres"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld caractères"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld अक्षर"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld caratteri"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 文字"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld자"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld caracteres"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个字符"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個字元"
           }
         }
       }
@@ -18792,6 +18920,70 @@
         }
       }
     },
+    "%lld px on the long side" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld px an der langen Seite"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld px en el lado largo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld px sur le grand côté"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "लंबी भुजा पर %lld px"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld px sul lato lungo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長辺 %lld px"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "긴 변 %lld px"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld px no lado maior"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长边 %lld 像素"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長邊 %lld 像素"
+          }
+        }
+      }
+    },
     "%lld QC samples" : {
       "localizations" : {
         "de" : {
@@ -25409,6 +25601,70 @@
         }
       }
     },
+    "A file system fact: one file cannot exceed 4 GiB there; mbox exports can be split into 2 GB parts." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Dateisystem-Gegebenheit: eine Datei kann dort 4 GiB nicht überschreiten; mbox-Exporte können in 2-GB-Teile geteilt werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un hecho del sistema de archivos: allí un archivo no puede superar 4 GiB; las exportaciones mbox pueden dividirse en partes de 2 GB."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une contrainte du système de fichiers : un fichier ne peut y dépasser 4 Gio ; les exports mbox peuvent être découpés en parties de 2 Go."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ाइल सिस्टम की वास्तविकता: वहाँ एक फ़ाइल 4 GiB से बड़ी नहीं हो सकती; mbox निर्यात 2 GB के हिस्सों में बाँटे जा सकते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un dato del file system: lì un file non può superare 4 GiB; le esportazioni mbox possono essere divise in parti da 2 GB."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルシステムの事実です。1ファイルは4 GiBを超えられません。mbox の書き出しは 2 GB ごとに分割できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 시스템의 사실입니다. 파일 하나는 4 GiB를 넘을 수 없습니다. mbox 내보내기는 2 GB 단위로 나눌 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um fato do sistema de arquivos: um arquivo não pode passar de 4 GiB lá; exportações mbox podem ser divididas em partes de 2 GB."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件系统事实：单个文件在那里不能超过 4 GiB；mbox 导出可拆分为 2 GB 的部分。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檔案系統事實：單一檔案在那裡不能超過 4 GiB；mbox 匯出可拆分為 2 GB 的部分。"
+          }
+        }
+      }
+    },
     "A folder per year" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -25663,6 +25919,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "保留郵件的格式：這些檔案可由 mailin 和其他郵件 App 重新匯入。"
+          }
+        }
+      }
+    },
+    "A part larger than this inside a .docx/.xlsx/.pptx is listed and the document marked partial, never silently dropped." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein größerer Teil in einer .docx/.xlsx/.pptx wird aufgeführt und das Dokument als teilweise markiert, nie stillschweigend verworfen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una parte mayor dentro de un .docx/.xlsx/.pptx se lista y el documento se marca como parcial, nunca se descarta en silencio."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une partie plus grande dans un .docx/.xlsx/.pptx est listée et le document marqué partiel, jamais ignorée en silence."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ".docx/.xlsx/.pptx के अंदर इससे बड़ा भाग सूचीबद्ध होता है और दस्तावेज़ आंशिक चिह्नित होता है, चुपचाप कभी नहीं छोड़ा जाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una parte più grande dentro un .docx/.xlsx/.pptx viene elencata e il documento segnato come parziale, mai scartata in silenzio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ".docx/.xlsx/.pptx 内のこれより大きいパートは一覧に載り、文書は部分的と記録されます。黙って捨てられることはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ".docx/.xlsx/.pptx 안의 이보다 큰 파트는 목록에 오르고 문서는 부분으로 표시됩니다. 조용히 버려지지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma parte maior dentro de um .docx/.xlsx/.pptx é listada e o documento marcado como parcial, nunca descartada em silêncio."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ".docx/.xlsx/.pptx 中超过此大小的部件会被列出，文档标记为部分读取，绝不会被悄悄丢弃。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ".docx/.xlsx/.pptx 中超過此大小的部件會被列出，文件標記為部分讀取，絕不會被悄悄丟棄。"
           }
         }
       }
@@ -64460,6 +64780,70 @@
         }
       }
     },
+    "Bodies and attachment texts are indexed whole in 48K-character chunks; results, counts and exports walk every match." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texte und Anhangstexte werden vollständig in 48K-Zeichen-Blöcken indiziert; Ergebnisse, Zählungen und Exporte durchlaufen jeden Treffer."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los cuerpos y textos de adjuntos se indexan completos en bloques de 48K caracteres; los resultados, recuentos y exportaciones recorren cada coincidencia."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les corps et textes de pièces jointes sont indexés en entier par blocs de 48K caractères ; résultats, décomptes et exports parcourent chaque correspondance."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संदेश-पाठ और अनुलग्नक पाठ 48K-अक्षर खंडों में पूरे अनुक्रमित होते हैं; परिणाम, गिनती और निर्यात हर मेल को देखते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corpi e testi degli allegati sono indicizzati per intero in blocchi da 48K caratteri; risultati, conteggi ed esportazioni percorrono ogni corrispondenza."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本文と添付ファイルのテキストは48K文字のチャンクで全文インデックスされます。結果、件数、書き出しはすべての一致を辿ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "본문과 첨부 파일 텍스트는 48K자 청크로 전체 색인됩니다. 결과, 개수, 내보내기는 모든 일치 항목을 살핍니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corpos e textos de anexos são indexados por inteiro em blocos de 48K caracteres; resultados, contagens e exportações percorrem cada correspondência."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正文和附件文本以 48K 字符为块完整建立索引；结果、计数和导出会遍历每一个匹配。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內文和附件文字以 48K 字元為塊完整建立索引；結果、計數和匯出會走過每一個符合項。"
+          }
+        }
+      }
+    },
     "body" : {
       "localizations" : {
         "de" : {
@@ -66326,7 +66710,9 @@
         }
       }
     },
-    "Build a search from conditions: all / any / exclude, dates, attachments" : {},
+    "Build a search from conditions: all / any / exclude, dates, attachments" : {
+
+    },
     "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft." : {
       "localizations" : {
         "de" : {
@@ -111259,6 +111645,70 @@
         }
       }
     },
+    "Device fact" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gerätegegebenheit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hecho del dispositivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contrainte de l'appareil"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिवाइस की वास्तविकता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dato del dispositivo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デバイスの事実"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기기 사실"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fato do dispositivo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备事实"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "裝置事實"
+          }
+        }
+      }
+    },
     "DEVONthink could not open the %lld files (%@); they are shown in Finder" : {
       "comment" : "The message in the alert that DEVONthink failed to open the .eml files. The first argument is the number of files. The second argument is the error message.",
       "isCommentAutoGenerated" : true,
@@ -129305,6 +129755,134 @@
         }
       }
     },
+    "every folder and label" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "jeder Ordner und jedes Label"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "todas las carpetas y etiquetas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "chaque dossier et libellé"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर फ़ोल्डर और लेबल"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ogni cartella ed etichetta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのフォルダとラベル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 폴더와 라벨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "todas as pastas e marcadores"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个文件夹和标签"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每個資料夾和標籤"
+          }
+        }
+      }
+    },
+    "Every format streams; the portable HTML viewer is written in chunks; the inventory lists every file." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jedes Format wird gestreamt; der portable HTML-Viewer wird in Blöcken geschrieben; das Inventar führt jede Datei auf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos los formatos se transmiten en flujo; el visor HTML portátil se escribe por bloques; el inventario enumera cada archivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tous les formats sont écrits en flux ; la visionneuse HTML portable est écrite par blocs ; l'inventaire répertorie chaque fichier."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर प्रारूप स्ट्रीम होता है; पोर्टेबल HTML व्यूअर खंडों में लिखा जाता है; सूची हर फ़ाइल दर्ज करती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ogni formato è in streaming; il visualizzatore HTML portatile è scritto a blocchi; l'inventario elenca ogni file."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべての形式がストリーミングで書き出されます。ポータブルHTMLビューアはチャンクで書かれ、インベントリにすべてのファイルが記載されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 형식이 스트리밍됩니다. 휴대용 HTML 뷰어는 청크로 쓰이고 인벤토리에 모든 파일이 기록됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os formatos são transmitidos; o visualizador HTML portátil é escrito em blocos; o inventário lista cada arquivo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有格式都以流式写出；便携 HTML 查看器分块写入；清单列出每个文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有格式都以串流寫出；可攜式 HTML 檢視器分塊寫入；清單列出每個檔案。"
+          }
+        }
+      }
+    },
     "Every import produces a cryptographically signed (HMAC) receipt. Any later modification is detectable — a forged receipt fails verification." : {
       "localizations" : {
         "de" : {
@@ -129429,6 +130007,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "您完成的每項工作都保存在一個文件編號下，可重新開啟、匯出為 CSV 並納入報告。關閉此項後改為用按鈕手動儲存。"
+          }
+        }
+      }
+    },
+    "Every limit mailin enforces, and what kind of limit it is. The five archive jobs have no cap of the app's own; plan rules are shown on the purchase screen too." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jede Grenze, die mailin durchsetzt, und welche Art von Grenze sie ist. Die fünf Archivaufgaben haben keine app-eigene Obergrenze; Planregeln stehen auch auf dem Kaufbildschirm."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada límite que aplica mailin y de qué tipo es. Las cinco tareas de archivo no tienen ningún tope propio de la app; las reglas del plan también se muestran en la pantalla de compra."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque limite appliquée par mailin et sa nature. Les cinq tâches d'archive n'ont aucun plafond propre à l'app ; les règles du forfait figurent aussi sur l'écran d'achat."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin द्वारा लागू हर सीमा और वह किस प्रकार की है। पाँच संग्रह कार्यों पर ऐप की अपनी कोई सीमा नहीं है; योजना नियम खरीद स्क्रीन पर भी दिखते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ogni limite applicato da mailin e di che tipo è. Le cinque attività di archivio non hanno alcun tetto proprio dell'app; le regole del piano sono mostrate anche nella schermata di acquisto."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin が適用するすべての制限とその種類です。5つのアーカイブ作業にアプリ独自の上限はありません。プランのルールは購入画面にも表示されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin이 적용하는 모든 한계와 그 종류입니다. 다섯 가지 보관 작업에는 앱 자체의 상한이 없습니다. 플랜 규칙은 구매 화면에도 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada limite que o mailin aplica e de que tipo ele é. As cinco tarefas de arquivo não têm teto próprio do app; as regras do plano também aparecem na tela de compra."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 执行的每项限制及其类型。五项归档工作没有应用自身的上限；套餐规则也会显示在购买页面。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 執行的每項限制及其類型。五項封存工作沒有 App 自身的上限；方案規則也會顯示在購買頁面。"
           }
         }
       }
@@ -134191,6 +134833,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "帶 NLP 分析的高階主管摘要"
+          }
+        }
+      }
+    },
+    "exFAT drives" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "exFAT-Laufwerke"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unidades exFAT"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disques exFAT"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "exFAT ड्राइव"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unità exFAT"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "exFAT ドライブ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "exFAT 드라이브"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unidades exFAT"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "exFAT 驱动器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "exFAT 磁碟"
           }
         }
       }
@@ -142637,6 +143343,10 @@
           }
         }
       }
+    },
+    "Exports" : {
+      "comment" : "Text for the export option in the app limits.",
+      "isCommentAutoGenerated" : true
     },
     "Exports %lld emails in %@ format" : {
       "localizations" : {
@@ -151131,6 +151841,9 @@
         }
       }
     },
+    "first %lld characters of a body" : {
+
+    },
     "First %lld of %lld emails · Unlock Full Archive" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -155003,6 +155716,70 @@
         }
       }
     },
+    "Format's own limit" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eigene Grenze des Formats"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Límite propio del formato"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite propre au format"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रारूप की अपनी सीमा"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite proprio del formato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォーマット自体の制限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "형식 자체의 한계"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite próprio do formato"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "格式自身的限制"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "格式自身的限制"
+          }
+        }
+      }
+    },
     "Forward" : {
       "localizations" : {
         "de" : {
@@ -155735,6 +156512,262 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "免費限額：%lld 封郵件"
+          }
+        }
+      }
+    },
+    "Free plan — AI questions" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free-Plan – KI-Fragen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan Free: preguntas a la IA"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forfait Free — questions à l'IA"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free योजना — AI प्रश्न"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Piano Free: domande all'IA"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free プラン — AI への質問"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free 플랜 — AI 질문"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plano Free — perguntas à IA"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免费套餐——AI 提问"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免費方案——AI 提問"
+          }
+        }
+      }
+    },
+    "Free plan — attachment saves" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free-Plan – Anhänge sichern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan Free: guardado de adjuntos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forfait Free — enregistrement des pièces jointes"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free योजना — अनुलग्नक सहेजना"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Piano Free: salvataggio allegati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free プラン — 添付ファイルの保存"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free 플랜 — 첨부 파일 저장"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plano Free — salvar anexos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免费套餐——保存附件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免費方案——儲存附件"
+          }
+        }
+      }
+    },
+    "Free plan — import size" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free-Plan – Importgröße"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan Free: tamaño de importación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forfait Free — taille d'import"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free योजना — आयात आकार"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Piano Free: dimensione importazione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free プラン — 取り込みサイズ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free 플랜 — 가져오기 크기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plano Free — tamanho da importação"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免费套餐——导入大小"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免費方案——匯入大小"
+          }
+        }
+      }
+    },
+    "Free plan — reading and search" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free-Plan – Lesen und Suche"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan Free: lectura y búsqueda"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forfait Free — lecture et recherche"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free योजना — पढ़ना और खोज"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Piano Free: lettura e ricerca"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free プラン — 閲覧と検索"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free 플랜 — 읽기와 검색"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plano Free — leitura e pesquisa"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免费套餐——阅读和搜索"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免費方案——閱讀和搜尋"
           }
         }
       }
@@ -162753,6 +163786,70 @@
         }
       }
     },
+    "Groups are found over the whole archive and compared in full before anything is offered for removal." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gruppen werden über das ganze Archiv gefunden und vollständig verglichen, bevor etwas zum Entfernen angeboten wird."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los grupos se encuentran en todo el archivo y se comparan por completo antes de ofrecer nada para eliminar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les groupes sont trouvés sur toute l'archive et comparés intégralement avant que quoi que ce soit ne soit proposé à la suppression."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "समूह पूरे संग्रह में खोजे जाते हैं और हटाने के लिए कुछ भी प्रस्तावित करने से पहले पूरी तुलना की जाती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I gruppi vengono trovati su tutto l'archivio e confrontati per intero prima che qualcosa venga proposto per la rimozione."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "グループはアーカイブ全体から見つけ、削除候補として提示する前に完全に比較します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그룹은 보관함 전체에서 찾고, 제거 대상으로 제시하기 전에 전체 비교합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os grupos são encontrados em todo o arquivo e comparados por inteiro antes de algo ser oferecido para remoção."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在整个归档中查找重复组，并在提供删除之前进行完整比较。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在整個封存中尋找重複群組，並在提供移除之前進行完整比較。"
+          }
+        }
+      }
+    },
     "Groups found among the newest 5,000 emails only (previous engine). The whole archive needs “Whole-archive duplicate groups (3.0)” in Settings ▸ Modules." : {
       "localizations" : {
         "de" : {
@@ -164231,6 +165328,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "雜湊驗證"
+          }
+        }
+      }
+    },
+    "HCL's documented ceilings for older and current Notes databases." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HCLs dokumentierte Obergrenzen für ältere und aktuelle Notes-Datenbanken."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los topes documentados por HCL para bases de datos Notes antiguas y actuales."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les plafonds documentés par HCL pour les bases Notes anciennes et actuelles."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पुराने और वर्तमान Notes डेटाबेस के लिए HCL की प्रलेखित सीमाएँ।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I limiti documentati da HCL per i database Notes vecchi e attuali."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "古い Notes データベースと現行のものに対する HCL の公開上限です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "구형 및 현행 Notes 데이터베이스에 대해 HCL이 문서화한 상한입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os tetos documentados pela HCL para bancos Notes antigos e atuais."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HCL 为旧版和当前 Notes 数据库记录的上限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HCL 為舊版和目前 Notes 資料庫記載的上限。"
           }
         }
       }
@@ -177435,6 +178596,70 @@
         }
       }
     },
+    "Imports stream in batches sized to free memory and disk; a single message of any size is indexed by its boundaries." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importe laufen in Stapeln, die sich nach freiem Speicher und Platz richten; eine einzelne Nachricht beliebiger Größe wird über ihre Grenzen indiziert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las importaciones se procesan en lotes dimensionados según la memoria y el disco libres; un solo mensaje de cualquier tamaño se indexa por sus límites."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les imports se font par lots dimensionnés selon la mémoire et le disque libres ; un message isolé de n'importe quelle taille est indexé par ses frontières."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आयात मुक्त मेमोरी और डिस्क के अनुसार बैचों में होता है; किसी भी आकार का एक संदेश उसकी सीमाओं से अनुक्रमित होता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le importazioni procedono a lotti dimensionati su memoria e disco liberi; un singolo messaggio di qualsiasi dimensione è indicizzato dai suoi confini."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り込みは空きメモリとディスクに合わせたバッチで進みます。どんな大きさの1通のメッセージも境界でインデックスされます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져오기는 여유 메모리와 디스크에 맞춘 배치로 진행됩니다. 크기에 상관없이 메시지 하나는 경계로 색인됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As importações fluem em lotes dimensionados pela memória e pelo disco livres; uma única mensagem de qualquer tamanho é indexada pelos seus limites."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入按可用内存和磁盘大小分批进行；任何大小的单封邮件都按其边界建立索引。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入按可用記憶體和磁碟大小分批進行；任何大小的單封郵件都按其邊界建立索引。"
+          }
+        }
+      }
+    },
     "in %@" : {
       "localizations" : {
         "de" : {
@@ -186721,6 +187946,70 @@
         }
       }
     },
+    "Labels (%lld)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Labels (%lld)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etiquetas (%lld)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Libellés (%lld)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "लेबल (%lld)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etichette (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ラベル（%lld）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "라벨(%lld)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcadores (%lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签（%lld）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標籤（%lld）"
+          }
+        }
+      }
+    },
     "Labels & Folders" : {
       "localizations" : {
         "de" : {
@@ -187550,6 +188839,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "大訊息儲存"
+          }
+        }
+      }
+    },
+    "Larger images are scaled down before recognition; every image is still read." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Größere Bilder werden vor der Erkennung verkleinert; jedes Bild wird trotzdem gelesen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las imágenes mayores se reducen antes del reconocimiento; todas las imágenes se leen igualmente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les images plus grandes sont réduites avant la reconnaissance ; chaque image est tout de même lue."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बड़ी छवियाँ पहचान से पहले छोटी की जाती हैं; हर छवि फिर भी पढ़ी जाती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le immagini più grandi vengono ridotte prima del riconoscimento; ogni immagine viene comunque letta."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大きい画像は認識前に縮小されます。すべての画像が読み取られます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "더 큰 이미지는 인식 전에 축소됩니다. 모든 이미지가 읽힙니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imagens maiores são reduzidas antes do reconhecimento; toda imagem ainda é lida."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更大的图像在识别前会被缩小；每张图像仍会被读取。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更大的影像在辨識前會被縮小；每張影像仍會被讀取。"
           }
         }
       }
@@ -191446,6 +192799,70 @@
         }
       }
     },
+    "Limits" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grenzen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Límites"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limites"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सीमाएँ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limiti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "制限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "한계"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limites"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "限制"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "限制"
+          }
+        }
+      }
+    },
     "Limits: a script is stopped when one email takes more than %lld seconds or the app's memory passes %llu GB." : {
       "comment" : "A description of the limits on how long a script can run and how much memory it can use. The first argument is the time limit in seconds. The second argument is the memory limit in gigabytes.",
       "extractionState" : "stale",
@@ -192107,6 +193524,70 @@
         }
       }
     },
+    "Lists page 200 at a time with the total shown; nothing is cut." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listen blättern in 200er-Seiten mit angezeigter Gesamtzahl; nichts wird abgeschnitten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las listas avanzan de 200 en 200 con el total visible; nada se recorta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les listes avancent par pages de 200 avec le total affiché ; rien n'est tronqué."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सूचियाँ 200-200 के पृष्ठों में चलती हैं और कुल दिखता है; कुछ भी काटा नहीं जाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gli elenchi avanzano a pagine di 200 con il totale visibile; nulla viene tagliato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストは合計を表示しながら200件ずつ進みます。何も切り捨てられません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "목록은 합계를 보여주며 200개씩 넘어갑니다. 잘리는 것은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As listas avançam 200 por vez com o total exibido; nada é cortado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表每次显示 200 条并显示总数；不会截断任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表每次顯示 200 筆並顯示總數；不會截斷任何內容。"
+          }
+        }
+      }
+    },
     "Lists the email addresses, phone numbers and web addresses found in each body as the columns emails_in_body, phones and urls, for building a contact or link catalogue. Nothing is tagged." : {
       "comment" : "Help text for a bundled script that lists email addresses, phone numbers and web addresses found in the body of each email.",
       "isCommentAutoGenerated" : true,
@@ -192233,6 +193714,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "列出接下來的 %lld 個資料夾，郵件最多的在前。封存中的每個資料夾都可以透過這種方式或篩選到達。"
+          }
+        }
+      }
+    },
+    "Lists the next %lld labels, busiest first. Every label in the archive can be reached this way." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listet die nächsten %lld Labels, die meistgenutzten zuerst. Jedes Label im Archiv ist so erreichbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muestra las siguientes %lld etiquetas, las más usadas primero. Así se puede llegar a todas las etiquetas del archivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affiche les %lld libellés suivants, les plus utilisés d'abord. Chaque libellé de l'archive est accessible ainsi."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अगले %lld लेबल दिखाता है, सबसे व्यस्त पहले। संग्रह का हर लेबल इस तरह पहुँचा जा सकता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elenca le prossime %lld etichette, le più usate per prime. Ogni etichetta dell'archivio è raggiungibile così."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次の %lld 件のラベルを使用頻度順に表示します。アーカイブ内のすべてのラベルにこの方法で到達できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음 라벨 %lld개를 많이 쓰인 순으로 표시합니다. 보관함의 모든 라벨에 이 방법으로 도달할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lista os próximos %lld marcadores, os mais usados primeiro. Todos os marcadores do arquivo podem ser alcançados assim."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出接下来的 %lld 个标签，按使用频率排序。归档中的每个标签都可以通过这种方式访问。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出接下來的 %lld 個標籤，按使用頻率排序。封存中的每個標籤都可以透過這種方式存取。"
           }
         }
       }
@@ -211588,6 +213133,70 @@
         }
       }
     },
+    "newest %lld emails" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "die neuesten %lld E-Mails"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "los %lld correos más recientes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "les %lld courriels les plus récents"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नवीनतम %lld ईमेल"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le %lld email più recenti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新の %lld 件のメール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최신 메일 %lld개"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "os %lld e-mails mais recentes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新的 %lld 封邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新的 %lld 封郵件"
+          }
+        }
+      }
+    },
     "Newest First" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -214102,6 +215711,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未登記生物辨識認證。請在系統設定中設定。"
+          }
+        }
+      }
+    },
+    "No cap" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Obergrenze"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin límite"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun plafond"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई सीमा नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun limite"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上限なし"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "상한 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem limite"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无上限"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無上限"
           }
         }
       }
@@ -219246,6 +220919,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未載入外掛模組"
+          }
+        }
+      }
+    },
+    "no preset size or message count" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "keine voreingestellte Größe oder Nachrichtenzahl"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sin tamaño ni número de mensajes preestablecidos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aucune taille ni nombre de messages prédéfinis"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कोई पूर्व-निर्धारित आकार या संदेश संख्या नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nessuna dimensione o numero di messaggi prestabiliti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サイズやメッセージ数の既定値なし"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미리 정한 크기나 메시지 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sem tamanho ou número de mensagens predefinidos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有预设的大小或邮件数量"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有預設的大小或郵件數量"
           }
         }
       }
@@ -224601,6 +226338,70 @@
         }
       }
     },
+    "Notes NSF" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes NSF"
+          }
+        }
+      }
+    },
     "Notes-friendly document — Obsidian, GitHub" : {
       "localizations" : {
         "de" : {
@@ -226343,6 +228144,70 @@
         }
       }
     },
+    "OCR image size" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OCR-Bildgröße"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño de imagen para OCR"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Taille d'image pour l'OCR"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OCR छवि आकार"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dimensione immagine OCR"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OCR 画像サイズ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OCR 이미지 크기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamanho da imagem para OCR"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OCR 图像尺寸"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OCR 影像尺寸"
+          }
+        }
+      }
+    },
     "of %lld" : {
       "localizations" : {
         "de" : {
@@ -226723,6 +228588,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "關。開啟前先顯示摘要。"
+          }
+        }
+      }
+    },
+    "Office document part" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teil eines Office-Dokuments"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parte de documento de Office"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Partie d'un document Office"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Office दस्तावेज़ का भाग"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parte di documento Office"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Office 書類のパート"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Office 문서 파트"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parte de documento do Office"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Office 文档部件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Office 文件部件"
           }
         }
       }
@@ -227430,6 +229359,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "裝置端 AI"
+          }
+        }
+      }
+    },
+    "On-device AI answers; the archive itself is never limited by this." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "KI-Antworten auf dem Gerät; das Archiv selbst wird dadurch nie begrenzt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respuestas de IA en el dispositivo; el archivo en sí nunca se limita por esto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réponses de l'IA sur l'appareil ; l'archive elle-même n'est jamais limitée par cela."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "डिवाइस पर AI उत्तर; संग्रह स्वयं इससे कभी सीमित नहीं होता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Risposte dell'IA sul dispositivo; l'archivio in sé non è mai limitato da questo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デバイス上の AI 回答です。アーカイブ自体がこれで制限されることはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기기 내 AI 답변입니다. 보관함 자체는 이것으로 제한되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respostas de IA no dispositivo; o arquivo em si nunca é limitado por isso."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备端 AI 回答；归档本身从不因此受限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "裝置端 AI 回答；封存本身從不因此受限。"
           }
         }
       }
@@ -231682,6 +233675,134 @@
         }
       }
     },
+    "Opening archives" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive öffnen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir archivos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrir des archives"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रह खोलना"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apertura degli archivi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブを開く"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관함 열기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir arquivos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开归档"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟封存"
+          }
+        }
+      }
+    },
+    "Opening attachments is never limited; saving them in bulk is, on the Free plan." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Öffnen von Anhängen ist nie begrenzt; das Sichern in Masse ist es im Free-Plan."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir adjuntos nunca está limitado; guardarlos en bloque sí, en el plan Free."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ouverture des pièces jointes n'est jamais limitée ; leur enregistrement en masse l'est, sous le forfait Free."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अनुलग्नक खोलना कभी सीमित नहीं है; Free योजना में उन्हें थोक में सहेजना सीमित है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprire gli allegati non è mai limitato; salvarli in blocco lo è, nel piano Free."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添付ファイルを開くことに制限はありません。まとめて保存することは Free プランで制限されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부 파일 열기는 제한이 없습니다. 일괄 저장은 Free 플랜에서 제한됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir anexos nunca é limitado; salvá-los em massa é, no plano Free."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开附件从不受限；批量保存在免费套餐中受限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟附件從不受限；批次儲存在免費方案中受限。"
+          }
+        }
+      }
+    },
     "Opens mailin to import an email archive file" : {
       "localizations" : {
         "de" : {
@@ -231806,6 +233927,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "開啟已完成操作的完整記錄——每個欄位、步驟和結果。"
+          }
+        }
+      }
+    },
+    "Opens the latest import receipt; its “Retry failed sources” imports again only the files that failed, from their checkpoints" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnet die letzte Importquittung; ihr „Fehlgeschlagene Quellen wiederholen“ importiert nur die fehlgeschlagenen Dateien erneut, ab ihren Prüfpunkten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre el último recibo de importación; su «Reintentar orígenes fallidos» vuelve a importar solo los archivos que fallaron, desde sus puntos de control"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvre le dernier reçu d'import ; son « Réessayer les sources échouées » réimporte uniquement les fichiers qui ont échoué, depuis leurs points de reprise"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नवीनतम आयात रसीद खोलता है; उसका “विफल स्रोत फिर से आज़माएँ” केवल विफल फ़ाइलों को उनके चेकपॉइंट से दोबारा आयात करता है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apre l'ultima ricevuta di importazione; il suo \"Riprova origini non riuscite\" reimporta solo i file falliti, dai loro checkpoint"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新の取り込み受領書を開きます。その「失敗したソースを再試行」は失敗したファイルだけをチェックポイントから再取り込みします"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최신 가져오기 영수증을 엽니다. 그 안의 \"실패한 소스 다시 시도\"는 실패한 파일만 체크포인트부터 다시 가져옵니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre o último recibo de importação; o seu “Tentar novamente origens com falha” reimporta só os arquivos que falharam, a partir dos seus pontos de verificação"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开最新的导入回执；其中的“重试失败的来源”只会从检查点重新导入失败的文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟最新的匯入回條；其中的「重試失敗的來源」只會從檢查點重新匯入失敗的檔案"
           }
         }
       }
@@ -233285,6 +235470,70 @@
         }
       }
     },
+    "Original files that moved: use “Relink…” in Original files below. A detached archive volume: reconnect it and relaunch (Archive location)." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verschobene Originaldateien: „Neu verknüpfen …“ unter Originaldateien unten. Ein getrenntes Archivvolume: wieder anschließen und neu starten (Archivort)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivos originales que se movieron: use «Volver a vincular…» en Archivos originales, abajo. Un volumen de archivo desconectado: vuelva a conectarlo y reinicie (Ubicación del archivo)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichiers d'origine déplacés : utilisez « Relier… » dans Fichiers d'origine ci-dessous. Un volume d'archive déconnecté : reconnectez-le et relancez (Emplacement de l'archive)."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्थानांतरित मूल फ़ाइलें: नीचे मूल फ़ाइलों में “फिर से लिंक करें…” का उपयोग करें। अलग हुआ संग्रह वॉल्यूम: उसे फिर से जोड़ें और ऐप दोबारा शुरू करें (संग्रह स्थान)।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File originali spostati: usa \"Ricollega…\" in File originali qui sotto. Un volume dell'archivio scollegato: ricollegalo e riavvia (Posizione archivio)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移動した元ファイル：下の「元のファイル」で「再リンク…」を使います。切断されたアーカイブボリューム：再接続して再起動します（アーカイブの場所）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이동된 원본 파일: 아래 원본 파일에서 \"다시 연결…\"을 사용하세요. 분리된 보관함 볼륨: 다시 연결한 뒤 재실행하세요(보관함 위치)."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arquivos originais que foram movidos: use “Religar…” em Arquivos originais abaixo. Um volume de arquivo desconectado: reconecte-o e reinicie (Local do arquivo)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移动的原始文件：使用下方“原始文件”中的“重新链接…”。已断开的归档卷：重新连接后重新启动（归档位置）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移動的原始檔案：使用下方「原始檔案」中的「重新連結…」。已中斷的封存磁碟區：重新連接後重新啟動（封存位置）。"
+          }
+        }
+      }
+    },
     "Originals" : {
       "localizations" : {
         "de" : {
@@ -233929,6 +236178,70 @@
         }
       }
     },
+    "Outlook PST" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook PST"
+          }
+        }
+      }
+    },
     "Outlook PST Export, Rebuilt" : {
       "localizations" : {
         "de" : {
@@ -234181,6 +236494,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "相容 Outlook 的輸出"
+          }
+        }
+      }
+    },
+    "Outlook's own default maximum; mailin opens the file and says so, it does not refuse." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlooks eigenes Standardmaximum; mailin öffnet die Datei und sagt es, es verweigert nicht."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Máximo predeterminado del propio Outlook; mailin abre el archivo y lo indica, no lo rechaza."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maximum par défaut d'Outlook lui-même ; mailin ouvre le fichier et le signale, sans le refuser."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook की अपनी डिफ़ॉल्ट अधिकतम सीमा; mailin फ़ाइल खोलता है और बताता है, मना नहीं करता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Massimo predefinito di Outlook stesso; mailin apre il file e lo dice, non rifiuta."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook 自体の既定の上限です。mailin はファイルを開いてその旨を伝えます。拒否はしません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook 자체의 기본 최대값입니다. mailin은 파일을 열고 그 사실을 알립니다. 거부하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Máximo padrão do próprio Outlook; o mailin abre o arquivo e avisa, não recusa."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook 自身的默认上限；mailin 会打开文件并说明，而不是拒绝。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outlook 自身的預設上限；mailin 會開啟檔案並說明，而不是拒絕。"
           }
         }
       }
@@ -238061,6 +240438,70 @@
         }
       }
     },
+    "Per import, under the Free plan only." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro Import, nur im Free-Plan."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Por importación, solo en el plan Free."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Par import, sous le forfait Free uniquement."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रति आयात, केवल Free योजना में।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Per importazione, solo nel piano Free."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り込みごと、Free プランのみ。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져오기마다, Free 플랜에서만."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Por importação, só no plano Free."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次导入，仅限免费套餐。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次匯入，僅限免費方案。"
+          }
+        }
+      }
+    },
     "Per-email analysis index (3.0)" : {
       "localizations" : {
         "de" : {
@@ -240441,6 +242882,134 @@
         }
       }
     },
+    "Phrase verification" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Phrasenprüfung"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificación de frases"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérification des expressions"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "वाक्यांश सत्यापन"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifica delle frasi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フレーズの検証"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "구문 검증"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificação de frases"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "短语验证"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "片語驗證"
+          }
+        }
+      }
+    },
+    "Phrases up to this length are verified across chunk boundaries; longer ones match as all-words and the result says so." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Phrasen bis zu dieser Länge werden über Blockgrenzen hinweg geprüft; längere passen als „alle Wörter“, und das Ergebnis sagt es."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las frases hasta esta longitud se verifican a través de los límites de bloque; las más largas coinciden como «todas las palabras» y el resultado lo indica."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les expressions jusqu'à cette longueur sont vérifiées à travers les frontières de blocs ; les plus longues correspondent en « tous les mots » et le résultat le dit."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस लंबाई तक के वाक्यांश खंड सीमाओं के पार सत्यापित होते हैं; लंबे वाक्यांश “सभी शब्द” के रूप में मेल खाते हैं और परिणाम यह बताता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le frasi fino a questa lunghezza sono verificate oltre i confini dei blocchi; quelle più lunghe corrispondono come \"tutte le parole\" e il risultato lo dice."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この長さまでのフレーズはチャンク境界をまたいで検証されます。これより長いものは「すべての語」として一致し、結果にその旨が表示されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 길이까지의 구문은 청크 경계를 넘어 검증됩니다. 더 긴 구문은 '모든 단어'로 일치하며 결과에 그 사실이 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frases até este comprimento são verificadas através dos limites de bloco; as mais longas correspondem como \"todas as palavras\" e o resultado diz isso."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不超过此长度的短语会跨块边界验证；更长的按“全部词语”匹配，结果会予以说明。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不超過此長度的片語會跨塊邊界驗證；更長的按「全部詞語」比對，結果會予以說明。"
+          }
+        }
+      }
+    },
     "Pick an original file to re-hash it and compare against the values recorded at import. Matched by filename." : {
       "localizations" : {
         "de" : {
@@ -242436,6 +245005,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "方案與購買"
+          }
+        }
+      }
+    },
+    "Plan rule" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Planregel"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regla del plan"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Règle du forfait"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "योजना नियम"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regola del piano"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プランのルール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "플랜 규칙"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regra do plano"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "套餐规则"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "方案規則"
           }
         }
       }
@@ -247064,6 +249697,70 @@
         }
       }
     },
+    "Previous duplicate engine" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorherige Duplikat-Engine"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motor de duplicados anterior"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ancien moteur de doublons"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पिछला डुप्लिकेट इंजन"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motore duplicati precedente"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以前の重複エンジン"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 중복 엔진"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motor de duplicatas anterior"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "旧的重复项引擎"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "舊的重複項引擎"
+          }
+        }
+      }
+    },
     "Previous email" : {
       "localizations" : {
         "de" : {
@@ -247127,6 +249824,74 @@
           }
         }
       }
+    },
+    "Previous engine (rollback), stated on screen" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorherige Engine (Rollback), auf dem Bildschirm angegeben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motor anterior (reversión), indicado en pantalla"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moteur précédent (retour arrière), indiqué à l'écran"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पिछला इंजन (रोलबैक), स्क्रीन पर बताया गया"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motore precedente (rollback), indicato sullo schermo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以前のエンジン（ロールバック用）、画面に表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 엔진(롤백용), 화면에 표시됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motor anterior (reversão), indicado na tela"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "旧引擎（回退用），屏幕上有说明"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "舊引擎（回退用），畫面上有說明"
+          }
+        }
+      }
+    },
+    "Previous search index" : {
+      "comment" : "Name of the previous search index.",
+      "isCommentAutoGenerated" : true
     },
     "print" : {
       "comment" : "\"print\" is a verb, not a noun.",
@@ -259035,6 +261800,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重建關係圖譜"
+          }
+        }
+      }
+    },
+    "Rebuilds the full-text index from the stored emails, batch by batch; the archive itself is not modified" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baut den Volltextindex aus den gespeicherten E-Mails Stapel für Stapel neu auf; das Archiv selbst wird nicht verändert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconstruye el índice de texto completo a partir de los correos almacenados, lote a lote; el archivo en sí no se modifica"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconstruit l'index plein texte à partir des courriels stockés, lot par lot ; l'archive elle-même n'est pas modifiée"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रहीत ईमेल से पूर्ण-पाठ अनुक्रमणिका को बैच दर बैच फिर से बनाता है; संग्रह स्वयं नहीं बदला जाता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricostruisce l'indice full-text dalle email memorizzate, un lotto alla volta; l'archivio stesso non viene modificato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存されたメールから全文インデックスをバッチごとに再構築します。アーカイブ自体は変更されません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 메일에서 전체 텍스트 색인을 배치 단위로 다시 만듭니다. 보관함 자체는 변경되지 않습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconstrói o índice de texto completo a partir dos e-mails armazenados, lote a lote; o arquivo em si não é modificado"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从已存储的邮件逐批重建全文索引；归档本身不会被修改"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從已儲存的郵件逐批重建全文索引；封存本身不會被修改"
           }
         }
       }
@@ -275054,6 +277883,70 @@
         }
       }
     },
+    "Retry failed imports…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fehlgeschlagene Importe wiederholen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reintentar importaciones fallidas…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réessayer les imports échoués…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "विफल आयात फिर से आज़माएँ…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Riprova le importazioni non riuscite…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失敗した取り込みを再試行…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실패한 가져오기 다시 시도…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentar novamente importações com falha…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试失败的导入…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重試失敗的匯入…"
+          }
+        }
+      }
+    },
     "Retry failed sources" : {
       "localizations" : {
         "de" : {
@@ -283851,6 +286744,70 @@
         }
       }
     },
+    "Runs only when the whole-archive engine is switched off or has stopped; the screen states the window." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Läuft nur, wenn die Gesamtarchiv-Engine ausgeschaltet ist oder gestoppt hat; der Bildschirm nennt das Fenster."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo se ejecuta cuando el motor de archivo completo está apagado o se ha detenido; la pantalla indica la ventana."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ne s'exécute que lorsque le moteur d'archive complète est désactivé ou s'est arrêté ; l'écran indique la fenêtre."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "केवल तब चलता है जब पूरे-संग्रह इंजन बंद हो या रुक गया हो; स्क्रीन विंडो बताती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si attiva solo quando il motore dell'intero archivio è spento o si è fermato; lo schermo indica la finestra."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ全体エンジンがオフか停止したときだけ動きます。画面にその範囲が表示されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관함 전체 엔진이 꺼져 있거나 멈췄을 때만 실행됩니다. 화면에 범위가 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só roda quando o motor de arquivo inteiro está desligado ou parou; a tela indica a janela."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在全归档引擎关闭或停止时运行；屏幕会说明其范围。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅在全封存引擎關閉或停止時執行；畫面會說明其範圍。"
+          }
+        }
+      }
+    },
     "Runs the previous and the 3.0 engine of five read-only tools on the newest %lld emails and lists every difference. Test builds only; nothing is changed." : {
       "comment" : "A description of the Shadow Comparison feature, including the number of newest emails used and the purpose of the feature. The argument is the number of newest emails used in the comparison.",
       "isCommentAutoGenerated" : true,
@@ -284431,6 +287388,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "安全模式"
+          }
+        }
+      }
+    },
+    "Safety budget — reports what it skipped" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherheitsbudget – meldet, was übersprungen wurde"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Presupuesto de seguridad: informa lo que omitió"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Budget de sécurité — signale ce qui a été ignoré"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सुरक्षा बजट — जो छोड़ा गया उसकी सूचना देता है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Budget di sicurezza: riferisce cosa ha saltato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安全予算 — スキップしたものを報告します"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "안전 예산 — 건너뛴 항목을 보고함"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Orçamento de segurança — informa o que pulou"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安全预算——会报告跳过的内容"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安全預算——會回報略過的內容"
           }
         }
       }
@@ -308427,6 +311448,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顯示更多（%lld / %lld 個資料夾）"
+          }
+        }
+      }
+    },
+    "Show more (%lld of %lld labels)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehr anzeigen (%1$lld von %2$lld Labels)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar más (%1$lld de %2$lld etiquetas)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher plus (%1$lld libellés sur %2$lld)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "और दिखाएँ (%2$lld में से %1$lld लेबल)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra altro (%1$lld di %2$lld etichette)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "さらに表示（%2$lld 件中 %1$lld 件のラベル）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "더 보기(라벨 %2$lld개 중 %1$lld개)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar mais (%1$lld de %2$lld marcadores)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示更多（%2$lld 个标签中的 %1$lld 个）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示更多（%2$lld 個標籤中的 %1$lld 個）"
           }
         }
       }
@@ -339563,6 +342648,10 @@
         }
       }
     },
+    "The per-year index behind the plain box when the search model is off. The search model reads the chunk index, which holds bodies whole." : {
+      "comment" : "The per-year index behind the plain box when the search model is off. The search model reads the chunk index, which holds bodies whole.",
+      "isCommentAutoGenerated" : true
+    },
     "The person whose emails are being reviewed — usually the original account holder. eDiscovery is typically organized around named custodians." : {
       "localizations" : {
         "de" : {
@@ -366160,6 +369249,134 @@
         }
       }
     },
+    "warning above %@; ANSI PST %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Warnung über %1$@; ANSI-PST %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aviso por encima de %1$@; PST ANSI %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "avertissement au-delà de %1$@ ; PST ANSI %2$@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ से ऊपर चेतावनी; ANSI PST %2$@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "avviso oltre %1$@; PST ANSI %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ を超えると警告。ANSI PST は %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 초과 시 경고, ANSI PST %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aviso acima de %1$@; PST ANSI %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超过 %1$@ 时警告；ANSI PST 为 %2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超過 %1$@ 時警告；ANSI PST 為 %2$@"
+          }
+        }
+      }
+    },
+    "warning between %@ and %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Warnung zwischen %1$@ und %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aviso entre %1$@ y %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "avertissement entre %1$@ et %2$@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ और %2$@ के बीच चेतावनी"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "avviso tra %1$@ e %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ から %2$@ の間で警告"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@와 %2$@ 사이에서 경고"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aviso entre %1$@ e %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "介于 %1$@ 和 %2$@ 之间时警告"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "介於 %1$@ 和 %2$@ 之間時警告"
+          }
+        }
+      }
+    },
     "Warning: the source changed while it was read (SHA-256 before %@, after %@); %lld s." : {
       "comment" : "The SHA-256 values are shown in the log.",
       "isCommentAutoGenerated" : true,
@@ -367967,6 +371184,70 @@
         }
       }
     },
+    "What to do when something went wrong — each action keeps the archive as it is until it has finished, and nothing here deletes data." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Was zu tun ist, wenn etwas schiefging – jede Aktion lässt das Archiv unverändert, bis sie abgeschlossen ist, und nichts hier löscht Daten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qué hacer cuando algo salió mal: cada acción deja el archivo como está hasta terminar, y nada aquí elimina datos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Que faire quand quelque chose a mal tourné — chaque action laisse l'archive telle quelle jusqu'à ce qu'elle soit terminée, et rien ici ne supprime de données."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "कुछ गलत होने पर क्या करें — हर क्रिया पूरी होने तक संग्रह को जैसा है वैसा रखती है, और यहाँ कुछ भी डेटा नहीं हटाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cosa fare quando qualcosa è andato storto: ogni azione lascia l'archivio com'è finché non ha finito, e nulla qui elimina dati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "問題が起きたときの対処です。各操作は完了するまでアーカイブをそのままにし、ここではデータを削除しません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "문제가 생겼을 때 할 일입니다. 각 작업은 끝날 때까지 보관함을 그대로 두며, 여기서는 데이터를 삭제하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que fazer quando algo deu errado — cada ação mantém o arquivo como está até terminar, e nada aqui apaga dados."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出现问题时该怎么做——每项操作在完成前都保持归档不变，这里没有任何操作会删除数据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出現問題時該怎麼做——每項操作在完成前都保持封存不變，這裡沒有任何操作會刪除資料。"
+          }
+        }
+      }
+    },
     "What to do when the destination already holds a file with the same name" : {
       "localizations" : {
         "de" : {
@@ -368673,6 +371954,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "當"
+          }
+        }
+      }
+    },
+    "When a subscription ends, everything you imported stays yours: you can still browse, read, search it and export it as .eml or mbox files. New imports beyond the Free rules, OCR, AI and professional tools need an active plan. Nothing is ever deleted because a plan changed." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn ein Abonnement endet, bleibt alles Importierte Ihres: Sie können es weiterhin durchsuchen, lesen, durchsuchen und als .eml- oder mbox-Dateien exportieren. Neue Importe über die Free-Regeln hinaus, OCR, KI und Profi-Werkzeuge brauchen einen aktiven Plan. Nichts wird jemals gelöscht, weil sich ein Plan geändert hat."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuando termina una suscripción, todo lo que importó sigue siendo suyo: puede seguir explorándolo, leyéndolo, buscando en él y exportándolo como archivos .eml o mbox. Las nuevas importaciones más allá de las reglas del plan Free, el OCR, la IA y las herramientas profesionales necesitan un plan activo. Nunca se elimina nada porque un plan cambie."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quand un abonnement prend fin, tout ce que vous avez importé reste à vous : vous pouvez toujours le parcourir, le lire, le rechercher et l'exporter en fichiers .eml ou mbox. Les nouveaux imports au-delà des règles Free, l'OCR, l'IA et les outils professionnels nécessitent un abonnement actif. Rien n'est jamais supprimé parce qu'un abonnement a changé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सदस्यता समाप्त होने पर आपने जो कुछ आयात किया वह आपका ही रहता है: आप उसे अब भी ब्राउज़, पढ़, खोज सकते हैं और .eml या mbox फ़ाइलों के रूप में निर्यात कर सकते हैं। Free नियमों से परे नए आयात, OCR, AI और पेशेवर उपकरणों के लिए सक्रिय योजना चाहिए। योजना बदलने के कारण कभी कुछ नहीं हटाया जाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando un abbonamento termina, tutto ciò che hai importato resta tuo: puoi ancora sfogliarlo, leggerlo, cercarlo ed esportarlo come file .eml o mbox. Nuove importazioni oltre le regole Free, OCR, IA e strumenti professionali richiedono un piano attivo. Nulla viene mai eliminato perché un piano è cambiato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブスクリプションが終了しても、取り込んだものはすべてあなたのものです。引き続き閲覧、読み取り、検索ができ、.eml または mbox ファイルとして書き出せます。Free の範囲を超える新しい取り込み、OCR、AI、プロ向けツールには有効なプランが必要です。プランが変わったことを理由に削除されるものは何もありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "구독이 끝나도 가져온 모든 것은 여러분의 것입니다. 계속 탐색하고 읽고 검색할 수 있으며 .eml 또는 mbox 파일로 내보낼 수 있습니다. Free 규칙을 넘는 새 가져오기, OCR, AI, 전문가 도구에는 활성 플랜이 필요합니다. 플랜이 바뀌었다는 이유로 삭제되는 것은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando uma assinatura termina, tudo o que você importou continua seu: ainda é possível navegar, ler, pesquisar e exportar como arquivos .eml ou mbox. Novas importações além das regras do plano Free, OCR, IA e ferramentas profissionais exigem um plano ativo. Nada é apagado porque um plano mudou."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订阅结束后，您导入的一切仍然属于您：您仍可浏览、阅读、搜索，并导出为 .eml 或 mbox 文件。超出免费规则的新导入、OCR、AI 和专业工具需要有效的套餐。绝不会因为套餐变更而删除任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "訂閱結束後，您匯入的一切仍然屬於您：您仍可瀏覽、閱讀、搜尋，並匯出為 .eml 或 mbox 檔案。超出免費規則的新匯入、OCR、AI 和專業工具需要有效的方案。絕不會因為方案變更而刪除任何內容。"
           }
         }
       }
@@ -369575,6 +372920,70 @@
         }
       }
     },
+    "whole archive" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ganzes Archiv"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "todo el archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "archive entière"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पूरा संग्रह"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "intero archivio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ全体"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관함 전체"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "arquivo inteiro"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整个归档"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整個封存"
+          }
+        }
+      }
+    },
     "Whole archive" : {
       "localizations" : {
         "de" : {
@@ -369701,6 +373110,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "整個封存 · %lld 封郵件"
+          }
+        }
+      }
+    },
+    "whole archive, whole texts" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ganzes Archiv, ganze Texte"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "todo el archivo, textos completos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "archive entière, textes entiers"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पूरा संग्रह, पूरे पाठ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "intero archivio, testi interi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ全体、テキスト全文"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관함 전체, 전체 텍스트"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "arquivo inteiro, textos inteiros"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整个归档、完整文本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整個封存、完整文字"
           }
         }
       }
@@ -369837,6 +373310,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "整個範圍：%@ %lld 封郵件包含個人資料。"
+          }
+        }
+      }
+    },
+    "whole selection, every format" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ganze Auswahl, jedes Format"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "toda la selección, todos los formatos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sélection entière, tous les formats"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पूरा चयन, हर प्रारूप"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "intera selezione, ogni formato"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択全体、すべての形式"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "선택 전체, 모든 형식"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "seleção inteira, todos os formatos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整个选择、所有格式"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整個選取、所有格式"
           }
         }
       }
@@ -375179,6 +378716,70 @@
         }
       }
     },
+    "Your %@ plan has ended. Your archive stays readable, searchable and exportable as .eml or mbox; new imports, OCR, AI and professional tools need an active plan again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ihr %@-Plan ist beendet. Ihr Archiv bleibt lesbar, durchsuchbar und als .eml oder mbox exportierbar; neue Importe, OCR, KI und Profi-Werkzeuge brauchen wieder einen aktiven Plan."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su plan %@ ha terminado. Su archivo sigue siendo legible, consultable y exportable como .eml o mbox; las nuevas importaciones, el OCR, la IA y las herramientas profesionales vuelven a necesitar un plan activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre abonnement %@ a pris fin. Votre archive reste lisible, consultable et exportable en .eml ou mbox ; les nouveaux imports, l'OCR, l'IA et les outils professionnels nécessitent à nouveau un abonnement actif."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपकी %@ योजना समाप्त हो गई है। आपका संग्रह पढ़ने, खोजने और .eml या mbox के रूप में निर्यात करने योग्य बना रहता है; नए आयात, OCR, AI और पेशेवर उपकरणों के लिए फिर से सक्रिय योजना चाहिए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il tuo piano %@ è terminato. Il tuo archivio resta leggibile, ricercabile ed esportabile come .eml o mbox; nuove importazioni, OCR, IA e strumenti professionali richiedono di nuovo un piano attivo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ プランは終了しました。アーカイブは引き続き閲覧・検索でき、.eml または mbox として書き出せます。新しい取り込み、OCR、AI、プロ向けツールには再び有効なプランが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 플랜이 종료되었습니다. 보관함은 계속 읽고 검색할 수 있으며 .eml 또는 mbox로 내보낼 수 있습니다. 새 가져오기, OCR, AI, 전문가 도구에는 다시 활성 플랜이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seu plano %@ terminou. Seu arquivo continua legível, pesquisável e exportável como .eml ou mbox; novas importações, OCR, IA e ferramentas profissionais exigem novamente um plano ativo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的 %@ 套餐已结束。您的归档仍可阅读、搜索并导出为 .eml 或 mbox；新导入、OCR、AI 和专业工具需要再次启用有效套餐。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的 %@ 方案已結束。您的封存仍可閱讀、搜尋並匯出為 .eml 或 mbox；新匯入、OCR、AI 和專業工具需要再次啟用有效方案。"
+          }
+        }
+      }
+    },
     "Your %lld emails are ready to explore. Everything runs on-device." : {
       "localizations" : {
         "de" : {
@@ -378161,646 +381762,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "非真實 PII 項目的從零開始編號 — Unix 時間戳記、訂單/參照/追蹤/序號、訊息 ID、版本字串。若所有項目均為真實則為空。"
-          }
-        }
-      }
-    },
-    "What to do when something went wrong — each action keeps the archive as it is until it has finished, and nothing here deletes data." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Was zu tun ist, wenn etwas schiefging – jede Aktion lässt das Archiv unverändert, bis sie abgeschlossen ist, und nichts hier löscht Daten."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Qué hacer cuando algo salió mal: cada acción deja el archivo como está hasta terminar, y nada aquí elimina datos."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Que faire quand quelque chose a mal tourné — chaque action laisse l'archive telle quelle jusqu'à ce qu'elle soit terminée, et rien ici ne supprime de données."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "कुछ गलत होने पर क्या करें — हर क्रिया पूरी होने तक संग्रह को जैसा है वैसा रखती है, और यहाँ कुछ भी डेटा नहीं हटाता।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cosa fare quando qualcosa è andato storto: ogni azione lascia l'archivio com'è finché non ha finito, e nulla qui elimina dati."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "問題が起きたときの対処です。各操作は完了するまでアーカイブをそのままにし、ここではデータを削除しません。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "문제가 생겼을 때 할 일입니다. 각 작업은 끝날 때까지 보관함을 그대로 두며, 여기서는 데이터를 삭제하지 않습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O que fazer quando algo deu errado — cada ação mantém o arquivo como está até terminar, e nada aqui apaga dados."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "出现问题时该怎么做——每项操作在完成前都保持归档不变，这里没有任何操作会删除数据。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "出現問題時該怎麼做——每項操作在完成前都保持封存不變，這裡沒有任何操作會刪除資料。"
-          }
-        }
-      }
-    },
-    "Retry failed imports…" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fehlgeschlagene Importe wiederholen …"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reintentar importaciones fallidas…"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Réessayer les imports échoués…"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "विफल आयात फिर से आज़माएँ…"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Riprova le importazioni non riuscite…"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "失敗した取り込みを再試行…"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "실패한 가져오기 다시 시도…"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tentar novamente importações com falha…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重试失败的导入…"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重試失敗的匯入…"
-          }
-        }
-      }
-    },
-    "Opens the latest import receipt; its “Retry failed sources” imports again only the files that failed, from their checkpoints" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Öffnet die letzte Importquittung; ihr „Fehlgeschlagene Quellen wiederholen“ importiert nur die fehlgeschlagenen Dateien erneut, ab ihren Prüfpunkten"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abre el último recibo de importación; su «Reintentar orígenes fallidos» vuelve a importar solo los archivos que fallaron, desde sus puntos de control"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ouvre le dernier reçu d'import ; son « Réessayer les sources échouées » réimporte uniquement les fichiers qui ont échoué, depuis leurs points de reprise"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "नवीनतम आयात रसीद खोलता है; उसका “विफल स्रोत फिर से आज़माएँ” केवल विफल फ़ाइलों को उनके चेकपॉइंट से दोबारा आयात करता है"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Apre l'ultima ricevuta di importazione; il suo \"Riprova origini non riuscite\" reimporta solo i file falliti, dai loro checkpoint"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最新の取り込み受領書を開きます。その「失敗したソースを再試行」は失敗したファイルだけをチェックポイントから再取り込みします"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "최신 가져오기 영수증을 엽니다. 그 안의 \"실패한 소스 다시 시도\"는 실패한 파일만 체크포인트부터 다시 가져옵니다"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abre o último recibo de importação; o seu “Tentar novamente origens com falha” reimporta só os arquivos que falharam, a partir dos seus pontos de verificação"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开最新的导入回执；其中的“重试失败的来源”只会从检查点重新导入失败的文件"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "開啟最新的匯入回條；其中的「重試失敗的來源」只會從檢查點重新匯入失敗的檔案"
-          }
-        }
-      }
-    },
-    "Rebuilds the full-text index from the stored emails, batch by batch; the archive itself is not modified" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Baut den Volltextindex aus den gespeicherten E-Mails Stapel für Stapel neu auf; das Archiv selbst wird nicht verändert"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reconstruye el índice de texto completo a partir de los correos almacenados, lote a lote; el archivo en sí no se modifica"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reconstruit l'index plein texte à partir des courriels stockés, lot par lot ; l'archive elle-même n'est pas modifiée"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "संग्रहीत ईमेल से पूर्ण-पाठ अनुक्रमणिका को बैच दर बैच फिर से बनाता है; संग्रह स्वयं नहीं बदला जाता"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ricostruisce l'indice full-text dalle email memorizzate, un lotto alla volta; l'archivio stesso non viene modificato"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存されたメールから全文インデックスをバッチごとに再構築します。アーカイブ自体は変更されません"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "저장된 메일에서 전체 텍스트 색인을 배치 단위로 다시 만듭니다. 보관함 자체는 변경되지 않습니다"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reconstrói o índice de texto completo a partir dos e-mails armazenados, lote a lote; o arquivo em si não é modificado"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从已存储的邮件逐批重建全文索引；归档本身不会被修改"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從已儲存的郵件逐批重建全文索引；封存本身不會被修改"
-          }
-        }
-      }
-    },
-    "Original files that moved: use “Relink…” in Original files below. A detached archive volume: reconnect it and relaunch (Archive location)." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Verschobene Originaldateien: „Neu verknüpfen …“ unter Originaldateien unten. Ein getrenntes Archivvolume: wieder anschließen und neu starten (Archivort)."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Archivos originales que se movieron: use «Volver a vincular…» en Archivos originales, abajo. Un volumen de archivo desconectado: vuelva a conectarlo y reinicie (Ubicación del archivo)."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fichiers d'origine déplacés : utilisez « Relier… » dans Fichiers d'origine ci-dessous. Un volume d'archive déconnecté : reconnectez-le et relancez (Emplacement de l'archive)."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "स्थानांतरित मूल फ़ाइलें: नीचे मूल फ़ाइलों में “फिर से लिंक करें…” का उपयोग करें। अलग हुआ संग्रह वॉल्यूम: उसे फिर से जोड़ें और ऐप दोबारा शुरू करें (संग्रह स्थान)।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "File originali spostati: usa \"Ricollega…\" in File originali qui sotto. Un volume dell'archivio scollegato: ricollegalo e riavvia (Posizione archivio)."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移動した元ファイル：下の「元のファイル」で「再リンク…」を使います。切断されたアーカイブボリューム：再接続して再起動します（アーカイブの場所）。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이동된 원본 파일: 아래 원본 파일에서 \"다시 연결…\"을 사용하세요. 분리된 보관함 볼륨: 다시 연결한 뒤 재실행하세요(보관함 위치)."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Arquivos originais que foram movidos: use “Religar…” em Arquivos originais abaixo. Um volume de arquivo desconectado: reconecte-o e reinicie (Local do arquivo)."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已移动的原始文件：使用下方“原始文件”中的“重新链接…”。已断开的归档卷：重新连接后重新启动（归档位置）。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已移動的原始檔案：使用下方「原始檔案」中的「重新連結…」。已中斷的封存磁碟區：重新連接後重新啟動（封存位置）。"
-          }
-        }
-      }
-    },
-    "When a subscription ends, everything you imported stays yours: you can still browse, read, search it and export it as .eml or mbox files. New imports beyond the Free rules, OCR, AI and professional tools need an active plan. Nothing is ever deleted because a plan changed." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wenn ein Abonnement endet, bleibt alles Importierte Ihres: Sie können es weiterhin durchsuchen, lesen, durchsuchen und als .eml- oder mbox-Dateien exportieren. Neue Importe über die Free-Regeln hinaus, OCR, KI und Profi-Werkzeuge brauchen einen aktiven Plan. Nichts wird jemals gelöscht, weil sich ein Plan geändert hat."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cuando termina una suscripción, todo lo que importó sigue siendo suyo: puede seguir explorándolo, leyéndolo, buscando en él y exportándolo como archivos .eml o mbox. Las nuevas importaciones más allá de las reglas del plan Free, el OCR, la IA y las herramientas profesionales necesitan un plan activo. Nunca se elimina nada porque un plan cambie."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Quand un abonnement prend fin, tout ce que vous avez importé reste à vous : vous pouvez toujours le parcourir, le lire, le rechercher et l'exporter en fichiers .eml ou mbox. Les nouveaux imports au-delà des règles Free, l'OCR, l'IA et les outils professionnels nécessitent un abonnement actif. Rien n'est jamais supprimé parce qu'un abonnement a changé."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "सदस्यता समाप्त होने पर आपने जो कुछ आयात किया वह आपका ही रहता है: आप उसे अब भी ब्राउज़, पढ़, खोज सकते हैं और .eml या mbox फ़ाइलों के रूप में निर्यात कर सकते हैं। Free नियमों से परे नए आयात, OCR, AI और पेशेवर उपकरणों के लिए सक्रिय योजना चाहिए। योजना बदलने के कारण कभी कुछ नहीं हटाया जाता।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Quando un abbonamento termina, tutto ciò che hai importato resta tuo: puoi ancora sfogliarlo, leggerlo, cercarlo ed esportarlo come file .eml o mbox. Nuove importazioni oltre le regole Free, OCR, IA e strumenti professionali richiedono un piano attivo. Nulla viene mai eliminato perché un piano è cambiato."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "サブスクリプションが終了しても、取り込んだものはすべてあなたのものです。引き続き閲覧、読み取り、検索ができ、.eml または mbox ファイルとして書き出せます。Free の範囲を超える新しい取り込み、OCR、AI、プロ向けツールには有効なプランが必要です。プランが変わったことを理由に削除されるものは何もありません。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "구독이 끝나도 가져온 모든 것은 여러분의 것입니다. 계속 탐색하고 읽고 검색할 수 있으며 .eml 또는 mbox 파일로 내보낼 수 있습니다. Free 규칙을 넘는 새 가져오기, OCR, AI, 전문가 도구에는 활성 플랜이 필요합니다. 플랜이 바뀌었다는 이유로 삭제되는 것은 없습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Quando uma assinatura termina, tudo o que você importou continua seu: ainda é possível navegar, ler, pesquisar e exportar como arquivos .eml ou mbox. Novas importações além das regras do plano Free, OCR, IA e ferramentas profissionais exigem um plano ativo. Nada é apagado porque um plano mudou."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "订阅结束后，您导入的一切仍然属于您：您仍可浏览、阅读、搜索，并导出为 .eml 或 mbox 文件。超出免费规则的新导入、OCR、AI 和专业工具需要有效的套餐。绝不会因为套餐变更而删除任何内容。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "訂閱結束後，您匯入的一切仍然屬於您：您仍可瀏覽、閱讀、搜尋，並匯出為 .eml 或 mbox 檔案。超出免費規則的新匯入、OCR、AI 和專業工具需要有效的方案。絕不會因為方案變更而刪除任何內容。"
-          }
-        }
-      }
-    },
-    "Your %@ plan has ended. Your archive stays readable, searchable and exportable as .eml or mbox; new imports, OCR, AI and professional tools need an active plan again." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ihr %@-Plan ist beendet. Ihr Archiv bleibt lesbar, durchsuchbar und als .eml oder mbox exportierbar; neue Importe, OCR, KI und Profi-Werkzeuge brauchen wieder einen aktiven Plan."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Su plan %@ ha terminado. Su archivo sigue siendo legible, consultable y exportable como .eml o mbox; las nuevas importaciones, el OCR, la IA y las herramientas profesionales vuelven a necesitar un plan activo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Votre abonnement %@ a pris fin. Votre archive reste lisible, consultable et exportable en .eml ou mbox ; les nouveaux imports, l'OCR, l'IA et les outils professionnels nécessitent à nouveau un abonnement actif."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "आपकी %@ योजना समाप्त हो गई है। आपका संग्रह पढ़ने, खोजने और .eml या mbox के रूप में निर्यात करने योग्य बना रहता है; नए आयात, OCR, AI और पेशेवर उपकरणों के लिए फिर से सक्रिय योजना चाहिए।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Il tuo piano %@ è terminato. Il tuo archivio resta leggibile, ricercabile ed esportabile come .eml o mbox; nuove importazioni, OCR, IA e strumenti professionali richiedono di nuovo un piano attivo."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ プランは終了しました。アーカイブは引き続き閲覧・検索でき、.eml または mbox として書き出せます。新しい取り込み、OCR、AI、プロ向けツールには再び有効なプランが必要です。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 플랜이 종료되었습니다. 보관함은 계속 읽고 검색할 수 있으며 .eml 또는 mbox로 내보낼 수 있습니다. 새 가져오기, OCR, AI, 전문가 도구에는 다시 활성 플랜이 필요합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Seu plano %@ terminou. Seu arquivo continua legível, pesquisável e exportável como .eml ou mbox; novas importações, OCR, IA e ferramentas profissionais exigem novamente um plano ativo."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "您的 %@ 套餐已结束。您的归档仍可阅读、搜索并导出为 .eml 或 mbox；新导入、OCR、AI 和专业工具需要再次启用有效套餐。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "您的 %@ 方案已結束。您的封存仍可閱讀、搜尋並匯出為 .eml 或 mbox；新匯入、OCR、AI 和專業工具需要再次啟用有效方案。"
-          }
-        }
-      }
-    },
-    "Show more (%lld of %lld labels)" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mehr anzeigen (%1$lld von %2$lld Labels)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mostrar más (%1$lld de %2$lld etiquetas)"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Afficher plus (%1$lld libellés sur %2$lld)"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "और दिखाएँ (%2$lld में से %1$lld लेबल)"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mostra altro (%1$lld di %2$lld etichette)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "さらに表示（%2$lld 件中 %1$lld 件のラベル）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "더 보기(라벨 %2$lld개 중 %1$lld개)"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mostrar mais (%1$lld de %2$lld marcadores)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示更多（%2$lld 个标签中的 %1$lld 个）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "顯示更多（%2$lld 個標籤中的 %1$lld 個）"
-          }
-        }
-      }
-    },
-    "Lists the next %lld labels, busiest first. Every label in the archive can be reached this way." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Listet die nächsten %lld Labels, die meistgenutzten zuerst. Jedes Label im Archiv ist so erreichbar."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muestra las siguientes %lld etiquetas, las más usadas primero. Así se puede llegar a todas las etiquetas del archivo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Affiche les %lld libellés suivants, les plus utilisés d'abord. Chaque libellé de l'archive est accessible ainsi."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "अगले %lld लेबल दिखाता है, सबसे व्यस्त पहले। संग्रह का हर लेबल इस तरह पहुँचा जा सकता है।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Elenca le prossime %lld etichette, le più usate per prime. Ogni etichetta dell'archivio è raggiungibile così."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "次の %lld 件のラベルを使用頻度順に表示します。アーカイブ内のすべてのラベルにこの方法で到達できます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "다음 라벨 %lld개를 많이 쓰인 순으로 표시합니다. 보관함의 모든 라벨에 이 방법으로 도달할 수 있습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lista os próximos %lld marcadores, os mais usados primeiro. Todos os marcadores do arquivo podem ser alcançados assim."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "列出接下来的 %lld 个标签，按使用频率排序。归档中的每个标签都可以通过这种方式访问。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "列出接下來的 %lld 個標籤，按使用頻率排序。封存中的每個標籤都可以透過這種方式存取。"
-          }
-        }
-      }
-    },
-    "Labels (%lld)" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Labels (%lld)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Etiquetas (%lld)"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Libellés (%lld)"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "लेबल (%lld)"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Etichette (%lld)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ラベル（%lld）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "라벨(%lld)"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Marcadores (%lld)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "标签（%lld）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "標籤（%lld）"
           }
         }
       }

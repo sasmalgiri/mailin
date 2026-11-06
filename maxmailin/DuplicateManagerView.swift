@@ -627,8 +627,11 @@ struct DuplicateManagerView: View {
             // content-hash groups over a bounded window).
             var emails: [MBOXParser.RawEmail] = []
             let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
-            do { for try await b in stream { emails.append(contentsOf: b); if emails.count >= 5000 { break } } } catch { }
-            emails = Array(emails.prefix(5000))
+            // CAP-06: the previous engine's window is a named, listed limit
+            // (Settings ▸ Health ▸ Limits) and is stated on screen below.
+            let window = AppLimits.previousEngineDuplicateWindow
+            do { for try await b in stream { emails.append(contentsOf: b); if emails.count >= window { break } } } catch { }
+            emails = Array(emails.prefix(window))
             let exactGroups = Self.findExactDuplicates(in: emails)
             let nearGroups: [[MBOXParser.RawEmail]]
             if includeNear {

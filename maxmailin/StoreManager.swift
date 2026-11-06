@@ -220,6 +220,8 @@ class StoreManager: ObservableObject {
     /// archive, counted by the bytes on disk). Decimal megabytes, so the
     /// formatter and the number agree ("100 MB").
     nonisolated static let freeInputByteLimit = 100_000_000
+    /// Free plan: bulk attachment saves per day (opening attachments is never limited).
+    nonisolated static let freeAttachmentDownloadsPerDay = 10
 
     /// The input allowance for the current tier: nil = unlimited.
     var inputByteLimit: Int? { isPremium ? nil : Self.freeInputByteLimit }

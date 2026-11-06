@@ -77,6 +77,23 @@ struct ArchiveHealthView: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
 
+            // CAP-06: every limit the app enforces, named, with its kind —
+            // and the five jobs listed as having no cap of the app's own.
+            Section("Limits") {
+                Text("Every limit mailin enforces, and what kind of limit it is. The five archive jobs have no cap of the app's own; plan rules are shown on the purchase screen too.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(AppLimits.all) { limit in
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent(limit.what) { Text(limit.value) }
+                        Text("\(limit.kind.label) — \(limit.why)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .accessibilityIdentifier("health.limits")
+
             Section("Snapshots") {
                 if !modules.isOn(.v3Snapshots) {
                     Text("Archive snapshots are off. Turn on “Archive snapshots (3.0)” in Modules to keep a restorable copy before every upgrade and once a day.")

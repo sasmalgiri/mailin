@@ -3277,7 +3277,7 @@ struct ParsedEmailListView: View {
     private var totalAttachments: Int {
         model.visibleEmails.map { $0.attachments.count }.reduce(0, +)
     }
-    private static let freeAttachmentLimit = 10
+    private static let freeAttachmentLimit = StoreManager.freeAttachmentDownloadsPerDay
     @AppStorage("freeAttachmentDownloadCount") private var freeAttachmentDownloadCount: Int = 0
 
     private func downloadAllAttachments() {

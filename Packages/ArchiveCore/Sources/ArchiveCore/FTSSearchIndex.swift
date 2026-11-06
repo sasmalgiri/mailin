@@ -952,6 +952,13 @@ actor FTSSearchIndex {
     /// Interactive cap: enough for "search across a decade" without leaking
     /// handles on a 50-year archive.
     private static let interactiveMaxOpenShards = 20
+
+    /// CAP-06: the previous search index (per-year FTS shards) indexes the
+    /// first this-many characters of a body. Named and listed in Settings ▸
+    /// Health ▸ Limits; the chunk index (FIND-07) indexes bodies whole and is
+    /// what the search model reads, so this bounds only the previous text
+    /// path. Not a cap on what is stored.
+    static let indexedBodyCharacters = 50_000
     /// P3.3: during an import the date spread decides how many shards get
     /// touched — a 2007–2025 corpus opened 19 connections, each with its own
     /// page cache, and that cost accumulates independently of batch size. A
@@ -1660,7 +1667,7 @@ enum BoundedRegexSearch {
         let body = email.plainBody.isEmpty
             ? FTSSearchIndex.stripHTMLText(email.htmlBody)
             : email.plainBody
-        return subject + "\n" + sender + "\n" + recipients + "\n" + String(body.prefix(50_000))
+        return subject + "\n" + sender + "\n" + recipients + "\n" + String(body.prefix(FTSSearchIndex.indexedBodyCharacters))
     }
 
     static func matches(_ regex: NSRegularExpression, _ email: MBOXParser.RawEmail) -> Bool {
