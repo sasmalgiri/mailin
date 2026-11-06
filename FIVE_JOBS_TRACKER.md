@@ -69,7 +69,7 @@ export cancel/keep-partial/resume with 17 tests (`ExportResumeTests.swift`), leg
 | LIFE-03 | B | Field contract implicit | `FIELD_CONTRACT.md`: every field — where the original is kept, the normalised form, what is disclosed when absent or transformed (repeated headers collapse in `headers_json`, MIME tree rebuilt from raw, PST read/unread not imported, Maildir++ flattening …) and the job-consistency rules | verified | f9fe401 | `testLIFE03_importDuringSearchDuplicateReviewAndExport_staysConsistent`: import under 30 count/page reads (never shrinks), duplicate review (5 pairs verified, 0 candidates) and two simultaneous exports over a frozen selection (both inventories exact and clean) |
 | LIFE-04 | E | Safe HTML, bounded extraction exist | Verified + fixed: store, snapshots, search shards, receipts, checkpoints were owner-only; the blob tier's root/fan-out folders and the new backup folder/files were not — now `ArtifactProtection` on both (0700/0600 macOS; protected-until-first-unlock iOS). Diagnostics (`EngineTripCenter.diagnosticsText`, `DiagnosticsCenter`) are built from trips, fallbacks, MetricKit summaries and counts — no message fields (source guard). Not changed: no at-rest encryption beyond FileVault/Data Protection — stated; temporary preview extractions live in the per-user temp dir | verified | aa5672e | `testLIFE04_archiveArtifactsAreOwnerOnly_andDiagnosticsNameNoMailContent` |
 | LIFE-05 | E | Sample mbox, help exist | Settings ▸ Health ▸ Recovery: Retry failed imports… (opens the import receipt whose button re-imports only the failed files from their checkpoints), Rebuild search index, pointers to Relink (Original files) and reconnecting a detached volume; Restore latest snapshot… and Restore from backup… beside it. Each action says what it does; none deletes data. First-import guide, sample archive and contextual help were already there | verified | aa5672e | `testLIFE05_everyRecoveryActionIsReachableFromHealth` (identifiers + retry wiring end to end) |
-| LIFE-06 | E | Newest-500 free tier; Pro Lifetime | Owner policy decision on post-expiry reading/export; capability table tested | blocked (owner) | | entitlement matrix |
+| LIFE-06 | E | Newest-500 free tier; Pro Lifetime | Owner adopted the policy 2026-11-06 (plan v3 §12.2). `AccessPolicy` + `StoreManager.entitlementState` (free / active / lifetime / lapsed): a lapsed plan (expired, cancelled, refunded, revoked) keeps the whole archive readable and searchable, saves attachments, exports .eml/mbox uncapped; reports, new imports beyond Free, OCR, AI and specialist tools follow the plan; maintenance never gated; nothing deleted on an entitlement change; purchase screen states it. Offline: StoreKit's cached verified entitlements are read locally and a failed refresh does not downgrade (no network call decides access). **Still to run (owner/sandbox):** a real sandbox expiry → lapsed → restore cycle with a second Apple account, and the StoreKit test classes not run this release | implemented | 4f6883b | `testLIFE06_accessPolicy_*` (table per state), `testLIFE06_storeManagerStates_andExportAuthorization` (fixtures, export caps per format, no-delete guard, paywall statement) |
 
 ## Owner decisions taken during the work
 
@@ -109,9 +109,22 @@ Stage E (2026-11-06): OPEN-06, LIFE-04, LIFE-05 done (aa5672e); LIFE-06 and OUT-
 | 9 | Every benchmark tied to commit/build/device/dataset | **pass** | `SCALE_RESULTS.md` 2026-11-06 rows name the test, build configuration, Mac and the synthetic dataset; nothing is extrapolated |
 | 10 | Usability pilot (9 of 10 on each task; partial outputs recognised) | **open (owner)** | Not run |
 
+
+## Plan v3 (6 November 2026) — closure list §12.3, state
+
+| Item | State | Notes |
+|---|---|---|
+| Finish the two search paths (ordinary box on the validated model; chip opens the specific attachment) | open | FIND-04/FIND-05 stay partial until done |
+| Implement and verify LIFE-06 | implemented (4f6883b); sandbox expiry/restore run owner-bound | see LIFE-06 row |
+| Validate real supported inputs (small real-client fixtures per format) | open (owner: fixtures) | gate 2 |
+| Validate usable exports (source-to-output reconciliation; Apple Mail / Thunderbird; PST independent check) | partly: inventory + re-hash done; re-parse vs source and destinations open | OUT-04 note, OUT-05 |
+| External-process recovery evidence (drive detach during write) | open | OPEN-03 |
+| Human usability gate | open (owner) | gate 10 |
+| Reconcile LIFE/security/help evidence (safe previews, key behaviour, temp/log handling, VoiceOver) | partly: LIFE-04 permissions + diagnostics; safe-preview/VoiceOver evidence to collect | — |
+| Presentation (§3.3 identity, §3.4 capacity wording), cap audit, signed candidate | open | no 100 MB cap exists in code; audit to be recorded |
+
 ## Owner decisions needed
 
 - OLM reader and TAR/TGZ wrapper: proposed additions, not adopted. Adopt or defer?
-- LIFE-06 post-expiry policy (plan recommends: reading + basic export stay available).
 - OUT-05 Apple Mail / Thunderbird interactive import runs.
 - OST and NSF real fixtures (none exist; without them those rows stay "partially supported").
