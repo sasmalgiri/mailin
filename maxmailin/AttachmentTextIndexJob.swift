@@ -66,7 +66,9 @@ final class AttachmentTextIndexJob {
     /// below this version in unsupported/failed/truncated are re-queued at
     /// the start of the next pass. 1 = before per-attachment coverage;
     /// 2 = per-attachment states; 3 = DOCX/XLSX/PPTX (FIND-01).
-    nonisolated static let extractorVersion = 3
+    /// 4 (2026-11-06): OpenDocument, iWork, Office 97–2003 and ZIP contents
+    /// are read — rows those kinds left as unsupported are retried.
+    nonisolated static let extractorVersion = 4
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -451,27 +453,31 @@ final class AttachmentTextIndexJob {
 
     /// FIND-01: an Office Open XML package. Needs a file: the extractor's
     /// temp file when there is one, otherwise the bytes written to one.
-    nonisolated private static func readOffice(_ attachment: AttachmentMetadata, kind: OfficeTextExtractor.Kind, data: Data)
+    /// TYPE-01…04: every document kind through the one facade — Office Open
+    /// XML, OpenDocument, iWork, Office 97–2003 and one level inside ZIPs.
+    nonisolated private static func readDocument(_ attachment: AttachmentMetadata, kind: DocumentKind, data: Data)
         -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
         var url = attachment.fileURL
         var temporary: URL?
         if url == nil {
-            let t = FileManager.default.temporaryDirectory.appendingPathComponent("office-\(UUID().uuidString).\(kind.rawValue)")
-            do { try data.write(to: t) } catch { return (nil, .failed, "office", error.localizedDescription) }
+            let t = FileManager.default.temporaryDirectory.appendingPathComponent("document-\(UUID().uuidString).\(kind.rawValue)")
+            do { try data.write(to: t) } catch { return (nil, .failed, kind.extractorName, error.localizedDescription) }
             temporary = t; url = t
         }
         defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
         do {
-            let result = try OfficeTextExtractor.extract(fileURL: url!, kind: kind)
+            let result = try DocumentTextExtractor.extract(fileURL: url!, kind: kind)
             var note: String? = nil
             if !result.skipped.isEmpty {
                 note = String(localized: "not read: \(result.skipped.joined(separator: "; "))")
             }
-            return (result.text, result.partial ? .partial : .extracted, "office", note)
+            return (result.text, result.partial ? .partial : .extracted, kind.extractorName, note)
         } catch OfficeTextExtractor.ExtractError.encrypted {
-            return (nil, .locked, "office", String(localized: "password-protected Office file"))
+            return (nil, .locked, kind.extractorName, String(localized: "password-protected document"))
+        } catch OfficeTextExtractor.ExtractError.noTextParts {
+            return ("", .noText, kind.extractorName, nil)
         } catch {
-            return (nil, .failed, "office", error.localizedDescription)
+            return (nil, .failed, kind.extractorName, error.localizedDescription)
         }
     }
 
@@ -518,21 +524,16 @@ final class AttachmentTextIndexJob {
             }
             return (AttachmentOCR.text(fromImageData: data), .extracted, "ocr", nil)
         }
-        // FIND-01: DOCX / XLSX / PPTX through the Office Open XML extractor.
-        if let kind = OfficeTextExtractor.Kind.detect(mimeType: mime, filename: attachment.filename) {
-            return readOffice(attachment, kind: kind, data: data)
+        // FIND-01 + TYPE-01…04: Office Open XML, OpenDocument, iWork, Office
+        // 97–2003 and ZIP (one level inside) through the document facade —
+        // before the text families, because their MIME types contain "xml"
+        // and were once decoded as Latin-1 text, indexing bytes as words.
+        if let kind = DocumentKind.detect(mimeType: mime, filename: attachment.filename) {
+            return readDocument(attachment, kind: kind, data: data)
         }
-        // Other Office and compressed containers before the text families:
-        // their MIME types contain "xml" ("…officedocument…") and were once
-        // decoded as Latin-1 text, indexing bytes as words.
-        let legacyOffice: Set<String> = ["doc", "xls", "ppt", "odt", "ods", "odp", "pages", "numbers", "key"]
-        if legacyOffice.contains(ext) || mime.contains("msword") || mime.contains("ms-excel") || mime.contains("ms-powerpoint")
-            || mime.contains("opendocument") {
-            return (nil, .unsupported, "none", String(localized: "older Office or iWork format — only DOCX, XLSX and PPTX are read"))
-        }
-        let containerExts: Set<String> = ["zip", "gz", "tgz", "7z", "rar", "tar"]
-        if mime.contains("zip") || mime.contains("compressed") || containerExts.contains(ext) {
-            return (nil, .unsupported, "none", nil)
+        let otherContainers: Set<String> = ["gz", "tgz", "7z", "rar", "tar", "bz2", "xz"]
+        if otherContainers.contains(ext) || mime.contains("x-7z") || mime.contains("x-rar") || mime.contains("x-tar") || mime.contains("gzip") {
+            return (nil, .unsupported, "none", String(localized: "archive format not opened — files inside ZIP attachments are read, other archive formats are kept as files"))
         }
         if mime.contains("rtf") || ext == "rtf" {
             guard let text = (try? NSAttributedString(

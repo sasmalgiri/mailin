@@ -1155,7 +1155,7 @@ final class V2CutoverTests: XCTestCase {
         let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
         let rows = try coverage.rows(for: email.id)
         XCTAssertEqual(rows.map(\.filename), ["notes.txt", "blank.txt", "report.doc", "locked.pdf", "big.txt"])
-        XCTAssertEqual(rows.map(\.state), [.extracted, .noText, .unsupported, .locked, .truncated])
+        XCTAssertEqual(rows.map(\.state), [.extracted, .noText, .failed, .locked, .truncated])
         XCTAssertEqual(rows[4].characters, AttachmentTextIndexJob.maxTextPerAttachment)
         XCTAssertTrue(rows.allSatisfy { $0.extractorVersion == AttachmentTextIndexJob.extractorVersion })
         XCTAssertNotNil(rows[3].note)
@@ -1163,7 +1163,9 @@ final class V2CutoverTests: XCTestCase {
         let summary = try coverage.summary(currentExtractorVersion: AttachmentTextIndexJob.extractorVersion)
         XCTAssertEqual(summary.total, 5)
         XCTAssertEqual(summary.searchable, 2)
-        XCTAssertEqual(summary.unsupportedKinds.map(\.kind), ["doc"])
+        // TYPE-01: .doc is a read kind now; this fixture's bytes are not a Word file, so it is a failed read with its reason.
+        XCTAssertEqual(summary.unsupportedKinds.map(\.kind), [])
+        XCTAssertTrue(rows[2].note?.contains("OLE2") == true, rows[2].note ?? "")
         XCTAssertEqual(summary.staleRows, 0)
         let hits = try await env.store.attachmentTextSearch("xylophone")
         XCTAssertEqual(hits, [email.id])
@@ -1187,7 +1189,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(try coverage.rows(for: email.id).isEmpty)
         let again = await AttachmentTextIndexJob.shared.run()
         XCTAssertEqual(again.indexedEmails, 1)
-        XCTAssertEqual(try coverage.rows(for: email.id).map(\.state), [.extracted, .noText, .unsupported, .locked, .truncated])
+        XCTAssertEqual(try coverage.rows(for: email.id).map(\.state), [.extracted, .noText, .failed, .locked, .truncated])
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
@@ -2332,9 +2334,10 @@ final class V2CutoverTests: XCTestCase {
 
         let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
         let rows = try coverage.rows(for: email.id)
-        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted, .extracted, .unsupported])
-        XCTAssertEqual(rows.map(\.extractorVersion), Array(repeating: 3, count: 4))
-        XCTAssertTrue(rows[3].note?.contains("older Office") == true, rows[3].note ?? "")
+        // TYPE-01: a .doc is now read; this one is not an OLE2 file at all, so it fails with the reason, never "unsupported".
+        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted, .extracted, .failed])
+        XCTAssertEqual(rows.map(\.extractorVersion), Array(repeating: AttachmentTextIndexJob.extractorVersion, count: 4))
+        XCTAssertTrue(rows[3].note?.contains("OLE2") == true, rows[3].note ?? "")
 
         // Found only through the attachment's text, with the component label in the chunk.
         try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "docx", contentMatch: .phrase, content: "quorum clause")])]), ["Office files"])
@@ -2913,6 +2916,291 @@ final class V2CutoverTests: XCTestCase {
         }
         let health = try String(contentsOf: repo.appendingPathComponent("maxmailin/ArchiveHealthView.swift"), encoding: .utf8)
         XCTAssertTrue(health.contains("AppLimits.all") && health.contains("\"health.limits\""), "the list is on screen")
+    }
+
+    // MARK: - TYPE-01 … TYPE-04 — every document kind is read for search
+
+    private static var fixturesRoot: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures", isDirectory: true)
+    }
+
+    /// Real files made by Pages, Numbers, Keynote (modern IWA and Pages '09) and by macOS textutil (Word 97 .doc, .docx).
+    func testTYPE_realIWorkAndWordFixturesAreRead_withTheirLabels() throws {
+        let iwork = Self.fixturesRoot.appendingPathComponent("iwork")
+        let pages = try DocumentTextExtractor.extract(fileURL: iwork.appendingPathComponent("sample.pages"), kind: .pages)
+        XCTAssertTrue(pages.text.contains("Quorum clause applies to every board vote"), pages.text)
+        XCTAssertEqual(pages.components, ["Document"])
+        XCTAssertFalse(pages.text.contains("Body Level One"), "template placeholder text is not user text")
+
+        let numbers = try DocumentTextExtractor.extract(fileURL: iwork.appendingPathComponent("sample.numbers"), kind: .numbers)
+        XCTAssertTrue(numbers.text.contains("Gross margin") && numbers.text.contains("Quarterly budget review"), numbers.text)
+        XCTAssertTrue(numbers.components.contains { $0.hasPrefix("Table cells") }, "\(numbers.components)")
+        XCTAssertTrue(numbers.text.contains("Sheet 1"), "sheet names travel with the cells")
+
+        let key = try DocumentTextExtractor.extract(fileURL: iwork.appendingPathComponent("sample.key"), kind: .key)
+        XCTAssertTrue(key.text.contains("Roadmap overview") && key.text.contains("Milestones for the board vote"), key.text)
+        XCTAssertEqual(key.components, ["Slide 1"], "the real slide, not the 17 template slides")
+        XCTAssertFalse(key.text.contains("Presentation Title"))
+
+        let pages09 = try DocumentTextExtractor.extract(fileURL: iwork.appendingPathComponent("sample-pages09.pages"), kind: .pages)
+        XCTAssertTrue(pages09.text.contains("Quorum clause applies to every board vote"), pages09.text)
+        XCTAssertEqual(pages09.components, ["Document"])
+
+        let legacy = Self.fixturesRoot.appendingPathComponent("legacy")
+        let doc = try DocumentTextExtractor.extract(fileURL: legacy.appendingPathComponent("sample.doc"), kind: .doc)
+        XCTAssertTrue(doc.text.contains("Quorum clause applies to every board vote.") && doc.text.contains("Payment within thirty days."), doc.text)
+        let docx = try DocumentTextExtractor.extract(fileURL: legacy.appendingPathComponent("sample.docx"), kind: .docx)
+        XCTAssertTrue(docx.text.contains("Payment within thirty days"), docx.text)
+
+        // Detection: by extension and by MIME type, every kind, ZIP included.
+        XCTAssertEqual(DocumentKind.detect(mimeType: "application/octet-stream", filename: "Deck.KEY"), .key)
+        XCTAssertEqual(DocumentKind.detect(mimeType: "application/vnd.oasis.opendocument.spreadsheet", filename: "x"), .ods)
+        XCTAssertEqual(DocumentKind.detect(mimeType: "application/msword", filename: "memo"), .doc)
+        XCTAssertEqual(DocumentKind.detect(mimeType: "application/zip", filename: "bundle"), .zip)
+        XCTAssertNil(DocumentKind.detect(mimeType: "image/png", filename: "photo.png"))
+    }
+
+    private static func odf(kind: DocumentKind, content: String, encrypted: Bool = false, header: String? = nil) -> Data {
+        var members: [(name: String, data: Data)] = [
+            ("mimetype", Data("application/vnd.oasis.opendocument.text".utf8)),
+            ("content.xml", Data(content.utf8)),
+            ("META-INF/manifest.xml", Data((encrypted
+                ? "<manifest:manifest><manifest:file-entry><manifest:encryption-data/></manifest:file-entry></manifest:manifest>"
+                : "<manifest:manifest/>").utf8)),
+            ("Pictures/logo.png", Data([0x89, 0x50, 0x4E, 0x47])),
+        ]
+        if let header {
+            members.append(("styles.xml", Data("<office:document-styles><office:master-styles><style:master-page><style:header><text:p>\(header)</text:p></style:header></style:master-page></office:master-styles></office:document-styles>".utf8)))
+        }
+        return zipPackage(members)
+    }
+
+    func testTYPE02_openDocumentTextSheetsAndSlides_withLabels_andLockedFiles() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("odf-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let odt = dir.appendingPathComponent("t.odt")
+        try Self.odf(kind: .odt, content: """
+            <office:document-content><office:body><office:text>
+            <text:h>Board minutes</text:h><text:p>The <text:span>quorum clause</text:span> applies.<text:line-break/>Second<text:s text:c="3"/>line.</text:p>
+            </office:text></office:body></office:document-content>
+            """, header: "Confidential header").write(to: odt)
+        let text = try DocumentTextExtractor.extract(fileURL: odt, kind: .odt)
+        XCTAssertTrue(text.text.contains("Board minutes\n") && text.text.contains("The quorum clause applies.\nSecond   line."), text.text)
+        XCTAssertEqual(text.components, ["Document", "Header"])
+        XCTAssertTrue(text.text.contains("[Header]\nConfidential header"))
+        XCTAssertEqual(text.notText, ["Pictures/logo.png"])
+
+        let ods = dir.appendingPathComponent("s.ods")
+        try Self.odf(kind: .ods, content: """
+            <office:document-content><office:body><office:spreadsheet>
+            <table:table table:name="Budget"><table:table-row><table:table-cell office:value-type="string"><text:p>Gross margin</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="42.5"/></table:table-row></table:table>
+            <table:table table:name="Notes"><table:table-row><table:table-cell><text:p>see appendix</text:p></table:table-cell></table:table-row></table:table>
+            </office:spreadsheet></office:body></office:document-content>
+            """).write(to: ods)
+        let sheets = try DocumentTextExtractor.extract(fileURL: ods, kind: .ods)
+        XCTAssertEqual(sheets.components, ["Sheet: Budget", "Sheet: Notes"])
+        XCTAssertTrue(sheets.text.contains("[Sheet: Budget]\nGross margin\t42.5\t"), sheets.text)
+
+        let odp = dir.appendingPathComponent("p.odp")
+        try Self.odf(kind: .odp, content: """
+            <office:document-content><office:body><office:presentation>
+            <draw:page draw:name="page1"><draw:frame><draw:text-box><text:p>Roadmap overview</text:p></draw:text-box></draw:frame>
+            <presentation:notes><draw:frame><draw:text-box><text:p>remember the demo</text:p></draw:text-box></draw:frame></presentation:notes></draw:page>
+            <draw:page draw:name="page2"><draw:frame><draw:text-box><text:p>Milestones</text:p></draw:text-box></draw:frame></draw:page>
+            </office:presentation></office:body></office:document-content>
+            """).write(to: odp)
+        let slides = try DocumentTextExtractor.extract(fileURL: odp, kind: .odp)
+        XCTAssertEqual(slides.components, ["Slide 1", "Notes 1", "Slide 2"], "\(slides.components)")
+        XCTAssertTrue(slides.text.contains("[Notes 1]\nremember the demo"))
+
+        let locked = dir.appendingPathComponent("locked.odt")
+        try Self.odf(kind: .odt, content: "<office:document-content/>", encrypted: true).write(to: locked)
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: locked, kind: .odt)) {
+            XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .encrypted)
+        }
+    }
+
+    /// A minimal OLE2 compound file: one FAT sector, one directory sector, streams in whole sectors.
+    private static func oleContainer(streams: [(name: String, data: Data)]) -> Data {
+        let sector = 512
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        let endOfChain: UInt32 = 0xFFFF_FFFE, free: UInt32 = 0xFFFF_FFFF, fatSect: UInt32 = 0xFFFF_FFFD
+        // Streams are padded to whole sectors and kept above the 4,096-byte mini cutoff.
+        let padded: [Data] = streams.map { s in
+            var d = s.data
+            let minimum = max(4096, ((d.count + sector - 1) / sector) * sector)
+            d.append(Data(repeating: 0, count: minimum - d.count))
+            return d
+        }
+        var fat: [UInt32] = [fatSect, endOfChain]   // sector 0 = FAT, sector 1 = directory
+        var starts: [Int] = []
+        var next = 2
+        for d in padded {
+            starts.append(next)
+            let count = d.count / sector
+            for i in 0..<count { fat.append(i == count - 1 ? endOfChain : UInt32(next + i + 1)) }
+            next += count
+        }
+        while fat.count < sector / 4 { fat.append(free) }
+        var header = Data([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) + Data(repeating: 0, count: 16)
+        header += Data(le16(0x3E) + le16(3) + le16(0xFFFE) + le16(9) + le16(6)) + Data(repeating: 0, count: 6)
+        header += Data(le32(0))                         // directory sector count (v3: 0)
+        header += Data(le32(1))                         // FAT sector count
+        header += Data(le32(1))                         // first directory sector
+        header += Data(le32(0))                         // transaction signature
+        header += Data(le32(4096))                      // mini stream cutoff
+        header += Data(le32(endOfChain))                // first mini FAT sector
+        header += Data(le32(0))                         // mini FAT count
+        header += Data(le32(endOfChain))                // first DIFAT sector
+        header += Data(le32(0))                         // DIFAT count
+        header += Data(le32(0))                         // DIFAT[0] = FAT at sector 0
+        header += Data(repeating: 0xFF, count: 4 * 108)
+        precondition(header.count == 512)
+        func entry(name: String, type: UInt8, left: Int32, right: Int32, child: Int32, start: UInt32, size: UInt32) -> Data {
+            var e = Data(repeating: 0, count: 128)
+            let utf16 = Array(name.utf16) + [0]
+            for (i, u) in utf16.prefix(32).enumerated() { e[i * 2] = UInt8(u & 0xFF); e[i * 2 + 1] = UInt8(u >> 8) }
+            let nameLength = UInt16(min(utf16.count, 32) * 2)
+            e[64] = UInt8(nameLength & 0xFF); e[65] = UInt8(nameLength >> 8)
+            e[66] = type; e[67] = 1
+            e.replaceSubrange(68..<72, with: le32(UInt32(bitPattern: left)))
+            e.replaceSubrange(72..<76, with: le32(UInt32(bitPattern: right)))
+            e.replaceSubrange(76..<80, with: le32(UInt32(bitPattern: child)))
+            e.replaceSubrange(116..<120, with: le32(start))
+            e.replaceSubrange(120..<124, with: le32(size))
+            return e
+        }
+        var directory = entry(name: "Root Entry", type: 5, left: -1, right: -1, child: streams.isEmpty ? -1 : 1, start: endOfChain, size: 0)
+        for (i, s) in streams.enumerated() {
+            // The padded size keeps the stream out of the mini stream (the record parsers skip the zero tail).
+            directory += entry(name: s.name, type: 2, left: -1, right: i + 1 < streams.count ? Int32(i + 2) : -1, child: -1,
+                               start: UInt32(starts[i]), size: UInt32(padded[i].count))
+        }
+        directory.append(Data(repeating: 0, count: sector - directory.count % sector == sector ? 0 : sector - directory.count % sector))
+        var file = header
+        file += Data(fat.flatMap { le32($0) })
+        file += directory.prefix(sector)
+        for d in padded { file += d }
+        return file
+    }
+
+    func testTYPE01_legacyExcelAndPowerPointBinaries_areReadFromTheirRecords() throws {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        func record(_ id: Int, _ body: [UInt8]) -> [UInt8] { le16(id) + le16(body.count) + body }
+        // BIFF8: BOF, a sheet, an SST whose second string continues into a CONTINUE record, EOF.
+        let budget = Array("Budget".utf8)
+        let boundsheet = record(0x0085, le32(0) + le16(0) + [UInt8(budget.count), 0] + budget)
+        let first = Array("Gross margin".utf8)
+        let secondAll = Array("Quarterly budget review".utf8)
+        let secondHead = Array(secondAll.prefix(9)), secondTail = Array(secondAll.dropFirst(9))
+        let sst = record(0x00FC, le32(2) + le32(2) + le16(first.count) + [0] + first + le16(secondAll.count) + [0] + secondHead)
+        let cont = record(0x003C, [0] + secondTail)
+        let workbook = Data(record(0x0809, Array(repeating: 0, count: 16)) + boundsheet + sst + cont + record(0x000A, []))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ole-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let xls = dir.appendingPathComponent("b.xls")
+        try Self.oleContainer(streams: [("Workbook", workbook)]).write(to: xls)
+        let sheet = try DocumentTextExtractor.extract(fileURL: xls, kind: .xls)
+        XCTAssertEqual(sheet.components, ["Workbook", "Cells"])
+        XCTAssertTrue(sheet.text.contains("[Workbook]\nBudget") && sheet.text.contains("Gross margin\nQuarterly budget review"), sheet.text)
+
+        // PowerPoint: two slide containers with a UTF-16 TextCharsAtom and a byte TextBytesAtom.
+        func atom(_ type: Int, _ body: [UInt8]) -> [UInt8] { le16(0) + le16(type) + le32(body.count) + body }
+        func container(_ type: Int, _ body: [UInt8]) -> [UInt8] { le16(0x000F) + le16(type) + le32(body.count) + body }
+        let utf16 = Array("Roadmap overview".utf16).flatMap { le16(Int($0)) }
+        let slide1 = container(0x03EE, atom(0x0FA0, utf16))
+        let slide2 = container(0x03EE, atom(0x0FA8, Array("Milestones for the board vote".utf8)))
+        let ppt = dir.appendingPathComponent("d.ppt")
+        try Self.oleContainer(streams: [("PowerPoint Document", Data(slide1 + slide2))]).write(to: ppt)
+        let deck = try DocumentTextExtractor.extract(fileURL: ppt, kind: .ppt)
+        XCTAssertEqual(deck.components, ["Slide 1", "Slide 2"])
+        XCTAssertTrue(deck.text.contains("[Slide 1]\nRoadmap overview") && deck.text.contains("[Slide 2]\nMilestones for the board vote"), deck.text)
+
+        // An encrypted workbook (FILEPASS) is locked, not empty.
+        let lockedBook = Data(record(0x0809, Array(repeating: 0, count: 16)) + record(0x002F, Array(repeating: 0, count: 6)) + record(0x000A, []))
+        let locked = dir.appendingPathComponent("locked.xls")
+        try Self.oleContainer(streams: [("Workbook", lockedBook)]).write(to: locked)
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: locked, kind: .xls)) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .encrypted) }
+    }
+
+    func testTYPE04_filesInsideAZipAreRead_oneLevelDown_withWhatWasNotRead() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("zip-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let inner = Self.zipPackage([("deep.txt", Data("too deep".utf8))])
+        let bundle = Self.zipPackage([
+            ("report.docx", Self.docx(body: "The quorum clause applies.", header: "Board")),
+            ("notes/readme.txt", Data("Payment within thirty days.".utf8)),
+            ("photo.png", Data([0x89, 0x50, 0x4E, 0x47])),
+            ("nested.zip", inner),
+            ("__MACOSX/._report.docx", Data([0, 1, 2])),
+        ])
+        let url = dir.appendingPathComponent("bundle.zip")
+        try bundle.write(to: url)
+        let result = try DocumentTextExtractor.extract(fileURL: url, kind: .zip)
+        XCTAssertEqual(result.components, ["ZIP: report.docx", "ZIP: notes/readme.txt"])
+        XCTAssertTrue(result.text.contains("quorum clause") && result.text.contains("Payment within thirty days"), result.text)
+        XCTAssertEqual(result.notText, ["photo.png"])
+        XCTAssertEqual(result.skipped, ["nested.zip (an archive inside the archive — one level is read)"])
+        XCTAssertTrue(result.partial, "something was not read, and the state says so")
+    }
+
+    func testTYPE_throughTheIndexingJob_everyKindIsSearchableByContent_andStatesAreRecorded() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let iwork = Self.fixturesRoot.appendingPathComponent("iwork"), legacy = Self.fixturesRoot.appendingPathComponent("legacy")
+        let pagesData = try Data(contentsOf: iwork.appendingPathComponent("sample.pages"))
+        let numbersData = try Data(contentsOf: iwork.appendingPathComponent("sample.numbers"))
+        let docData = try Data(contentsOf: legacy.appendingPathComponent("sample.doc"))
+        let odt = Self.odf(kind: .odt, content: "<office:document-content><office:body><office:text><text:p>Confidential appendix nine</text:p></office:text></office:body></office:document-content>")
+        let zip = Self.zipPackage([("inside.txt", Data("Treasure inside the archive".utf8))])
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Every kind
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <type-all@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see attached
+        \(mimeAttachment("minutes.pages", "application/x-iwork-pages-sffpages", pagesData))
+        \(mimeAttachment("budget.numbers", "application/x-iwork-numbers-sffnumbers", numbersData))
+        \(mimeAttachment("memo.doc", "application/msword", docData))
+        \(mimeAttachment("appendix.odt", "application/vnd.oasis.opendocument.text", odt))
+        \(mimeAttachment("bundle.zip", "application/zip", zip))
+        \(mimeAttachment("old.tar.gz", "application/gzip", Data("not an archive we open".utf8)))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        let rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted, .extracted, .extracted, .extracted, .unsupported], "\(rows.map { ($0.filename, $0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows.map(\.extractor), ["iwork", "iwork", "ole", "odf", "zip", "none"])
+        XCTAssertTrue(rows.allSatisfy { $0.extractorVersion == AttachmentTextIndexJob.extractorVersion })
+        XCTAssertTrue(rows[5].note?.contains("other archive formats are kept as files") == true)
+        // Each one is found by what is inside it, through the attachment condition of the search model.
+        for (type, phrase) in [("pages", "quorum clause"), ("numbers", "quarterly budget review"), ("doc", "thirty days"), ("odt", "appendix nine"), ("zip", "treasure inside")] {
+            try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: type, contentMatch: .phrase, content: phrase)])]), ["Every kind"], "\(type)")
+        }
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
     // MARK: - Five jobs LIFE-06 — the adopted data-access policy (owner, 2026-11-06)

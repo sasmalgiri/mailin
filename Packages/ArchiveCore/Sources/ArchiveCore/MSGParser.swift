@@ -444,6 +444,18 @@ struct OLE2Reader {
         return attachments
     }
 
+    // MARK: - Named streams (TYPE-01: legacy Office readers share this container reader)
+
+    /// Every stream and storage name in the compound file, root excluded.
+    var streamNames: [String] { directories.dropFirst().map(\.name) }
+
+    /// The bytes of the first stream whose name matches (case-insensitive), or nil.
+    func streamData(named name: String) -> Data? {
+        let wanted = name.lowercased()
+        guard let entry = directories.dropFirst().first(where: { $0.type == 2 && $0.name.lowercased() == wanted }) else { return nil }
+        return readEntryData(entry)
+    }
+
     private func readEntryData(_ entry: DirectoryEntry) -> Data {
         if entry.size < miniStreamCutoff && entry.type != 5 {
             let chain = Self.buildChain(startSector: entry.startSector, fat: miniFat)
