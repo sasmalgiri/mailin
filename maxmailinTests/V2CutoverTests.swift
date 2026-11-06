@@ -2087,6 +2087,68 @@ final class V2CutoverTests: XCTestCase {
         try await expectUnresolved(env, q, 1)
     }
 
+    /// Audit 2026-11-06 A02: "all words" means every word somewhere in the
+    /// same text, not every word in one 48 K-character chunk; a long phrase
+    /// is verified on the exact text even where it crosses a chunk boundary;
+    /// and the same-attachment rule still holds.
+    func testA02_allWordsAcrossChunks_longPhraseVerified_sameAttachmentStillHolds() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        let filler = String(repeating: "lorem ipsum filler words here ", count: 2_400)   // ~72 K characters → two chunks
+        let spread = mail(80, from: "s@x.com", subject: "Spread", body: "alphawitness starts here. " + filler + " and omegawitness ends it.")
+        let together = mail(81, from: "s@x.com", subject: "Together", body: "alphawitness and omegawitness together.")
+        let onlyAlpha = mail(82, from: "s@x.com", subject: "OnlyAlpha", body: "alphawitness alone. " + filler)
+        let files = mail(83, from: "s@x.com", subject: "Files", body: "see the files",
+                         attachments: [AttachmentMetadata(filename: "a.txt", mimeType: "text/plain", size: 1),
+                                       AttachmentMetadata(filename: "b.txt", mimeType: "text/plain", size: 1)])
+        let oneFile = mail(84, from: "s@x.com", subject: "OneFile", body: "see the file",
+                           attachments: [AttachmentMetadata(filename: "c.txt", mimeType: "text/plain", size: 1)])
+        try await env.store.insertBatch([spread, together, onlyAlpha, files, oneFile], batchSize: 10)
+        try await env.store.indexAttachmentSearchDocuments(emailID: files.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "a.txt", text: "alphawitness in file a", state: .complete, extractorVersion: 4, ocr: false),
+            AttachmentSearchDocument(ordinal: 1, filename: "b.txt", text: "omegawitness in file b", state: .complete, extractorVersion: 4, ocr: false)])
+        try await env.store.indexAttachmentSearchDocuments(emailID: oneFile.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "c.txt", text: "alphawitness opens. " + filler + " omegawitness closes.", state: .complete, extractorVersion: 4, ocr: false)])
+
+        // Body / anywhere: the words may be chunks apart.
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "alphawitness omegawitness")])]), ["Spread", "Together"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .allWords, "omegawitness alphawitness")])]), ["Spread", "Together", "Files", "OneFile"],
+                            "anywhere: Files holds the words in two attachments of one message")
+        // One attachment must hold every word: Files has them in two different files.
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(contentMatch: .allWords, content: "alphawitness omegawitness")])]), ["OneFile"])
+        // Evidence for a spread match names the place of the first word instead of "unavailable".
+        let evidence = try await env.store.matchEvidence(emailID: spread.id, spec: SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "alphawitness omegawitness")])]), freeText: nil)
+        XCTAssertEqual(evidence.map(\.location), [.body])
+
+        // A phrase longer than the overlap, planted across the first chunk boundary: exact text, verified.
+        let phraseWords = (0..<90).map { "boundaryword\($0)" }   // ~1,300 characters, well over the 512 overlap
+        let phrase = phraseWords.joined(separator: " ")
+        let lead = String(repeating: "lead ", count: (SearchChunker.chunkCharacters - 600) / 5)
+        let crossing = mail(85, from: "s@x.com", subject: "Crossing", body: lead + phrase + " trailing text " + filler,
+                            attachments: [AttachmentMetadata(filename: "x.txt", mimeType: "text/plain", size: 1)])
+        try await env.store.insertBatch([crossing], batchSize: 10)
+        let chunks = SearchChunker.chunks(of: crossing.plainBody)
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertFalse(chunks.contains { $0.contains(phrase) }, "the phrase is in no single chunk — the test would prove nothing otherwise")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, phrase)])]), ["Crossing"])
+        let scrambled = (phraseWords.reversed()).joined(separator: " ")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .phrase, scrambled)])]), [],
+                            "the same words in another order are not the phrase")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, scrambled)])]), ["Crossing"],
+                            "all-words still finds the words")
+        // The same long phrase inside one attachment.
+        try await env.store.indexAttachmentSearchDocuments(emailID: crossing.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "x.txt", text: lead + phrase + " end " + filler, state: .complete, extractorVersion: 4, ocr: false)])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(contentMatch: .phrase, content: phrase)])]), ["Crossing"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(contentMatch: .phrase, content: scrambled)])]), [])
+        // Ordinary box and Advanced Search agree.
+        let typed = try XCTUnwrap(PlainSearchTranslator.spec(from: "omegawitness alphawitness"))
+        try await expectIDs(env, typed, ["Spread", "Together", "Files", "OneFile"])
+        let mixed = try XCTUnwrap(PlainSearchTranslator.spec(from: "\"alphawitness alone\" omegawitness OR together"))
+        try await expectIDs(env, mixed, ["Together"], "(\"alphawitness alone\" AND omegawitness) OR together: OnlyAlpha lacks omegawitness")
+    }
+
     func testFIND07_wholeBodyIsIndexed_tailAndCrossChunkPhraseAreFound() async throws {
         let wasOn = SearchChunkPolicy.isEnabled
         defer { SearchChunkPolicy.isEnabled = wasOn }
@@ -2745,11 +2807,14 @@ final class V2CutoverTests: XCTestCase {
         let simple = try XCTUnwrap(PlainSearchTranslator.spec(from: "invoice purchase ord"))
         XCTAssertEqual(simple.groups, [SearchGroup(.all, [SearchCondition(.anyText, .contains, "ord"), SearchCondition(.anyText, .allWords, "invoice purchase")])])
         // Phrases, OR, NOT and -.
+        // Audit A09: ("purchase order" AND alpha) OR receipt ≡ ("purchase order" OR receipt) AND (alpha OR receipt) — the phrase stays a phrase.
         let rich = try XCTUnwrap(PlainSearchTranslator.spec(from: "\"purchase order\" alpha OR receipt NOT newsletter -spam"))
-        XCTAssertEqual(rich.groups.count, 2)
-        XCTAssertEqual(rich.groups[0].kind, .any)
-        XCTAssertEqual(rich.groups[0].conditions, [SearchCondition(.anyText, .allWords, "purchase order alpha"), SearchCondition(.anyText, .allWords, "receipt")])
-        XCTAssertEqual(rich.groups[1], SearchGroup(.exclude, [SearchCondition(.anyText, .anyWords, "newsletter spam")]))
+        XCTAssertEqual(rich.groups.count, 3)
+        XCTAssertEqual(rich.groups[0], SearchGroup(.any, [SearchCondition(.anyText, .phrase, "purchase order"), SearchCondition(.anyText, .allWords, "receipt")]))
+        XCTAssertEqual(rich.groups[1], SearchGroup(.any, [SearchCondition(.anyText, .allWords, "alpha"), SearchCondition(.anyText, .allWords, "receipt")]))
+        XCTAssertEqual(rich.groups[2], SearchGroup(.exclude, [SearchCondition(.anyText, .anyWords, "newsletter spam")]))
+        let plainOr = try XCTUnwrap(PlainSearchTranslator.spec(from: "invoice OR receipt"))
+        XCTAssertEqual(plainOr.groups, [SearchGroup(.any, [SearchCondition(.anyText, .allWords, "invoice"), SearchCondition(.anyText, .allWords, "receipt")])])
         // in:attachments turns the words into conditions on one attachment's text.
         let inside = try XCTUnwrap(PlainSearchTranslator.spec(from: "in:attachments quorum \"board vote\""))
         XCTAssertEqual(inside.groups, [SearchGroup(.all, [], attachments: [

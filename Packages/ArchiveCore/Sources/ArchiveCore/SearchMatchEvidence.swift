@@ -99,8 +99,14 @@ extension SQLiteEmailStore {
             let words = SearchTextTokens.words(in: c.trimmedValue)
             let literal = (c.match == .contains || c.match == .phrase) && c.trimmedValue.count <= SearchSpec.phraseVerificationLimit
                 ? SearchTextTokens.collapsed(c.trimmedValue) : nil
-            let hits = try textHits(emailID: emailID, kinds: kinds, words: words, literal: literal,
+            var hits = try textHits(emailID: emailID, kinds: kinds, words: words, literal: literal,
                                     prefix: c.match == .contains, anyWord: c.match == .anyWords, limit: 2)
+            // Audit A02: the words may sit in different chunks (or the literal
+            // may cross one); the place is then where the first word is.
+            if hits.isEmpty, let first = words.first, words.count > 1 || literal != nil {
+                hits = try textHits(emailID: emailID, kinds: kinds, words: [first], literal: nil,
+                                    prefix: c.match == .contains, limit: 2)
+            }
             if hits.isEmpty { return [MatchEvidence(location: .unavailable, condition: label, excerpt: nil)] }
             return hits.map { MatchEvidence(location: $0.location, condition: label, excerpt: $0.excerpt) }
         case .sender:
@@ -123,8 +129,12 @@ extension SQLiteEmailStore {
         let words = SearchTextTokens.words(in: content)
         let literal = (g.contentMatch == .contains || g.contentMatch == .phrase) && content.count <= SearchSpec.phraseVerificationLimit
             ? SearchTextTokens.collapsed(content) : nil
-        let hits = try textHits(emailID: emailID, kinds: SearchDocKind.attachmentContent, words: words, literal: literal,
+        var hits = try textHits(emailID: emailID, kinds: SearchDocKind.attachmentContent, words: words, literal: literal,
                                 prefix: g.contentMatch == .contains, anyWord: g.contentMatch == .anyWords, limit: 3)
+        if hits.isEmpty, let first = words.first, words.count > 1 || literal != nil {
+            hits = try textHits(emailID: emailID, kinds: SearchDocKind.attachmentContent, words: [first], literal: nil,
+                                prefix: g.contentMatch == .contains, limit: 3)
+        }
         // Only files that also satisfy the group's name/type belong to this evidence.
         let qualifying = hits.filter { hit in
             guard case .attachmentText(_, let filename, _, _) = hit.location else { return false }

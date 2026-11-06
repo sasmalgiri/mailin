@@ -66,19 +66,33 @@ enum PlainSearchTranslator {
         if positives.count == 1 {
             groups.append(group(.all, terms: positives[0], lastIsPrefix: true, inAttachments: inAttachments))
         } else if positives.count > 1 {
-            // Each OR branch becomes one "any" condition; a branch with several
-            // words is folded into one all-words value so the branch stays one choice.
-            var conditions: [SearchCondition] = []
-            var attachmentGroups: [AttachmentConditionGroup] = []
-            for branch in positives {
-                let (match, value) = folded(branch)
+            // Audit 2026-11-06 A09: an OR alternative may itself be a
+            // conjunction ("purchase order" AND urgent). The model nests no
+            // groups, so the OR of conjunctions is written in its conjunctive
+            // form — one "any" group per way of picking one condition from
+            // each alternative — which is exactly equivalent and keeps every
+            // quoted phrase a phrase. Alternatives yield at most two
+            // conditions each (phrases, then the plain words as all-words).
+            let alternatives: [[(SearchCondition.Match, String)]] = positives.map { branch in
+                var out: [(SearchCondition.Match, String)] = branch.filter(\.isPhrase).map { (.phrase, $0.text) }
+                let plain = branch.filter { !$0.isPhrase }.map(\.text)
+                if !plain.isEmpty { out.append((.allWords, plain.joined(separator: " "))) }
+                return out
+            }
+            let expandable = alternatives.reduce(1) { $0 * $1.count } <= maxExpandedGroups
+            var anyGroups: [[(SearchCondition.Match, String)]] = [[]]
+            if expandable {
+                for options in alternatives { anyGroups = anyGroups.flatMap { prefix in options.map { prefix + [$0] } } }
+            } else {
+                anyGroups = [alternatives.map { options in options.count == 1 ? options[0] : (.allWords, options.map(\.1).joined(separator: " ")) }]
+            }
+            for picks in anyGroups {
                 if inAttachments {
-                    attachmentGroups.append(AttachmentConditionGroup(contentMatch: match, content: value))
+                    groups.append(SearchGroup(.any, [], attachments: picks.map { AttachmentConditionGroup(contentMatch: $0.0, content: $0.1) }))
                 } else {
-                    conditions.append(SearchCondition(.anyText, match, value))
+                    groups.append(SearchGroup(.any, picks.map { SearchCondition(.anyText, $0.0, $0.1) }))
                 }
             }
-            groups.append(SearchGroup(.any, conditions, attachments: attachmentGroups))
         }
         if !excluded.isEmpty {
             groups.append(group(.exclude, terms: excluded, lastIsPrefix: false, inAttachments: inAttachments))
@@ -115,10 +129,9 @@ enum PlainSearchTranslator {
         return SearchGroup(kind, conditions, attachments: attachmentGroups)
     }
 
-    private static func folded(_ branch: [Term]) -> (SearchCondition.Match, String) {
-        if branch.count == 1, branch[0].isPhrase { return (.phrase, branch[0].text) }
-        return (.allWords, branch.map(\.text).joined(separator: " "))
-    }
+    /// Beyond this many expanded groups (2⁶ alternatives each mixing a phrase
+    /// and words), the alternatives are folded to all-words instead.
+    static let maxExpandedGroups = 64
 
     /// `typed` merged on top of the Advanced Search spec the user applied.
     static func merge(_ typed: SearchSpec, into applied: SearchSpec?) -> SearchSpec {

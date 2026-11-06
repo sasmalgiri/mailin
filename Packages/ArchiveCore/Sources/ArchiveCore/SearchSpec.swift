@@ -24,11 +24,13 @@
 //    allWords / anyWords — whole tokens on the unicode61 tokeniser,
 //                diacritics folded, no stemming: a plural does not find a
 //                singular.
-//  Phrases and contains are verified within one chunk; chunks overlap by
-//  `SearchChunker.overlapCharacters`, so a phrase up to that length is found
-//  even where it crosses a chunk boundary; a longer phrase is evaluated as
-//  "all words in the same document" and the summary says so
-//  (`SearchSpec.phraseVerificationLimit`).
+//  allWords is evaluated over the whole text of the message (every word
+//  somewhere in it — audit 2026-11-06 A02: words in different chunks of one
+//  long text still match). Phrases and contains are verified literally:
+//  within one chunk up to the overlap (`SearchSpec.phraseVerificationLimit`),
+//  on two adjacent chunks joined for anything up to a chunk's length
+//  (`SearchSpec.phraseWholeTextLimit`); only a phrase longer than a whole
+//  chunk is evaluated as all its words, and the summary says so.
 //
 
 import Foundation
@@ -136,6 +138,9 @@ struct SearchSpec: Codable, Equatable, Hashable, Sendable {
     /// Phrases up to this many characters are verified across chunk
     /// boundaries (the chunk overlap); longer ones fall back to all-words.
     static var phraseVerificationLimit: Int { SearchChunker.overlapCharacters }
+    /// The longest literal that is still verified on the exact text (two
+    /// adjacent chunks joined); beyond it, all words in the same text.
+    static var phraseWholeTextLimit: Int { SearchChunker.chunkCharacters }
 
     var version: Int = SearchSpec.currentVersion
     var groups: [SearchGroup] = []

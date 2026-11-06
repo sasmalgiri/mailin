@@ -149,34 +149,78 @@ extension SQLiteEmailStore {
         }
     }
 
-    /// Text over the chunk index. FTS narrows to chunks holding the words;
-    /// literal modes then verify the substring on the chunk text, so
-    /// punctuation the tokeniser drops ("C++", "PO-4471") still has to be
-    /// there. A phrase longer than the chunk overlap cannot be verified
-    /// within one chunk and is evaluated as all-words (stated in the spec).
+    /// Text over the chunk index. Audit 2026-11-06 A02: the words of one
+    /// condition may sit in different chunks of the same text, so:
+    ///  - anyWords: some chunk of these kinds holds some word.
+    ///  - allWords: every word is somewhere in the message's text of these
+    ///    kinds — the message is the unit (one body document; "anywhere"
+    ///    means any field), each word its own FTS lookup, intersected.
+    ///  - contains / phrase / equals up to the chunk overlap: FTS prefilter,
+    ///    then the literal verified on one chunk's text (the overlap makes a
+    ///    boundary-crossing literal whole), so punctuation the tokeniser
+    ///    drops ("C++", "PO-4471") still has to be there.
+    ///  - a longer literal (up to a chunk): verified on one chunk or on two
+    ///    adjacent chunks joined with the overlap removed — the exact text,
+    ///    not "all the words".
+    ///  - a literal longer than a chunk: all its words in the message (the
+    ///    describer says so; `SearchSpec.phraseWholeTextLimit`).
     private static func textClause(kinds: [SearchDocKind], match: SearchCondition.Match, value: String) -> (String, [QueryBind]) {
         let kindList = kinds.map { "'\($0.rawValue)'" }.joined(separator: ",")
         let words = SearchTextTokens.words(in: value)
-        var binds: [QueryBind] = []
-        var inner: [String] = ["sc.kind IN (\(kindList))"]
-        if !words.isEmpty {
-            let fts: String
-            switch match {
-            case .anyWords: fts = words.map(SearchTextTokens.quoted).joined(separator: " OR ")
-            case .contains: fts = words.map { SearchTextTokens.quoted($0) + "*" }.joined(separator: " AND ")   // word starts
-            default: fts = words.map(SearchTextTokens.quoted).joined(separator: " AND ")
+        let literalMode = match == .contains || match == .phrase || match == .equals
+        let prefix = match == .contains
+        if words.isEmpty || match == .anyWords || (literalMode && value.count <= SearchSpec.phraseVerificationLimit) {
+            var binds: [QueryBind] = []
+            var inner: [String] = ["sc.kind IN (\(kindList))"]
+            if !words.isEmpty {
+                let fts: String
+                switch match {
+                case .anyWords: fts = words.map(SearchTextTokens.quoted).joined(separator: " OR ")
+                case .contains: fts = words.map { SearchTextTokens.quoted($0) + "*" }.joined(separator: " AND ")   // word starts
+                default: fts = words.map(SearchTextTokens.quoted).joined(separator: " AND ")
+                }
+                inner.append("search_chunks MATCH ?")
+                binds.append(.text(fts))
             }
-            inner.append("search_chunks MATCH ?")
-            binds.append(.text(fts))
+            if literalMode || words.isEmpty {
+                // Literal substring, verified on the chunk text (also the only
+                // test when the value has no indexable word at all, e.g. "++").
+                inner.append("instr(lower(sc.text), lower(?)) > 0")
+                binds.append(.text(SearchTextTokens.collapsed(value)))
+            }
+            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE \(inner.joined(separator: " AND ")))", binds)
         }
-        let literal = (match == .contains || match == .phrase || match == .equals) && value.count <= SearchSpec.phraseVerificationLimit
-        if literal || words.isEmpty {
-            // Literal substring, verified on the chunk text (also the only
-            // test when the value has no indexable word at all, e.g. "++").
-            inner.append("instr(lower(sc.text), lower(?)) > 0")
-            binds.append(.text(SearchTextTokens.collapsed(value)))
+        if literalMode, value.count <= SearchSpec.phraseWholeTextLimit {
+            return wholeTextLiteral(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(value),
+                                    sameDocument: "c1.email_id = e.id")
         }
-        return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE \(inner.joined(separator: " AND ")))", binds)
+        // allWords, or a literal longer than a chunk: each word somewhere in the message's text of these kinds.
+        var parts: [String] = []
+        var binds: [QueryBind] = []
+        for word in words {
+            parts.append("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND search_chunks MATCH ?)")
+            binds.append(.text(SearchTextTokens.quoted(word) + (prefix ? "*" : "")))
+        }
+        return ("(" + parts.joined(separator: " AND ") + ")", binds)
+    }
+
+    /// A literal longer than the overlap, verified on the exact text: on
+    /// one chunk, or on two adjacent chunks of the same document joined with
+    /// the next chunk's leading overlap removed (chunk k+1 begins exactly
+    /// `overlap` characters before chunk k ends — `SearchChunker`). FTS
+    /// prefilters through the table-valued form `search_chunks(?)`: the
+    /// first word in the first chunk, the last word in the second.
+    /// `sameDocument` correlates `c1` with the outer row.
+    static func wholeTextLiteral(kindList: String, words: [String], prefix: Bool, literal: String, sameDocument: String) -> (String, [QueryBind]) {
+        let first = SearchTextTokens.quoted(words[0]) + (prefix ? "*" : "")
+        let last = SearchTextTokens.quoted(words[words.count - 1]) + (prefix ? "*" : "")
+        let single = "EXISTS (SELECT 1 FROM search_chunks(?) c1 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
+            + " AND instr(lower(c1.text), lower(?)) > 0)"
+        let pair = "EXISTS (SELECT 1 FROM search_chunks(?) c1, search_chunks(?) c2 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
+            + " AND c2.email_id = c1.email_id AND c2.kind = c1.kind AND c2.ordinal = c1.ordinal AND c2.chunk = c1.chunk + 1"
+            + " AND instr(lower(c1.text || substr(c2.text, ?)), lower(?)) > 0)"
+        return ("(" + single + " OR " + pair + ")",
+                [.text(first), .text(literal), .text(first), .text(last), .int(Int64(SearchChunker.overlapCharacters + 1)), .text(literal)])
     }
 
     // MARK: Attachments — one file must satisfy everything in the group
@@ -193,25 +237,39 @@ extension SQLiteEmailStore {
             tests.append(sql); binds.append(contentsOf: b)
         }
         if let content = g.content?.trimmingCharacters(in: .whitespaces), !content.isEmpty {
+            // Same attachment throughout: a chunk's (email, ordinal) is this file's (email, position).
+            // Audit A02: the same four forms as `textClause`, correlated on the file.
             let words = SearchTextTokens.words(in: content)
-            var inner: [String] = ["ac.kind IN (\(SearchDocKind.attachmentContentSQL))"]
-            if !words.isEmpty {
-                let fts: String
-                switch g.contentMatch {
-                case .anyWords: fts = words.map(SearchTextTokens.quoted).joined(separator: " OR ")
-                case .contains: fts = words.map { SearchTextTokens.quoted($0) + "*" }.joined(separator: " AND ")
-                default: fts = words.map(SearchTextTokens.quoted).joined(separator: " AND ")
+            let kindList = SearchDocKind.attachmentContentSQL
+            let literalMode = g.contentMatch == .contains || g.contentMatch == .phrase
+            let prefix = g.contentMatch == .contains
+            if words.isEmpty || g.contentMatch == .anyWords || (literalMode && content.count <= SearchSpec.phraseVerificationLimit) {
+                var inner: [String] = ["ac.kind IN (\(kindList))"]
+                if !words.isEmpty {
+                    let fts: String
+                    switch g.contentMatch {
+                    case .anyWords: fts = words.map(SearchTextTokens.quoted).joined(separator: " OR ")
+                    case .contains: fts = words.map { SearchTextTokens.quoted($0) + "*" }.joined(separator: " AND ")
+                    default: fts = words.map(SearchTextTokens.quoted).joined(separator: " AND ")
+                    }
+                    inner.append("search_chunks MATCH ?")
+                    binds.append(.text(fts))
                 }
-                inner.append("search_chunks MATCH ?")
-                binds.append(.text(fts))
+                if literalMode || words.isEmpty {
+                    inner.append("instr(lower(ac.text), lower(?)) > 0")
+                    binds.append(.text(SearchTextTokens.collapsed(content)))
+                }
+                tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE \(inner.joined(separator: " AND ")))")
+            } else if literalMode, content.count <= SearchSpec.phraseWholeTextLimit {
+                let (sql, b) = wholeTextLiteral(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(content),
+                                                sameDocument: "c1.email_id = ag.email_id AND c1.ordinal = ag.position")
+                tests.append(sql); binds.append(contentsOf: b)
+            } else {
+                for word in words {
+                    tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND search_chunks MATCH ?)")
+                    binds.append(.text(SearchTextTokens.quoted(word) + (prefix ? "*" : "")))
+                }
             }
-            let literal = (g.contentMatch == .contains || g.contentMatch == .phrase) && content.count <= SearchSpec.phraseVerificationLimit
-            if literal || words.isEmpty {
-                inner.append("instr(lower(ac.text), lower(?)) > 0")
-                binds.append(.text(SearchTextTokens.collapsed(content)))
-            }
-            // Same attachment: the chunk's (email, ordinal) is this file's (email, position).
-            tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE \(inner.joined(separator: " AND ")))")
         }
         guard !tests.isEmpty else { return ("1", []) }
         return ("EXISTS (SELECT 1 FROM attachments ag WHERE ag.email_id = e.id AND \(tests.joined(separator: " AND ")))", binds)

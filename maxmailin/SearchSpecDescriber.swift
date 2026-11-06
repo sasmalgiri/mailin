@@ -108,8 +108,8 @@ enum SearchSpecDescriber {
         if spec.hasUncertainTextConditions {
             text += " " + String(localized: "Messages whose text is not indexed yet are counted apart as “may still match”.")
         }
-        if groups.contains(where: { g in g.liveConditions.contains { $0.match == .phrase && $0.trimmedValue.count > SearchSpec.phraseVerificationLimit } }) {
-            text += " " + String(localized: "A phrase longer than \(SearchSpec.phraseVerificationLimit) characters is matched as all its words in the same text.")
+        if groups.contains(where: { g in g.liveConditions.contains { $0.match == .phrase && $0.trimmedValue.count > SearchSpec.phraseWholeTextLimit } }) {
+            text += " " + String(localized: "A phrase longer than \(SearchSpec.phraseWholeTextLimit) characters is matched as all its words in the same text.")
         }
         return text
     }
