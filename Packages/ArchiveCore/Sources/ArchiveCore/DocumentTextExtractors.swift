@@ -158,7 +158,9 @@ enum ODFTextExtractor {
 
 /// Text of an OpenDocument content/styles part, split into labelled sections
 /// (document, sheets, slides and their notes, headers and footers).
+/// `maxRepeatedSpaces` bounds one `text:s` run (audit A05).
 final class ODFTextCollector: NSObject, XMLParserDelegate {
+    static let maxRepeatedSpaces = 4_096
     struct Section { var label: String; var text: String }
     private(set) var sections: [Section] = []
     private let kind: DocumentKind
@@ -216,7 +218,9 @@ final class ODFTextCollector: NSObject, XMLParserDelegate {
             // Numbers and dates carry their value as an attribute; text cells have text:p inside.
             if let value = attributes["office:value"], attributes["office:value-type"] != "string" { current.text += value }
         case "text:s" where capturing:
-            current.text += String(repeating: " ", count: Int(attributes["text:c"] ?? "1") ?? 1)
+            // Audit A05: the count is untrusted input — never negative, never
+            // an allocation the document's own size cannot justify.
+            current.text += String(repeating: " ", count: min(max(Int(attributes["text:c"] ?? "1") ?? 1, 0), Self.maxRepeatedSpaces))
         case "text:tab" where capturing: current.text += "\t"
         case "text:line-break" where capturing: current.text += "\n"
         default: break

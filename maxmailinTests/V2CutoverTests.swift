@@ -859,10 +859,11 @@ final class V2CutoverTests: XCTestCase {
         let a = makeEmail(i: 1, total: 2, body: "the same body")
         let b = copy(of: a)
         XCTAssertEqual(DuplicateVerification.verify([a, b]), .byteIdentical)
-        // CRLF and LF forms of the same message are the same message.
+        // CRLF and LF forms of the same message are the same message — but
+        // not the same bytes (audit A01): content-equivalent, not byte-identical.
         let lf = copy(of: a) { $0.rawSource = "Subject: s\n\nline one\nline two" }
         let crlf = copy(of: a) { $0.rawSource = "Subject: s\r\n\r\nline one\r\nline two" }
-        XCTAssertEqual(DuplicateVerification.verify([lf, crlf]), .byteIdentical)
+        XCTAssertEqual(DuplicateVerification.verify([lf, crlf]), .contentEquivalent(attachmentBytesCompared: true))
     }
 
     func testDUP01_sameMessageIDDifferentAttachmentIsACandidate() {
@@ -910,7 +911,34 @@ final class V2CutoverTests: XCTestCase {
             $0.attachments = [AttachmentMetadata(filename: "a.txt", mimeType: "text/plain", size: 9)]
         }
         let b = copy(of: a) { $0.rawSource = "raw other" }
-        XCTAssertEqual(DuplicateVerification.verify([a, b]), .contentEquivalent(attachmentBytesCompared: false))
+        // Audit 2026-11-06 A01: bytes that cannot be produced leave the copies unproven — a candidate, not a verified pair.
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .candidate(differences: [.attachmentBytes]))
+        XCTAssertFalse(DuplicateVerification.verify([a, b]).isVerified)
+        XCTAssertTrue(DuplicateVerification.differenceLine(.candidate(differences: [.attachmentBytes]))?.contains("attachment bytes") == true)
+    }
+
+    func testA01_sameNameSizeAndType_differentBytes_isACandidate_andLineEndingsAreNotByteIdentical() {
+        let one = Data("first contents".utf8), two = Data("other contents".utf8)   // the same length
+        let a = copy(of: makeEmail(i: 8, total: 2, body: "b")) {
+            $0.attachments = [AttachmentMetadata(filename: "a.txt", mimeType: "text/plain", size: one.count, base64: one.base64EncodedString())]
+        }
+        let b = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [AttachmentMetadata(filename: "a.txt", mimeType: "text/plain", size: two.count, base64: two.base64EncodedString())]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .candidate(differences: [.attachments]), "same name, type and size; different bytes")
+        let same = copy(of: a) { $0.rawSource = "raw other" }
+        XCTAssertEqual(DuplicateVerification.verify([a, same]), .contentEquivalent(attachmentBytesCompared: true))
+        // Raw bytes that differ only in line endings are content-equivalent, never "byte-identical".
+        let lf = copy(of: a) { $0.rawSource = "Subject: s\n\nline one\nline two" }
+        let crlf = copy(of: a) { $0.rawSource = "Subject: s\r\n\r\nline one\r\nline two" }
+        XCTAssertNotEqual(lf.rawSource, crlf.rawSource)
+        XCTAssertEqual(DuplicateVerification.verify([lf, crlf]), .contentEquivalent(attachmentBytesCompared: true))
+        XCTAssertEqual(DuplicateVerification.verify([a, copy(of: a)]), .byteIdentical)
+        // Archive-wide planning never takes from the unproven group.
+        let (verified, candidates) = DuplicateVerification.classify([[a, b], [a, same]])
+        XCTAssertEqual(verified.count, 1); XCTAssertEqual(candidates.count, 1)
+        XCTAssertEqual(DuplicateVerification.bulkRemovable(verified + candidates), [same.id])
     }
 
     func testDUP01_bulkRemovalNeverTakesFromCandidateGroups() {
@@ -2955,7 +2983,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(listed(bytes(Int64(StoreManager.freeInputByteLimit))), "\(limits.map { plain($0.value) })")
         XCTAssertTrue(listed("\(StoreManager.freeAttachmentDownloadsPerDay) a day"))
         XCTAssertTrue(listed("\(AIAssistantView.freeQueryLimit) a day"))
-        XCTAssertTrue(listed(bytes(SourceSizePolicy.pstTestedCeilingBytes)) && listed("Notes NSF") && listed("exFAT"))
+        XCTAssertTrue(listed(bytes(SourceSizePolicy.pstTestedCeilingBytes)) && listed("Notes NSF") && listed("FAT32"))
         XCTAssertTrue(listed(bytes(OfficeTextExtractor.maxPartBytes)), "the Office part budget is named")
         XCTAssertTrue(listed("\(Int(AttachmentOCR.maxPixels)) px"))
         XCTAssertTrue(listed("\(SearchChunker.overlapCharacters) characters"))
@@ -3023,6 +3051,38 @@ final class V2CutoverTests: XCTestCase {
             members.append(("styles.xml", Data("<office:document-styles><office:master-styles><style:master-page><style:header><text:p>\(header)</text:p></style:header></style:master-page></office:master-styles></office:document-styles>".utf8)))
         }
         return zipPackage(members)
+    }
+
+    /// Audit 2026-11-06 A05: counts and indexes inside a document are
+    /// untrusted input. A negative or absurd `text:c`, or a negative
+    /// shared-string index, must leave the reader standing and the rest of
+    /// the text readable — a trap in a detached task would take the app down.
+    func testA05_malformedRepeatCountsAndIndexes_areBounded_andTheRestIsRead() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("malformed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let odt = dir.appendingPathComponent("bad.odt")
+        try Self.odf(kind: .odt, content: """
+            <office:document-content><office:body><office:text>
+            <text:p>alpha<text:s text:c="-5"/>beta<text:s text:c="999999999999"/>gamma<text:s text:c="abc"/>delta</text:p>
+            </office:text></office:body></office:document-content>
+            """).write(to: odt)
+        let text = try DocumentTextExtractor.extract(fileURL: odt, kind: .odt)
+        XCTAssertTrue(text.text.contains("alphabeta"), "a negative count adds nothing: \(text.text.prefix(200))")
+        XCTAssertTrue(text.text.contains("gamma delta"), "a missing count is one space")
+        let run = text.text.range(of: "beta")!.upperBound..<text.text.range(of: "gamma")!.lowerBound
+        XCTAssertEqual(text.text[run].count, ODFTextCollector.maxRepeatedSpaces, "an absurd count is bounded, not allocated")
+
+        let xlsx = dir.appendingPathComponent("bad.xlsx")
+        try Self.zipPackage([
+            ("xl/workbook.xml", Data("<workbook xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>".utf8)),
+            ("xl/_rels/workbook.xml.rels", Data("<Relationships><Relationship Id=\"rId1\" Type=\"x\" Target=\"worksheets/sheet1.xml\"/></Relationships>".utf8)),
+            ("xl/sharedStrings.xml", Data("<sst><si><t>only</t></si></sst>".utf8)),
+            ("xl/worksheets/sheet1.xml", Data("<worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>-1</v></c><c r=\"B1\" t=\"s\"><v>7</v></c><c r=\"C1\" t=\"s\"><v>0</v></c></row></sheetData></worksheet>".utf8)),
+        ]).write(to: xlsx)
+        let sheet = try OfficeTextExtractor.extract(fileURL: xlsx, kind: .xlsx)
+        XCTAssertTrue(sheet.text.contains("only"), sheet.text)
+        XCTAssertTrue(sheet.text.contains("-1") && sheet.text.contains("7"), "out-of-range indexes keep their raw value instead of trapping: \(sheet.text)")
     }
 
     func testTYPE02_openDocumentTextSheetsAndSlides_withLabels_andLockedFiles() throws {
@@ -3674,7 +3734,7 @@ final class V2CutoverTests: XCTestCase {
         // Similar is its own class and never verified.
         XCTAssertFalse(DuplicateVerification.Verdict.similar(similarity: 0.9).isVerified)
         XCTAssertTrue(DuplicateVerification.Verdict.byteIdentical.isVerified)
-        XCTAssertTrue(DuplicateVerification.Verdict.contentEquivalent(attachmentBytesCompared: false).isVerified)
+        XCTAssertFalse(DuplicateVerification.Verdict.contentEquivalent(attachmentBytesCompared: false).isVerified, "audit A01: unproven bytes are never bulk-removable")
         XCTAssertFalse(DuplicateVerification.Verdict.candidate(differences: [.body]).isVerified)
         // Survivor planning: the first unticked member stays; a fully ticked group keeps its first copy.
         let c = copy(of: a)

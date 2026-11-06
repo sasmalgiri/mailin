@@ -128,7 +128,7 @@ struct ExportOptions: Codable, Equatable, Sendable {
     var folderOccurrences: Bool? = nil
     /// Folder formats: also copy every attachment into `Attachments/`.
     var includeAttachmentsFolder: Bool = false
-    /// mbox: split into ≤ 2 GB partitions (exFAT-safe, Apple Mail imports a folder).
+    /// mbox: split into ≤ 2 GB partitions (FAT32-safe, Apple Mail imports a folder).
     var partitionMBOX: Bool = false
 }
 

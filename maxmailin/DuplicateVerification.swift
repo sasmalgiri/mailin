@@ -29,6 +29,9 @@ enum DuplicateVerification {
     /// What differed between members of a group that did not verify.
     enum Difference: String, CaseIterable, Sendable {
         case from, to, cc, bcc, date, subject, body, structure, attachments
+        /// Audit 2026-11-06 A01: at least one attachment's bytes could not be
+        /// produced, so the copies could not be compared byte for byte.
+        case attachmentBytes
 
         var label: String {
             switch self {
@@ -41,17 +44,20 @@ enum DuplicateVerification {
             case .body: return String(localized: "body")
             case .structure: return String(localized: "MIME structure")
             case .attachments: return String(localized: "attachments")
+            case .attachmentBytes: return String(localized: "attachment bytes (not available for every copy — open the files and compare before removing)")
             }
         }
     }
 
     /// DUP-03: the four classes, kept apart on screen and in what they allow.
     enum Verdict: Equatable, Sendable {
-        /// Every member's stored raw message hashes the same (line endings normalised).
+        /// Every member's stored raw message hashes the same, byte for byte.
         case byteIdentical
         /// Content-equivalent as defined by `contentEquivalentDefinition`.
-        /// `attachmentBytesCompared` is false when at least one attachment had
-        /// no stored bytes, so only its name, type and size were compared.
+        /// `attachmentBytesCompared` is always true for a verdict `verify`
+        /// returns (audit A01: copies whose attachment bytes could not be
+        /// compared are candidates); false is kept for stored/older values
+        /// and is never verified.
         case contentEquivalent(attachmentBytesCompared: Bool)
         /// Similar text above a threshold (near-duplicate engines) — never identical.
         case similar(similarity: Double)
@@ -61,8 +67,8 @@ enum DuplicateVerification {
         /// Only the two identical classes may be removed in bulk.
         var isVerified: Bool {
             switch self {
-            case .byteIdentical, .contentEquivalent: return true
-            case .similar, .candidate: return false
+            case .byteIdentical, .contentEquivalent(attachmentBytesCompared: true): return true
+            case .contentEquivalent, .similar, .candidate: return false
             }
         }
     }
@@ -86,10 +92,15 @@ enum DuplicateVerification {
     static func verify(_ members: [MBOXParser.RawEmail]) -> Verdict {
         guard members.count > 1 else { return .byteIdentical }
 
-        // 1. Stored raw bytes, when every member has them.
+        // 1. Stored raw bytes, when every member has them: the same bytes are
+        //    byte-identical; the same bytes up to line endings are content-
+        //    equivalent (audit A01: a different byte stream is never called
+        //    byte-identical).
         if members.allSatisfy({ !$0.rawSource.isEmpty }) {
-            let digests = Set(members.map { sha256(normalisedLineEndings($0.rawSource)) })
-            if digests.count == 1 { return .byteIdentical }
+            if Set(members.map { sha256($0.rawSource) }).count == 1 { return .byteIdentical }
+            if Set(members.map { sha256(normalisedLineEndings($0.rawSource)) }).count == 1 {
+                return .contentEquivalent(attachmentBytesCompared: true)
+            }
         }
 
         // 2. Full content, field by field.
@@ -112,16 +123,20 @@ enum DuplicateVerification {
 
         var bytesCompared = true
         let attachmentKeys = members.map { email -> String in
-            let identities = email.attachments.map { attachment -> String in
-                let identity = attachmentIdentity(attachment)
+            let cache = AttachmentHydrator.Cache()
+            let identities = email.attachments.enumerated().map { index, attachment -> String in
+                let identity = attachmentIdentity(attachment, index: index, email: email, cache: cache)
                 if !identity.bytes { bytesCompared = false }
                 return identity.key
             }
             return identities.sorted().joined(separator: "\n")
         }
         if Set(attachmentKeys).count > 1 { differences.append(.attachments) }
+        // Audit A01: bytes that could not be produced for comparison leave the
+        // copies unproven — a candidate the person compares, never a bulk removal.
+        if bytesCompared == false, !differences.contains(.attachments) { differences.append(.attachmentBytes) }
 
-        if differences.isEmpty { return .contentEquivalent(attachmentBytesCompared: bytesCompared) }
+        if differences.isEmpty { return .contentEquivalent(attachmentBytesCompared: true) }
         return .candidate(differences: differences)
     }
 
@@ -276,14 +291,13 @@ enum DuplicateVerification {
         return sha256(key)
     }
 
-    /// Bytes when stored (base64 or a readable file); otherwise name, type and size.
-    private static func attachmentIdentity(_ attachment: AttachmentMetadata) -> (key: String, bytes: Bool) {
-        if let base64 = attachment.base64, !base64.isEmpty {
-            let stripped = base64.filter { !$0.isWhitespace }
-            if let data = Data(base64Encoded: stripped) { return ("bytes:" + sha256(data), true) }
-            return ("b64:" + sha256(stripped), true)
-        }
-        if let url = attachment.fileURL, let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
+    /// The attachment's bytes through the same hydrator the detail view uses
+    /// (temp file, inline payload, the part's byte range, or a re-extraction
+    /// from the stored raw message); when none of those can produce them,
+    /// the identity is only the name, type and size and `bytes` is false.
+    private static func attachmentIdentity(_ attachment: AttachmentMetadata, index: Int, email: MBOXParser.RawEmail,
+                                           cache: AttachmentHydrator.Cache) -> (key: String, bytes: Bool) {
+        if let data = AttachmentHydrator.data(for: attachment, index: index, email: email, cache: cache) {
             return ("bytes:" + sha256(data), true)
         }
         return ("meta:\(attachment.filename)|\(attachment.mimeType)|\(attachment.size)", false)

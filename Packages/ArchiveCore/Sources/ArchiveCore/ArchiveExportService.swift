@@ -838,7 +838,7 @@ final class ArchiveExportService {
     ///  2. when `rawSource` was empty it synthesized headers + plain body only,
     ///     silently **dropping attachments**
     ///  3. there was no partitioning, so a whole-archive export produced one
-    ///     file that exceeds the 4 GB single-file limit of exFAT — the normal
+    ///     file that exceeds the 4 GiB single-file limit of FAT32 — the normal
     ///     format for the external drive such an export lands on
     @discardableResult
     func exportMBOXArchive(scope: ArchiveSelectionScope, to url: URL,

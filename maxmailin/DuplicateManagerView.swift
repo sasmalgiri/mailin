@@ -281,7 +281,8 @@ struct DuplicateManagerView: View {
         var note: String? {
             switch self {
             case .verified(.contentEquivalent(attachmentBytesCompared: false)):
-                return DuplicateVerification.contentEquivalentDefinition + " " + String(localized: "Attachment bytes are not stored for every copy — names, types and sizes matched.")
+                // Not produced by verification any more (audit A01); an older stored verdict reads as unproven.
+                return DuplicateVerification.contentEquivalentDefinition + " " + String(localized: "Attachment bytes were not compared for every copy — compare the files before removing.")
             case .verified(.contentEquivalent):
                 return DuplicateVerification.contentEquivalentDefinition
             case .candidate(let verdict):

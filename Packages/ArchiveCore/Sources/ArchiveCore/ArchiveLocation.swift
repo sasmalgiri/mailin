@@ -16,8 +16,10 @@
 //     the archive is the evidence.
 //   • **A network volume.** SQLite's locking depends on POSIX advisory locks
 //     that most network filesystems implement incorrectly or not at all.
-//   • **A FAT/exFAT volume.** exFAT caps a single file at 4 GB, so the archive
+//   • **A FAT32 volume.** FAT32 caps a single file at 4 GiB, so the archive
 //     would fail partway through a large import with a confusing error.
+//     exFAT has no such ceiling (audit 2026-11-06 A11 corrected the earlier
+//     claim) but no journal either, so an unclean eject is the risk there.
 //
 //  So the picker validates, and refuses with the reason. A refusal the user
 //  can act on beats an import that dies at 4 GB.
@@ -69,9 +71,19 @@ enum ArchiveLocationVerdict: Equatable, Sendable {
 
 enum ArchiveLocationPolicy {
 
-    /// exFAT's single-file ceiling. The database alone will pass it on any
-    /// serious archive.
-    static let exFATFileCeilingBytes: Int64 = 4 * 1_073_741_824
+    /// FAT32's single-file ceiling (4 GiB − 1). The database alone will pass
+    /// it on any serious archive. exFAT, APFS and HFS+ have no such ceiling.
+    static let fat32FileCeilingBytes: Int64 = 4 * 1_073_741_824
+
+    /// The volume's file-system type name as the kernel reports it
+    /// ("apfs", "hfs", "exfat", "msdos", "smbfs", …); nil when it cannot be read.
+    static func fileSystemType(of directory: URL) -> String? {
+        var info = statfs()
+        guard unsafe statfs(directory.path, &info) == 0 else { return nil }
+        return unsafe withUnsafePointer(to: &info.f_fstypename) { pointer in
+            unsafe pointer.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) { unsafe String(cString: $0) }
+        }.lowercased()
+    }
 
     /// Judges a candidate directory. Every refusal names the actual reason —
     /// a generic "unsupported location" would send the user guessing.
@@ -121,15 +133,24 @@ enum ArchiveLocationPolicy {
 
         let free = Int64(values?.volumeAvailableCapacityForImportantUsage ?? 0)
 
-        // Filesystem format. `volumeSupportsFileCloning` is false on FAT and
-        // exFAT and true on APFS/HFS+, which is the cheapest reliable signal
-        // available without mount-table parsing.
-        if values?.volumeSupportsFileCloning == false {
+        // Filesystem format, from the mount table (audit A11: the earlier
+        // "no file cloning ⇒ FAT/exFAT" inference was not a size test, and
+        // exFAT has no 4 GB ceiling — FAT32 does).
+        switch fileSystemType(of: directory) {
+        case "msdos", "fat32", "fat", "vfat":
             return .warn("""
-                That volume looks like FAT or exFAT, which cannot hold a single file larger \
-                than 4 GB. The archive database will exceed that on a large import and the \
-                import will fail partway. An APFS-formatted disk avoids it.
+                That volume is FAT32, which cannot hold a single file larger than 4 GiB. The \
+                archive database will exceed that on a large import and the import will fail \
+                partway. An exFAT- or APFS-formatted disk avoids it.
                 """, freeBytes: free)
+        case "exfat":
+            return .warn("""
+                That volume is exFAT. File size is not a concern there, but exFAT keeps no \
+                journal: unplugging the disk during a write can damage the archive. Always \
+                eject it first; an APFS-formatted disk recovers from an unclean eject.
+                """, freeBytes: free)
+        default:
+            break
         }
 
         if free > 0, free < 2 * 1_073_741_824 {

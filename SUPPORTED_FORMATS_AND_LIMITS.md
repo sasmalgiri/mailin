@@ -210,7 +210,7 @@ Refused above 2 GB (`MSGParser.MSGError.fileTooLarge`). This is a mailin limit
 | Target | Status |
 |---|---|
 | mbox | Round-trip verified: 526 messages exported → 526 re-parsed → 526, 94,929,888 bytes. Writes a real `From_` envelope (`MBOXRecordBuilder.envelopeLine(for:)`) and includes attachments as base64 MIME parts, marked `X-Mailin-Reconstructed` when the record was synthesised rather than byte-copied. |
-| mbox, partitioned | `ArchiveExportService.exportMBOXPartitions(...)` splits on a byte budget, never mid-message — for destinations such as exFAT with a 4 GB single-file limit |
+| mbox, partitioned | `ArchiveExportService.exportMBOXPartitions(...)` splits on a byte budget, never mid-message — for destinations such as FAT32 with its 4 GiB single-file limit (exFAT has none; audit 2026-11-06 A11) |
 | PDF (Bates) | Stamp verified by PDFKit read-back (`GoldCaseClosureTests`) — **executed 2026-09-25, pass** |
 
 Export of a *reconstructed* message is not byte-identical to the source and is

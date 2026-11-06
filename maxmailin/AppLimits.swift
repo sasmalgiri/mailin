@@ -72,8 +72,8 @@ enum AppLimits {
                      why: String(localized: "Outlook's own default maximum; mailin opens the file and says so, it does not refuse.")),
             AppLimit(kind: .format, what: String(localized: "Notes NSF"), value: String(localized: "warning between \(bytes(SourceSizePolicy.nsfLegacyMaxBytes)) and \(bytes(SourceSizePolicy.nsfModernMaxBytes))"),
                      why: String(localized: "HCL's documented ceilings for older and current Notes databases.")),
-            AppLimit(kind: .device, what: String(localized: "exFAT drives"), value: bytes(ArchiveLocationPolicy.exFATFileCeilingBytes),
-                     why: String(localized: "A file system fact: one file cannot exceed 4 GiB there; mbox exports can be split into 2 GB parts.")),
+            AppLimit(kind: .device, what: String(localized: "FAT32 drives"), value: bytes(ArchiveLocationPolicy.fat32FileCeilingBytes),
+                     why: String(localized: "A file system fact: one file cannot exceed 4 GiB on FAT32 (exFAT and APFS have no such ceiling); mbox exports can be split into 2 GB parts.")),
             // Safety budgets.
             AppLimit(kind: .safety, what: String(localized: "Office document part"), value: bytes(OfficeTextExtractor.maxPartBytes),
                      why: String(localized: "A part larger than this inside a .docx/.xlsx/.pptx is listed and the document marked partial, never silently dropped.")),

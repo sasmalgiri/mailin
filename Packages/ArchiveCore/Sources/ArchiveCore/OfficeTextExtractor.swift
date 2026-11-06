@@ -333,7 +333,8 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
             switch name {
             case "v":
                 inValue = false
-                if cellType == "s", let index = Int(current.trimmingCharacters(in: .whitespaces)), index < shared.count {
+                // Audit A05: a shared-string index is untrusted; only 0..<count reads the table.
+                if cellType == "s", let index = Int(current.trimmingCharacters(in: .whitespaces)), index >= 0, index < shared.count {
                     cellValue = shared[index]
                 } else {
                     cellValue = current
