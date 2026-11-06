@@ -2614,6 +2614,139 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(ExportInventory.safeRelativeDirectory(forFolderPath: "/Inbox//Sub/"), "Inbox/Sub")
     }
 
+    // MARK: - CAP-01 — the plain search box has no candidate window and runs on the search model
+
+    func testCAP01_pagingATextQueryWalksEveryMatch_noTwoThousandWindow() async throws {
+        let env = try makeEnv()
+        // 2,300 messages carry the word; 200 do not. The old page path stopped at 2,000 with no next cursor.
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<2_500 {
+            emails.append(mail(20_000 + i, from: "s\(i % 7)@x.com", subject: "Row \(i)",
+                               body: i < 2_300 ? "the needle is in this haystack \(i)" : "nothing to see \(i)",
+                               date: "Wed, 01 Mar 2023 \(String(format: "%02d:%02d:%02d", (i / 3600) % 24, (i / 60) % 60, i % 60)) +0000"))
+        }
+        for start in stride(from: 0, to: emails.count, by: 500) {
+            let batch = Array(emails[start..<min(start + 500, emails.count)])
+            try await env.store.insertBatch(batch, batchSize: 500)
+            try await env.fts.indexBatch(batch)
+        }
+        var query = EmailQuery.all
+        query.text = "needle"
+        // Page by page through the data service's plain page API — the one exports, fingerprints and scope jobs use.
+        var seen = Set<UUID>()
+        var cursor: EmailPageCursor? = nil
+        var pages = 0
+        repeat {
+            let page = try await env.archive.page(query: query, cursor: cursor, limit: 300)
+            pages += 1
+            for s in page.summaries { XCTAssertTrue(seen.insert(s.id).inserted, "no row twice") }
+            cursor = page.nextCursor
+        } while cursor != nil
+        XCTAssertEqual(seen.count, 2_300, "every match, over \(pages) pages")
+        let counted = try await env.archive.count(query: query)
+        XCTAssertEqual(counted, 2_300)
+        // The export fingerprint and the summary stream walk the same set.
+        let fingerprint = try await env.archive.selectionFingerprint(scope: .query(query, exclusions: []))
+        XCTAssertTrue(fingerprint.hasPrefix("2300:"), fingerprint)
+        var streamed = 0
+        for try await batch in await env.archive.streamSummaries(query: query, batchSize: 700) { streamed += batch.count }
+        XCTAssertEqual(streamed, 2_300)
+        // Dates narrow it honestly, still with no window.
+        query.afterDate = ISO8601DateFormatter().date(from: "2023-03-01T00:10:00Z")
+        let narrowed = try await env.archive.count(query: query)
+        XCTAssertEqual(narrowed, 2_300 - 600)
+    }
+
+    func testCAP01_plainBoxTranslatesToTheModel_andIsOffWhenTheModelIsOff() throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        // Words: all but the last as whole words, the last as typed so far.
+        let simple = try XCTUnwrap(PlainSearchTranslator.spec(from: "invoice purchase ord"))
+        XCTAssertEqual(simple.groups, [SearchGroup(.all, [SearchCondition(.anyText, .contains, "ord"), SearchCondition(.anyText, .allWords, "invoice purchase")])])
+        // Phrases, OR, NOT and -.
+        let rich = try XCTUnwrap(PlainSearchTranslator.spec(from: "\"purchase order\" alpha OR receipt NOT newsletter -spam"))
+        XCTAssertEqual(rich.groups.count, 2)
+        XCTAssertEqual(rich.groups[0].kind, .any)
+        XCTAssertEqual(rich.groups[0].conditions, [SearchCondition(.anyText, .allWords, "purchase order alpha"), SearchCondition(.anyText, .allWords, "receipt")])
+        XCTAssertEqual(rich.groups[1], SearchGroup(.exclude, [SearchCondition(.anyText, .anyWords, "newsletter spam")]))
+        // in:attachments turns the words into conditions on one attachment's text.
+        let inside = try XCTUnwrap(PlainSearchTranslator.spec(from: "in:attachments quorum \"board vote\""))
+        XCTAssertEqual(inside.groups, [SearchGroup(.all, [], attachments: [
+            AttachmentConditionGroup(contentMatch: .contains, content: "quorum"),
+            AttachmentConditionGroup(contentMatch: .phrase, content: "board vote"),
+        ])])
+        XCTAssertNil(PlainSearchTranslator.spec(from: "AND OR"))
+        XCTAssertNil(PlainSearchTranslator.spec(from: "in:attachments"))
+
+        // The browse state: operators stay fields, the words move onto the model only when it is on.
+        SearchChunkPolicy.isEnabled = true
+        let on = ArchiveBrowseState(searchText: "from:alice@x.com invoice").query(plainTextOnModel: true)
+        XCTAssertEqual(on.sender, "alice@x.com")
+        XCTAssertNil(on.text)
+        XCTAssertEqual(on.spec?.groups, [SearchGroup(.all, [SearchCondition(.anyText, .contains, "invoice")])])
+        let withAdvanced = ArchiveBrowseState(searchText: "invoice", spec: SearchSpec(groups: [SearchGroup(.exclude, [SearchCondition(.subject, .contains, "draft")])]))
+            .query(plainTextOnModel: true)
+        XCTAssertEqual(withAdvanced.spec?.groups.count, 2, "typed words ride on top of the applied Advanced Search")
+        let off = ArchiveBrowseState(searchText: "from:alice@x.com invoice").query(plainTextOnModel: false)
+        XCTAssertEqual(off.text, "invoice")
+        XCTAssertNil(off.spec)
+        SearchChunkPolicy.isEnabled = false
+        let indexOff = ArchiveBrowseState(searchText: "invoice").query(plainTextOnModel: true)
+        XCTAssertEqual(indexOff.text, "invoice", "without the chunk index the previous path stays")
+    }
+
+    func testCAP01_plainBoxOnTheModel_countsExactly_andSaysWhatIsUnknown() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<30 {
+            emails.append(mail(21_000 + i, from: "a@x.com", subject: "Note \(i)", body: i % 3 == 0 ? "the quorum clause applies" : "ordinary text \(i)"))
+        }
+        // One message carries a legacy .doc whose text cannot be read.
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Old document
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <cap01-doc@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see attached
+        \(mimeAttachment("old.doc", "application/msword", Data("not readable here".utf8)))
+        --B--
+        """
+        emails.append(try MBOXParser.processRawMessage(raw, senderEmail: ""))
+        try await env.store.insertBatch(emails, batchSize: 50)
+        _ = await AttachmentTextIndexJob.shared.run()
+
+        let query = ArchiveBrowseState(searchText: "quorum clause").query(plainTextOnModel: true)
+        XCTAssertNil(query.text)
+        let count = try await env.archive.count(query: query)
+        XCTAssertEqual(count, 10, "the ten bodies that hold the words; exact, from the model")
+        let unresolved = try await env.archive.unresolvedCount(query: query)
+        XCTAssertEqual(unresolved, 0, "every body is indexed; nothing is unknown for a positive search")
+        // Evidence names the body, with no free text left to guess from.
+        var ids: [UUID] = []
+        for try await batch in await env.archive.streamFullEmails(query: query, batchSize: 50) { ids += batch.map(\.id) }
+        let evidence = try await env.archive.matchEvidence(emailID: try XCTUnwrap(ids.first), spec: query.spec, freeText: nil)
+        XCTAssertFalse(evidence.isEmpty)
+        // A negative search over attachment text leaves the unreadable .doc unknown — said, not hidden.
+        let negative = ArchiveBrowseState(searchText: "in:attachments NOT quorum").query(plainTextOnModel: true)
+        let unknown = try await env.archive.unresolvedCount(query: negative)
+        XCTAssertEqual(unknown, 1)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     // MARK: - Five jobs LIFE-06 — the adopted data-access policy (owner, 2026-11-06)
 
     func testLIFE06_accessPolicy_keepsImportedDataOpenAfterExpiry_andStopsNewPaidWork() throws {

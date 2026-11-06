@@ -5058,8 +5058,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// never per email body, so the old fixed limits only hid data.
     nonisolated(unsafe) static var unboundedIDLookups = false
 
-    func attachmentTextSearch(_ ftsQuery: String, limit requested: Int = 2_000) throws -> Set<UUID> {
-        let limit = Self.unboundedIDLookups ? Int(Int32.max) : requested
+    /// CAP-01: no window by default — every matching id (ids only, bounded by
+    /// the matches, never by a constant). A caller may still ask for a bound.
+    func attachmentTextSearch(_ ftsQuery: String, limit requested: Int? = nil) throws -> Set<UUID> {
+        let limit = requested.map { Self.unboundedIDLookups ? Int(Int32.max) : $0 } ?? Int(Int32.max)
         let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         do {

@@ -45,6 +45,9 @@ struct EmailPageCursor: Sendable, Equatable {
     let beforeDate: Date
     let beforeID: EmailID
     var sortKey: String? = nil
+    /// CAP-01: a text query pages through the ranked continuation; the
+    /// cursor rides here so every `page` caller walks the whole result.
+    var ranked: RankedSearchCursor? = nil
 }
 
 /// One bounded page plus the cursor to fetch the next (nil = end).
@@ -232,19 +235,30 @@ struct EmailStoreRepository: EmailRepository {
         self.fts = fts
     }
 
-    /// Bounded cap on a single ranked text search. A term matching more than this
-    /// many rows is ranked/date-filtered over this bounded candidate window — we
-    /// never materialize the full result set. Deep ranked continuation beyond the
-    /// cap is a later refinement (cross-shard BM25 cursor).
-    static let textSearchCap = 2_000
-
     func page(query: EmailQuery, cursor: EmailPageCursor?, limit: Int) async throws -> EmailPage {
         if let text = query.text, !text.isEmpty {
-            // Text (optionally + filters): FTS5 ranked candidate ids →
-            // summaries → SQL-verified filters → bm25 order → bounded page.
-            // (Deep continuation callers use searchRanked; this is one page.)
-            let ordered = try await rankedTextSummaries(text, query: query)
-            return EmailPage(summaries: Array(ordered.prefix(limit)), nextCursor: nil)
+            // CAP-01 (five jobs, owner 2026-11-06): a text query pages through
+            // the ranked continuation like every other caller — bm25 order,
+            // SQL-verified filters, and NO candidate window. Before this, one
+            // page over text was cut at 2,000 candidates with no next cursor,
+            // so exports, fingerprints and scope jobs over a text search
+            // silently stopped there.
+            var rankedCursor = cursor?.ranked
+            var rounds = 0
+            while true {
+                rounds += 1
+                let page = try await searchRanked(query: query, cursor: rankedCursor, limit: limit)
+                if let last = page.summaries.last {
+                    let next = page.nextCursor.map { EmailPageCursor(beforeDate: last.date, beforeID: last.id, ranked: $0) }
+                    return EmailPage(summaries: page.summaries, nextCursor: next)
+                }
+                // A short round with a live cursor (date filtering rejected a
+                // whole boundary shard) keeps going; exhaustion ends it.
+                guard let next = page.nextCursor, rounds < Self.maxRankedFillRounds else {
+                    return EmailPage(summaries: [], nextCursor: nil)
+                }
+                rankedCursor = next
+            }
         }
         // §13/§16: structured filters or a non-date sort → the SQL-compiled
         // keyset page (every query field participates; none is ignored).
@@ -269,29 +283,6 @@ struct EmailStoreRepository: EmailRepository {
         )
         let next = (sums.count == limit) ? sums.last.map { EmailPageCursor(beforeDate: $0.date, beforeID: $0.id) } : nil
         return EmailPage(summaries: sums, nextCursor: next)
-    }
-
-    /// FTS candidate ids → summaries → exact date filter → bm25 rank order.
-    /// Part P1: when the query carries date bounds, the FTS work is pruned to
-    /// the year shards intersecting the range (+ the unknown-date shard), then
-    /// the EXACT bounds are applied on the hydrated summaries — same results
-    /// as the unpruned reference, bounded work.
-    private func rankedTextSummaries(_ text: String, query: EmailQuery) async throws -> [EmailSummary] {
-        let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
-        let years = FTSSearchIndex.shardYears(after: query.afterDate, before: query.beforeDate)
-        // L3: an FTS failure must SURFACE, not render as "0 results" while
-        // count() for the same query throws.
-        let ids: [UUID]
-        if years != nil {
-            let ranked = try await fts.searchRanked(ftsQuery, years: years, limit: Self.textSearchCap)
-            ids = ranked.hits.map(\.id)
-        } else {
-            ids = try await fts.searchRaw(ftsQuery, limit: Self.textSearchCap)
-        }
-        var sums = try await store.summaries(ids: ids)
-        sums = try await applyingStructuredFilters(sums, query: query)
-        let rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
-        return sums.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
     }
 
     /// §13/§19.1: verify FTS candidates against EVERY non-text query field in

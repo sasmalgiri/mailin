@@ -68,12 +68,10 @@ extension ArchiveDataService {
         case .explicit(let ids):
             for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) { add(id) }
         case .query(let query, let exclusions):
-            var cursor: EmailPageCursor? = nil
-            repeat {
-                let page = try await self.page(query: query, cursor: cursor, limit: 1_000)
-                for summary in page.summaries where !exclusions.contains(summary.id) { add(summary.id) }
-                cursor = page.nextCursor
-            } while cursor != nil
+            // CAP-01: the same complete walk exports use — text queries included.
+            for try await summaries in streamSummaries(query: query, batchSize: 1_000) {
+                for summary in summaries where !exclusions.contains(summary.id) { add(summary.id) }
+            }
         }
         return "\(count):" + digest.finalize().map { String(format: "%02x", $0) }.joined()
     }

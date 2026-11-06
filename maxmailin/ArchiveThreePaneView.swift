@@ -185,9 +185,13 @@ struct ArchiveThreePaneView: View {
         let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         // A saved search already carries its text; a typed search narrows it.
         // FIND-04: the Advanced Search rides on top; scope stays in `base`.
-        let query = ArchiveBrowseState(searchText: text, afterDate: scope.after, spec: spec).query(base: base)
+        // CAP-01 / FIND-04: with the search model on, the typed words run on
+        // the model too (same engine, coverage and evidence as Advanced
+        // Search, no candidate window); otherwise the previous text path.
+        let query = ArchiveBrowseState(searchText: text, afterDate: scope.after, spec: spec)
+            .query(base: base, plainTextOnModel: modules?.isOn(.searchQueryModel) ?? false)
         await model.setQuery(query)
-        if let spec, !spec.isEmpty {
+        if let applied = query.spec, !applied.isEmpty {
             unresolved = (try? await model.archive.unresolvedCount(query: query)) ?? 0
         } else {
             unresolved = 0
