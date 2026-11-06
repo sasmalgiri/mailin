@@ -131,7 +131,7 @@ can exist; audio and video through Apple's on-device speech recognition (owner a
 | TYPE-03 | iWork .pages / .numbers / .key (IWA snappy + protobuf; iWork '09 XML) | verified on real files made by Pages, Numbers and Keynote (fixtures committed) | c1298d0 | `testTYPE_realIWorkAndWordFixturesAreRead_withTheirLabels`, through-the-job test |
 | TYPE-04 | Files inside ZIP attachments, one level down, budgeted and stated | verified | c1298d0 | `testTYPE04_filesInsideAZipAreRead_oneLevelDown_withWhatWasNotRead`, `testTYPE_throughTheIndexingJob_*` |
 | TYPE-05 | Audio and video speech → "recognised speech" documents (Apple Speech, on device, every supported system) | implemented; **verification blocked on the owner**: allow Speech Recognition for mailin (the test host) in System Settings ▸ Privacy & Security, then `testTYPE05_*` runs on the two system-voice recordings | 9352bd6 | `testTYPE05_speechInRecordingsIsRecognisedOnDevice_andSearchableAsRecognisedSpeech` (skips with the reason while denied) |
-| TYPE-06 | OLM (Outlook for Mac) and TAR / TGZ wrappers as sources | not started | | |
+| TYPE-06 | OLM (Outlook for Mac) and TAR / TGZ wrappers as sources | implemented and tested on records/archives written from the format descriptions (`OLMParser`, `TARReader`; classifier decides OLM from the ZIP directory, tar from the header; one level of nesting followed; non-mail OLM objects counted on the receipt; file pickers list .olm/.tar/.tgz/.gz). **Not verified against a real Outlook for Mac export** — none exists on this Mac; the owner's `.olm` is the remaining evidence | ee97c52 | `ContainerImportTests.olmArchiveImportsRecords_foldersFlagsAttachments_andCountsNonMail`, `olmIsDecidedFromTheDirectory_notTheName`, `tarOfMailboxesImports_everyHeaderForm`, `tgzIsFollowedOneLevel_deeperIsCounted`, `truncatedTarIsNamed` |
 
 ## Plan v3 (6 November 2026) — closure list §12.3, state
 
@@ -148,6 +148,6 @@ can exist; audio and video through Apple's on-device speech recognition (owner a
 
 ## Owner decisions needed
 
-- OLM reader and TAR/TGZ wrapper: proposed additions, not adopted. Adopt or defer?
+- OLM reader and TAR/TGZ wrapper: adopted under the 2026-11-06 directive ("support all types") and built (TYPE-06). Still needed from the owner: one real `.olm` export from Outlook for Mac to run against.
 - OUT-05 Apple Mail / Thunderbird interactive import runs.
 - OST and NSF real fixtures (none exist; without them those rows stay "partially supported").
