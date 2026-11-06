@@ -37,6 +37,12 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     /// (streamed to a scratch file, one at a time; v2.1 backlog #1).
     case zip
     case gzip
+    /// TYPE-06: a tar wrapper (`.tar`; `.tgz` / `.tar.gz` is gzip → tar),
+    /// imported member by member through `TARReader`.
+    case tar
+    /// TYPE-06: an Outlook for Mac archive — a ZIP whose records are
+    /// Outlook's message XML; read by `OLMParser`, never member-classified.
+    case olm
     /// Directory forms.
     case appleMailMailbox     // Apple Mail's .mbox *package*
     case appleMailLibrary     // Mail's own folders: <box>.mbox/<UUID>/Data/…/Messages/*.emlx
@@ -47,7 +53,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     var isSupported: Bool {
         switch self {
         case .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf,
-             .appleMailMailbox, .appleMailLibrary, .maildir, .emlFolder, .zip, .gzip:
+             .appleMailMailbox, .appleMailLibrary, .maildir, .emlFolder, .zip, .gzip, .tar, .olm:
             return true
         case .unknown:
             return false
@@ -56,7 +62,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
 
     /// ZIP and gzip: the messages are inside; each member is extracted to a
     /// scratch file and classified on its own contents.
-    var isContainer: Bool { self == .zip || self == .gzip }
+    var isContainer: Bool { self == .zip || self == .gzip || self == .tar }
 
     /// The parser that handles this format, as an extension token the existing
     /// `ParserFactory` dispatch understands.
@@ -71,6 +77,8 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .nsf: return "nsf"
         case .zip: return "zip"
         case .gzip: return "gzip"
+        case .tar: return "tar"
+        case .olm: return "olm"
         case .unknown: return ""
         }
     }
@@ -86,6 +94,8 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .nsf: return "Lotus Notes database (.nsf)"
         case .zip: return "ZIP archive"
         case .gzip: return "gzip-compressed file"
+        case .tar: return "tar archive"
+        case .olm: return "Outlook for Mac archive (.olm)"
         case .appleMailMailbox: return "Apple Mail mailbox package"
         case .appleMailLibrary: return "Apple Mail folder (.emlx messages)"
         case .maildir: return "Maildir folder"
@@ -101,6 +111,10 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
             return "Each mailbox file inside will be imported; other files, encrypted members and nested archives are skipped and counted."
         case .gzip:
             return "The compressed mailbox inside will be imported."
+        case .tar:
+            return "Each mailbox file inside will be imported; other files and archives nested more than one level down are skipped and counted."
+        case .olm:
+            return "Every message record is imported with its folder, flags and attachments; contacts, calendar items, tasks and notes are counted and left in the file."
         case .unknown:
             return "This file does not look like any mail format mailin can read. Check that it is a mailbox export and not, for example, a database or a disk image."
         default:
@@ -158,7 +172,7 @@ enum SourceFormatClassifier {
                 extensionHint: ext, nameContentMismatch: false, warning: nil)
         }
 
-        if var byMagic = classifyByMagic(probe, ext: ext) {
+        if var byMagic = classifyByMagic(probe, ext: ext, currentURL: url) {
             // S1: attach the documented size verdict now, so the pre-import
             // sheet can warn before a parse is attempted rather than after.
             byMagic.warning = sizeWarning(for: byMagic.format, url: url, probe: probe)
@@ -177,7 +191,7 @@ enum SourceFormatClassifier {
 
     // MARK: - Binary signatures
 
-    private static func classifyByMagic(_ data: Data, ext: String) -> SourceClassification? {
+    private static func classifyByMagic(_ data: Data, ext: String, currentURL: URL? = nil) -> SourceClassification? {
         func has(_ bytes: [UInt8], at offset: Int = 0) -> Bool {
             guard data.count >= offset + bytes.count else { return false }
             let start = data.index(data.startIndex, offsetBy: offset)
@@ -207,11 +221,35 @@ enum SourceFormatClassifier {
         }
 
         if has([0x50, 0x4B, 0x03, 0x04]) || has([0x50, 0x4B, 0x05, 0x06]) {
+            // TYPE-06: an Outlook for Mac archive is a ZIP whose directory
+            // holds `com.microsoft.__Messages/` records. Decided from the
+            // directory, not the name — a renamed .olm is still an OLM, and a
+            // plain ZIP named .olm is still a ZIP of whatever it holds.
+            if let url = currentURL, let members = try? ZIPArchiveReader.members(of: url), OLMParser.isOLM(members: members) {
+                return SourceClassification(
+                    format: .olm,
+                    evidence: "ZIP whose directory holds Outlook for Mac message records (com.microsoft.__Messages)",
+                    extensionHint: ext,
+                    nameContentMismatch: ext != "olm",
+                    warning: nil)
+            }
             return SourceClassification(
                 format: .zip,
                 evidence: "ZIP signature \"PK\" at offset 0",
                 extensionHint: ext,
-                nameContentMismatch: ext != "zip",
+                nameContentMismatch: ext != "zip" && ext != "olm",
+                warning: nil)
+        }
+
+        // TYPE-06: tar — ustar magic at offset 257, or a pre-POSIX header
+        // whose checksum verifies. Checked before the text rules because a
+        // tar of mbox files begins with a header block followed by mail text.
+        if TARReader.looksLikeTar(data) {
+            return SourceClassification(
+                format: .tar,
+                evidence: "tar header block at offset 0 (ustar magic or verified header checksum)",
+                extensionHint: ext,
+                nameContentMismatch: ext != "tar",
                 warning: nil)
         }
 
@@ -220,7 +258,7 @@ enum SourceFormatClassifier {
                 format: .gzip,
                 evidence: "gzip signature at offset 0",
                 extensionHint: ext,
-                nameContentMismatch: ext != "gz" && ext != "gzip",
+                nameContentMismatch: ext != "gz" && ext != "gzip" && ext != "tgz",
                 warning: nil)
         }
 

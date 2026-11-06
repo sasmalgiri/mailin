@@ -41,7 +41,9 @@ a file was routed where it was, and a name/content disagreement is surfaced
 | MSG | OLE compound-document signature `D0 CF 11 E0 A1 B1 1A E1` at offset 0 |
 | NSF | `1A 00` at offset 0 |
 | ZIP | `PK\x03\x04` or `PK\x05\x06` at offset 0 |
-| gzip | `1F 8B` at offset 0 |
+| gzip | `1F 8B` at offset 0 (`.tgz` / `.tar.gz` included — the payload is then classified on its own bytes) |
+| tar | `ustar` magic at offset 257, or a pre-POSIX header block whose checksum verifies (checked before the text rules, because a tar of mbox files begins with a header followed by mail text) |
+| OLM (Outlook for Mac) | ZIP signature **and** a central directory holding `com.microsoft.__Messages/` records — decided from the directory, so a renamed `.olm` is still an OLM and a plain ZIP named `.olm` is still a ZIP |
 | EMLX | leading decimal byte count, then an RFC 822 header block |
 | mbox | one or more `From ` separators at start of line, with a 4-digit year |
 | EML | ≥ 2 recognised RFC 822 header lines and no mbox separator |
@@ -100,7 +102,9 @@ same bytes (FTS shard eviction thrash between members) — a 3.1 tuning item.
 | Apple Mail package | `MBOXParser` per member | Yes | As mbox | Reports "nothing to import" when no `mbox` file is inside |
 | Maildir | `MBOXParser` per member | Yes | As eml, one message per file | `tmp/` skipped by design |
 | ZIP | `ZIPArchiveReader` → member's own parser | Yes | **Container (2.1):** each member streams to a scratch file (64 KiB window), is classified on its own bytes, parsed, and deleted before the next member is touched. Stored and deflate methods; ZIP64 records and extra fields honoured (Google Takeout > 4 GB). Size and CRC-32 verified per member | The only ceiling is the scratch volume's free space (+64 MiB margin) — there is no arbitrary member cap. Refused and counted, never imported: encrypted members, other compression methods, a member whose output exceeds or falls short of its declared size, CRC mismatch. Skipped and counted: non-mail members, nested archives, `__MACOSX/` and dot-files. Executed: `ContainerImportTests` (9) |
-| gzip | `ZIPArchiveReader.gunzip` → payload's parser | Yes | **Container (2.1):** RFC 1952 header parsed (FEXTRA/FNAME/FCOMMENT/FHCRC), raw deflate streamed, trailer CRC-32 and size verified | Single payload; name taken from the archive's own name minus `.gz` |
+| gzip | `ZIPArchiveReader.gunzip` → payload's parser | Yes | **Container (2.1):** RFC 1952 header parsed (FEXTRA/FNAME/FCOMMENT/FHCRC), raw deflate streamed, trailer CRC-32 and size verified | Single payload; name taken from the archive's own name minus `.gz`. A `.tgz` is gzip → tar → members (TYPE-06) |
+| tar, tgz | `TARReader` → member's own parser (TYPE-06, 2026-11-06) | Yes | **Container:** POSIX ustar headers, GNU long names (`L` records), PAX `path=` / `size=` records, base-256 sizes; every header checksum verified; regular files only (directories, links and `__MACOSX/` / dot-files are not extracted). Each member streams to scratch, is classified on its bytes, parsed, deleted | The only ceiling is the scratch volume's free space (+64 MiB margin). A member whose declared size runs past the end of the file is refused as truncated and the archive is named as damaged in preflight. **One level of nesting is followed** (gzip → tar, ZIP holding `.mbox.gz`); a container inside that inner container is skipped and counted (`container_nested_skipped`). Executed: `ContainerImportTests.tarOfMailboxesImports_everyHeaderForm`, `tgzIsFollowedOneLevel_deeperIsCounted`, `truncatedTarIsNamed` — fixtures written from the format description; no real tarball from a mail client has been run |
+| olm (Outlook for Mac) | `OLMParser` (TYPE-06, 2026-11-06) | Yes — one record at a time out of the ZIP, batches to the store | Every `message_NNNNN.xml` record under `com.microsoft.__Messages/`: addresses (display names kept), subject, sent/received times, Message-ID, In-Reply-To, References, Thread-Topic/Index, priority, plain and HTML bodies, attachments **with their bytes** (the member `OPFAttachmentURL` names; `Local/` root and suffix fallbacks), read and flagged states as flags, primary category as a tag. The folder path is the record's place in the tree (`Local/` dropped, `Accounts/<name>` kept); empty folders are declared (FOLD-02). Each record is rebuilt as an RFC 5322 message marked `X-Mailin-Reconstructed: rebuilt from an Outlook for Mac (OLM) record, <member>` and parsed by the .eml path, so export and search treat it like any other message | Contacts, calendar items, tasks and notes are **counted on the receipt and left in the file** (`olm_contacts_not_imported`, `olm_calendar_not_imported`, `olm_tasks_not_imported`, `olm_notes_not_imported`, `olm_other_objects_not_imported`); an attachment whose member is missing is listed in `X-Mailin-Attachments-Missing` and counted (`olm_attachment_bytes_missing`); a record that is not XML or holds no `<email>` is counted as failed with its category. **Executed on records written from Outlook's XML shape** (`ContainerImportTests.olmArchiveImportsRecords_*`): no copy of Outlook for Mac is on the development Mac, so no real `.olm` has been run — "implemented and tested on synthetic records", not "verified against Outlook" until the owner supplies an export |
 
 With "Streaming PST and NSF import" on (default since five jobs OPEN-02, 2026-11-05),
 `pst`, `ost` and `nsf` hand messages out in batches as they are read; only one
@@ -219,9 +223,13 @@ the offset-index work (S4/S5) exists to preserve.
 
 - **Encrypted ZIP members, and ZIP compression methods other than stored /
   deflate** — refused by name and counted; the rest of the archive still
-  imports. Nested archives inside an archive are skipped, not recursed into.
+  imports. One level of nesting is followed (`.tgz`, a `.mbox.gz` inside a
+  ZIP or tar); an archive inside that inner archive is skipped and counted.
+- **Other wrappers** — `.7z`, `.rar`, `.bz2`, `.xz` are not opened as sources
+  (and are kept as files when they are attachments).
 - **Non-mail Outlook items** — contacts, calendar entries, tasks, notes, journal
-  and RSS items in a PST/OST are counted out, not imported.
+  and RSS items in a PST/OST, and contacts / calendar / tasks / notes in an
+  OLM, are counted out, not imported.
 - **Encrypted PST/OST beyond that obfuscation** — password-protected files are
   not decrypted.
 - **Live mail accounts** — Page 4 ships default-off and its features are

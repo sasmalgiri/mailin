@@ -717,3 +717,349 @@ struct ContainerImportTests {
         #expect(after.subtracting(before).isEmpty, "every scratch directory created by the import is removed")
     }
 }
+
+// MARK: - TYPE-06 (owner directive 2026-11-06): Outlook for Mac archives and tar wrappers
+
+/// A minimal ustar writer for fixtures: plain members, a directory, a GNU
+/// long-name record and a PAX path record — the structures `TARReader` must
+/// understand, written from the format description, not from a library.
+private enum TARFixtureWriter {
+    enum Entry {
+        case file(name: String, payload: Data)
+        case directory(name: String)
+        /// A name longer than 100 bytes, carried in a GNU 'L' record.
+        case longNameFile(name: String, payload: Data)
+        /// A name carried in a PAX 'x' record (`path=`).
+        case paxFile(name: String, payload: Data)
+    }
+
+    private static func header(name: String, size: Int, type: UInt8) -> Data {
+        var block = [UInt8](repeating: 0, count: 512)
+        func put(_ text: String, at offset: Int, width: Int) {
+            for (i, byte) in Array(text.utf8).prefix(width).enumerated() { block[offset + i] = byte }
+        }
+        put(name, at: 0, width: 100)
+        put("0000644", at: 100, width: 8)
+        put("0000000", at: 108, width: 8)
+        put("0000000", at: 116, width: 8)
+        put(String(format: "%011o", size), at: 124, width: 12)
+        put(String(format: "%011o", 1_489_484_460), at: 136, width: 12)
+        put("        ", at: 148, width: 8)
+        block[156] = type
+        put("ustar", at: 257, width: 6)
+        put("00", at: 263, width: 2)
+        let sum = block.reduce(0) { $0 + Int($1) }
+        put(String(format: "%06o", sum), at: 148, width: 6)
+        block[154] = 0
+        block[155] = 0x20
+        return Data(block)
+    }
+
+    private static func padded(_ data: Data) -> Data {
+        let remainder = data.count % 512
+        return remainder == 0 ? data : data + Data(count: 512 - remainder)
+    }
+
+    static func write(_ entries: [Entry], to url: URL, truncateLastMember: Bool = false) throws {
+        var file = Data()
+        for entry in entries {
+            switch entry {
+            case .file(let name, let payload):
+                file += header(name: name, size: payload.count, type: 0x30) + padded(payload)
+            case .directory(let name):
+                file += header(name: name.hasSuffix("/") ? name : name + "/", size: 0, type: 0x35)
+            case .longNameFile(let name, let payload):
+                let nameData = Data(name.utf8) + Data([0])
+                file += header(name: "././@LongLink", size: nameData.count, type: 0x4C) + padded(nameData)
+                file += header(name: String(name.prefix(100)), size: payload.count, type: 0x30) + padded(payload)
+            case .paxFile(let name, let payload):
+                let body = "path=\(name)\n"
+                // The record length counts its own digits: "<len> path=…\n".
+                var length = body.utf8.count + 3
+                while "\(length) ".utf8.count + body.utf8.count != length { length += 1 }
+                let record = Data("\(length) \(body)".utf8)
+                file += header(name: "PaxHeaders/\(name.prefix(80))", size: record.count, type: 0x78) + padded(record)
+                file += header(name: String(name.prefix(100)), size: payload.count, type: 0x30) + padded(payload)
+            }
+        }
+        if truncateLastMember {
+            // A copy that stopped mid-way: the last member's header promises
+            // bytes the file no longer has, and there is no end marker.
+            file = file.prefix(file.count - 512)
+        } else {
+            file += Data(count: 1024)
+        }
+        try file.write(to: url)
+    }
+}
+
+// Inside the serialized container suite: these imports create scratch
+// directories, and `scratchIsCleanedUp` counts them, so they must not run
+// in parallel with it.
+extension ContainerImportTests {
+
+    private static func type06File(_ name: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("type06-\(UUID().uuidString)-\(name)")
+    }
+
+    private static let emlText = """
+        From: single@example.com
+        To: recipient@example.com
+        Subject: Fifth
+        Date: Sat, 18 Mar 2017 13:00:00 +0000
+        Message-ID: <fifth@example.com>
+
+        body five
+
+        """
+
+    private static let type06SecondMbox = """
+        From other@example.com Thu Mar 16 11:00:00 2017
+        From: other@example.com
+        To: recipient@example.com
+        Subject: Third
+        Date: Thu, 16 Mar 2017 11:00:00 +0000
+
+        body three
+
+        From other@example.com Fri Mar 17 12:00:00 2017
+        From: other@example.com
+        To: recipient@example.com
+        Subject: Fourth
+        Date: Fri, 17 Mar 2017 12:00:00 +0000
+
+        body four
+
+        """
+
+    private static func importAll(_ url: URL) async throws
+        -> (array: [MBOXParser.RawEmail], streamed: [MBOXParser.RawEmail], report: MBOXParser.ParseRecoveryReport) {
+        let array = try ParserFactory.parse(fileURL: url, senderEmail: "")
+        var streamed: [MBOXParser.RawEmail] = []
+        let report = try await ParserFactory.parseStreamingCallback(
+            fileURL: url, senderEmail: "", batchSize: 2
+        ) { batch in streamed += batch }
+        return (array, streamed, report)
+    }
+
+    // MARK: OLM
+
+    /// Outlook for Mac's record layout, written from its XML shape (no copy
+    /// of Outlook is on this Mac; a real export from the owner is welcome and
+    /// will be added as a fixture when it arrives).
+    private static func olmRecord(subject: String, from: (String, String), to: String, sent: String,
+                                  messageID: String, inReplyTo: String? = nil, plain: String, html: String,
+                                  read: Bool, flagged: Bool, attachment: (name: String, type: String, url: String)? = nil) -> Data {
+        // Outlook escapes the angle brackets of ids in element content.
+        func esc(_ text: String) -> String {
+            text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+        }
+        var xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <emails>
+        <email>
+        <OPFMessageCopyMessageID>\(esc(messageID))</OPFMessageCopyMessageID>
+        <OPFMessageCopySubject>\(subject)</OPFMessageCopySubject>
+        <OPFMessageCopySentTime>\(sent)</OPFMessageCopySentTime>
+        <OPFMessageCopyReceivedTime>\(sent)</OPFMessageCopyReceivedTime>
+        <OPFMessageCopyFromAddresses><emailAddress OPFContactEmailAddressAddress="\(from.1)" OPFContactEmailAddressName="\(from.0)" OPFContactEmailAddressType="SMTP"/></OPFMessageCopyFromAddresses>
+        <OPFMessageCopySenderAddress><emailAddress OPFContactEmailAddressAddress="\(from.1)" OPFContactEmailAddressName="\(from.0)" OPFContactEmailAddressType="SMTP"/></OPFMessageCopySenderAddress>
+        <OPFMessageCopyToAddresses><emailAddress OPFContactEmailAddressAddress="\(to)" OPFContactEmailAddressName="\(to)" OPFContactEmailAddressType="SMTP"/></OPFMessageCopyToAddresses>
+        <OPFMessageCopyCCAddresses/>
+        <OPFMessageCopyBCCAddresses/>
+        <OPFMessageIsRead>\(read ? 1 : 0)</OPFMessageIsRead>
+        <OPFMessageGetIsFlagged>\(flagged ? 1 : 0)</OPFMessageGetIsFlagged>
+        <OPFMessageCopyBody>\(plain)</OPFMessageCopyBody>
+        <OPFMessageCopyHTMLBody><![CDATA[\(html)]]></OPFMessageCopyHTMLBody>
+
+        """
+        if let inReplyTo { xml += "<OPFMessageCopyInReplyTo>\(esc(inReplyTo))</OPFMessageCopyInReplyTo>\n" }
+        if let attachment {
+            xml += """
+            <OPFMessageGetHasAttachment>1</OPFMessageGetHasAttachment>
+            <OPFMessageCopyAttachmentList><messageAttachment OPFAttachmentContentExtension="pdf" OPFAttachmentContentFileSize="14" OPFAttachmentContentID="" OPFAttachmentContentType="\(attachment.type)" OPFAttachmentName="\(attachment.name)" OPFAttachmentURL="\(attachment.url)"/></OPFMessageCopyAttachmentList>
+
+            """
+        }
+        xml += "</email>\n</emails>\n"
+        return Data(xml.utf8)
+    }
+
+    private static func writeOLM(to url: URL) throws {
+        let pdf = Data("%PDF-1.4 hello".utf8)
+        try ZIPFixtureWriter.write([
+            .init(name: "Local/", payload: Data()),
+            .init(name: "Local/com.microsoft.__Messages/", payload: Data()),
+            .init(name: "Local/com.microsoft.__Messages/Inbox/com.microsoft.__Messages/message_00001.xml",
+                  payload: olmRecord(subject: "Quarterly report", from: ("Jürgen Müller", "juergen@example.com"),
+                                     to: "recipient@example.com", sent: "2017-03-14T09:41:00",
+                                     messageID: "<one@example.com>", plain: "Please find the report attached.",
+                                     html: "<html><body><p>Please find the <b>report</b> attached.</p></body></html>",
+                                     read: true, flagged: false,
+                                     attachment: ("report.pdf", "application/pdf", "com.microsoft.__Attachments/message_00001/report.pdf")),
+                  deflate: true),
+            .init(name: "Local/com.microsoft.__Messages/Inbox/Clients/com.microsoft.__Messages/message_00002.xml",
+                  payload: olmRecord(subject: "Re: Quarterly report", from: ("Recipient", "recipient@example.com"),
+                                     to: "juergen@example.com", sent: "2017-03-15T10:00:00Z",
+                                     messageID: "<two@example.com>", inReplyTo: "<one@example.com>",
+                                     plain: "Thanks, received.", html: "", read: false, flagged: true),
+                  deflate: true),
+            .init(name: "Accounts/Work/com.microsoft.__Messages/Sent Items/com.microsoft.__Messages/message_00003.xml",
+                  payload: olmRecord(subject: "Sent from work", from: ("Me", "me@work.example"),
+                                     to: "them@example.com", sent: "2017-03-16T11:00:00",
+                                     messageID: "<three@work.example>", plain: "", html: "<p>Only HTML here</p>",
+                                     read: true, flagged: false)),
+            .init(name: "Local/com.microsoft.__Messages/Empty Folder/", payload: Data()),
+            .init(name: "Local/com.microsoft.__Attachments/message_00001/report.pdf", payload: pdf, deflate: true),
+            .init(name: "Local/com.microsoft.__Contacts/contact_00001.xml", payload: Data("<contacts><contact/></contacts>".utf8)),
+            .init(name: "Local/com.microsoft.__Calendar/event_00001.xml", payload: Data("<appointments><appointment/></appointments>".utf8)),
+            .init(name: "Categories.xml", payload: Data("<categories/>".utf8)),
+            .init(name: "__MACOSX/._Categories.xml", payload: Data([0, 1, 2])),
+        ], to: url)
+    }
+
+    @Test("An .olm imports every message record with folder, flags, reply chain and attachment bytes; non-mail objects are counted out")
+    func olmArchiveImportsRecords_foldersFlagsAttachments_andCountsNonMail() async throws {
+        let url = Self.type06File("archive.olm")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Self.writeOLM(to: url)
+
+        let classification = SourceFormatClassifier.classify(url: url)
+        #expect(classification.format == .olm)
+        #expect(classification.nameContentMismatch == false)
+        #expect(SourceFormatClassifier.preflight(url: url).condition == .ready)
+        #expect(ParserFactory.parserIdentity(for: url).name == "olm")
+
+        let result = try await Self.importAll(url)
+        #expect(result.array.count == 3)
+        #expect(result.streamed.count == 3)
+        #expect(result.report.totalMessages == 3)
+        #expect(result.report.failed == 0, "\(result.report.errorCategories)")
+        #expect(Set(result.streamed.map { $0.headers["Subject"] ?? "" }) == ["Quarterly report", "Re: Quarterly report", "Sent from work"])
+
+        // FOLD-02: the archive's own tree, the empty folder included; "Local" dropped, the account kept.
+        #expect(result.report.declaredFolders == ["Empty Folder", "Inbox", "Inbox/Clients", "Work/Sent Items"])
+
+        let first = try #require(result.streamed.first { $0.headers["Subject"] == "Quarterly report" })
+        #expect(first.folderPath == "Inbox")
+        #expect(first.flags == ["Read"])
+        #expect(first.headers["From"]?.contains("Jürgen Müller") == true, "non-ASCII display names survive the rebuild: \(first.headers["From"] ?? "")")
+        #expect(first.headers["Message-ID"] == "<one@example.com>")
+        #expect(first.headers["X-Mailin-Reconstructed"]?.contains("Outlook for Mac") == true, "the rebuilt form says so")
+        #expect(first.plainBody.contains("Please find the report attached."))
+        #expect(first.htmlBody.contains("<b>report</b>"))
+        #expect(first.attachments.count == 1)
+        #expect(first.attachments.first?.filename == "report.pdf")
+        #expect(first.attachments.first?.mimeType == "application/pdf")
+        let firstAttachment = try #require(first.attachments.first)
+        #expect(AttachmentHydrator.data(for: firstAttachment, index: 0, email: first) == Data("%PDF-1.4 hello".utf8),
+                "the attachment bytes come from the archive member the record points at")
+        #expect(first.timestamp.hasPrefix("2017-03-14T09:41:00"))
+
+        let reply = try #require(result.streamed.first { $0.headers["Subject"] == "Re: Quarterly report" })
+        #expect(reply.folderPath == "Inbox/Clients")
+        #expect(reply.flags == ["Flagged"])
+        #expect(reply.inReplyTo == "<one@example.com>")
+
+        let sent = try #require(result.streamed.first { $0.headers["Subject"] == "Sent from work" })
+        #expect(sent.folderPath == "Work/Sent Items")
+        #expect(sent.htmlBody.contains("Only HTML here"))
+
+        // Plan §: non-mail objects are counted and disclosed, never imported.
+        #expect(result.report.errorCategories["olm_contacts_not_imported"] == 1)
+        #expect(result.report.errorCategories["olm_calendar_not_imported"] == 1)
+        #expect(result.report.errorCategories["olm_other_objects_not_imported"] == 1, "Categories.xml")
+        #expect(result.report.errorCategories["olm_attachment_bytes_missing"] == nil)
+    }
+
+    @Test("An OLM renamed .zip is still read as an OLM (content decides); a plain ZIP named .olm is a ZIP")
+    func olmIsDecidedFromTheDirectory_notTheName() throws {
+        let renamed = Self.type06File("archive.zip")
+        defer { try? FileManager.default.removeItem(at: renamed) }
+        try Self.writeOLM(to: renamed)
+        let asZip = SourceFormatClassifier.classify(url: renamed)
+        #expect(asZip.format == .olm)
+        #expect(asZip.nameContentMismatch == true)
+
+        let plain = Self.type06File("not-really.olm")
+        defer { try? FileManager.default.removeItem(at: plain) }
+        try ZIPFixtureWriter.write([.init(name: "mail.mbox", payload: Data(mboxText.utf8))], to: plain)
+        #expect(SourceFormatClassifier.classify(url: plain).format == .zip)
+    }
+
+    // MARK: tar / tgz
+
+    private static func writeTar(to url: URL, nested: Data? = nil, truncate: Bool = false) throws {
+        let longName = "mail/" + String(repeating: "very-long-folder-name/", count: 5) + "archive.mbox"
+        var entries: [TARFixtureWriter.Entry] = [
+            .directory(name: "mail"),
+            .file(name: "mail/inbox.mbox", payload: Data(mboxText.utf8)),
+            .file(name: "mail/one.eml", payload: Data(emlText.utf8)),
+            .file(name: "mail/readme.txt", payload: Data("not mail".utf8)),
+            .file(name: "mail/.DS_Store", payload: Data([0, 1])),
+            .longNameFile(name: longName, payload: Data(type06SecondMbox.utf8)),
+            .paxFile(name: "mail/pax-named-ü.eml", payload: Data(emlText.replacingOccurrences(of: "Fifth", with: "Sixth").utf8)),
+        ]
+        if let nested { entries.append(.file(name: "mail/inner.tar", payload: nested)) }
+        try TARFixtureWriter.write(entries, to: url, truncateLastMember: truncate)
+    }
+
+    @Test("A tar of mailboxes imports member by member (ustar, GNU long names, PAX paths); non-mail and junk are counted, not imported")
+    func tarOfMailboxesImports_everyHeaderForm() async throws {
+        let url = Self.type06File("mail.tar")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Self.writeTar(to: url)
+
+        let classification = SourceFormatClassifier.classify(url: url)
+        #expect(classification.format == .tar)
+        #expect(classification.nameContentMismatch == false)
+        #expect(SourceFormatClassifier.preflight(url: url).condition == .ready)
+        #expect(ParserFactory.parserIdentity(for: url).name == "container-tar")
+
+        let members = try TARReader.members(of: url)
+        #expect(members.map(\.name).contains("mail/" + String(repeating: "very-long-folder-name/", count: 5) + "archive.mbox"))
+        #expect(members.map(\.name).contains("mail/pax-named-ü.eml"))
+
+        let result = try await Self.importAll(url)
+        #expect(result.array.count == 6)
+        #expect(result.streamed.count == 6)
+        #expect(Set(result.streamed.map { $0.headers["Subject"] ?? "" }) == ["First", "Second", "Third", "Fourth", "Fifth", "Sixth"])
+        #expect(result.report.failed == 0)
+        #expect(result.report.errorCategories["container_member_not_mail"] == 1, "readme.txt; .DS_Store is never extracted")
+    }
+
+    @Test("A .tgz is gzip → tar → members: one level of nesting is followed, a second level is skipped and counted")
+    func tgzIsFollowedOneLevel_deeperIsCounted() async throws {
+        let innerTar = Self.type06File("inner.tar")
+        defer { try? FileManager.default.removeItem(at: innerTar) }
+        try TARFixtureWriter.write([.file(name: "deep.mbox", payload: Data(mboxText.utf8))], to: innerTar)
+
+        let tar = Self.type06File("mail.tar")
+        defer { try? FileManager.default.removeItem(at: tar) }
+        try Self.writeTar(to: tar, nested: try Data(contentsOf: innerTar))
+
+        let tgz = Self.type06File("mail.tgz")
+        defer { try? FileManager.default.removeItem(at: tgz) }
+        try ZIPFixtureWriter.gzip(try Data(contentsOf: tar), name: "mail.tar").write(to: tgz)
+
+        let classification = SourceFormatClassifier.classify(url: tgz)
+        #expect(classification.format == .gzip)
+        #expect(classification.nameContentMismatch == false, ".tgz is a gzip name")
+
+        let result = try await Self.importAll(tgz)
+        #expect(result.array.count == 6)
+        #expect(result.streamed.count == 6)
+        #expect(result.report.errorCategories["container_nested_skipped"] == 1, "inner.tar inside the tar inside the gzip")
+    }
+
+    @Test("A tar whose last member runs past the end is named as damaged before import; the members before it still import")
+    func truncatedTarIsNamed() async throws {
+        let url = Self.type06File("cut.tar")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Self.writeTar(to: url, truncate: true)
+        let preflight = SourceFormatClassifier.preflight(url: url)
+        #expect(preflight.condition == .damaged)
+        #expect(preflight.detail.contains("tar headers could not be read"))
+        #expect(throws: TARReader.ReadError.self) { _ = try TARReader.members(of: url) }
+    }
+}

@@ -467,7 +467,11 @@ struct ContentView: View {
             UTType(filenameExtension: "pst"),
             UTType(filenameExtension: "ost"),
             UTType(filenameExtension: "nsf"),
-            UTType(filenameExtension: "zip")
+            UTType(filenameExtension: "zip"),
+            UTType(filenameExtension: "gz"),
+            UTType(filenameExtension: "olm"),
+            UTType(filenameExtension: "tar"),
+            UTType(filenameExtension: "tgz")
         ].compactMap { $0 }
     }
 
@@ -3786,12 +3790,16 @@ struct ContentView: View {
             UTType(filenameExtension: "pst"),
             UTType(filenameExtension: "ost"),
             UTType(filenameExtension: "nsf"),
-            UTType(filenameExtension: "zip")
+            UTType(filenameExtension: "zip"),
+            UTType(filenameExtension: "gz"),
+            UTType(filenameExtension: "olm"),
+            UTType(filenameExtension: "tar"),
+            UTType(filenameExtension: "tgz")
         ].compactMap { $0 }
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.message = "Select email files (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip) from any email client"
+        panel.message = String(localized: "Select email files (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) from any email client")
 
         if panel.runModal() == .OK {
             parseFailed = false

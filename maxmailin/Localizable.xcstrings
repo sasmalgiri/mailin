@@ -382535,6 +382535,70 @@
           }
         }
       }
+    },
+    "Select email files (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) from any email client" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E-Mail-Dateien (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) aus einem beliebigen E-Mail-Programm auswählen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleccione archivos de correo (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) de cualquier cliente de correo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sélectionnez des fichiers de courrier (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) de n'importe quel client de messagerie"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "किसी भी ईमेल क्लाइंट से ईमेल फ़ाइलें (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) चुनें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleziona file di posta (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) da qualsiasi client di posta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任意のメールクライアントのメールファイル（.mbox、.eml、.emlx、.msg、.pst、.ost、.nsf、.olm、.zip、.gz、.tar、.tgz）を選択"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 이메일 클라이언트의 이메일 파일(.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz)을 선택하세요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecione arquivos de e-mail (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) de qualquer cliente de e-mail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择来自任意邮件客户端的邮件文件（.mbox、.eml、.emlx、.msg、.pst、.ost、.nsf、.olm、.zip、.gz、.tar、.tgz）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇來自任何郵件用戶端的郵件檔案（.mbox、.eml、.emlx、.msg、.pst、.ost、.nsf、.olm、.zip、.gz、.tar、.tgz）"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

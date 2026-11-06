@@ -74,8 +74,20 @@ extension SourceFormatClassifier {
         switch classification.format {
         case .pst, .ost:
             return pstPreflight(url: url, size: size)
-        case .zip:
+        case .zip, .olm:
             return zipPreflight(url: url)
+        case .tar:
+            // TYPE-06: the header chain must walk; a bad checksum or a member
+            // running past the end is damage, named before the import starts.
+            do {
+                let members = try TARReader.members(of: url)
+                if members.filter({ $0.isRegularFile && !$0.isJunk }).isEmpty {
+                    return SourcePreflight(condition: .damaged, detail: "the tar archive holds no files")
+                }
+                return .ready
+            } catch {
+                return SourcePreflight(condition: .damaged, detail: "the tar headers could not be read: \(error)")
+            }
         case .nsf:
             if size < 256 { return SourcePreflight(condition: .damaged, detail: "shorter than a Notes database header (\(size) bytes)") }
             return .ready
