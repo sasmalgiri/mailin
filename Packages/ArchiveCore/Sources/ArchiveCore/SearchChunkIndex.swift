@@ -37,10 +37,14 @@ public enum SearchChunkPolicy {
 
 enum SearchDocKind: String, CaseIterable, Sendable {
     case subject, sender, recipients, body, attachmentName, attachmentText, ocrText
+    /// TYPE-05: words recognised in an audio or video attachment, on the device.
+    case speechText
 
     /// What "anywhere in this message" covers (stated on the summary).
-    static let anyText: [SearchDocKind] = [.subject, .sender, .recipients, .body, .attachmentName, .attachmentText, .ocrText]
-    static let attachmentContent: [SearchDocKind] = [.attachmentText, .ocrText]
+    static let anyText: [SearchDocKind] = [.subject, .sender, .recipients, .body, .attachmentName, .attachmentText, .ocrText, .speechText]
+    static let attachmentContent: [SearchDocKind] = [.attachmentText, .ocrText, .speechText]
+    /// SQL list of the attachment-content kinds.
+    static let attachmentContentSQL = "'attachmentText','ocrText','speechText'"
 }
 
 enum SearchDocState: String, Sendable {
@@ -103,6 +107,10 @@ struct AttachmentSearchDocument: Sendable {
     let state: SearchDocState
     let extractorVersion: Int
     let ocr: Bool
+    /// TYPE-05: the text is speech recognised from audio or video.
+    var speech: Bool = false
+
+    var kind: SearchDocKind { speech ? .speechText : (ocr ? .ocrText : .attachmentText) }
 }
 
 extension SQLiteEmailStore {
@@ -216,15 +224,16 @@ extension SQLiteEmailStore {
         do {
             let id = emailID.uuidString
             for document in documents {
-                let kind: SearchDocKind = document.ocr ? .ocrText : .attachmentText
-                let other: SearchDocKind = document.ocr ? .attachmentText : .ocrText
+                let kind = document.kind
                 // One document per attachment: whichever extractor produced it.
-                let clear = try prepare(db, "DELETE FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = ?;")
-                bindText(clear, 1, id); bindText(clear, 2, other.rawValue); sqlite3_bind_int64(clear, 3, Int64(document.ordinal))
-                _ = sqlite3_step(clear); sqlite3_finalize(clear)
-                let clearDoc = try prepare(db, "DELETE FROM search_docs WHERE email_id = ? AND kind = ? AND ordinal = ?;")
-                bindText(clearDoc, 1, id); bindText(clearDoc, 2, other.rawValue); sqlite3_bind_int64(clearDoc, 3, Int64(document.ordinal))
-                _ = sqlite3_step(clearDoc); sqlite3_finalize(clearDoc)
+                for other in SearchDocKind.attachmentContent where other != kind {
+                    let clear = try prepare(db, "DELETE FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = ?;")
+                    bindText(clear, 1, id); bindText(clear, 2, other.rawValue); sqlite3_bind_int64(clear, 3, Int64(document.ordinal))
+                    _ = sqlite3_step(clear); sqlite3_finalize(clear)
+                    let clearDoc = try prepare(db, "DELETE FROM search_docs WHERE email_id = ? AND kind = ? AND ordinal = ?;")
+                    bindText(clearDoc, 1, id); bindText(clearDoc, 2, other.rawValue); sqlite3_bind_int64(clearDoc, 3, Int64(document.ordinal))
+                    _ = sqlite3_step(clearDoc); sqlite3_finalize(clearDoc)
+                }
                 try indexSearchDocument(db, emailID: id, kind: kind, ordinal: document.ordinal, text: document.text,
                                         state: document.state, extractorVersion: document.extractorVersion, ocr: document.ocr)
             }
@@ -279,7 +288,7 @@ extension SQLiteEmailStore {
             SELECT e.id FROM emails e
             WHERE e.has_attach = 1
               AND EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
-              AND NOT EXISTS (SELECT 1 FROM search_docs d WHERE d.email_id = e.id AND d.kind IN ('attachmentText','ocrText'))
+              AND NOT EXISTS (SELECT 1 FROM search_docs d WHERE d.email_id = e.id AND d.kind IN (\(SearchDocKind.attachmentContentSQL)))
             ORDER BY e.id LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
@@ -304,7 +313,7 @@ extension SQLiteEmailStore {
         return SearchDocCoverage(
             bodiesEvaluable: try scalarInt(db, "SELECT COUNT(*) FROM search_docs WHERE kind = 'body' AND state IN ('complete','noText');"),
             emails: try scalarInt(db, "SELECT COUNT(*) FROM emails;"),
-            attachmentsEvaluable: try scalarInt(db, "SELECT COUNT(*) FROM search_docs WHERE kind IN ('attachmentText','ocrText') AND state IN ('complete','noText');"),
+            attachmentsEvaluable: try scalarInt(db, "SELECT COUNT(*) FROM search_docs WHERE kind IN (\(SearchDocKind.attachmentContentSQL)) AND state IN ('complete','noText');"),
             attachments: try scalarInt(db, "SELECT COUNT(*) FROM attachments;"),
             bodyChunks: try scalarInt(db, "SELECT COALESCE(SUM(chunk_count), 0) FROM search_docs WHERE kind = 'body';"))
     }

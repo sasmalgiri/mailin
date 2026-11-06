@@ -163,6 +163,8 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     // 3.0.x (FINAL_TODO_3_0_MAJOR.md Phase E) — preview, off until tested.
     case devonthinkHandOff
     case attachmentOCR
+    /// TYPE-05 (owner 2026-11-06): speech in audio and video attachments, recognised on the device.
+    case attachmentSpeech
     // Five jobs (FIVE_JOBS_TRACKER.md) — preview until each gate passes.
     /// OPEN-02: PST/OST read message by message in batches instead of all at once.
     case streamingBinaryParsers

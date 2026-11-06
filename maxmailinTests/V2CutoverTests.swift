@@ -3203,6 +3203,82 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    // MARK: - TYPE-05 — speech in audio and video attachments, recognised on the device
+
+    func testTYPE05_speechInRecordingsIsRecognisedOnDevice_andSearchableAsRecognisedSpeech() async throws {
+        XCTAssertTrue(AttachmentSpeech.isMedia(mimeType: "audio/mp4", filename: "memo"))
+        XCTAssertTrue(AttachmentSpeech.isMedia(mimeType: "application/octet-stream", filename: "call.MOV"))
+        XCTAssertFalse(AttachmentSpeech.isMedia(mimeType: "application/pdf", filename: "deed.pdf"))
+        let media = Self.fixturesRoot.appendingPathComponent("media")
+        let m4a = media.appendingPathComponent("speech.m4a"), aiff = media.appendingPathComponent("speech.aiff")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: m4a.path) && FileManager.default.fileExists(atPath: aiff.path), "real recordings made with the system voice")
+
+        // The person must have allowed speech recognition for the test host once; without that the test says so and skips.
+        var status = AttachmentSpeech.authorizationStatus()
+        if status == .notDetermined { status = await AttachmentSpeech.requestAuthorization() }
+        try XCTSkipUnless(status == .authorized, "speech recognition is not authorised for the test host (status \(status.rawValue)) — allow it once in System Settings ▸ Privacy & Security ▸ Speech Recognition")
+        try XCTSkipUnless(AttachmentSpeech.onDeviceRecognizer() != nil, "no on-device speech model is installed on this Mac")
+
+        let transcript = await Task.detached { AttachmentSpeech.transcribe(fileURL: m4a) }.value
+        XCTAssertNil(transcript.failure, transcript.failure ?? "")
+        let words = (transcript.text ?? "").lowercased()
+        XCTAssertTrue(words.contains("quorum") && words.contains("board"), "recognised: \(transcript.text ?? "nil")")
+        XCTAssertNotNil(transcript.locale)
+
+        // Through the indexing pass: a recording is "recognised speech", searchable by its words, labelled as speech in the evidence.
+        let wasOn = SearchChunkPolicy.isEnabled, wasSpeech = AttachmentSpeech.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn; AttachmentSpeech.isEnabled = wasSpeech }
+        AttachmentSpeech.isEnabled = true
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Voice memo
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <type05@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        listen to this
+        \(mimeAttachment("memo.m4a", "audio/mp4", try Data(contentsOf: m4a)))
+        \(mimeAttachment("roadmap.aiff", "audio/aiff", try Data(contentsOf: aiff)))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        let rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted], "\(rows.map { ($0.filename, $0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows.map(\.extractor), ["speech", "speech"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "m4a", contentMatch: .allWords, content: "quorum board")])]), ["Voice memo"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .allWords, "roadmap milestones")])]), ["Voice memo"], "speech counts as text anywhere in the message")
+        let spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "aiff", contentMatch: .allWords, content: "roadmap")])])
+        let evidence = try await env.archive.matchEvidence(emailID: email.id, spec: spec, freeText: nil)
+        guard case .speech(let ordinal, let filename, _)? = evidence.first?.location else {
+            return XCTFail("evidence should name recognised speech, got \(evidence)")
+        }
+        XCTAssertEqual(ordinal, 1); XCTAssertEqual(filename, "roadmap.aiff")
+        let chunks = try await env.store.searchChunks(emailID: email.id, kind: .speechText, ordinal: 0)
+        XCTAssertTrue(chunks.joined().hasPrefix("[Recognised speech ("), "the text says where it came from")
+        // Switched off: the recording is kept, and the state says why its words are not searched.
+        AttachmentSpeech.isEnabled = false
+        let off = AttachmentTextIndexJob.extractCoverage(fromRaw: raw)?.map { ($0.state, $0.note ?? "") } ?? []
+        XCTAssertEqual(off.map(\.0), [.unsupported, .unsupported])
+        XCTAssertTrue(off.first?.1.contains("turn on speech") == true)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     // MARK: - Five jobs LIFE-06 — the adopted data-access policy (owner, 2026-11-06)
 
     func testLIFE06_accessPolicy_keepsImportedDataOpenAfterExpiry_andStopsNewPaidWork() throws {

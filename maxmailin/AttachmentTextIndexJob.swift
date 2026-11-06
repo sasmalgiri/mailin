@@ -104,7 +104,8 @@ final class AttachmentTextIndexJob {
             case .failed: docState = .failed
             }
             return AttachmentSearchDocument(ordinal: ordinal, filename: filename, text: (docState == .complete || docState == .partial) ? fullText : nil,
-                                            state: docState, extractorVersion: AttachmentTextIndexJob.extractorVersion, ocr: extractor == "ocr")
+                                            state: docState, extractorVersion: AttachmentTextIndexJob.extractorVersion, ocr: extractor == "ocr",
+                                            speech: extractor == "speech")
         }
 
         func coverageRow(emailID: UUID) -> AttachmentCoverageRow {
@@ -523,6 +524,28 @@ final class AttachmentTextIndexJob {
                 return (nil, .unsupported, "none", String(localized: "image — turn on attachment OCR to read it"))
             }
             return (AttachmentOCR.text(fromImageData: data), .extracted, "ocr", nil)
+        }
+        // TYPE-05: audio and video — the spoken words, recognised on this device.
+        if AttachmentSpeech.isMedia(mimeType: mime, filename: attachment.filename) {
+            guard AttachmentSpeech.isEnabled else {
+                return (nil, .unsupported, "none", String(localized: "audio or video — turn on speech in attachments (Settings ▸ Modules) to read it"))
+            }
+            var url = attachment.fileURL
+            var temporary: URL?
+            if url == nil {
+                let ext = (attachment.filename as NSString).pathExtension.lowercased()
+                let t = FileManager.default.temporaryDirectory.appendingPathComponent("media-\(UUID().uuidString).\(ext.isEmpty ? "m4a" : ext)")
+                do { try data.write(to: t) } catch { return (nil, .failed, "speech", error.localizedDescription) }
+                temporary = t; url = t
+            }
+            defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
+            let transcript = AttachmentSpeech.transcribe(fileURL: url!)
+            if let failure = transcript.failure, transcript.text == nil {
+                return (nil, transcript.notAuthorized ? .unsupported : .failed, "speech", failure)
+            }
+            let words = transcript.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if words.isEmpty { return ("", .noText, "speech", String(localized: "no speech was recognised in the recording")) }
+            return ("[Recognised speech (\(transcript.locale ?? "?"))]\n" + words, .extracted, "speech", transcript.failure)
         }
         // FIND-01 + TYPE-01…04: Office Open XML, OpenDocument, iWork, Office
         // 97–2003 and ZIP (one level inside) through the document facade —

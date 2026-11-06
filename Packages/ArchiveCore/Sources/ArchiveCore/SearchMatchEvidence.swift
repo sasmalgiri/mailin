@@ -26,6 +26,8 @@ struct MatchEvidence: Sendable, Equatable {
         case subject, sender, recipients, body
         case attachmentName
         case attachmentText(ordinal: Int, filename: String, ocr: Bool, context: String?)
+        /// TYPE-05: words recognised in an audio or video attachment.
+        case speech(ordinal: Int, filename: String, context: String?)
         /// A condition on metadata (dates, attachments yes/no, tags, folders…) that the row passed.
         case metadata
         /// A text condition whose evidence could not be found in the index.
@@ -183,6 +185,10 @@ extension SQLiteEmailStore {
                 let filename = filenames.indices.contains(ordinal) ? filenames[ordinal] : ""
                 location = .attachmentText(ordinal: ordinal, filename: filename, ocr: kind == .ocrText,
                                            context: Self.nearestLabel(in: text, before: excerpt.marks.first?.lowerBound))
+            case .speechText:
+                let filename = filenames.indices.contains(ordinal) ? filenames[ordinal] : ""
+                location = .speech(ordinal: ordinal, filename: filename,
+                                   context: Self.nearestLabel(in: text, before: excerpt.marks.first?.lowerBound))
             }
             hits.append(Hit(location: location, excerpt: excerpt))
         }

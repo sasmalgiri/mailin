@@ -84,7 +84,7 @@ extension SQLiteEmailStore {
             parts.append("""
                 EXISTS (SELECT 1 FROM attachments ua WHERE ua.email_id = e.id
                         AND NOT EXISTS (SELECT 1 FROM search_docs ud WHERE ud.email_id = e.id
-                                        AND ud.kind IN ('attachmentText','ocrText') AND ud.ordinal = ua.position
+                                        AND ud.kind IN (\(SearchDocKind.attachmentContentSQL)) AND ud.ordinal = ua.position
                                         AND ud.state IN ('complete','noText')))
                 """)
         }
@@ -194,7 +194,7 @@ extension SQLiteEmailStore {
         }
         if let content = g.content?.trimmingCharacters(in: .whitespaces), !content.isEmpty {
             let words = SearchTextTokens.words(in: content)
-            var inner: [String] = ["ac.kind IN ('attachmentText','ocrText')"]
+            var inner: [String] = ["ac.kind IN (\(SearchDocKind.attachmentContentSQL))"]
             if !words.isEmpty {
                 let fts: String
                 switch g.contentMatch {

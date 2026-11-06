@@ -321,6 +321,34 @@ Mail files do not record when a message was deleted, so deletion analysis counts
   itself is not changed in format, so an earlier build still opens it.
 - Handwriting and low-contrast photos are recognised poorly or not at all.
 
+**Every document kind is read for search (2026-11-06, owner directive "all types").** Attachment text
+comes from: PDF (text layer, OCR when scanned); DOCX / XLSX / PPTX; **OpenDocument** .odt / .ods / .odp
+(sheets, slides, notes, headers and footers labelled; an encrypted manifest → "locked"); **iWork**
+.pages / .numbers / .key — the modern IWA format (snappy + protobuf; body text, table cells with sheet
+names, slides without template placeholders) and iWork '09 XML, verified on real files made by Pages,
+Numbers and Keynote (`maxmailinTests/Fixtures/iwork`); **Office 97–2003** .doc (piece table), .xls (sheet
+names, shared strings across CONTINUE records, inline labels; FILEPASS → "locked") and .ppt (text atoms per
+slide; the Word reader verified on a real textutil .doc, the Excel and PowerPoint readers on spec-built
+streams — real files welcome); **ZIP attachments** one level down (each file inside read by its kind, nested
+archives and oversize members listed as not read, media listed as not text); RTF, HTML and plain-text
+kinds. Still not read, and said so per attachment: password-protected files ("locked"), images without
+OCR on, other archive formats (.gz/.7z/.rar/.tar are kept as files), and files with no text.
+
+**Speech in audio and video attachments** — switch "Speech in audio and video attachments" (on by default).
+- The words spoken in m4a, mp3, wav, aiff, caf, aac, flac, mov, mp4, m4v and 3gp attachments are recognised
+  on this device with Apple's Speech framework (`requiresOnDeviceRecognition`); nothing is sent anywhere.
+  The first recognition asks the person once (System Settings ▸ Privacy & Security ▸ Speech Recognition).
+- Recognised speech is its own document kind (`speechText`): search finds it anywhere and per attachment, and
+  the evidence chip says "Recognised speech: file". The text is prefixed with the language used
+  ("[Recognised speech (en-US)]").
+- Language: the person's language when an on-device model is installed for it, else English, else any
+  installed on-device model; a recording in a language with no on-device model is recorded as "failed" with
+  that reason, never as "no match". Quality follows Apple's dictation model: clean speech is good, crosstalk,
+  music and poor phone audio are not.
+- Verified: `testTYPE05_*` recognises two recordings made with the system voice (fixtures under
+  `maxmailinTests/Fixtures/media`); the test skips with the reason when the test host has not been allowed
+  speech recognition on this Mac.
+
 **Send to DEVONthink and email links** — switch "Send to DEVONthink and email links" (Mac).
 - Export ▸ Send to DEVONthink: the emails (count shown first) are written as standard .eml files through
   the normal export run — pre-flight, receipt, Resume, the Free plan's 500-email limit — then opened with

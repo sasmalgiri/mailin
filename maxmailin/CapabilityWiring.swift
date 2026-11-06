@@ -58,6 +58,16 @@ enum CapabilityWiring {
         case .devonthinkHandOff:
             // E2: read by the export menus, the email link command and the URL handler.
             DEVONthinkHandOff.isEnabled = isOn
+        case .attachmentSpeech:
+            // TYPE-05: read by AttachmentTextIndexJob; the first recognition asks the person once.
+            AttachmentSpeech.isEnabled = isOn
+            if isOn {
+                Task { @MainActor in
+                    if AttachmentSpeech.authorizationStatus() == .notDetermined { _ = await AttachmentSpeech.requestAuthorization() }
+                    try? await Task.sleep(for: .seconds(5))
+                    AttachmentTextIndexJob.shared.kickIfNeeded()
+                }
+            }
         case .attachmentOCR:
             // E1: read by AttachmentTextIndexJob, which runs without a view.
             AttachmentOCR.isEnabled = isOn

@@ -61,6 +61,10 @@ struct MatchEvidenceChips: View {
             var text = ocr ? String(localized: "Recognised text: \(filename)") : String(localized: "Attachment text: \(filename)")
             if let context, !context.isEmpty { text += " · " + context }
             return text
+        case .speech(_, let filename, let context):
+            var text = String(localized: "Recognised speech: \(filename)")
+            if let context, !context.isEmpty { text += " · " + context }
+            return text
         case .metadata: return String(localized: "Matches filters")
         case .unavailable: return String(localized: "Evidence unavailable — text not indexed yet")
         }
@@ -74,6 +78,7 @@ struct MatchEvidenceChips: View {
         case .body: return "text.alignleft"
         case .attachmentName: return "paperclip"
         case .attachmentText(_, _, let ocr, _): return ocr ? "text.viewfinder" : "doc.text.magnifyingglass"
+        case .speech: return "waveform"
         case .metadata: return "line.3.horizontal.decrease"
         case .unavailable: return "questionmark.circle"
         }

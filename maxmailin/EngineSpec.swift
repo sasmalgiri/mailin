@@ -285,6 +285,11 @@ struct EngineSpec: Sendable {
             return EngineSpec(.archive, maturity: .stable,
                 name: String(localized: "Text in scanned attachments (OCR)"),
                 detail: String(localized: "Reads the text in scanned PDFs and photos attached to emails, on this device, so attachment search finds it. No network."))
+        case .attachmentSpeech:
+            // TYPE-05: Apple Speech on-device recognition for audio and video attachments.
+            return EngineSpec(.archive, maturity: .stable,
+                name: String(localized: "Speech in audio and video attachments"),
+                detail: String(localized: "Recognises the words spoken in voice memos, calls and videos attached to emails, on this device, so search finds them and says \"Recognised speech\". Asks once for permission. No network."))
         default:
             return nil
         }

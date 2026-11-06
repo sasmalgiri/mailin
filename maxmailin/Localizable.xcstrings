@@ -381895,6 +381895,646 @@
           }
         }
       }
+    },
+    "Speech in audio and video attachments" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprache in Audio- und Videoanhängen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voz en adjuntos de audio y vídeo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parole dans les pièces jointes audio et vidéo"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ऑडियो और वीडियो अनुलग्नकों में बोली"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parlato negli allegati audio e video"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声・動画添付ファイル内の発話"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오디오 및 비디오 첨부 파일의 음성"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fala em anexos de áudio e vídeo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音频和视频附件中的语音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音訊和影片附件中的語音"
+          }
+        }
+      }
+    },
+    "Recognises the words spoken in voice memos, calls and videos attached to emails, on this device, so search finds them and says \"Recognised speech\". Asks once for permission. No network." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erkennt die in Sprachmemos, Anrufen und Videos an E-Mails gesprochenen Wörter auf diesem Gerät, sodass die Suche sie findet und „Erkannte Sprache“ sagt. Fragt einmal um Erlaubnis. Kein Netzwerk."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconoce las palabras habladas en notas de voz, llamadas y vídeos adjuntos a correos, en este dispositivo, para que la búsqueda las encuentre y diga «Voz reconocida». Pide permiso una vez. Sin red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnaît les mots prononcés dans les mémos vocaux, appels et vidéos joints aux courriels, sur cet appareil, pour que la recherche les trouve et indique « Parole reconnue ». Demande la permission une fois. Pas de réseau."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ईमेल से जुड़े वॉइस मेमो, कॉल और वीडियो में बोले गए शब्दों को इसी डिवाइस पर पहचानता है, ताकि खोज उन्हें पा सके और “पहचानी गई बोली” कहे। एक बार अनुमति माँगता है। कोई नेटवर्क नहीं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Riconosce le parole pronunciate in memo vocali, chiamate e video allegati alle email, su questo dispositivo, così la ricerca le trova e indica \"Parlato riconosciuto\". Chiede il permesso una volta. Nessuna rete."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールに添付されたボイスメモ、通話、動画の中で話された言葉をこのデバイス上で認識し、検索で見つけて「認識された発話」と表示します。許可は一度だけ求めます。ネットワークは使いません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일에 첨부된 음성 메모, 통화, 비디오에서 말한 단어를 이 기기에서 인식하여 검색이 찾고 \"인식된 음성\"으로 표시합니다. 권한은 한 번만 묻습니다. 네트워크를 쓰지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconhece as palavras faladas em memos de voz, chamadas e vídeos anexados a e-mails, neste dispositivo, para que a pesquisa as encontre e diga \"Fala reconhecida\". Pede permissão uma vez. Sem rede."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在本设备上识别邮件所附语音备忘录、通话和视频中说出的词语，使搜索能找到它们并标注“已识别的语音”。只请求一次权限。不使用网络。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在本裝置上辨識郵件所附語音備忘錄、通話和影片中說出的詞語，使搜尋能找到它們並標註「已辨識的語音」。只請求一次權限。不使用網路。"
+          }
+        }
+      }
+    },
+    "Recognised speech: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erkannte Sprache: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voz reconocida: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parole reconnue : %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहचानी गई बोली: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parlato riconosciuto: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "認識された発話：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인식된 음성: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fala reconhecida: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已识别的语音：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已辨識的語音：%@"
+          }
+        }
+      }
+    },
+    "audio or video — turn on speech in attachments (Settings ▸ Modules) to read it" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio oder Video – schalten Sie „Sprache in Anhängen“ (Einstellungen ▸ Module) ein, um es zu lesen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "audio o vídeo: active «Voz en adjuntos» (Ajustes ▸ Módulos) para leerlo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "audio ou vidéo — activez « Parole dans les pièces jointes » (Réglages ▸ Modules) pour le lire"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ऑडियो या वीडियो — इसे पढ़ने के लिए “अनुलग्नकों में बोली” (सेटिंग्स ▸ मॉड्यूल) चालू करें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "audio o video: attiva \"Parlato negli allegati\" (Impostazioni ▸ Moduli) per leggerlo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声または動画 — 読み取るには「添付ファイル内の発話」（設定 ▸ モジュール）をオンにしてください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오디오 또는 비디오 — 읽으려면 '첨부 파일의 음성'(설정 ▸ 모듈)을 켜세요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "áudio ou vídeo — ative \"Fala em anexos\" (Ajustes ▸ Módulos) para lê-lo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音频或视频——请在“设置 ▸ 模块”中开启“附件中的语音”以读取"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音訊或影片——請在「設定 ▸ 模組」中開啟「附件中的語音」以讀取"
+          }
+        }
+      }
+    },
+    "speech recognition is not allowed for mailin — allow it in System Settings ▸ Privacy & Security ▸ Speech Recognition" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spracherkennung ist für mailin nicht erlaubt – erlauben Sie sie in Systemeinstellungen ▸ Datenschutz & Sicherheit ▸ Spracherkennung"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el reconocimiento de voz no está permitido para mailin: permítalo en Ajustes del Sistema ▸ Privacidad y seguridad ▸ Reconocimiento de voz"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la reconnaissance vocale n'est pas autorisée pour mailin — autorisez-la dans Réglages Système ▸ Confidentialité et sécurité ▸ Reconnaissance vocale"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin के लिए बोली पहचान की अनुमति नहीं है — सिस्टम सेटिंग्स ▸ गोपनीयता और सुरक्षा ▸ बोली पहचान में अनुमति दें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "il riconoscimento vocale non è consentito a mailin: consentilo in Impostazioni di Sistema ▸ Privacy e sicurezza ▸ Riconoscimento vocale"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin の音声認識が許可されていません。システム設定 ▸ プライバシーとセキュリティ ▸ 音声認識で許可してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin의 음성 인식이 허용되지 않았습니다. 시스템 설정 ▸ 개인정보 보호 및 보안 ▸ 음성 인식에서 허용하세요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o reconhecimento de fala não está permitido para o mailin — permita em Ajustes do Sistema ▸ Privacidade e Segurança ▸ Reconhecimento de Fala"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 未获语音识别权限——请在“系统设置 ▸ 隐私与安全性 ▸ 语音识别”中允许"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 未獲語音辨識權限——請在「系統設定 ▸ 隱私權與安全性 ▸ 語音辨識」中允許"
+          }
+        }
+      }
+    },
+    "speech recognition has not been allowed yet — the next time the app is in front it asks once" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spracherkennung wurde noch nicht erlaubt – wenn die App das nächste Mal im Vordergrund ist, fragt sie einmal"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el reconocimiento de voz aún no se ha permitido: la próxima vez que la app esté en primer plano lo pedirá una vez"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la reconnaissance vocale n'a pas encore été autorisée — la prochaine fois que l'app sera au premier plan, elle le demandera une fois"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बोली पहचान की अनुमति अभी नहीं दी गई — अगली बार ऐप सामने आने पर यह एक बार पूछेगा"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "il riconoscimento vocale non è ancora stato consentito: la prossima volta che l'app è in primo piano lo chiede una volta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声認識はまだ許可されていません。次にアプリが前面に来たときに一度だけ確認します"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "음성 인식이 아직 허용되지 않았습니다. 다음에 앱이 앞에 오면 한 번 묻습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o reconhecimento de fala ainda não foi permitido — da próxima vez que o app estiver em primeiro plano ele pede uma vez"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未允许语音识别——下次应用位于前台时会询问一次"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未允許語音辨識——下次 App 位於前景時會詢問一次"
+          }
+        }
+      }
+    },
+    "speech recognition is not available" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spracherkennung ist nicht verfügbar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el reconocimiento de voz no está disponible"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la reconnaissance vocale n'est pas disponible"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बोली पहचान उपलब्ध नहीं है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "il riconoscimento vocale non è disponibile"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声認識は利用できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "음성 인식을 사용할 수 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o reconhecimento de fala não está disponível"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语音识别不可用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "語音辨識不可用"
+          }
+        }
+      }
+    },
+    "no on-device speech model is installed for %@ or English — add the language's dictation pack in System Settings" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für %@ oder Englisch ist kein Sprachmodell auf dem Gerät installiert – fügen Sie das Diktatpaket der Sprache in den Systemeinstellungen hinzu"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no hay ningún modelo de voz en el dispositivo para %@ ni para inglés: añada el paquete de dictado del idioma en Ajustes del Sistema"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aucun modèle vocal sur l'appareil n'est installé pour %@ ni pour l'anglais — ajoutez le pack de dictée de la langue dans Réglages Système"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ या अंग्रेज़ी के लिए डिवाइस पर कोई बोली मॉडल स्थापित नहीं है — सिस्टम सेटिंग्स में भाषा का डिक्टेशन पैक जोड़ें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nessun modello vocale sul dispositivo è installato per %@ o per l'inglese: aggiungi il pacchetto di dettatura della lingua nelle Impostazioni di Sistema"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ または英語のオンデバイス音声モデルがインストールされていません。システム設定でその言語の音声入力パックを追加してください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 또는 영어용 기기 내 음성 모델이 설치되어 있지 않습니다. 시스템 설정에서 해당 언어의 받아쓰기 팩을 추가하세요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nenhum modelo de fala no dispositivo está instalado para %@ ou inglês — adicione o pacote de ditado do idioma em Ajustes do Sistema"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安装 %@ 或英语的设备端语音模型——请在“系统设置”中添加该语言的听写包"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安裝 %@ 或英語的裝置端語音模型——請在「系統設定」中加入該語言的聽寫套件"
+          }
+        }
+      }
+    },
+    "recognition did not finish within %lld minutes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Erkennung war nach %lld Minuten nicht abgeschlossen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el reconocimiento no terminó en %lld minutos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la reconnaissance ne s'est pas terminée en %lld minutes"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहचान %lld मिनट में पूरी नहीं हुई"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "il riconoscimento non è terminato entro %lld minuti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "認識が %lld 分以内に終わりませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인식이 %lld분 안에 끝나지 않았습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o reconhecimento não terminou em %lld minutos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "识别未在 %lld 分钟内完成"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "辨識未在 %lld 分鐘內完成"
+          }
+        }
+      }
+    },
+    "no speech was recognised in the recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In der Aufnahme wurde keine Sprache erkannt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se reconoció voz en la grabación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aucune parole n'a été reconnue dans l'enregistrement"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "रिकॉर्डिंग में कोई बोली नहीं पहचानी गई"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nessun parlato riconosciuto nella registrazione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音内に発話は認識されませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "녹음에서 음성이 인식되지 않았습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nenhuma fala foi reconhecida na gravação"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音中未识别到语音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音中未辨識到語音"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

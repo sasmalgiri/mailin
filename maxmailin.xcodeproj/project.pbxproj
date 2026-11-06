@@ -735,6 +735,7 @@
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025-2026 mailin. All rights reserved.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mailin recognises the speech in audio and video attachments on this device, so a recording's words can be searched like a document. For example, finding the voice memo in which a contract term was discussed. Nothing is sent anywhere; recognition runs only when the switch in Settings ▸ Modules is on.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
@@ -787,6 +788,7 @@
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025-2026 mailin. All rights reserved.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mailin recognises the speech in audio and video attachments on this device, so a recording's words can be searched like a document. For example, finding the voice memo in which a contract term was discussed. Nothing is sent anywhere; recognition runs only when the switch in Settings ▸ Modules is on.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
