@@ -114,6 +114,8 @@ struct ArchiveListPane: View {
     var matchTerms: SearchMatchTerms? = nil
     /// FIND-05: evidence from the index per row (the search model on); nil = heuristic chips.
     var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
+    /// FIND-05: a chip naming an attachment opens it (email id, attachment ordinal).
+    var onOpenAttachment: ((EmailID, Int) -> Void)? = nil
     /// True while a search string is active — decides which empty state shows.
     var isSearching: Bool = false
 
@@ -160,7 +162,8 @@ struct ArchiveListPane: View {
             }
 
             ForEach(model.summaries) { summary in
-                ArchiveSummaryRow(summary: summary, matchTerms: matchTerms, evidenceProvider: evidenceProvider)
+                ArchiveSummaryRow(summary: summary, matchTerms: matchTerms, evidenceProvider: evidenceProvider,
+                                  onOpenAttachment: onOpenAttachment)
                     .tag(summary.id)
                     .onAppear {
                         if summary.id == model.summaries.last?.id && model.hasMore {
@@ -274,6 +277,8 @@ struct ArchiveSummaryRow: View {
     /// FIND-05: when set, the strip shows evidence the index returned for
     /// this row instead of the heuristic attribution.
     var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
+    /// FIND-05: opens the attachment a chip names.
+    var onOpenAttachment: ((EmailID, Int) -> Void)? = nil
     @State private var evidence: [MatchEvidence] = []
 
     private var matchedFields: [SearchMatchField] {
@@ -296,7 +301,8 @@ struct ArchiveSummaryRow: View {
             Text(summary.subject.isEmpty ? "(No Subject)" : summary.subject)
                 .font(.subheadline).lineLimit(1)
             if evidenceProvider != nil {
-                MatchEvidenceChips(evidence: evidence)
+                MatchEvidenceChips(evidence: evidence,
+                                   onOpenAttachment: onOpenAttachment.map { open in { ordinal in open(summary.id, ordinal) } })
             } else {
                 SearchMatchFieldChips(fields: matchedFields)
             }

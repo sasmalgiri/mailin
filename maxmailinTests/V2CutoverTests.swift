@@ -2469,6 +2469,56 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertNil(SQLiteEmailStore.nearestLabel(in: "no label here", before: 5))
     }
 
+    /// FIND-05 (plan v3 closure list): a chip that names an attachment opens
+    /// THAT attachment — by its ordinal, under its own name — never the first
+    /// file that happens to share the name; failures are named, not silent.
+    func testFIND05_chipOpensTheSpecificAttachment_byOrdinal_underItsOwnName() throws {
+        let first = Data("first file".utf8), second = Data("%PDF-1.4 second".utf8)
+        let email = mail(71, from: "a@example.com", subject: "Two files", body: "see attached", attachments: [
+            AttachmentMetadata(filename: "budget.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               size: first.count, base64: first.base64EncodedString()),
+            AttachmentMetadata(filename: "budget.xlsx", mimeType: "application/pdf", size: second.count, base64: second.base64EncodedString()),
+        ])
+
+        let url = try EvidenceAttachmentOpener.temporaryFile(for: email, ordinal: 1).get()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertEqual(try Data(contentsOf: url), second, "the second of two same-named files, not the first")
+        XCTAssertEqual(url.lastPathComponent, "budget.xlsx", "the attachment keeps its own name so the system picks the right app")
+        XCTAssertTrue(url.standardizedFileURL.path.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path),
+                      "written to the temporary directory, never into the archive")
+
+        // A chip for the first file opens the first file.
+        let firstURL = try EvidenceAttachmentOpener.temporaryFile(for: email, ordinal: 0).get()
+        defer { try? FileManager.default.removeItem(at: firstURL.deletingLastPathComponent()) }
+        XCTAssertEqual(try Data(contentsOf: firstURL), first)
+
+        // An ordinal the message does not have: a named failure, nothing written.
+        guard case .failure(let missing) = EvidenceAttachmentOpener.temporaryFile(for: email, ordinal: 2) else {
+            return XCTFail("ordinal 2 of a two-attachment message must fail")
+        }
+        XCTAssertEqual(missing, .noAttachment(ordinal: 2, count: 2))
+        XCTAssertFalse(missing.message.isEmpty)
+
+        // Bytes that cannot be produced: the failure names the file.
+        var bare = email
+        bare.attachments = [AttachmentMetadata(filename: "ghost.pdf", mimeType: "application/pdf", size: 5)]
+        guard case .failure(let unavailable) = EvidenceAttachmentOpener.temporaryFile(for: bare, ordinal: 0) else {
+            return XCTFail("an attachment with no bytes anywhere must fail")
+        }
+        XCTAssertEqual(unavailable, .bytesUnavailable(filename: "ghost.pdf"))
+
+        // Names are made safe for one path component and get an extension when they lack one.
+        XCTAssertEqual(EvidenceAttachmentOpener.safeFilename("../../etc/passwd", mimeType: "text/plain"), "_.._etc_passwd")
+        XCTAssertEqual(EvidenceAttachmentOpener.safeFilename("", mimeType: "application/pdf"), "attachment.pdf")
+        XCTAssertEqual(EvidenceAttachmentOpener.safeFilename("notes", mimeType: "text/plain; charset=utf-8"), "notes.txt")
+
+        // Only chips that name an attachment open one; the others stay labels.
+        XCTAssertEqual(MatchEvidenceChips.attachmentOrdinal(.attachmentText(ordinal: 1, filename: "budget.xlsx", ocr: true, context: "Sheet: Q3")), 1)
+        XCTAssertEqual(MatchEvidenceChips.attachmentOrdinal(.speech(ordinal: 0, filename: "memo.m4a", context: nil)), 0)
+        XCTAssertNil(MatchEvidenceChips.attachmentOrdinal(.body))
+        XCTAssertNil(MatchEvidenceChips.attachmentOrdinal(.attachmentName), "a name match does not say which of several same-named files")
+    }
+
     // MARK: - Five jobs FIND-03 — coverage states; a failed counter is unknown, not zero
 
     func testFIND03_coverageSnapshot_statesAreDistinct_andUnknownIsNeverZero() {

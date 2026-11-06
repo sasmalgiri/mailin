@@ -14,6 +14,9 @@ import SwiftUI
 
 struct MatchEvidenceChips: View {
     let evidence: [MatchEvidence]
+    /// FIND-05: when set, a chip that names an attachment is a button that
+    /// opens that attachment (by its ordinal in the message).
+    var onOpenAttachment: ((Int) -> Void)? = nil
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
@@ -21,15 +24,15 @@ struct MatchEvidenceChips: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
                     ForEach(Array(evidence.enumerated()), id: \.offset) { _, item in
-                        Label(Self.label(item.location), systemImage: Self.symbol(item.location))
-                            .labelStyle(.titleAndIcon)
-                            .font(.caption2)
-                            .lineLimit(1)
-                            .foregroundStyle(chipForeground(item))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(prominence == .increased ? Color.white.opacity(0.22) : Color.secondary.opacity(0.12), in: Capsule())
-                            .help(item.condition)
+                        if let onOpenAttachment, let ordinal = Self.attachmentOrdinal(item.location) {
+                            Button { onOpenAttachment(ordinal) } label: { chip(item) }
+                                .buttonStyle(.plain)
+                                .help(String(localized: "Open \(Self.attachmentFilename(item.location) ?? "")") + " · " + item.condition)
+                                .accessibilityHint(String(localized: "Opens this attachment"))
+                                .accessibilityIdentifier("search.matchEvidence.open.\(ordinal)")
+                        } else {
+                            chip(item).help(item.condition)
+                        }
                     }
                 }
                 if let excerpt = evidence.compactMap(\.excerpt).first {
@@ -42,6 +45,34 @@ struct MatchEvidenceChips: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("search.matchEvidence")
+        }
+    }
+
+    private func chip(_ item: MatchEvidence) -> some View {
+        Label(Self.label(item.location), systemImage: Self.symbol(item.location))
+            .labelStyle(.titleAndIcon)
+            .font(.caption2)
+            .lineLimit(1)
+            .foregroundStyle(chipForeground(item))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(prominence == .increased ? Color.white.opacity(0.22) : Color.secondary.opacity(0.12), in: Capsule())
+    }
+
+    /// The attachment a chip points at, when it points at one.
+    static func attachmentOrdinal(_ location: MatchEvidence.Location) -> Int? {
+        switch location {
+        case .attachmentText(let ordinal, _, _, _): return ordinal
+        case .speech(let ordinal, _, _): return ordinal
+        default: return nil
+        }
+    }
+
+    static func attachmentFilename(_ location: MatchEvidence.Location) -> String? {
+        switch location {
+        case .attachmentText(_, let filename, _, _): return filename
+        case .speech(_, let filename, _): return filename
+        default: return nil
         }
     }
 

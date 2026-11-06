@@ -33,6 +33,8 @@ struct ArchiveThreePaneView: View {
     @State private var spec: SearchSpec?
     @State private var unresolved = 0
     @State private var showAdvancedSearch = false
+    /// FIND-05: why an attachment named by a chip could not be opened.
+    @State private var attachmentOpenFailure: EvidenceAttachmentOpener.Failure?
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     /// Return to the tools hub (the Archive page keeps its other surfaces).
@@ -81,8 +83,16 @@ struct ArchiveThreePaneView: View {
                                 selectedID: $selectedID,
                                 matchTerms: SearchMatchTerms(searchText: searchText),
                                 evidenceProvider: evidenceProvider,
+                                onOpenAttachment: openAttachmentFromEvidence,
                                 isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !(spec?.isEmpty ?? true))
             }
+                .alert(String(localized: "Could not open the attachment"),
+                       isPresented: Binding(get: { attachmentOpenFailure != nil }, set: { if !$0 { attachmentOpenFailure = nil } }),
+                       presenting: attachmentOpenFailure) { _ in
+                    Button("OK", role: .cancel) { attachmentOpenFailure = nil }
+                } message: { failure in
+                    Text(failure.message)
+                }
                 .navigationTitle(selection?.title ?? "Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
                 .sheet(isPresented: $showAdvancedSearch) {
@@ -207,6 +217,16 @@ struct ArchiveThreePaneView: View {
         guard !(applied?.isEmpty ?? true) || !(freeText?.isEmpty ?? true) else { return nil }
         let archive = model.archive
         return { id in (try? await archive.matchEvidence(emailID: id, spec: applied, freeText: freeText)) ?? [] }
+    }
+
+    /// FIND-05: a chip that names an attachment opens that attachment — the
+    /// one at the recorded ordinal — and selects its message, in one click.
+    private func openAttachmentFromEvidence(_ id: EmailID, _ ordinal: Int) {
+        selectedID = id
+        let archive = model.archive
+        Task { @MainActor in
+            attachmentOpenFailure = await EvidenceAttachmentOpener.open(emailID: id, ordinal: ordinal, archive: archive)
+        }
     }
 
     /// What the sidebar and date scope limit the list to, in words.
