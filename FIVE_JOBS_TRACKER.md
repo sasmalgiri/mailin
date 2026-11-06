@@ -110,6 +110,29 @@ Stage E (2026-11-06): OPEN-06, LIFE-04, LIFE-05 done (aa5672e); LIFE-06 and OUT-
 | 10 | Usability pilot (9 of 10 on each task; partial outputs recognised) | **open (owner)** | Not run |
 
 
+
+## Owner directive 2026-11-06 — no hidden caps, every type working, speech
+
+"Hidden cap is backstabbing." Every limit the app enforces must be a plan limit (Free / purchase), a real
+format or device limit stated on screen, or gone. Every attachment type is to be read for search where text
+can exist; audio and video through Apple's on-device speech recognition (owner accepted the recommendation).
+
+| ID | What | State | Commit | Test |
+|---|---|---|---|---|
+| CAP-01 | Plain search box: no 2,000 candidate window anywhere (`page`, fingerprint, scope jobs, old attachment search); typed words run on the search model (same engine, coverage, evidence as Advanced Search) when the model is on | verified | 5aaea88 | `testCAP01_pagingATextQueryWalksEveryMatch_noTwoThousandWindow`, `testCAP01_plainBoxTranslatesToTheModel_andIsOffWhenTheModelIsOff`, `testCAP01_plainBoxOnTheModel_countsExactly_andSaysWhatIsUnknown` |
+| CAP-02 | Old export menu: Free cap 10 vs the promised 500 → one policy | not started | | |
+| CAP-03 | Old folder tree view: 30 labels / 50 sources → paged, complete | not started | | |
+| CAP-04 | Portable HTML viewer: 10,000-message single page → chunked viewer, no cap | not started | | |
+| CAP-05 | Shortcuts Find: 10,000 → paged continuation, total always returned | not started | | |
+| CAP-06 | A guard test over the five-jobs source for `prefix(N)` / `>= N { break }` windows, and a Settings ▸ Health "Limits" list naming every real limit the app enforces | not started | | |
+| CAP-07 | Previous-engine windows in AI / Professional tools (2,000 / 5,000): stated on screen today; retire the old paths after the whole-archive engines' soak (rule 14) | stated; retire later | | |
+| TYPE-01 | Legacy Office .doc / .xls / .ppt text (own OLE2 readers; AppKit .doc on the Mac) | not started | | |
+| TYPE-02 | OpenDocument .odt / .ods / .odp | not started | | |
+| TYPE-03 | iWork .pages / .numbers / .key (IWA snappy + protobuf; iWork '09 XML) | not started | | |
+| TYPE-04 | Files inside ZIP attachments, one level down, budgeted and stated | not started | | |
+| TYPE-05 | Audio and video speech → "recognised speech" documents (Apple Speech, on device; SpeechAnalyzer on macOS 26 / iOS 26, dictation recogniser before) | not started | | |
+| TYPE-06 | OLM (Outlook for Mac) and TAR / TGZ wrappers as sources | not started | | |
+
 ## Plan v3 (6 November 2026) — closure list §12.3, state
 
 | Item | State | Notes |
