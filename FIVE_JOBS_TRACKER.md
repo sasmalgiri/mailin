@@ -130,7 +130,7 @@ can exist; audio and video through Apple's on-device speech recognition (owner a
 | TYPE-02 | OpenDocument .odt / .ods / .odp | verified (synthetic packages; encrypted manifest → locked) | c1298d0 | `testTYPE02_openDocumentTextSheetsAndSlides_withLabels_andLockedFiles` |
 | TYPE-03 | iWork .pages / .numbers / .key (IWA snappy + protobuf; iWork '09 XML) | verified on real files made by Pages, Numbers and Keynote (fixtures committed) | c1298d0 | `testTYPE_realIWorkAndWordFixturesAreRead_withTheirLabels`, through-the-job test |
 | TYPE-04 | Files inside ZIP attachments, one level down, budgeted and stated | verified | c1298d0 | `testTYPE04_filesInsideAZipAreRead_oneLevelDown_withWhatWasNotRead`, `testTYPE_throughTheIndexingJob_*` |
-| TYPE-05 | Audio and video speech → "recognised speech" documents (Apple Speech, on device; SpeechAnalyzer on macOS 26 / iOS 26, dictation recogniser before) | not started | | |
+| TYPE-05 | Audio and video speech → "recognised speech" documents (Apple Speech, on device, every supported system) | implemented; **verification blocked on the owner**: allow Speech Recognition for mailin (the test host) in System Settings ▸ Privacy & Security, then `testTYPE05_*` runs on the two system-voice recordings | 9352bd6 | `testTYPE05_speechInRecordingsIsRecognisedOnDevice_andSearchableAsRecognisedSpeech` (skips with the reason while denied) |
 | TYPE-06 | OLM (Outlook for Mac) and TAR / TGZ wrappers as sources | not started | | |
 
 ## Plan v3 (6 November 2026) — closure list §12.3, state
