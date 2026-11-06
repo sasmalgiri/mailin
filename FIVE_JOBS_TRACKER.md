@@ -144,7 +144,7 @@ can exist; audio and video through Apple's on-device speech recognition (owner a
 | External-process recovery evidence (drive detach during write) | open | OPEN-03 |
 | Human usability gate | open (owner) | gate 10 |
 | Reconcile LIFE/security/help evidence (safe previews, key behaviour, temp/log handling, VoiceOver) | partly: LIFE-04 permissions + diagnostics; safe-preview/VoiceOver evidence to collect | — |
-| Presentation (§3.3 identity, §3.4 capacity wording), cap audit, signed candidate | open | no 100 MB cap exists in code; audit to be recorded |
+| Presentation (§3.3 identity, §3.4 capacity wording), cap audit, signed candidate | cap audit recorded (`CAP_AUDIT_2026-11-06.md`); §3.4 wording applied to the store draft and the Limits screen; §3.3 identity (display name / subtitle / screenshots / listing order) and the signed candidate are **owner decisions and actions** | the qualified claim is permitted: every import, indexing, query, paging and export path audited, windows removed or stated (CAP-01…07), guard test `testCAP06_*` |
 
 ## Owner decisions needed
 

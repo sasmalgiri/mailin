@@ -382983,6 +382983,134 @@
           }
         }
       }
+    },
+    "Single message above" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einzelne Nachricht über"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensaje individual por encima de"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Message unique au-dessus de"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इससे बड़ा एक संदेश"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Singolo messaggio oltre"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次のサイズを超える単一メッセージ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음 크기를 넘는 단일 메시지"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensagem única acima de"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超过以下大小的单封邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超過以下大小的單封郵件"
+          }
+        }
+      }
+    },
+    "A message larger than this is kept by byte range and exported byte for byte, but its text is not searchable; the import receipt counts such messages." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine größere Nachricht wird per Bytebereich aufbewahrt und Byte für Byte exportiert, ihr Text ist jedoch nicht durchsuchbar; die Importquittung zählt solche Nachrichten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un mensaje mayor se conserva por intervalo de bytes y se exporta byte a byte, pero su texto no se puede buscar; el recibo de importación cuenta esos mensajes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un message plus grand est conservé par plage d'octets et exporté octet par octet, mais son texte n'est pas interrogeable ; le reçu d'importation compte ces messages."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इससे बड़ा संदेश बाइट-सीमा से रखा जाता है और बाइट-दर-बाइट निर्यात होता है, पर उसका पाठ खोजा नहीं जा सकता; आयात रसीद ऐसे संदेश गिनती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un messaggio più grande è conservato per intervallo di byte ed esportato byte per byte, ma il suo testo non è ricercabile; la ricevuta di importazione conta tali messaggi."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これより大きいメッセージはバイト範囲で保持され、バイト単位でそのまま書き出されますが、本文は検索できません。読み込みの受領書にその件数が記録されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이보다 큰 메시지는 바이트 범위로 보관되고 바이트 그대로 내보내지지만 본문은 검색할 수 없습니다. 가져오기 영수증에 그 수가 기록됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma mensagem maior é mantida por intervalo de bytes e exportada byte a byte, mas seu texto não é pesquisável; o recibo de importação conta essas mensagens."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超过此大小的邮件按字节范围保存并逐字节导出，但其正文不可搜索；导入回执会统计此类邮件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超過此大小的郵件按位元組範圍保存並逐位元組匯出，但其內文不可搜尋；匯入收據會統計此類郵件。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

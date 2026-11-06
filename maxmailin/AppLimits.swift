@@ -81,6 +81,8 @@ enum AppLimits {
                      why: String(localized: "Larger images are scaled down before recognition; every image is still read.")),
             AppLimit(kind: .safety, what: String(localized: "Phrase verification"), value: String(localized: "\(SearchChunker.overlapCharacters) characters"),
                      why: String(localized: "Phrases up to this length are verified across chunk boundaries; longer ones match as all-words and the result says so.")),
+            AppLimit(kind: .safety, what: String(localized: "Single message above"), value: bytes(Int64(MBOXParser.maxMessageBytes)),
+                     why: String(localized: "A message larger than this is kept by byte range and exported byte for byte, but its text is not searchable; the import receipt counts such messages.")),
             // Previous engines.
             AppLimit(kind: .previousEngine, what: String(localized: "Previous duplicate engine"), value: String(localized: "newest \(previousEngineDuplicateWindow) emails"),
                      why: String(localized: "Runs only when the whole-archive engine is switched off or has stopped; the screen states the window.")),

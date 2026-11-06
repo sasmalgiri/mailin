@@ -62,7 +62,7 @@ mailin 3.0 is the biggest update yet.
 • Search the text inside scanned PDFs and photos.
 • New three-pane archive; AI Insights and Professional Workflows are pages you switch on.
 • Import queue with pause and resume; every import and export ends in a receipt, and an interrupted export resumes.
-• Archives of any size: mail is streamed from disk.
+• No preset archive-size or message-count cap: mail is streamed from disk. Capacity depends on your storage, memory and the archive format; see the tested-workload record.
 • Outlook .pst export rebuilt — the files open in Outlook.
 • Scripts and Shortcuts actions, Review Packs and team cases.
 • Hidden header timestamps, ARC and DKIM checks.
