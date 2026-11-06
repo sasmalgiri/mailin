@@ -126,10 +126,10 @@ can exist; audio and video through Apple's on-device speech recognition (owner a
 | CAP-05 | Shortcuts Find: 10,000 clamp → the person's Shortcuts Limit as given, none = everything (a Shortcuts list is in memory; stated in the action) | verified | f99460f | `testCAP05_shortcutsFindHasNoCapOfItsOwn` |
 | CAP-06 | A guard test over the five-jobs source for `prefix(N)` / `>= N { break }` windows, and a Settings ▸ Health "Limits" list naming every real limit the app enforces | verified | 864ba58 | `testCAP06_noNumericWindowInTheFiveJobsSource_andEveryRealLimitIsListed` |
 | CAP-07 | Previous-engine windows in AI / Professional tools (2,000 / 5,000): stated on screen today; retire the old paths after the whole-archive engines' soak (rule 14) | stated; retire later | | |
-| TYPE-01 | Legacy Office .doc / .xls / .ppt text (own OLE2 readers; AppKit .doc on the Mac) | not started | | |
-| TYPE-02 | OpenDocument .odt / .ods / .odp | not started | | |
-| TYPE-03 | iWork .pages / .numbers / .key (IWA snappy + protobuf; iWork '09 XML) | not started | | |
-| TYPE-04 | Files inside ZIP attachments, one level down, budgeted and stated | not started | | |
+| TYPE-01 | Legacy Office .doc / .xls / .ppt text (own OLE2 readers) | verified: .doc on a real textutil Word 97 file; .xls/.ppt on spec-built BIFF8/PPT streams (real files from the owner welcome) | c1298d0 | `testTYPE_realIWorkAndWordFixturesAreRead_withTheirLabels`, `testTYPE01_legacyExcelAndPowerPointBinaries_areReadFromTheirRecords` |
+| TYPE-02 | OpenDocument .odt / .ods / .odp | verified (synthetic packages; encrypted manifest → locked) | c1298d0 | `testTYPE02_openDocumentTextSheetsAndSlides_withLabels_andLockedFiles` |
+| TYPE-03 | iWork .pages / .numbers / .key (IWA snappy + protobuf; iWork '09 XML) | verified on real files made by Pages, Numbers and Keynote (fixtures committed) | c1298d0 | `testTYPE_realIWorkAndWordFixturesAreRead_withTheirLabels`, through-the-job test |
+| TYPE-04 | Files inside ZIP attachments, one level down, budgeted and stated | verified | c1298d0 | `testTYPE04_filesInsideAZipAreRead_oneLevelDown_withWhatWasNotRead`, `testTYPE_throughTheIndexingJob_*` |
 | TYPE-05 | Audio and video speech → "recognised speech" documents (Apple Speech, on device; SpeechAnalyzer on macOS 26 / iOS 26, dictation recogniser before) | not started | | |
 | TYPE-06 | OLM (Outlook for Mac) and TAR / TGZ wrappers as sources | not started | | |
 
