@@ -28,7 +28,12 @@ enum DocumentKind: String, Sendable, CaseIterable {
     case odt, ods, odp
     case pages, numbers, key
     case doc, xls, ppt
-    case zip
+    /// Archives (audit 2026-11-06 A04): the files inside are read, nested
+    /// archives up to `ContainerTextExtractor.maxDepth` levels, every child
+    /// that was not read listed by name.
+    case zip, tar, gzip
+
+    var isContainer: Bool { self == .zip || self == .tar || self == .gzip }
 
     static func detect(mimeType: String, filename: String) -> DocumentKind? {
         if let office = OfficeTextExtractor.Kind.detect(mimeType: mimeType, filename: filename) {
@@ -47,6 +52,8 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case "xls", "xlt": return .xls
         case "ppt", "pps", "pot": return .ppt
         case "zip": return .zip
+        case "tar": return .tar
+        case "tgz", "gz", "gzip": return .gzip
         default: break
         }
         if mime.contains("opendocument.text") { return .odt }
@@ -59,6 +66,8 @@ enum DocumentKind: String, Sendable, CaseIterable {
         if mime.contains("ms-excel") { return .xls }
         if mime.contains("ms-powerpoint") { return .ppt }
         if mime == "application/zip" || mime == "application/x-zip-compressed" { return .zip }
+        if mime.contains("x-tar") { return .tar }
+        if mime.contains("gzip") { return .gzip }
         return nil
     }
 
@@ -69,7 +78,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .odt, .ods, .odp: return "odf"
         case .pages, .numbers, .key: return "iwork"
         case .doc, .xls, .ppt: return "ole"
-        case .zip: return "zip"
+        case .zip, .tar, .gzip: return "archive"
         }
     }
 }
@@ -83,7 +92,7 @@ enum DocumentTextExtractor {
         case .odt, .ods, .odp: return try ODFTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .pages, .numbers, .key: return try IWorkTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .doc, .xls, .ppt: return try LegacyOfficeTextExtractor.extract(fileURL: fileURL, kind: kind)
-        case .zip: return try ZIPContainerTextExtractor.extract(fileURL: fileURL)
+        case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind)
         }
     }
 
@@ -234,7 +243,7 @@ final class ODFTextCollector: NSObject, XMLParserDelegate {
 
     func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
         switch name {
-        case "text:p", "text:h" where capturing:
+        case "text:p" where capturing, "text:h" where capturing:
             // Inside a cell, paragraphs stay on the cell's line; the row ends the line.
             current.text += cellDepth > 0 ? " " : "\n"
         case "table:table-cell" where capturing:
@@ -384,7 +393,7 @@ final class IWork09TextCollector: NSObject, XMLParserDelegate {
         case "sf:p": paragraphDepth += 1
         case "sf:ct":
             if let s = attributes["sfa:s"], !s.isEmpty { text += s + "\t" }
-        case "sf:br", "sf:lnbr" where paragraphDepth > 0: text += "\n"
+        case "sf:br" where paragraphDepth > 0, "sf:lnbr" where paragraphDepth > 0: text += "\n"
         case "sf:tab" where paragraphDepth > 0: text += "\t"
         default: break
         }
@@ -676,61 +685,179 @@ enum LegacyOfficeTextExtractor {
         return out
     }
 
-    // MARK: Excel (.xls) — BIFF8 records: sheet names, the shared string table, inline labels.
+    // MARK: Excel (.xls) — BIFF5/BIFF8: sheets, shared strings, every cell with its address, formula results, comments.
 
+    /// Audit 2026-11-06 A03: a workbook's values live in cell records, not
+    /// only in the shared-string table. Each sheet is a labelled section and
+    /// each cell a line "A1<tab>value": LABELSST / LABEL / RSTRING (text),
+    /// NUMBER / RK / MULRK (numbers), FORMULA with its cached result (a
+    /// number; text through the STRING record that follows; TRUE/FALSE;
+    /// #ERROR), BOOLERR, and TXO note text ("Comment: …"). Sheets are mapped
+    /// by the stream offsets BOUNDSHEET declares; hidden sheets are labelled.
+    /// Numbers appear as stored — a date is its serial number, number
+    /// formats are not applied — and the text says so.
     private static func excel(_ ole: OLE2Reader) throws -> OfficeTextExtractor.Result {
         guard let stream = ole.streamData(named: "Workbook") ?? ole.streamData(named: "Book") else {
             throw OfficeTextExtractor.ExtractError.notAPackage("no Workbook stream")
         }
-        var sheets: [String] = []
-        var strings: [String] = []
-        var pos = 0
-        // Records: id (2) + length (2) + data. The SST may continue into CONTINUE records.
+        struct Sheet { var name: String; var offset: Int; var hidden: Bool; var cells: [String] = []; var notes: [String] = [] }
+        var sheets: [Sheet] = []
+        var sst: [String] = []
         var sstSegments: [Data] = []
         var collectingSST = false
+        var biff8 = true
+        var sawBOF = false
+        var current: Int? = nil                 // the sheet whose substream we are in
+        var orphans: [String] = []              // cells met outside any declared sheet
+        var formulaWaitingForString: (row: Int, col: Int)? = nil
+        var noteWaitingForText = false
+        var noteCharacters = 0
+        var skipped: [String] = []
+        var numbersSeen = false
+
+        func reference(_ row: Int, _ col: Int) -> String {
+            var c = col, letters = ""
+            repeat { letters = String(UnicodeScalar(UInt8(65 + c % 26))) + letters; c = c / 26 - 1 } while c >= 0
+            return letters + String(row + 1)
+        }
+        func put(_ row: Int, _ col: Int, _ value: String) {
+            guard !value.isEmpty else { return }
+            let line = reference(row, col) + "\t" + value
+            if let current { sheets[current].cells.append(line) } else { orphans.append(line) }
+        }
+        func number(_ d: Double) -> String {
+            numbersSeen = true
+            if d.isFinite, d == d.rounded(), abs(d) < 1e15 { return String(Int64(d)) }
+            return String(d)
+        }
+        func rk(_ v: UInt32) -> Double {
+            let value: Double = v & 0x02 != 0 ? Double(Int32(bitPattern: v) >> 2) : Double(bitPattern: UInt64(v & ~UInt32(3)) << 32)
+            return v & 0x01 != 0 ? value / 100 : value
+        }
+        func le64(_ d: Data, _ o: Int) -> UInt64 { UInt64(le32(d, o)) | (UInt64(le32(d, o + 4)) << 32) }
+        /// A BIFF string: cch, then (BIFF8) an option byte and 8- or 16-bit characters, (BIFF5) bytes.
+        func string(_ record: Data, cchAt: Int, cchBytes: Int) -> String {
+            guard record.count >= cchAt + cchBytes else { return "" }
+            let cch = cchBytes == 2 ? Int(le16(record, cchAt)) : Int(record[record.startIndex + cchAt])
+            var start = cchAt + cchBytes
+            var wide = false
+            if biff8 {
+                guard record.count > start else { return "" }
+                let flags = record[record.startIndex + start]; start += 1
+                wide = flags & 0x01 != 0
+                if flags & 0x08 != 0 { start += 2 }      // rich-text run count
+                if flags & 0x04 != 0 { start += 4 }      // extended-string byte count
+            }
+            let end = min(record.count, start + (wide ? cch * 2 : cch))
+            guard end > start else { return "" }
+            let bytes = record.subdata(in: start..<end)
+            return (wide ? String(data: bytes, encoding: .utf16LittleEndian) : String(data: bytes, encoding: .windowsCP1252)) ?? ""
+        }
+
+        var pos = 0
         while pos + 4 <= stream.count {
             let id = le16(stream, pos), length = Int(le16(stream, pos + 2))
             let body = pos + 4
             guard body + length <= stream.count else { break }
             let record = stream.subdata(in: body..<(body + length))
+            if id != 0x003C { collectingSST = false }
             switch id {
-            case 0x002F: throw OfficeTextExtractor.ExtractError.encrypted   // FILEPASS
-            case 0x0085:   // BOUNDSHEET
-                if record.count >= 8 {
-                    let cch = Int(record[record.startIndex + 6]), wide = record.count > 7 && record[record.startIndex + 7] & 1 == 1
-                    let start = 8, end = min(record.count, start + (wide ? cch * 2 : cch))
-                    if end > start {
-                        let bytes = record.subdata(in: start..<end)
-                        sheets.append((wide ? String(data: bytes, encoding: .utf16LittleEndian) : String(data: bytes, encoding: .windowsCP1252)) ?? "")
-                    }
+            case 0x0809:   // BOF: the first tells the version; a sheet's own BOF is found by its declared offset
+                if !sawBOF {
+                    sawBOF = true
+                    if record.count >= 2 { let version = le16(record, 0); biff8 = version == 0 || version >= 0x0600 }
                 }
-                collectingSST = false
+                if let index = sheets.firstIndex(where: { $0.offset == pos }) { current = index }
+            case 0x000A:   // EOF: the substream ends
+                current = nil
+            case 0x002F: throw OfficeTextExtractor.ExtractError.encrypted   // FILEPASS
+            case 0x0085:   // BOUNDSHEET: lbPlyPos (4), options (2; low bits = hidden state), cch (1), [BIFF8 flags (1)], name
+                if record.count >= 7 {
+                    sheets.append(Sheet(name: string(record, cchAt: 6, cchBytes: 1), offset: Int(le32(record, 0)),
+                                        hidden: record[record.startIndex + 4] & 0x03 != 0))
+                }
             case 0x00FC:   // SST
                 sstSegments = [record]; collectingSST = true
-            case 0x003C where collectingSST:   // CONTINUE
-                sstSegments.append(record)
-            case 0x0204:   // LABEL (inline string cell)
-                collectingSST = false
-                if record.count >= 9 {
-                    let cch = Int(le16(record, 6)), wide = record[record.startIndex + 8] & 1 == 1
-                    let start = 9, end = min(record.count, start + (wide ? cch * 2 : cch))
-                    if end > start, let s = wide ? String(data: record.subdata(in: start..<end), encoding: .utf16LittleEndian)
-                                                : String(data: record.subdata(in: start..<end), encoding: .windowsCP1252) {
-                        strings.append(s)
-                    }
+            case 0x003C:   // CONTINUE: of the SST, or the text of a note
+                if collectingSST {
+                    sstSegments.append(record)
+                } else if noteWaitingForText, record.count >= 1 {
+                    let wide = record[record.startIndex] & 0x01 != 0
+                    let end = min(record.count, 1 + (wide ? noteCharacters * 2 : noteCharacters))
+                    let bytes = record.subdata(in: 1..<end)
+                    let text = (wide ? String(data: bytes, encoding: .utf16LittleEndian) : String(data: bytes, encoding: .windowsCP1252)) ?? ""
+                    let line = "Comment: " + text.replacingOccurrences(of: "\n", with: " ")
+                    if let current { sheets[current].notes.append(line) } else { orphans.append(line) }
+                    noteWaitingForText = false
                 }
+            case 0x00FD where record.count >= 10:   // LABELSST
+                if sst.isEmpty, !sstSegments.isEmpty { sst = sharedStrings(segments: sstSegments) }
+                let index = Int(le32(record, 6))
+                if index >= 0, index < sst.count { put(Int(le16(record, 0)), Int(le16(record, 2)), sst[index]) }
+            case 0x0204, 0x00D6:   // LABEL, RSTRING
+                if record.count >= 8 { put(Int(le16(record, 0)), Int(le16(record, 2)), string(record, cchAt: 6, cchBytes: 2)) }
+            case 0x0203 where record.count >= 14:   // NUMBER
+                put(Int(le16(record, 0)), Int(le16(record, 2)), number(Double(bitPattern: le64(record, 6))))
+            case 0x027E where record.count >= 10:   // RK
+                put(Int(le16(record, 0)), Int(le16(record, 2)), number(rk(le32(record, 6))))
+            case 0x00BD where record.count >= 12:   // MULRK: row, first col, (xf, rk)*, last col
+                let row = Int(le16(record, 0))
+                var offset = 4, col = Int(le16(record, 2))
+                while offset + 6 <= record.count - 2 {
+                    put(row, col, number(rk(le32(record, offset + 2))))
+                    offset += 6; col += 1
+                }
+            case 0x0006 where record.count >= 14:   // FORMULA: the cached result in bytes 6…13
+                let row = Int(le16(record, 0)), col = Int(le16(record, 2))
+                if le16(record, 12) == 0xFFFF {
+                    switch record[record.startIndex + 6] {
+                    case 0: formulaWaitingForString = (row, col)     // a STRING record follows
+                    case 1: put(row, col, record[record.startIndex + 8] != 0 ? "TRUE" : "FALSE")
+                    case 2: put(row, col, "#ERROR")
+                    default: break                                     // an empty-string result
+                    }
+                } else {
+                    put(row, col, number(Double(bitPattern: le64(record, 6))))
+                }
+            case 0x0207:   // STRING: the text result of the formula before it
+                if let cell = formulaWaitingForString {
+                    put(cell.row, cell.col, string(record, cchAt: 0, cchBytes: 2))
+                    formulaWaitingForString = nil
+                }
+            case 0x0205 where record.count >= 8:   // BOOLERR
+                let value = record[record.startIndex + 6], isError = record[record.startIndex + 7] != 0
+                put(Int(le16(record, 0)), Int(le16(record, 2)), isError ? "#ERROR" : (value != 0 ? "TRUE" : "FALSE"))
+            case 0x01B6 where record.count >= 12:   // TXO: a note's text follows in a CONTINUE record
+                noteCharacters = Int(le16(record, 10))
+                noteWaitingForText = noteCharacters > 0
             default:
-                if id != 0x003C { collectingSST = false }
+                break
             }
             pos = body + length
         }
-        if !sstSegments.isEmpty { strings.append(contentsOf: sharedStrings(segments: sstSegments)) }
+        if let cell = formulaWaitingForString { skipped.append("formula result text missing for \(reference(cell.row, cell.col))") }
+        if sst.isEmpty, !sstSegments.isEmpty { sst = sharedStrings(segments: sstSegments) }
+
         var text = ""
         var components: [String] = []
-        if !sheets.isEmpty { components.append("Workbook"); text += "[Workbook]\n" + sheets.joined(separator: "\n") + "\n" }
-        if !strings.isEmpty { components.append("Cells"); text += "[Cells]\n" + strings.joined(separator: "\n") + "\n" }
+        if !sheets.isEmpty {
+            components.append("Workbook")
+            text += "[Workbook]\n" + sheets.map { $0.name + ($0.hidden ? " (hidden)" : "") }.joined(separator: "\n") + "\n"
+        }
+        for sheet in sheets where !sheet.cells.isEmpty || !sheet.notes.isEmpty {
+            let label = "Sheet: " + sheet.name + (sheet.hidden ? " (hidden)" : "")
+            components.append(label)
+            text += "[\(label)]\n" + (sheet.cells + sheet.notes).joined(separator: "\n") + "\n"
+        }
+        if !orphans.isEmpty { components.append("Cells"); text += "[Cells]\n" + orphans.joined(separator: "\n") + "\n" }
+        // Shared strings no cell referenced (an unusual sheet map): kept, so nothing is lost.
+        if sheets.allSatisfy({ $0.cells.isEmpty }), orphans.isEmpty, !sst.isEmpty {
+            components.append("Shared strings")
+            text += "[Shared strings]\n" + sst.joined(separator: "\n") + "\n"
+        }
+        if numbersSeen { text += "[Numbers are shown as stored: a date is its serial number]\n" }
         if components.isEmpty { throw OfficeTextExtractor.ExtractError.noTextParts }
-        return OfficeTextExtractor.Result(text: text, components: components, skipped: [], notText: [])
+        return OfficeTextExtractor.Result(text: text, components: components, skipped: skipped, notText: [])
     }
 
     /// The SST: a count, then strings whose characters may run across a
@@ -846,59 +973,161 @@ enum LegacyOfficeTextExtractor {
     }
 }
 
-// MARK: - ZIP attachments: one level of files inside
+// MARK: - Archive attachments: the files inside ZIP / tar / gzip, nested, with what was not read
 
-enum ZIPContainerTextExtractor {
+/// What the app's own reader made of an archive child the package cannot
+/// read itself (PDF, image, audio, video, message): its text, or why it was
+/// not read. Installed by the indexing job (`ContainerTextExtractor.childReader`).
+struct ArchiveChildReading: Sendable {
+    var text: String?
+    var notRead: String?
+    init(text: String?, notRead: String?) { self.text = text; self.notRead = notRead }
+}
+
+/// Audit 2026-11-06 A04. Every child of an archive attachment is accounted
+/// for: documents through the document facade, text files directly, every
+/// other kind through the app's reader when one is installed (PDF text
+/// layer, OCR, speech) — and a child nothing could read is LISTED as not
+/// read, so the attachment is partial, never silently "complete". Archives
+/// inside archives are opened to `maxDepth` levels; what lies deeper is
+/// listed too. Extraction is bounded per part (`OfficeTextExtractor.maxPartBytes`)
+/// and per attachment across all levels (`maxTotalBytes`), and each bound
+/// that bites is named in the result.
+enum ContainerTextExtractor {
     static let textualExtensions: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "html", "htm", "ics", "vcf", "eml", "yml", "yaml", "rtf"]
+    /// Archive inside archive inside archive: this many levels are opened.
+    static let maxDepth = 3
+    /// Bytes extracted from one attachment's archives, all levels together.
+    static let maxTotalBytes: Int64 = 1_073_741_824
+    /// The app's reader for children the package cannot read itself.
+    nonisolated(unsafe) static var childReader: (@Sendable (URL, String) -> ArchiveChildReading)?
 
-    static func extract(fileURL: URL) throws -> OfficeTextExtractor.Result {
-        let members: [ZIPArchiveReader.Member]
-        do { members = try ZIPArchiveReader.members(of: fileURL) } catch {
-            throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error))
+    private struct Child {
+        let name: String
+        let size: Int64?
+        let encrypted: Bool
+        let extract: (URL) throws -> Void
+    }
+
+    static func extract(fileURL: URL, kind: DocumentKind) throws -> OfficeTextExtractor.Result {
+        var budget = maxTotalBytes
+        return try extract(fileURL: fileURL, kind: kind, depth: 1, prefix: "", budget: &budget)
+    }
+
+    private static func children(of url: URL, kind: DocumentKind) throws -> [Child] {
+        switch kind {
+        case .tar:
+            let members: [TARReader.Member]
+            do { members = try TARReader.members(of: url) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
+            return members.filter { $0.isRegularFile && !$0.isDirectory && !$0.isJunk }
+                .map { member in Child(name: member.name, size: member.size, encrypted: false) { try TARReader.extract(member, from: url, to: $0) } }
+        case .gzip:
+            var name = url.deletingPathExtension().lastPathComponent
+            if url.pathExtension.lowercased() == "tgz" { name += ".tar" }
+            if name.isEmpty { name = "payload" }
+            return [Child(name: name, size: nil, encrypted: false) { try ZIPArchiveReader.gunzip(url, to: $0) }]
+        default:
+            let members: [ZIPArchiveReader.Member]
+            do { members = try ZIPArchiveReader.members(of: url) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
+            return members.filter { !$0.isDirectory && !$0.isJunk }
+                .map { member in Child(name: member.name, size: member.uncompressedSize, encrypted: member.isEncrypted) { try ZIPArchiveReader.extract(member, from: url, to: $0) } }
         }
-        let scratch = try DocumentTextExtractor.scratchDirectory("zip")
+    }
+
+    private static func extract(fileURL: URL, kind: DocumentKind, depth: Int, prefix: String, budget: inout Int64) throws -> OfficeTextExtractor.Result {
+        let children = try children(of: fileURL, kind: kind)
+        let scratch = try DocumentTextExtractor.scratchDirectory("archive")
         defer { try? FileManager.default.removeItem(at: scratch) }
+        let tag = kind.rawValue.uppercased()
         var text = ""
         var components: [String] = []
         var skipped: [String] = []
         var notText: [String] = []
-        for member in members where !member.isDirectory && !member.isJunk {
-            let name = member.name
-            let ext = (name as NSString).pathExtension.lowercased()
-            if member.isEncrypted { skipped.append("\(name) (password-protected)"); continue }
-            guard member.uncompressedSize <= OfficeTextExtractor.maxPartBytes else {
-                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)"); continue
+        var unextractable = 0
+        func add(_ label: String, _ body: String) {
+            components.append(label)
+            text += "[\(label)]\n" + body + "\n"
+        }
+        for child in children {
+            let name = prefix + child.name
+            let ext = (child.name as NSString).pathExtension.lowercased()
+            if child.encrypted { skipped.append("\(name) (password-protected)"); continue }
+            if let size = child.size, size > OfficeTextExtractor.maxPartBytes {
+                skipped.append("\(name) (\(size) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)"); continue
             }
-            if let kind = DocumentKind.detect(mimeType: "", filename: name) {
-                if kind == .zip { skipped.append("\(name) (an archive inside the archive — one level is read)"); continue }
-                let destination = scratch.appendingPathComponent(UUID().uuidString + "." + ext)
+            if let size = child.size, size > budget {
+                skipped.append("\(name) (the \(maxTotalBytes)-byte budget for one attachment's archives is used up)"); continue
+            }
+            let destination = scratch.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : "." + ext))
+            do { try child.extract(destination) } catch {
+                unextractable += 1
+                skipped.append("\(name) (\(error))"); continue
+            }
+            defer { try? FileManager.default.removeItem(at: destination) }
+            let written = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
+            budget -= written
+            if budget < 0 {
+                skipped.append("\(name) (the \(maxTotalBytes)-byte budget for one attachment's archives is used up)"); continue
+            }
+            if let innerKind = DocumentKind.detect(mimeType: "", filename: child.name) {
+                if innerKind.isContainer {
+                    guard depth < maxDepth else {
+                        skipped.append("\(name) (an archive nested deeper than \(maxDepth) levels)"); continue
+                    }
+                    do {
+                        let inner = try extract(fileURL: destination, kind: innerKind, depth: depth + 1, prefix: name + " › ", budget: &budget)
+                        components.append(contentsOf: inner.components)
+                        text += inner.text
+                        skipped.append(contentsOf: inner.skipped)
+                        notText.append(contentsOf: inner.notText)
+                    } catch OfficeTextExtractor.ExtractError.noTextParts {
+                        notText.append(name)
+                    } catch OfficeTextExtractor.ExtractError.encrypted {
+                        skipped.append("\(name) (password-protected)")
+                    } catch {
+                        skipped.append("\(name) (\(error))")
+                    }
+                    continue
+                }
                 do {
-                    try ZIPArchiveReader.extract(member, from: fileURL, to: destination)
-                    defer { try? FileManager.default.removeItem(at: destination) }
-                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: kind)
-                    let label = "ZIP: \(name)"
-                    components.append(label)
-                    text += "[\(label)]\n" + inner.text + "\n"
+                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind)
+                    add("\(tag): \(name)", inner.text)
                     skipped.append(contentsOf: inner.skipped.map { "\(name): \($0)" })
                 } catch OfficeTextExtractor.ExtractError.encrypted {
                     skipped.append("\(name) (password-protected)")
+                } catch OfficeTextExtractor.ExtractError.noTextParts {
+                    notText.append(name)
                 } catch {
                     skipped.append("\(name) (\(error))")
                 }
             } else if textualExtensions.contains(ext) {
-                let data = try DocumentTextExtractor.memberData(member, from: fileURL, scratch: scratch)
+                let data = (try? Data(contentsOf: destination)) ?? Data()
                 var body = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
                 if ext == "html" || ext == "htm" { body = body.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) }
-                if !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    let label = "ZIP: \(name)"
-                    components.append(label)
-                    text += "[\(label)]\n" + body + "\n"
+                if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { notText.append(name) } else { add("\(tag): \(name)", body) }
+            } else if let reader = childReader {
+                let reading = reader(destination, child.name)
+                if let body = reading.text, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    add("\(tag): \(name)", body)
+                    if let why = reading.notRead { skipped.append("\(name): \(why)") }
+                } else if let why = reading.notRead {
+                    skipped.append("\(name) (\(why))")
+                } else {
+                    notText.append(name)
                 }
             } else {
-                notText.append(name)
+                skipped.append("\(name) (not read inside archives: .\(ext.isEmpty ? "?" : ext))")
             }
+        }
+        // Not one child could even be extracted: the file is not the archive
+        // its name claims (a bogus .gz, a truncated .zip) — a failure, not "partly read".
+        if components.isEmpty, !children.isEmpty, unextractable == children.count {
+            throw OfficeTextExtractor.ExtractError.notAPackage(skipped.joined(separator: "; "))
         }
         if components.isEmpty && skipped.isEmpty { throw OfficeTextExtractor.ExtractError.noTextParts }
         return OfficeTextExtractor.Result(text: text, components: components, skipped: skipped, notText: notText.sorted())
     }
 }
+
+/// The name the ZIP-only reader had before archives were generalised (TYPE-04).
+typealias ZIPContainerTextExtractor = ContainerTextExtractor

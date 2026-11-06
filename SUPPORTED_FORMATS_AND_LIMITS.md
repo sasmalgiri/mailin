@@ -340,7 +340,8 @@ slide; the Word reader verified on a real textutil .doc, the Excel and PowerPoin
 streams — real files welcome); **ZIP attachments** one level down (each file inside read by its kind, nested
 archives and oversize members listed as not read, media listed as not text); RTF, HTML and plain-text
 kinds. Still not read, and said so per attachment: password-protected files ("locked"), images without
-OCR on, other archive formats (.gz/.7z/.rar/.tar are kept as files), and files with no text.
+OCR on, 7z/rar/bz2/xz archives (kept as files — ZIP, tar and gzip attachments are opened, audit 2026-11-06 A04), and files with no text.
+**Archive attachments (A04):** every child is accounted for — documents through the document readers, text files directly, PDFs / images / recordings through the same reader a top-level attachment gets (text layer, OCR, speech); a child nothing can read is listed by name and the attachment is *partial*, never silently complete; archives nest three levels (what lies deeper is listed); one attachment's archives are bounded to 1 GiB of extracted bytes across levels, each bound that bites named in the state. Children are read into the parent attachment's text with "ZIP: outer.zip › inner.pdf" labels; a condition on an attachment's type or name still addresses the parent file, not the child.
 
 **Speech in audio and video attachments** — switch "Speech in audio and video attachments" (on by default).
 - The words spoken in m4a, mp3, wav, aiff, caf, aac, flac, mov, mp4, m4v and 3gp attachments are recognised

@@ -452,6 +452,28 @@ final class AttachmentTextIndexJob {
                           text: text, fullText: fullText, state: state, extractor: result.extractor, note: result.note)
     }
 
+    /// Audit 2026-11-06 A06: the coverage state an OCR outcome earns.
+    /// Every page read and words found → extracted; every page read and no
+    /// words → noText (the picture has no text); some pages failed but
+    /// others were read → partial, the note lists the failed pages; nothing
+    /// could be read → failed with the reasons. A failure is never "no text".
+    nonisolated static func ocrState(_ outcome: AttachmentOCR.Outcome, pages: Int)
+        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        let read = outcome.recognised + outcome.layerPages
+        let reasons = outcome.failures.prefix(3).joined(separator: "; ")
+            + (outcome.failures.count > 3 ? String(localized: "; and \(outcome.failures.count - 3) more") : "")
+        if outcome.isComplete {
+            let words = outcome.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if words.isEmpty { return ("", .noText, "ocr", String(localized: "no text was recognised in the image")) }
+            return (outcome.text, .extracted, "ocr", nil)
+        }
+        if read > 0 {
+            return (outcome.text, .partial, "ocr",
+                    String(localized: "\(outcome.failed) of \(max(pages, read + outcome.failed)) pages could not be read: \(reasons)"))
+        }
+        return (nil, .failed, "ocr", reasons)
+    }
+
     /// FIND-01: an Office Open XML package. Needs a file: the extractor's
     /// temp file when there is one, otherwise the bytes written to one.
     /// TYPE-01…04: every document kind through the one facade — Office Open
@@ -482,9 +504,29 @@ final class AttachmentTextIndexJob {
         }
     }
 
+    /// Audit 2026-11-06 A04: children of an archive the package cannot read
+    /// itself go through the same reader as a top-level attachment (PDF text
+    /// layer, OCR, speech), so a PDF inside a ZIP is read, and a child
+    /// nothing can read is listed in the attachment's state, never dropped.
+    nonisolated static let childReaderInstalled: Void = {
+        ContainerTextExtractor.childReader = { url, name in
+            let child = AttachmentMetadata(filename: name, mimeType: "", size: 0, fileURL: url)
+            let reading = read(child, ocr: AttachmentOCR.isEnabled)
+            switch reading.state {
+            case .extracted, .truncated: return ArchiveChildReading(text: reading.text, notRead: nil)
+            case .partial: return ArchiveChildReading(text: reading.text, notRead: reading.note)
+            case .noText: return ArchiveChildReading(text: "", notRead: nil)
+            case .unsupported, .locked, .failed: return ArchiveChildReading(text: nil, notRead: reading.note ?? reading.state.rawValue)
+            }
+        }
+    }()
+
+    nonisolated static func installChildReader() { _ = childReaderInstalled }
+
     /// One attachment through the extractor that fits it.
     nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool)
         -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        _ = childReaderInstalled
         let data: Data?
         if let url = attachment.fileURL {
             data = try? Data(contentsOf: url)
@@ -508,13 +550,13 @@ final class AttachmentTextIndexJob {
                 return (nil, .locked, "pdfkit", String(localized: "password-protected PDF"))
             }
             let layer = document.string
-            // E1: a scanned PDF (no real text layer) is read by OCR, page by page.
-            if ocr, AttachmentOCR.pdfNeedsOCR(text: layer, pageCount: document.pageCount),
-               let scanned = AttachmentOCR.text(fromPDF: document) {
-                let stamp = layer?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return (stamp.isEmpty ? scanned : stamp + "\n" + scanned, .extracted, "ocr", nil)
+            // E1: a PDF without a real text layer is read by OCR, page by page
+            // (audit A06: text-layer pages and scanned pages mixed; every
+            // failed page named, never "no text").
+            if ocr, AttachmentOCR.pdfNeedsOCR(document) {
+                return ocrState(AttachmentOCR.outcome(fromPDF: document), pages: document.pageCount)
             }
-            if !ocr, AttachmentOCR.pdfNeedsOCR(text: layer, pageCount: document.pageCount) {
+            if !ocr, AttachmentOCR.pdfNeedsOCR(document) {
                 return (nil, .unsupported, "pdfkit", String(localized: "scanned PDF — turn on attachment OCR to read it"))
             }
             return (layer, .extracted, "pdfkit", nil)
@@ -523,7 +565,7 @@ final class AttachmentTextIndexJob {
             guard ocr else {
                 return (nil, .unsupported, "none", String(localized: "image — turn on attachment OCR to read it"))
             }
-            return (AttachmentOCR.text(fromImageData: data), .extracted, "ocr", nil)
+            return ocrState(AttachmentOCR.outcome(fromImageData: data), pages: 1)
         }
         // TYPE-05: audio and video — the spoken words, recognised on this device.
         if AttachmentSpeech.isMedia(mimeType: mime, filename: attachment.filename) {
@@ -554,9 +596,10 @@ final class AttachmentTextIndexJob {
         if let kind = DocumentKind.detect(mimeType: mime, filename: attachment.filename) {
             return readDocument(attachment, kind: kind, data: data)
         }
-        let otherContainers: Set<String> = ["gz", "tgz", "7z", "rar", "tar", "bz2", "xz"]
-        if otherContainers.contains(ext) || mime.contains("x-7z") || mime.contains("x-rar") || mime.contains("x-tar") || mime.contains("gzip") {
-            return (nil, .unsupported, "none", String(localized: "archive format not opened — files inside ZIP attachments are read, other archive formats are kept as files"))
+        // A04: ZIP, tar and gzip attachments are read above (DocumentKind); these formats are not opened.
+        let otherContainers: Set<String> = ["7z", "rar", "bz2", "xz"]
+        if otherContainers.contains(ext) || mime.contains("x-7z") || mime.contains("x-rar") || mime.contains("bzip2") || mime.contains("x-xz") {
+            return (nil, .unsupported, "none", String(localized: "archive format not opened (7z, rar, bz2, xz) — ZIP, tar and gzip attachments are read; this one is kept as a file"))
         }
         if mime.contains("rtf") || ext == "rtf" {
             guard let text = (try? NSAttributedString(

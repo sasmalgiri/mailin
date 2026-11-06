@@ -1,6 +1,7 @@
 @testable import ArchiveCore
 import XCTest
 import PDFKit
+import Compression
 @testable import maxmailin
 
 /// Parts Q/R/S regression net — the final legacy-corpus cutover:
@@ -3204,6 +3205,94 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(sheet.text.contains("-1") && sheet.text.contains("7"), "out-of-range indexes keep their raw value instead of trapping: \(sheet.text)")
     }
 
+    /// A PDF drawn with Core Graphics: one page per string, an empty string
+    /// giving a blank (scan-like) page with no text layer.
+    static func pdfData(pages: [String]) -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 300, height: 300)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { return Data() }
+        for text in pages {
+            context.beginPDFPage(nil)
+            if !text.isEmpty {
+                let font = CTFontCreateWithName("Helvetica" as CFString, 12, nil)
+                let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
+                context.textPosition = CGPoint(x: 20, y: 150)
+                CTLineDraw(line, context)
+            }
+            context.endPDFPage()
+        }
+        context.closePDF()
+        return data as Data
+    }
+
+    /// A small blank PNG (decodable, no text in it).
+    static func pngData() -> Data {
+        guard let context = CGContext(data: nil, width: 24, height: 24, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let image = context.makeImage() else { return Data() }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out as CFMutableData, "public.png" as CFString, 1, nil) else { return Data() }
+        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationFinalize(destination)
+        return out as Data
+    }
+
+    /// Audit 2026-11-06 A06: a recognition failure is never read as "no
+    /// text"; a mixed PDF is read page by page (text layer where it is real,
+    /// recognition where it is not); the failed pages are named and the
+    /// attachment is partial or failed — never complete.
+    func testA06_ocrFailuresAreNamed_mixedPDFsReadPageByPage_neverComplete() throws {
+        let original = AttachmentOCR.recognizer
+        defer { AttachmentOCR.recognizer = original }
+        struct Boom: Error, LocalizedError { var errorDescription: String? { "Vision stopped" } }
+        let layerText = "This page carries a real text layer with enough characters."
+        let document = try XCTUnwrap(PDFDocument(data: Self.pdfData(pages: [layerText, ""])))
+        XCTAssertEqual(document.pageCount, 2)
+        XCTAssertFalse(AttachmentOCR.pdfNeedsOCR(text: document.string, pageCount: 2), "the whole-document count hides the scanned page — the defect")
+        XCTAssertTrue(AttachmentOCR.pdfNeedsOCR(document), "one scanned page out of two still needs OCR (per-page check)")
+
+        // The recogniser fails: the layer page is read, the scanned page is a named failure → partial.
+        AttachmentOCR.recognizer = { _ in .failure(Boom()) }
+        let failing = AttachmentOCR.outcome(fromPDF: document)
+        XCTAssertEqual(failing.layerPages, 1)
+        XCTAssertEqual(failing.attempted, 1)
+        XCTAssertEqual(failing.failed, 1)
+        XCTAssertTrue(failing.failures[0].contains("page 2") && failing.failures[0].contains("Vision stopped"), failing.failures[0])
+        XCTAssertTrue(failing.text?.contains("real text layer") == true)
+        let partial = AttachmentTextIndexJob.ocrState(failing, pages: 2)
+        XCTAssertEqual(partial.state, .partial)
+        XCTAssertTrue(partial.note?.contains("1 of 2 pages") == true, partial.note ?? "")
+        XCTAssertEqual(partial.extractor, "ocr")
+
+        // The recogniser works: both pages read, complete.
+        AttachmentOCR.recognizer = { _ in .success("recognised scan words") }
+        let good = AttachmentOCR.outcome(fromPDF: document)
+        XCTAssertTrue(good.isComplete)
+        XCTAssertEqual(good.recognised, 1)
+        XCTAssertTrue(good.text?.contains("real text layer") == true && good.text?.contains("recognised scan words") == true, good.text ?? "")
+        XCTAssertEqual(AttachmentTextIndexJob.ocrState(good, pages: 2).state, .extracted)
+
+        // Nothing readable on any page: failed, with the reasons — not "no text".
+        let scansOnly = try XCTUnwrap(PDFDocument(data: Self.pdfData(pages: ["", ""])))
+        AttachmentOCR.recognizer = { _ in .failure(Boom()) }
+        let allFailed = AttachmentTextIndexJob.ocrState(AttachmentOCR.outcome(fromPDF: scansOnly), pages: 2)
+        XCTAssertEqual(allFailed.state, .failed)
+        XCTAssertTrue(allFailed.note?.contains("page 1") == true && allFailed.note?.contains("page 2") == true, allFailed.note ?? "")
+        // A picture that really has no text: noText, and said so.
+        AttachmentOCR.recognizer = { _ in .success(nil) }
+        let empty = AttachmentTextIndexJob.ocrState(AttachmentOCR.outcome(fromImageData: Self.pngData()), pages: 1)
+        XCTAssertEqual(empty.state, .noText)
+        XCTAssertEqual(empty.text, "")
+        // An image whose recognition fails, and bytes that are not an image at all: failed.
+        AttachmentOCR.recognizer = { _ in .failure(Boom()) }
+        XCTAssertEqual(AttachmentTextIndexJob.ocrState(AttachmentOCR.outcome(fromImageData: Self.pngData()), pages: 1).state, .failed)
+        let undecodable = AttachmentOCR.outcome(fromImageData: Data([1, 2, 3, 4]))
+        XCTAssertEqual(undecodable.failed, 1)
+        XCTAssertTrue(undecodable.failures[0].contains("decoded"))
+        XCTAssertEqual(AttachmentTextIndexJob.ocrState(undecodable, pages: 1).state, .failed)
+    }
+
     func testTYPE02_openDocumentTextSheetsAndSlides_withLabels_andLockedFiles() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("odf-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -3319,23 +3408,63 @@ final class V2CutoverTests: XCTestCase {
         func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
         func le32(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
         func record(_ id: Int, _ body: [UInt8]) -> [UInt8] { le16(id) + le16(body.count) + body }
-        // BIFF8: BOF, a sheet, an SST whose second string continues into a CONTINUE record, EOF.
-        let budget = Array("Budget".utf8)
-        let boundsheet = record(0x0085, le32(0) + le16(0) + [UInt8(budget.count), 0] + budget)
+        // BIFF8 workbook: globals (BOF, two BOUNDSHEETs, an SST whose second string continues
+        // into a CONTINUE record, EOF), then two sheet substreams found by their declared offsets.
+        // Audit A03: every cell kind, with its address, on its sheet — not just the string table.
+        func le64(_ v: UInt64) -> [UInt8] { (0..<8).map { UInt8((v >> (8 * UInt64($0))) & 0xFF) } }
+        let bof = record(0x0809, le16(0x0600) + Array(repeating: 0, count: 14))
         let first = Array("Gross margin".utf8)
         let secondAll = Array("Quarterly budget review".utf8)
         let secondHead = Array(secondAll.prefix(9)), secondTail = Array(secondAll.dropFirst(9))
         let sst = record(0x00FC, le32(2) + le32(2) + le16(first.count) + [0] + first + le16(secondAll.count) + [0] + secondHead)
         let cont = record(0x003C, [0] + secondTail)
-        let workbook = Data(record(0x0809, Array(repeating: 0, count: 16)) + boundsheet + sst + cont + record(0x000A, []))
+        func boundsheet(_ name: String, offset: Int, hidden: Bool) -> [UInt8] {
+            let bytes = Array(name.utf8)
+            return record(0x0085, le32(offset) + [hidden ? 1 : 0, 0] + [UInt8(bytes.count), 0] + bytes)
+        }
+        let cell: (Int, Int) -> [UInt8] = { row, col in le16(row) + le16(col) + le16(0) }   // row, col, xf
+        let note = Array("Check this".utf8)
+        let totalDue = Array("Total due".utf8)
+        let inline = Array("inline note".utf8)
+        let sheet1 = bof
+            + record(0x00FD, cell(0, 0) + le32(0))                                        // A1 = shared string 0
+            + record(0x0203, cell(1, 0) + le64(42.5.bitPattern))                          // A2 = 42.5
+            + record(0x027E, cell(1, 1) + le32((7 << 2) | 0x02))                           // B2 = 7 (RK integer)
+            + record(0x00BD, le16(2) + le16(0) + le16(0) + le32((150 << 2) | 0x03) + le16(0) + le32((9 << 2) | 0x02) + le16(1))  // A3 = 1.5, B3 = 9
+            + record(0x0006, cell(3, 0) + [0, 0, 0, 0, 0, 0, 0xFF, 0xFF] + le16(0) + le32(0) + le16(0))   // A4 = formula, text result follows
+            + record(0x0207, le16(totalDue.count) + [0] + totalDue)
+            + record(0x0006, cell(3, 1) + le64(84.0.bitPattern) + le16(0) + le32(0) + le16(0))          // B4 = 84
+            + record(0x0205, cell(4, 0) + [1, 0])                                          // A5 = TRUE
+            + record(0x0204, cell(5, 0) + le16(inline.count) + [0] + inline)              // A6 inline label
+            + record(0x01B6, Array(repeating: 0, count: 10) + le16(note.count) + le16(0) + le32(0))   // TXO: a note of 10 characters
+            + record(0x003C, [0] + note)
+            + record(0x003C, Array(repeating: 0, count: 8))
+            + record(0x000A, [])
+        let sheet2 = bof + record(0x00FD, cell(0, 0) + le32(1)) + record(0x000A, [])
+        let globalsLength = bof.count + boundsheet("Budget", offset: 0, hidden: false).count + boundsheet("Hidden", offset: 0, hidden: true).count
+            + sst.count + cont.count + record(0x000A, []).count
+        let workbook = Data(bof + boundsheet("Budget", offset: globalsLength, hidden: false)
+                            + boundsheet("Hidden", offset: globalsLength + sheet1.count, hidden: true)
+                            + sst + cont + record(0x000A, []) + sheet1 + sheet2)
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ole-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let xls = dir.appendingPathComponent("b.xls")
         try Self.oleContainer(streams: [("Workbook", workbook)]).write(to: xls)
         let sheet = try DocumentTextExtractor.extract(fileURL: xls, kind: .xls)
-        XCTAssertEqual(sheet.components, ["Workbook", "Cells"])
-        XCTAssertTrue(sheet.text.contains("[Workbook]\nBudget") && sheet.text.contains("Gross margin\nQuarterly budget review"), sheet.text)
+        XCTAssertEqual(sheet.components, ["Workbook", "Sheet: Budget", "Sheet: Hidden (hidden)"])
+        XCTAssertTrue(sheet.text.contains("[Workbook]\nBudget\nHidden (hidden)"), sheet.text)
+        XCTAssertTrue(sheet.text.contains("[Sheet: Budget]\nA1\tGross margin\nA2\t42.5\nB2\t7\nA3\t1.5\nB3\t9\nA4\tTotal due\nB4\t84\nA5\tTRUE\nA6\tinline note\nComment: Check this\n"), sheet.text)
+        XCTAssertTrue(sheet.text.contains("[Sheet: Hidden (hidden)]\nA1\tQuarterly budget review"), sheet.text)
+        XCTAssertTrue(sheet.text.contains("serial number"), "numbers are stated to be as stored")
+        XCTAssertEqual(sheet.skipped, [])
+        // A workbook whose cells never reach the sheets (no LABELSST) still keeps its strings.
+        let stringsOnly = Data(bof + boundsheet("Budget", offset: 0, hidden: false) + sst + cont + record(0x000A, []))
+        let onlyURL = dir.appendingPathComponent("strings.xls")
+        try Self.oleContainer(streams: [("Workbook", stringsOnly)]).write(to: onlyURL)
+        let only = try DocumentTextExtractor.extract(fileURL: onlyURL, kind: .xls)
+        XCTAssertEqual(only.components, ["Workbook", "Shared strings"])
+        XCTAssertTrue(only.text.contains("Gross margin\nQuarterly budget review"), only.text)
 
         // PowerPoint: two slide containers with a UTF-16 TextCharsAtom and a byte TextBytesAtom.
         func atom(_ type: Int, _ body: [UInt8]) -> [UInt8] { le16(0) + le16(type) + le32(body.count) + body }
@@ -3370,12 +3499,111 @@ final class V2CutoverTests: XCTestCase {
         ])
         let url = dir.appendingPathComponent("bundle.zip")
         try bundle.write(to: url)
+        // Package-level reading, without the app's child reader (audit A04: a child nothing reads is LISTED).
+        let previousReader = ContainerTextExtractor.childReader
+        ContainerTextExtractor.childReader = nil
+        defer { ContainerTextExtractor.childReader = previousReader }
         let result = try DocumentTextExtractor.extract(fileURL: url, kind: .zip)
-        XCTAssertEqual(result.components, ["ZIP: report.docx", "ZIP: notes/readme.txt"])
-        XCTAssertTrue(result.text.contains("quorum clause") && result.text.contains("Payment within thirty days"), result.text)
-        XCTAssertEqual(result.notText, ["photo.png"])
-        XCTAssertEqual(result.skipped, ["nested.zip (an archive inside the archive — one level is read)"])
+        XCTAssertEqual(result.components, ["ZIP: report.docx", "ZIP: notes/readme.txt", "ZIP: nested.zip › deep.txt"], "the nested archive is opened too")
+        XCTAssertTrue(result.text.contains("quorum clause") && result.text.contains("Payment within thirty days") && result.text.contains("too deep"), result.text)
+        XCTAssertEqual(result.notText, [])
+        XCTAssertEqual(result.skipped, ["photo.png (not read inside archives: .png)"], "an image is not silently 'no text' — it was not read")
         XCTAssertTrue(result.partial, "something was not read, and the state says so")
+    }
+
+    /// A minimal ustar archive of the given files.
+    static func tarArchive(_ files: [(name: String, data: Data)]) -> Data {
+        var out = Data()
+        for file in files {
+            var block = [UInt8](repeating: 0, count: 512)
+            func put(_ text: String, at offset: Int, width: Int) {
+                for (i, byte) in Array(text.utf8).prefix(width).enumerated() { block[offset + i] = byte }
+            }
+            put(file.name, at: 0, width: 100); put("0000644", at: 100, width: 8); put("0000000", at: 108, width: 8); put("0000000", at: 116, width: 8)
+            put(String(format: "%011o", file.data.count), at: 124, width: 12); put(String(format: "%011o", 1_700_000_000), at: 136, width: 12)
+            put("        ", at: 148, width: 8); block[156] = 0x30; put("ustar", at: 257, width: 6); put("00", at: 263, width: 2)
+            let sum = block.reduce(0) { $0 + Int($1) }
+            put(String(format: "%06o", sum), at: 148, width: 6); block[154] = 0; block[155] = 0x20
+            out += Data(block) + file.data + Data(count: (512 - file.data.count % 512) % 512)
+        }
+        return out + Data(count: 1024)
+    }
+
+    /// RFC 1952 gzip of `payload` (deflate, no name).
+    static func gzipData(_ payload: Data) -> Data {
+        let capacity = max(64, payload.count * 2)
+        var compressed = Data(count: capacity)
+        let produced = compressed.withUnsafeMutableBytes { dst in
+            payload.withUnsafeBytes { src in
+                compression_encode_buffer(dst.bindMemory(to: UInt8.self).baseAddress!, capacity,
+                                          src.bindMemory(to: UInt8.self).baseAddress!, payload.count, nil, COMPRESSION_ZLIB)
+            }
+        }
+        func le32(_ v: UInt32) -> Data { Data((0..<4).map { UInt8((v >> (8 * $0)) & 0xFF) }) }
+        var out = Data([0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0, 0x03])
+        out += compressed.prefix(produced)
+        out += le32(ZIPArchiveReader.CRC32.checksum(payload)) + le32(UInt32(truncatingIfNeeded: payload.count))
+        return out
+    }
+
+    /// Audit 2026-11-06 A04: every child of an archive attachment is accounted
+    /// for — a PDF inside a ZIP is read through the app's reader, a child
+    /// nothing can read is listed (the attachment is partial, never silently
+    /// complete), archives nest three levels and what lies deeper is listed,
+    /// and tar / tgz attachments open like ZIPs.
+    func testA04_archiveChildrenAreAccountedFor_pdfInsideZipRead_nestedThreeLevels_tarAndGzipOpened() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("archive-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let previousReader = ContainerTextExtractor.childReader
+        defer { ContainerTextExtractor.childReader = previousReader }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+
+        let level3 = Self.zipPackage([("deepest.txt", Data("three levels down".utf8))])
+        let level2 = Self.zipPackage([("level3.zip", level3), ("mid.txt", Data("two levels down".utf8))])
+        let level4 = Self.zipPackage([("l4.txt", Data("four levels down".utf8))])
+        let level2b = Self.zipPackage([("level3b.zip", Self.zipPackage([("level4.zip", level4)]))])
+        let bundle = Self.zipPackage([
+            ("invoice.pdf", Self.pdfData(pages: ["Invoice total nine hundred and forty euros."])),
+            ("drawing.dwg", Data([0x41, 0x43, 0x31, 0x30, 0x31, 0x38])),
+            ("photo.png", Self.pngData()),
+            ("level2.zip", level2),
+            ("deep/level2b.zip", level2b),
+        ])
+        let url = dir.appendingPathComponent("bundle.zip")
+        try bundle.write(to: url)
+        let result = try DocumentTextExtractor.extract(fileURL: url, kind: .zip)
+        XCTAssertTrue(result.components.contains("ZIP: invoice.pdf"), "\(result.components)")
+        XCTAssertTrue(result.text.contains("nine hundred and forty"), "the PDF's text layer, read inside the archive")
+        XCTAssertTrue(result.components.contains("ZIP: level2.zip › mid.txt") && result.components.contains("ZIP: level2.zip › level3.zip › deepest.txt"), "\(result.components)")
+        XCTAssertFalse(result.text.contains("four levels down"))
+        XCTAssertTrue(result.skipped.contains { $0.contains("level4.zip") && $0.contains("deeper than \(ContainerTextExtractor.maxDepth) levels") }, "\(result.skipped)")
+        XCTAssertTrue(result.skipped.contains { $0.hasPrefix("drawing.dwg (") }, "a child nothing can read is listed: \(result.skipped)")
+        XCTAssertTrue(result.skipped.contains { $0.hasPrefix("photo.png (") && $0.contains("OCR") }, "an image with OCR off is listed as not read: \(result.skipped)")
+        XCTAssertTrue(result.partial)
+
+        // tar and gzip attachments open like ZIPs; a .tgz is gzip → tar → files.
+        let tar = Self.tarArchive([("notes/minutes.txt", Data("Quorum reached at the board vote".utf8)),
+                                   ("report.docx", Self.docx(body: "Payment within thirty days.", header: "H"))])
+        let tarURL = dir.appendingPathComponent("files.tar")
+        try tar.write(to: tarURL)
+        let tarResult = try DocumentTextExtractor.extract(fileURL: tarURL, kind: .tar)
+        XCTAssertEqual(tarResult.components, ["TAR: notes/minutes.txt", "TAR: report.docx"])
+        XCTAssertTrue(tarResult.text.contains("Quorum reached") && tarResult.text.contains("Payment within thirty days"), tarResult.text)
+        XCTAssertFalse(tarResult.partial)
+        let tgzURL = dir.appendingPathComponent("files.tgz")
+        try Self.gzipData(tar).write(to: tgzURL)
+        let tgz = try DocumentTextExtractor.extract(fileURL: tgzURL, kind: .gzip)
+        XCTAssertEqual(tgz.components, ["TAR: files.tar › notes/minutes.txt", "TAR: files.tar › report.docx"])
+        XCTAssertEqual(DocumentKind.detect(mimeType: "application/gzip", filename: "old.tar.gz"), .gzip)
+        XCTAssertEqual(DocumentKind.detect(mimeType: "application/x-tar", filename: "backup"), .tar)
+        // Bytes that are not a gzip at all: a named failure, never "no text".
+        let bogus = dir.appendingPathComponent("bogus.gz")
+        try Data("not an archive we open".utf8).write(to: bogus)
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: bogus, kind: .gzip))
     }
 
     func testTYPE_throughTheIndexingJob_everyKindIsSearchableByContent_andStatesAreRecorded() async throws {
@@ -3421,10 +3649,11 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(outcome.indexedEmails, 1)
         let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
         let rows = try coverage.rows(for: email.id)
-        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted, .extracted, .extracted, .extracted, .unsupported], "\(rows.map { ($0.filename, $0.state, $0.note ?? "") })")
-        XCTAssertEqual(rows.map(\.extractor), ["iwork", "iwork", "ole", "odf", "zip", "none"])
+        // A04: a .tar.gz that is not a gzip is a named failure, not "unsupported" — the format is read now.
+        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted, .extracted, .extracted, .extracted, .failed], "\(rows.map { ($0.filename, $0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows.map(\.extractor), ["iwork", "iwork", "ole", "odf", "archive", "archive"])
         XCTAssertTrue(rows.allSatisfy { $0.extractorVersion == AttachmentTextIndexJob.extractorVersion })
-        XCTAssertTrue(rows[5].note?.contains("other archive formats are kept as files") == true)
+        XCTAssertTrue(rows[5].note?.contains("gzip signature") == true, "the failure names what was wrong: \(rows[5].note ?? "")")
         // Each one is found by what is inside it, through the attachment condition of the search model.
         for (type, phrase) in [("pages", "quorum clause"), ("numbers", "quarterly budget review"), ("doc", "thirty days"), ("odt", "appendix nine"), ("zip", "treasure inside")] {
             try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: type, contentMatch: .phrase, content: phrase)])]), ["Every kind"], "\(type)")

@@ -79,8 +79,8 @@ enum ArchiveLocationPolicy {
     /// ("apfs", "hfs", "exfat", "msdos", "smbfs", …); nil when it cannot be read.
     static func fileSystemType(of directory: URL) -> String? {
         var info = statfs()
-        guard unsafe statfs(directory.path, &info) == 0 else { return nil }
-        return unsafe withUnsafePointer(to: &info.f_fstypename) { pointer in
+        guard statfs(directory.path, &info) == 0 else { return nil }
+        return withUnsafePointer(to: &info.f_fstypename) { pointer in
             unsafe pointer.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) { unsafe String(cString: $0) }
         }.lowercased()
     }
