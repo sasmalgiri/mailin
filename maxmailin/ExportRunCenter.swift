@@ -355,6 +355,7 @@ struct ExportProgressOverlayView: View {
         switch outcome {
         case .complete: return "checkmark.seal.fill"
         case .truncated, .partial: return "exclamationmark.circle.fill"
+        case .unverified: return "exclamationmark.triangle.fill"
         case .cancelled: return "stop.circle.fill"
         case .failed: return "xmark.octagon.fill"
         }
@@ -363,7 +364,7 @@ struct ExportProgressOverlayView: View {
     private func color(for outcome: ExportReceipt.Outcome) -> Color {
         switch outcome {
         case .complete: return .green
-        case .truncated, .partial: return .orange
+        case .truncated, .partial, .unverified: return .orange
         case .cancelled: return .secondary
         case .failed: return .red
         }

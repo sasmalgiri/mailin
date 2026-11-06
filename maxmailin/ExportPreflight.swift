@@ -563,6 +563,14 @@ final class ExportJobRunner {
             let line = "\(unverified) source file\(unverified == 1 ? "" : "s") could not be verified against an import digest (imported before digests were recorded)"
             note = note.map { $0 + "; " + line } ?? line
         }
+        if let failure = result?.inventoryFailure {
+            // Audit A07: every file was written but the portable inventory was
+            // not — its own outcome, with the reason and what to do.
+            if outcome == .complete { outcome = .unverified }
+            let line = "the inventory file could not be written (\(failure)); the working manifest \(ExportFolderManifest.filename) stays beside the files — Verify export re-hashes them once the destination allows writing"
+            note = note.map { $0 + "; " + line } ?? line
+            onError?("\(what) export: \(line).")
+        }
 
         var resume: ExportRequest? = nil
         if outcome == .cancelled || outcome == .failed {

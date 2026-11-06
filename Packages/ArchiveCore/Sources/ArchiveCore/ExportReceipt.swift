@@ -25,6 +25,11 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         /// F05/F09: a production whose input had no readable content). Never
         /// reported as `complete`.
         case partial
+        /// Audit 2026-11-06 A07: every requested message was written, but
+        /// the portable inventory could not be created (destination full,
+        /// read-only, …). The working manifest stays beside the files; the
+        /// receipt says so instead of "complete".
+        case unverified
         case cancelled
         case failed
     }
@@ -72,7 +77,9 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         var parts: [String] = []
         if let requested { parts.append("selected \(requested)") }
         parts.append(copies > 0 ? "written \(messagesWritten) messages in \(written) files" : "written \(written)")
-        if let checked { parts.append("checked \(checked) of \(written)") }
+        // A07: these are the hashes recorded while writing — not a later re-read
+        // of the destination, which Verify export performs separately.
+        if let checked { parts.append("hashes recorded while writing \(checked) of \(written)") }
         if let excluded { parts.append("excluded \(excluded)") }
         if let requested {
             let failed = max(0, requested - messagesWritten - (excluded ?? 0))
@@ -103,6 +110,8 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
             return "Truncated — \(written) of \(requested ?? written) written (free-tier limit)"
         case .partial:
             return "Partial — \(written) of \(requested ?? written) produced; the rest withheld, see the error line"
+        case .unverified:
+            return "Written, record incomplete — \(written) written; the inventory file could not be created, see the error line"
         case .cancelled:
             return resumeRequest != nil
                 ? "Cancelled — \(written) written before the stop; partial output kept, Resume continues from there"

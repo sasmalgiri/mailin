@@ -1862,6 +1862,27 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return try scalarInt(db, "SELECT value FROM meta WHERE key = 'corpus_revision';")
     }
 
+    // MARK: - LIFE-06 archive-level access record (audit 2026-11-06 A08)
+
+    /// The highest paid tier (raw value) under which this archive was used,
+    /// kept IN the archive so a restore onto a clean installation keeps the
+    /// "you keep what you imported" policy without the old preferences or a
+    /// live store connection. 0 / absent = never.
+    func paidTierRecord() throws -> Int {
+        let db = try ensureDB()
+        return (try? scalarInt(db, "SELECT value FROM meta WHERE key = 'paid_tier_record';")) ?? 0
+    }
+
+    /// Records `tier` when it is higher than what the archive already knows.
+    func recordPaidTier(_ tier: Int) throws {
+        guard tier > 0 else { return }
+        let db = try ensureDB()
+        try exec(db, """
+            INSERT INTO meta(key, value) VALUES ('paid_tier_record', \(tier))
+            ON CONFLICT(key) DO UPDATE SET value = max(value, \(tier));
+        """)
+    }
+
     @discardableResult
     func bumpCorpusRevision() throws -> Int {
         let db = try ensureDB()

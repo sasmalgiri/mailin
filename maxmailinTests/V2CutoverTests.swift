@@ -2716,10 +2716,64 @@ final class V2CutoverTests: XCTestCase {
         var receipt = ExportReceipt(title: "t", destination: folder.path, isFolder: true, requested: 5, written: 3, outcome: .partial,
                                     startedAt: Date(), completedAt: Date())
         receipt.checked = 3; receipt.excluded = 1; receipt.inventoryPath = inventoryURL.path
-        XCTAssertEqual(receipt.reconciliationLine, "selected 5 · written 3 · checked 3 of 3 · excluded 1 · failed 1")
+        XCTAssertEqual(receipt.reconciliationLine, "selected 5 · written 3 · hashes recorded while writing 3 of 3 · excluded 1 · failed 1")
         let plain = ExportReceipt(title: "t", destination: "x", isFolder: false, requested: nil, written: 2, outcome: .complete,
                                   startedAt: Date(), completedAt: Date())
         XCTAssertNil(plain.reconciliationLine, "older receipts show nothing they do not know")
+    }
+
+    /// Audit 2026-11-06 A07: when every file is written but the inventory
+    /// cannot be created, the run is not "complete" — the failure is named,
+    /// the working manifest stays as the record, nothing is rewritten.
+    func testA07_inventoryFinalizationFailure_isNamed_notSwallowedIntoComplete() async throws {
+        let env = try makeEnv()
+        let emails = (0..<2).map { mail(120 + $0, from: "a@x.com", subject: "Inv \($0)", body: "body \($0)") }
+        try await env.store.insertBatch(emails, batchSize: 10)
+        let folder = env.root.appendingPathComponent("out-noinv", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // A directory where the inventory file must go: the atomic write fails at finalisation, after the files.
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent(ExportInventory.filename), withIntermediateDirectories: true)
+        let service = ArchiveExportService(archive: env.archive)
+        let result = try await service.exportEMLFiles(scope: .explicit(Set(emails.map(\.id))), to: folder)
+        XCTAssertEqual(result.recordsWritten, 2)
+        XCTAssertTrue(result.completed, "the message files themselves are complete")
+        XCTAssertNil(result.inventoryURL)
+        XCTAssertNotNil(result.inventoryFailure, "the reason travels with the result")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(ExportFolderManifest.filename).path),
+                      "the working manifest stays as the record")
+        let emls = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".eml") }
+        XCTAssertEqual(emls.count, 2)
+        // The receipt outcome for this case stands apart from complete and from partial.
+        let receipt = ExportReceipt(title: "t", destination: folder.path, isFolder: true, requested: 2, written: 2, outcome: .unverified,
+                                    startedAt: Date(), completedAt: Date())
+        XCTAssertTrue(receipt.verdictLine.contains("record incomplete"), receipt.verdictLine)
+        XCTAssertFalse(receipt.isResumable, "nothing to resume — the files are there")
+        XCTAssertEqual(receipt.shortfall, 0)
+    }
+
+    /// Audit 2026-11-06 A08: the archive itself remembers that it was used
+    /// under a plan, so restoring it onto a clean installation keeps the
+    /// imported mail open; the record only ever rises.
+    func testA08_archiveRemembersThePaidTier_andACleanInstallReadsIt() async throws {
+        let env = try makeEnv()
+        let before = await env.archive.paidTierRecord()
+        XCTAssertEqual(before, 0)
+        await env.archive.recordPaidTier(PurchaseTier.professional.rawValue)
+        await env.archive.recordPaidTier(PurchaseTier.personal.rawValue)
+        let afterLower = await env.archive.paidTierRecord()
+        XCTAssertEqual(afterLower, PurchaseTier.professional.rawValue, "highest wins, a later lower plan never lowers it")
+        await env.archive.recordPaidTier(0)
+        let afterZero = await env.archive.paidTierRecord()
+        XCTAssertEqual(afterZero, PurchaseTier.professional.rawValue)
+        // A manager with no local history and no current entitlement, but an archive that remembers: lapsed, not Free.
+        let states: (clean: EntitlementState, cleanLimit: Int?, both: EntitlementState) = await MainActor.run {
+            let cleanInstall = StoreManager(testTier: .free, archiveRecord: .personal)
+            let both = StoreManager(testTier: .free, lapsedFrom: .personal, archiveRecord: .professional)
+            return (cleanInstall.entitlementState, cleanInstall.accessPolicy.archiveReadLimit, both.entitlementState)
+        }
+        XCTAssertEqual(states.clean, .lapsed(previous: .personal))
+        XCTAssertNil(states.cleanLimit)
+        XCTAssertEqual(states.both, .lapsed(previous: .professional), "the higher of the two records")
     }
 
     func testOUT03_sourceFolderLayoutReproducesTheTree_withSafeNamesAndTheOriginalKept() async throws {

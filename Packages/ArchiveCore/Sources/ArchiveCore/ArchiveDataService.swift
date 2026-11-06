@@ -214,6 +214,18 @@ final class ArchiveDataService {
         (repository as? EmailStoreRepository)?.store as? SQLiteEmailStore
     }
 
+    /// LIFE-06 (audit A08): the paid tier recorded inside the archive (raw
+    /// value; 0 = none) and the write that records one.
+    func paidTierRecord() async -> Int {
+        guard let sqlite = sqliteStore else { return 0 }
+        return (try? await sqlite.paidTierRecord()) ?? 0
+    }
+
+    func recordPaidTier(_ tier: Int) async {
+        guard let sqlite = sqliteStore else { return }
+        try? await sqlite.recordPaidTier(tier)
+    }
+
     /// FIND-03/07: how far the chunk index reaches (bodies and attachments with an evaluable document).
     func searchDocCoverage() async throws -> SQLiteEmailStore.SearchDocCoverage {
         guard let sqlite = sqliteStore else {

@@ -265,6 +265,8 @@ class StoreManager: ObservableObject {
                 lastPaidTier = max(lastPaidTier ?? .free, currentTier)
                 if persistsEntitlementHistory {
                     UserDefaults.standard.set(lastPaidTier?.rawValue, forKey: Self.lastPaidTierKey)
+                    // A08: the archive itself remembers that it was used under a plan.
+                    Task { await self.refreshArchiveAccessRecord() }
                 }
             }
             publishAccessScope()
@@ -279,12 +281,31 @@ class StoreManager: ObservableObject {
     /// Test fixtures never write the history; the live manager does.
     private var persistsEntitlementHistory = false
 
-    /// What the store has proved now, and whether a plan was held before.
+    /// Audit 2026-11-06 A08: the paid tier recorded INSIDE the archive, so a
+    /// restore onto a clean installation (no preferences, no store history
+    /// yet) still keeps the imported mail open. Read by
+    /// `refreshArchiveAccessRecord()`; fixtures set it directly.
+    private(set) var archivePaidTier: PurchaseTier?
+
+    /// What the store has proved now, and whether a plan was held before —
+    /// from this install's history, the archive's own record, or (A08) the
+    /// App Store's transaction history scanned in `checkEntitlements`.
     var entitlementState: EntitlementState {
         let tier = effectiveTier
         if tier > .free { return isLifetimePurchase ? .lifetime(tier) : .active(tier) }
-        if let previous = lastPaidTier, previous > .free { return .lapsed(previous: previous) }
+        let previous = max(lastPaidTier ?? .free, archivePaidTier ?? .free)
+        if previous > .free { return .lapsed(previous: previous) }
         return .free
+    }
+
+    /// Reads the archive's own paid-tier record and, while a plan is active,
+    /// writes the current tier into it (highest wins). Live manager only.
+    func refreshArchiveAccessRecord() async {
+        guard Self.live === self else { return }
+        let recorded = await ArchiveDataService.shared.paidTierRecord()
+        archivePaidTier = PurchaseTier(rawValue: recorded).flatMap { $0 > .free ? $0 : nil }
+        if currentTier > .free { await ArchiveDataService.shared.recordPaidTier(currentTier.rawValue) }
+        publishAccessScope()
     }
 
     /// The single access table every gate on existing data consults (§12.2).
@@ -445,18 +466,22 @@ class StoreManager: ObservableObject {
         lastPaidTier = PurchaseTier(rawValue: UserDefaults.standard.integer(forKey: Self.lastPaidTierKey)).flatMap { $0 > .free ? $0 : nil }
         if Self.live == nil { Self.live = self }
         publishAccessScope()
+        // A08: the archive's own record, for a clean installation restoring an archive.
+        Task { await refreshArchiveAccessRecord() }
     }
 
     #if DEBUG
     /// Test fixture: a deterministic Free / Personal / Professional manager
     /// that never touches StoreKit and does not take the debug unlock, so a
     /// test can prove that a gate denies.
-    init(testTier: PurchaseTier, lifetime: Bool = false, lapsedFrom: PurchaseTier? = nil) {
+    init(testTier: PurchaseTier, lifetime: Bool = false, lapsedFrom: PurchaseTier? = nil, archiveRecord: PurchaseTier? = nil) {
         currentTier = testTier
         isLifetimePurchase = lifetime
         debugUnlocksAllTiers = false
         // LIFE-06: a fixture for "the plan ended" — Free now, paid before.
         if let lapsedFrom, lapsedFrom > .free { lastPaidTier = lapsedFrom }
+        // A08: a fixture for "clean installation, the archive remembers the plan".
+        if let archiveRecord, archiveRecord > .free { archivePaidTier = archiveRecord }
     }
 
     /// Developer switch: launching with `-mailinSimulateTier free|personal|
@@ -631,6 +656,28 @@ class StoreManager: ObservableObject {
                     if expirationDate > current { latestExpiration = expirationDate }
                 } else {
                     latestExpiration = expirationDate
+                }
+            }
+        }
+
+        // Audit 2026-11-06 A08: current entitlements say what is active now;
+        // the transaction history says what was ever paid for. An expired
+        // subscription or a plan bought on another Mac with this Apple ID
+        // still counts as "a plan was held" — refunded/revoked ones do not —
+        // so a clean installation recovers the existing-data policy without
+        // the old preferences.
+        if highestTier == .free {
+            var historical: PurchaseTier = .free
+            for await result in Transaction.all {
+                guard let transaction = try? checkVerified(result), transaction.revocationDate == nil else { continue }
+                if StoreManager.professionalProductIDs.contains(transaction.productID) { historical = .professional; break }
+                if StoreManager.personalProductIDs.contains(transaction.productID) { historical = max(historical, .personal) }
+            }
+            if historical > .free {
+                lastPaidTier = max(lastPaidTier ?? .free, historical)
+                if persistsEntitlementHistory {
+                    UserDefaults.standard.set(lastPaidTier?.rawValue, forKey: Self.lastPaidTierKey)
+                    Task { await self.refreshArchiveAccessRecord() }
                 }
             }
         }

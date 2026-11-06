@@ -56,6 +56,10 @@ struct ArchiveExportResult: Sendable, Equatable {
     /// Five jobs OUT-02: files beyond one per message, written because the
     /// user chose one copy per folder occurrence. Disclosed on the receipt.
     var extraCopies: Int = 0
+    /// Audit 2026-11-06 A07: the files were all written but the inventory
+    /// could not be finalised — the reason, so the receipt is `unverified`
+    /// rather than `complete`. The working manifest is kept in that case.
+    var inventoryFailure: String? = nil
 }
 
 enum ArchiveExportError: LocalizedError {
@@ -629,12 +633,21 @@ final class ArchiveExportService {
         // that succeeded is the working manifest removed; otherwise it stays
         // as the record rather than nothing.
         manifest.close()
-        let inventoryURL = try? ExportInventory.finalize(folder: folder, manifestURL: manifest.url, layout: options.layout.rawValue,
-                                                         written: records, withheld: withheld, skipped: skipped, positionsConsumed: seen)
-        if inventoryURL != nil { manifest.remove() }
+        var inventoryURL: URL? = nil
+        var inventoryFailure: String? = nil
+        do {
+            inventoryURL = try ExportInventory.finalize(folder: folder, manifestURL: manifest.url, layout: options.layout.rawValue,
+                                                        written: records, withheld: withheld, skipped: skipped, positionsConsumed: seen)
+            manifest.remove()
+        } catch {
+            // Audit A07: the files are complete, the record is not — carried
+            // to the receipt as its own outcome, never swallowed into "complete".
+            inventoryFailure = error.localizedDescription
+        }
         return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes, completed: true, cancelled: false,
                                    withheld: withheld, unverifiedSources: sourceLedger.unverifiedPaths.count,
-                                   positionsConsumed: seen, skipped: skipped, inventoryURL: inventoryURL, extraCopies: extraCopies)
+                                   positionsConsumed: seen, skipped: skipped, inventoryURL: inventoryURL, extraCopies: extraCopies,
+                                   inventoryFailure: inventoryFailure)
     }
 
     /// `2019`, or `undated` when the Date header is missing or unparseable.
