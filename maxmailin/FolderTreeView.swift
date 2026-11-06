@@ -23,14 +23,16 @@ struct FolderTreeView: View {
     @State private var typeCounts: [String: Int] = [:]
     @State private var attachmentTotal = 0
     @State private var labelBuckets: [AggregateBucket] = []
+    /// CAP-03: every label is reachable — the total is shown and the list
+    /// grows a page at a time; nothing is cut at a constant.
+    @State private var labelTotal = 0
     @State private var sourceBuckets: [AggregateBucket] = []
     /// 3.1 R2: recovered mail by kind (empty when recovery is off or nothing was found).
     @State private var recovery = RecoveryCounts()
     @State private var isLoaded = false
 
-    /// Bounded label subtree, matching v1's most-used-first ordering.
-    static let maxLabels = 30
-    static let maxSourceFiles = 50
+    /// Labels load this many at a time, busiest first (a page size, not a cap).
+    static let labelPage = 200
 
     /// Operator-safe value: multiword labels/filenames must be quoted or the
     /// search parser splits them ("tag:Boxbe Waiting List" → tag:Boxbe + text).
@@ -113,6 +115,19 @@ struct FolderTreeView: View {
                         .accessibilityLabel("\(row.node.name), \(row.node.emailCount) emails")
                         .accessibilityAddTraits(selectedFolder == row.node.filterValue ? .isSelected : [])
                     }
+                    if labelBuckets.count < labelTotal {
+                        Button {
+                            Task { @MainActor in await loadMoreLabels() }
+                        } label: {
+                            Label("Show more (\(labelBuckets.count) of \(labelTotal) labels)", systemImage: "ellipsis.circle")
+                                .font(Typography.caption1)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 16 + Spacing.small)
+                        .padding(.vertical, Spacing.xxSmall)
+                        .help("Lists the next \(Self.labelPage) labels, busiest first. Every label in the archive can be reached this way.")
+                        .accessibilityIdentifier("folderTree.moreLabels")
+                    }
                 }
             }
         }
@@ -138,10 +153,19 @@ struct FolderTreeView: View {
         let store = SQLiteEmailStore.shared
         typeCounts = (try? await store.messageTypeCounts()) ?? [:]
         attachmentTotal = (try? await store.attachmentCount()) ?? 0
-        labelBuckets = (try? await store.parserTagCounts(limit: Self.maxLabels)) ?? []
-        sourceBuckets = (try? await store.sourceFileCounts(limit: Self.maxSourceFiles)) ?? []
+        // CAP-03: the total is always known; the list keeps what was expanded.
+        labelTotal = (try? await store.parserTagTotal()) ?? 0
+        labelBuckets = (try? await store.parserTagCounts(matching: nil, offset: 0, limit: max(Self.labelPage, labelBuckets.count))) ?? []
+        // One bucket per imported file: bounded by the import history, never by a constant.
+        sourceBuckets = (try? await store.sourceFileCounts(limit: Int(Int32.max))) ?? []
         recovery = RecoveryPolicy.isEnabled && TierAccess.allows(.recovery)
             ? ((try? await store.recoveryCounts()) ?? RecoveryCounts()) : RecoveryCounts()
+    }
+
+    @MainActor
+    private func loadMoreLabels() async {
+        let next = (try? await SQLiteEmailStore.shared.parserTagCounts(matching: nil, offset: labelBuckets.count, limit: Self.labelPage)) ?? []
+        labelBuckets.append(contentsOf: next)
     }
 
     private func flattenTree(_ nodes: [FolderNode], depth: Int = 0) -> [FlatRow] {
@@ -188,7 +212,7 @@ struct FolderTreeView: View {
             }
             // v1 showed the label-application total on the parent row
             // (labels overlap, so this can exceed the email count).
-            nodes.append(FolderNode(name: String(localized: "Labels"), icon: "tag.fill", children: labelChildren,
+            nodes.append(FolderNode(name: String(localized: "Labels (\(labelTotal))"), icon: "tag.fill", children: labelChildren,
                                     emailCount: labelChildren.reduce(0) { $0 + $1.emailCount }, filterValue: ""))
         }
 

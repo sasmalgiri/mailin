@@ -2747,6 +2747,47 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    // MARK: - CAP-02 / CAP-03 — legacy export paths follow the one policy; the old folder tree pages every label
+
+    func testCAP02_03_legacyExportsUseTheAccessPolicy_andTheFolderTreeReachesEveryLabel() async throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let content = try String(contentsOf: repo.appendingPathComponent("maxmailin/ContentView.swift"), encoding: .utf8)
+        XCTAssertFalse(content.contains("freeExportLimit"), "the private 10-email export cap is gone")
+        XCTAssertFalse(content.contains("freeExportCap"), "no cap of its own; the access policy decides")
+        for format in ["emlFiles", "pdfFiles", "csv", "portableHTML"] {
+            XCTAssertTrue(content.contains("exportCap(for: .\(format))"), "\(format) export asks the policy")
+        }
+        // What the policy says for those paths: Free 500 (as the purchase screen promises), never 10.
+        XCTAssertEqual(AccessPolicy(state: .free).exportCap(for: .emlFiles), StoreManager.freeEmailLimit)
+        XCTAssertEqual(AccessPolicy(state: .free).exportCap(for: .csv), StoreManager.freeEmailLimit)
+        XCTAssertNil(AccessPolicy(state: .lapsed(previous: .personal)).exportCap(for: .emlFiles))
+
+        let tree = try String(contentsOf: repo.appendingPathComponent("maxmailin/FolderTreeView.swift"), encoding: .utf8)
+        XCTAssertFalse(tree.contains("maxLabels") || tree.contains("maxSourceFiles"), "no label or source window")
+        XCTAssertTrue(tree.contains("parserTagTotal()") && tree.contains("folderTree.moreLabels"), "total shown, Show more offered")
+
+        // The store side the tree pages through: 450 labels, all reachable, total exact.
+        let env = try makeEnv()
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<450 {
+            var e = mail(30_000 + i, from: "a@x.com", subject: "L \(i)", body: "b")
+            e.tags = ["Label \(String(format: "%03d", i))"]
+            emails.append(e)
+        }
+        try await env.store.insertBatch(emails, batchSize: 100)
+        let total = try await env.store.parserTagTotal()
+        XCTAssertEqual(total, 450)
+        var seen: [String] = []
+        var offset = 0
+        while true {
+            let page = try await env.store.parserTagCounts(matching: nil, offset: offset, limit: FolderTreeView.labelPage)
+            if page.isEmpty { break }
+            seen += page.map(\.value)
+            offset += page.count
+        }
+        XCTAssertEqual(Set(seen).count, 450, "every label, page by page")
+    }
+
     // MARK: - Five jobs LIFE-06 — the adopted data-access policy (owner, 2026-11-06)
 
     func testLIFE06_accessPolicy_keepsImportedDataOpenAfterExpiry_andStopsNewPaidWork() throws {

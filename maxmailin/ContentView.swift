@@ -1988,8 +1988,10 @@ struct ContentView: View {
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         #endif
         let vm = viewModel
-        let isPro = storeManager.isPremium
-        let limitedEmails = isPro ? emails : Array(emails.prefix(Self.freeExportLimit))
+        // CAP-02: the one access policy decides the cap (Free 500, a lapsed
+        // plan uncapped for .eml, paid uncapped) — not a private constant.
+        let exportLimit = exportCap(for: .emlFiles)
+        let limitedEmails = exportLimit.map { Array(emails.prefix($0)) } ?? emails
         Task.detached(priority: .userInitiated) {
             var usedNames = Set<String>()
             var exportedCount = 0
@@ -2036,7 +2038,7 @@ struct ContentView: View {
             let finalFailedSubjects = failedSubjects
             let totalSelected = emails.count
             await MainActor.run {
-                if !isPro && totalSelected > finalExported {
+                if exportLimit != nil && totalSelected > finalExported {
                     vm.statusMessage = "Exported \(finalExported) of \(totalSelected) emails (free limit). Upgrade for unlimited."
                     vm.statusColor = .orange
                     self.storeManager.showPaywall = true
@@ -3930,7 +3932,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
         beginImport([url])
     }
 
-    private static let freeExportLimit = 10
 
     /// Set when the Free input allowance refuses an import; drives the alert.
     @State private var importAllowanceDenial: ImportAllowance.Denial?
@@ -3964,9 +3965,11 @@ private func handleMultipleFiles(_ urls: [URL]) {
         return .none
     }
 
-    /// Free-tier cap on export record counts (nil = unlimited for Pro).
-    private var freeExportCap: Int? {
-        storeManager.isPremium ? nil : Self.freeExportLimit
+    /// CAP-02 / LIFE-06: the export cap for a format comes from the access
+    /// policy — Free 500, a lapsed plan uncapped for mail-preserving formats,
+    /// an active plan uncapped. Never a private number of its own.
+    private func exportCap(for format: UnifiedExportFormat) -> Int? {
+        storeManager.accessPolicy.exportCap(for: format)
     }
 
     /// Shared runner: progress + Cancel via `ExportRunCenter`; cancellation and
@@ -4008,8 +4011,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
     /// Free-limit messaging shared by capped exports; returns the status
     /// message and raises the paywall when the cap truncated the export.
     private func cappedExportMessage(written: Int, scope: ArchiveSelectionScope,
-                                     what: String) async -> String {
-        if let cap = freeExportCap {
+                                     cap: Int?, what: String) async -> String {
+        if let cap {
             let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? written
             if total > cap {
                 storeManager.showPaywall = true
@@ -4033,7 +4036,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
         let vm = viewModel
-        let cap = freeExportCap
+        let cap = exportCap(for: .emlFiles)
         runStreamingExport("Exporting selected emails as EML") { service in
             // Streams the (possibly symbolic) selection; one .eml per message.
             let result = try await service.exportEMLFiles(
@@ -4042,7 +4045,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Export Selection", detail: "Exported \(result.recordsWritten) selected emails as EML")
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "selected emails"))
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: String(localized: "selected emails"))
         }
         #endif
     }
@@ -4058,7 +4061,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.message = "Export selected email(s) as individual PDFs"
         panel.prompt = "Export PDFs"
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
-        let cap = freeExportCap
+        let cap = exportCap(for: .pdfFiles)
         runStreamingExport("Exporting PDFs") { service in
             // Streams the selection; each PDF rendered per message (bounded).
             let result = try await service.exportPDFFiles(
@@ -4066,7 +4069,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "PDF export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Individual PDF Export", detail: "\(result.recordsWritten) exported")
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "PDFs"))
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: String(localized: "PDFs"))
         }
         #endif
     }
@@ -4086,7 +4089,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #endif
         let scope = filteredScope
         let vm = viewModel
-        let cap = freeExportCap
+        let cap = exportCap(for: .emlFiles)
         runStreamingExport("Exporting emails as EML") { service in
             // Streams the whole filtered query from the store — never the
             // bounded preview arrays.
@@ -4098,7 +4101,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             #if os(iOS)
             if result.recordsWritten > 0 { self.iOSShareFile(at: folderURL) }
             #endif
-            let message = await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "emails")
+            let message = await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: "emails")
             return message == "Exported \(result.recordsWritten) emails."
                 ? "Exported \(result.recordsWritten) emails to \(folderURL.lastPathComponent)."
                 : message
@@ -4116,7 +4119,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_export_emails.csv")
         #endif
         let scope = filteredScope
-        let cap = freeExportCap
+        let cap = exportCap(for: .csv)
         runStreamingExport("Exporting CSV") { service in
             // Streamed row-by-row from the store; incremental file writes.
             let result = try await service.exportDetailedCSV(
@@ -4126,7 +4129,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             #if os(iOS)
             self.iOSShareFile(at: url)
             #endif
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "emails as CSV"))
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: String(localized: "emails as CSV"))
         }
     }
 
@@ -4440,7 +4443,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #endif
         let folderURL = baseURL.appendingPathComponent("mailin_html_export")
         let scope = filteredScope
-        let cap = freeExportCap
+        let cap = exportCap(for: .portableHTML)
         runStreamingExport("Exporting portable HTML") { service in
             // Streamed into index.html. A single self-contained page must be
             // loaded whole by the browser, so the format carries an explicit
