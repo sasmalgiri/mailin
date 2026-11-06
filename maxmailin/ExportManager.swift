@@ -606,6 +606,81 @@ struct ExportManager {
         try html.write(to: indexURL, atomically: true, encoding: .utf8)
     }
 
+    /// CAP-04: the viewer for a chunked export — `index.html` loads
+    /// `data/part-0001.js` … one after another (script tags work from a
+    /// file:// folder, fetch does not), so an archive of any size opens. The
+    /// list shows the first rows at once and grows on "Show more"; search
+    /// runs over everything loaded; the counter always says how much of the
+    /// export has arrived. No message cap.
+    static func portableHTMLViewer(total: Int, parts: Int, chunkSize: Int) -> String {
+        let head = portableHTMLPrefix(emailCount: total).replacingOccurrences(of: "var DATA=[", with: "")
+        return head + """
+        var TOTAL=\(total),PARTS=\(parts),CHUNK=\(chunkSize),DATA=[],loadedParts=0,failedPart=null;
+        var listEl=document.getElementById("list"),detailEl=document.getElementById("detail"),searchEl=document.getElementById("search"),countEl=document.getElementById("count");
+        var filtered=[],activeId=null,shown=0,PAGE=500,query="";
+        function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
+        function status(){
+            var loading=loadedParts<PARTS?" — loading "+DATA.length+" of "+TOTAL:"";
+            if(failedPart){loading=" — part "+failedPart+" of "+PARTS+" could not be read"}
+            countEl.textContent=(query?filtered.length+" of ":"")+DATA.length+" emails"+loading;
+        }
+        function row(e){
+            var d=document.createElement("div");d.className="item"+(e.id===activeId?" active":"");
+            d.innerHTML='<div class="subject">'+esc(e.subject)+'</div><div class="meta">'+esc(e.from)+' &mdash; '+esc(e.date)+'</div><div class="preview">'+esc(e.preview)+'</div>';
+            d.onclick=function(){activeId=e.id;showDetail(e);render()};
+            return d;
+        }
+        function render(){
+            listEl.innerHTML="";
+            if(filtered.length===0){listEl.innerHTML='<div class="no-results">'+(DATA.length===0?"Loading…":"No emails match your search.")+'</div>';status();return}
+            var upto=Math.min(shown,filtered.length);
+            for(var i=0;i<upto;i++){listEl.appendChild(row(filtered[i]))}
+            if(upto<filtered.length){
+                var more=document.createElement("div");more.className="item";more.style.textAlign="center";more.style.color="#0071e3";
+                more.textContent="Show more ("+upto+" of "+filtered.length+")";
+                more.onclick=function(){shown+=PAGE;render()};
+                listEl.appendChild(more);
+            }
+            status();
+        }
+        function applyFilter(){
+            var q=query;
+            filtered=q?DATA.filter(function(e){return e.subject.toLowerCase().indexOf(q)!==-1||e.from.toLowerCase().indexOf(q)!==-1||e.body.toLowerCase().indexOf(q)!==-1}):DATA.slice();
+            if(shown===0){shown=PAGE}
+            render();
+            if(activeId===null&&DATA.length>0){activeId=DATA[0].id;showDetail(DATA[0]);render()}
+        }
+        function sanitizeHTML(s){return s.replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi,"").replace(/<iframe[^>]*>[\\s\\S]*?<\\/iframe>/gi,"").replace(/<embed[^>]*>/gi,"").replace(/<object[^>]*>[\\s\\S]*?<\\/object>/gi,"").replace(/<form[^>]*>[\\s\\S]*?<\\/form>/gi,"").replace(/\\son\\w+\\s*=/gi," data-removed=")}
+        function showDetail(e){
+            var isHTML=e.body.indexOf("<")!==-1&&e.body.indexOf(">")!==-1;
+            var bodyContent=isHTML?sanitizeHTML(e.body):'<pre style="white-space:pre-wrap;font-family:inherit">'+esc(e.body)+'</pre>';
+            detailEl.innerHTML='<h2>'+esc(e.subject)+'</h2>'
+                +'<div class="hdr"><b>From:</b> '+esc(e.from)+'</div>'
+                +'<div class="hdr"><b>To:</b> '+esc(e.to)+'</div>'
+                +(e.cc?'<div class="hdr"><b>Cc:</b> '+esc(e.cc)+'</div>':'')
+                +'<div class="hdr"><b>Date:</b> '+esc(e.date)+'</div>'
+                +'<hr><div class="body">'+bodyContent+'</div>'
+        }
+        function mailinChunk(entries){
+            DATA=DATA.concat(entries);loadedParts++;applyFilter();
+            if(loadedParts<PARTS){loadPart(loadedParts+1)}
+        }
+        function loadPart(n){
+            var s=document.createElement("script");
+            var name=String(n);while(name.length<4){name="0"+name}
+            s.src="data/part-"+name+".js";
+            s.onerror=function(){failedPart=n;status()};
+            document.body.appendChild(s);
+        }
+        searchEl.addEventListener("input",function(){query=searchEl.value.toLowerCase();shown=PAGE;applyFilter()});
+        render();
+        if(PARTS>0){loadPart(1)}
+        </script>
+        </body>
+        </html>
+        """
+    }
+
     /// Everything up to (and including) the opening `var DATA=[`.
     static func portableHTMLPrefix(emailCount: Int) -> String {
         return """

@@ -71,24 +71,73 @@ extension ArchiveExportService {
         }
     }
 
+    /// CAP-04 (owner 2026-11-06, no hidden caps): the portable viewer has no
+    /// message cap. Messages are written in `data/part-NNNN.js` chunks of
+    /// `portableHTMLChunkSize`, streamed from the scope, and `index.html`
+    /// loads them one after another. `limit` is only the plan's cap.
+    static let portableHTMLChunkSize = 2_000
+
     @discardableResult
     func exportPortableHTML(scope: ArchiveSelectionScope, to folder: URL,
                             limit: Int? = nil,
                             onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let cap = min(limit ?? Self.portableHTMLMaxEmails, Self.portableHTMLMaxEmails)
-        let url = folder.appendingPathComponent("index.html")
-        var first = true
-        return try await exportTextDocument(
-            scope: scope, to: url, limit: cap,
-            header: { total in ExportManager.portableHTMLPrefix(emailCount: total) },
-            footer: { _ in ExportManager.portableHTMLSuffix },
-            onProgress: onProgress
-        ) { email, _ in
-            guard let entry = ExportManager.portableHTMLEntryJSON(email: email) else { return "" }
-            defer { first = false }
-            return (first ? "" : ",") + entry
+        let fm = FileManager.default
+        let dataFolder = folder.appendingPathComponent("data", isDirectory: true)
+        try fm.createDirectory(at: dataFolder, withIntermediateDirectories: true)
+        let total = try await boundedTotal(scope: scope, limit: limit)
+        var written = 0, skipped = 0, bytes = 0, parts = 0, inChunk = 0, cancelled = false
+        var handle: FileHandle?
+        var partFiles: [URL] = []
+
+        func openPart() throws {
+            parts += 1
+            let url = dataFolder.appendingPathComponent(String(format: "part-%04d.js", parts))
+            guard fm.createFile(atPath: url.path, contents: nil) else {
+                throw ArchiveExportError.nothingToExport("the viewer's data file could not be created at \(url.path)")
+            }
+            let h = try FileHandle(forWritingTo: url)
+            partFiles.append(url)
+            let opening = Data("mailinChunk([\n".utf8)
+            try h.write(contentsOf: opening); bytes += opening.count
+            handle = h; inChunk = 0
         }
+        func closePart() throws {
+            guard let h = handle else { return }
+            let closing = Data("\n]);\n".utf8)
+            try h.write(contentsOf: closing); bytes += closing.count
+            try h.close(); handle = nil
+        }
+        func cleanup() {
+            try? handle?.close(); handle = nil
+            for url in partFiles { try? fm.removeItem(at: url) }
+            try? fm.removeItem(at: dataFolder)
+        }
+
+        do {
+            stream: for try await batch in archive.streamSelected(scope: scope) {
+                if Task.isCancelled { cancelled = true; break }
+                for email in batch {
+                    if let limit, written >= limit { break stream }
+                    guard let entry = ExportManager.portableHTMLEntryJSON(email: email) else { skipped += 1; continue }
+                    if handle == nil || inChunk >= Self.portableHTMLChunkSize { try closePart(); try openPart() }
+                    let line = Data(((inChunk == 0 ? "" : ",\n") + entry).utf8)
+                    try handle?.write(contentsOf: line)
+                    bytes += line.count; inChunk += 1; written += 1
+                }
+                onProgress?(written, total)
+            }
+            try closePart()
+        } catch {
+            cleanup()
+            throw error
+        }
+        if cancelled || Task.isCancelled {
+            cleanup()
+            return ArchiveExportResult(recordsWritten: 0, bytesWritten: 0, completed: false, cancelled: true, skipped: skipped)
+        }
+        let viewer = ExportManager.portableHTMLViewer(total: written, parts: parts, chunkSize: Self.portableHTMLChunkSize)
+        try viewer.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        return ArchiveExportResult(recordsWritten: written, bytesWritten: bytes + viewer.utf8.count, completed: true, cancelled: false, skipped: skipped)
     }
 
     /// vCard: contacts are a SMALL derived record (distinct addresses), but the

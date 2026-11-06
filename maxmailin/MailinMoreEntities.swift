@@ -166,12 +166,12 @@ struct FindEmailsWithTagIntent: AppIntent {
         var q = EmailQuery()
         q.userTag = tag.id          // set directly: any tag text, quotes included
         var out: [EmailEntity] = []
+        // CAP-05: every email with the tag; Shortcuts' own Limit bounds it when wanted.
         for try await page in await ScopeJobEnvironment.archive.streamSummaries(query: q, batchSize: 500) {
             let rec = (try? await ScopeJobEnvironment.store.recovery(for: page.map(\.id))) ?? [:]
             out += page.map { EmailEntity(summary: $0, recovered: rec[$0.id] != nil) }
-            if out.count >= ShortcutsPolicy.findLimit { break }
         }
-        return .result(value: Array(out.prefix(ShortcutsPolicy.findLimit)))
+        return .result(value: out)
     }
 }
 

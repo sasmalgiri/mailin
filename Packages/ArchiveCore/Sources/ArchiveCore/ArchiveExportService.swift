@@ -750,11 +750,8 @@ final class ArchiveExportService {
         return row + "\n"
     }
 
-    /// Portable HTML: index.html embedding all message data. The artifact is
-    /// streamed, but a single self-contained HTML page has to be LOADED whole
-    /// by a browser — so it carries an explicit, user-facing cap (known
-    /// limitation of the format, not of the pipeline).
-    static let portableHTMLMaxEmails = 10_000
+    // CAP-04: the portable HTML viewer is chunked (`data/part-NNNN.js`) and
+    // carries no message cap any more; see ArchiveExportService+Renderers.
 
     /// Full-archive JSON (`ExportableParsedMBOXFile` shape) — the emails array
     /// is streamed; the summary is accumulated incrementally (date bounds +

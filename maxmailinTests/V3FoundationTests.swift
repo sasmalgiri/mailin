@@ -1618,11 +1618,12 @@ final class V31ScriptRunTests: XCTestCase {
         try await ScopeJobEnvironment.$current.withValue(env.job) {
             let base = ScriptSandbox.footprint()
             let start = Date()
-            let found = try await EmailEntityQuery.find([.sender("example.com")], mode: .and, limit: ShortcutsPolicy.findLimit)
+            // CAP-05: 10,000 here is the Shortcuts "Limit" the person set, not a cap of the app's.
+            let found = try await EmailEntityQuery.find([.sender("example.com")], mode: .and, limit: ShortcutsPolicy.effectiveFindLimit(10_000))
             let seconds = Date().timeIntervalSince(start)
             let mem = Int(ScriptSandbox.footprint()) - Int(base)
             print(String(format: "FIND-100K: %d results in %.2f s, memory +%d MB", found.count, seconds, mem / 1_048_576))
-            XCTAssertEqual(found.count, ShortcutsPolicy.findLimit)
+            XCTAssertEqual(found.count, 10_000)
             XCTAssertLessThan(seconds, 10)
         }
     }

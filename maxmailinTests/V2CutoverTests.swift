@@ -2788,6 +2788,70 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(Set(seen).count, 450, "every label, page by page")
     }
 
+    // MARK: - CAP-04 / CAP-05 — the portable viewer and Shortcuts Find have no caps of their own
+
+    func testCAP04_portableHTMLViewerIsChunked_everyMessageWritten_noCap() async throws {
+        let env = try makeEnv()
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<4_500 {
+            emails.append(mail(40_000 + i, from: "s\(i % 5)@x.com", subject: "Viewer \(i)", body: i == 7 ? "has </script> inside" : "body \(i)",
+                               date: "Wed, 01 Mar 2023 \(String(format: "%02d:%02d:%02d", (i / 3600) % 24, (i / 60) % 60, i % 60)) +0000"))
+        }
+        for start in stride(from: 0, to: emails.count, by: 500) {
+            try await env.store.insertBatch(Array(emails[start..<min(start + 500, emails.count)]), batchSize: 500)
+        }
+        let folder = env.root.appendingPathComponent("viewer", isDirectory: true)
+        let service = ArchiveExportService(archive: env.archive)
+        let result = try await service.exportPortableHTML(scope: .query(.all, exclusions: []), to: folder)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 4_500, "every message, well past the old 10,000-free single page's logic and any window")
+        let index = try String(contentsOf: folder.appendingPathComponent("index.html"), encoding: .utf8)
+        XCTAssertTrue(index.contains("TOTAL=4500,PARTS=3,CHUNK=\(ArchiveExportService.portableHTMLChunkSize)"), "the viewer knows the whole export")
+        XCTAssertTrue(index.contains("function mailinChunk") && index.contains("loadPart(1)"))
+        var total = 0
+        for part in 1...3 {
+            let url = folder.appendingPathComponent("data").appendingPathComponent(String(format: "part-%04d.js", part))
+            let text = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertTrue(text.hasPrefix("mailinChunk([") && text.hasSuffix("]);\n"), "part \(part) is a JavaScript chunk")
+            let json = text.dropFirst("mailinChunk(".count).dropLast(");\n".count)
+            let entries = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+            total += entries.count
+            XCTAssertLessThanOrEqual(entries.count, ArchiveExportService.portableHTMLChunkSize)
+        }
+        XCTAssertEqual(total, 4_500, "the chunks hold every message exactly once")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("data/part-0004.js").path))
+        // The plan's cap still applies as a cap, stated by the caller — not a cap of the format.
+        let capped = try await service.exportPortableHTML(scope: .query(.all, exclusions: []), to: env.root.appendingPathComponent("capped", isDirectory: true), limit: 500)
+        XCTAssertEqual(capped.recordsWritten, 500)
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        for file in ["maxmailin/ContentView.swift", "maxmailin/ArchiveExportService+Renderers.swift", "Packages/ArchiveCore/Sources/ArchiveCore/ArchiveExportService.swift"] {
+            let source = try String(contentsOf: repo.appendingPathComponent(file), encoding: .utf8)
+            XCTAssertFalse(source.contains("static let portableHTMLMaxEmails"), "\(file) still declares the old cap")
+        }
+    }
+
+    func testCAP05_shortcutsFindHasNoCapOfItsOwn() async throws {
+        XCTAssertEqual(ShortcutsPolicy.effectiveFindLimit(nil), Int.max, "no Limit set in Shortcuts → everything")
+        XCTAssertEqual(ShortcutsPolicy.effectiveFindLimit(25), 25, "the person's Limit is honoured as given")
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        for file in ["maxmailin/MailinAppEntities.swift", "maxmailin/MailinMoreEntities.swift"] {
+            let source = try String(contentsOf: repo.appendingPathComponent(file), encoding: .utf8)
+            XCTAssertFalse(source.contains("findLimit"), "\(file) still clamps to a constant")
+        }
+        // Through the entity query over a bound environment: 10,050 rows, all returned.
+        let env = try makeEnv()
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<10_050 { emails.append(mail(50_000 + i, from: "finder@example.com", subject: "F \(i)", body: "b")) }
+        for start in stride(from: 0, to: emails.count, by: 1_000) {
+            try await env.store.insertBatch(Array(emails[start..<min(start + 1_000, emails.count)]), batchSize: 1_000)
+        }
+        let environment = ScopeJobEnvironment(archive: env.archive, store: env.store, root: env.root)
+        let found = try await ScopeJobEnvironment.$current.withValue(environment) {
+            try await EmailEntityQuery.find([.sender("example.com")], mode: .and, limit: ShortcutsPolicy.effectiveFindLimit(nil))
+        }
+        XCTAssertEqual(found.count, 10_050)
+    }
+
     // MARK: - Five jobs LIFE-06 — the adopted data-access policy (owner, 2026-11-06)
 
     func testLIFE06_accessPolicy_keepsImportedDataOpenAfterExpiry_andStopsNewPaidWork() throws {

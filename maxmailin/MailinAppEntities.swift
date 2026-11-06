@@ -22,9 +22,11 @@ import Foundation
 /// Pushed by CapabilityWiring; intents can run without any view on screen.
 enum ShortcutsPolicy {
     nonisolated(unsafe) static var actionsEnabled = false
-    /// The most emails one Find returns to Shortcuts (a Shortcuts list lives in
-    /// memory). Stated in the action's description and in the limits doc.
-    static let findLimit = 10_000
+    /// CAP-05: Find has no cap of its own. Shortcuts' own "Limit" option on
+    /// the Find action bounds the list when the person wants it; without it,
+    /// every match is returned (a Shortcuts list lives in memory — that is
+    /// the person's call, stated in the action's description).
+    static func effectiveFindLimit(_ requested: Int?) -> Int { requested ?? Int.max }
 
     static func requireEnabled() throws {
         guard actionsEnabled else { throw ShortcutsActionError.switchedOff }
@@ -147,7 +149,7 @@ struct EmailEntityQuery: EntityPropertyQuery {
     func entities(matching comparators: [EmailEntityClause], mode: ComparatorMode,
                   sortedBy: [EntityQuerySort<EmailEntity>], limit: Int?) async throws -> [EmailEntity] {
         try ShortcutsPolicy.requireEnabled()
-        return try await Self.find(comparators, mode: mode, limit: min(limit ?? ShortcutsPolicy.findLimit, ShortcutsPolicy.findLimit))
+        return try await Self.find(comparators, mode: mode, limit: ShortcutsPolicy.effectiveFindLimit(limit))
     }
 
     /// "All" = one query; "any" = one query per clause, merged without repeats.

@@ -4447,7 +4447,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         runStreamingExport("Exporting portable HTML") { service in
             // Streamed into index.html. A single self-contained page must be
             // loaded whole by the browser, so the format carries an explicit
-            // cap (ArchiveExportService.portableHTMLMaxEmails) — surfaced below.
+            // CAP-04: the chunked viewer has no message cap; only the plan's cap applies.
             let result = try await service.exportPortableHTML(
                 scope: scope, to: folderURL, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
@@ -4462,9 +4462,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
             if let cap, total > cap {
                 self.storeManager.showPaywall = true
                 return "Exported \(result.recordsWritten) of \(total) emails as portable HTML (free limit — upgrade for unlimited). Open index.html in any browser."
-            }
-            if total > ArchiveExportService.portableHTMLMaxEmails {
-                return "Exported first \(result.recordsWritten) of \(total) emails as portable HTML (single-page format is capped at \(ArchiveExportService.portableHTMLMaxEmails) — use EML/CSV for the full set). Open index.html in any browser."
             }
             return "Exported \(result.recordsWritten) emails as portable HTML. Open index.html in any browser."
         }
