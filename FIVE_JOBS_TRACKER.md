@@ -178,13 +178,13 @@ can supply. A synthetic-fixture pass never implies real-origin compatibility.
 
 | ID | Implemented | Test executed | Result | Evidence | Known limitation | External dependency |
 |---|---|---|---|---|---|---|
-| R01 Boolean structure without expansion | R01_STATE | R01_TEST | R01_RESULT | R01_COMMIT | — | — |
-| R02 Exact literal verification, one offset unit | R02_STATE | R02_TEST | R02_RESULT | R02_COMMIT | R02_LIMIT | — |
-| R03 Logical names and payload sniffing | R03_STATE | R03_TEST | R03_RESULT | R03_COMMIT | — | — |
-| R04 EML/RTF through semantic readers | R04_STATE | R04_TEST | R04_RESULT | R04_COMMIT | MSG/TNEF children not yet a tree (WP2) | — |
-| R05 Budgets enforced in-stream; pause/continue | R05_STATE | R05_TEST | R05_RESULT | R05_COMMIT | Exhaustion is a named partial state, not yet a resumable checkpoint (A10) | — |
-| R06 Finish inventory / Verify export | R06_STATE | R06_TEST | R06_RESULT | R06_COMMIT | Content reconciliation against source records (OUT-04 re-parse) still open | — |
-| R07 Archive-access initialisation and refresh | R07_STATE | R07_TEST | R07_RESULT | R07_COMMIT | — | StoreKit sandbox expiry/refund/restore journeys on a clean profile (owner's Apple ID) |
+| R01 Boolean structure without expansion | yes — branches and branch-local negation in the query model; translator emits one group, no expansion | `testR01_booleanStructureCompiledAsWritten_63Branches_branchLocalNot`, CAP01 translator test | passed | 88ce321 | — | — |
+| R02 Exact literal verification, one offset unit | yes — contiguous chunks (schema v24 migration), literals verified on the stored text at any length | `testR02_literalsVerifiedAcrossChunks_unicodeAndBeyondAChunk_noFallback`, FIND07 chunker, FOLD02 schema guard | passed | 88ce321 | a literal longer than one chunk joins the document per candidate (correct, slower on very long texts) | — |
+| R03 Logical names and payload sniffing | yes — logical name through the facade, gzip payload named from it, byte sniffing for nameless members | `testR03R04R05_logicalNames_messageAndRTFChildren_gzipBudgetInStream` | passed | f0ce329 | — | — |
+| R04 EML/RTF through semantic readers | yes — attached messages decoded as messages with their attachments as children; RTF through the decoder | `testR03R04R05_*` | passed | f0ce329 | MSG/TNEF children not yet a tree (WP2) | — |
+| R05 Budgets enforced in-stream; pause/continue | partly — gzip budget inside the inflate sink, cumulative archive budget checked per child, exhaustion named | `testR03R04R05_*` | passed | f0ce329 | Exhaustion is a named partial state, not yet a resumable checkpoint (A10) | — |
+| R06 Finish inventory / Verify export | yes — Finish inventory (from the kept manifest) and Verify export on the receipt; separate rehash line | `testR06_finishInventoryFromTheKeptManifest_thenVerify` | passed | f0ce329 | Content reconciliation against source records (OUT-04 re-parse) still open | — |
+| R07 Archive-access initialisation and refresh | partly — record read at launch and after a backup restore; fixture for the clean-install state | `testA08_*`, `testLIFE02_*` | passed (unit) | f0ce329 | — | StoreKit sandbox expiry/refund/restore journeys on a clean profile (owner's Apple ID) |
 
 ### COMP-01…20
 
@@ -206,7 +206,7 @@ can supply. A synthetic-fixture pass never implies real-origin compatibility.
 | COMP-14 Encryption/signatures/IRM/cloud refs | originals kept; S/MIME verify exists for signatures | not executed for decrypt | not implemented (decrypt/IRM) | — | no decrypt-and-index, no rights-aware path | — |
 | COMP-15 Cross-format duplicates | classes, merge, holds, Trash (A01) | DUP tests | passed (synthetic) | 189b87e | PST/OLM/EML same-mail fixtures not run | real cross-format set |
 | COMP-16 Independent export consumption | inventories, re-hash, unverified outcome (A07) | OUT tests | passed | d14f93e | re-parse vs source open; destination clients not run | Apple Mail / Thunderbird / Outlook runs |
-| COMP-17 Equivalent search semantics | A02/A09 + R01/R02 | `testA02_*`, R01/R02 tests | R17_RESULT | — | — | — |
+| COMP-17 Equivalent search semantics | A02/A09 + R01/R02 | `testA02_*`, R01/R02 tests | passed (A02, R01, R02 tests) | — | — | — |
 | COMP-18 Detach → restart → nested find → backup → restore → export | LIFE-01/02 + rehearsal | `testCombinedPreservationRehearsal_*` (00b8b50) | passed then | — | nested-Office step not in the rehearsal | — |
 | COMP-19 Malformed / fault / recovery | A05/A06/A07 fixes; fault tests exist | `testA05_*`, `testA06_*`, `testA07_*` | passed | 882f179 | worker containment and external interruption not executed | disposable volume + external controller run |
 | COMP-20 Clean install / entitlements / pilot | A08/R07 code | unit fixtures | partly | d14f93e | — | sandbox journeys; human pilot (owner) |
