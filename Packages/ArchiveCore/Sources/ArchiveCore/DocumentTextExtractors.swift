@@ -34,6 +34,9 @@ enum DocumentKind: String, Sendable, CaseIterable {
     /// archives up to `ContainerTextExtractor.maxDepth` levels, every child
     /// that was not read listed by name.
     case zip, tar, gzip
+    /// Directive 2026-11-07 §6: OpenPGP files (.gpg/.pgp/.asc) — described from
+    /// their packet headers, never decrypted (`OpenPGP.swift`).
+    case pgp
 
     var isContainer: Bool { self == .zip || self == .tar || self == .gzip }
 
@@ -44,6 +47,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         let mime = mimeType.lowercased()
         let ext = (filename as NSString).pathExtension.lowercased()
         if ext == "xlsb" || mime.contains("ms-excel.sheet.binary") { return .xlsb }
+        if OpenPGP.isOpenPGPAttachment(mimeType: mime, filename: filename) { return .pgp }
         if ["vsdx", "vsdm", "vstx", "vstm"].contains(ext) || mime.contains("ms-visio.drawing") || mime.contains("ms-visio.template") { return .vsdx }
         switch ext {
         case "odt", "ott": return .odt
@@ -86,6 +90,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .vsdx: return "visio"
         case .projectXML: return "project"
         case .zip, .tar, .gzip: return "archive"
+        case .pgp: return "openpgp"
         }
     }
 }
@@ -123,6 +128,7 @@ enum DocumentTextExtractor {
         case .vsdx: return try VisioTextExtractor.extract(fileURL: fileURL)
         case .projectXML: return try ProjectXMLTextExtractor.extract(fileURL: fileURL)
         case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: password)
+        case .pgp: return try OpenPGP.extract(fileURL: fileURL)
         }
     }
 
