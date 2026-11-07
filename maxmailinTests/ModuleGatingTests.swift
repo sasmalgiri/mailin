@@ -1120,10 +1120,13 @@ struct InterfaceLocalizationTests {
 /// switched off — the same code path the App Store build takes. What this
 /// does NOT cover: the App Store sandbox and Apple Account sign-in, which
 /// need TestFlight.
-#if os(iOS)
-// iOS only: on macOS `Product.purchase()` needs a window to anchor its
-// confirmation sheet, and the hosted test runner has none, so it waits
-// minutes and fails. The entitlement code under test is shared.
+///
+/// Both platforms: on macOS `Product.purchase()` needs a window to anchor its
+/// confirmation sheet and the hosted test runner has none, so there the
+/// purchase step is `SKTestSession.buyProduct` (the same local store, no
+/// sheet) and everything after it — `Transaction.currentEntitlements`, the
+/// transaction listener, the expiry re-check, Restore Purchases — is the
+/// app's own code. Ask to Buy needs `purchase()` and stays iOS-only.
 @Suite("StoreKit purchase flows (local StoreKit test environment)", .serialized)
 @MainActor
 struct StoreKitPurchaseFlowTests {
@@ -1134,7 +1137,60 @@ struct StoreKitPurchaseFlowTests {
             .appendingPathComponent("maxmailin/Products.storekit")
     }
 
-    private func freshSession() throws -> SKTestSession {
+    /// One test's StoreKit session plus what it must put back. The test host
+    /// IS the app (same bundle id, same preferences), so every live
+    /// `StoreManager` a test creates writes `entitlement.lastPaidTier` into the
+    /// app's real defaults; a later `StoreManager()` reads it at init and then
+    /// reports `.lapsed` instead of `.free`. The fixture clears that key for
+    /// the test and restores the owner's value afterwards, and leaves the
+    /// session with no transactions, real-time clock and default settings.
+    @MainActor
+    struct Fixture {
+        let session: SKTestSession
+        let savedPaidTier: Any?
+
+        func tearDown() {
+            session.timeRate = .realTime
+            for id in StoreManager.subscriptionProductIDs { try? session.expireSubscription(productIdentifier: id) }
+            session.clearTransactions()
+            session.resetToDefaultState()
+            if let savedPaidTier {
+                UserDefaults.standard.set(savedPaidTier, forKey: StoreManager.lastPaidTierKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+            }
+        }
+    }
+
+    /// What the app's own StoreKit API sees right now (verified only).
+    private static func storeKitView() async -> (all: [StoreKit.Transaction], current: [StoreKit.Transaction]) {
+        var all: [StoreKit.Transaction] = [], current: [StoreKit.Transaction] = []
+        for await result in StoreKit.Transaction.all { if case .verified(let t) = result { all.append(t) } }
+        for await result in StoreKit.Transaction.currentEntitlements { if case .verified(let t) = result { current.append(t) } }
+        return (all, current)
+    }
+
+    /// Waits until the app's StoreKit view satisfies `condition`. On macOS a
+    /// change made through `SKTestSession` (buy, clear, refund, expire) reaches
+    /// `Transaction.all` / `currentEntitlements` a second or more later, via
+    /// storekitagent — measured 2026-11-08: a purchase was invisible right
+    /// after `buyProduct` and visible 3 s later; likewise the previous test's
+    /// transactions were still in `Transaction.all` when the next test began,
+    /// so its fresh manager read them as "a plan was held" (`.lapsed`). That
+    /// lag was the suite's cross-test leak.
+    @discardableResult
+    private func settleStoreKit(_ seconds: Double = 20,
+                                _ condition: (_ all: [StoreKit.Transaction], _ current: [StoreKit.Transaction]) -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            let view = await Self.storeKitView()
+            if condition(view.all, view.current) { return true }
+            if Date() >= deadline { return false }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    private func freshSession() async throws -> Fixture {
         let session = try SKTestSession(contentsOf: Self.configURL)
         session.resetToDefaultState()
         // A subscription an earlier test left auto-renewing (accelerated
@@ -1145,7 +1201,28 @@ struct StoreKitPurchaseFlowTests {
         session.clearTransactions()
         session.disableDialogs = true
         session.askToBuyEnabled = false
-        return session
+        // Start only once the app's StoreKit view is empty too (see settleStoreKit).
+        let cleared = await settleStoreKit { all, current in all.isEmpty && current.isEmpty }
+        #expect(cleared, "the previous test's transactions are still visible to StoreKit")
+        let saved = UserDefaults.standard.object(forKey: StoreManager.lastPaidTierKey)
+        UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+        return Fixture(session: session, savedPaidTier: saved)
+    }
+
+    /// Buys `id` from the local store. iOS: the app's `StoreManager.purchase`.
+    /// macOS: `SKTestSession.buyProduct` (no sheet), then the app's own
+    /// entitlement pass, which is what `purchase` runs after a success.
+    private func buy(_ id: String, in store: StoreManager, session: SKTestSession) async throws -> PurchaseOutcome {
+        #if os(iOS)
+        return await store.purchase(try product(id, in: store))
+        #else
+        let before = await Self.storeKitView().all.count
+        _ = try await session.buyProduct(identifier: id)
+        let seen = await settleStoreKit { all, current in all.count > before && current.contains { $0.productID == id } }
+        #expect(seen, "the purchase of \(id) never reached Transaction.currentEntitlements")
+        await store.checkEntitlements()
+        return .success(store.currentTier)
+        #endif
     }
 
     /// The live manager as the App Store build runs it: StoreKit products,
@@ -1174,21 +1251,23 @@ struct StoreKitPurchaseFlowTests {
 
     @Test("A fresh install is Free: all six products load, nothing is unlocked, exports are capped")
     func freshInstallIsFree() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions() }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
         let store = await liveStore()
         #expect(Set(store.products.map(\.id)) == StoreManager.allProductIDs)
         #expect(store.effectiveTier == .free)
+        #expect(store.entitlementState == .free, "no remembered tier: \(store.entitlementState)")
         #expect(!store.isPremium)
         #expect(try ExportJobRunner.enforcedCap(savedCap: nil, isPremium: store.isPremium) == StoreManager.freeEmailLimit)
     }
 
     @Test("Buying Personal yearly unlocks Personal (not Professional) with a renewal date")
     func buyPersonalYearly() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions() }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         let store = await liveStore()
-        let outcome = await store.purchase(try product(StoreManager.personalYearlyID, in: store))
+        let outcome = try await buy(StoreManager.personalYearlyID, in: store, session: session)
         #expect(outcome == .success(.personal), "outcome: \(outcome)")
         #expect(store.isPremium)
         #expect(!store.isProfessional)
@@ -1199,11 +1278,12 @@ struct StoreKitPurchaseFlowTests {
 
     @Test("Upgrading Personal to Professional lifetime unlocks Professional for life")
     func upgradeToProfessionalLifetime() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions() }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         let store = await liveStore()
-        _ = await store.purchase(try product(StoreManager.personalMonthlyID, in: store))
-        let outcome = await store.purchase(try product(StoreManager.professionalLifetimeID, in: store))
+        _ = try await buy(StoreManager.personalMonthlyID, in: store, session: session)
+        let outcome = try await buy(StoreManager.professionalLifetimeID, in: store, session: session)
         #expect(outcome == .success(.professional), "outcome: \(outcome)")
         #expect(store.isProfessional)
         #expect(store.isLifetimePurchase)
@@ -1212,25 +1292,28 @@ struct StoreKitPurchaseFlowTests {
 
     @Test("A refunded (revoked) purchase takes access away")
     func refundRevokesAccess() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions() }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         let store = await liveStore()
-        _ = await store.purchase(try product(StoreManager.personalLifetimeID, in: store))
+        _ = try await buy(StoreManager.personalLifetimeID, in: store, session: session)
         #expect(store.isPremium)
         let transaction = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalLifetimeID })
         try session.refundTransaction(identifier: transaction.identifier)
+        await settleStoreKit { all, _ in all.contains { $0.productID == StoreManager.personalLifetimeID && $0.revocationDate != nil } }
         await store.checkEntitlements()
         #expect(await eventually { store.effectiveTier == .free }, "tier after refund: \(store.effectiveTier)")
     }
 
     @Test("A cancelled subscription lapses on its own at the end of the period, with the app left running")
     func cancelledSubscriptionLapsesWhileRunning() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions(); session.timeRate = .realTime }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         // One monthly period = 30 real seconds.
         session.timeRate = .monthlyRenewalEveryThirtySeconds
         let store = await liveStore()
-        _ = await store.purchase(try product(StoreManager.professionalMonthlyID, in: store))
+        _ = try await buy(StoreManager.professionalMonthlyID, in: store, session: session)
         #expect(store.isProfessional)
         let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.professionalMonthlyID })
         try session.disableAutoRenewForTransaction(identifier: sub.identifier)
@@ -1241,12 +1324,13 @@ struct StoreKitPurchaseFlowTests {
 
     @Test("A subscription that renews keeps access and moves its renewal date forward")
     func renewalKeepsAccess() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions(); session.timeRate = .realTime }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         // One monthly period = 30 real seconds; auto-renew stays on.
         session.timeRate = .monthlyRenewalEveryThirtySeconds
         let store = await liveStore()
-        _ = await store.purchase(try product(StoreManager.personalMonthlyID, in: store))
+        _ = try await buy(StoreManager.personalMonthlyID, in: store, session: session)
         #expect(store.isPremium)
         let firstExpiry = try #require(store.subscriptionExpirationDate)
         // Past the first period: the renewal must have arrived through the
@@ -1263,23 +1347,27 @@ struct StoreKitPurchaseFlowTests {
 
     @Test("An expired subscription grants nothing once the app is next active")
     func expiredSubscriptionOnActivation() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions() }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         let store = await liveStore()
-        _ = await store.purchase(try product(StoreManager.personalMonthlyID, in: store))
+        _ = try await buy(StoreManager.personalMonthlyID, in: store, session: session)
         #expect(store.isPremium)
         let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalMonthlyID })
         try session.disableAutoRenewForTransaction(identifier: sub.identifier)
         try session.expireSubscription(productIdentifier: StoreManager.personalMonthlyID)
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        // Wait until StoreKit itself no longer grants it (macOS: storekitagent lag).
+        await settleStoreKit { _, current in !current.contains { $0.productID == StoreManager.personalMonthlyID && ($0.expirationDate ?? .distantFuture) > Date() } }
         await store.checkEntitlements()   // what the app does on becoming active
         #expect(store.effectiveTier == .free, "tier: \(store.effectiveTier)")
     }
 
+    #if os(iOS)
     @Test("Ask to Buy: pending unlocks nothing; approval unlocks through the transaction listener")
     func askToBuyPendingThenApproved() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions() }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         session.askToBuyEnabled = true
         let store = await liveStore()
         let outcome = await store.purchase(try product(StoreManager.personalYearlyID, in: store))
@@ -1290,13 +1378,15 @@ struct StoreKitPurchaseFlowTests {
         try session.approveAskToBuyTransaction(identifier: pending.identifier)
         #expect(await eventually { store.effectiveTier == .personal }, "tier after approval: \(store.effectiveTier)")
     }
+    #endif
 
     @Test("Restore Purchases on a new install finds the purchase; with none it says so")
     func restorePurchases() async throws {
-        let session = try freshSession()
-        defer { session.clearTransactions() }
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
         let buyer = await liveStore()
-        _ = await buyer.purchase(try product(StoreManager.professionalYearlyID, in: buyer))
+        _ = try await buy(StoreManager.professionalYearlyID, in: buyer, session: session)
 
         // A second manager stands in for the same Apple Account on a fresh install.
         let reinstall = StoreManager()
@@ -1306,13 +1396,131 @@ struct StoreKitPurchaseFlowTests {
         #expect(reinstall.lastRestoreOutcome == restored)
 
         session.clearTransactions()
+        await settleStoreKit { all, current in all.isEmpty && current.isEmpty }
         let nobody = StoreManager()
         nobody.debugUnlocksAllTiers = false
         let none = await nobody.restorePurchases()
         #expect(none == .nothingFound, "restore with no purchases: \(none)")
     }
+
+    // MARK: LIFE-06 — expiry → lapsed → restore, refund → lapsed (local StoreKit)
+
+    /// The access table LIFE-06 promises once a plan has ended: the whole
+    /// archive readable and searchable (no Free 500 scope), attachments
+    /// saved freely, .eml / mbox exports uncapped, reports on the Free cap,
+    /// no new paid work, maintenance open.
+    private func expectLapsedAccess(_ store: StoreManager, previous: PurchaseTier,
+                                    sourceLocation: SourceLocation = #_sourceLocation) throws {
+        #expect(store.entitlementState == .lapsed(previous: previous), "state: \(store.entitlementState)", sourceLocation: sourceLocation)
+        let policy = store.accessPolicy
+        #expect(policy.isLapsed, sourceLocation: sourceLocation)
+        #expect(policy.archiveReadLimit == nil, "lapsed: the whole archive stays readable and searchable", sourceLocation: sourceLocation)
+        #expect(policy.readsWholeArchive, sourceLocation: sourceLocation)
+        #expect(policy.attachmentDownloadLimit(usedToday: 50, freeAllowance: StoreManager.freeAttachmentDownloadsPerDay) == nil, sourceLocation: sourceLocation)
+        #expect(!policy.allowsPaidWork, "new paid work stops", sourceLocation: sourceLocation)
+        #expect(policy.allowsMaintenance, sourceLocation: sourceLocation)
+        #expect(!store.isPremium, sourceLocation: sourceLocation)
+        let eml = ExportRequest(format: .emlFiles, title: "t", scope: .explicit([UUID()]), destination: "/tmp/x", isFolder: true, cap: nil)
+        var mbox = eml; mbox.format = .mbox; mbox.isFolder = false
+        var pdf = eml; pdf.format = .pdfFiles
+        #expect(try ExportJobRunner.authorized(eml, policy: policy).cap == nil, ".eml export uncapped", sourceLocation: sourceLocation)
+        #expect(try ExportJobRunner.authorized(mbox, policy: policy).cap == nil, "mbox export uncapped", sourceLocation: sourceLocation)
+        #expect(try ExportJobRunner.authorized(pdf, policy: policy).cap == StoreManager.freeEmailLimit, "reports follow the Free cap", sourceLocation: sourceLocation)
+    }
+
+    @Test("LIFE-06: buy a subscription → active; it expires → lapsed with the archive open; re-buy and Restore → active again")
+    func life06_subscriptionExpiryLapsesThenRestoreReactivates() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+
+        // Never paid: Free, newest-500 scope.
+        #expect(store.entitlementState == .free, "state: \(store.entitlementState)")
+        #expect(store.accessPolicy.archiveReadLimit == StoreManager.freeEmailLimit)
+
+        // Buy Professional monthly → active, whole archive, paid work allowed.
+        let outcome = try await buy(StoreManager.professionalMonthlyID, in: store, session: session)
+        #expect(outcome == .success(.professional), "outcome: \(outcome)")
+        #expect(store.entitlementState == .active(.professional), "state: \(store.entitlementState)")
+        #expect(store.accessPolicy.allowsPaidWork)
+        #expect(store.accessPolicy.exportCap(for: .pdfFiles) == nil)
+        #expect(store.subscriptionExpirationDate != nil)
+
+        // The subscription expires (auto-renew off, then StoreKit expires it).
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.professionalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        try session.expireSubscription(productIdentifier: StoreManager.professionalMonthlyID)
+        // Wait until StoreKit itself no longer grants it (macOS: storekitagent lag).
+        await settleStoreKit { _, current in !current.contains { $0.productID == StoreManager.professionalMonthlyID && ($0.expirationDate ?? .distantFuture) > Date() } }
+        await store.checkEntitlements()   // what the app does on becoming active
+        #expect(store.effectiveTier == .free, "tier after expiry: \(store.effectiveTier)")
+        try expectLapsedAccess(store, previous: .professional)
+        // The expired purchase stays in StoreKit's history (nothing on the store side is removed).
+        #expect(session.allTransactions().contains { $0.productIdentifier == StoreManager.professionalMonthlyID })
+
+        // Re-subscribe → active again, on the same manager.
+        let again = try await buy(StoreManager.professionalMonthlyID, in: store, session: session)
+        #expect(again == .success(.professional), "re-buy outcome: \(again)")
+        #expect(store.entitlementState == .active(.professional), "state after re-buy: \(store.entitlementState)")
+        #expect(store.accessPolicy.allowsPaidWork)
+
+        // Restore Purchases on a clean install (no remembered tier) finds the live plan.
+        UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+        let reinstall = StoreManager()
+        reinstall.debugUnlocksAllTiers = false
+        let restored = await reinstall.restorePurchases()
+        #expect(restored == .restored(.professional), "restore outcome: \(restored)")
+        #expect(reinstall.entitlementState == .active(.professional), "state after restore: \(reinstall.entitlementState)")
+    }
+
+    @Test("LIFE-06: a clean install after the subscription expired reads the history and is lapsed, not Free")
+    func life06_cleanInstallAfterExpiryIsLapsed() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let buyer = await liveStore()
+        _ = try await buy(StoreManager.personalMonthlyID, in: buyer, session: session)
+        #expect(buyer.entitlementState == .active(.personal), "state: \(buyer.entitlementState)")
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        try session.expireSubscription(productIdentifier: StoreManager.personalMonthlyID)
+        // Wait until StoreKit itself no longer grants it (macOS: storekitagent lag).
+        await settleStoreKit { _, current in !current.contains { $0.productID == StoreManager.personalMonthlyID && ($0.expirationDate ?? .distantFuture) > Date() } }
+
+        // A08: no preferences on this install — the App Store history alone proves a plan was held.
+        UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+        let clean = await liveStore()
+        #expect(clean.effectiveTier == .free, "tier: \(clean.effectiveTier)")
+        try expectLapsedAccess(clean, previous: .personal)
+    }
+
+    @Test("LIFE-06: a refunded lifetime purchase → lapsed with the archive open; buying again → lifetime")
+    func life06_refundLapsesThenRepurchase() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+        #expect(store.entitlementState == .free, "state: \(store.entitlementState)")
+
+        _ = try await buy(StoreManager.personalLifetimeID, in: store, session: session)
+        #expect(store.entitlementState == .lifetime(.personal), "state: \(store.entitlementState)")
+        #expect(store.subscriptionExpirationDate == nil)
+
+        let transaction = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalLifetimeID })
+        try session.refundTransaction(identifier: transaction.identifier)
+        await settleStoreKit { all, _ in all.contains { $0.productID == StoreManager.personalLifetimeID && $0.revocationDate != nil } }
+        await store.checkEntitlements()
+        #expect(await eventually { store.effectiveTier == .free }, "tier after refund: \(store.effectiveTier)")
+        try expectLapsedAccess(store, previous: .personal)
+
+        // Buying Professional lifetime afterwards → lifetime, paid work back.
+        let outcome = try await buy(StoreManager.professionalLifetimeID, in: store, session: session)
+        #expect(outcome == .success(.professional), "outcome: \(outcome)")
+        #expect(store.entitlementState == .lifetime(.professional), "state: \(store.entitlementState)")
+        #expect(store.accessPolicy.allowsPaidWork)
+    }
 }
-#endif
 
 #if os(macOS)
 import AppKit
