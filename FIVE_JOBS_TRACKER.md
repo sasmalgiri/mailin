@@ -105,7 +105,7 @@ Stage E (2026-11-06): OPEN-06, LIFE-04, LIFE-05 done (aa5672e); LIFE-06 and OUT-
 | 5 | Exports reconcile the whole selection, keep inventories; independent destination tests | **pass / destinations open (owner)** | OUT-07 inventory + full re-hash, OUT-04 reconciliation, OUT-02 frozen scope; Apple Mail / Thunderbird import of mailin's output = OUT-05, owner-run |
 | 6 | Fault tests incl. separate-process drive removal during a write; whole-archive restore on a clean profile | **restore pass; drive-removal process test open** | LIFE-02 + rehearsal restore on a clean directory with the old archive deleted; `DiskImageFaultTests` need `MAILIN_SCALE=1`, the fault volume and a fixture; the out-of-process kill test (OPEN-03) is not written |
 | 7 | Upgrades, saved professional work, holds, purchases, restoration | **partly (owner instruction)** | Schema upgrade from a real v1 store green (`testMigrationFromRealV1Store`, 2026-11-05); holds verified in DUP-04/05 with the Professional layer off; purchase/entitlement test classes NOT run this release on the owner's instruction (five-jobs tests only); LIFE-06 policy is the owner's |
-| 8 | No unresolved critical/high issue | **reopened by the b4b502f audit; P1/P2 findings fixed the same day; A10 open** | Audit of 2026-11-06 (`Mailin_Implementation_Audit_b4b502f`): eight P1 and three P2 findings; A01–A09 and A11 fixed and tested (section below); A10 (processing ceilings → streaming continuation) is the one open item and is a design task, stated on the Limits screen. OUT-04 re-parse, the Verify button, DUP-05 side-by-side comparison and the FIND-02 Vision language list closed 2026-11-07 (eb3a027); a further P1 found and fixed the same day: attachments of PST/MSG/NSF imports were not persisted (COMP-15 row) |
+| 8 | No unresolved critical/high issue | **reopened by the b4b502f audit; P1/P2 findings fixed the same day; A10 closed by Resume (d55ffc7)** | Audit of 2026-11-06 (`Mailin_Implementation_Audit_b4b502f`): eight P1 and three P2 findings; A01–A09 and A11 fixed and tested (section below); A10 (processing ceilings) closed by Resume rounds (d55ffc7): the ceilings are per-run limits stated on the Limits screen and lifted one round at a time. OUT-04 re-parse, the Verify button, DUP-05 side-by-side comparison and the FIND-02 Vision language list closed 2026-11-07 (eb3a027); a further P1 found and fixed the same day: attachments of PST/MSG/NSF imports were not persisted (COMP-15 row) |
 | 9 | Every benchmark tied to commit/build/device/dataset | **pass** | `SCALE_RESULTS.md` 2026-11-06 rows name the test, build configuration, Mac and the synthetic dataset; nothing is extrapolated |
 | 10 | Usability pilot (9 of 10 on each task; partial outputs recognised) | **open (owner)** | Not run |
 
@@ -241,6 +241,17 @@ can supply. A synthetic-fixture pass never implies real-origin compatibility.
 | COMP-18 Detach → restart → nested find → backup → restore → export | LIFE-01/02 + rehearsal now with a DOCX inside a ZIP inside a message: found by a same-child condition after restart, again after restore from backup, exported and reconciled 4 of 4 | `testCombinedPreservationRehearsal_*` | passed | eb3a027 | — | a hand-walked run on a Release build (gate 1) |
 | COMP-19 Malformed / fault / recovery | A05/A06/A07 fixes; fault tests exist | `testA05_*`, `testA06_*`, `testA07_*` | passed | 882f179 | worker containment and external interruption not executed | disposable volume + external controller run |
 | COMP-20 Clean install / entitlements / pilot | A08/R07 code | unit fixtures | partly | d14f93e | — | sandbox journeys; human pilot (owner) |
+
+### Gap closure — owner decisions 2026-11-07 (evening)
+
+Owner chose, for the four claim gaps found at bde389d:
+
+| ID | Item | Decision | State | Commit | Test |
+|---|---|---|---|---|---|
+| GAP-RAR | Compressed RAR members | Vendor libarchive's RAR4 + RAR5 reader (BSD-2-Clause) as a C target in ArchiveCore; attribution in the licences | not started | | |
+| GAP-PGP | OpenPGP signatures | Public keys (.asc) imported into an on-device keyring; signatures verified good / bad / unknown key (RSA, Ed25519, ECDSA); no secret keys, no passphrases, no decryption | not started | | |
+| GAP-NSF | Lotus Notes .nsf | New ODS reader beside the old heuristic (new capability, preview/off until verified), checked on the public SampleNSF.nsf; shortfalls stated | not started | | |
+| GAP-VER | The 20 "implemented" rows | Run every named test on a Release-configuration build of the final commit; passing rows become "verified at <hash>", owner-bound parts stay open | not started | | |
 
 ## Owner decisions needed
 - OLM reader and TAR/TGZ wrapper: adopted under the 2026-11-06 directive ("support all types") and built (TYPE-06). Still needed from the owner: one real `.olm` export from Outlook for Mac to run against.
