@@ -2,6 +2,7 @@
 import XCTest
 import PDFKit
 import Compression
+import CryptoKit
 @testable import maxmailin
 
 /// Parts Q/R/S regression net — the final legacy-corpus cutover:
@@ -3645,6 +3646,166 @@ final class V2CutoverTests: XCTestCase {
             XCTAssertNil(DocumentKind.detect(mimeType: "", filename: name), "\(name) must not pretend to be read")
             XCTAssertNil(AttachmentTextIndexJob.extractText(from: AttachmentMetadata(filename: name, mimeType: "application/octet-stream", size: 0, fileURL: tika.appendingPathComponent(name))), name)
         }
+    }
+
+    /// The owner's fixture pack of 2026-11-07: Microsoft's official Outlook
+    /// template (kept outside the repository; skipped when absent), WinZip
+    /// AES archives from libarchive, archives made with official 7-Zip,
+    /// Word-written tracked changes with a ground-truth record, and EML
+    /// wrappers that carry each through the attachment pipeline. The
+    /// pack's `expected_results.json` is the oracle.
+    func testREAL_publicPack_oftArchivesTrackedChanges_againstTheOracle() async throws {
+        let pack = Self.fixturesRoot.appendingPathComponent("opensource/public-pack")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: pack.path), "public pack not present")
+        let oracle = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: pack.appendingPathComponent("expected_results.json"))) as? [String: Any])
+        func sha(_ data: Data) -> String { ExportFolderManifest.hex(data) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pack-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // 1. Microsoft's .oft: routed to the MSG reader; subject and all 22 inline images byte-exact, with their content ids.
+        let oftURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Fixtures/public-pack/01_outlook/Set_Up_Mobile_Thru_Admin.oft")
+        let outlook = try XCTUnwrap(oracle["outlook"] as? [String: Any])
+        if FileManager.default.fileExists(atPath: oftURL.path) {
+            let bytes = try Data(contentsOf: oftURL)
+            XCTAssertEqual(sha(bytes), outlook["sha256"] as? String, "the fixture is the official download")
+            let classification = SourceFormatClassifier.classify(url: oftURL)
+            XCTAssertEqual(classification.format, .msg); XCTAssertFalse(classification.nameContentMismatch)
+            let template = try XCTUnwrap(try ParserFactory.parse(fileURL: oftURL, senderEmail: "").first)
+            XCTAssertEqual(template.headers["Subject"], outlook["subject"] as? String)
+            let expected = try XCTUnwrap(outlook["attachments"] as? [[String: Any]])
+            XCTAssertEqual(template.attachments.count, expected.count, "\(template.attachments.map(\.filename))")
+            var byName: [String: AttachmentMetadata] = [:]
+            for a in template.attachments { byName[a.filename] = a }
+            for item in expected {
+                let name = item["filename"] as? String ?? ""
+                guard let attachment = byName[name] else { XCTFail("missing \(name)"); continue }
+                XCTAssertEqual(attachment.base64.flatMap { Data(base64Encoded: $0) }.map(sha), item["sha256"] as? String, "\(name) byte-exact")
+                XCTAssertEqual(attachment.contentID?.trimmingCharacters(in: CharacterSet(charactersIn: "<>")), item["content_id"] as? String, "\(name) keeps its Content-ID")
+                XCTAssertTrue(attachment.isInline, "\(name) is inline")
+            }
+            print("REAL OFT: \(template.headers["Subject"] ?? "") — \(template.attachments.count) images verified")
+        } else {
+            print("REAL OFT: not present at \(oftURL.path) — Microsoft's template is not redistributed; download id 44066 and place it there")
+        }
+
+        // 2. WinZip AES from libarchive: AES-128, AES-256 deflated, AES-256 stored — password "password", one README of 6,818 bytes.
+        for name in ["test_read_format_zip_winzip_aes128.zip", "test_read_format_zip_winzip_aes256.zip", "test_read_format_zip_winzip_aes256_stored.zip"] {
+            let url = pack.appendingPathComponent("02_archives/public/\(name)")
+            let member = try XCTUnwrap(try ZIPArchiveReader.members(of: url).first { !$0.isDirectory })
+            XCTAssertTrue(member.isEncrypted && member.method == 99, name)
+            let out = dir.appendingPathComponent(name + ".README")
+            XCTAssertThrowsError(try ZIPArchiveReader.extract(member, from: url, to: out, password: "wrong"), name) { XCTAssertEqual($0 as? ZIPArchiveReader.ReadError, .wrongPassword(member: member.name), name) }
+            try ZIPArchiveReader.extract(member, from: url, to: out, password: "password")
+            XCTAssertEqual(try Data(contentsOf: out).count, 6818, name)
+        }
+
+        // 3. Archives made with official 7-Zip: ZipCrypto and AES-256, README marker and the nested Word file with its tracked changes.
+        let archives = try XCTUnwrap(oracle["archives"] as? [[String: Any]])
+        for name in ["7zip_AES256.zip", "7zip_ZipCrypto.zip"] {
+            let url = pack.appendingPathComponent("02_archives/7zip_generated/\(name)")
+            let expected = try XCTUnwrap(archives.first { ($0["path"] as? String)?.hasSuffix(name) == true })
+            let password = try XCTUnwrap(expected["password"] as? String)
+            let locked = try DocumentTextExtractor.extract(fileURL: url, kind: .zip)
+            XCTAssertEqual(Set(locked.children.map(\.state)), [.locked], "\(name): without the password every member is locked")
+            let wrong = try DocumentTextExtractor.extract(fileURL: url, kind: .zip, password: "wrong")
+            XCTAssertEqual(Set(wrong.children.map(\.state)), [.locked], "\(name): a wrong password opens nothing")
+            let opened = try DocumentTextExtractor.extract(fileURL: url, kind: .zip, password: password)
+            XCTAssertEqual(opened.children.map(\.path).sorted(), ["README.txt", "nested/W05_tracked_retained.docx"], name)
+            for member in try XCTUnwrap(expected["members"] as? [[String: Any]]) {
+                let path = member["path"] as? String ?? ""
+                let child = try XCTUnwrap(opened.children.first { $0.path == path }, "\(name): \(path)")
+                XCTAssertEqual(child.sha256, member["sha256"] as? String, "\(name): \(path) byte-exact")
+                XCTAssertEqual(child.state, .extracted, "\(name): \(path)")
+            }
+            let readme = try XCTUnwrap(opened.children.first { $0.path == "README.txt" }?.text)
+            XCTAssertTrue(readme.contains("MAILIN-PROTECTED-CONTENT-20261107"), readme)
+            let nested = try XCTUnwrap(opened.children.first { $0.path.hasSuffix(".docx") }?.text)
+            XCTAssertTrue(nested.contains("{inserted: red") && nested.contains("{deleted: brown }"), "\(name): tracked changes inside the archived Word file — \(nested.prefix(300))")
+        }
+        // 7z stays unopened and says so — never garbage, never silent.
+        for name in ["7zip_AES256_header_encrypted.7z"] {
+            let url = pack.appendingPathComponent("02_archives/7zip_generated/\(name)")
+            XCTAssertNil(DocumentKind.detect(mimeType: "application/x-7z-compressed", filename: name))
+            XCTAssertNil(AttachmentTextIndexJob.extractText(from: AttachmentMetadata(filename: name, mimeType: "application/x-7z-compressed", size: 0, fileURL: url)), name)
+        }
+
+        // 4. Word-written tracked changes against the ground-truth record.
+        let word = try XCTUnwrap(oracle["word"] as? [[String: Any]])
+        for item in word {
+            let path = item["path"] as? String ?? ""
+            let url = pack.appendingPathComponent(path)
+            XCTAssertEqual(sha(try Data(contentsOf: url)), item["sha256"] as? String, path)
+            let text = try DocumentTextExtractor.extract(fileURL: url, kind: .docx).text
+            let revisions = item["revisions"] as? [[String: Any]] ?? []
+            if revisions.isEmpty {
+                XCTAssertFalse(text.contains("{inserted:") || text.contains("{deleted:"), "\(path): no pending revision may be labelled — \(text.prefix(200))")
+            } else {
+                for revision in revisions {
+                    let kind = revision["kind"] as? String == "ins" ? "inserted" : "deleted"
+                    let marker = "{\(kind): \(revision["text"] as? String ?? "")"
+                    XCTAssertTrue(text.contains(marker), "\(path): expected \(marker.debugDescription) in \(text.prefix(300))")
+                }
+            }
+        }
+
+        // 5. Through the attachment pipeline: the EML wrappers, with Unlock for the archives.
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        var emails: [MBOXParser.RawEmail] = []
+        var wrapperNames = ["03_W05_tracked_retained", "04_W06_tracked_accepted", "06_test_read_format_zip_winzip_aes256", "07_7zip_AES256"]
+        let oftWrapper = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Fixtures/public-pack/04_import_ready_eml/01_Set_Up_Mobile_Thru_Admin.eml")
+        for name in wrapperNames {
+            let raw = try String(contentsOf: pack.appendingPathComponent("04_import_ready_eml/\(name).eml"), encoding: .utf8)
+            emails.append(try MBOXParser.processRawMessage(raw, senderEmail: ""))
+        }
+        if FileManager.default.fileExists(atPath: oftWrapper.path) {
+            emails.append(try MBOXParser.processRawMessage(try String(contentsOf: oftWrapper, encoding: .utf8), senderEmail: ""))
+            wrapperNames.append("01_Set_Up_Mobile_Thru_Admin")
+        }
+        _ = try await env.store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, emails.count)
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        func row(_ index: Int) throws -> AttachmentCoverageRow { try XCTUnwrap(try coverage.rows(for: emails[index].id).first) }
+        XCTAssertEqual(try row(0).state, .extracted, "W05 via mail")
+        XCTAssertEqual(try row(2).state, .locked, "the WinZip AES zip is locked until unlocked")
+        XCTAssertEqual(try row(3).state, .locked, "the 7-Zip AES zip is locked until unlocked")
+        func group(type: String? = nil, name: String? = nil, _ match: SearchCondition.Match, _ content: String) -> SearchSpec {
+            SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: name, type: type, contentMatch: match, content: content)])])
+        }
+        // Deleted text is searchable but labelled; the accepted control carries no label.
+        try await expectIDs(env, group(type: "docx", .allWords, "brown"), ["Mailin test fixture W05_tracked_retained.docx"], "the deleted word is found, labelled as deleted")
+        try await expectIDs(env, group(type: "docx", .phrase, "{deleted: brown"), ["Mailin test fixture W05_tracked_retained.docx"])
+        try await expectIDs(env, group(.allWords, "MAILIN-PROTECTED-CONTENT-20261107"), [], "locked archives yield nothing before Unlock")
+        // Unlock through the same path the sheet uses.
+        let wrongUnlock = await AttachmentTextIndexJob.shared.unlock(emailID: emails[3].id, position: 0, password: "wrong", retain: true)
+        guard case .wrongPassword = wrongUnlock else { return XCTFail("\(wrongUnlock)") }
+        let sevenZipUnlock = await AttachmentTextIndexJob.shared.unlock(emailID: emails[3].id, position: 0, password: "mailin-fixture-2026", retain: true)
+        guard case .unlocked(_, let children, true) = sevenZipUnlock else { return XCTFail("\(sevenZipUnlock)") }
+        XCTAssertEqual(children.map(\.path).sorted(), ["README.txt", "nested/W05_tracked_retained.docx"])
+        try await expectIDs(env, group(.allWords, "MAILIN-PROTECTED-CONTENT-20261107"), ["Mailin test fixture 7zip_AES256.zip"], "after Unlock the marker inside the archive is found")
+        try await expectIDs(env, group(name: "nested", .phrase, "{inserted: red"), ["Mailin test fixture 7zip_AES256.zip"], "the tracked change inside the Word file inside the archive")
+        let winzipUnlock = await AttachmentTextIndexJob.shared.unlock(emailID: emails[2].id, position: 0, password: "password", retain: false)
+        guard case .unlocked(_, let readmeChildren, false) = winzipUnlock else { return XCTFail("\(winzipUnlock)") }
+        XCTAssertEqual(readmeChildren.map(\.path), ["README"])
+        XCTAssertEqual(try row(2).state, .locked, "view-only unlock leaves the record locked")
+        if wrapperNames.count == 5 {
+            let oftRow = try row(4)
+            XCTAssertEqual(oftRow.extractor, "msg", "an .oft attachment is read as a message")
+            let oftChildren = try await env.store.attachmentChildren(forEmailID: emails[4].id)
+            XCTAssertEqual(oftChildren.count, 22, "its 22 images are children")
+        }
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
     /// WP4 (handoff 7481852): one registry says what is read and on what

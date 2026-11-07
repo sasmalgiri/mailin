@@ -773,7 +773,7 @@ final class AttachmentTextIndexJob {
             }
             children.append(ChildDocument(path: attachment.filename, filename: attachment.filename,
                                           kind: (attachment.filename as NSString).pathExtension.lowercased(),
-                                          sha256: ExportFolderManifest.hex(Data(SHA256.hash(data: data))), bytes: data.count,
+                                          sha256: ExportFolderManifest.hex(data), bytes: data.count,
                                           text: child.text, state: state, note: child.note))
             children.append(contentsOf: child.children.map { nested in
                 var moved = nested; moved.path = attachment.filename + " › " + nested.path; return moved
