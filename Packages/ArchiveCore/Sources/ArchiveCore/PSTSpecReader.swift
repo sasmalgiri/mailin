@@ -79,6 +79,11 @@ enum PSTSpec {
         for i in d.indices { d[i] = crypt[512 + Int(d[i])] }
     }
 
+    /// [MS-PST] 5.1 mpbbR: the encode table (the inverse of the decode above); the spec writer's bCryptMethod 1.
+    static func encodePermute(_ d: inout [UInt8]) {
+        for i in d.indices { d[i] = crypt[Int(d[i])] }
+    }
+
     /// [MS-PST] 5.2 CryptCyclic (symmetric); key = low DWORD of the block's BID.
     static func cyclic(_ d: inout [UInt8], key: UInt32) {
         var w = UInt16(truncatingIfNeeded: key ^ (key >> 16))
@@ -134,7 +139,8 @@ final class PSTSpecReader {
         geometry = PSTPageGeometry.forHeaderVersion(ver)
         unicode = geometry.unicode
         crypt = data[unicode ? 513 : 461]
-        guard crypt <= 2 else { throw PSTError.invalidFormat("unknown encoding \(crypt)") }
+        // Directive 2026-11-07 §6: 0x10 (Windows Information Protection) and anything else are named, not "unknown".
+        guard crypt <= 2 else { throw PSTError.invalidFormat(PSTProtection.CryptMethod(raw: crypt).lockedDescription) }
         let nbtIB = unicode ? Self.u64(data, 224) : UInt64(Self.u32(data, 188))
         let bbtIB = unicode ? Self.u64(data, 240) : UInt64(Self.u32(data, 196))
         try walk(page: nbtIB, nbt: true, depth: 0)
