@@ -126,7 +126,7 @@ struct MSGWriter {
 
         // Attachments
         for (idx, att) in email.attachments.enumerated() {
-            let attachStreams = buildAttachmentStreams(attachment: att, index: idx, depth: depth)
+            let attachStreams = buildAttachmentStreams(attachment: att, index: idx, depth: depth, email: email)
             streams.append(contentsOf: attachStreams)
         }
         return streams
@@ -180,14 +180,17 @@ struct MSGWriter {
 
     // MARK: - Attachment Streams
 
-    private static func buildAttachmentStreams(attachment: AttachmentMetadata, index: Int, depth: Int) -> [(String, Data)] {
+    private static func buildAttachmentStreams(attachment: AttachmentMetadata, index: Int, depth: Int, email: MBOXParser.RawEmail) -> [(String, Data)] {
         let prefix = "__attach_version1.0_#\(String(format: "%08X", index))"
         var result: [(String, Data)] = []
 
         // §13.8 step 3: an attached message is written as an EMBEDDED message
         // (PR_ATTACH_METHOD 5) with its own storage, so Outlook shows it as a
         // message and the reader expands it again — round trip, three levels.
-        let bytes = attachment.fileURL.flatMap { try? Data(contentsOf: $0) } ?? attachment.base64.flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
+        // OUT-04: a stored message keeps its attachment bytes in its raw source,
+        // not inline — the hydrator re-extracts them (temp file, inline payload,
+        // byte range or raw message), so an exported .msg carries every file whole.
+        let bytes = AttachmentHydrator.data(for: attachment, index: index, email: email)
         let isMessage = attachment.mimeType.lowercased().contains("message/rfc822") || (attachment.filename as NSString).pathExtension.lowercased() == "eml"
         var embedded: MBOXParser.RawEmail?
         if isMessage, depth + 1 < maxEmbeddedDepth, let bytes,

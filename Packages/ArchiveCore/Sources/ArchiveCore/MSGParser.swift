@@ -138,7 +138,7 @@ struct MSGParser {
             attachments.append(record.metadata)
         }
 
-        return MBOXParser.RawEmail(
+        let email = MBOXParser.RawEmail(
             id: UUID(),
             headers: headers,
             rawSource: "",
@@ -157,6 +157,9 @@ struct MSGParser {
             tags: [],
             anomalies: MBOXParser.findAnomalies(headers: headers, body: effectiveBody, attachments: attachments)
         )
+        // The top-level message keeps a rendered raw source so its attachment
+        // bytes survive the import; embedded ones are rendered by their parent.
+        return depth == 0 ? email.withRenderedSource("Outlook .msg") : email
     }
 
     /// "Subject.eml" for an embedded message, safe as a file name.

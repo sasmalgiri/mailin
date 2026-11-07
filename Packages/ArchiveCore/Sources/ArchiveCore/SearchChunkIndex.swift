@@ -443,6 +443,30 @@ extension SQLiteEmailStore {
         } catch { try? exec(db, "ROLLBACK;"); throw error }
     }
 
+    /// §13.3 (8): how many files inside attachments are in each state, archive-wide.
+    func attachmentChildStateCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT state, COUNT(*) FROM attachment_children GROUP BY state;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// §13.3 (9): the whole extracted text of one attachment document (or of
+    /// one file inside it, by its child ordinal), joined from its chunks.
+    func attachmentDocumentText(emailID: UUID, ordinal: Int) throws -> String? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT text FROM search_chunks WHERE email_id = ? AND ordinal = ? AND kind IN (\(SearchDocKind.attachmentContentSQL), 'childText') ORDER BY chunk;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, emailID.uuidString); sqlite3_bind_int64(stmt, 2, Int64(ordinal))
+        var pieces: [String] = []
+        while try stepRow(stmt, db) { pieces.append(columnText(stmt, 0)) }
+        return pieces.isEmpty ? nil : pieces.joined()
+    }
+
     /// The recorded children of every attachment of one message.
     func attachmentChildren(forEmailID emailID: UUID) throws -> [AttachmentChildRow] {
         let db = try ensureDB()

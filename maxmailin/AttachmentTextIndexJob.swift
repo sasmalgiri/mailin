@@ -214,6 +214,8 @@ final class AttachmentTextIndexJob {
             if let coverage {
                 let requeued = try await Self.requeueStale(store: store, coverage: coverage)
                 if requeued > 0 { Self.logger.info("attachment index: \(requeued) email(s) re-queued for extractor v\(Self.extractorVersion)") }
+                // §13.3 (11): the upgrade's re-read is a visible record, not only a log line.
+                Self.recordRebuild(requeued: requeued)
             }
             // FIND-07: attachments indexed before the chunk index existed go
             // back on the work list so their whole text is indexed too.
@@ -420,7 +422,58 @@ final class AttachmentTextIndexJob {
     nonisolated static func coverageSummary(store: SQLiteEmailStore) async -> AttachmentCoverageSummary? {
         let url = await store.attachmentCoverageURL
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try? AttachmentCoverageStore(url: url).summary(currentExtractorVersion: extractorVersion)
+        guard var summary = try? AttachmentCoverageStore(url: url).summary(currentExtractorVersion: extractorVersion) else { return nil }
+        // §13.3 (8): the files inside attachments are part of the honest negative.
+        summary.childCounts = (try? await store.attachmentChildStateCounts()) ?? [:]
+        return summary
+    }
+
+    /// §13.3 (8): what the files inside attachments add to a notice — only the
+    /// states that stop text from being searched; nothing when all were read.
+    nonisolated static func childrenNotice(_ counts: [String: Int]) -> String? {
+        var parts: [String] = []
+        if let n = counts[ChildDocument.State.locked.rawValue], n > 0 { parts.append(String(localized: "\(n) locked")) }
+        if let n = counts[ChildDocument.State.unsupported.rawValue], n > 0 { parts.append(String(localized: "\(n) not read")) }
+        if let n = counts[ChildDocument.State.failed.rawValue], n > 0 { parts.append(String(localized: "\(n) failed")) }
+        if let n = counts[ChildDocument.State.partial.rawValue], n > 0 { parts.append(String(localized: "\(n) partly read")) }
+        guard !parts.isEmpty else { return nil }
+        return String(localized: "Files inside attachments: \(parts.joined(separator: ", ")).")
+    }
+
+    // MARK: - §13.3 (11): what an extractor upgrade re-read
+
+    struct RebuildRecord: Codable, Sendable, Equatable {
+        var extractorVersion: Int
+        var messagesRequeued: Int
+        var date: Date
+    }
+
+    nonisolated static let rebuildRecordKey = "attachmentIndex.lastRebuild"
+
+    /// Remembers how many messages the pass put back on the work list for
+    /// the current extractor version (accumulating within one version).
+    nonisolated static func recordRebuild(requeued: Int, defaults: UserDefaults = .standard) {
+        guard requeued > 0 else { return }
+        var record = RebuildRecord(extractorVersion: extractorVersion, messagesRequeued: 0, date: Date())
+        if let data = defaults.data(forKey: rebuildRecordKey), let previous = try? JSONDecoder().decode(RebuildRecord.self, from: data),
+           previous.extractorVersion == extractorVersion {
+            record.messagesRequeued = previous.messagesRequeued
+        }
+        record.messagesRequeued += requeued
+        record.date = Date()
+        if let data = try? JSONEncoder().encode(record) { defaults.set(data, forKey: rebuildRecordKey) }
+    }
+
+    nonisolated static func rebuildRecord(defaults: UserDefaults = .standard) -> RebuildRecord? {
+        guard let data = defaults.data(forKey: rebuildRecordKey) else { return nil }
+        return try? JSONDecoder().decode(RebuildRecord.self, from: data)
+    }
+
+    /// "Reader version 7 re-read 1,204 messages, last on 7 Nov 2026." — nil when nothing was re-read.
+    nonisolated static func rebuildReportText(_ record: RebuildRecord?) -> String? {
+        guard let record, record.messagesRequeued > 0 else { return nil }
+        let when = record.date.formatted(date: .abbreviated, time: .omitted)
+        return String(localized: "Reader version \(record.extractorVersion) re-read \(record.messagesRequeued.formatted()) messages whose attachments an earlier version could not read whole, last on \(when).")
     }
 
     /// "No attachments matched" that says what was not searchable.
@@ -437,10 +490,11 @@ final class AttachmentTextIndexJob {
         if let n = summary.counts[.truncated], n > 0 { parts.append(String(localized: "\(n) cut short")) }
         if let n = summary.counts[.partial], n > 0 { parts.append(String(localized: "\(n) partly read")) }
         if let n = summary.counts[.noText], n > 0 { parts.append(String(localized: "\(n) with no text")) }
+        let children = childrenNotice(summary.childCounts).map { " " + $0 } ?? ""
         if parts.isEmpty {
-            return String(localized: "No attachments matched. Searchable text covers all \(summary.total) attachments.")
+            return String(localized: "No attachments matched. Searchable text covers all \(summary.total) attachments.") + children
         }
-        return String(localized: "No attachments matched. Searchable text covers \(summary.searchable) of \(summary.total) attachments — \(parts.joined(separator: ", ")).")
+        return String(localized: "No attachments matched. Searchable text covers \(summary.searchable) of \(summary.total) attachments — \(parts.joined(separator: ", ")).") + children
     }
 
     // MARK: - Extraction (nonisolated, bounded)

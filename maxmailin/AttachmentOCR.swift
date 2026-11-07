@@ -54,6 +54,12 @@ enum AttachmentOCR {
         var isComplete: Bool { failures.isEmpty }
     }
 
+    /// FIND-02: the languages this device's text recogniser can read, as Vision
+    /// reports them at run time (e.g. "en-US", "de-DE", "hi-IN"); empty when it cannot say.
+    static func supportedLanguages() -> [String] {
+        (try? VNRecognizeTextRequest().supportedRecognitionLanguages()) ?? []
+    }
+
     /// The recogniser, replaceable by tests. The production one asks Vision.
     nonisolated(unsafe) static var recognizer: @Sendable (CGImage) -> Result<String?, Error> = visionRecognizer
 

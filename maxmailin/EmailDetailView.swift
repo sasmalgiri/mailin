@@ -661,6 +661,9 @@ struct EmailDetailView: View {
                         // §13.8 step 5: a locked attachment offers Unlock… (one password, once).
                         AttachmentUnlockView(emailID: shown.id, position: index, filename: att.filename)
                             .padding(.leading, Spacing.large)
+                        // §13.3 (9): what search reads for this attachment, with Open original.
+                        AttachmentTextButton(emailID: shown.id, ordinal: index, filename: att.filename)
+                            .padding(.leading, Spacing.large)
                     }
                     .padding(.vertical, Spacing.xxSmall)
                     .accessibilityElement(children: .contain)

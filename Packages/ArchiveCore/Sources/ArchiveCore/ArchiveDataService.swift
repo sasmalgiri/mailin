@@ -220,6 +220,12 @@ final class ArchiveDataService {
         return (try? await sqlite.attachmentChildren(forEmailID: emailID)) ?? []
     }
 
+    /// §13.3 (9): the extracted text of one attachment document or child, for the text view.
+    func attachmentDocumentText(emailID: EmailID, ordinal: Int) async -> String? {
+        guard let sqlite = sqliteStore else { return nil }
+        return try? await sqlite.attachmentDocumentText(emailID: emailID, ordinal: ordinal)
+    }
+
     /// LIFE-06 (audit A08): the paid tier recorded inside the archive (raw
     /// value; 0 = none) and the write that records one.
     func paidTierRecord() async -> Int {

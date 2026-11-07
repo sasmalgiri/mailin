@@ -103,6 +103,19 @@ struct ArchiveHealthView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
+                // FIND-02: the recogniser's own list, read at run time — never a typed list.
+                let ocrLanguages = AttachmentOCR.supportedLanguages()
+                Text(ocrLanguages.isEmpty
+                     ? String(localized: "Text recognition (OCR): this device did not report its languages.")
+                     : String(localized: "Text recognition (OCR) languages on this device: \(ocrLanguages.joined(separator: ", "))"))
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("health.formats.ocrLanguages")
+                // §13.3 (11): what the last reader upgrade re-read.
+                if let rebuild = AttachmentTextIndexJob.rebuildReportText(AttachmentTextIndexJob.rebuildRecord()) {
+                    Text(rebuild).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("health.formats.rebuild")
+                }
             }
             .accessibilityIdentifier("health.formats")
 

@@ -32,6 +32,8 @@ struct AttachmentChildrenList: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer()
+                            // §13.3 (9): the text search reads for this file, with a find field.
+                            AttachmentTextButton(emailID: emailID, ordinal: child.ordinal, filename: child.filename, childPath: child.path, attachmentPosition: position)
                             Button {
                                 Task { @MainActor in
                                     failure = await EvidenceAttachmentOpener.open(emailID: emailID, ordinal: position, childPath: child.path,

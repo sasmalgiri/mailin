@@ -225,7 +225,8 @@ struct PSTParser {
             ).withRecovery(msg.recovery)
             // FOLD-02: the folder as a path of its own, not only a tag.
             email.folderPath = msg.folderPath.isEmpty ? nil : msg.folderPath
-            return email
+            // §13.8 step 6: a rendered raw source, so the attachment bytes outlive the import.
+            return email.withRenderedSource("Outlook PST")
     }
 
     private static func mergeTransportHeaders(_ raw: String, into headers: inout [String: String]) {

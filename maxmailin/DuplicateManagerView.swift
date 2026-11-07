@@ -10,6 +10,9 @@ struct DuplicateManagerView: View {
     // one copy at a time.
     @State private var verifiedGroups: [DuplicateVerification.Group] = []
     @State private var candidateGroups: [DuplicateVerification.Group] = []
+    /// DUP-05: the pair being compared side by side.
+    @State private var comparing: ComparePair?
+    struct ComparePair: Identifiable { let id = UUID(); let a: MBOXParser.RawEmail; let b: MBOXParser.RawEmail }
     @State private var nearDuplicateGroups: [[MBOXParser.RawEmail]] = []
     @State private var selectedForRemoval: Set<UUID> = []
     @State private var isScanning = false
@@ -175,6 +178,17 @@ struct DuplicateManagerView: View {
 
                     ForEach(candidateGroups) { group in
                         duplicateGroupView(group.members, kind: .candidate(group.verdict))
+                        // DUP-05: the two copies side by side before anyone ticks one.
+                        if group.members.count >= 2 {
+                            Button {
+                                comparing = ComparePair(a: group.members[0], b: group.members[1])
+                            } label: { Label(String(localized: "Compare the first two copies side by side"), systemImage: "rectangle.split.2x1") }
+                            .buttonStyle(.plain)
+                            .font(Typography.caption1)
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, Spacing.medium)
+                            .accessibilityIdentifier("duplicates.compare.\(group.id.uuidString)")
+                        }
                     }
                 }
 
@@ -203,6 +217,13 @@ struct DuplicateManagerView: View {
                 }
             }
             .padding(Spacing.medium)
+        }
+        .sheet(item: $comparing) { pair in
+            VStack(alignment: .trailing, spacing: Spacing.small) {
+                EmailComparisonView(emailA: pair.a, emailB: pair.b)
+                Button(String(localized: "Close")) { comparing = nil }.keyboardShortcut(.cancelAction).padding([.trailing, .bottom], Spacing.medium)
+            }
+            .frame(minWidth: 900, minHeight: 600)
         }
     }
 

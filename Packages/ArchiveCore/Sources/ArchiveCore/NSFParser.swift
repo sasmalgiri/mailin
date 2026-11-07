@@ -168,7 +168,7 @@ struct NSFParser {
 
         let htmlBody = note.items["$HtmlBody"] ?? note.items["Body_HTML"] ?? ""
 
-        return MBOXParser.RawEmail(
+        let email = MBOXParser.RawEmail(
             id: UUID(),
             headers: headers,
             rawSource: "",
@@ -187,6 +187,8 @@ struct NSFParser {
             tags: note.categories,
             anomalies: MBOXParser.findAnomalies(headers: headers, body: body.isEmpty ? htmlBody : body, attachments: note.attachments)
         )
+        // §13.8 step 6: a rendered raw source, so the attachment bytes outlive the import.
+        return email.withRenderedSource("Lotus Notes NSF")
     }
 
     static func parseNotesDateForStub(_ dateStr: String) -> Date? { parseNotesDate(dateStr) }

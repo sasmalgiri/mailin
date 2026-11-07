@@ -15,13 +15,21 @@ import Foundation
 
 enum RFC822Renderer {
 
+    /// The header that marks a raw source mailin rendered itself (a PST, MSG
+    /// or NSF message has no RFC 5322 bytes of its own) — honest provenance
+    /// for `FIELD_CONTRACT.md`; it lives only in the rendered text.
+    static let provenanceHeader = "X-Mailin-Rendered"
+
     /// The message as RFC 5322 bytes (CRLF line ends, UTF-8, base64 bodies).
-    static func render(_ email: MBOXParser.RawEmail) -> Data {
+    /// - Parameter provenance: when given, `X-Mailin-Rendered: <provenance>`
+    ///   says this text was built by mailin from the named source format.
+    static func render(_ email: MBOXParser.RawEmail, provenance: String? = nil) -> Data {
         var out = ""
         func header(_ name: String, _ value: String) {
             let flat = value.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
             out += "\(name): \(flat)\r\n"
         }
+        if let provenance { header(provenanceHeader, provenance) }
         let first = ["From", "To", "Cc", "Bcc", "Subject", "Date", "Message-ID", "In-Reply-To", "References", "Reply-To", "Thread-Topic"]
         var written = Set<String>()
         for name in first {

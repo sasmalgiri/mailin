@@ -85,3 +85,19 @@ single actor connection. Consistency rules the LIFE-03 test holds:
 - `V2CutoverTests.testOUT02_*` (frozen selections), `testOUT07_*` (inventory)
 - `V2CutoverTests.testFIND03_*` (attachment states), `testFIND05_*` (evidence names the real place)
 - `V2VerificationTests.testArchiveDataService_matchesArrayOracle` (headers / participants / dates round-trip)
+
+## Raw source of messages read from binary mail files (added 2026-11-07, §13.8 step 6)
+
+A message read from a PST, OST, MSG, OFT or NSF file has no RFC 5322 bytes of its own. Until
+2026-11-07 such a message was stored with an empty raw source, and because the archive keeps
+attachment BYTES only inside the raw source (`AttachmentHydrator` re-extracts them from it), every
+attachment of such a message was lost when the import ended — not openable, not searchable, not
+exported, not comparable for duplicates. `testCOMP15_theSameMailInFourFormats_*` found it.
+
+**Rule now:** the parser renders the message as RFC 5322 (`RFC822Renderer`, the same rendering
+the OLM reader always used) and stores that as the raw source, with the header
+`X-Mailin-Rendered: <source format>` as the first line so the provenance is never hidden. The
+original record fields (headers, bodies, attachment metadata) are unchanged; the rendering is
+derived from them and from the attachment bytes the parser produced. Real source bytes (mbox,
+.eml, .emlx) are never replaced. Duplicate verification therefore classifies four renderings of
+one message as **content-equivalent** (never byte-identical: the rendered boundaries differ).

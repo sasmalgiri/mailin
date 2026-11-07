@@ -176,7 +176,9 @@ final class ExportRunCenter {
         replace(updated)
     }
 
-    /// Re-read every file the inventory lists and compare its hash (full, never sampled).
+    /// Re-read every file the inventory lists and compare its hash (full, never
+    /// sampled); then (OUT-04) parse each .eml/.msg back and compare its
+    /// content with the archive's record — two statements, both on the receipt.
     func verifyExport(_ receipt: ExportReceipt) async {
         var updated = receipt
         let folder = receipt.destinationURL
@@ -186,10 +188,37 @@ final class ExportRunCenter {
         switch outcome {
         case .success(let verification):
             updated.verificationLine = Self.verificationText(verification)
+            if let content = await Self.contentReconciliationText(folder: folder) {
+                updated.verificationLine = (updated.verificationLine ?? "") + " · " + content
+            }
         case .failure(let error):
             updated.verificationLine = String(localized: "Verification could not run: \(error.localizedDescription)")
         }
         replace(updated)
+    }
+
+    /// OUT-04: the archive's records for every message the inventory names,
+    /// then the re-parse. Nil when the folder holds nothing this check parses.
+    static func contentReconciliationText(folder: URL) async -> String? {
+        guard let inventory = try? ExportInventory.load(folder: folder) else { return nil }
+        let ids = inventory.files.compactMap { $0.emailID.flatMap(UUID.init(uuidString:)) }
+        guard !ids.isEmpty else { return nil }
+        var records: [UUID: MBOXParser.RawEmail] = [:]
+        for id in ids { if let email = try? await SQLiteEmailStore.shared.fullEmail(id: id) { records[id] = email } }
+        let report: ExportReconciliation.Report? = await Task.detached(priority: .utility) { try? ExportReconciliation.reconcile(folder: folder, records: records) }.value
+        guard let report, report.checked > 0 || !report.unparsed.isEmpty else { return nil }
+        return reconciliationText(report)
+    }
+
+    static func reconciliationText(_ r: ExportReconciliation.Report) -> String {
+        var line = String(localized: "content checked: \(r.matching) of \(r.checked) files say what the archive says")
+        if !r.mismatches.isEmpty {
+            let named = r.mismatches.prefix(3).map { "\(($0.path as NSString).lastPathComponent) (\($0.differences.joined(separator: ", ")))" }.joined(separator: "; ")
+            line += " · " + String(localized: "differ \(r.mismatches.count): \(named)")
+        }
+        if !r.unparsed.isEmpty { line += " · " + String(localized: "unparsable \(r.unparsed.count)") }
+        if r.withoutRecord > 0 { line += " · " + String(localized: "no record \(r.withoutRecord)") }
+        return line
     }
 
     /// "written", "hashes recorded while writing" and this re-read stay three different statements.
