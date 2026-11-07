@@ -177,6 +177,16 @@ fixes, OLM/OFT/TNEF/embedded messages), (4) document depth (legacy/modern Word/E
 Office / OpenDocument / iWork rows), (5) recursive and protected workflows, (6) duplicates and outputs across
 representations, (7) release evidence and presentation.
 
+### What only the owner can supply (2026-11-07, after §13.8 steps 2–5)
+
+| Need | Why | Unblocks |
+|---|---|---|
+| Real Outlook files: a .msg with an embedded message, an .oft, a winmail.dat from Exchange | the compound-file reader was found reading directory ids in the wrong order (a real .msg parsed empty); fixed and verified only on files this app wrote — the Tika fixtures are no longer on the build machine | COMP-04 evidence → real files; `testTikaMSG_*` runs instead of skipping |
+| Protected files from Acrobat, Word, Excel, 7-Zip/WinZip | encryptors here are spec-built; Office Agile/Standard, ZipCrypto, WinZip AES verified by round trip only | COMP-13 evidence → real files |
+| A test S/MIME identity in the keychain | `.protectedMessageDecrypt` (preview, off) has never run against a real envelope | COMP-14 → executed |
+| Real Word/Excel/PowerPoint files with tracked changes, hidden sheets/slides, charts, embedded objects; a real .xlsb, .vsdx, Project XML | depth readers run on spec-built fixtures | COMP-06…10 evidence → real files |
+| Decisions: Resume/Locate/Attach actions (D10), extracted-content view with the match highlighted (D9), children counted in the no-match notice (D8) | design choices the plan leaves to the owner | the remaining `in progress` rows of §13.3 |
+
 ### §13.3 depth and coverage contract — state
 
 | # | Requirement | State | Evidence / what is open |
