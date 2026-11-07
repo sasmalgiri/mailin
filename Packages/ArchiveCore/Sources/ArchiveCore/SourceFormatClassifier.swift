@@ -210,13 +210,14 @@ enum SourceFormatClassifier {
                 warning: nil)
         }
 
-        // OLE compound document — Outlook .msg lives in one of these.
+        // OLE compound document — Outlook .msg lives in one of these, and so
+        // does an Outlook template (.oft): the same MAPI streams, read the same way.
         if has([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
             return SourceClassification(
                 format: .msg,
-                evidence: "OLE compound-document signature at offset 0",
+                evidence: ext == "oft" ? "OLE compound-document signature at offset 0 (Outlook template)" : "OLE compound-document signature at offset 0",
                 extensionHint: ext,
-                nameContentMismatch: ext != "msg",
+                nameContentMismatch: !(ext == "msg" || ext == "oft"),
                 warning: nil)
         }
 

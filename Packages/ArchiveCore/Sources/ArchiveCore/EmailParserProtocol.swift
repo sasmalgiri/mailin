@@ -95,7 +95,7 @@ struct ParserFactory {
     }
 
     static let allSupportedExtensions: [String] = [
-        "mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip", "gz", "olm", "tar", "tgz"
+        "mbox", "eml", "emlx", "msg", "oft", "pst", "ost", "nsf", "zip", "gz", "olm", "tar", "tgz"
     ]
 
     // MARK: - Containers (ZIP / gzip) — v2.1 backlog #1
@@ -250,7 +250,7 @@ struct ParserFactory {
             return ("mbox", MBOXParser.parserVersion)
         case "emlx":
             return ("emlx", EMLXParser.parserVersion)
-        case "msg":
+        case "msg", "oft":
             return ("msg", MSGParser.parserVersion)
         case "pst", "ost":
             return ("pst", PSTParser.parserVersion)

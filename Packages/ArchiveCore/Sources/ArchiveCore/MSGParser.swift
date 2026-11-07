@@ -3,7 +3,9 @@ import Foundation
 struct MSGParser {
     /// Bump when message extraction/ordering changes — invalidates mid-file
     /// resume checkpoints bound to the previous version (Part B5).
-    static let parserVersion = 1
+    /// 2 (§13.8 step 3): directory ids read in the spec's order, v4 sector
+    /// offsets, embedded messages expanded, .oft routed here.
+    static let parserVersion = 2
 
     static func parse(
         fileURL: URL,
@@ -25,14 +27,32 @@ struct MSGParser {
         }
     }
 
+    /// Messages embedded in messages are expanded this many levels deep
+    /// (plan v4 §13.8 step 3); what lies deeper is listed as an attachment.
+    static let maxEmbeddedDepth = 3
+
     private static func parseSingleMSG(fileURL: URL, senderEmail: String) throws -> MBOXParser.RawEmail {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = attrs[.size] as? Int64 ?? 0
         if fileSize > 2_000_000_000 { throw MSGError.fileTooLarge(fileSize) }
 
         let data = try Data(contentsOf: fileURL)
+        return try parse(data: data, senderEmail: senderEmail)
+    }
+
+    /// One Outlook message (or .oft template) from its bytes — also the path
+    /// for a .msg that arrives as an attachment of another message.
+    static func parse(data: Data, senderEmail: String = "") throws -> MBOXParser.RawEmail {
         let ole2 = try OLE2Reader(data: data)
-        let properties = try ole2.readMAPIProperties()
+        return try email(from: ole2, storage: 0, propertiesHeader: 32, depth: 0, senderEmail: senderEmail)
+    }
+
+    /// The message held in one storage of the compound file: the root (header
+    /// 32 bytes) or an embedded message's `__substg1.0_3701000D` storage
+    /// (header 24 bytes). Each embedded message becomes an attached message in
+    /// RFC 5322 form, so its own attachments are read as children downstream.
+    private static func email(from ole2: OLE2Reader, storage: Int, propertiesHeader: Int, depth: Int, senderEmail: String) throws -> MBOXParser.RawEmail {
+        let properties = try ole2.readMAPIProperties(storage: storage, propertiesHeader: propertiesHeader)
 
         let senderAddr = properties.stringProperty(.senderEmailAddress)
             ?? properties.stringProperty(.senderSmtpAddress)
@@ -98,7 +118,25 @@ struct MSGParser {
         let effectiveBody = !body.isEmpty ? body : (!htmlBody.isEmpty ? htmlBody : rtfBody)
         let domains = MBOXParser.extractDomains(from: headers)
 
-        let attachments = try ole2.readAttachments()
+        var attachments: [AttachmentMetadata] = []
+        for record in try ole2.readAttachments(storage: storage) {
+            if let embeddedStorage = record.embeddedMessageStorage {
+                if depth + 1 < maxEmbeddedDepth,
+                   let inner = try? email(from: ole2, storage: embeddedStorage, propertiesHeader: 24, depth: depth + 1, senderEmail: senderEmail) {
+                    let rendered = RFC822Renderer.render(inner)
+                    let name = Self.attachedMessageName(subject: inner.headers["Subject"], fallback: record.metadata.filename)
+                    attachments.append(AttachmentMetadata(filename: name, mimeType: "message/rfc822", size: rendered.count,
+                                                          isInline: false, contentID: nil, base64: rendered.base64EncodedString(), fileURL: nil))
+                } else {
+                    // Deeper than the limit, or unreadable: kept as the attachment it is, under Outlook's own type.
+                    let name = record.metadata.filename == "attachment" ? "embedded-message.msg" : record.metadata.filename
+                    attachments.append(AttachmentMetadata(filename: name, mimeType: "application/vnd.ms-outlook", size: 0,
+                                                          isInline: false, contentID: nil, base64: nil, fileURL: nil))
+                }
+                continue
+            }
+            attachments.append(record.metadata)
+        }
 
         return MBOXParser.RawEmail(
             id: UUID(),
@@ -119,6 +157,14 @@ struct MSGParser {
             tags: [],
             anomalies: MBOXParser.findAnomalies(headers: headers, body: effectiveBody, attachments: attachments)
         )
+    }
+
+    /// "Subject.eml" for an embedded message, safe as a file name.
+    static func attachedMessageName(subject: String?, fallback: String) -> String {
+        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
+        let base = (subject ?? "").components(separatedBy: illegal).joined(separator: "_").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = base.isEmpty ? (fallback == "attachment" ? "embedded-message" : fallback) : String(base.prefix(120))
+        return name.lowercased().hasSuffix(".eml") ? name : name + ".eml"
     }
 
     private static func mergeTransportHeaders(_ raw: String, into headers: inout [String: String]) {
@@ -145,7 +191,8 @@ struct MSGParser {
 
     // MARK: - RTF Decompression (LZFu)
 
-    private static func decompressRTF(_ data: Data) -> String? {
+    /// Compressed RTF (MS-OXRTFCP) to its text; shared with the TNEF reader.
+    static func decompressRTF(_ data: Data) -> String? {
         guard data.count >= 16 else { return nil }
         let compressedSize = readUInt32LE(data, offset: 0)
         let uncompressedSize = readUInt32LE(data, offset: 4)
@@ -287,7 +334,7 @@ struct OLE2Reader {
             var difatSector = difatFirstSector
             var difatRead = 0
             while difatSector >= 0 && difatRead < difatSectorCount && difatRead < 1000 {
-                let base = 512 + difatSector * sectorSize
+                let base = (difatSector + 1) * sectorSize
                 guard base >= 0 && base < data.count else { break }
                 let entriesPerSector = (sectorSize / 4) - 1
                 for i in 0..<entriesPerSector {
@@ -356,20 +403,29 @@ struct OLE2Reader {
 
     // MARK: - Read MAPI Properties
 
-    func readMAPIProperties() throws -> MAPIPropertySet {
+    /// The properties of one message storage. The fixed-property stream's
+    /// header is 32 bytes at the root, 24 in an embedded message, 8 in an
+    /// attachment or recipient (MS-OXMSG §2.4.1) — reading with the wrong
+    /// header misaligns every entry, so the caller says which it is.
+    func readMAPIProperties(storage: Int = 0, propertiesHeader: Int = 32) throws -> MAPIPropertySet {
         var props = MAPIPropertySet()
 
-        let rootChildren = childrenOf(directoryIndex: 0)
-
-        for entry in rootChildren {
-            if entry.name.hasPrefix("__substg1.0_") {
+        for entry in childrenOf(directoryIndex: storage) {
+            if entry.name.hasPrefix("__substg1.0_"), entry.type == 2 {
                 parseSubstgEntry(entry, into: &props)
             } else if entry.name.lowercased() == "__properties_version1.0" {
                 let streamData = readEntryData(entry)
-                Self.parseFixedProperties(from: streamData, into: &props)
+                Self.parseFixedProperties(from: streamData, into: &props, header: propertiesHeader)
             }
         }
         return props
+    }
+
+    /// One attachment storage: its metadata and, for an embedded message
+    /// (PR_ATTACH_METHOD 5, `__substg1.0_3701000D` storage), where it lives.
+    struct AttachmentRecord {
+        var metadata: AttachmentMetadata
+        var embeddedMessageStorage: Int?
     }
 
     private func parseSubstgEntry(_ entry: DirectoryEntry, into props: inout MAPIPropertySet) {
@@ -398,19 +454,26 @@ struct OLE2Reader {
     // MARK: - Attachment Reading (Properly Scoped)
 
     func readAttachments() throws -> [AttachmentMetadata] {
-        var attachments: [AttachmentMetadata] = []
-        let rootChildren = childrenOf(directoryIndex: 0)
+        try readAttachments(storage: 0).map(\.metadata)
+    }
 
-        for entry in rootChildren where entry.name.hasPrefix("__attach_version1.0") {
+    func readAttachments(storage: Int) throws -> [AttachmentRecord] {
+        var attachments: [AttachmentRecord] = []
+        let rootChildren = childrenOf(directoryIndex: storage)
+
+        for entry in rootChildren where entry.name.hasPrefix("__attach_version1.0") && entry.type == 1 {
             let attachChildren = childrenOf(directoryIndex: entry.index)
             var attachProps = MAPIPropertySet()
+            var embeddedStorage: Int?
 
             for child in attachChildren {
-                if child.name.hasPrefix("__substg1.0_") {
+                if child.name.hasPrefix("__substg1.0_3701000D"), child.type == 1 {
+                    embeddedStorage = child.index
+                } else if child.name.hasPrefix("__substg1.0_"), child.type == 2 {
                     parseSubstgEntry(child, into: &attachProps)
                 } else if child.name.lowercased() == "__properties_version1.0" {
                     let streamData = readEntryData(child)
-                    Self.parseFixedProperties(from: streamData, into: &attachProps)
+                    Self.parseFixedProperties(from: streamData, into: &attachProps, header: 8)
                 }
             }
 
@@ -425,7 +488,7 @@ struct OLE2Reader {
             let isInline = contentID != nil ||
                 (attachProps.ints[MAPIPropertyID.attachFlags.rawValue].map { $0 & 0x04 != 0 } ?? false)
 
-            attachments.append(AttachmentMetadata(
+            let metadata = AttachmentMetadata(
                 filename: filename.trimmingCharacters(in: .controlCharacters),
                 mimeType: mimeType.trimmingCharacters(in: .controlCharacters),
                 size: attachData?.count ?? 0,
@@ -433,13 +496,10 @@ struct OLE2Reader {
                 contentID: contentID,
                 base64: attachData?.base64EncodedString(),
                 fileURL: nil
-            ))
-
-            let embeddedMsgData = attachProps.binaries[MAPIPropertyID.attachDataObject.rawValue]
-            if embeddedMsgData != nil {
-                // Embedded MSG (nested message) — recognized but not recursively parsed
-                // to prevent stack overflow on deeply nested messages
-            }
+            )
+            // An embedded message (method 5) is expanded by the caller, depth-limited.
+            let method = attachProps.ints[MAPIPropertyID.attachMethod.rawValue]
+            attachments.append(AttachmentRecord(metadata: metadata, embeddedMessageStorage: (method == 5 || attachData == nil) ? embeddedStorage : nil))
         }
         return attachments
     }
@@ -471,7 +531,7 @@ struct OLE2Reader {
     private static func buildFAT(data: Data, fatSectors: [Int], sectorSize: Int) -> [Int32] {
         var fat: [Int32] = []
         for sector in fatSectors {
-            let offset = 512 + sector * sectorSize
+            let offset = (sector + 1) * sectorSize
             let entries = sectorSize / 4
             for i in 0..<entries {
                 let pos = offset + i * 4
@@ -501,7 +561,7 @@ struct OLE2Reader {
         var dirs: [DirectoryEntry] = []
         let entriesPerSector = sectorSize / 128
         for sector in chain {
-            let base = 512 + sector * sectorSize
+            let base = (sector + 1) * sectorSize
             for i in 0..<entriesPerSector {
                 let offset = base + i * 128
                 guard offset + 128 <= data.count else { continue }
@@ -512,10 +572,14 @@ struct OLE2Reader {
                 let name = String(data: nameData, encoding: .utf16LittleEndian)?
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\0")) ?? ""
 
+                // MS-CFB §2.6.1: left sibling at 68, right sibling at 72, child at 76
+                // (checked against a real Word file: Root Entry = -1, -1, 3). The
+                // three were read in the wrong order before §13.8 step 3, so no
+                // storage's children could be walked — a real .msg came out empty.
                 let type = data[offset + 66]
-                let childID = Int(readInt32(data, offset: offset + 68))
-                let leftID = Int(readInt32(data, offset: offset + 72))
-                let rightID = Int(readInt32(data, offset: offset + 76))
+                let leftID = Int(readInt32(data, offset: offset + 68))
+                let rightID = Int(readInt32(data, offset: offset + 72))
+                let childID = Int(readInt32(data, offset: offset + 76))
                 let startSector = Int(readInt32(data, offset: offset + 116))
                 let size: Int
                 if sectorSize == 4096 {
@@ -526,14 +590,14 @@ struct OLE2Reader {
                     size = Int(readUInt32(data, offset: offset + 120))
                 }
 
-                if type > 0 {
-                    dirs.append(DirectoryEntry(
-                        index: dirs.count,
-                        name: name, type: type,
-                        startSector: startSector, size: max(0, size),
-                        childID: childID, leftSiblingID: leftID, rightSiblingID: rightID
-                    ))
-                }
+                // Every entry keeps its position: sibling and child ids are
+                // absolute, so an unallocated entry (type 0) is kept as a hole.
+                dirs.append(DirectoryEntry(
+                    index: dirs.count,
+                    name: type > 0 ? name : "", type: type,
+                    startSector: startSector, size: max(0, size),
+                    childID: type > 0 ? childID : -1, leftSiblingID: type > 0 ? leftID : -1, rightSiblingID: type > 0 ? rightID : -1
+                ))
                 if dirs.count >= maxDirCount { return dirs }
             }
         }
@@ -543,7 +607,7 @@ struct OLE2Reader {
     private static func readStreamData(data: Data, chain: [Int], sectorSize: Int, streamSize: Int) -> Data {
         var result = Data()
         for sector in chain {
-            let offset = 512 + sector * sectorSize
+            let offset = (sector + 1) * sectorSize
             let end = min(offset + sectorSize, data.count)
             guard offset >= 0 && offset < data.count else { break }
             result.append(data[offset..<end])
@@ -565,7 +629,7 @@ struct OLE2Reader {
     private static func readFATFromChain(data: Data, chain: [Int], sectorSize: Int) -> [Int32] {
         var entries: [Int32] = []
         for sector in chain {
-            let base = 512 + sector * sectorSize
+            let base = (sector + 1) * sectorSize
             for i in 0..<(sectorSize / 4) {
                 let pos = base + i * 4
                 if pos + 4 <= data.count {
@@ -576,8 +640,8 @@ struct OLE2Reader {
         return entries
     }
 
-    private static func parseFixedProperties(from data: Data, into props: inout MAPIPropertySet) {
-        var offset = data.count >= 32 ? 32 : (data.count >= 8 ? 8 : 0)
+    private static func parseFixedProperties(from data: Data, into props: inout MAPIPropertySet, header: Int) {
+        var offset = min(header, data.count)
         while offset + 16 <= data.count {
             let propType = readUInt16(data, offset: offset)
             let propID = readUInt16(data, offset: offset + 2)
@@ -649,6 +713,7 @@ enum MAPIPropertyID: UInt16 {
     case attachMimeTag = 0x370E
     case attachDataBinary = 0x3701
     case attachDataObject = 0x3703
+    case attachMethod = 0x3705
     case attachContentId = 0x3712
     case attachFlags = 0x3714
     case attachSize = 0x0E20

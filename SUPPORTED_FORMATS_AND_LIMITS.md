@@ -104,7 +104,7 @@ fixtures" is not "real files", and "not implemented" is said plainly.
 | Mail source | Apple Mail message / library | emlx | messages with flags, the mailbox chain from the library layout | real files | — | — |
 | Mail source | Apple Mail mailbox package | mbox (package) | the mbox inside, mailbox chain | spec-built fixtures | — | a real Apple Mail export (owner) |
 | Mail source | Maildir / Thunderbird folder | cur, new | one message per file, the folder as mailbox | spec-built fixtures | Maildir++ sub-folders flatten to the root name; tmp/ skipped by design | — |
-| Mail source | Outlook message | msg | MAPI properties: sender, recipients, subject, bodies (plain, HTML, RTF), attachments | real files | embedded messages recognised, not expanded; OFT templates not read | — |
+| Mail source | Outlook message / template | msg, oft | MAPI properties: sender, recipients, subject, bodies (plain, HTML, RTF), attachments; embedded messages expanded as attached messages (three levels); .oft templates read as messages | spec-built fixtures | the compound-file reader's directory links were fixed in §13.8 step 3; verified since only on files this app wrote — the Tika .msg fixtures are no longer on the build machine | real .msg files (incl. one with an embedded message) and a real .oft to re-run (owner) |
 | Mail source | Outlook data file | pst | ANSI and Unicode; folders including empty ones, recipients, bodies, attachments by the MS-PST layers; non-mail items counted out | real files | — | small real PSTs with empty/deep/Unicode folders for the candidate run |
 | Mail source | Outlook offline store | ost | shares the PST reader | not executed | 4 KB-page OST (Outlook 2013+, wVer 36) not read by layout | a real OST |
 | Mail source | Lotus Notes database | nsf | structured notes with LZSS and LMBCS, attachments by item; heuristic text scan as fallback | spec-built fixtures | fallback path is not byte-exact | a real NSF |
@@ -120,9 +120,9 @@ fixtures" is not "real files", and "not implemented" is said plainly.
 | Attachment | Rich Text | rtf | decoded text | spec-built fixtures | — | — |
 | Attachment | HTML | html, htm | text with tags removed | spec-built fixtures | — | — |
 | Attachment | Plain text families | txt, csv, log, md, json, xml, ics, vcf, yml, yaml | the text, UTF-8 or Latin-1 | spec-built fixtures | — | — |
-| Attachment | Attached message | eml, message/rfc822 | decoded headers and body, its own attachments as children (three levels) | spec-built fixtures | each attachment of the message is its own child document (name, hash, state); MSG/TNEF children not yet | — |
+| Attachment | Attached message | eml, msg, oft, message/rfc822 | decoded headers and body (MIME for .eml, MAPI for .msg/.oft), its own attachments as children (three levels) | spec-built fixtures | each attachment of the message is its own child document (name, hash, state) | — |
 | Attachment | Excel Binary Workbook | xlsb | — | **not implemented** | no reader; kept and listed as unsupported | — |
-| Attachment | Outlook template / TNEF | oft, winmail.dat | — | **not implemented** | no reader | — |
+| Attachment | TNEF (winmail.dat) | winmail.dat, ms-tnef | subject and body (plain, HTML, compressed RTF); every file inside as a child document with its name and type | spec-built fixtures | a message embedded inside the TNEF is listed, not expanded | a real winmail.dat from Exchange (owner) |
 | Attachment | OneNote, Visio, Project, Publisher, Access | one, onepkg, vsd, vsdx, mpp, pub, mdb, accdb | — | **not implemented** | no reader; a new adapter project per family | — |
 | Archive attachment | ZIP, tar, gzip attachments | zip, tar, tgz, gz, gzip | every child accounted for: documents, text, PDFs/images/recordings through the same readers; unread children listed; three levels; 1 GiB per attachment | spec-built fixtures | each member is its own child document with path, hash and state, searchable and openable on its own; 7z/RAR/split volumes not opened | — |
 | Archive attachment | 7z, RAR, bz2, xz | 7z, rar, bz2, xz | — | **not implemented** | kept as files, stated | — |

@@ -2950,6 +2950,172 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    /// A TNEF stream (MS-OXTNEF) with a subject, a body and files — the
+    /// winmail.dat Outlook sends through servers that do not speak MAPI.
+    static func tnef(subject: String, body: String, files: [(name: String, mime: String, data: Data)]) -> Data {
+        var out = Data()
+        func le16(_ v: UInt16) { out.append(contentsOf: [UInt8(v & 0xFF), UInt8(v >> 8)]) }
+        func le32(_ v: UInt32) { out.append(contentsOf: (0..<4).map { UInt8((v >> (8 * $0)) & 0xFF) }) }
+        func le32(into d: inout Data, _ v: UInt32) { d.append(contentsOf: (0..<4).map { UInt8((v >> (8 * $0)) & 0xFF) }) }
+        func attribute(_ level: UInt8, _ id: UInt32, _ payload: Data) {
+            out.append(level); le32(id); le32(UInt32(payload.count)); out.append(payload)
+            le16(UInt16(payload.reduce(UInt32(0)) { ($0 + UInt32($1)) & 0xFFFF }))
+        }
+        func cString(_ s: String) -> Data { Data(s.utf8) + Data([0]) }
+        func padded(_ d: Data) -> Data { d + Data(repeating: 0, count: (4 - d.count % 4) % 4) }
+        le32(TNEFReader.signature); le16(0x1234)
+        attribute(1, 0x0001_8004, cString(subject))
+        attribute(1, 0x0002_800C, cString(body))
+        for file in files {
+            attribute(2, 0x0006_9002, Data(count: 14))
+            attribute(2, 0x0001_8010, cString(file.name))
+            attribute(2, 0x0006_800F, file.data)
+            var props = Data(); le32(into: &props, 2)
+            let unicode = file.name.data(using: .utf16LittleEndian)! + Data([0, 0])
+            le32(into: &props, 0x3707_001F); le32(into: &props, 1); le32(into: &props, UInt32(unicode.count)); props.append(padded(unicode))
+            let mime = cString(file.mime)
+            le32(into: &props, 0x370E_001E); le32(into: &props, 1); le32(into: &props, UInt32(mime.count)); props.append(padded(mime))
+            attribute(2, 0x0006_9005, props)
+        }
+        return out
+    }
+
+    /// Plan v4 §13.8 step 3 (COMP-06/07): Outlook's own containers all the
+    /// way down — an .oft template routes to the MSG reader; a message
+    /// embedded in a .msg is expanded into an attached message whose own
+    /// files are children; a .msg or winmail.dat attached to a message is
+    /// read as a message with children; every child opens by its chain.
+    func testWP3_outlookIntake_oftRouted_embeddedMessageExpanded_msgAndTNEFAttachmentsRead_childrenOpen() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("outlook-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        // 1. A message carrying an attached message is written as a .msg with an EMBEDDED message, then read back.
+        let terms = Self.docx(body: "Nested terms mention indemnity.", header: "")
+        let innerRaw = """
+        From: inner@example.com
+        To: me@example.com
+        Subject: Inner subject
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        Inner body says quorum
+        \(mimeAttachment("terms.docx", docxMime, terms))
+        --B--
+        """
+        let plain = Data("Plain file next to the message".utf8)
+        let outer = mail(81, from: "a@example.com", subject: "Outer", body: "outer body", attachments: [
+            AttachmentMetadata(filename: "inner.eml", mimeType: "message/rfc822", size: innerRaw.utf8.count, base64: Data(innerRaw.utf8).base64EncodedString()),
+            AttachmentMetadata(filename: "plain.txt", mimeType: "text/plain", size: plain.count, base64: plain.base64EncodedString()),
+        ])
+        let msgData = try XCTUnwrap(MSGWriter.write(email: outer))
+        let oft = dir.appendingPathComponent("template.oft")
+        try msgData.write(to: oft)
+        let classification = SourceFormatClassifier.classify(url: oft)
+        XCTAssertEqual(classification.format, .msg)
+        XCTAssertFalse(classification.nameContentMismatch, ".oft is an Outlook template, the same compound file")
+        XCTAssertTrue(ParserFactory.allSupportedExtensions.contains("oft"))
+        let parsed = try ParserFactory.parse(fileURL: oft, senderEmail: "")
+        XCTAssertEqual(parsed.count, 1)
+        XCTAssertEqual(parsed[0].headers["Subject"], "Outer")
+        XCTAssertEqual(parsed[0].attachments.map(\.filename), ["Inner subject.eml", "plain.txt"], "the embedded message is an attached message; the second file is linked too")
+        let attachedMessage = try XCTUnwrap(parsed[0].attachments.first)
+        let plainBack = try XCTUnwrap(parsed[0].attachments.dropFirst().first)
+        XCTAssertEqual(attachedMessage.mimeType, "message/rfc822")
+        XCTAssertEqual(plainBack.base64.flatMap { Data(base64Encoded: $0) }, plain)
+        let innerBytes = try XCTUnwrap(attachedMessage.base64.flatMap { Data(base64Encoded: $0) })
+        let innerBack = try MBOXParser.processRawMessage(String(decoding: innerBytes, as: UTF8.self), senderEmail: "")
+        defer { for a in innerBack.attachments { if let u = a.fileURL { try? FileManager.default.removeItem(at: u) } } }
+        XCTAssertEqual(innerBack.headers["Subject"], "Inner subject")
+        XCTAssertTrue(innerBack.plainBody.contains("Inner body says quorum"), innerBack.plainBody)
+        XCTAssertEqual(innerBack.attachments.map(\.filename), ["terms.docx"])
+        let termsBack = try XCTUnwrap(innerBack.attachments.first)
+        XCTAssertEqual(AttachmentHydrator.data(for: termsBack, index: 0, email: innerBack), terms, "the file two messages down, byte for byte")
+
+        // 2. winmail.dat and a .msg as attachments of an ordinary message, through the indexing job.
+        let budget = Self.docx(body: "Budget inside winmail mentions quorum.", header: "")
+        let tnef = Self.tnef(subject: "TNEF subject", body: "Winmail body about the audit", files: [("budget.docx", docxMime, budget)])
+        let content = try TNEFReader.read(tnef)
+        XCTAssertEqual(content.subject, "TNEF subject")
+        XCTAssertEqual(content.bodyText, "Winmail body about the audit")
+        XCTAssertEqual(content.attachments.map { ($0.filename, $0.mimeType) }.map { "\($0.0)|\($0.1)" }, ["budget.docx|\(docxMime)"])
+        XCTAssertEqual(content.attachments[0].data, budget)
+        XCTAssertThrowsError(try TNEFReader.read(tnef.prefix(tnef.count - 10))) { error in
+            guard case TNEFReader.ReadError.truncated = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(TNEFReader.encoding(forCodepage: 1252), .windowsCP1252)
+
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Outlook wrappers
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <wrappers@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see the wrappers
+        \(mimeAttachment("winmail.dat", "application/ms-tnef", tnef))
+        \(mimeAttachment("forwarded.msg", "application/vnd.ms-outlook", msgData))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        let rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.extractor), ["tnef", "msg"], "\(rows.map { ($0.filename, $0.extractor, $0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted], "\(rows.map { ($0.filename, $0.state, $0.note ?? "") })")
+        let children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map { "\($0.position):\($0.path)" }, ["0:budget.docx", "1:Inner subject.eml", "1:Inner subject.eml › terms.docx", "1:plain.txt"])
+        XCTAssertEqual(Set(children.map(\.state)), ["extracted"], "\(children.map { ($0.path, $0.state, $0.note ?? "") })")
+
+        func group(type: String? = nil, name: String? = nil, _ match: SearchCondition.Match, _ content: String) -> SearchSpec {
+            SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: name, type: type, contentMatch: match, content: content)])])
+        }
+        try await expectIDs(env, group(type: "docx", .allWords, "indemnity"), ["Outlook wrappers"], "a file inside a message inside a .msg")
+        try await expectIDs(env, group(name: "budget", .allWords, "quorum"), ["Outlook wrappers"], "a file inside winmail.dat")
+        try await expectIDs(env, group(name: "winmail", .phrase, "about the audit"), ["Outlook wrappers"], "the TNEF body itself")
+        try await expectIDs(env, group(type: "docx", .allWords, "audit"), [], "the TNEF body's words do not belong to the file inside it")
+
+        // 3. Every child opens by its chain — from the TNEF and from the .msg.
+        let scratch = dir.appendingPathComponent("scratch", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let winmail = dir.appendingPathComponent("winmail.dat"); try tnef.write(to: winmail)
+        let fromTNEF = try ContainerTextExtractor.materialize(childPath: "budget.docx", in: winmail, kind: nil, logicalName: "winmail.dat", scratch: scratch)
+        XCTAssertEqual(try Data(contentsOf: fromTNEF), budget)
+        let msgURL = dir.appendingPathComponent("forwarded.msg"); try msgData.write(to: msgURL)
+        let fromMSG = try ContainerTextExtractor.materialize(childPath: "Inner subject.eml › terms.docx", in: msgURL, kind: nil, logicalName: "forwarded.msg", scratch: scratch)
+        XCTAssertEqual(try Data(contentsOf: fromMSG), terms)
+        XCTAssertEqual(fromMSG.lastPathComponent.hasSuffix("terms.docx"), true)
+        let stored = try await env.store.fullEmail(id: email.id)
+        let opened = try EvidenceAttachmentOpener.temporaryFile(for: XCTUnwrap(stored), ordinal: 1, childPath: "Inner subject.eml › terms.docx").get()
+        defer { try? FileManager.default.removeItem(at: opened.deletingLastPathComponent()) }
+        XCTAssertEqual(try Data(contentsOf: opened), terms, "the chip's Open reaches the file two levels inside the .msg")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated

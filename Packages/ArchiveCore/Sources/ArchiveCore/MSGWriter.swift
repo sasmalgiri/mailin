@@ -59,11 +59,23 @@ struct MSGWriter {
     // MARK: - Build MSG
 
     private static func buildMSG(email: MBOXParser.RawEmail) throws -> Data {
+        let streams = messageStreams(email: email, propertiesHeader: 32, depth: 0)
+        // Layout sectors
+        return try layoutOLE2(streams: streams, attachmentCount: email.attachments.count)
+    }
+
+    /// Messages attached as messages are written as embedded messages this
+    /// many levels deep (matches `MSGParser.maxEmbeddedDepth`).
+    static let maxEmbeddedDepth = 3
+
+    /// The streams of one message storage. `propertiesHeader` is 32 bytes at
+    /// the root and 24 in an embedded message (MS-OXMSG §2.4.1).
+    private static func messageStreams(email: MBOXParser.RawEmail, propertiesHeader: Int, depth: Int) -> [(String, Data)] {
         // Collect streams: each is (name, data)
         var streams: [(String, Data)] = []
 
         // Properties stream (fixed-length properties header)
-        let propsData = buildPropertiesStream(email: email)
+        let propsData = buildPropertiesStream(email: email, header: propertiesHeader)
         streams.append(("__properties_version1.0", propsData))
 
         // Subject
@@ -108,12 +120,10 @@ struct MSGWriter {
 
         // Attachments
         for (idx, att) in email.attachments.enumerated() {
-            let attachStreams = buildAttachmentStreams(attachment: att, index: idx)
+            let attachStreams = buildAttachmentStreams(attachment: att, index: idx, depth: depth)
             streams.append(contentsOf: attachStreams)
         }
-
-        // Layout sectors
-        return try layoutOLE2(streams: streams, attachmentCount: email.attachments.count)
+        return streams
     }
 
     // MARK: - String Stream Helpers
@@ -128,9 +138,13 @@ struct MSGWriter {
 
     // MARK: - Properties Stream
 
-    private static func buildPropertiesStream(email: MBOXParser.RawEmail) -> Data {
-        // Message properties stream has an 8-byte reserved header, then 16-byte entries
-        var data = Data(repeating: 0, count: 32)
+    private static func buildPropertiesStream(email: MBOXParser.RawEmail, header: Int = 32) -> Data {
+        // Message properties stream: a reserved header (32 bytes at the root,
+        // 24 in an embedded message), then 16-byte entries.
+        var data = Data(repeating: 0, count: header)
+        // Next recipient / attachment ids and counts live at offsets 8…23 of either header.
+        writeUInt32(&data, offset: 12, value: UInt32(email.attachments.count))
+        writeUInt32(&data, offset: 20, value: UInt32(email.attachments.count))
         // Each entry: propType (2) + propID (2) + flags (4) + value (8) = 16 bytes
 
         func appendProp(id: UInt16, type: UInt16, value: UInt64 = 0) {
@@ -160,233 +174,199 @@ struct MSGWriter {
 
     // MARK: - Attachment Streams
 
-    private static func buildAttachmentStreams(attachment: AttachmentMetadata, index: Int) -> [(String, Data)] {
+    private static func buildAttachmentStreams(attachment: AttachmentMetadata, index: Int, depth: Int) -> [(String, Data)] {
         let prefix = "__attach_version1.0_#\(String(format: "%08X", index))"
         var result: [(String, Data)] = []
 
-        // Attachment properties
+        // §13.8 step 3: an attached message is written as an EMBEDDED message
+        // (PR_ATTACH_METHOD 5) with its own storage, so Outlook shows it as a
+        // message and the reader expands it again — round trip, three levels.
+        let bytes = attachment.fileURL.flatMap { try? Data(contentsOf: $0) } ?? attachment.base64.flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
+        let isMessage = attachment.mimeType.lowercased().contains("message/rfc822") || (attachment.filename as NSString).pathExtension.lowercased() == "eml"
+        var embedded: MBOXParser.RawEmail?
+        if isMessage, depth + 1 < maxEmbeddedDepth, let bytes,
+           let raw = String(data: bytes, encoding: .utf8) ?? String(data: bytes, encoding: .isoLatin1),
+           let inner = try? MBOXParser.processRawMessage(raw, senderEmail: "") {
+            embedded = inner
+        }
+
+        // Attachment properties (8-byte header): attach number, attach method.
         var propsData = Data(repeating: 0, count: 8)
-        var entry = Data(count: 16)
-        writeUInt16(&entry, offset: 0, value: 0x0003) // PT_LONG
-        writeUInt16(&entry, offset: 2, value: 0x0E21) // attach method = 1 (by value)
-        writeUInt32(&entry, offset: 4, value: 0x00000006)
-        writeUInt64(&entry, offset: 8, value: 1)
-        propsData.append(entry)
+        func fixed(_ id: UInt16, _ value: UInt64) {
+            var entry = Data(count: 16)
+            writeUInt16(&entry, offset: 0, value: 0x0003) // PT_LONG
+            writeUInt16(&entry, offset: 2, value: id)
+            writeUInt32(&entry, offset: 4, value: 0x00000006)
+            writeUInt64(&entry, offset: 8, value: value)
+            propsData.append(entry)
+        }
+        fixed(0x0E21, UInt64(index))                     // PR_ATTACH_NUM
+        fixed(0x3705, embedded == nil ? 1 : 5)           // PR_ATTACH_METHOD: by value / embedded message
         result.append(("\(prefix)/__properties_version1.0", propsData))
 
-        // Filename (long)
+        // Filename (long) and display name
         if let nameData = attachment.filename.data(using: .utf16LittleEndian) {
             result.append(("\(prefix)/__substg1.0_3707001F", nameData))
+            result.append(("\(prefix)/__substg1.0_3001001F", nameData))
         }
         // MIME type
         if let mimeData = attachment.mimeType.data(using: .utf16LittleEndian) {
             result.append(("\(prefix)/__substg1.0_370E001F", mimeData))
         }
+        if let embedded {
+            for (name, data) in messageStreams(email: embedded, propertiesHeader: 24, depth: depth + 1) {
+                result.append(("\(prefix)/__substg1.0_3701000D/\(name)", data))
+            }
+            for inner in embedded.attachments { if let url = inner.fileURL { try? FileManager.default.removeItem(at: url) } }
+            return result
+        }
         // Binary content
-        if let b64 = attachment.base64, let binData = Data(base64Encoded: b64) {
-            result.append(("\(prefix)/__substg1.0_37010102", binData))
+        if let bytes {
+            result.append(("\(prefix)/__substg1.0_37010102", bytes))
         }
         return result
     }
 
     // MARK: - OLE2 Layout
 
+    /// Lays the streams out as MS-CFB asks: streams under the mini-stream
+    /// cutoff (4,096 bytes) live in 64-byte mini sectors inside the root
+    /// entry's stream and are chained in the mini FAT; larger streams,
+    /// the mini stream itself, the mini FAT and the directory live in
+    /// 4,096-byte sectors chained in the FAT. Storages nest to any depth
+    /// ("attach/__substg1.0_3701000D/stream"), and every storage's children
+    /// form a sibling tree a reader can walk.
     private static func layoutOLE2(streams: [(String, Data)], attachmentCount: Int) throws -> Data {
-        // Compute sector allocation for all stream data
-        var sectorData: [Data] = [] // each entry = one sector of stream content
-
         struct StreamInfo {
             let dirName: String
             let parentPath: String
-            let startSector: Int
+            let startSector: Int32
             let size: Int
         }
-
-        var streamInfos: [StreamInfo] = []
-
-        for (name, content) in streams {
-            let startSector = sectorData.count
-            // Split content into sectors
+        var sectorData: [Data] = []            // regular 4,096-byte sectors
+        var chains: [(start: Int, count: Int)] = []
+        func appendSectors(_ content: Data) -> Int {
+            let start = sectorData.count
             var offset = 0
             while offset < content.count {
                 let end = min(offset + sectorSize, content.count)
                 var sector = Data(content[offset..<end])
-                if sector.count < sectorSize {
-                    sector.append(Data(repeating: 0, count: sectorSize - sector.count))
-                }
+                if sector.count < sectorSize { sector.append(Data(repeating: 0, count: sectorSize - sector.count)) }
                 sectorData.append(sector)
                 offset += sectorSize
             }
+            chains.append((start, sectorData.count - start))
+            return start
+        }
+
+        var infos: [StreamInfo] = []
+        var miniStream = Data()
+        var miniFat: [Int32] = []
+        for (name, content) in streams {
+            let parts = name.split(separator: "/").map(String.init)
+            let dirName = parts.last ?? name
+            let parentPath = parts.dropLast().joined(separator: "/")
+            let start: Int32
             if content.isEmpty {
-                // Empty stream still needs a record
-                streamInfos.append(StreamInfo(dirName: name, parentPath: "", startSector: -2, size: 0))
+                start = endOfChain
+            } else if content.count < miniStreamCutoff {
+                let first = miniFat.count
+                let count = (content.count + miniSectorSize - 1) / miniSectorSize
+                for i in 0..<count { miniFat.append(i < count - 1 ? Int32(first + i + 1) : endOfChain) }
+                miniStream.append(content)
+                miniStream.append(Data(repeating: 0, count: count * miniSectorSize - content.count))
+                start = Int32(first)
             } else {
-                let parts = name.split(separator: "/", maxSplits: 1)
-                let dirName = String(parts.last ?? Substring(name))
-                let parentPath = parts.count > 1 ? String(parts[0]) : ""
-                streamInfos.append(StreamInfo(dirName: dirName, parentPath: parentPath, startSector: startSector, size: content.count))
+                start = Int32(appendSectors(content))
             }
+            infos.append(StreamInfo(dirName: dirName, parentPath: parentPath, startSector: start, size: content.count))
+        }
+        let miniStreamStart: Int32 = miniStream.isEmpty ? endOfChain : Int32(appendSectors(miniStream))
+        var miniFatStart: Int32 = endOfChain
+        var miniFatSectorCount = 0
+        if !miniFat.isEmpty {
+            var bytes = Data()
+            for entry in miniFat { var e = Data(count: 4); writeInt32(&e, offset: 0, value: entry); bytes.append(e) }
+            let padded = (bytes.count + sectorSize - 1) / sectorSize * sectorSize
+            bytes.append(Data(repeating: 0xFF, count: padded - bytes.count))   // 0xFFFFFFFF = free
+            miniFatStart = Int32(appendSectors(bytes))
+            miniFatSectorCount = padded / sectorSize
         }
 
-        // Build directory entries
+        // Directory entries: root, then storages for every chain prefix, then streams.
         var dirs: [DirEntry] = []
-
-        // 0: Root Entry
-        dirs.append(DirEntry(name: "Root Entry", type: 5))
-
-        // Collect top-level and attachment storage entries
-        var topLevelIndices: [Int] = []
-        var attachStorageMap: [String: Int] = [:] // path -> dir index
-
-        // First pass: create attachment storages
-        for info in streamInfos where !info.parentPath.isEmpty {
-            if attachStorageMap[info.parentPath] == nil {
-                let idx = dirs.count
-                dirs.append(DirEntry(name: info.parentPath, type: 1))
-                attachStorageMap[info.parentPath] = idx
-                topLevelIndices.append(idx)
-            }
-        }
-
-        // Second pass: create stream entries
-        for info in streamInfos {
+        dirs.append(DirEntry(name: "Root Entry", type: 5, startSector: miniStreamStart, size: Int32(miniStream.count)))
+        var storageIndex: [String: Int] = ["": 0]
+        var childrenOf: [Int: [Int]] = [:]
+        func storage(for path: String) -> Int {
+            if let idx = storageIndex[path] { return idx }
+            let components = path.split(separator: "/").map(String.init)
+            let parent = storage(for: components.dropLast().joined(separator: "/"))
             let idx = dirs.count
-            dirs.append(DirEntry(
-                name: info.dirName,
-                type: 2,
-                startSector: Int32(info.startSector),
-                size: Int32(info.size)
-            ))
-            if info.parentPath.isEmpty {
-                topLevelIndices.append(idx)
-            } else if let parentIdx = attachStorageMap[info.parentPath] {
-                // Add as child of attachment storage
-                if dirs[parentIdx].childID == -1 {
-                    dirs[parentIdx].childID = Int32(idx)
-                }
-            }
+            dirs.append(DirEntry(name: components.last ?? path, type: 1))
+            storageIndex[path] = idx
+            childrenOf[parent, default: []].append(idx)
+            return idx
         }
-
-        // Build a balanced binary tree for root's children
-        if !topLevelIndices.isEmpty {
-            buildSiblingTree(&dirs, indices: topLevelIndices)
-            dirs[0].childID = Int32(topLevelIndices[topLevelIndices.count / 2])
+        for info in infos {
+            let parent = storage(for: info.parentPath)
+            let idx = dirs.count
+            dirs.append(DirEntry(name: info.dirName, type: 2, startSector: info.startSector, size: Int32(info.size)))
+            childrenOf[parent, default: []].append(idx)
         }
-
-        // Directory sector data
-        let dirData = serializeDirectories(dirs)
-        let dirStartSector = sectorData.count
-        var dirOffset = 0
-        while dirOffset < dirData.count {
-            let end = min(dirOffset + sectorSize, dirData.count)
-            var sector = Data(dirData[dirOffset..<end])
-            if sector.count < sectorSize {
-                sector.append(Data(repeating: 0, count: sectorSize - sector.count))
-            }
-            sectorData.append(sector)
-            dirOffset += sectorSize
+        // Every storage's children form a balanced sibling tree (a reader walks
+        // left/right siblings from the storage's child — one link is not enough).
+        for (parent, indices) in childrenOf where !indices.isEmpty {
+            let sorted = indices.sorted { cfbNameLess(dirs[$0].name, dirs[$1].name) }
+            dirs[parent].childID = linkSiblings(&dirs, sorted: sorted[...])
         }
+        let dirStartSector = appendSectors(serializeDirectories(dirs))
 
-        // Build FAT
+        // FAT: one entry per regular sector, chained; FAT sectors mark themselves.
         let totalDataSectors = sectorData.count
         let fatEntriesPerSector = sectorSize / 4
-        let fatSectorCount = max(1, (totalDataSectors + 2 + fatEntriesPerSector - 1) / fatEntriesPerSector)
-
-        var fat = [Int32](repeating: freeSect, count: (totalDataSectors + fatSectorCount) * 1)
-        // Expand FAT to cover all sectors including FAT sectors themselves
+        var fatSectorCount = max(1, (totalDataSectors + fatEntriesPerSector - 1) / fatEntriesPerSector)
+        while (totalDataSectors + fatSectorCount + fatEntriesPerSector - 1) / fatEntriesPerSector > fatSectorCount { fatSectorCount += 1 }
         let totalSectors = totalDataSectors + fatSectorCount
-        while fat.count < totalSectors {
-            fat.append(freeSect)
+        var fat = [Int32](repeating: freeSect, count: totalSectors)
+        for chain in chains {
+            for i in 0..<chain.count { fat[chain.start + i] = i < chain.count - 1 ? Int32(chain.start + i + 1) : endOfChain }
         }
-
-        // Chain stream sectors
-        for info in streamInfos where info.startSector >= 0 {
-            let sectorCount = (info.size + sectorSize - 1) / sectorSize
-            for i in 0..<sectorCount {
-                let sec = info.startSector + i
-                guard sec < fat.count else { break }
-                fat[sec] = (i < sectorCount - 1) ? Int32(sec + 1) : endOfChain
-            }
-        }
-        // Chain directory sectors
-        let dirSectorCount = (dirData.count + sectorSize - 1) / sectorSize
-        for i in 0..<dirSectorCount {
-            let sec = dirStartSector + i
-            fat[sec] = (i < dirSectorCount - 1) ? Int32(sec + 1) : endOfChain
-        }
-        // Mark FAT sectors
         let fatStartSector = totalDataSectors
-        for i in 0..<fatSectorCount {
-            let sec = fatStartSector + i
-            if sec < fat.count { fat[sec] = fatSect }
-        }
+        for i in 0..<fatSectorCount { fat[fatStartSector + i] = fatSect }
 
-        // Build the file
-        var fileData = Data()
-
-        // OLE2 Header (512 bytes, padded to sectorSize for v4)
+        // Header (512 bytes, padded to one sector for version 4).
         var header = Data(repeating: 0, count: sectorSize)
         header.replaceSubrange(0..<8, with: ole2Magic)
-        // Minor version
-        writeUInt16(&header, offset: 24, value: 0x003E)
-        // Major version = 4 (4096-byte sectors)
-        writeUInt16(&header, offset: 26, value: 0x0004)
-        // Byte order (little-endian)
-        writeUInt16(&header, offset: 28, value: 0xFFFE)
-        // Sector size power = 12 (4096)
-        writeUInt16(&header, offset: 30, value: 12)
-        // Mini sector size power = 6 (64)
-        writeUInt16(&header, offset: 32, value: 6)
-        // Total directory sectors (v4 = 0)
-        writeUInt32(&header, offset: 40, value: 0)
-        // Total FAT sectors
+        writeUInt16(&header, offset: 24, value: 0x003E)                 // minor version
+        writeUInt16(&header, offset: 26, value: 0x0004)                 // major version 4 (4,096-byte sectors)
+        writeUInt16(&header, offset: 28, value: 0xFFFE)                 // little-endian
+        writeUInt16(&header, offset: 30, value: 12)                     // sector size 2^12
+        writeUInt16(&header, offset: 32, value: 6)                      // mini sector size 2^6
+        writeUInt32(&header, offset: 40, value: UInt32((serializeDirectories(dirs).count + sectorSize - 1) / sectorSize)) // directory sectors (v4)
         writeUInt32(&header, offset: 44, value: UInt32(fatSectorCount))
-        // First directory sector
         writeInt32(&header, offset: 48, value: Int32(dirStartSector))
-        // Mini stream cutoff
         writeUInt32(&header, offset: 56, value: UInt32(miniStreamCutoff))
-        // First mini FAT sector (none)
-        writeInt32(&header, offset: 60, value: endOfChain)
-        // Mini FAT sector count
-        writeUInt32(&header, offset: 64, value: 0)
-        // First DIFAT sector (none)
-        writeInt32(&header, offset: 68, value: endOfChain)
-        // DIFAT sector count
+        writeInt32(&header, offset: 60, value: miniFatStart)
+        writeUInt32(&header, offset: 64, value: UInt32(miniFatSectorCount))
+        writeInt32(&header, offset: 68, value: endOfChain)              // no DIFAT sectors
         writeUInt32(&header, offset: 72, value: 0)
-        // DIFAT array (109 entries starting at offset 76)
+        guard fatSectorCount <= 109 else { throw MSGError.invalidFormat("message too large for a single-DIFAT compound file") }
         for i in 0..<109 {
-            if i < fatSectorCount {
-                writeInt32(&header, offset: 76 + i * 4, value: Int32(fatStartSector + i))
-            } else {
-                writeInt32(&header, offset: 76 + i * 4, value: freeSect)
-            }
+            writeInt32(&header, offset: 76 + i * 4, value: i < fatSectorCount ? Int32(fatStartSector + i) : freeSect)
         }
+
+        var fileData = Data()
         fileData.append(header)
-
-        // Write data sectors (streams + directories)
-        for i in 0..<totalDataSectors {
-            if i < sectorData.count {
-                fileData.append(sectorData[i])
-            } else {
-                fileData.append(Data(repeating: 0, count: sectorSize))
-            }
-        }
-
-        // Write FAT sectors
+        for sector in sectorData { fileData.append(sector) }
         for f in 0..<fatSectorCount {
-            var fatSector = Data(repeating: 0xFF, count: sectorSize) // fill with 0xFF = free
-            let baseEntry = f * fatEntriesPerSector
+            var fatSector = Data(repeating: 0xFF, count: sectorSize)
             for i in 0..<fatEntriesPerSector {
-                let entryIdx = baseEntry + i
-                if entryIdx < fat.count {
-                    writeInt32(&fatSector, offset: i * 4, value: fat[entryIdx])
-                } else {
-                    writeInt32(&fatSector, offset: i * 4, value: freeSect)
-                }
+                let entryIdx = f * fatEntriesPerSector + i
+                writeInt32(&fatSector, offset: i * 4, value: entryIdx < fat.count ? fat[entryIdx] : freeSect)
             }
             fileData.append(fatSector)
         }
-
         logger.debug("MSG file built: \(fileData.count) bytes, \(totalSectors) sectors")
         return fileData
     }
@@ -419,25 +399,23 @@ struct MSGWriter {
 
     // MARK: - Sibling Tree Builder
 
-    private static func buildSiblingTree(_ dirs: inout [DirEntry], indices: [Int]) {
-        guard indices.count > 1 else { return }
-        let sorted = indices.sorted { dirs[$0].name < dirs[$1].name }
-        let mid = sorted.count / 2
-        if mid > 0 {
-            dirs[sorted[mid]].leftSiblingID = Int32(sorted[mid - 1])
-            // Build left subtree
-            if mid > 1 {
-                let leftIndices = Array(sorted[0..<mid])
-                buildSiblingTree(&dirs, indices: leftIndices)
-            }
-        }
-        if mid < sorted.count - 1 {
-            dirs[sorted[mid]].rightSiblingID = Int32(sorted[mid + 1])
-            if mid + 2 < sorted.count {
-                let rightIndices = Array(sorted[(mid + 1)...])
-                buildSiblingTree(&dirs, indices: Array(rightIndices))
-            }
-        }
+    /// A balanced binary tree over `sorted`: the middle entry is the root, its
+    /// left and right links point at the ROOTS of the two halves (not at the
+    /// neighbours — the earlier builder did that and left entries unreachable).
+    /// Returns the root's index, or -1 for an empty slice.
+    private static func linkSiblings(_ dirs: inout [DirEntry], sorted: ArraySlice<Int>) -> Int32 {
+        guard !sorted.isEmpty else { return -1 }
+        let mid = sorted.startIndex + sorted.count / 2
+        let node = sorted[mid]
+        dirs[node].leftSiblingID = linkSiblings(&dirs, sorted: sorted[sorted.startIndex..<mid])
+        dirs[node].rightSiblingID = linkSiblings(&dirs, sorted: sorted[(mid + 1)...])
+        return Int32(node)
+    }
+
+    /// MS-CFB §2.6.4 ordering: shorter names first, then an uppercase compare.
+    private static func cfbNameLess(_ a: String, _ b: String) -> Bool {
+        if a.utf16.count != b.utf16.count { return a.utf16.count < b.utf16.count }
+        return a.uppercased().utf16.lexicographicallyPrecedes(b.uppercased().utf16)
     }
 
     // MARK: - Helpers

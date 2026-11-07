@@ -702,10 +702,14 @@ final class ArchiveExportService {
                         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options,
                                      locatedRawExtension: "eml", onProgress: onProgress, onProduced: onProduced) { email, index in
-            let eml = render?(email) ?? (email.rawSource.isEmpty
-                ? "Subject: \(email.headers["Subject"] ?? "")\n\n\(email.plainBody)"
-                : email.rawSource)
-            return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "eml"), Data(eml.utf8))
+            // A message without raw source (PST, MSG, OLM, NSF imports) is
+            // rendered whole — headers, both bodies, every attachment — not
+            // reduced to a subject line and the plain text.
+            let eml: Data
+            if let render { eml = Data(render(email).utf8) }
+            else if email.rawSource.isEmpty { eml = RFC822Renderer.render(email) }
+            else { eml = Data(email.rawSource.utf8) }
+            return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "eml"), eml)
         }
     }
 

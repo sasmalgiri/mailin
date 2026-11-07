@@ -69,7 +69,11 @@ final class AttachmentTextIndexJob {
     /// 2 = per-attachment states; 3 = DOCX/XLSX/PPTX (FIND-01).
     /// 4 (2026-11-06): OpenDocument, iWork, Office 97–2003 and ZIP contents
     /// are read — rows those kinds left as unsupported are retried.
-    nonisolated static let extractorVersion = 5   // v5: children of archives and messages are their own documents (§13.3)
+    /// 5: children of archives and messages are their own documents (§13.3).
+    /// 6 (§13.8 step 3): winmail.dat (TNEF) opened, .msg/.oft attachments read
+    /// as messages, embedded Outlook messages expanded — rows those kinds
+    /// left as unsupported are retried.
+    nonisolated static let extractorVersion = 6
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -494,9 +498,9 @@ final class AttachmentTextIndexJob {
     /// the files inside it as children with their own identity.
     nonisolated struct Reading: Sendable {
         let text: String?
-        let state: AttachmentCoverageState
+        var state: AttachmentCoverageState
         let extractor: String
-        let note: String?
+        var note: String?
         var children: [ChildDocument] = []
         init(_ text: String?, _ state: AttachmentCoverageState, _ extractor: String, _ note: String?, children: [ChildDocument] = []) {
             self.text = text; self.state = state; self.extractor = extractor; self.note = note; self.children = children
@@ -591,6 +595,59 @@ final class AttachmentTextIndexJob {
         do { email = try MBOXParser.processRawMessage(raw, senderEmail: "") } catch {
             return Reading(nil, .failed, "eml", error.localizedDescription)
         }
+        return messageReading(email, extractor: "eml", ocr: ocr, depth: depth)
+    }
+
+    /// §13.8 step 3: an Outlook message (.msg) or template (.oft) attached as
+    /// a file is a message too — its MAPI properties are read by the MSG
+    /// reader, and its attachments (embedded messages included) are children.
+    nonisolated private static func readOutlookMessage(_ data: Data, ocr: Bool, depth: Int) -> Reading {
+        guard depth < maxMessageDepth else {
+            return Reading(nil, .unsupported, "msg", String(localized: "a message nested deeper than \(maxMessageDepth) levels"))
+        }
+        let email: MBOXParser.RawEmail
+        do { email = try MSGParser.parse(data: data) } catch {
+            return Reading(nil, .failed, "msg", error.localizedDescription)
+        }
+        return messageReading(email, extractor: "msg", ocr: ocr, depth: depth)
+    }
+
+    /// §13.8 step 3 (COMP-07): winmail.dat — the TNEF wrapper Outlook puts a
+    /// message's rich body and files in. Its text is read, and every file in
+    /// it is a child document under the winmail.dat attachment.
+    nonisolated private static func readTNEF(_ data: Data, ocr: Bool, depth: Int) -> Reading {
+        guard depth < maxMessageDepth else {
+            return Reading(nil, .unsupported, "tnef", String(localized: "a message nested deeper than \(maxMessageDepth) levels"))
+        }
+        let content: TNEFReader.Content
+        do { content = try TNEFReader.read(data) } catch TNEFReader.ReadError.truncated(let why) {
+            return Reading(nil, .failed, "tnef", String(localized: "winmail.dat is cut short: \(why)"))
+        } catch {
+            return Reading(nil, .failed, "tnef", error.localizedDescription)
+        }
+        var headers: [String: String] = [:]
+        if let subject = content.subject, !subject.isEmpty { headers["Subject"] = subject }
+        let attachments = content.attachments.map { file in
+            AttachmentMetadata(filename: file.filename, mimeType: file.isEmbeddedMessage ? "application/vnd.ms-outlook" : file.mimeType,
+                               size: file.data.count, base64: file.isEmbeddedMessage ? nil : file.data.base64EncodedString())
+        }
+        let email = MBOXParser.RawEmail(
+            id: UUID(), headers: headers, rawSource: "", messageType: "received", attachments: attachments, timestamp: "",
+            domains: [], plainBody: content.bodyText, htmlBody: "", mimeRoot: nil, mimeSummary: nil, mimeDiagnostics: [],
+            threadID: "", inReplyTo: nil, references: nil, tags: [], anomalies: [])
+        var reading = messageReading(email, extractor: "tnef", ocr: ocr, depth: depth)
+        if !content.notes.isEmpty {
+            let joined = content.notes.joined(separator: "; ")
+            reading.note = reading.note.map { $0 + "; " + joined } ?? joined
+            if content.notes.contains(where: { $0.contains("not expanded") }), reading.state == .extracted { reading.state = .partial }
+        }
+        return reading
+    }
+
+    /// The text of a message (headers, body) and its attachments as children,
+    /// each through the reader that fits it — shared by attached .eml, .msg
+    /// and TNEF so the three arrive in the same shape.
+    nonisolated private static func messageReading(_ email: MBOXParser.RawEmail, extractor: String, ocr: Bool, depth: Int) -> Reading {
         defer { for attachment in email.attachments { if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) } } }
         var text = ""
         for (key, label) in [("Subject", "Subject"), ("From", "From"), ("To", "To"), ("Date", "Date")] {
@@ -603,9 +660,7 @@ final class AttachmentTextIndexJob {
         var children: [ChildDocument] = []
         for attachment in email.attachments {
             let data = attachment.fileURL.flatMap { try? Data(contentsOf: $0) } ?? attachment.base64.flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) } ?? Data()
-            let child = attachment.mimeType.lowercased().contains("message/rfc822") || (attachment.filename as NSString).pathExtension.lowercased() == "eml"
-                ? readEmbeddedMessage(data, ocr: ocr, depth: depth + 1)
-                : read(attachment, ocr: ocr)
+            let child = read(attachment, ocr: ocr, depth: depth + 1)
             let state: ChildDocument.State
             switch child.state {
             case .extracted, .truncated: state = .extracted
@@ -623,11 +678,26 @@ final class AttachmentTextIndexJob {
                 var moved = nested; moved.path = attachment.filename + " › " + nested.path; return moved
             })
         }
-        return Reading(text, partial ? .partial : .extracted, "eml", notes.isEmpty ? nil : String(localized: "not read: \(notes.joined(separator: "; "))"), children: children)
+        return Reading(text, partial ? .partial : .extracted, extractor, notes.isEmpty ? nil : String(localized: "not read: \(notes.joined(separator: "; "))"), children: children)
     }
 
-    /// One attachment through the extractor that fits it.
-    nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool)
+    /// Is this attachment an Outlook message file (.msg / .oft, or the Outlook MIME type)?
+    nonisolated static func isOutlookMessage(mimeType mime: String, filename: String, data: Data) -> Bool {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        if mime.contains("vnd.ms-outlook") || ext == "msg" || ext == "oft" {
+            return data.count >= 8 && data[data.startIndex] == 0xD0 && data[data.startIndex + 1] == 0xCF
+        }
+        return false
+    }
+
+    /// Is this attachment a TNEF wrapper (winmail.dat), by its bytes first and its name second?
+    nonisolated static func isTNEF(mimeType mime: String, filename: String, data: Data) -> Bool {
+        TNEFReader.isTNEF(data) || ((mime.contains("ms-tnef") || filename.lowercased() == "winmail.dat") && data.count >= 6)
+    }
+
+    /// One attachment through the extractor that fits it. `depth` counts
+    /// messages inside messages (eml, msg, TNEF), bounded by `maxMessageDepth`.
+    nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool, depth: Int = 0)
         -> Reading {
         _ = childReaderInstalled
         let data: Data?
@@ -692,6 +762,13 @@ final class AttachmentTextIndexJob {
             if words.isEmpty { return Reading("", .noText, "speech", String(localized: "no speech was recognised in the recording")) }
             return Reading("[Recognised speech (\(transcript.locale ?? "?"))]\n" + words, .extracted, "speech", transcript.failure)
         }
+        // §13.8 step 3: winmail.dat and Outlook message files are messages with files inside.
+        if isTNEF(mimeType: mime, filename: attachment.filename, data: data) {
+            return readTNEF(data, ocr: ocr, depth: depth)
+        }
+        if isOutlookMessage(mimeType: mime, filename: attachment.filename, data: data) {
+            return readOutlookMessage(data, ocr: ocr, depth: depth)
+        }
         // FIND-01 + TYPE-01…04: Office Open XML, OpenDocument, iWork, Office
         // 97–2003 and ZIP (one level inside) through the document facade —
         // before the text families, because their MIME types contain "xml"
@@ -701,7 +778,7 @@ final class AttachmentTextIndexJob {
         }
         // R04: an attached message is decoded as a message, with its own attachments as children.
         if mime.contains("message/rfc822") || ext == "eml" {
-            return readEmbeddedMessage(data, ocr: ocr, depth: 0)
+            return readEmbeddedMessage(data, ocr: ocr, depth: depth)
         }
         // A04: ZIP, tar and gzip attachments are read above (DocumentKind); these formats are not opened.
         let otherContainers: Set<String> = ["7z", "rar", "bz2", "xz"]

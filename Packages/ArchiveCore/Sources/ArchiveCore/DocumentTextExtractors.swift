@@ -1234,6 +1234,30 @@ enum ContainerTextExtractor {
         while !segments.isEmpty {
             let segment = segments.removeFirst()
             let ext = (currentName as NSString).pathExtension.lowercased()
+            // §13.8 step 3: a TNEF wrapper or an Outlook message along the chain.
+            if TNEFReader.isTNEF(fileURL: currentURL) {
+                let content = try TNEFReader.read(Data(contentsOf: currentURL))
+                guard let file = content.attachments.first(where: { $0.filename == segment }), !file.isEmbeddedMessage else {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) has no file named \(segment)")
+                }
+                let destination = scratch.appendingPathComponent(UUID().uuidString + "-" + (segment as NSString).lastPathComponent)
+                try file.data.write(to: destination)
+                currentURL = destination; currentName = segment
+                currentKind = DocumentKind.detect(mimeType: file.mimeType, filename: segment) ?? DocumentTextExtractor.sniff(fileURL: destination)
+                continue
+            }
+            if ext == "msg" || ext == "oft" {
+                let email = try MSGParser.parse(data: Data(contentsOf: currentURL))
+                guard let attachment = email.attachments.first(where: { $0.filename == segment }),
+                      let base64 = attachment.base64, let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) else {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) has no attachment named \(segment)")
+                }
+                let destination = scratch.appendingPathComponent(UUID().uuidString + "-" + (segment as NSString).lastPathComponent)
+                try data.write(to: destination)
+                currentURL = destination; currentName = segment
+                currentKind = DocumentKind.detect(mimeType: attachment.mimeType, filename: segment) ?? DocumentTextExtractor.sniff(fileURL: destination)
+                continue
+            }
             if ext == "eml" || currentKind == nil {
                 // A message: the child is one of its attachments.
                 let bytes = try Data(contentsOf: currentURL)
