@@ -251,12 +251,100 @@ struct MSGParser {
             }
         }
 
-        guard let rtf = String(data: output, encoding: .ascii) else { return nil }
-        let stripped = rtf.replacingOccurrences(of: "\\\\[a-z]+[0-9]*\\s?", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "[{}]", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let text = rtfPlainText(output)
+        return text.isEmpty ? nil : text
+    }
+
+    /// The words of an RTF document: destination groups that carry no
+    /// prose (font and colour tables, stylesheet, info, `{\\*…}`) are skipped,
+    /// `\\par`/`\\line` become line breaks, `\\tab` a tab, `\\'hh` and `\\uN` their
+    /// characters; every other control word is dropped. Nothing is executed.
+    static func rtfPlainText(_ data: Data) -> String {
+        let bytes = [UInt8](data)
+        var out = ""
+        var i = 0
+        var skipDepth: Int? = nil        // depth at which a skipped destination group opened
+        var depth = 0
+        var unicodeSkip = 1               // \ucN: bytes to skip after \uN
+        var pendingSkip = 0
+        let skippedDestinations = ["fonttbl", "colortbl", "stylesheet", "info", "generator", "listtable", "listoverridetable", "rsidtbl", "xmlnstbl", "themedata", "colorschememapping", "latentstyles", "datastore", "pict", "object", "header", "footer", "pntext", "fldinst"]
+        func peekWord(at start: Int) -> (word: String, number: Int?, next: Int) {
+            var j = start
+            var word = ""
+            while j < bytes.count, (bytes[j] >= 97 && bytes[j] <= 122) || (bytes[j] >= 65 && bytes[j] <= 90) { word.append(Character(UnicodeScalar(bytes[j]))); j += 1 }
+            var digits = ""
+            if j < bytes.count, bytes[j] == 45 { digits.append("-"); j += 1 }
+            while j < bytes.count, bytes[j] >= 48 && bytes[j] <= 57 { digits.append(Character(UnicodeScalar(bytes[j]))); j += 1 }
+            if j < bytes.count, bytes[j] == 32 { j += 1 }   // one delimiting space belongs to the control word
+            return (word, Int(digits), j)
+        }
+        while i < bytes.count {
+            let b = bytes[i]
+            if b == 123 {   // {
+                depth += 1
+                // `{\*` is an ignorable destination; named tables are skipped by name.
+                if i + 2 < bytes.count, bytes[i + 1] == 92 {
+                    if bytes[i + 2] == 42 { if skipDepth == nil { skipDepth = depth } }
+                    else {
+                        let (word, _, _) = peekWord(at: i + 2)
+                        if skippedDestinations.contains(word), skipDepth == nil { skipDepth = depth }
+                    }
+                }
+                i += 1
+            } else if b == 125 {   // }
+                if let d = skipDepth, d == depth { skipDepth = nil }
+                depth = max(0, depth - 1)
+                i += 1
+            } else if b == 92 {   // backslash
+                guard i + 1 < bytes.count else { break }
+                let n = bytes[i + 1]
+                if n == 39 {   // \'hh
+                    if i + 3 < bytes.count, let v = UInt8(String(bytes: bytes[(i + 2)...(i + 3)], encoding: .ascii) ?? "", radix: 16) {
+                        if skipDepth == nil { if pendingSkip > 0 { pendingSkip -= 1 } else if let ch = String(bytes: [v], encoding: .windowsCP1252) { out += ch } }
+                        i += 4
+                    } else { i += 2 }
+                } else if n == 92 || n == 123 || n == 125 {   // escaped \ { }
+                    if skipDepth == nil { out.append(Character(UnicodeScalar(n))) }
+                    i += 2
+                } else if n == 126 { if skipDepth == nil { out += "\u{00A0}" }; i += 2 }
+                else if n == 45 || n == 58 { i += 2 }                 // optional hyphen, subentry
+                else if n == 95 { if skipDepth == nil { out += "-" }; i += 2 }
+                else if n == 10 || n == 13 { if skipDepth == nil { out += "\n" }; i += 2 }
+                else {
+                    let (word, number, next) = peekWord(at: i + 1)
+                    if skipDepth == nil {
+                        switch word {
+                        case "par", "line", "sect", "page": out += "\n"
+                        case "tab", "cell": out += "\t"
+                        case "row": out += "\n"
+                        case "uc": unicodeSkip = max(0, number ?? 1)
+                        case "u":
+                            if let code = number {
+                                let scalar = code < 0 ? code + 65536 : code
+                                if let u = UnicodeScalar(UInt32(max(0, scalar))) { out.append(Character(u)) }
+                                pendingSkip = unicodeSkip
+                            }
+                        case "emdash": out += "—"
+                        case "endash": out += "–"
+                        case "lquote", "rquote": out += "'"
+                        case "ldblquote", "rdblquote": out += "\""
+                        case "bullet": out += "•"
+                        default: break
+                        }
+                    }
+                    i = next
+                }
+            } else {
+                if skipDepth == nil, b != 10, b != 13 {
+                    if pendingSkip > 0 { pendingSkip -= 1 } else { out.append(Character(UnicodeScalar(b))) }
+                }
+                i += 1
+            }
+        }
+        return out.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: " ?\\n ?", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return stripped.isEmpty ? nil : stripped
     }
 
     private static func readUInt32LE(_ data: Data, offset: Int) -> UInt32 {

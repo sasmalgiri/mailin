@@ -3510,6 +3510,143 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    // MARK: - Real files from open-source corpora (Apache Tika, Apache POI, MPXJ)
+
+    /// The password that opens a protected file, tried from a short list;
+    /// nil when none did. Says which one in the message.
+    static func openingPassword(_ data: Data, candidates: [String]) -> String? {
+        for candidate in candidates where (try? OfficeCryptoUnlocker.decrypt(data: data, password: candidate)) != nil { return candidate }
+        return nil
+    }
+
+    /// Real Outlook messages (Tika, POI), a real winmail.dat, real
+    /// encrypted Office files with known passwords, a real protected PDF,
+    /// real .xlsb / Strict / Visio / charts / embedded-object files and a
+    /// Microsoft Project MSPDI plan — every reader built in §13.8 steps 2–5
+    /// against files the originating programs wrote. The fixtures live in
+    /// `Fixtures/opensource` (Apache-2.0 test data; see MANIFEST.md).
+    func testREAL_openSourceFixtures_outlookTNEFProtectedOfficeVisioProject_readersRunOnRealFiles() throws {
+        let root = Self.fixturesRoot.appendingPathComponent("opensource")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: root.path), "open-source fixtures not present")
+        let tika = root.appendingPathComponent("tika"), poi = root.appendingPathComponent("poi"), mpxj = root.appendingPathComponent("mpxj")
+        func data(_ url: URL) throws -> Data { try Data(contentsOf: url) }
+
+        // 1. Outlook messages: every one parses with a subject or a body; attachments come out with bytes.
+        var msgNotes: [String] = []
+        for name in ["testMSG.msg", "testMSG_forwarded.msg", "test-outlook.msg", "test-outlook2003.msg", "testMSG_chinese.msg", "testMSG_dateHeaderOnly.msg"] {
+            let email = try MSGParser.parse(data: try data(tika.appendingPathComponent(name)))
+            XCTAssertTrue(!(email.headers["Subject"] ?? "").isEmpty || !email.plainBody.isEmpty, "\(name): neither subject nor body — \(email.headers)")
+            XCTAssertNotEqual(email.headers["Subject"], "(No Subject)", name)
+            msgNotes.append("\(name): subject=\(email.headers["Subject"] ?? "") attachments=\(email.attachments.count)")
+        }
+        for name in ["attachment_msg_pdf.msg", "attachment_test_msg.msg", "example_received_unicode.msg", "example_sent_regular.msg", "58214_with_attachment.msg",
+                     "cyrillic_message.msg", "HTMLBodyBinary_UTF-8.msg", "outlook_30_msg.msg", "quick.msg", "attachment_msg_inlineImg.msg", "MailSentPropertyMultiple.msg"] {
+            let email = try MSGParser.parse(data: try data(poi.appendingPathComponent(name)))
+            XCTAssertTrue(!(email.headers["Subject"] ?? "").isEmpty || !email.plainBody.isEmpty || !email.htmlBody.isEmpty, "\(name): nothing read")
+            msgNotes.append("\(name): subject=\(email.headers["Subject"] ?? "") attachments=\(email.attachments.map(\.filename))")
+        }
+        let withPDF = try MSGParser.parse(data: try data(poi.appendingPathComponent("attachment_msg_pdf.msg")))
+        let pdfAttachment = try XCTUnwrap(withPDF.attachments.first { $0.filename.lowercased().hasSuffix(".pdf") }, "\(withPDF.attachments.map(\.filename))")
+        XCTAssertTrue((pdfAttachment.base64.flatMap { Data(base64Encoded: $0) }?.starts(with: Array("%PDF".utf8))) == true, "the PDF's bytes come out whole")
+        let withDoc = try MSGParser.parse(data: try data(tika.appendingPathComponent("testMSG_att_doc.msg")))
+        XCTAssertTrue(withDoc.attachments.contains { $0.filename.lowercased().hasSuffix(".doc") }, "\(withDoc.attachments.map(\.filename))")
+        // An embedded message is expanded into an attached message with its own subject.
+        let withMessage = try MSGParser.parse(data: try data(tika.appendingPathComponent("testMSG_att_msg.msg")))
+        let embedded = try XCTUnwrap(withMessage.attachments.first { $0.mimeType == "message/rfc822" }, "no embedded message expanded: \(withMessage.attachments.map { ($0.filename, $0.mimeType) })")
+        let innerBytes = try XCTUnwrap(embedded.base64.flatMap { Data(base64Encoded: $0) })
+        let inner = try MBOXParser.processRawMessage(String(decoding: innerBytes, as: UTF8.self), senderEmail: "")
+        defer { for a in inner.attachments { if let u = a.fileURL { try? FileManager.default.removeItem(at: u) } } }
+        XCTAssertFalse((inner.headers["Subject"] ?? "").isEmpty, "the embedded message has its own subject: \(inner.headers)")
+        print("REAL MSG:\n" + msgNotes.joined(separator: "\n"))
+
+        // 2. winmail.dat from Exchange.
+        let tnef = try TNEFReader.read(try data(tika.appendingPathComponent("testWINMAIL.dat")))
+        XCTAssertFalse(tnef.attachments.isEmpty, "a real winmail.dat carries files: \(tnef.notes)")
+        XCTAssertTrue(tnef.attachments.allSatisfy { !$0.filename.isEmpty && !$0.data.isEmpty }, "\(tnef.attachments.map { ($0.filename, $0.data.count) })")
+        XCTAssertFalse(tnef.bodyText.contains("fonttbl") || tnef.bodyText.contains("Times New Roman;"), "the RTF body is words, not its font table: \(tnef.bodyText.prefix(200))")
+        print("REAL TNEF: subject=\(tnef.subject ?? "") files=\(tnef.attachments.map(\.filename)) body=\(tnef.bodyText.prefix(80))")
+
+        // 3. Encrypted Office files with known passwords (Tika: "tika"; POI: pwd123), plus probes for the rest.
+        for (name, password) in [("testWORD_protected_passtika.docx", "tika"), ("testEXCEL_protected_passtika.xlsx", "tika"), ("testEXCEL_protected_passtika_2.xlsx", "tika"),
+                                 ("testPPT_protected_passtika.pptx", "tika")] {
+            let bytes = try data(tika.appendingPathComponent(name))
+            XCTAssertTrue(OfficeCryptoUnlocker.isEncryptedPackage(bytes), name)
+            XCTAssertThrowsError(try OfficeCryptoUnlocker.decrypt(data: bytes, password: "wrong"), name) { XCTAssertEqual($0 as? ProtectedContentError, .wrongPassword, name) }
+            let plain = try OfficeCryptoUnlocker.decrypt(data: bytes, password: password)
+            XCTAssertTrue(plain.starts(with: [0x50, 0x4B]), "\(name): the decrypted package is a ZIP")
+            let kind = try XCTUnwrap(DocumentKind.detect(mimeType: "", filename: name))
+            let result = try DocumentTextExtractor.extract(fileURL: tika.appendingPathComponent(name), kind: kind, password: password)
+            XCTAssertFalse(result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(name): no text after unlocking")
+        }
+        let candidates = ["tika", "pwd123", "password", "Password", "test", "secret", "VelvetSweatshop", "Example123", "12345678", "abc", "openwall", "protect", "poi"]
+        var opened: [String] = [], unopened: [String] = []
+        for name in ["protect.xlsx", "protectedFile.xlsx", "protected_agile.docx", "protected_sha512.xlsx", "extenxls_pwd123.xlsx", "60320-protected.xlsx"] {
+            let url = (FileManager.default.fileExists(atPath: poi.appendingPathComponent(name).path) ? poi : tika).appendingPathComponent(name)
+            let bytes = try data(url)
+            guard OfficeCryptoUnlocker.isEncryptedPackage(bytes) else { unopened.append("\(name): not an encrypted package (sheet protection only)"); continue }
+            if let password = Self.openingPassword(bytes, candidates: candidates) { opened.append("\(name): \(password)") } else { unopened.append("\(name): none of \(candidates.count) candidates") }
+        }
+        XCTAssertTrue(opened.contains { $0.hasPrefix("extenxls_pwd123.xlsx: pwd123") }, "\(opened) / \(unopened)")
+        print("REAL PROTECTED opened: \(opened); unopened: \(unopened)")
+
+        // 4. A protected PDF through PDFKit.
+        let pdf = try XCTUnwrap(PDFDocument(data: try data(tika.appendingPathComponent("testPDF_protected.pdf"))))
+        XCTAssertTrue(pdf.isEncrypted, "Tika's protected PDF is encrypted (owner password; it opens without a user password, so it is not locked for reading)")
+        let pdfPassword = ["tika", "password", "Password", "test", "secret", "user", "owner"].first { pdf.unlock(withPassword: $0) }
+        XCTAssertFalse((pdf.string ?? "").isEmpty, "its text layer is readable")
+        print("REAL PDF: locked=\(pdf.isLocked) owner password accepted: \(pdfPassword ?? "none of the candidates")")
+
+        // 5. Binary workbook, Strict OOXML, Visio, charts, comments, embedded objects, text boxes.
+        func extract(_ folder: URL, _ name: String) throws -> OfficeTextExtractor.Result {
+            let kind = try XCTUnwrap(DocumentKind.detect(mimeType: "", filename: name) ?? DocumentTextExtractor.sniff(fileURL: folder.appendingPathComponent(name)), name)
+            return try DocumentTextExtractor.extract(fileURL: folder.appendingPathComponent(name), kind: kind)
+        }
+        for name in ["testEXCEL.xlsb", "testEXCEL_various.xlsb", "testEXCEL_charts.xlsb"] {
+            let r = try extract(tika, name)
+            XCTAssertTrue(r.components.contains { $0.hasPrefix("Sheet: ") }, "\(name): \(r.components)")
+            XCTAssertTrue(r.text.contains(":"), "\(name): cells carry addresses — \(r.text.prefix(200))")
+            XCTAssertTrue(r.text.rangeOfCharacter(from: .letters) != nil, "\(name): no words read")
+        }
+        let strict = try extract(tika, "testEXCEL.strict.xlsx")
+        XCTAssertTrue(strict.text.rangeOfCharacter(from: .letters) != nil, "Strict OOXML: \(strict.text.prefix(200))")
+        for name in ["testVISIO.vsdx", "testVISIO_text.vsdx", "testVISIO.vsdm"] {
+            let r = try extract(tika, name)
+            XCTAssertTrue(r.components.contains { $0.hasPrefix("Page: ") }, "\(name): \(r.components)")
+            XCTAssertTrue(r.text.rangeOfCharacter(from: .letters) != nil, "\(name): no shape text — \(r.text.prefix(200))")
+        }
+        for name in ["testWORD_charts.docx", "testEXCEL_charts.xlsx", "testPPT_charts.pptx"] {
+            let r = try extract(tika, name)
+            XCTAssertTrue(r.components.contains { $0.hasPrefix("Chart ") }, "\(name): \(r.components)")
+        }
+        let comments = try extract(tika, "testPPT_comment.pptx")
+        XCTAssertTrue(comments.components.contains { $0.hasPrefix("Comments ") }, "\(comments.components)")
+        for name in ["testWORD_embeded.docx", "testEXCEL_embeded.xlsx", "testPPT_embedded_two_slides.pptx"] {
+            let r = try extract(tika, name)
+            XCTAssertFalse(r.children.isEmpty, "\(name): embedded objects are children — notText=\(r.notText)")
+            print("REAL EMBEDDED \(name): \(r.children.map { "\($0.path)|\($0.state.rawValue)" })")
+        }
+        let textbox = try extract(tika, "testWORD_emptyParaInTextbox.docx")
+        XCTAssertTrue(textbox.text.contains("[Text box]"), textbox.text.prefix(300).description)
+        let excelTextbox = try extract(tika, "testEXCEL_textbox.xlsx")
+        XCTAssertTrue(excelTextbox.text.rangeOfCharacter(from: .letters) != nil, excelTextbox.text)
+        let features = try extract(tika, "testWORD_features.docx")
+        XCTAssertTrue(features.text.contains("{"), "tracked changes or footnotes expected in Tika's features document: \(features.text.prefix(300))")
+
+        // 6. Microsoft Project XML, recognised by namespace.
+        for name in ["mspdiresource.xml", "mspdirelations.xml"] {
+            let url = mpxj.appendingPathComponent(name)
+            XCTAssertEqual(DocumentTextExtractor.sniff(fileURL: url), .projectXML, name)
+            let r = try DocumentTextExtractor.extract(fileURL: url, kind: .projectXML)
+            XCTAssertTrue(r.components.contains("Tasks") || r.components.contains("Resources"), "\(name): \(r.components)")
+        }
+
+        // 7. Formats without a reader stay honest: no text, named as unsupported, never garbage.
+        for name in ["testPUBLISHER.pub", "testACCESS.mdb", "testPROJECT2007.mpp"] {
+            XCTAssertNil(DocumentKind.detect(mimeType: "", filename: name), "\(name) must not pretend to be read")
+            XCTAssertNil(AttachmentTextIndexJob.extractText(from: AttachmentMetadata(filename: name, mimeType: "application/octet-stream", size: 0, fileURL: tika.appendingPathComponent(name))), name)
+        }
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated

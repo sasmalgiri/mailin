@@ -202,13 +202,21 @@ enum OfficeTextExtractor {
                     if let state = sheet?.state, state == "hidden" || state == "veryHidden" { label += " (hidden)" }
                     components.append(label)
                     text += "[\(label)]\n" + collector.text + "\n"
-                    // Comments attached to this sheet, by its relationships.
-                    for (_, target) in try relationships(of: file).sorted(by: { $0.value < $1.value }) where target.contains("comments") && target.hasSuffix(".xml") {
-                        let comments = OOXMLTextCollector(.comments)
-                        if try read(target, into: comments, skipped: &skipped), !comments.text.isEmpty {
-                            let commentsLabel = "Comments: " + (sheet?.name ?? "Sheet \(sheetNumber(file))")
-                            components.append(commentsLabel)
-                            text += "[\(commentsLabel)]\n" + comments.text + "\n"
+                    // Comments and drawings (text boxes, shapes) attached to this sheet, by its relationships.
+                    for (_, target) in try relationships(of: file).sorted(by: { $0.value < $1.value }) where target.hasSuffix(".xml") {
+                        let sheetName = sheet?.name ?? "Sheet \(sheetNumber(file))"
+                        if target.contains("comments") {
+                            let comments = OOXMLTextCollector(.comments)
+                            if try read(target, into: comments, skipped: &skipped), !comments.text.isEmpty {
+                                components.append("Comments: " + sheetName)
+                                text += "[Comments: \(sheetName)]\n" + comments.text + "\n"
+                            }
+                        } else if target.contains("/drawings/drawing") {
+                            let drawing = OOXMLTextCollector(.drawing)
+                            if try read(target, into: drawing, skipped: &skipped), !drawing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                components.append("Text boxes: " + sheetName)
+                                text += "[Text boxes: \(sheetName)]\n" + drawing.text + "\n"
+                            }
                         }
                     }
                 }
