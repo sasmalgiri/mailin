@@ -26,15 +26,17 @@ struct ParserFactory {
             }
             var all: [MBOXParser.RawEmail] = []
             for (index, member) in members.enumerated() {
+                // FOLD-02: the mailbox this member belongs to, from the layout (as the streaming path does).
+                let folder = SourceFormatClassifier.folderPath(member: member, root: fileURL, format: classification.format)
                 if classification.format == .appleMailLibrary {
-                    all += try EMLXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
+                    all += stamp(try EMLXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
                         onProgress?((Double(index) + fraction) / Double(members.count))
-                    }
+                    }, folder: folder)
                     continue
                 }
-                all += try MBOXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
+                all += stamp(try MBOXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
                     onProgress?((Double(index) + fraction) / Double(members.count))
-                }
+                }, folder: folder)
             }
             return all
         }
@@ -368,14 +370,18 @@ struct ParserFactory {
         // through `onBatch` before the next is opened, so peak memory stays
         // bounded by one member's batch rather than the whole mailbox.
         if SourceFormatClassifier.isDirectoryForm(classification.format) {
-            let members = SourceFormatClassifier.expand(fileURL, format: classification.format)
+            let expansion = SourceFormatClassifier.expandDirectory(fileURL, format: classification.format)
+            let members = expansion.members
             guard !members.isEmpty else {
                 throw ExtractionError.unsupportedFormat(
                     reason: "\(classification.summary). No message files were found inside it.")
             }
             var total = 0, parsed = 0, failed = 0
             var categories: [String: Int] = [:]
-            var declaredFolders = Set<String>()
+            // FOLD-02: every mailbox the layout declares, empty ones too (Maildir++ sub-mailboxes).
+            var declaredFolders = Set(expansion.declaredFolders)
+            // Maildir tmp/ members: deliveries in progress, not messages — skipped and counted.
+            if !expansion.skipped.isEmpty { categories["maildir_tmp_skipped"] = expansion.skipped.count }
             for (index, member) in members.enumerated() {
                 // FOLD-02: the mailbox this member belongs to, from the layout.
                 let folder = SourceFormatClassifier.folderPath(member: member, root: fileURL, format: classification.format)
