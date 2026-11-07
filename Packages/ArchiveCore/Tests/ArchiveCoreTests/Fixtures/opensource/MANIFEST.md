@@ -24,6 +24,13 @@ three open-source projects. They are test data and are used here only to verify 
 | `tika/testACCESS.mdb`, `tika/testAccess_V1997.mdb` | Access 2000–2003 (Jet 4) / Access 97 (Jet 3) | tables and rows read |
 | `tika/testAccess2.accdb`, `tika/testAccess2_2000.mdb`, `tika/testAccess2_2002-2003.mdb` | Access 2007+ / 2000 / 2002–2003 | column `ShortTextField`, date 2015-06-24, memo text `over the bold italic dog`, Unicode `普林斯顿大学` (Tika `JackcessParserTest`) |
 | `tika/testAccess2_encrypted.accdb` | Access 2010 (password `tika`) | reported locked, nothing read |
-| `tika/testOneNote*.one`, `tika/test-tika-*.one` | OneNote 2010–2016, OneNote 2007, Office 365 | see `OneNoteReaderTests` (Tika `OneNoteParserTest` strings); `testOneNote-fuzz1..3.one` are fuzzer regressions that must not trap |
+| `tika/testOneNote1.one`, `testOneNote2.one`, `testOneNote3.one`, `testOneNote4.one` | OneNote 2013 (MS-ONESTORE) | Doc2: `wow this is neat`, `neat info about totally killin it bro`, `Section1TextArea1`, `Section1HeaderTitle`, `Section1TextArea2`; Doc3: `awesome information about sports or some crap like that.`, `Quit doing horrible things to me. Dang you.`, `Section2*`; Doc4: `way too much information about poptarts to handle.`, `Section3*`; no `Calibri` or garbage UTF-16 in any (Tika `OneNoteParserTest`) |
+| `tika/testOneNote2016.one` | OneNote 2016 | `So good`, `This is one note 2016` |
+| `tika/test-tika-4303-Chinese-notes.one` | OneNote 2016 | `中文标题` (TIKA-4303) |
+| `tika/testOneNoteFromOffice365.one`, `testOneNoteFromOffice365-2.one`, `testOneNoteTablesLists.one` | Office 365 (FSSHTTPB packaging) | `Section1Page1Content`, `Section1Page2Content`; table cells `Table cell 1a` … `Table cell 4b`, list items `Bullet 2`, `Indented bullet`, `Number 2`, `Letter a`, `Numeral I`, `Outdented number` |
+| `tika/testOneNote2007OrEarlier.one` | OneNote 2007 (packaging GUID, no readable revision store) | the long "One note is the application…" paragraph and `Correlation between Outlook and OneNote` |
+| `tika/testOneNoteEmbeddedWordDoc.one` | OneNote 2013 | the embedded Word file is listed as not text |
+| `tika/testOneNote.one`, `tika/testOneNote-fuzz1..3.one` | OneNote 2010; fuzzer regressions | fuzz files must not trap; fuzz1/fuzz2 report their damage |
+| `../derived/testOneNote.onepkg` (+ `make_onepkg.py`) | built here from `testOneNote2.one` + `testOneNote3.one` | cabinet with one MSZIP folder in 15 blocks (byte-identical members), a stored `.onetoc2` stub, an LZX folder named and not opened |
 
 Nothing from an owner-private pack is in this folder.

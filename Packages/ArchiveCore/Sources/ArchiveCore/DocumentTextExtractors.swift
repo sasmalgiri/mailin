@@ -34,8 +34,10 @@ enum DocumentKind: String, Sendable, CaseIterable {
     /// archives up to `ContainerTextExtractor.maxDepth` levels, every child
     /// that was not read listed by name.
     case zip, tar, gzip
-    /// Directive 2026-11-07 §6: the other business formats — Publisher.
+    /// Directive 2026-11-07 §6: the other business formats — Publisher,
+    /// OneNote section (.one) and notebook package (.onepkg, a cabinet).
     case pub
+    case one, onepkg
 
     var isContainer: Bool { self == .zip || self == .tar || self == .gzip }
 
@@ -61,9 +63,12 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case "tar": return .tar
         case "tgz", "gz", "gzip": return .gzip
         case "pub": return .pub
+        case "one": return .one
+        case "onepkg": return .onepkg
         default: break
         }
         if mime.contains("mspublisher") { return .pub }
+        if mime.contains("onenote") { return .one }
         if mime.contains("opendocument.text") { return .odt }
         if mime.contains("opendocument.spreadsheet") { return .ods }
         if mime.contains("opendocument.presentation") { return .odp }
@@ -91,6 +96,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .projectXML: return "project"
         case .zip, .tar, .gzip: return "archive"
         case .pub: return "publisher"
+        case .one, .onepkg: return "onenote"
         }
     }
 }
@@ -127,6 +133,8 @@ enum DocumentTextExtractor {
         case .projectXML: return try ProjectXMLTextExtractor.extract(fileURL: fileURL)
         case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: password)
         case .pub: return try PublisherTextExtractor.extract(fileURL: fileURL)
+        case .one: return try OneNoteTextExtractor.extract(fileURL: fileURL, logicalName: logicalName)
+        case .onepkg: return try OneNoteTextExtractor.extractPackage(fileURL: fileURL, logicalName: logicalName)
         }
     }
 
@@ -151,8 +159,11 @@ enum DocumentTextExtractor {
         if bytes[0] == 0x1F, bytes[1] == 0x8B { return .gzip }
         if bytes[0] == 0x50, bytes[1] == 0x4B, bytes[2] == 0x03 || bytes[2] == 0x05, bytes[3] == 0x04 || bytes[3] == 0x06 { return .zip }
         if bytes.count >= 262, Array(bytes[257..<262]) == [0x75, 0x73, 0x74, 0x61, 0x72] { return .tar }
-        // Directive 2026-11-07 §6: Publisher (and the other OLE2 business formats) by the root CLSID.
+        // Directive 2026-11-07 §6: Publisher (and the other OLE2 business formats) by the root CLSID;
+        // a OneNote section by its file-type GUID; a notebook package by the cabinet signature.
         if Array(bytes[0..<8]) == OfficeTextExtractor.oleSignature { return OLE2CompoundSniff.kind(head: head) }
+        if OneNoteTextExtractor.hasSectionSignature(head) { return .one }
+        if CabinetReader.hasSignature(head) { return .onepkg }
         return nil
     }
 
