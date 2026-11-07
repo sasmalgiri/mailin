@@ -176,49 +176,147 @@ final class ExportRunCenter {
         replace(updated)
     }
 
-    /// Re-read every file the inventory lists and compare its hash (full, never
-    /// sampled); then (OUT-04) parse each .eml/.msg back and compare its
-    /// content with the archive's record — two statements, both on the receipt.
+    /// Re-read what the export wrote. Two statements, kept apart on the receipt:
+    /// the byte re-hash (`verificationLine` — every listed file against the
+    /// inventory, or the single file against the receipt's SHA-256) and the
+    /// content reconciliation (`contentLine`, OUT-04 — every output message
+    /// parsed back and compared with the archive's record, streamed a page at
+    /// a time). The content line is always written: when nothing could be
+    /// checked it says why. The full report is saved beside the receipt.
     func verifyExport(_ receipt: ExportReceipt) async {
         var updated = receipt
-        let folder = receipt.destinationURL
-        let outcome: Result<ExportInventory.Verification, Error> = await Task.detached(priority: .utility) {
-            do { return .success(try ExportInventory.verify(folder: folder)) } catch { return .failure(error) }
-        }.value
-        switch outcome {
-        case .success(let verification):
-            updated.verificationLine = Self.verificationText(verification)
-            if let content = await Self.contentReconciliationText(folder: folder) {
-                updated.verificationLine = (updated.verificationLine ?? "") + " · " + content
+        let destination = receipt.destinationURL
+        if receipt.isFolder {
+            let outcome: Result<ExportInventory.Verification, Error> = await Task.detached(priority: .utility) {
+                do { return .success(try ExportInventory.verify(folder: destination)) } catch { return .failure(error) }
+            }.value
+            switch outcome {
+            case .success(let verification):
+                updated.verificationLine = Self.verificationText(verification)
+            case .failure(let error):
+                updated.verificationLine = String(localized: "Verification could not run: \(error.localizedDescription)")
             }
-        case .failure(let error):
-            updated.verificationLine = String(localized: "Verification could not run: \(error.localizedDescription)")
+        } else {
+            updated.verificationLine = await Self.fileRehashText(file: destination, recorded: receipt.sha256Hex)
         }
+        let report = receipt.isFolder
+            ? await ExportReconciliation.reconcile(folder: destination, lookup: Self.sourceLookup())
+            : await ExportReconciliation.reconcile(file: destination, promised: receipt.written, lookup: Self.sourceLookup())
+        updated.contentLine = Self.reconciliationText(report)
+        updated.contentReportPath = (try? ExportReceiptStore.production.saveContentReport(report, for: receipt))?.path
         replace(updated)
     }
 
-    /// OUT-04: the archive's records for every message the inventory names,
-    /// then the re-parse. Nil when the folder holds nothing this check parses.
-    static func contentReconciliationText(folder: URL) async -> String? {
-        guard let inventory = try? ExportInventory.load(folder: folder) else { return nil }
-        let ids = inventory.files.compactMap { $0.emailID.flatMap(UUID.init(uuidString:)) }
-        guard !ids.isEmpty else { return nil }
-        var records: [UUID: MBOXParser.RawEmail] = [:]
-        for id in ids { if let email = try? await SQLiteEmailStore.shared.fullEmail(id: id) { records[id] = email } }
-        let report: ExportReconciliation.Report? = await Task.detached(priority: .utility) { try? ExportReconciliation.reconcile(folder: folder, records: records) }.value
-        guard let report, report.checked > 0 || !report.unparsed.isEmpty else { return nil }
-        return reconciliationText(report)
+    /// A single-file export (mbox, PST, one .eml): its SHA-256 now against the one the receipt recorded.
+    nonisolated static func fileRehashText(file: URL, recorded: String?) async -> String {
+        let outcome: Result<String, Error> = await Task.detached(priority: .utility) {
+            do { return .success(try ExportInventory.sha256(of: file)) } catch { return .failure(error) }
+        }.value
+        switch outcome {
+        case .failure(let error):
+            return String(localized: "Verification could not run: \(error.localizedDescription)")
+        case .success(let hash):
+            guard let recorded, !recorded.isEmpty else {
+                return String(localized: "rehash: the receipt recorded no SHA-256, so the bytes could not be compared")
+            }
+            return hash.lowercased() == recorded.lowercased()
+                ? String(localized: "rehash checked: the file matches the receipt's SHA-256")
+                : String(localized: "rehash checked: the file's SHA-256 differs from the receipt")
+        }
     }
 
-    static func reconciliationText(_ r: ExportReconciliation.Report) -> String {
-        var line = String(localized: "content checked: \(r.matching) of \(r.checked) files say what the archive says")
-        if !r.mismatches.isEmpty {
-            let named = r.mismatches.prefix(3).map { "\(($0.path as NSString).lastPathComponent) (\($0.differences.joined(separator: ", ")))" }.joined(separator: "; ")
-            line += " · " + String(localized: "differ \(r.mismatches.count): \(named)")
+    /// OUT-04: the archive's records a page at a time — the engine hands at
+    /// most `ExportReconciliation.maxPageSize` ids per call, so no
+    /// whole-archive dictionary is ever built. Container outputs (mbox, PST)
+    /// are tied to their records by Message-ID. A header-only (located)
+    /// record is completed by the engine through the hydrator's locator
+    /// route, which `CapabilityWiring` installs under `.locatorReads`.
+    nonisolated static func sourceLookup(store: SQLiteEmailStore = .shared) -> ExportReconciliation.SourceLookup {
+        ExportReconciliation.SourceLookup(
+            records: { ids in
+                var out: [UUID: MBOXParser.RawEmail] = [:]
+                for id in ids { if let email = try await store.fullEmail(id: id) { out[id] = email } }
+                return out
+            },
+            recordsByMessageID: { messageIDs in
+                var out: [String: MBOXParser.RawEmail] = [:]
+                for (key, id) in try await store.emailIDs(forMessageIDs: messageIDs) {
+                    if let email = try await store.fullEmail(id: id) { out[key] = email }
+                }
+                return out
+            })
+    }
+
+    /// The receipt's content statement: outcome, counts, named differences,
+    /// and every lossy-but-permitted transformation the format imposed.
+    nonisolated static func reconciliationText(_ r: ExportReconciliation.ContentReport) -> String {
+        var line: String
+        switch r.outcome {
+        case .complete:
+            line = String(localized: "content checked: \(r.matching) of \(r.eligible) messages say what the archive says")
+        case .partial:
+            line = String(localized: "content check incomplete: \(r.matching) of \(r.eligible) messages reached say what the archive says")
+        case .failed:
+            line = String(localized: "content check failed: \(r.matching) of \(r.eligible) messages say what the archive says")
+        case .unavailable:
+            line = String(localized: "content not checked")
         }
-        if !r.unparsed.isEmpty { line += " · " + String(localized: "unparsable \(r.unparsed.count)") }
+        if let reason = r.reason, !reason.isEmpty { line += " — " + reason }
+        if r.mismatched > 0 {
+            let named = r.mismatches.prefix(3)
+                .map { "\(($0.path as NSString).lastPathComponent) (\($0.lostFields.map(\.rawValue).joined(separator: ", ")))" }
+                .joined(separator: "; ")
+            line += " · " + String(localized: "differ \(r.mismatched): \(named)")
+        }
+        if r.unverifiable > 0 { line += " · " + String(localized: "not verifiable \(r.unverifiable)") }
         if r.withoutRecord > 0 { line += " · " + String(localized: "no record \(r.withoutRecord)") }
+        if r.unparsed > 0 { line += " · " + String(localized: "unparsable \(r.unparsed)") }
+        if r.hydrated > 0 { line += " · " + String(localized: "\(r.hydrated) located record(s) read from their source bytes") }
+        if !r.transformations.isEmpty {
+            let named = r.transformations.sorted { $0.key < $1.key }
+                .map { "\(transformationText($0.key)) (\($0.value))" }
+                .joined(separator: "; ")
+            line += " · " + String(localized: "re-expressed, not lost: \(named)")
+        }
         return line
+    }
+
+    /// The transformations `ExportReconciliation` names, in the user's
+    /// language. The engine writes English keys; the ones it is known to emit
+    /// are translated here, anything else is shown as the engine wrote it.
+    nonisolated static func transformationText(_ key: String) -> String {
+        switch key {
+        case "the .msg writer does not carry attachment Content-IDs":
+            return String(localized: "the .msg writer does not carry attachment Content-IDs")
+        case "the .msg writer does not carry the inline disposition":
+            return String(localized: "the .msg writer does not carry the inline disposition")
+        case "mbox carries no folder path":
+            return String(localized: "mbox carries no folder path")
+        case "the PST export writes every message into its export folder; the source folder path is not carried":
+            return String(localized: "the PST export writes every message into its export folder; the source folder path is not carried")
+        case "the file layout did not record the folder":
+            return String(localized: "the file layout did not record the folder")
+        case "date re-expressed (same instant to the second)":
+            return String(localized: "date re-expressed (same instant to the second)")
+        default:
+            break
+        }
+        let minutePrefix = "date compared to the minute because ", minuteSuffix = " carries no seconds"
+        if key.hasPrefix(minutePrefix), key.hasSuffix(minuteSuffix), key.count > minutePrefix.count + minuteSuffix.count {
+            let side = String(key.dropFirst(minutePrefix.count).dropLast(minuteSuffix.count))
+            return String(localized: "date compared to the minute because \(side) carries no seconds")
+        }
+        let deliveryPrefix = "date: the ", deliverySuffix = " carries a delivery time derived from the record (the source had no Date header)"
+        if key.hasPrefix(deliveryPrefix), key.hasSuffix(deliverySuffix), key.count > deliveryPrefix.count + deliverySuffix.count {
+            let format = String(key.dropFirst(deliveryPrefix.count).dropLast(deliverySuffix.count))
+            return String(localized: "date: the \(format) carries a delivery time derived from the record (the source had no Date header)")
+        }
+        let addressSuffix = ": same addresses, display names or order re-expressed"
+        if key.hasSuffix(addressSuffix), key.count > addressSuffix.count {
+            let field = String(key.dropLast(addressSuffix.count))
+            return String(localized: "\(field): same addresses, display names or order re-expressed")
+        }
+        return key
     }
 
     /// "written", "hashes recorded while writing" and this re-read stay three different statements.
@@ -382,6 +480,15 @@ struct ExportProgressOverlayView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("export.receipt.verification")
             }
+            // OUT-04: the content statement, apart from the byte re-hash above.
+            if let content = receipt.contentLine {
+                Text(content)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(receipt.contentReportPath ?? content)
+                    .accessibilityIdentifier("export.receipt.content")
+            }
 
             Text(receipt.destinationURL.lastPathComponent)
                 .font(.system(size: 11, design: .monospaced))
@@ -429,14 +536,15 @@ struct ExportProgressOverlayView: View {
                     .font(.system(size: 11))
                     .help(String(localized: "Build the inventory from the kept manifest and re-hash every file; nothing is rewritten"))
                     .accessibilityIdentifier("export.receipt.finishInventory")
-                } else if receipt.isFolder, receipt.inventoryPath != nil {
+                } else if receipt.destination != "—", receipt.isFolder ? receipt.inventoryPath != nil : receipt.written > 0 {
+                    // A folder needs its inventory; a single mbox / PST / .eml is re-hashed against the receipt.
                     Button {
                         Task { await center.verifyExport(receipt) }
                     } label: {
                         Label(String(localized: "Verify export"), systemImage: "checkmark.shield")
                     }
                     .font(.system(size: 11))
-                    .help(String(localized: "Re-read every listed file and compare its hash with the inventory"))
+                    .help(String(localized: "Re-read what was written: the bytes against the recorded hashes, then every message parsed back and compared with the archive"))
                     .accessibilityIdentifier("export.receipt.verify")
                 }
                 #if os(macOS)

@@ -3846,23 +3846,47 @@ final class V2CutoverTests: XCTestCase {
                           raw(1, subject: "Reconcile 1", body: "body 1 with a few words", attachment: false),
                           raw(2, subject: "With file", body: "see the file", attachment: true)].map { try MBOXParser.processRawMessage($0, senderEmail: "") }
         _ = try await env.store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
-        var records: [UUID: MBOXParser.RawEmail] = [:]
-        for email in emails { if let stored = try await env.store.fullEmail(id: email.id) { records[email.id] = stored } }
-        XCTAssertEqual(records.count, 3)
+        // The app's lookup: records a page at a time from the store, never a whole-archive dictionary.
+        let lookup = ExportRunCenter.sourceLookup(store: env.store)
+        let page = try await lookup.records(emails.map(\.id))
+        XCTAssertEqual(page.count, 3)
         let service = ArchiveExportService(archive: env.archive)
 
         let emlFolder = env.root.appendingPathComponent("eml", isDirectory: true)
         _ = try await service.exportEMLFiles(scope: .explicit(Set(emails.map(\.id))), to: emlFolder)
-        let clean = try ExportReconciliation.reconcile(folder: emlFolder, records: records)
-        XCTAssertEqual(clean.checked, 3); XCTAssertEqual(clean.matching, 3); XCTAssertTrue(clean.isClean, "\(clean)")
-        XCTAssertEqual(ExportRunCenter.reconciliationText(clean), "content checked: 3 of 3 files say what the archive says")
+        let clean = await ExportReconciliation.reconcile(folder: emlFolder, lookup: lookup)
+        XCTAssertEqual(clean.checked, 3); XCTAssertEqual(clean.matching, 3); XCTAssertEqual(clean.outcome, .complete, "\(clean)")
+        XCTAssertEqual(clean.eligible, 3); XCTAssertEqual(clean.promised, 3)
+        XCTAssertEqual(ExportRunCenter.reconciliationText(clean), "content checked: 3 of 3 messages say what the archive says")
 
         // A different rendering of the same messages: .msg bytes differ from the source, the content does not.
         let msgFolder = env.root.appendingPathComponent("msg", isDirectory: true)
         _ = try await service.exportMSGFiles(scope: .explicit(Set(emails.map(\.id))), to: msgFolder)
-        let msgReport = try ExportReconciliation.reconcile(folder: msgFolder, records: records)
+        let msgReport = await ExportReconciliation.reconcile(folder: msgFolder, lookup: lookup)
         XCTAssertEqual(msgReport.checked, 3)
         XCTAssertEqual(msgReport.matching, 3, "\(msgReport.mismatches)")
+
+        // A single-file container: every record inside the mbox is tied to its archive record by Message-ID.
+        let mbox = env.root.appendingPathComponent("all.mbox")
+        _ = try await service.exportMBOXArchive(scope: .explicit(Set(emails.map(\.id))), to: mbox)
+        let container = await ExportReconciliation.reconcile(file: mbox, promised: 3, lookup: lookup)
+        XCTAssertEqual(container.eligible, 3, "\(container)")
+        XCTAssertEqual(container.matching, 3, "\(container.findings)")
+        XCTAssertEqual(container.outcome, .complete, container.reason ?? "")
+        let containerText = ExportRunCenter.reconciliationText(container)
+        XCTAssertTrue(containerText.hasPrefix("content checked: 3 of 3 messages say what the archive says"), containerText)
+        // The mbox writer cannot carry the folder path: named as re-expressed, not counted as lost.
+        if container.transformations.keys.contains("mbox carries no folder path") {
+            XCTAssertTrue(containerText.contains("re-expressed, not lost: mbox carries no folder path (3)"), containerText)
+        }
+        let shortfall = await ExportReconciliation.reconcile(file: mbox, promised: 4, lookup: lookup)
+        XCTAssertEqual(shortfall.outcome, .failed, "a promise of 4 against 3 found is a failure, named")
+        XCTAssertTrue(ExportRunCenter.reconciliationText(shortfall).contains("the export promised 4 messages, 3 found"), ExportRunCenter.reconciliationText(shortfall))
+        // A file this check does not parse is unavailable with the reason — the content line is never silent.
+        let csv = env.root.appendingPathComponent("report.csv"); try Data("a,b\n".utf8).write(to: csv)
+        let unavailable = await ExportReconciliation.reconcile(file: csv, promised: nil, lookup: lookup)
+        XCTAssertEqual(unavailable.outcome, .unavailable)
+        XCTAssertTrue(ExportRunCenter.reconciliationText(unavailable).hasPrefix("content not checked — "), ExportRunCenter.reconciliationText(unavailable))
 
         // A file edited after the export: the byte check says "changed", the content check says WHAT changed.
         let inventory = try ExportInventory.load(folder: emlFolder)
@@ -3870,15 +3894,27 @@ final class V2CutoverTests: XCTestCase {
         let original = try String(contentsOf: edited, encoding: .utf8)
         try original.replacingOccurrences(of: "Subject: ", with: "Subject: Altered ").write(to: edited, atomically: true, encoding: .utf8)
         XCTAssertEqual(try ExportInventory.verify(folder: emlFolder).changed, [inventory.files[0].path])
-        let tampered = try ExportReconciliation.reconcile(folder: emlFolder, records: records)
-        XCTAssertEqual(tampered.mismatches.map(\.differences), [["subject"]], "\(tampered)")
+        let tampered = await ExportReconciliation.reconcile(folder: emlFolder, lookup: lookup)
+        XCTAssertEqual(tampered.mismatches.map { $0.lostFields.map(\.rawValue) }, [["subject"]], "\(tampered)")
         XCTAssertEqual(tampered.matching, 2)
+        XCTAssertEqual(tampered.outcome, .failed)
         let tamperedText = ExportRunCenter.reconciliationText(tampered)
+        XCTAssertTrue(tamperedText.hasPrefix("content check failed: 2 of 3 messages say what the archive says"), tamperedText)
         XCTAssertTrue(tamperedText.contains("differ 1: \((inventory.files[0].path as NSString).lastPathComponent) (subject)"), tamperedText)
         // A record no longer in the archive is counted, not invented.
-        var fewer = records
-        fewer.removeValue(forKey: emails[1].id)
-        XCTAssertEqual(try ExportReconciliation.reconcile(folder: emlFolder, records: fewer).withoutRecord, 1)
+        let missingOne = emails[1].id
+        let fewer = ExportReconciliation.SourceLookup(records: { ids in try await lookup.records(ids.filter { $0 != missingOne }) })
+        let withoutRecord = await ExportReconciliation.reconcile(folder: emlFolder, lookup: fewer)
+        XCTAssertEqual(withoutRecord.withoutRecord, 1)
+        XCTAssertTrue(ExportRunCenter.reconciliationText(withoutRecord).contains("no record 1"), ExportRunCenter.reconciliationText(withoutRecord))
+        // The report travels with the receipt, whole.
+        let receipts = ExportReceiptStore(directory: env.root.appendingPathComponent("receipts", isDirectory: true))
+        let receipt = ExportReceipt(title: "t", destination: emlFolder.path, isFolder: true, requested: 3, written: 3, outcome: .complete, startedAt: Date(), completedAt: Date())
+        let reportURL = try receipts.saveContentReport(tampered, for: receipt)
+        XCTAssertEqual(reportURL.lastPathComponent, "export-\(receipt.id.uuidString).content.json")
+        XCTAssertEqual(try JSONDecoder().decode(ExportReconciliation.ContentReport.self, from: Data(contentsOf: reportURL)), tampered)
+        _ = try receipts.save(receipt)
+        XCTAssertEqual(receipts.list().count, 1, "the content report is not listed as a receipt")
         // Normalisation: display names and whitespace do not count as differences; a different address does.
         XCTAssertEqual(ExportReconciliation.addresses("Ann <ann@x.com>, bob@y.org"), ExportReconciliation.addresses("bob@y.org,ANN@x.com"))
         XCTAssertNotEqual(ExportReconciliation.addresses("ann@x.com"), ExportReconciliation.addresses("anna@x.com"))
@@ -6183,13 +6219,17 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(export.recordsWritten, 4)
         XCTAssertTrue(try ExportInventory.verify(folder: exportFolder).isClean)
         // OUT-04 / COMP-16: the outputs say what the restored archive says, message by message.
-        var records: [UUID: MBOXParser.RawEmail] = [:]
-        for file in try ExportInventory.load(folder: exportFolder).files {
-            if let id = file.emailID.flatMap(UUID.init(uuidString:)), let email = try await restored.fullEmail(id: id) { records[id] = email }
-        }
-        let reconciliation = try ExportReconciliation.reconcile(folder: exportFolder, records: records)
+        // The located (header-only) record is completed from its source bytes through the
+        // hydrator's locator route — routed at the restored store, as CapabilityWiring does
+        // in production — and counted as hydrated, never silently taken as matching.
+        let savedLocator = AttachmentHydrator.locatorProvider
+        defer { AttachmentHydrator.locatorProvider = savedLocator }
+        AttachmentHydrator.locatorProvider = { id in SQLiteEmailStore.locatorSnapshot(emailID: id, storeDirectory: cleanStoreDir) }
+        let reconciliation = await ExportReconciliation.reconcile(folder: exportFolder, lookup: ExportRunCenter.sourceLookup(store: restored))
         XCTAssertEqual(reconciliation.matching, 4, "\(reconciliation)")
-        XCTAssertTrue(reconciliation.isClean)
+        XCTAssertEqual(reconciliation.outcome, .complete, reconciliation.reason ?? "")
+        XCTAssertGreaterThanOrEqual(reconciliation.hydrated, 1, "the deferred large message is a located record read from its bytes: \(reconciliation)")
+        XCTAssertTrue(ExportRunCenter.reconciliationText(reconciliation).hasPrefix("content checked: 4 of 4 messages say what the archive says"))
         // Independent check: the exported files parse back to the same three subjects, large message intact.
         var subjects: [String] = []
         var largeBytes = 0

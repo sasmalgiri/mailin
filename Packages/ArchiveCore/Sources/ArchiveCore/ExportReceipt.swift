@@ -68,6 +68,13 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     /// "rehash checked N of M files match · missing k …" — kept apart from
     /// `checked` (hashes recorded while writing) and from `written`.
     var verificationLine: String? = nil
+    /// OUT-04: the content statement of a later Verify export — the outputs
+    /// parsed back and compared with the archive's records. Always written by
+    /// a verification, even when nothing could be checked (then it says why).
+    /// Kept apart from `verificationLine`, which is the byte re-hash.
+    var contentLine: String? = nil
+    /// The full `ExportReconciliation.ContentReport` saved beside this receipt.
+    var contentReportPath: String? = nil
 
     var durationSeconds: Double { completedAt.timeIntervalSince(startedAt) }
 
@@ -141,6 +148,9 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         if let signaturePath { lines.append("Signature: \(signaturePath)") }
         if let errorMessage { lines.append("Error: \(errorMessage)") }
         if let resumeRequest { lines.append("Resumable: yes — continues at message \(resumeRequest.skipFirst + 1)") }
+        if let verificationLine { lines.append("Verification: \(verificationLine)") }
+        if let contentLine { lines.append("Content: \(contentLine)") }
+        if let contentReportPath { lines.append("Content report: \(contentReportPath)") }
         lines.append("Started: \(startedAt.formatted(date: .abbreviated, time: .standard))")
         lines.append("Finished: \(completedAt.formatted(date: .abbreviated, time: .standard)) (\(String(format: "%.1f", durationSeconds)) s)")
         lines.append("Receipt id: \(id.uuidString)")
@@ -169,6 +179,17 @@ struct ExportReceiptStore {
         return url
     }
 
+    /// OUT-04: the full content report beside its receipt, as
+    /// `export-<id>.content.json` (Codable `ExportReconciliation.ContentReport`).
+    func saveContentReport(_ report: ExportReconciliation.ContentReport, for receipt: ExportReceipt) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let url = directory.appendingPathComponent("export-\(receipt.id.uuidString).content.json")
+        try encoder.encode(report).write(to: url, options: .atomic)
+        return url
+    }
+
     func load(_ url: URL) throws -> ExportReceipt {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -179,7 +200,7 @@ struct ExportReceiptStore {
     func list() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         return urls
-            .filter { $0.pathExtension == "json" }
+            .filter { $0.pathExtension == "json" && !$0.lastPathComponent.hasSuffix(".content.json") }
             .sorted {
                 let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast

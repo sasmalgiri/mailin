@@ -4268,6 +4268,35 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
+    /// OUT-04: the rows whose Message-ID matches one of `messageIDs`, keyed by
+    /// the identifier without angle brackets or surrounding whitespace (the
+    /// stored header keeps its brackets, so both spellings are bound). One IN
+    /// query per 400 identifiers; callers pass a page at a time.
+    func emailIDs(forMessageIDs messageIDs: [String]) throws -> [String: UUID] {
+        func bare(_ s: String) -> String {
+            s.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "<>")).trimmingCharacters(in: .whitespaces)
+        }
+        let wanted = Array(Set(messageIDs.map(bare).filter { !$0.isEmpty }))
+        guard !wanted.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [String: UUID] = [:]
+        var start = 0
+        while start < wanted.count {
+            let slice = wanted[start..<min(start + 400, wanted.count)]
+            start += 400
+            let bound = slice.flatMap { [$0, "<\($0)>"] }
+            let placeholders = Array(repeating: "?", count: bound.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT id, message_id FROM emails WHERE message_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (index, value) in bound.enumerated() { bindText(stmt, Int32(index + 1), value) }
+            while try stepRow(stmt, db) {
+                let key = bare(columnText(stmt, 1))
+                if out[key] == nil, let id = UUID(uuidString: columnText(stmt, 0)) { out[key] = id }
+            }
+        }
+        return out
+    }
+
     func fullEmail(id: UUID) throws -> MBOXParser.RawEmail? {
         let db = try ensureDB()
         let stmt = try prepare(db, """
