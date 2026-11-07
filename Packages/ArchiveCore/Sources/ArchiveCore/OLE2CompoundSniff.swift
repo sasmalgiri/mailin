@@ -44,6 +44,7 @@ enum OLE2CompoundSniff {
         guard let clsid = rootCLSID(head: head) else { return nil }
         if clsid == publisherCLSID { return .pub }
         if visioCLSIDs.contains(clsid) { return .vsd }
+        if clsid == projectCLSID { return .mpp }
         return nil
     }
 }
