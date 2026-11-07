@@ -85,6 +85,10 @@ struct ParserFactory {
         case "pst", "ost":
             return try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "nsf":
+            // GAP-NSF seam: the Notes ODS reader (preview) when its switch is on, else the old heuristic.
+            if NotesODSPolicy.isEnabled {
+                return try NSFODSParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            }
             return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "olm":
             return try OLMParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
@@ -304,7 +308,8 @@ struct ParserFactory {
         case "pst", "ost":
             return ("pst", PSTParser.parserVersion)
         case "nsf":
-            return ("nsf", NSFParser.parserVersion)
+            // A different reader is a different identity: old checkpoints never resume into it.
+            return NotesODSPolicy.isEnabled ? ("nsf-ods", NSFODSReader.parserVersion) : ("nsf", NSFParser.parserVersion)
         case "zip", "gzip":
             // The container's own identity; each member is still parsed by
             // its own format's parser once extracted.
@@ -516,6 +521,16 @@ struct ParserFactory {
                     failed: outcome.failed, errorCategories: outcome.categories)
                 report.declaredFolders = outcome.declaredFolders
                 return report
+            }
+            if ext == "nsf", NotesODSPolicy.isEnabled {
+                // GAP-NSF: the ODS reader always goes note by note; mail notes it
+                // could not rebuild are failures in the report, never dropped.
+                let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+                let streamed = try await NSFODSParser.parseStreamingWithInventory(
+                    fileURL: fileURL, senderEmail: senderEmail,
+                    batchSize: max(1, min(batchSize, chunkLimit)),
+                    onProgress: onProgress, onBatch: onBatch)
+                return NSFODSParser.report(streamed)
             }
             if ext == "nsf", StreamingParserPolicy.binaryStreaming {
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
