@@ -4055,6 +4055,160 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    /// COMP-14 (owner-approved 2026-11-07): an S/MIME envelope encrypted to a
+    /// disposable identity in a temporary keychain is decoded by the Mac's
+    /// CMS decoder when the module is on — locked with the reason when off —
+    /// and the message inside is read with its attachment as a child. Skips
+    /// when the fixture is absent (the identity is created and removed by hand).
+    func testCOMP14_smimeEnvelopeDecodedWithTheKeychainIdentity_whenTheSwitchIsOn() async throws {
+        let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Fixtures/smime")
+        let enveloped = folder.appendingPathComponent("enveloped.p7m"), signed = folder.appendingPathComponent("signed.p7m")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: enveloped.path), "S/MIME fixture not present")
+        #if os(macOS)
+        let plain = try XCTUnwrap(SMIMEHandler.decodeCMS(try Data(contentsOf: enveloped)), "the keychain identity decrypts the envelope")
+        XCTAssertTrue(String(decoding: plain, as: UTF8.self).contains("periwinkle"))
+        let signedContent = try XCTUnwrap(SMIMEHandler.decodeCMS(try Data(contentsOf: signed)), "a signed-data part yields its content")
+        XCTAssertTrue(String(decoding: signedContent, as: UTF8.self).contains("periwinkle"))
+        XCTAssertNil(SMIMEHandler.decodeCMS(Data([0x30, 0x82, 0x01, 0x00, 0x06, 0x09])), "garbage is not decoded")
+
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let smimeWas = ProtectedContentPolicy.decryptSMIME
+        defer { ProtectedContentPolicy.decryptSMIME = smimeWas }
+        AttachmentTextIndexJob.installChildReader()
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: smime-test@example.invalid
+        Subject: Sealed envelope
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <smime-real@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        the envelope follows
+        \(mimeAttachment("smime.p7m", "application/pkcs7-mime; smime-type=enveloped-data; name=smime.p7m", try Data(contentsOf: enveloped)))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+
+        ProtectedContentPolicy.decryptSMIME = false
+        _ = await AttachmentTextIndexJob.shared.run()
+        var rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.state), [.locked])
+        XCTAssertTrue(rows[0].note?.contains("Read S/MIME with your keychain key") == true, rows[0].note ?? "")
+
+        ProtectedContentPolicy.decryptSMIME = true
+        try await env.store.attachmentTextStateReset(emailIDs: [email.id])
+        try coverage.remove(emailIDs: [email.id])
+        _ = await AttachmentTextIndexJob.shared.run()
+        rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.state), [.extracted], "\(rows.map { ($0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows[0].extractor, "smime")
+        let children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map(\.path), ["note.txt"])
+        func group(_ match: SearchCondition.Match, _ content: String, name: String? = nil) -> SearchSpec {
+            SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: name, type: nil, contentMatch: match, content: content)])])
+        }
+        try await expectIDs(env, group(.allWords, "periwinkle"), ["Sealed envelope"], "the decrypted body is searchable")
+        try await expectIDs(env, group(.allWords, "quorum", name: "note"), ["Sealed envelope"], "the attachment inside the envelope is a child")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        #else
+        throw XCTSkip("CMS decoding runs on the Mac")
+        #endif
+    }
+
+    /// A10 / §13.3 (10): an attachment that stopped at a per-run ceiling is
+    /// recorded with the reason and offers Resume; each round doubles the
+    /// ceilings and opens one more level for that attachment only, and the
+    /// record names the round. Small ceilings here stand in for the real ones.
+    func testA10_resumeReadsMoreOfAnAttachment_roundByRound_recordedPerAttachment() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        // Base ceilings small enough that a 600-byte member and a second nesting level are over them.
+        ExtractionLimits.baseOverride = ExtractionLimits(partBytes: 400, totalArchiveBytes: 1_000, archiveDepth: 1)
+        defer { ExtractionLimits.baseOverride = nil }
+        XCTAssertEqual(ExtractionLimits.round(2).partBytes, 1_600)
+        XCTAssertEqual(ExtractionLimits.round(2).archiveDepth, 3)
+        XCTAssertTrue(ExtractionLimits.noteNamesALimit("x (700 bytes, over the 400-byte guard)"))
+        XCTAssertFalse(ExtractionLimits.noteNamesALimit("password-protected"))
+
+        let small = Data("small member with the word quorum".utf8)
+        let big = Data(String(repeating: "big member text about escrow ", count: 24).utf8)      // ~700 bytes > 400
+        let inner = Self.zipPackage([("deep.txt", Data("deep member names indemnity".utf8))])
+        let zip = Self.zipPackage([("small.txt", small), ("big.txt", big), ("inner.zip", inner)])
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Resume me
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <resume@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see the archive
+        \(mimeAttachment("bundle.zip", "application/zip", zip))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        var row = try XCTUnwrap(try coverage.rows(for: email.id).first)
+        XCTAssertEqual(row.state, .partial)
+        XCTAssertEqual(row.resumeRound, 0)
+        XCTAssertTrue(ExtractionLimits.noteNamesALimit(row.note), row.note ?? "")
+        XCTAssertTrue(AttachmentResumeView.canResume(row))
+        var children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map { "\($0.path)|\($0.state)" }, ["small.txt|extracted", "big.txt|unsupported", "inner.zip|unsupported"], "round 0: the big member and the nested archive are listed, not read")
+        func found(_ words: String) async throws -> Int {
+            var q = EmailQuery.all
+            q.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "bundle", contentMatch: .allWords, content: words)])])
+            return try await env.archive.count(query: q)
+        }
+        let before = try await found("escrow")
+        XCTAssertEqual(before, 0)
+
+        // Round 1: 800-byte parts, 2,000 bytes, 2 levels → the big member and the nested file are read.
+        let outcome = await AttachmentTextIndexJob.shared.resume(emailID: email.id, position: 0)
+        guard case .resumed(let round, let state, _, let limits) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertEqual(round, 1); XCTAssertEqual(state, .extracted); XCTAssertEqual(limits, "800 bytes per part, 2000 bytes per attachment's archives, 2 levels")
+        row = try XCTUnwrap(try coverage.rows(for: email.id).first)
+        XCTAssertEqual(row.resumeRound, 1)
+        XCTAssertTrue(row.note?.contains("read in Resume round 1") == true, row.note ?? "")
+        XCTAssertFalse(AttachmentResumeView.canResume(row), "read whole: nothing left to resume")
+        children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map { "\($0.path)|\($0.state)" }, ["small.txt|extracted", "big.txt|extracted", "inner.zip › deep.txt|extracted"])
+        let after = try await found("escrow")
+        XCTAssertEqual(after, 1)
+        let deep = try await found("indemnity")
+        XCTAssertEqual(deep, 1, "the file one level deeper is searchable after the round")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated

@@ -37,8 +37,9 @@ enum VisioTextExtractor {
         var skipped: [String] = []
         func bytes(_ name: String) throws -> Data? {
             guard let member = parts[name] else { return nil }
-            guard member.uncompressedSize <= OfficeTextExtractor.maxPartBytes else {
-                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)")
+            let partLimit = ExtractionLimits.effective.partBytes
+            guard member.uncompressedSize <= partLimit else {
+                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(partLimit)-byte guard)")
                 return nil
             }
             return try DocumentTextExtractor.memberData(member, from: fileURL, scratch: scratch)
@@ -153,8 +154,8 @@ enum ProjectXMLTextExtractor {
 
     static func extract(fileURL: URL) throws -> OfficeTextExtractor.Result {
         let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-        guard Int64(data.count) <= OfficeTextExtractor.maxPartBytes else {
-            return OfficeTextExtractor.Result(text: "", components: [], skipped: ["\(fileURL.lastPathComponent) (\(data.count) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)"], notText: [])
+        guard Int64(data.count) <= ExtractionLimits.effective.partBytes else {
+            return OfficeTextExtractor.Result(text: "", components: [], skipped: ["\(fileURL.lastPathComponent) (\(data.count) bytes, over the \(ExtractionLimits.effective.partBytes)-byte guard)"], notText: [])
         }
         let collector = ProjectXMLCollector()
         guard collector.parse(data) else { throw OfficeTextExtractor.ExtractError.notAPackage("malformed Project XML") }

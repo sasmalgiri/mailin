@@ -18,7 +18,7 @@
 //  "[ZIP: report.docx]"), lists what it could not read, and throws
 //  `.encrypted` for password-protected files so the coverage state says
 //  "locked" instead of "no match". Readers are bounded by
-//  `OfficeTextExtractor.maxPartBytes` per part and never execute anything.
+//  `ExtractionLimits.effective.partBytes` per part and never execute anything.
 //
 
 import Foundation
@@ -174,7 +174,7 @@ enum ODFTextExtractor {
         let byName = Dictionary(members.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         let scratch = try DocumentTextExtractor.scratchDirectory("odf")
         defer { try? FileManager.default.removeItem(at: scratch) }
-        if let manifest = byName["META-INF/manifest.xml"], manifest.uncompressedSize <= OfficeTextExtractor.maxPartBytes,
+        if let manifest = byName["META-INF/manifest.xml"], manifest.uncompressedSize <= ExtractionLimits.effective.partBytes,
            let text = String(data: try DocumentTextExtractor.memberData(manifest, from: fileURL, scratch: scratch), encoding: .utf8),
            text.contains("encryption-data") {
             throw OfficeTextExtractor.ExtractError.encrypted
@@ -186,8 +186,8 @@ enum ODFTextExtractor {
         }
         func parse(_ name: String, collector: ODFTextCollector) throws -> Bool {
             guard let member = byName[name] else { return false }
-            guard member.uncompressedSize <= OfficeTextExtractor.maxPartBytes else {
-                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)")
+            guard member.uncompressedSize <= ExtractionLimits.effective.partBytes else {
+                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(ExtractionLimits.effective.partBytes)-byte guard)")
                 return false
             }
             let data = try DocumentTextExtractor.memberData(member, from: fileURL, scratch: scratch)
@@ -354,8 +354,8 @@ enum IWorkTextExtractor {
 
         // iWork '09: one XML document (index.xml / index.apxl).
         if let xml = members.first(where: { ["index.xml", "index.apxl"].contains($0.name) }) {
-            guard xml.uncompressedSize <= OfficeTextExtractor.maxPartBytes else {
-                throw OfficeTextExtractor.ExtractError.notAPackage("\(xml.name) is \(xml.uncompressedSize) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard")
+            guard xml.uncompressedSize <= ExtractionLimits.effective.partBytes else {
+                throw OfficeTextExtractor.ExtractError.notAPackage("\(xml.name) is \(xml.uncompressedSize) bytes, over the \(ExtractionLimits.effective.partBytes)-byte guard")
             }
             let data = try DocumentTextExtractor.memberData(xml, from: fileURL, scratch: scratch)
             let collector = IWork09TextCollector()
@@ -380,13 +380,13 @@ enum IWorkTextExtractor {
         var slideIndex = 0
         var cellStrings: [String] = []
         for member in textMembers {
-            guard member.uncompressedSize <= OfficeTextExtractor.maxPartBytes else {
-                skipped.append("\(member.name) (\(member.uncompressedSize) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)")
+            guard member.uncompressedSize <= ExtractionLimits.effective.partBytes else {
+                skipped.append("\(member.name) (\(member.uncompressedSize) bytes, over the \(ExtractionLimits.effective.partBytes)-byte guard)")
                 continue
             }
             let data = try DocumentTextExtractor.memberData(member, from: fileURL, scratch: scratch)
             let objects: [IWAFile.Object]
-            do { objects = try IWAFile.objects(in: data, limit: Int(OfficeTextExtractor.maxPartBytes)) } catch {
+            do { objects = try IWAFile.objects(in: data, limit: Int(ExtractionLimits.effective.partBytes)) } catch {
                 skipped.append("\(member.name) (\(error))"); continue
             }
             let base = String(member.name.dropFirst("Index/".count))
@@ -1074,10 +1074,10 @@ enum ContainerTextExtractor {
     /// here — a message has MIME parts and encodings, RTF has its own
     /// encoding; both go to the app's reader through `childReader`.
     static let textualExtensions: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "html", "htm", "ics", "vcf", "yml", "yaml"]
-    /// Archive inside archive inside archive: this many levels are opened.
-    static let maxDepth = 3
-    /// Bytes extracted from one attachment's archives, all levels together.
-    static let maxTotalBytes: Int64 = 1_073_741_824
+    /// Archive inside archive inside archive: this many levels are opened (round 0; Resume adds a level per round).
+    static var maxDepth: Int { ExtractionLimits.base.archiveDepth }
+    /// Bytes extracted from one attachment's archives, all levels together (round 0; Resume doubles it per round).
+    static var maxTotalBytes: Int64 { ExtractionLimits.base.totalArchiveBytes }
     /// The app's reader for children the package cannot read itself.
     nonisolated(unsafe) static var childReader: (@Sendable (URL, String) -> ArchiveChildReading)?
 
@@ -1089,7 +1089,7 @@ enum ContainerTextExtractor {
     }
 
     static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil) throws -> OfficeTextExtractor.Result {
-        var budget = maxTotalBytes
+        var budget = ExtractionLimits.effective.totalArchiveBytes
         return try extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, depth: 1, prefix: "", budget: &budget, password: password)
     }
 
@@ -1117,7 +1117,7 @@ enum ContainerTextExtractor {
         case .gzip:
             // R05: the uncompressed size is unknown in advance, so the budget
             // is enforced inside the inflate sink.
-            let limit = min(OfficeTextExtractor.maxPartBytes, max(0, budget))
+            let limit = min(ExtractionLimits.effective.partBytes, max(0, budget))
             return [Child(name: gzipPayloadName(for: logicalName), size: nil, encrypted: false) {
                 try ZIPArchiveReader.gunzip(url, to: $0, maxOutputBytes: limit)
             }]
@@ -1156,12 +1156,12 @@ enum ContainerTextExtractor {
             if member.encrypted, password == nil {
                 skipped.append("\(name) (password-protected)"); record(name, member, .locked, note: "password-protected"); continue
             }
-            if let size = member.size, size > OfficeTextExtractor.maxPartBytes {
-                let why = "\(size) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard"
+            if let size = member.size, size > ExtractionLimits.effective.partBytes {
+                let why = "\(size) bytes, over the \(ExtractionLimits.effective.partBytes)-byte guard"
                 skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, bytes: Int(size)); continue
             }
             if let size = member.size, size > budget {
-                let why = "the \(maxTotalBytes)-byte budget for one attachment's archives is used up"
+                let why = "the \(ExtractionLimits.effective.totalArchiveBytes)-byte budget for one attachment's archives is used up"
                 skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, bytes: Int(size)); continue
             }
             let destination = scratch.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : "." + ext))
@@ -1180,7 +1180,7 @@ enum ContainerTextExtractor {
             let written = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
             budget -= written
             if budget < 0 {
-                let why = "the \(maxTotalBytes)-byte budget for one attachment's archives is used up"
+                let why = "the \(ExtractionLimits.effective.totalArchiveBytes)-byte budget for one attachment's archives is used up"
                 skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, bytes: Int(written)); continue
             }
             let sha = (try? ExportInventory.sha256(of: destination)) ?? ""
@@ -1188,8 +1188,8 @@ enum ContainerTextExtractor {
             // R03: the logical name decides; when it says nothing, the bytes do.
             if let innerKind = DocumentKind.detect(mimeType: "", filename: member.name) ?? DocumentTextExtractor.sniff(fileURL: destination) {
                 if innerKind.isContainer {
-                    guard depth < maxDepth else {
-                        let why = "an archive nested deeper than \(maxDepth) levels"
+                    guard depth < ExtractionLimits.effective.archiveDepth else {
+                        let why = "an archive nested deeper than \(ExtractionLimits.effective.archiveDepth) levels"
                         skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, sha256: sha, bytes: size, detected: innerKind.rawValue); continue
                     }
                     do {
@@ -1316,7 +1316,7 @@ enum ContainerTextExtractor {
                 guard let containerKind = currentKind, containerKind.isContainer else {
                     throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) is not an archive")
                 }
-                let members = try children(of: currentURL, kind: containerKind, logicalName: currentName, budget: maxTotalBytes, password: password)
+                let members = try children(of: currentURL, kind: containerKind, logicalName: currentName, budget: ExtractionLimits.effective.totalArchiveBytes, password: password)
                 guard let member = members.first(where: { $0.name == segment }) else {
                     throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) has no member named \(segment)")
                 }

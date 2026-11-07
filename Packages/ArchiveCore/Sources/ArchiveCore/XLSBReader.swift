@@ -38,8 +38,9 @@ enum XLSBReader {
         var skipped: [String] = []
         func bytes(_ name: String) throws -> Data? {
             guard let member = parts[name] else { return nil }
-            guard member.uncompressedSize <= OfficeTextExtractor.maxPartBytes else {
-                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)")
+            let partLimit = ExtractionLimits.effective.partBytes
+            guard member.uncompressedSize <= partLimit else {
+                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(partLimit)-byte guard)")
                 return nil
             }
             return try DocumentTextExtractor.memberData(member, from: fileURL, scratch: scratch)

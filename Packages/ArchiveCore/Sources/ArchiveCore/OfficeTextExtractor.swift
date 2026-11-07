@@ -84,8 +84,9 @@ enum OfficeTextExtractor {
         }
     }
 
-    /// One XML part is read whole; larger parts are listed as skipped.
-    static let maxPartBytes: Int64 = 64 * 1_048_576
+    /// One XML part is read whole; larger parts are listed as skipped. The
+    /// base ceiling (round 0); a Resume round reads `ExtractionLimits.effective`.
+    static var maxPartBytes: Int64 { ExtractionLimits.base.partBytes }
 
     /// A password-protected Office file is an OLE compound document, not a ZIP.
     static let oleSignature: [UInt8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
@@ -123,8 +124,9 @@ enum OfficeTextExtractor {
         /// Reads one XML part's text through `collector`; nil when absent.
         func read(_ name: String, into collector: OOXMLTextCollector, skipped: inout [String]) throws -> Bool {
             guard let member = parts[name] else { return false }
-            guard member.uncompressedSize <= maxPartBytes else {
-                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(maxPartBytes)-byte guard)")
+            let partLimit = ExtractionLimits.effective.partBytes
+            guard member.uncompressedSize <= partLimit else {
+                skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(partLimit)-byte guard)")
                 return false
             }
             let destination = scratch.appendingPathComponent(UUID().uuidString)

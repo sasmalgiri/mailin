@@ -746,6 +746,52 @@ final class AttachmentTextIndexJob {
         return .unlocked(text: target.fullText ?? "", children: target.children, stored: retain)
     }
 
+    // MARK: - A10 / §13.3 (10): Resume an attachment that stopped at a per-run ceiling
+
+    enum ResumeOutcome: Sendable, Equatable {
+        case unreadable(String)
+        /// Read again under round `round`'s limits; the new state and note are recorded for this attachment alone.
+        case resumed(round: Int, state: AttachmentCoverageState, note: String?, limits: String)
+    }
+
+    /// Reads one attachment again under the next Resume round (ceilings doubled,
+    /// one more archive level) and records that attachment's row, documents and
+    /// children — the other attachments of the message are left as they were.
+    func resume(emailID: UUID, position: Int) async -> ResumeOutcome {
+        guard let page = try? await store.rawCandidates(ids: [emailID]), let candidate = page.candidates.first else {
+            return .unreadable(String(localized: "message source not stored"))
+        }
+        let coverage = try? AttachmentCoverageStore(url: await store.attachmentCoverageURL)
+        let previousRound = (try? coverage?.rows(for: emailID).first { $0.ordinal == position }?.resumeRound) ?? 0
+        let round = previousRound + 1
+        let limits = ExtractionLimits.round(round)
+        let ocr = AttachmentOCR.isEnabled
+        let raw = candidate.raw
+        let extractions: [Extraction]? = await Task.detached(priority: .userInitiated) {
+            ExtractionLimits.$current.withValue(limits) { Self.extractCoverage(fromRaw: raw, ocr: ocr) }
+        }.value
+        guard let extractions, position < extractions.count else {
+            return .unreadable(String(localized: "message could not be parsed"))
+        }
+        var target = extractions[position]
+        let roundNote = String(localized: "read in Resume round \(round) (\(limits.summary))")
+        target = Extraction(ordinal: target.ordinal, filename: target.filename, mimeType: target.mimeType, text: target.text, fullText: target.fullText,
+                            state: target.state, extractor: target.extractor, note: target.note.map { $0 + "; " + roundNote } ?? roundNote, children: target.children)
+        do {
+            if SearchChunkPolicy.isEnabled {
+                try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: [target.searchDocument])
+                try await recordChildren(emailID: emailID, extraction: target)
+            }
+            var row = target.coverageRow(emailID: emailID)
+            row.resumeRound = round
+            try coverage?.record(row: row)
+        } catch {
+            return .unreadable(String(localized: "the text was read but could not be stored: \(error.localizedDescription)"))
+        }
+        NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
+        return .resumed(round: round, state: target.state, note: target.note, limits: limits.summary)
+    }
+
     /// The recorded state of one attachment, for the detail view's lock row.
     func coverageRow(emailID: UUID, position: Int) async -> AttachmentCoverageRow? {
         let url = await store.attachmentCoverageURL
