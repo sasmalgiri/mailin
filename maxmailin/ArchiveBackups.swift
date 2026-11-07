@@ -65,9 +65,15 @@ enum ArchiveBackups {
         panel.message = String(localized: "Choose a mailin backup folder (it contains mailin-backup-inventory.json).")
         panel.prompt = String(localized: "Verify and Restore")
         guard panel.runModal() == .OK, let backup = panel.url else { return String(localized: "Restore cancelled.") }
+        return await restore(from: backup)
         #else
         return String(localized: "Restoring from a backup folder is done on the Mac.")
         #endif
+    }
+
+    /// Verifies `backup` fully, confirms (Mac), then restores into the running archive.
+    /// Split out of `restoreInteractively` so iOS, which has no folder picker here, compiles.
+    private static func restore(from backup: URL) async -> String {
         let verification: ArchiveBackup.Verification
         do { verification = try ArchiveBackup.verify(backup: backup) } catch { return error.localizedDescription }
         guard verification.isClean else {
