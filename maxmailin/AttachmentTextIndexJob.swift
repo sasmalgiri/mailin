@@ -78,7 +78,7 @@ final class AttachmentTextIndexJob {
     /// 7 (§13.8 step 4): Office depth — tracked changes, text boxes, Excel
     /// comments and hidden sheets, hidden slides, charts, embedded documents
     /// as children; XLSB, Visio (VSDX) and Project XML readers.
-    nonisolated static let extractorVersion = 7
+    nonisolated static let extractorVersion = 8
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0

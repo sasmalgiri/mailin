@@ -2488,7 +2488,7 @@ final class V2CutoverTests: XCTestCase {
         let xlsx = try OfficeTextExtractor.extract(fileURL: try write("b.xlsx", Self.xlsx(sheetName: "Budget", sharedText: "Gross margin", inlineText: "inline note")), kind: .xlsx)
         XCTAssertEqual(xlsx.components, ["Sheet: Budget"])
         // §13.3 (2): every cell carries its address; a formula's cached value comes first, the formula after it.
-        XCTAssertTrue(xlsx.text.contains("[Sheet: Budget]\nA1: Gross margin\tB1: inline note\nA2: 42\tB2: 84 {=SUM(A1:A2)}\tC2: rich run"), xlsx.text)
+        XCTAssertTrue(xlsx.text.contains("[Sheet: Budget]\nA1: Gross margin\tB1: inline note\nA2: 42\tB2: 84 (formula =SUM(A1:A2))\tC2: rich run"), xlsx.text)
 
         let pptx = try OfficeTextExtractor.extract(fileURL: try write("c.pptx", Self.pptx(slide: "Roadmap overview", notes: "remember the demo")), kind: .pptx)
         XCTAssertEqual(pptx.components, ["Slide 1", "Slide 2", "Notes 1"])
@@ -3161,7 +3161,7 @@ final class V2CutoverTests: XCTestCase {
             ("word/embeddings/oleObject1.bin", Data([0xD0, 0xCF, 0x11, 0xE0, 0, 0, 0, 0])),
         ])
         let word = try OfficeTextExtractor.extract(fileURL: try write("r.docx", docx), kind: .docx)
-        XCTAssertTrue(word.text.contains("Body before{inserted: added words}{deleted: removed words}"), word.text)
+        XCTAssertTrue(word.text.contains("Body before{inserted by A: added words}{deleted by A: removed words}"), word.text)
         XCTAssertEqual(word.text.components(separatedBy: "Boxed sidebar note").count - 1, 1, "the Fallback copy of a text box is not read twice: \(word.text)")
         XCTAssertTrue(word.text.contains("[Text box] Boxed sidebar note"), word.text)
         XCTAssertEqual(word.children.map { "\($0.path)|\($0.state.rawValue)" },
@@ -3253,7 +3253,7 @@ final class V2CutoverTests: XCTestCase {
         ])
         let binary = try DocumentTextExtractor.extract(fileURL: try write("b.xlsb", xlsb), kind: .xlsb)
         XCTAssertEqual(binary.components, ["Workbook", "Sheet: Figures", "Sheet: Backstage (hidden)"])
-        XCTAssertTrue(binary.text.contains("[Sheet: Figures]\nA1: Binary margin\tB1: 42.5\tC1: inline text\nA3: 3.5\tB3: TRUE\tC3: #DIV/0!\tD3: 3.5 {formula}\n"), binary.text)
+        XCTAssertTrue(binary.text.contains("[Sheet: Figures]\nA1: Binary margin\tB1: 42.5\tC1: inline text\nA3: 3.5\tB3: TRUE\tC3: #DIV/0!\tD3: 3.5 (formula not stored)\n"), binary.text)
         XCTAssertTrue(binary.text.contains("[Sheet: Backstage (hidden)]\nA5: Second string"), binary.text)
         XCTAssertEqual(DocumentKind.detect(mimeType: "application/vnd.ms-excel.sheet.binary.macroEnabled.12", filename: "x"), .xlsb)
         XCTAssertEqual(XLSBReader.rk(UInt32(bitPattern: (7 << 2) | 0x2)), "7")
@@ -3722,12 +3722,13 @@ final class V2CutoverTests: XCTestCase {
             let readme = try XCTUnwrap(opened.children.first { $0.path == "README.txt" }?.text)
             XCTAssertTrue(readme.contains("MAILIN-PROTECTED-CONTENT-20261107"), readme)
             let nested = try XCTUnwrap(opened.children.first { $0.path.hasSuffix(".docx") }?.text)
-            XCTAssertTrue(nested.contains("{inserted: red") && nested.contains("{deleted: brown }"), "\(name): tracked changes inside the archived Word file — \(nested.prefix(300))")
+            XCTAssertTrue(nested.contains("{inserted by Thabang Kubheka 2026-09-28: red") && nested.contains("{deleted by Thabang Kubheka 2026-09-28: brown }"), "\(name): tracked changes inside the archived Word file, author and day named — \(nested.prefix(300))")
         }
-        // 7z stays unopened and says so — never garbage, never silent.
+        // Directive §6 "Containers": a 7z whose headers are encrypted is a 7z (read by `SevenZipReader`)
+        // that is locked — never garbage, never silent, and no text without the password.
         for name in ["7zip_AES256_header_encrypted.7z"] {
             let url = pack.appendingPathComponent("02_archives/7zip_generated/\(name)")
-            XCTAssertNil(DocumentKind.detect(mimeType: "application/x-7z-compressed", filename: name))
+            XCTAssertEqual(DocumentKind.detect(mimeType: "application/x-7z-compressed", filename: name), .sevenZip)
             XCTAssertNil(AttachmentTextIndexJob.extractText(from: AttachmentMetadata(filename: name, mimeType: "application/x-7z-compressed", size: 0, fileURL: url)), name)
         }
 
@@ -3740,11 +3741,14 @@ final class V2CutoverTests: XCTestCase {
             let text = try DocumentTextExtractor.extract(fileURL: url, kind: .docx).text
             let revisions = item["revisions"] as? [[String: Any]] ?? []
             if revisions.isEmpty {
-                XCTAssertFalse(text.contains("{inserted:") || text.contains("{deleted:"), "\(path): no pending revision may be labelled — \(text.prefix(200))")
+                XCTAssertFalse(text.contains("{inserted") || text.contains("{deleted"), "\(path): no pending revision may be labelled — \(text.prefix(200))")
             } else {
                 for revision in revisions {
                     let kind = revision["kind"] as? String == "ins" ? "inserted" : "deleted"
-                    let marker = "{\(kind): \(revision["text"] as? String ?? "")"
+                    // Directive §6 "Word": the marker names the author and the day Word recorded.
+                    let author = revision["author"] as? String ?? ""
+                    let day = String((revision["date"] as? String ?? "").prefix(10))
+                    let marker = "{\(kind) by \(author) \(day): \(revision["text"] as? String ?? "")"
                     XCTAssertTrue(text.contains(marker), "\(path): expected \(marker.debugDescription) in \(text.prefix(300))")
                 }
             }
@@ -3786,7 +3790,7 @@ final class V2CutoverTests: XCTestCase {
         }
         // Deleted text is searchable but labelled; the accepted control carries no label.
         try await expectIDs(env, group(type: "docx", .allWords, "brown"), ["Mailin test fixture W05_tracked_retained.docx"], "the deleted word is found, labelled as deleted")
-        try await expectIDs(env, group(type: "docx", .phrase, "{deleted: brown"), ["Mailin test fixture W05_tracked_retained.docx"])
+        try await expectIDs(env, group(type: "docx", .phrase, "{deleted by Thabang Kubheka 2026-09-28: brown"), ["Mailin test fixture W05_tracked_retained.docx"])
         try await expectIDs(env, group(.allWords, "MAILIN-PROTECTED-CONTENT-20261107"), [], "locked archives yield nothing before Unlock")
         // Unlock through the same path the sheet uses.
         let wrongUnlock = await AttachmentTextIndexJob.shared.unlock(emailID: emails[3].id, position: 0, password: "wrong", retain: true)
@@ -3795,7 +3799,7 @@ final class V2CutoverTests: XCTestCase {
         guard case .unlocked(_, let children, true) = sevenZipUnlock else { return XCTFail("\(sevenZipUnlock)") }
         XCTAssertEqual(children.map(\.path).sorted(), ["README.txt", "nested/W05_tracked_retained.docx"])
         try await expectIDs(env, group(.allWords, "MAILIN-PROTECTED-CONTENT-20261107"), ["Mailin test fixture 7zip_AES256.zip"], "after Unlock the marker inside the archive is found")
-        try await expectIDs(env, group(name: "nested", .phrase, "{inserted: red"), ["Mailin test fixture 7zip_AES256.zip"], "the tracked change inside the Word file inside the archive")
+        try await expectIDs(env, group(name: "nested", .phrase, "{inserted by Thabang Kubheka 2026-09-28: red"), ["Mailin test fixture 7zip_AES256.zip"], "the tracked change inside the Word file inside the archive")
         let winzipUnlock = await AttachmentTextIndexJob.shared.unlock(emailID: emails[2].id, position: 0, password: "password", retain: false)
         guard case .unlocked(_, let readmeChildren, false) = winzipUnlock else { return XCTFail("\(winzipUnlock)") }
         XCTAssertEqual(readmeChildren.map(\.path), ["README"])
