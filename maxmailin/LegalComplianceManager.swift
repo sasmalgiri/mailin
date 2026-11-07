@@ -156,10 +156,14 @@ class LegalComplianceManager: ObservableObject {
     • Vision — OCR text recognition
     • Charts — Data visualization
 
-    No third-party open source libraries are used. All code is original.
+    One open source component is included, under its licence below. All other
+    code is original.
 
     Apple frameworks are provided under Apple's Software License Agreement.
-    """
+
+    ────────────────────────────────────────
+
+    """ + VendoredNotices.libarchive
 }
 
 // MARK: - Terms Acceptance View

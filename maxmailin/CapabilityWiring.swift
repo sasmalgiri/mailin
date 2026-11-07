@@ -68,6 +68,9 @@ enum CapabilityWiring {
                     AttachmentTextIndexJob.shared.kickIfNeeded()
                 }
             }
+        case .notesODSReader:
+            // GAP-NSF: read by ParserFactory at import time; affects the next .nsf import only.
+            NotesODSPolicy.isEnabled = isOn
         case .protectedMessageDecrypt:
             // §13.8 step 5: read by AttachmentTextIndexJob; locked S/MIME rows are retried on the next pass.
             ProtectedContentPolicy.decryptSMIME = isOn
@@ -256,9 +259,14 @@ enum CapabilityWiring {
     /// invisible until an assertion happened to compare two runs.
     ///
     /// Any test that touches capability state should call this in teardown.
+    ///
+    /// Archive engines go back to their shipped default rather than off: "all
+    /// off" left the MS-PST reader off for every later test in the process, so
+    /// PST tests read files with the earlier reader (1 message of 2,000) when
+    /// they happened to run after this teardown. Optional pages stay disarmed.
     static func resetAll() {
         for capability in Capability.allCases {
-            apply(capability, isOn: false)
+            apply(capability, isOn: capability.owner == .archive && capability.defaultsOn)
         }
     }
 }

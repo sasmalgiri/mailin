@@ -176,6 +176,10 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// FIND-04/07: the typed search model over the chunked in-database index
     /// (whole bodies and attachment texts, no cutoff; groups; honest unknowns).
     case searchQueryModel
+    /// GAP-NSF (owner 2026-11-07): Lotus Notes databases read by the ODS
+    /// layout (NotesODSPolicy) instead of the heuristic NSF parser. Preview:
+    /// verified on one public sample only.
+    case notesODSReader
 
     var id: String { rawValue }
 

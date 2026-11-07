@@ -33,10 +33,10 @@ struct AttachmentUnlockView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     if current.state == .locked, current.extractor == "openpgp" {
-                        // Directive §6 "OpenPGP": no key store in this release — a password field would be a false promise.
-                        Text(String(localized: "No OpenPGP key store in this release"))
+                        // Directive §6 "OpenPGP": never decrypted (GAP-PGP keeps public keys only) — a password field would be a false promise.
+                        Text(String(localized: "OpenPGP: not decrypted, public keys only"))
                             .font(Typography.caption1).foregroundStyle(.secondary)
-                            .help(String(localized: "The file is described from its OpenPGP packet headers; a password cannot open it here"))
+                            .help(String(localized: "The file is described from its OpenPGP packet headers; mailin keeps public keys only, so a password cannot open it here"))
                             .accessibilityIdentifier("attachment.unlock.openpgp.\(position)")
                     } else {
                         Button(String(localized: "Unlock…")) { showingSheet = true }

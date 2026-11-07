@@ -5062,11 +5062,13 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(rows.map(\.extractor), ["openpgp", "openpgp", "text"])
         let lockedNote = try XCTUnwrap(rows[0].note)
         XCTAssertTrue(lockedNote.contains("OpenPGP-encrypted to key DEADBEEF01020304 (RSA)"), lockedNote)
-        XCTAssertTrue(lockedNote.contains("MDC present") && lockedNote.contains("no OpenPGP key store"), lockedNote)
+        XCTAssertTrue(lockedNote.contains("MDC present") && lockedNote.contains("never decrypts"), lockedNote)
         XCTAssertFalse(lockedNote.contains("password-protected"), "the generic password note is not used for OpenPGP: \(lockedNote)")
         let signedNote = try XCTUnwrap(rows[1].note)
-        XCTAssertTrue(signedNote.contains("signature present, not verified (no OpenPGP trust store)"), signedNote)
-        XCTAssertTrue(signedNote.contains("issuer") && signedNote.contains("EdDSA/SHA-512") && signedNote.contains("CRC-24 verified"), signedNote)
+        // GAP-PGP: no key imported, and the signed report.pdf is not attached — the issuer is named as unknown.
+        XCTAssertTrue(signedNote.contains("unknown key"), signedNote)
+        XCTAssertTrue(signedNote.contains("010C17222D38434E59646F7A85909BA6B1BCC7D2") && signedNote.contains("CRC-24 verified"),
+                      "the issuer is named by its fingerprint: \(signedNote)")
         XCTAssertTrue(rows[2].note?.contains("no OpenPGP packets") == true, rows[2].note ?? "")
 
         let mimeRows = try coverage.rows(for: mimeEmail.id)
@@ -5074,14 +5076,138 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(mimeRows[0].state, .locked)
         XCTAssertTrue(mimeRows[0].note?.hasPrefix("PGP/MIME encrypted message (RFC 3156); OpenPGP-encrypted to key DEADBEEF01020304 (RSA)") == true, mimeRows[0].note ?? "")
 
-        // Unlock cannot work without a key store, and says so instead of "wrong password".
+        // Unlock cannot work — mailin keeps public keys only — and says so instead of "wrong password".
         let attempt = await AttachmentTextIndexJob.shared.unlock(emailID: filesEmail.id, position: 0, password: "anything", retain: true)
         guard case .unreadable(let why) = attempt else { return XCTFail("\(attempt)") }
-        XCTAssertTrue(why.contains("no OpenPGP key store"), why)
+        XCTAssertTrue(why.contains("never decrypts"), why)
         XCTAssertEqual(try coverage.rows(for: filesEmail.id)[0].state, .locked, "nothing changed")
         let summaryValue = await AttachmentTextIndexJob.coverageSummary(store: env.store)
         let summary = try XCTUnwrap(summaryValue)
         XCTAssertTrue(AttachmentTextIndexJob.noMatchNotice(summary).contains("2 locked"), AttachmentTextIndexJob.noMatchNotice(summary))
+    }
+
+    /// GAP-PGP (owner 2026-11-07): signatures are verified against the archive's
+    /// public keyring through the job — a detached .sig beside the file it signs
+    /// (GnuPG's own signature of swdb.lst from gnupg.org) and a PGP/MIME signed
+    /// message (PGPy-written). Without keys: "unknown key". Import → every
+    /// OpenPGP row is re-read and says "good signature"; remove → unknown again.
+    func testGAPPGP_signaturesVerifiedThroughTheJob_importAndRemoveReverify() async throws {
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Packages/ArchiveCore/Tests/ArchiveCoreTests/Fixtures/openpgp")
+        let swdb = try Data(contentsOf: fixtures.appendingPathComponent("gnupg-org/swdb.lst"))
+        let swdbSig = try Data(contentsOf: fixtures.appendingPathComponent("gnupg-org/swdb.lst.sig"))
+        let gnupgKey = try Data(contentsOf: fixtures.appendingPathComponent("gnupg-org/gnupg_signature_key.asc"))
+        let rsaKey = try Data(contentsOf: fixtures.appendingPathComponent("pgpy/rsa3072.pub.asc"))
+        let pgpMIME = try XCTUnwrap(String(data: try Data(contentsOf: fixtures.appendingPathComponent("pgpy/pgpmime.rsa3072.eml")), encoding: .utf8))
+
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn; OpenPGPKeyring.active = OpenPGPKeyring(fileURL: nil) }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        AttachmentTextIndexJob.installChildReader()
+        let detached = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: GnuPG release list
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <gap-pgp-detached@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        the list and its signature
+        \(mimeAttachment("swdb.lst", "text/plain", swdb))
+        \(mimeAttachment("swdb.lst.sig", "application/pgp-signature", swdbSig))
+        --B--
+        """
+        let detachedEmail = try MBOXParser.processRawMessage(detached, senderEmail: "")
+        let mimeEmail = try MBOXParser.processRawMessage("From ed@example.org Sat Nov  7 10:00:00 2026\r\n" + pgpMIME, senderEmail: "")
+        _ = try await env.store.insertBatch([detachedEmail, mimeEmail], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        func sigNote() -> String {
+            (try? coverage.rows(for: detachedEmail.id))?.first { $0.filename == "swdb.lst.sig" }?.note ?? "<no swdb.lst.sig row>"
+        }
+        func mimeNote() -> String {
+            (try? coverage.rows(for: mimeEmail.id))?.first { $0.extractor == "openpgp" }?.note ?? "<no openpgp row>"
+        }
+        XCTAssertTrue(sigNote().contains("unknown key"), sigNote())
+        XCTAssertTrue(mimeNote().contains("unknown key"), mimeNote())
+        let empty = await AttachmentTextIndexJob.shared.publicKeys()
+        XCTAssertTrue(empty.isEmpty)
+
+        // Import GnuPG's signing keys: both OpenPGP rows are re-read; the detached signature is good.
+        let first = try await AttachmentTextIndexJob.shared.importPublicKeys(gnupgKey)
+        XCTAssertGreaterThan(first.result.imported.count, 0, "\(first.result.rejected)")
+        XCTAssertEqual(first.reverified, 2, "every message with an OpenPGP row is re-read")
+        _ = await AttachmentTextIndexJob.shared.run()
+        XCTAssertTrue(sigNote().contains("good signature"), sigNote())
+        XCTAssertTrue(mimeNote().contains("unknown key"), "the PGP/MIME signer is not imported yet: \(mimeNote())")
+
+        // The PGP/MIME signer: the signed entity is taken from the raw message.
+        let second = try await AttachmentTextIndexJob.shared.importPublicKeys(rsaKey)
+        XCTAssertEqual(second.result.imported.count, 1, "\(second.result.rejected)")
+        _ = await AttachmentTextIndexJob.shared.run()
+        XCTAssertTrue(mimeNote().contains("good signature"), mimeNote())
+
+        // The keyring is the archive's own file, kept beside the store.
+        let keyringURL = await AttachmentTextIndexJob.keyringURL(store: env.store)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keyringURL.path))
+        let kept = await AttachmentTextIndexJob.shared.publicKeys()
+        XCTAssertEqual(kept.count, first.result.imported.count + 1)
+
+        // Remove the RSA key: its signature is unknown again; the GnuPG one stays good.
+        let rsa = try XCTUnwrap(second.result.imported.first)
+        let reverified = try await AttachmentTextIndexJob.shared.removePublicKey(fingerprint: rsa.fingerprint)
+        XCTAssertEqual(reverified, 2)
+        _ = await AttachmentTextIndexJob.shared.run()
+        XCTAssertTrue(mimeNote().contains("unknown key"), mimeNote())
+        XCTAssertTrue(sigNote().contains("good signature"), sigNote())
+    }
+
+    /// GAP-RAR: the volumes of a RAR set attached as separate files are gathered
+    /// as one set (both naming schemes), and a later volume with the first
+    /// volume attached says its files are listed under that first volume.
+    func testGAPRAR_attachedRARVolumesGatheredAsOneSet_laterVolumeListedUnderTheFirst() {
+        func attachment(_ name: String) -> AttachmentMetadata {
+            AttachmentMetadata(filename: name, mimeType: "application/octet-stream", size: 3, base64: Data("RAR".utf8).base64EncodedString())
+        }
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("rar-vol-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let partN = [attachment("set.part1.rar"), attachment("notes.txt"), attachment("set.part2.rar"), attachment("other.part2.rar")]
+        let gathered = AttachmentTextIndexJob.volumeSiblings(of: 0, among: partN, scratch: scratch)
+        XCTAssertEqual(gathered.map(\.name), ["set.part2.rar"])
+        let old = [attachment("Set.rar"), attachment("set.r00"), attachment("set.r01"), attachment("set.part2.rar")]
+        XCTAssertEqual(AttachmentTextIndexJob.volumeSiblings(of: 0, among: old, scratch: scratch).map(\.name), ["set.r00", "set.r01"],
+                       "old-style names only; a .partN volume of the same stem is another scheme")
+
+        let second = AttachmentTextIndexJob.volumeSiblings(of: 2, among: partN, scratch: scratch)
+        let listed = AttachmentTextIndexJob.rarVolumeReading(name: "set.part2.rar", siblings: second)
+        XCTAssertEqual(listed?.state, .noText)
+        XCTAssertTrue(listed?.note?.contains("set.part1.rar") == true, listed?.note ?? "")
+        XCTAssertNil(AttachmentTextIndexJob.rarVolumeReading(name: "set.part1.rar", siblings: gathered), "the first volume is read, not listed")
+        XCTAssertNil(AttachmentTextIndexJob.rarVolumeReading(name: "other.part2.rar", siblings: []), "volume 1 missing: the reader names it")
+    }
+
+    /// GAP-RAR: the vendored libarchive is BSD-licensed; its notice must ship in About ▸ Licenses.
+    /// GAP-NSF: the ODS reader is a preview switch, off by default, wired to NotesODSPolicy.
+    func testGAP_licenceNoticeCarriesLibarchive_andNotesODSIsAPreviewSwitch() {
+        XCTAssertTrue(LegalComplianceManager.thirdPartyNotices.contains(VendoredNotices.libarchive))
+        XCTAssertFalse(LegalComplianceManager.thirdPartyNotices.contains("No third-party open source libraries are used"))
+        XCTAssertEqual(Capability.notesODSReader.maturity, .preview)
+        XCTAssertFalse(Capability.notesODSReader.defaultsOn)
+        let was = NotesODSPolicy.isEnabled
+        defer { NotesODSPolicy.isEnabled = was }
+        CapabilityWiring.apply(.notesODSReader, isOn: true)
+        XCTAssertTrue(NotesODSPolicy.isEnabled)
+        CapabilityWiring.apply(.notesODSReader, isOn: false)
+        XCTAssertFalse(NotesODSPolicy.isEnabled)
     }
 
     /// R06 (handoff 7481852): after the inventory failed, "Finish inventory"
@@ -5562,6 +5688,10 @@ final class V2CutoverTests: XCTestCase {
         }
         // Allowed: a 4 KB sniff of a file's head to tell text from binary is not a result window.
         offenders.removeAll { $0.contains("data.prefix(4096)") }
+        // Allowed: ODF's encryption checksum is defined over the first 1,024 bytes (SHA1/1K, SHA256/1K) — the format's rule.
+        offenders.removeAll { $0.hasPrefix("ODFEncryption.swift: let covered") }
+        // Allowed: the provenance headers mailin writes at the top of a source are read from its head — a sniff, not a result window.
+        offenders.removeAll { $0.hasPrefix("RawSourceRecovery.swift: for line in rawSource.prefix(4_096)") }
         XCTAssertEqual(offenders, [], "numeric windows in the five-jobs source:\n" + offenders.joined(separator: "\n"))
 
         // Every known constant is listed, with its kind, and the five jobs are listed as uncapped.
@@ -7010,7 +7140,7 @@ final class V2CutoverTests: XCTestCase {
                                     startedAt: Date(), completedAt: Date())
         receipt.checked = 3; receipt.excluded = 0; receipt.extraCopies = 1; receipt.selectionFrozen = true
         XCTAssertEqual(receipt.reconciliationLine,
-                       "selected 2 · written 2 messages in 3 files · checked 3 of 3 · excluded 0 · failed 0 · 1 extra copies — one file per folder occurrence, as chosen · selection frozen at start")
+                       "selected 2 · written 2 messages in 3 files · hashes recorded while writing 3 of 3 · excluded 0 · failed 0 · 1 extra copies — one file per folder occurrence, as chosen · selection frozen at start")
         // The request only turns occurrences on under the source-folder layout.
         var request = ExportRequest(format: .emlFiles, title: "t", scope: .explicit([both.id]), destination: eachFolder.path, isFolder: true, cap: nil)
         request.options.folderOccurrences = true

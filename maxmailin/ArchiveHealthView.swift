@@ -130,6 +130,9 @@ struct ArchiveHealthView: View {
             }
             .accessibilityIdentifier("health.formats")
 
+            // GAP-PGP: the public keys signatures are verified with.
+            OpenPGPKeysSection()
+
             Section("Limits") {
                 Text("Every limit mailin enforces, and what kind of limit it is. The five archive jobs have no cap of the app's own; plan rules are shown on the purchase screen too.")
                     .font(.caption).foregroundStyle(.secondary)

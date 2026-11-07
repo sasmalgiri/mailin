@@ -83,7 +83,11 @@ final class AttachmentTextIndexJob {
     /// volumes read as one set, OpenPGP described from its packets, Publisher /
     /// OneNote / Visio binary / Project binary / Access readers — completed
     /// rows are re-read so the richer output reaches the index.
-    nonisolated static let extractorVersion = 8
+    /// 9 (GAP-RAR / GAP-PGP, 2026-11-08): compressed RAR members decoded
+    /// (libarchive) with attached volume sets read as one; OpenPGP signatures
+    /// verified against the archive's public keyring — rows are re-read so
+    /// RAR members reach the index and signatures carry their verdict.
+    nonisolated static let extractorVersion = 9
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -140,6 +144,38 @@ final class AttachmentTextIndexJob {
         ) { _ in
             Task { @MainActor in AttachmentTextIndexJob.shared.kickIfNeeded() }
         }
+    }
+
+    // MARK: - GAP-PGP: the archive's public keyring
+
+    /// The public keys this archive verifies signatures with.
+    func publicKeys() async -> [OpenPGPKeySummary] {
+        await Self.activateKeyring(store: store)
+        return OpenPGPKeyring.active.list()
+    }
+
+    /// Imports the public keys in `data` (armored or binary; secret keys are
+    /// refused). When the keyring changed, every OpenPGP row is re-read so its
+    /// verdict follows the keys; the count re-queued is returned with the result.
+    func importPublicKeys(_ data: Data) async throws -> (result: OpenPGPKeyring.ImportResult, reverified: Int) {
+        await Self.activateKeyring(store: store)
+        let result = try OpenPGPKeyring.active.importKeys(data: data)
+        let reverified = result.count > 0 ? await reverifySignatures() : 0
+        return (result, reverified)
+    }
+
+    /// Removes one key; signatures by it become "unknown key" on the re-read.
+    func removePublicKey(fingerprint: String) async throws -> Int {
+        await Self.activateKeyring(store: store)
+        guard try OpenPGPKeyring.active.remove(fingerprint: fingerprint) else { return 0 }
+        return await reverifySignatures()
+    }
+
+    private func reverifySignatures() async -> Int {
+        guard let coverage = try? AttachmentCoverageStore(url: await store.attachmentCoverageURL),
+              let count = try? await Self.requeueOpenPGP(store: store, coverage: coverage) else { return 0 }
+        if count > 0 { kickIfNeeded() }
+        return count
     }
 
     func kickIfNeeded(registry: JobRegistry? = nil) {
@@ -217,6 +253,7 @@ final class AttachmentTextIndexJob {
         }
         // FIND-03: per-attachment coverage beside the archive.
         let coverage = try? AttachmentCoverageStore(url: await store.attachmentCoverageURL)
+        await Self.activateKeyring(store: store)
         do {
             if let coverage {
                 let requeued = try await Self.requeueStale(store: store, coverage: coverage)
@@ -415,7 +452,36 @@ final class AttachmentTextIndexJob {
             try coverage.remove(emailIDs: ids)
             total += ids.count
         }
+        // GAP-PGP: OpenPGP rows read before signatures were verified ("present,
+        // not verified") are re-read so they carry a verdict.
+        total += try await requeueOpenPGP(store: store, coverage: coverage, below: 9)
         return total
+    }
+
+    /// GAP-PGP: re-read the messages whose OpenPGP rows were written by an
+    /// extractor older than `below` (Int.max: all of them — after a public key
+    /// was imported or removed, every verdict may change). Returns how many.
+    static func requeueOpenPGP(store: SQLiteEmailStore, coverage: AttachmentCoverageStore, below version: Int = Int.max) async throws -> Int {
+        var total = 0
+        while !Task.isCancelled {
+            let ids = try coverage.emailIDs(extractors: ["openpgp"], below: version, limit: 500)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            try coverage.remove(emailIDs: ids)
+            total += ids.count
+        }
+        return total
+    }
+
+    /// GAP-PGP: the public keyring of the archive the job reads — kept beside
+    /// the store (`<store>/openpgp/public-keyring.pgp`), opened once per archive.
+    static func keyringURL(store: SQLiteEmailStore) async -> URL {
+        OpenPGPKeyring.fileURL(underArchiveRoot: await store.attachmentCoverageURL.deletingLastPathComponent())
+    }
+
+    static func activateKeyring(store: SQLiteEmailStore) async {
+        let url = await keyringURL(store: store)
+        if OpenPGPKeyring.active.fileURL != url { OpenPGPKeyring.active = OpenPGPKeyring(fileURL: url) }
     }
 
     /// FIND-07: emails whose attachments were attempted before the chunk
@@ -542,12 +608,33 @@ final class AttachmentTextIndexJob {
             for attachment in extraction.attachments { if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) } }
             try? FileManager.default.removeItem(at: scratch)
         }
+        // GAP-PGP: what each signature signed — the PGP/MIME signed entity
+        // (exact bytes from the raw message) or, for a detached .sig/.asc, the
+        // attachment it is named after — so the verdict can be computed.
+        let pgpMIMESignedEntity = mailKind == .pgpMIMESigned
+            ? OpenPGPVerifier.pgpMIMESigned(rawMessage: Data(raw.utf8))?.signedEntity : nil
         var out: [Extraction] = []
         for (ordinal, attachment) in extraction.attachments.enumerated() {
             let siblings = volumeSiblings(of: ordinal, among: extraction.attachments, scratch: scratch)
-            out.append(classify(attachment, ordinal: ordinal, ocr: ocr, password: passwords[ordinal], siblings: siblings, mailKind: mailKind))
+            let signedData = OpenPGP.isOpenPGPAttachment(mimeType: attachment.mimeType.lowercased(), filename: attachment.filename)
+                ? signedData(for: ordinal, among: extraction.attachments, pgpMIMESignedEntity: pgpMIMESignedEntity) : nil
+            out.append(classify(attachment, ordinal: ordinal, ocr: ocr, password: passwords[ordinal], siblings: siblings,
+                                mailKind: mailKind, signedData: signedData))
         }
         return out
+    }
+
+    /// GAP-PGP: the bytes an OpenPGP attachment's signature covers — the
+    /// attachment named by a detached signature (`report.pdf.sig` → `report.pdf`),
+    /// else the PGP/MIME signed entity. Nil when neither is in the message.
+    nonisolated static func signedData(for index: Int, among attachments: [AttachmentMetadata], pgpMIMESignedEntity: Data?) -> Data? {
+        guard index < attachments.count else { return nil }
+        if let target = OpenPGP.signedFileName(forDetachedSignature: attachments[index].filename),
+           let other = attachments.enumerated().first(where: { $0.offset != index && $0.element.filename.lowercased() == target.lowercased() })?.element {
+            if let url = other.fileURL, let data = try? Data(contentsOf: url) { return data }
+            if let b64 = other.base64 { return Data(base64Encoded: b64, options: .ignoreUnknownCharacters) }
+        }
+        return pgpMIMESignedEntity
     }
 
     /// Directive §6 "Containers": the other attachments of the message that are
@@ -555,12 +642,30 @@ final class AttachmentTextIndexJob {
     /// `archive.7z.001 …`), as files the container reader lays end to end. A
     /// sibling the parser kept only as base64 is written under `scratch` on
     /// demand; without a scratch directory such a sibling is left out.
+    /// GAP-RAR: RAR sets (`x.part1.rar …`, `x.rar` + `x.r00 …`) are gathered the same way.
     nonisolated static func volumeSiblings(of index: Int, among attachments: [AttachmentMetadata], scratch: URL?) -> [SplitVolumeSet.Sibling] {
-        guard index < attachments.count, let part = SplitVolumeSet.part(ofName: attachments[index].filename) else { return [] }
+        guard index < attachments.count else { return [] }
+        let name = attachments[index].filename
+        let sameSet: (String) -> Bool
+        if let part = SplitVolumeSet.part(ofName: name) {
+            sameSet = { other in
+                guard let p = SplitVolumeSet.part(ofName: other) else { return false }
+                return p.kind == part.kind && p.stem.lowercased() == part.stem.lowercased()
+            }
+        } else if let part = RARVolumeSet.part(ofName: name) {
+            sameSet = { other in
+                guard let p = RARVolumeSet.part(ofName: other) else { return false }
+                switch (p.style, part.style) {   // the naming scheme, not the digit width
+                case (.partN, .partN), (.oldStyle, .oldStyle): return p.stem.lowercased() == part.stem.lowercased()
+                default: return false
+                }
+            }
+        } else {
+            return []
+        }
         var out: [SplitVolumeSet.Sibling] = []
         for (i, other) in attachments.enumerated() where i != index {
-            guard let p = SplitVolumeSet.part(ofName: other.filename), p.kind == part.kind,
-                  p.stem.lowercased() == part.stem.lowercased() else { continue }
+            guard sameSet(other.filename) else { continue }
             if let url = other.fileURL { out.append(SplitVolumeSet.Sibling(name: other.filename, url: url)); continue }
             guard let scratch, let b64 = other.base64,
                   let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) else { continue }
@@ -579,6 +684,18 @@ final class AttachmentTextIndexJob {
     /// entry volume with this one laid beside it, so this row only says where
     /// they are — or that nothing could be read because the entry volume is
     /// not attached. Nil for an entry volume or an ordinary archive.
+    /// GAP-RAR: a later volume of a RAR set whose first volume is attached to the
+    /// same message is read through that first volume (the decoder reads a set
+    /// from volume 1), so this row only says where its files are listed. With
+    /// volume 1 missing, nil: the RAR reader names what the missing volume holds.
+    nonisolated static func rarVolumeReading(name: String, siblings: [SplitVolumeSet.Sibling]) -> Reading? {
+        guard let part = RARVolumeSet.part(ofName: name), part.number > 1 else { return nil }
+        let entryName = RARVolumeSet.volumeName(stem: part.stem, number: 1, style: part.style)
+        guard siblings.contains(where: { $0.name.lowercased() == entryName.lowercased() }) else { return nil }
+        return Reading("", .noText, "archive",
+                       String(localized: "volume \(part.number) of the split archive; its files are read and listed under \(entryName)"))
+    }
+
     nonisolated static func volumeReading(_ part: SplitVolumeSet.Part, siblings: [SplitVolumeSet.Sibling]) -> Reading? {
         let entryName: String
         switch part.kind {
@@ -600,15 +717,16 @@ final class AttachmentTextIndexJob {
 
     /// Directive §6 "OpenPGP": an OpenPGP file or a PGP/MIME payload is
     /// described from its packet headers — recipient key IDs, integrity
-    /// protection, signatures "present, not verified" — and never decrypted or
-    /// verified: this release has no OpenPGP key store. A clear-signed text is
+    /// protection — and never decrypted. GAP-PGP: signatures are verified
+    /// against the archive's public keyring (good / BAD / unknown key / cannot
+    /// verify) when the signed bytes are at hand (`signedData`). A clear-signed text is
     /// read; a detached signature or key block has nothing to index and says
     /// what it is. Something merely NAMED .asc that carries no packets is read
     /// as the text it is.
-    nonisolated static func readOpenPGP(_ data: Data, mailKind: OpenPGP.MailKind?) -> Reading {
+    nonisolated static func readOpenPGP(_ data: Data, mailKind: OpenPGP.MailKind?, signedData: Data? = nil) -> Reading {
         let summary: OpenPGP.Summary
         do {
-            summary = try OpenPGP.summarize(data)
+            summary = try OpenPGP.summarize(data, signedData: signedData)
         } catch let error as OpenPGP.ParseError {
             if case .notOpenPGP = error, let text = String(data: data, encoding: .utf8) {
                 if mailKind != nil, text.lowercased().contains("version:") {
@@ -641,8 +759,9 @@ final class AttachmentTextIndexJob {
     /// FIND-03: read one attachment and say what happened. Text longer than
     /// the cap is cut and the state says so.
     nonisolated static func classify(_ attachment: AttachmentMetadata, ordinal: Int, ocr: Bool, password: String? = nil,
-                                     siblings: [SplitVolumeSet.Sibling] = [], mailKind: OpenPGP.MailKind? = nil) -> Extraction {
-        var result = read(attachment, ocr: ocr, password: password, siblings: siblings, mailKind: mailKind)
+                                     siblings: [SplitVolumeSet.Sibling] = [], mailKind: OpenPGP.MailKind? = nil,
+                                     signedData: Data? = nil) -> Extraction {
+        var result = read(attachment, ocr: ocr, password: password, siblings: siblings, mailKind: mailKind, signedData: signedData)
         if password != nil, result.state != .locked, result.state != .failed, result.state != .unsupported {
             // The record says how this came to be readable — and that nothing was kept.
             let unlocked = String(localized: "unlocked with a password you entered; the password was not kept")
@@ -833,7 +952,7 @@ final class AttachmentTextIndexJob {
         }
         let target = extractions[position]
         if target.extractor == "openpgp", target.state == .locked {
-            return .unreadable(String(localized: "OpenPGP-encrypted: this release has no OpenPGP key store, so a password cannot open it"))
+            return .unreadable(String(localized: "OpenPGP-encrypted: mailin keeps public keys only and never decrypts, so a password cannot open it"))
         }
         switch target.state {
         case .locked: return .wrongPassword(target.note ?? String(localized: "the password did not open the file"))
@@ -1012,7 +1131,8 @@ final class AttachmentTextIndexJob {
     /// One attachment through the extractor that fits it. `depth` counts
     /// messages inside messages (eml, msg, TNEF), bounded by `maxMessageDepth`.
     nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool, depth: Int = 0, password: String? = nil,
-                                         siblings: [SplitVolumeSet.Sibling] = [], mailKind: OpenPGP.MailKind? = nil)
+                                         siblings: [SplitVolumeSet.Sibling] = [], mailKind: OpenPGP.MailKind? = nil,
+                                         signedData: Data? = nil)
         -> Reading {
         _ = childReaderInstalled
         let data: Data?
@@ -1033,11 +1153,14 @@ final class AttachmentTextIndexJob {
         // Directive §6 "OpenPGP": .gpg / .pgp / .asc / .sig and application/pgp-* —
         // described from the packet headers, never decrypted (no key store).
         if OpenPGP.isOpenPGPAttachment(mimeType: mime, filename: attachment.filename) {
-            return readOpenPGP(data, mailKind: mailKind)
+            return readOpenPGP(data, mailKind: mailKind, signedData: signedData)
         }
         // Directive §6 "Containers": a volume that is not the set's entry point
         // is read through the entry volume; its own row says so.
         if let part = SplitVolumeSet.part(ofName: attachment.filename), let volume = volumeReading(part, siblings: siblings) {
+            return volume
+        }
+        if let volume = rarVolumeReading(name: attachment.filename, siblings: siblings) {
             return volume
         }
 
