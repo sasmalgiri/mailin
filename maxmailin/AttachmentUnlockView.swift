@@ -32,11 +32,19 @@ struct AttachmentUnlockView: View {
                         .font(Typography.caption2).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    Button(String(localized: "Unlock…")) { showingSheet = true }
-                        .buttonStyle(.plain)
-                        .font(Typography.caption1)
-                        .foregroundStyle(Color.accentColor)
-                        .help(String(localized: "Type the file's password once to read what is inside"))
+                    if current.state == .locked, current.extractor == "openpgp" {
+                        // Directive §6 "OpenPGP": no key store in this release — a password field would be a false promise.
+                        Text(String(localized: "No OpenPGP key store in this release"))
+                            .font(Typography.caption1).foregroundStyle(.secondary)
+                            .help(String(localized: "The file is described from its OpenPGP packet headers; a password cannot open it here"))
+                            .accessibilityIdentifier("attachment.unlock.openpgp.\(position)")
+                    } else {
+                        Button(String(localized: "Unlock…")) { showingSheet = true }
+                            .buttonStyle(.plain)
+                            .font(Typography.caption1)
+                            .foregroundStyle(Color.accentColor)
+                            .help(String(localized: "Type the file's password once to read what is inside"))
+                    }
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("attachment.unlock.\(position)")

@@ -3686,8 +3686,10 @@ final class V2CutoverTests: XCTestCase {
                 XCTAssertTrue(attachment.isInline, "\(name) is inline")
             }
             print("REAL OFT: \(template.headers["Subject"] ?? "") — \(template.attachments.count) images verified")
+        } else if oftStatus.isAbsent {
+            print("REAL OFT: \(oftStatus.description) — Microsoft's template is not redistributed; download id 44066 and place it under the fixture root")
         } else {
-            print("REAL OFT: not present at \(oftURL.path) — Microsoft's template is not redistributed; download id 44066 and place it there")
+            XCTFail(oftStatus.description)   // present but not the official bytes, or not listed in the pack's SHA256SUMS
         }
 
         // 2. WinZip AES from libarchive: AES-128, AES-256 deflated, AES-256 stored — password "password", one README of 6,818 bytes.
@@ -4861,6 +4863,206 @@ final class V2CutoverTests: XCTestCase {
         guard let a = doc.range(of: start), let b = doc.range(of: end) else { return XCTFail("the registry markers are missing from the document") }
         let carried = doc[a.upperBound..<b.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertEqual(carried, table, "SUPPORTED_FORMATS_AND_LIMITS.md must carry FormatCapabilityRegistry.markdownTable() verbatim — regenerate it")
+    }
+
+    /// Directive 2026-11-07 §6 "Containers": a ZIP split into volumes and attached
+    /// as several files (set.z01 + set.zip) is read as one set through the job —
+    /// the member spanning the volume boundary is searchable, and the .z01 row
+    /// says its files are listed under the entry volume. With volume 1 not
+    /// attached, the member on it is named with the missing volume and the rest
+    /// is still read; a lone .z01 says which entry volume is missing.
+    func testSPLIT01_splitZipAttachedAsVolumes_readAsOneSet_missingVolumeNamed() async throws {
+        let zip = URL(fileURLWithPath: "/usr/bin/zip")
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: zip.path), "/usr/bin/zip is not available")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("split-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // minutes.txt (≈ 70,000 bytes, stored) starts on volume 1 and runs into volume 2; tail.txt sits on volume 2.
+        let minutes = "The quorum clause survives the split. " + String(repeating: "filler words for the spanned member. ", count: 1900)
+        try Data(minutes.utf8).write(to: dir.appendingPathComponent("minutes.txt"))
+        try Data("tail member on the last volume MAILIN-SPLIT-TAIL\n".utf8).write(to: dir.appendingPathComponent("tail.txt"))
+        let process = Process()
+        process.executableURL = zip
+        process.currentDirectoryURL = dir
+        process.arguments = ["-q", "-0", "-s", "64k", "set.zip", "minutes.txt", "tail.txt"]
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        try process.run(); process.waitUntilExit()
+        try XCTSkipUnless(process.terminationStatus == 0, "zip -s failed (\(process.terminationStatus))")
+        let z01 = try Data(contentsOf: dir.appendingPathComponent("set.z01"))
+        let last = try Data(contentsOf: dir.appendingPathComponent("set.zip"))
+        XCTAssertEqual(z01.count, 65_536, "Info-ZIP writes equal volumes; the first is exactly 64k")
+
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        AttachmentTextIndexJob.installChildReader()
+        func message(_ subject: String, _ id: String, _ parts: [String]) -> String {
+            """
+            From sender@example.com Wed Jan 15 10:00:00 2025
+            From: sender@example.com
+            To: user@dest.org
+            Subject: \(subject)
+            Date: Wed, 15 Jan 2025 10:00:00 +0000
+            Message-ID: <\(id)@t>
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="B"
+
+            --B
+            Content-Type: text/plain
+
+            the archive is attached in volumes
+            \(parts.joined(separator: "\n"))
+            --B--
+            """
+        }
+        let whole = try MBOXParser.processRawMessage(message("Split set", "split-whole", [mimeAttachment("set.z01", "application/octet-stream", z01), mimeAttachment("set.zip", "application/zip", last)]), senderEmail: "")
+        let lastOnly = try MBOXParser.processRawMessage(message("Last volume only", "split-last", [mimeAttachment("set.zip", "application/zip", last)]), senderEmail: "")
+        let firstOnly = try MBOXParser.processRawMessage(message("First volume only", "split-first", [mimeAttachment("set.z01", "application/octet-stream", z01)]), senderEmail: "")
+        _ = try await env.store.insertBatch([whole, lastOnly, firstOnly], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 3)
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+
+        // Both volumes attached: one set, read whole.
+        let wholeRows = try coverage.rows(for: whole.id)
+        XCTAssertEqual(wholeRows.map(\.filename), ["set.z01", "set.zip"])
+        XCTAssertEqual(wholeRows[0].state, .noText, wholeRows[0].note ?? "")
+        XCTAssertTrue(wholeRows[0].note?.contains("set.zip") == true, "the volume row points at the entry volume: \(wholeRows[0].note ?? "")")
+        XCTAssertEqual(wholeRows[1].state, .extracted, wholeRows[1].note ?? "")
+        let wholeChildren = await env.archive.attachmentChildren(emailID: whole.id)
+        XCTAssertEqual(Set(wholeChildren.map(\.filename)), ["minutes.txt", "tail.txt"])
+        XCTAssertEqual(wholeChildren.first { $0.filename == "minutes.txt" }?.state, ChildDocument.State.extracted.rawValue)
+        func inSet(_ phrase: String) -> SearchSpec {
+            SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "set", contentMatch: .phrase, content: phrase)])])
+        }
+        try await expectIDs(env, inSet("quorum clause survives the split"), ["Split set"], "the member spanning the boundary is searchable only where both volumes are attached")
+        try await expectIDs(env, inSet("MAILIN-SPLIT-TAIL"), ["Split set", "Last volume only"], "the member on the last volume is read with or without volume 1")
+
+        // Volume 1 missing: the member on it is named, the rest is read.
+        let lastRows = try coverage.rows(for: lastOnly.id)
+        XCTAssertEqual(lastRows.count, 1)
+        XCTAssertEqual(lastRows[0].state, .partial, lastRows[0].note ?? "")
+        XCTAssertTrue(lastRows[0].note?.contains("volume 1 (set.z01) missing") == true, "the missing volume is named: \(lastRows[0].note ?? "")")
+        let lastChildren = await env.archive.attachmentChildren(emailID: lastOnly.id)
+        XCTAssertEqual(lastChildren.first { $0.filename == "minutes.txt" }?.state, ChildDocument.State.unsupported.rawValue)
+        XCTAssertEqual(lastChildren.first { $0.filename == "minutes.txt" }?.note, "not opened: volume 1 (set.z01) missing")
+        XCTAssertEqual(lastChildren.first { $0.filename == "tail.txt" }?.state, ChildDocument.State.extracted.rawValue)
+
+        // The entry volume missing: nothing can be read, and the row says which file is needed.
+        let firstRows = try coverage.rows(for: firstOnly.id)
+        XCTAssertEqual(firstRows.count, 1)
+        XCTAssertEqual(firstRows[0].state, .unsupported, firstRows[0].note ?? "")
+        XCTAssertTrue(firstRows[0].note?.contains("set.zip") == true && firstRows[0].note?.contains("not attached") == true, firstRows[0].note ?? "")
+    }
+
+    /// Directive 2026-11-07 §6 "OpenPGP": OpenPGP attachments and the PGP/MIME
+    /// payload are described from their packet headers — recipient key IDs,
+    /// integrity protection, "signature present, not verified" — never
+    /// decrypted: this release has no OpenPGP key store. Unlock refuses with
+    /// that reason instead of asking for a password that cannot work.
+    func testPGP01_openPGPAttachmentsAndPGPMIME_describedNotDecrypted_noPasswordOffered() async throws {
+        // Packet builders (RFC 4880 §4.2) — the same spec-built bytes the package tests use.
+        func newPacket(tag: UInt8, _ body: [UInt8]) -> [UInt8] {
+            var out: [UInt8] = [0xC0 | tag]
+            let n = body.count
+            if n < 192 { out.append(UInt8(n)) } else { out += [UInt8(((n - 192) >> 8) + 192), UInt8((n - 192) & 0xFF)] }
+            return out + body
+        }
+        let keyA: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04]
+        let fingerprint: [UInt8] = (0..<20).map { UInt8($0 * 11 + 1) }
+        let pkesk = newPacket(tag: 1, [3] + keyA + [1] + [0x04, 0x00] + [UInt8](repeating: 0x5A, count: 128))
+        let seipdV1 = newPacket(tag: 18, [1] + [UInt8](repeating: 0x77, count: 40))
+        let encrypted = Data(pkesk + seipdV1)
+        let time: UInt32 = 1_700_000_000
+        let creation: [UInt8] = [5, 2, UInt8(time >> 24), UInt8((time >> 16) & 0xFF), UInt8((time >> 8) & 0xFF), UInt8(time & 0xFF)]
+        let issuerFP: [UInt8] = [UInt8(fingerprint.count + 2), 33, 4] + fingerprint
+        let hashed = creation + issuerFP
+        let unhashed: [UInt8] = [9, 16] + keyA
+        let signature = newPacket(tag: 2, [4, 0x00, 22, 10, UInt8(hashed.count >> 8), UInt8(hashed.count & 0xFF)] + hashed
+                                  + [UInt8(unhashed.count >> 8), UInt8(unhashed.count & 0xFF)] + unhashed + [0xAB, 0xCD] + [0x01, 0x00, 0x01] + [UInt8](repeating: 0x42, count: 64))
+        let detached = Data(OpenPGP.armor(Data(signature), type: "PGP SIGNATURE").utf8)
+        let armoredMessage = OpenPGP.armor(encrypted, type: "PGP MESSAGE")
+
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        AttachmentTextIndexJob.installChildReader()
+        let files = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: OpenPGP files
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <pgp-files@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        three OpenPGP-named files
+        \(mimeAttachment("secret.gpg", "application/octet-stream", encrypted))
+        \(mimeAttachment("report.pdf.sig", "application/pgp-signature", detached))
+        \(mimeAttachment("notes.asc", "application/octet-stream", Data("just plain notes, no packets\n".utf8)))
+        --B--
+        """
+        let pgpMIME = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: PGP/MIME message
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <pgp-mime@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/encrypted; boundary="B"; protocol="application/pgp-encrypted"
+
+        --B
+        Content-Type: application/pgp-encrypted
+
+        Version: 1
+        \(mimeAttachment("encrypted.asc", "application/octet-stream", Data(armoredMessage.utf8)))
+        --B--
+        """
+        let filesEmail = try MBOXParser.processRawMessage(files, senderEmail: "")
+        let mimeEmail = try MBOXParser.processRawMessage(pgpMIME, senderEmail: "")
+        _ = try await env.store.insertBatch([filesEmail, mimeEmail], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+
+        let rows = try coverage.rows(for: filesEmail.id)
+        XCTAssertEqual(rows.map(\.filename), ["secret.gpg", "report.pdf.sig", "notes.asc"])
+        XCTAssertEqual(rows.map(\.state), [.locked, .noText, .extracted], "\(rows.map { ($0.filename, $0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows.map(\.extractor), ["openpgp", "openpgp", "text"])
+        let lockedNote = try XCTUnwrap(rows[0].note)
+        XCTAssertTrue(lockedNote.contains("OpenPGP-encrypted to key DEADBEEF01020304 (RSA)"), lockedNote)
+        XCTAssertTrue(lockedNote.contains("MDC present") && lockedNote.contains("no OpenPGP key store"), lockedNote)
+        XCTAssertFalse(lockedNote.contains("password-protected"), "the generic password note is not used for OpenPGP: \(lockedNote)")
+        let signedNote = try XCTUnwrap(rows[1].note)
+        XCTAssertTrue(signedNote.contains("signature present, not verified (no OpenPGP trust store)"), signedNote)
+        XCTAssertTrue(signedNote.contains("issuer") && signedNote.contains("EdDSA/SHA-512") && signedNote.contains("CRC-24 verified"), signedNote)
+        XCTAssertTrue(rows[2].note?.contains("no OpenPGP packets") == true, rows[2].note ?? "")
+
+        let mimeRows = try coverage.rows(for: mimeEmail.id)
+        XCTAssertEqual(mimeRows.map(\.filename), ["encrypted.asc"], "the Version: 1 control part is not an attachment; the payload is")
+        XCTAssertEqual(mimeRows[0].state, .locked)
+        XCTAssertTrue(mimeRows[0].note?.hasPrefix("PGP/MIME encrypted message (RFC 3156); OpenPGP-encrypted to key DEADBEEF01020304 (RSA)") == true, mimeRows[0].note ?? "")
+
+        // Unlock cannot work without a key store, and says so instead of "wrong password".
+        let attempt = await AttachmentTextIndexJob.shared.unlock(emailID: filesEmail.id, position: 0, password: "anything", retain: true)
+        guard case .unreadable(let why) = attempt else { return XCTFail("\(attempt)") }
+        XCTAssertTrue(why.contains("no OpenPGP key store"), why)
+        XCTAssertEqual(try coverage.rows(for: filesEmail.id)[0].state, .locked, "nothing changed")
+        let summaryValue = await AttachmentTextIndexJob.coverageSummary(store: env.store)
+        let summary = try XCTUnwrap(summaryValue)
+        XCTAssertTrue(AttachmentTextIndexJob.noMatchNotice(summary).contains("2 locked"), AttachmentTextIndexJob.noMatchNotice(summary))
     }
 
     /// R06 (handoff 7481852): after the inventory failed, "Finish inventory"

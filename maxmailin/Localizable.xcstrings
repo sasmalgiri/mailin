@@ -51141,8 +51141,69 @@
         }
       }
     },
-    "archive format not opened (7z, rar, bz2, xz) — ZIP, tar and gzip attachments are read; this one is kept as a file" : {
-
+    "archive format not opened (bz2, xz) — ZIP, tar, gzip, 7z and RAR attachments are read; this one is kept as a file" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivformat nicht geöffnet (bz2, xz) — ZIP-, tar-, gzip-, 7z- und RAR-Anhänge werden gelesen; dieser bleibt als Datei erhalten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "formato de archivo no abierto (bz2, xz): los adjuntos ZIP, tar, gzip, 7z y RAR se leen; este se conserva como archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "format d'archive non ouvert (bz2, xz) — les pièces jointes ZIP, tar, gzip, 7z et RAR sont lues ; celle-ci est conservée comme fichier"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रह प्रारूप नहीं खोला गया (bz2, xz) — ZIP, tar, gzip, 7z और RAR अनुलग्नक पढ़े जाते हैं; यह फ़ाइल के रूप में रखा गया है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "formato di archivio non aperto (bz2, xz) — gli allegati ZIP, tar, gzip, 7z e RAR sono letti; questo è conservato come file"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開かないアーカイブ形式（bz2、xz）— ZIP、tar、gzip、7z、RAR の添付ファイルは読み取られます。これはファイルのまま保持されます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "열지 않는 아카이브 형식(bz2, xz) — ZIP, tar, gzip, 7z, RAR 첨부 파일은 읽습니다. 이 파일은 그대로 보관됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "formato de arquivo não aberto (bz2, xz) — anexos ZIP, tar, gzip, 7z e RAR são lidos; este é mantido como arquivo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未打开的压缩格式（bz2、xz）— ZIP、tar、gzip、7z 和 RAR 附件会被读取；此文件按原样保留"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未開啟的壓縮格式（bz2、xz）— ZIP、tar、gzip、7z 和 RAR 附件會被讀取；此檔案按原樣保留"
+          }
+        }
+      }
     },
     "Archive health: 80+ = Excellent (clean, well-threaded), 50-79 = Fair, below 50 = Needs attention (high anomalies or negative tone)" : {
       "localizations" : {
@@ -214413,6 +214474,70 @@
         }
       }
     },
+    "named as OpenPGP but carries no OpenPGP packets; read as text" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "als OpenPGP benannt, enthält aber keine OpenPGP-Pakete; als Text gelesen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "con nombre OpenPGP pero sin paquetes OpenPGP; leído como texto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nommé OpenPGP mais sans paquets OpenPGP ; lu comme texte"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP नाम से है पर इसमें कोई OpenPGP पैकेट नहीं; पाठ के रूप में पढ़ा गया"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "denominato OpenPGP ma senza pacchetti OpenPGP; letto come testo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP の名前ですが OpenPGP パケットを含みません。テキストとして読み取り"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP라는 이름이지만 OpenPGP 패킷이 없어 텍스트로 읽음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nomeado como OpenPGP mas sem pacotes OpenPGP; lido como texto"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名为 OpenPGP 但不含 OpenPGP 数据包；按文本读取"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名為 OpenPGP 但不含 OpenPGP 封包；按文字讀取"
+          }
+        }
+      }
+    },
     "Narrow the graph to specific relationships." : {
       "localizations" : {
         "de" : {
@@ -226201,6 +226326,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未安裝 %@ 或英語的裝置端語音模型——請在「系統設定」中加入該語言的聽寫套件"
+          }
+        }
+      }
+    },
+    "No OpenPGP key store in this release" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein OpenPGP-Schlüsselspeicher in dieser Version"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin almacén de claves OpenPGP en esta versión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas de magasin de clés OpenPGP dans cette version"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस संस्करण में OpenPGP कुंजी भंडार नहीं है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun archivio chiavi OpenPGP in questa versione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリリースには OpenPGP 鍵ストアがありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 릴리스에는 OpenPGP 키 저장소가 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem armazenamento de chaves OpenPGP nesta versão"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此版本没有 OpenPGP 密钥库"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此版本沒有 OpenPGP 金鑰庫"
           }
         }
       }
@@ -239997,6 +240186,70 @@
         }
       }
     },
+    "OpenPGP-encrypted: this release has no OpenPGP key store, so a password cannot open it" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP-verschlüsselt: diese Version hat keinen OpenPGP-Schlüsselspeicher, ein Passwort kann es nicht öffnen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cifrado con OpenPGP: esta versión no tiene almacén de claves OpenPGP, así que una contraseña no puede abrirlo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "chiffré OpenPGP : cette version n'a pas de magasin de clés OpenPGP, un mot de passe ne peut pas l'ouvrir"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP-एन्क्रिप्टेड: इस संस्करण में OpenPGP कुंजी भंडार नहीं है, इसलिए पासवर्ड इसे नहीं खोल सकता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cifrato con OpenPGP: questa versione non ha un archivio chiavi OpenPGP, quindi una password non può aprirlo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP で暗号化：このリリースには OpenPGP 鍵ストアがないため、パスワードでは開けません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP로 암호화됨: 이 릴리스에는 OpenPGP 키 저장소가 없어 암호로 열 수 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cifrado com OpenPGP: esta versão não tem armazenamento de chaves OpenPGP, então uma senha não pode abri-lo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP 加密：此版本没有 OpenPGP 密钥库，因此密码无法打开它"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenPGP 加密：此版本沒有 OpenPGP 金鑰庫，因此密碼無法打開它"
+          }
+        }
+      }
+    },
     "Opens mailin to import an email archive file" : {
       "localizations" : {
         "de" : {
@@ -248444,6 +248697,198 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "發現的個人識別資訊："
+          }
+        }
+      }
+    },
+    "PGP/MIME control part; the encrypted message is in the OpenPGP payload beside it" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME-Steuerteil; die verschlüsselte Nachricht liegt in der OpenPGP-Nutzlast daneben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "parte de control PGP/MIME; el mensaje cifrado está en la carga OpenPGP contigua"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "partie de contrôle PGP/MIME ; le message chiffré est dans la charge OpenPGP voisine"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME नियंत्रण भाग; एन्क्रिप्टेड संदेश इसके साथ के OpenPGP पेलोड में है"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "parte di controllo PGP/MIME; il messaggio cifrato è nel payload OpenPGP accanto"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 制御パート。暗号化されたメッセージは隣の OpenPGP ペイロードにあります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 제어 부분. 암호화된 메시지는 옆의 OpenPGP 페이로드에 있습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "parte de controle PGP/MIME; a mensagem cifrada está na carga OpenPGP ao lado"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 控制部分；加密邮件位于旁边的 OpenPGP 载荷中"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 控制部分；加密郵件位於旁邊的 OpenPGP 酬載中"
+          }
+        }
+      }
+    },
+    "PGP/MIME encrypted message (RFC 3156)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME-verschlüsselte Nachricht (RFC 3156)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mensaje cifrado PGP/MIME (RFC 3156)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "message chiffré PGP/MIME (RFC 3156)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME एन्क्रिप्टेड संदेश (RFC 3156)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "messaggio cifrato PGP/MIME (RFC 3156)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 暗号化メッセージ（RFC 3156）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 암호화 메시지(RFC 3156)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mensagem cifrada PGP/MIME (RFC 3156)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 加密邮件（RFC 3156）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 加密郵件（RFC 3156）"
+          }
+        }
+      }
+    },
+    "PGP/MIME signed message (RFC 3156)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME-signierte Nachricht (RFC 3156)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mensaje firmado PGP/MIME (RFC 3156)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "message signé PGP/MIME (RFC 3156)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME हस्ताक्षरित संदेश (RFC 3156)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "messaggio firmato PGP/MIME (RFC 3156)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 署名付きメッセージ（RFC 3156）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 서명 메시지(RFC 3156)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mensagem assinada PGP/MIME (RFC 3156)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 签名邮件（RFC 3156）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PGP/MIME 簽名郵件（RFC 3156）"
           }
         }
       }
@@ -349669,6 +350114,70 @@
         }
       }
     },
+    "The file is described from its OpenPGP packet headers; a password cannot open it here" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Datei wird aus ihren OpenPGP-Paketköpfen beschrieben; ein Passwort kann sie hier nicht öffnen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El archivo se describe a partir de sus cabeceras de paquete OpenPGP; una contraseña no puede abrirlo aquí"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le fichier est décrit d'après ses en-têtes de paquets OpenPGP ; un mot de passe ne peut pas l'ouvrir ici"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ाइल का वर्णन उसके OpenPGP पैकेट हेडर से किया गया है; यहाँ पासवर्ड इसे नहीं खोल सकता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il file è descritto dalle intestazioni dei suoi pacchetti OpenPGP; una password non può aprirlo qui"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルは OpenPGP パケットヘッダから説明されています。ここではパスワードで開けません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 파일은 OpenPGP 패킷 헤더로 설명됩니다. 여기서는 암호로 열 수 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O arquivo é descrito a partir dos cabeçalhos de pacote OpenPGP; uma senha não pode abri-lo aqui"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该文件根据其 OpenPGP 数据包头进行描述；此处无法用密码打开"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "該檔案根據其 OpenPGP 封包標頭進行描述；此處無法用密碼打開"
+          }
+        }
+      }
+    },
     "The file is imported into a temporary archive that is deleted afterwards. Your own archive is not touched." : {
       "localizations" : {
         "de" : {
@@ -380430,6 +380939,134 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "數量"
+          }
+        }
+      }
+    },
+    "volume %lld of a split archive whose entry volume %@ is not attached to this message; nothing inside could be read" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teil %1$lld eines geteilten Archivs, dessen Eingangsteil %2$@ dieser Nachricht nicht angehängt ist; nichts darin konnte gelesen werden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volumen %1$lld de un archivo dividido cuyo volumen de entrada %2$@ no está adjunto a este mensaje; no se pudo leer nada de su interior"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volume %1$lld d'une archive fractionnée dont le volume d'entrée %2$@ n'est pas joint à ce message ; rien n'a pu être lu à l'intérieur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ऐसे विभाजित संग्रह का खंड %1$lld जिसका प्रवेश खंड %2$@ इस संदेश से संलग्न नहीं है; अंदर कुछ भी पढ़ा नहीं जा सका"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volume %1$lld di un archivio suddiviso il cui volume d'ingresso %2$@ non è allegato a questo messaggio; nulla all'interno ha potuto essere letto"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分割アーカイブのボリューム %1$lld。入口となるボリューム %2$@ がこのメッセージに添付されていないため、中身は何も読み取れませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "분할 아카이브의 볼륨 %1$lld. 진입 볼륨 %2$@이(가) 이 메시지에 첨부되지 않아 안의 내용을 읽을 수 없었습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volume %1$lld de um arquivo dividido cujo volume de entrada %2$@ não está anexado a esta mensagem; nada dentro pôde ser lido"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分卷压缩包的第 %1$lld 卷，其入口卷 %2$@ 未附加到此邮件；其中内容均无法读取"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分卷壓縮檔的第 %1$lld 卷，其入口卷 %2$@ 未附加到此郵件；其中內容均無法讀取"
+          }
+        }
+      }
+    },
+    "volume %lld of the split archive; its files are read and listed under %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teil %1$lld des geteilten Archivs; seine Dateien werden unter %2$@ gelesen und aufgeführt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volumen %1$lld del archivo dividido; sus archivos se leen y se listan bajo %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volume %1$lld de l'archive fractionnée ; ses fichiers sont lus et listés sous %2$@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "विभाजित संग्रह का खंड %1$lld; इसकी फ़ाइलें %2$@ के अंतर्गत पढ़ी और सूचीबद्ध की जाती हैं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volume %1$lld dell'archivio suddiviso; i suoi file sono letti ed elencati sotto %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分割アーカイブのボリューム %1$lld。中のファイルは %2$@ の下で読み取られ一覧に示されます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "분할 아카이브의 볼륨 %1$lld. 안의 파일은 %2$@ 아래에서 읽고 나열됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "volume %1$lld do arquivo dividido; seus arquivos são lidos e listados sob %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分卷压缩包的第 %1$lld 卷；其中的文件在 %2$@ 下读取并列出"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分卷壓縮檔的第 %1$lld 卷；其中的檔案在 %2$@ 下讀取並列出"
           }
         }
       }

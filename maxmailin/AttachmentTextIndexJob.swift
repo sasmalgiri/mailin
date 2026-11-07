@@ -78,6 +78,11 @@ final class AttachmentTextIndexJob {
     /// 7 (§13.8 step 4): Office depth — tracked changes, text boxes, Excel
     /// comments and hidden sheets, hidden slides, charts, embedded documents
     /// as children; XLSB, Visio (VSDX) and Project XML readers.
+    /// 8 (directive 2026-11-07 §6): Office output re-expressed (formulas as
+    /// "(formula …)", revisions with author and day); 7z and RAR opened, split
+    /// volumes read as one set, OpenPGP described from its packets, Publisher /
+    /// OneNote / Visio binary / Project binary / Access readers — completed
+    /// rows are re-read so the richer output reaches the index.
     nonisolated static let extractorVersion = 8
 
     struct Outcome: Sendable, Equatable {
@@ -523,15 +528,109 @@ final class AttachmentTextIndexJob {
     /// - Parameter passwords: §13.8 step 5 — passwords the person typed for
     ///   specific attachments (by ordinal), used for this read and not kept.
     nonisolated static func extractCoverage(fromRaw raw: String, ocr: Bool = false, passwords: [Int: String] = [:]) -> [Extraction]? {
-        guard let extraction = try? EmailBodyExtractor.extractContents(from: raw) else { return nil }
+        let (headers, parts) = MIMEParser.parseEmail(rawEmail: raw)
+        guard let extraction = try? EmailBodyExtractor.extractContents(parts: parts) else { return nil }
+        // Directive §6 "OpenPGP": PGP/MIME is recognised from the message's own
+        // Content-Type, so the payload part's row says what the MESSAGE is.
+        let mailKind = OpenPGP.mailKind(contentType: headers["content-type"] ?? headers["Content-Type"] ?? "")
+        // Directive §6 "Containers": the volumes of a split archive attached as
+        // separate files are read as one set, so every attachment's file stays
+        // until the whole message has been read (a volume is a sibling of the
+        // entry volume, whichever order they were attached in).
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("volumes-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            for attachment in extraction.attachments { if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) } }
+            try? FileManager.default.removeItem(at: scratch)
+        }
         var out: [Extraction] = []
         for (ordinal, attachment) in extraction.attachments.enumerated() {
-            defer {
-                if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) }
-            }
-            out.append(classify(attachment, ordinal: ordinal, ocr: ocr, password: passwords[ordinal]))
+            let siblings = volumeSiblings(of: ordinal, among: extraction.attachments, scratch: scratch)
+            out.append(classify(attachment, ordinal: ordinal, ocr: ocr, password: passwords[ordinal], siblings: siblings, mailKind: mailKind))
         }
         return out
+    }
+
+    /// Directive §6 "Containers": the other attachments of the message that are
+    /// volumes of the same split set as attachment `index` (`archive.z01 … archive.zip`,
+    /// `archive.7z.001 …`), as files the container reader lays end to end. A
+    /// sibling the parser kept only as base64 is written under `scratch` on
+    /// demand; without a scratch directory such a sibling is left out.
+    nonisolated static func volumeSiblings(of index: Int, among attachments: [AttachmentMetadata], scratch: URL?) -> [SplitVolumeSet.Sibling] {
+        guard index < attachments.count, let part = SplitVolumeSet.part(ofName: attachments[index].filename) else { return [] }
+        var out: [SplitVolumeSet.Sibling] = []
+        for (i, other) in attachments.enumerated() where i != index {
+            guard let p = SplitVolumeSet.part(ofName: other.filename), p.kind == part.kind,
+                  p.stem.lowercased() == part.stem.lowercased() else { continue }
+            if let url = other.fileURL { out.append(SplitVolumeSet.Sibling(name: other.filename, url: url)); continue }
+            guard let scratch, let b64 = other.base64,
+                  let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) else { continue }
+            let url = scratch.appendingPathComponent("\(i)-\(UUID().uuidString)")
+            do {
+                try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+                try data.write(to: url)
+                out.append(SplitVolumeSet.Sibling(name: other.filename, url: url))
+            } catch { continue }
+        }
+        return out
+    }
+
+    /// A volume of a split set that is not the set's entry point (the `.zip` of
+    /// a spanned set, the `.001` of a 7z split): its files are read through the
+    /// entry volume with this one laid beside it, so this row only says where
+    /// they are — or that nothing could be read because the entry volume is
+    /// not attached. Nil for an entry volume or an ordinary archive.
+    nonisolated static func volumeReading(_ part: SplitVolumeSet.Part, siblings: [SplitVolumeSet.Sibling]) -> Reading? {
+        let entryName: String
+        switch part.kind {
+        case .zipSpanned:
+            guard part.number != nil else { return nil }
+            entryName = "\(part.stem).zip"
+        case .sevenZipSplit:
+            guard let number = part.number, number != 1 else { return nil }
+            entryName = SplitVolumeSet.sevenZipVolumeName(stem: part.stem, number: 1)
+        }
+        let number = part.number ?? 0
+        if siblings.contains(where: { $0.name.lowercased() == entryName.lowercased() }) {
+            return Reading("", .noText, "archive",
+                           String(localized: "volume \(number) of the split archive; its files are read and listed under \(entryName)"))
+        }
+        return Reading(nil, .unsupported, "archive",
+                       String(localized: "volume \(number) of a split archive whose entry volume \(entryName) is not attached to this message; nothing inside could be read"))
+    }
+
+    /// Directive §6 "OpenPGP": an OpenPGP file or a PGP/MIME payload is
+    /// described from its packet headers — recipient key IDs, integrity
+    /// protection, signatures "present, not verified" — and never decrypted or
+    /// verified: this release has no OpenPGP key store. A clear-signed text is
+    /// read; a detached signature or key block has nothing to index and says
+    /// what it is. Something merely NAMED .asc that carries no packets is read
+    /// as the text it is.
+    nonisolated static func readOpenPGP(_ data: Data, mailKind: OpenPGP.MailKind?) -> Reading {
+        let summary: OpenPGP.Summary
+        do {
+            summary = try OpenPGP.summarize(data)
+        } catch let error as OpenPGP.ParseError {
+            if case .notOpenPGP = error, let text = String(data: data, encoding: .utf8) {
+                if mailKind != nil, text.lowercased().contains("version:") {
+                    return Reading("", .noText, "openpgp", String(localized: "PGP/MIME control part; the encrypted message is in the OpenPGP payload beside it"))
+                }
+                return Reading(text, .extracted, "text", String(localized: "named as OpenPGP but carries no OpenPGP packets; read as text"))
+            }
+            return Reading(nil, .failed, "openpgp", String(describing: error))
+        } catch {
+            return Reading(nil, .failed, "openpgp", error.localizedDescription)
+        }
+        var prefix = ""
+        switch mailKind {
+        case .pgpMIMEEncrypted?: prefix = String(localized: "PGP/MIME encrypted message (RFC 3156)") + "; "
+        case .pgpMIMESigned?: prefix = String(localized: "PGP/MIME signed message (RFC 3156)") + "; "
+        case .inlineEncrypted?, .inlineSigned?, nil: break
+        }
+        if summary.isEncrypted { return Reading(nil, .locked, "openpgp", prefix + summary.description) }
+        if let text = summary.clearText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return Reading("[Signed text]\n" + text + "\n", .extracted, "openpgp", prefix + summary.description)
+        }
+        return Reading("", .noText, "openpgp", prefix + summary.description)
     }
 
     /// The extracted text of one attachment, if any (whole, not cut at the cap).
@@ -541,8 +640,9 @@ final class AttachmentTextIndexJob {
 
     /// FIND-03: read one attachment and say what happened. Text longer than
     /// the cap is cut and the state says so.
-    nonisolated static func classify(_ attachment: AttachmentMetadata, ordinal: Int, ocr: Bool, password: String? = nil) -> Extraction {
-        var result = read(attachment, ocr: ocr, password: password)
+    nonisolated static func classify(_ attachment: AttachmentMetadata, ordinal: Int, ocr: Bool, password: String? = nil,
+                                     siblings: [SplitVolumeSet.Sibling] = [], mailKind: OpenPGP.MailKind? = nil) -> Extraction {
+        var result = read(attachment, ocr: ocr, password: password, siblings: siblings, mailKind: mailKind)
         if password != nil, result.state != .locked, result.state != .failed, result.state != .unsupported {
             // The record says how this came to be readable — and that nothing was kept.
             let unlocked = String(localized: "unlocked with a password you entered; the password was not kept")
@@ -604,7 +704,8 @@ final class AttachmentTextIndexJob {
     /// temp file when there is one, otherwise the bytes written to one.
     /// TYPE-01…04: every document kind through the one facade — Office Open
     /// XML, OpenDocument, iWork, Office 97–2003 and one level inside ZIPs.
-    nonisolated private static func readDocument(_ attachment: AttachmentMetadata, kind: DocumentKind, data: Data, password: String? = nil)
+    nonisolated private static func readDocument(_ attachment: AttachmentMetadata, kind: DocumentKind, data: Data, password: String? = nil,
+                                                 siblings: [SplitVolumeSet.Sibling] = [])
         -> Reading {
         var url = attachment.fileURL
         var temporary: URL?
@@ -616,7 +717,7 @@ final class AttachmentTextIndexJob {
         defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
         do {
             // R03: the attachment's own name travels with the bytes, whatever the temp file is called.
-            let result = try DocumentTextExtractor.extract(fileURL: url!, kind: kind, logicalName: attachment.filename, password: password)
+            let result = try DocumentTextExtractor.extract(fileURL: url!, kind: kind, logicalName: attachment.filename, password: password, siblings: siblings)
             var note: String? = nil
             if !result.skipped.isEmpty {
                 note = String(localized: "not read: \(result.skipped.joined(separator: "; "))")
@@ -731,6 +832,9 @@ final class AttachmentTextIndexJob {
             return .unreadable(String(localized: "message could not be parsed"))
         }
         let target = extractions[position]
+        if target.extractor == "openpgp", target.state == .locked {
+            return .unreadable(String(localized: "OpenPGP-encrypted: this release has no OpenPGP key store, so a password cannot open it"))
+        }
         switch target.state {
         case .locked: return .wrongPassword(target.note ?? String(localized: "the password did not open the file"))
         case .failed, .unsupported: return .unreadable(target.note ?? target.state.rawValue)
@@ -868,9 +972,9 @@ final class AttachmentTextIndexJob {
         var notes: [String] = []
         var partial = false
         var children: [ChildDocument] = []
-        for attachment in email.attachments {
+        for (index, attachment) in email.attachments.enumerated() {
             let data = attachment.fileURL.flatMap { try? Data(contentsOf: $0) } ?? attachment.base64.flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) } ?? Data()
-            let child = read(attachment, ocr: ocr, depth: depth + 1)
+            let child = read(attachment, ocr: ocr, depth: depth + 1, siblings: volumeSiblings(of: index, among: email.attachments, scratch: nil))
             let state: ChildDocument.State
             switch child.state {
             case .extracted, .truncated: state = .extracted
@@ -907,7 +1011,8 @@ final class AttachmentTextIndexJob {
 
     /// One attachment through the extractor that fits it. `depth` counts
     /// messages inside messages (eml, msg, TNEF), bounded by `maxMessageDepth`.
-    nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool, depth: Int = 0, password: String? = nil)
+    nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool, depth: Int = 0, password: String? = nil,
+                                         siblings: [SplitVolumeSet.Sibling] = [], mailKind: OpenPGP.MailKind? = nil)
         -> Reading {
         _ = childReaderInstalled
         let data: Data?
@@ -924,6 +1029,17 @@ final class AttachmentTextIndexJob {
 
         let mime = attachment.mimeType.lowercased()
         let ext = (attachment.filename as NSString).pathExtension.lowercased()
+
+        // Directive §6 "OpenPGP": .gpg / .pgp / .asc / .sig and application/pgp-* —
+        // described from the packet headers, never decrypted (no key store).
+        if OpenPGP.isOpenPGPAttachment(mimeType: mime, filename: attachment.filename) {
+            return readOpenPGP(data, mailKind: mailKind)
+        }
+        // Directive §6 "Containers": a volume that is not the set's entry point
+        // is read through the entry volume; its own row says so.
+        if let part = SplitVolumeSet.part(ofName: attachment.filename), let volume = volumeReading(part, siblings: siblings) {
+            return volume
+        }
 
         if mime.contains("pdf") || ext == "pdf" {
             guard let document = PDFDocument(data: data) else {
@@ -992,7 +1108,7 @@ final class AttachmentTextIndexJob {
             return readSMIME(data, ocr: ocr, depth: depth)
         }
         if let kind = DocumentKind.detect(mimeType: mime, filename: attachment.filename) {
-            return readDocument(attachment, kind: kind, data: data, password: password)
+            return readDocument(attachment, kind: kind, data: data, password: password, siblings: siblings)
         }
         // §13.8 step 4: an .xml that is a Microsoft Project plan is read as one, not as plain text.
         if ext == "xml", let kind = DocumentTextExtractor.sniff(head: data.prefix(4096)), kind == .projectXML {
@@ -1002,10 +1118,10 @@ final class AttachmentTextIndexJob {
         if mime.contains("message/rfc822") || ext == "eml" {
             return readEmbeddedMessage(data, ocr: ocr, depth: depth)
         }
-        // A04: ZIP, tar and gzip attachments are read above (DocumentKind); these formats are not opened.
-        let otherContainers: Set<String> = ["7z", "rar", "bz2", "xz"]
-        if otherContainers.contains(ext) || mime.contains("x-7z") || mime.contains("x-rar") || mime.contains("bzip2") || mime.contains("x-xz") {
-            return Reading(nil, .unsupported, "none", String(localized: "archive format not opened (7z, rar, bz2, xz) — ZIP, tar and gzip attachments are read; this one is kept as a file"))
+        // A04 / directive §6: ZIP, tar, gzip, 7z and RAR attachments are read above (DocumentKind); these are not opened.
+        let otherContainers: Set<String> = ["bz2", "xz"]
+        if otherContainers.contains(ext) || mime.contains("bzip2") || mime.contains("x-xz") {
+            return Reading(nil, .unsupported, "none", String(localized: "archive format not opened (bz2, xz) — ZIP, tar, gzip, 7z and RAR attachments are read; this one is kept as a file"))
         }
         if mime.contains("rtf") || ext == "rtf" {
             guard let text = (try? NSAttributedString(
