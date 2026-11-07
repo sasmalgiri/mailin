@@ -51,8 +51,11 @@ struct ZIPArchiveReader {
         let uncompressedSize: Int64
         let method: UInt16
         let crc32: UInt32
+        /// Absolute within the source: for a spanned set, the disk's base is already added.
         let localHeaderOffset: Int64
         let isEncrypted: Bool
+        /// Directive §6 "Containers": the volume (0-based) a spanned entry starts on.
+        var diskNumberStart: Int = 0
 
         var isDirectory: Bool { name.hasSuffix("/") }
 
@@ -99,15 +102,40 @@ struct ZIPArchiveReader {
 
     /// Every entry in the archive's central directory, in directory order.
     static func members(of url: URL) throws -> [Member] {
-        let handle = try FileHandle(forReadingFrom: url)
+        try members(source: try FileRandomAccessSource(url: url))
+    }
+
+    /// Directive §6 "Containers": the number of disks a spanned archive's
+    /// last volume declares (its end-of-central-directory "number of this
+    /// disk" + 1), or nil when the file is not a ZIP / is a single-disk ZIP.
+    static func spannedDiskCount(url: URL) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        let fileSize = Int64((try handle.seekToEnd()))
+        guard let fileSize = try? Int64(handle.seekToEnd()), fileSize >= 22 else { return nil }
+        let tailLength = Int(min(fileSize, 65_557))
+        guard (try? handle.seek(toOffset: UInt64(fileSize - Int64(tailLength)))) != nil,
+              let tail = try? handle.read(upToCount: tailLength),
+              let eocdIndex = lastIndex(of: [0x50, 0x4B, 0x05, 0x06], in: tail) else { return nil }
+        let eocd = Data(tail[eocdIndex...])
+        guard eocd.count >= 22 else { return nil }
+        var thisDisk = Int(u16(eocd, 4))
+        if thisDisk == 0xFFFF, eocdIndex - 20 >= tail.startIndex, tail[(eocdIndex - 20)..<(eocdIndex - 16)].elementsEqual([0x50, 0x4B, 0x06, 0x07]) {
+            thisDisk = Int(u32(tail, eocdIndex - 20 + 16)) - 1   // ZIP64 locator: total number of disks
+        }
+        return thisDisk > 0 ? thisDisk + 1 : nil
+    }
+
+    /// The directory of a ZIP held in any random-access source — one file
+    /// or a spanned volume set. Local header offsets come out absolute
+    /// within the source (the entry's disk base is added), so `extract`
+    /// reads them without knowing about volumes.
+    static func members(source: RandomAccessSource) throws -> [Member] {
+        let fileSize = source.length
 
         // End of central directory: at most 65,535 bytes of comment precede
         // the end of file, plus the 22-byte record itself.
         let tailLength = Int(min(fileSize, 65_557))
-        try handle.seek(toOffset: UInt64(fileSize - Int64(tailLength)))
-        let tail = try handle.read(upToCount: tailLength) ?? Data()
+        let tail = try source.read(at: fileSize - Int64(tailLength), count: tailLength)
         guard let eocdIndex = lastIndex(of: [0x50, 0x4B, 0x05, 0x06], in: tail) else { throw ReadError.notAZip }
         // Copied, not sliced: a Data slice keeps its parent's indices, and the
         // little-endian readers below index from zero.
@@ -117,34 +145,39 @@ struct ZIPArchiveReader {
         var entryCount = Int64(u16(eocd, 10))
         var cdSize = Int64(u32(eocd, 12))
         var cdOffset = Int64(u32(eocd, 16))
+        var cdDisk = Int(u16(eocd, 6))
 
         // ZIP64: any 0xFFFF / 0xFFFFFFFF field means "see the ZIP64 record",
         // located by the 20-byte locator that immediately precedes the EOCD.
-        if entryCount == 0xFFFF || cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF {
+        if entryCount == 0xFFFF || cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF || cdDisk == 0xFFFF {
             let locatorStart = eocdIndex - 20
             guard locatorStart >= tail.startIndex,
                   tail[locatorStart..<locatorStart + 4].elementsEqual([0x50, 0x4B, 0x06, 0x07]) else {
                 throw ReadError.malformed("ZIP64 fields present but no ZIP64 locator")
             }
-            let zip64Offset = try i64(u64(tail, locatorStart + 8), "ZIP64 locator offset")
+            let zip64Disk = Int(u32(tail, locatorStart + 4))
+            var zip64Offset = try i64(u64(tail, locatorStart + 8), "ZIP64 locator offset")
+            zip64Offset += source.diskBase(zip64Disk) ?? 0
             guard zip64Offset >= 0, try checkedSum(zip64Offset, 56, "ZIP64 record end") <= fileSize else {
                 throw ReadError.truncated("ZIP64 end-of-central-directory record")
             }
-            try handle.seek(toOffset: UInt64(zip64Offset))
-            let z = try handle.read(upToCount: 56) ?? Data()
+            let z = try source.read(at: zip64Offset, count: 56)
             guard z.count == 56, z.prefix(4).elementsEqual([0x50, 0x4B, 0x06, 0x06]) else {
                 throw ReadError.malformed("ZIP64 end-of-central-directory signature")
             }
             entryCount = try i64(u64(z, 32), "ZIP64 entry count")
             cdSize = try i64(u64(z, 40), "ZIP64 central directory size")
             cdOffset = try i64(u64(z, 48), "ZIP64 central directory offset")
+            cdDisk = Int(u32(z, 20))
         }
+        // Spanned set: the directory offset is relative to its own disk.
+        if let base = source.diskBase(cdDisk) { cdOffset += base }
+        else if source.volumeCount > 1 || cdDisk > 0 { throw ReadError.malformed("the central directory is on volume \(cdDisk + 1), which the set does not have") }
 
         guard cdOffset >= 0, cdSize >= 0, try checkedSum(cdOffset, cdSize, "central directory end") <= fileSize else {
             throw ReadError.truncated("central directory")
         }
-        try handle.seek(toOffset: UInt64(cdOffset))
-        let directory = try handle.read(upToCount: Int(cdSize)) ?? Data()
+        let directory = try source.read(at: cdOffset, count: Int(cdSize))
         guard Int64(directory.count) == cdSize else { throw ReadError.truncated("central directory") }
 
         var members: [Member] = []
@@ -162,6 +195,7 @@ struct ZIPArchiveReader {
             let nameLength = Int(u16(directory, cursor + 28))
             let extraLength = Int(u16(directory, cursor + 30))
             let commentLength = Int(u16(directory, cursor + 32))
+            var diskStart = Int(u16(directory, cursor + 34))
             var localOffset = Int64(u32(directory, cursor + 42))
 
             let nameStart = cursor + 46
@@ -175,7 +209,7 @@ struct ZIPArchiveReader {
 
             // ZIP64 extra field 0x0001: 8-byte values, present only for the
             // fields that were saturated, in the fixed order size/csize/offset.
-            if compressed == 0xFFFF_FFFF || uncompressed == 0xFFFF_FFFF || localOffset == 0xFFFF_FFFF {
+            if compressed == 0xFFFF_FFFF || uncompressed == 0xFFFF_FFFF || localOffset == 0xFFFF_FFFF || diskStart == 0xFFFF {
                 var e = extraStart
                 let extraEnd = extraStart + extraLength
                 while e + 4 <= extraEnd {
@@ -192,11 +226,17 @@ struct ZIPArchiveReader {
                         if uncompressed == 0xFFFF_FFFF, f + 8 <= fieldEnd { uncompressed = try i64(u64(directory, f), "\(name): ZIP64 size"); f += 8 }
                         if compressed == 0xFFFF_FFFF, f + 8 <= fieldEnd { compressed = try i64(u64(directory, f), "\(name): ZIP64 compressed size"); f += 8 }
                         if localOffset == 0xFFFF_FFFF, f + 8 <= fieldEnd { localOffset = try i64(u64(directory, f), "\(name): ZIP64 offset"); f += 8 }
+                        if diskStart == 0xFFFF, f + 4 <= fieldEnd { diskStart = Int(u32(directory, f)); f += 4 }
                         break
                     }
                     e = fieldEnd
                 }
             }
+            // Spanned set: the local header offset is relative to the entry's
+            // disk; made absolute here. A disk the set does not have leaves
+            // the offset relative — the caller marks the member as needing
+            // that volume (`SplitVolumeSet`).
+            if let base = source.diskBase(diskStart) { localOffset += base }
 
             members.append(Member(name: name,
                                   compressedSize: compressed,
@@ -204,7 +244,8 @@ struct ZIPArchiveReader {
                                   method: method,
                                   crc32: crc,
                                   localHeaderOffset: localOffset,
-                                  isEncrypted: (flags & 0x0001) != 0))
+                                  isEncrypted: (flags & 0x0001) != 0,
+                                  diskNumberStart: diskStart))
             cursor = entryEnd
         }
         return members
@@ -224,6 +265,13 @@ struct ZIPArchiveReader {
     ///   call and not kept.
     static func extract(_ member: Member, from url: URL, to destination: URL,
                         availableDiskBytes: Int64? = nil, password: String? = nil) throws {
+        try extract(member, source: try FileRandomAccessSource(url: url), to: destination,
+                    availableDiskBytes: availableDiskBytes, password: password)
+    }
+
+    /// `extract` over any random-access source (a file or a spanned volume set).
+    static func extract(_ member: Member, source archive: RandomAccessSource, to destination: URL,
+                        availableDiskBytes: Int64? = nil, password: String? = nil) throws {
         if member.isEncrypted, password == nil { throw ReadError.encrypted(member: member.name) }
         guard member.method == 0 || member.method == 8 || (member.method == 99 && member.isEncrypted) else {
             throw ReadError.unsupportedMethod(member.method, member: member.name)
@@ -235,9 +283,14 @@ struct ZIPArchiveReader {
                                              available: available)
         }
 
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let fileSize = Int64(try handle.seekToEnd())
+        let fileSize = archive.length
+        // Sequential reads over the source, where the FileHandle cursor used to be.
+        var cursor: Int64 = 0
+        func readNext(_ count: Int) throws -> Data {
+            let chunk = try archive.read(at: cursor, count: count)
+            cursor += Int64(chunk.count)
+            return chunk
+        }
 
         // Local file header: 30 fixed bytes, then name and extra (whose
         // lengths may differ from the central directory's — always read the
@@ -246,8 +299,8 @@ struct ZIPArchiveReader {
               try checkedSum(member.localHeaderOffset, 30, "\(member.name): local header end") <= fileSize else {
             throw ReadError.truncated("\(member.name): local header")
         }
-        try handle.seek(toOffset: UInt64(member.localHeaderOffset))
-        let local = try handle.read(upToCount: 30) ?? Data()
+        cursor = member.localHeaderOffset
+        let local = try readNext(30)
         guard local.count == 30, local.prefix(4).elementsEqual([0x50, 0x4B, 0x03, 0x04]) else {
             throw ReadError.malformed("\(member.name): local header signature")
         }
@@ -256,21 +309,21 @@ struct ZIPArchiveReader {
         guard try checkedSum(dataStart, member.compressedSize, "\(member.name): member data end") <= fileSize else {
             throw ReadError.truncated("\(member.name): member data")
         }
-        try handle.seek(toOffset: UInt64(dataStart))
+        cursor = dataStart
 
         // Encrypted members: the data is read through a decrypting source.
         var method = member.method
         var compressedLength = member.compressedSize
-        var source: (Int) throws -> Data = { try handle.read(upToCount: $0) ?? Data() }
+        var source: (Int) throws -> Data = { try readNext($0) }
         var finish: () throws -> Void = {}
         var checkCRC = true
         if member.isEncrypted, let password {
             if member.method == 99 {
-                try handle.seek(toOffset: UInt64(member.localHeaderOffset + 30 + localNameLength))
-                let extra = try handle.read(upToCount: Int(localExtraLength)) ?? Data()
+                cursor = member.localHeaderOffset + 30 + localNameLength
+                let extra = try readNext(Int(localExtraLength))
                 guard let aes = WinZipAES.extraField(in: extra) else { throw ReadError.malformed("\(member.name): AES member without its extra field") }
                 let saltLength = WinZipAES.saltLength(strength: aes.strength)
-                let prefix = try handle.read(upToCount: saltLength + 2) ?? Data()
+                let prefix = try readNext(saltLength + 2)
                 guard prefix.count == saltLength + 2 else { throw ReadError.truncated("\(member.name): AES salt") }
                 let keys = WinZipAES.keys(password: password, salt: Array(prefix.prefix(saltLength)), strength: aes.strength)
                 guard Array(prefix.suffix(2)) == keys.verifier else { throw ReadError.wrongPassword(member: member.name) }
@@ -282,26 +335,26 @@ struct ZIPArchiveReader {
                 source = { want in
                     let take = Int(min(Int64(want), remainingPayload))
                     guard take > 0 else { return Data() }
-                    let chunk = try handle.read(upToCount: take) ?? Data()
+                    let chunk = try readNext(take)
                     remainingPayload -= Int64(chunk.count)
                     mac.update(data: chunk)
                     return try stream.process(chunk)
                 }
                 finish = {
-                    let code = try handle.read(upToCount: 10) ?? Data()
+                    let code = try readNext(10)
                     guard code.count == 10, Data(mac.finalize()).prefix(10) == code else { throw ReadError.wrongPassword(member: member.name) }
                 }
                 method = aes.actualMethod
                 checkCRC = aes.vendorVersion == 1 || member.crc32 != 0   // AE-2 stores no CRC
             } else {
                 var cipher = ZipCryptoCipher(password: password)
-                let header = cipher.decrypt(try handle.read(upToCount: 12) ?? Data())
+                let header = cipher.decrypt(try readNext(12))
                 guard header.count == 12 else { throw ReadError.truncated("\(member.name): encryption header") }
                 let localFlags = u16(local, 6), localTime = u16(local, 10)
                 let check: UInt8 = (localFlags & 0x0008) != 0 ? UInt8(truncatingIfNeeded: localTime >> 8) : UInt8(truncatingIfNeeded: member.crc32 >> 24)
                 guard header[header.startIndex + 11] == check else { throw ReadError.wrongPassword(member: member.name) }
                 compressedLength = member.compressedSize - 12
-                source = { want in cipher.decrypt(try handle.read(upToCount: want) ?? Data()) }
+                source = { want in cipher.decrypt(try readNext(want)) }
             }
         }
         guard method == 0 || method == 8 else { throw ReadError.unsupportedMethod(method, member: member.name) }
