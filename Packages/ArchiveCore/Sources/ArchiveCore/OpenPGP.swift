@@ -26,8 +26,13 @@
 //  classified from the content type and the armor markers.
 //
 //  Encrypted content is reported LOCKED with a note naming the recipient key
-//  IDs; signatures as "signature present, not verified (no OpenPGP trust
-//  store)". Nothing here derives, stores or guesses a key.
+//  IDs. Nothing here derives, stores or guesses a key.
+//
+//  GAP-PGP (owner decision 2026-11-07): signatures are VERIFIED against the
+//  public keys the person imported into the archive's keyring
+//  (`OpenPGPKeyring`, `OpenPGPVerify.swift`) — good / BAD / unknown key /
+//  cannot verify, stated in `Summary.description`. Public keys only: no
+//  secret keys, no passphrases, never decrypted.
 //
 
 import Foundation
@@ -374,6 +379,13 @@ enum OpenPGP {
         var clearText: String?
         var clearTextHash: String?
         var packetTags: [UInt8] = []
+        /// GAP-PGP: one verdict per signature over a document (empty for key blocks and encrypted data).
+        var verdicts: [OpenPGPVerdict] = []
+        /// GAP-PGP: for key blocks, each key's self-signature check.
+        var keyChecks: [String] = []
+
+        /// True when there are signatures and every one verified good.
+        var allSignaturesGood: Bool { !verdicts.isEmpty && verdicts.allSatisfy(\.isGood) }
 
         var isEncrypted: Bool { !recipients.isEmpty || !symmetricSessionKeys.isEmpty || encryptedData != nil }
         var isSigned: Bool { !signatures.isEmpty || onePassSignatures > 0 }
@@ -393,12 +405,14 @@ enum OpenPGP {
                 case .aead(let mode, let cipher)?: parts.append("AEAD \(mode) with \(cipher)")
                 case nil: break
                 }
-                parts.append("not decrypted — this release has no OpenPGP key store")
+                parts.append("not decrypted — mailin keeps public keys only and never decrypts")
             }
-            if isSigned {
+            if isSigned, !isKeyMaterial, !verdicts.isEmpty {
+                parts.append(verdicts.map(\.description).joined(separator: "; "))
+            } else if isSigned, !isKeyMaterial {
                 let issuers = signatures.compactMap { $0.issuerFingerprint ?? $0.issuerKeyID }
                 let algorithms = Set(signatures.map { "\($0.publicKeyAlgorithm)/\($0.hashAlgorithm)" }).sorted()
-                var s = "signature present, not verified (no OpenPGP trust store)"
+                var s = "signature present, not verified"
                 if !issuers.isEmpty { s += "; issuer " + issuers.joined(separator: ", ") }
                 if !algorithms.isEmpty { s += "; " + algorithms.joined(separator: ", ") }
                 if signatures.isEmpty, onePassSignatures > 0 { s += "; \(onePassSignatures) one-pass signature(s)" }
@@ -407,13 +421,19 @@ enum OpenPGP {
             if let compression { parts.append("compressed (\(compression))") }
             if let literalFilename { parts.append("literal data" + (literalFilename.isEmpty ? "" : " “\(literalFilename)”") + (literalBytes.map { " (\($0) bytes)" } ?? "")) }
             if isKeyMaterial { parts.append("key material: \(publicKeys) public, \(secretKeys) secret" + (userIDs.isEmpty ? "" : "; " + userIDs.joined(separator: ", "))) }
+            if !keyChecks.isEmpty { parts.append(keyChecks.joined(separator: "; ")) }
             if let armorType { parts.append("ASCII armor “\(armorType)”" + (armorCRCVerified == true ? ", CRC-24 verified" : "")) }
             return parts.joined(separator: "; ")
         }
     }
 
-    /// Everything the packet headers say about `data` (binary or armored).
-    static func summarize(_ data: Data) throws -> Summary {
+    /// Everything the packet headers say about `data` (binary or armored),
+    /// with every document signature verified against `keyring` (GAP-PGP).
+    /// - Parameter signedData: for a detached signature (a .sig/.asc beside
+    ///   its file, a PGP/MIME signature part) the bytes it signs; without it a
+    ///   known key's signature is "cannot be verified: the signed data is not
+    ///   with the signature".
+    static func summarize(_ data: Data, keyring: OpenPGPKeyring = .active, signedData: Data? = nil) throws -> Summary {
         var summary = Summary()
         var binary = data
         if let text = String(data: data.prefix(16_384), encoding: .utf8) ?? String(data: data.prefix(16_384), encoding: .isoLatin1),
@@ -426,7 +446,8 @@ enum OpenPGP {
             summary.clearTextHash = armor.clearTextHash
             binary = armor.data
         }
-        for packet in try packets(in: binary) {
+        let topLevel = try packets(in: binary)
+        for packet in topLevel {
             summary.packetTags.append(packet.tag)
             let b = [UInt8](packet.body)
             switch packet.tag {
@@ -467,7 +488,68 @@ enum OpenPGP {
             }
         }
         if summary.packetTags.isEmpty { throw ParseError.notOpenPGP("no packets") }
+        verifySignatures(&summary, data: data, packets: topLevel, keyring: keyring, signedData: signedData)
         return summary
+    }
+
+    /// GAP-PGP: the verdicts (and, for key blocks, the self-signature checks).
+    private static func verifySignatures(_ summary: inout Summary, data: Data, packets topLevel: [Packet],
+                                         keyring: OpenPGPKeyring, signedData: Data?) {
+        // Signatures inside encrypted data are not visible; nothing to verify.
+        if summary.isEncrypted { return }
+        if summary.isKeyMaterial {
+            let split = OpenPGPTransferableKey.split(topLevel)
+            for tpk in split.keys {
+                do {
+                    let c = try OpenPGPCertificate(tpk)
+                    let known = keyring.lookup(keyID: nil, fingerprint: c.primary.fingerprint) != nil
+                    summary.keyChecks.append("public key \(c.fingerprintHex)" + (c.primaryUserID.map { " “\($0)”" } ?? "")
+                                             + ": self-signature verified, " + (known ? "in the keyring" : "not in the keyring"))
+                } catch {
+                    summary.keyChecks.append("public key rejected: " + error.localizedDescription)
+                }
+            }
+            summary.keyChecks += split.refused
+            return
+        }
+        if summary.armorType == "PGP SIGNED MESSAGE" {
+            guard let clear = OpenPGPVerifier.cleartext(data) else {
+                summary.verdicts = [.cannotVerify(reason: "the cleartext signed message is malformed")]
+                return
+            }
+            let signatures = (try? packets(in: clear.signatureData)) ?? []
+            if !clear.unexpectedHeaders.isEmpty {
+                summary.verdicts = signatures.filter { $0.tag == 2 }.map { _ in
+                    .cannotVerify(reason: "the signed text carries an armor header other than “Hash:” (\(clear.unexpectedHeaders.joined(separator: ", "))), so what was signed is unclear")
+                }
+                return
+            }
+            summary.verdicts = OpenPGPVerifier.verdicts(signatures: signatures, signedData: clear.signedBytes, keyring: keyring)
+            return
+        }
+        let inline = OpenPGPVerifier.flatten(topLevel)
+        if inline.packets.map(\.tag) != topLevel.map(\.tag) {
+            // Compressed: describe what was inside.
+            for p in inline.packets where !topLevel.contains(p) {
+                switch p.tag {
+                case 2: if let info = signature([UInt8](p.body)) { summary.signatures.append(info) }
+                case 4: summary.onePassSignatures += 1
+                default: break
+                }
+            }
+            if summary.literalFilename == nil, let name = inline.literalFilename {
+                summary.literalFilename = name
+                summary.literalBytes = inline.literal?.count
+            }
+        }
+        if inline.packets.contains(where: { $0.tag == 2 }) {
+            let target = inline.literal ?? signedData.map { [UInt8]($0) }
+            summary.verdicts = OpenPGPVerifier.verdicts(signatures: inline.packets, signedData: target, keyring: keyring)
+        } else if let problem = inline.problem {
+            summary.verdicts = [.cannotVerify(reason: problem)]
+        } else if summary.onePassSignatures > 0 {
+            summary.verdicts = [.cannotVerify(reason: "the one-pass signature has no signature packet after the data")]
+        }
     }
 
     private static func signature(_ b: [UInt8]) -> SignatureInfo? {
@@ -532,21 +614,46 @@ enum OpenPGP {
 
     /// A .gpg / .pgp / .asc attachment through `DocumentTextExtractor`:
     /// encrypted → `encrypted` (the coverage row says locked; `summarize`
-    /// names the recipients for the lock row); a clearsigned message → its
-    /// text with the unverified signature noted; detached signatures and key
+    /// names the recipients for the lock row); a clearsigned or inline-signed
+    /// message → its text with the signature's verdict (GAP-PGP: a signed
+    /// text whose every signature is good is complete; otherwise the verdict
+    /// is listed as what could not be confirmed); detached signatures and key
     /// blocks → no text.
-    static func extract(fileURL: URL) throws -> OfficeTextExtractor.Result {
+    /// - Parameters:
+    ///   - logicalName: the attachment's own name ("memo.txt.sig").
+    ///   - siblings: the files beside it; a detached signature is checked
+    ///     against the sibling named like it minus the extension ("memo.txt").
+    static func extract(fileURL: URL, logicalName: String? = nil, siblings: [SplitVolumeSet.Sibling] = [],
+                        keyring: OpenPGPKeyring = .active) throws -> OfficeTextExtractor.Result {
         let data = try Data(contentsOf: fileURL)
         guard data.count <= ExtractionLimits.effective.partBytes else {
             throw OfficeTextExtractor.ExtractError.notAPackage("\(data.count) bytes, over the \(ExtractionLimits.effective.partBytes)-byte guard")
         }
+        var signedData: Data?
+        if let target = signedFileName(forDetachedSignature: logicalName ?? fileURL.lastPathComponent),
+           let sibling = siblings.first(where: { $0.name == target }) {
+            signedData = try? Data(contentsOf: sibling.url)
+        }
         let summary: Summary
-        do { summary = try summarize(data) } catch let error as ParseError { throw OfficeTextExtractor.ExtractError.notAPackage(error.localizedDescription) }
+        do { summary = try summarize(data, keyring: keyring, signedData: signedData) } catch let error as ParseError { throw OfficeTextExtractor.ExtractError.notAPackage(error.localizedDescription) }
         if summary.isEncrypted { throw OfficeTextExtractor.ExtractError.encrypted }
-        if let text = summary.clearText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        var text = summary.clearText
+        if text == nil, summary.literalFilename != nil, let literal = OpenPGPVerifier.flatten((try? packets(in: armoredOrBinary(data))) ?? []).literal {
+            text = String(data: Data(literal), encoding: .utf8)
+        }
+        if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let good = summary.allSignaturesGood
             return OfficeTextExtractor.Result(text: "[Signed text]\n" + text + "\n", components: ["Signed text"],
-                                              skipped: [summary.description], notText: [])
+                                              skipped: good ? [] : [summary.description], notText: good ? [summary.description] : [])
         }
         throw OfficeTextExtractor.ExtractError.noTextParts
+    }
+
+    /// The binary packets of `data`, de-armored when it is ASCII armor.
+    static func armoredOrBinary(_ data: Data) -> Data {
+        guard let head = String(data: data.prefix(16_384), encoding: .utf8) ?? String(data: data.prefix(16_384), encoding: .isoLatin1),
+              head.contains("-----BEGIN PGP "),
+              let armor = try? dearmor(String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)) else { return data }
+        return armor.data
     }
 }

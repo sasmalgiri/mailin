@@ -94,7 +94,7 @@ final class OpenPGPTests: XCTestCase {
         XCTAssertTrue(s.description.contains("key CAFEF00DAABBCCDD (ECDH)"), s.description)
         XCTAssertTrue(s.description.contains("a passphrase (AES-256)"), s.description)
         XCTAssertTrue(s.description.contains("MDC present"), s.description)
-        XCTAssertTrue(s.description.contains("not decrypted — this release has no OpenPGP key store"), s.description)
+        XCTAssertTrue(s.description.contains("not decrypted — mailin keeps public keys only and never decrypts"), s.description)
 
         // Through the facade: locked (the coverage state), nothing decrypted.
         let url = try writeBytes("secret.gpg", bytes)
@@ -127,7 +127,8 @@ final class OpenPGPTests: XCTestCase {
         XCTAssertEqual(s.onePassSignatures, 1)
         XCTAssertEqual(s.compression, "ZIP")
         XCTAssertEqual(s.packetTags, [4, 8])
-        XCTAssertTrue(s.description.contains("signature present, not verified (no OpenPGP trust store)"), s.description)
+        // GAP-PGP: the declared ZIP body is not deflate data, so the signature inside cannot be reached — said so.
+        XCTAssertTrue(s.description.contains("signature cannot be verified: the compressed signed data could not be opened"), s.description)
         XCTAssertTrue(s.description.contains("compressed (ZIP)"), s.description)
 
         // The same literal and signature uncompressed: issuer, fingerprint, algorithms and time are read.
@@ -143,8 +144,9 @@ final class OpenPGPTests: XCTestCase {
         XCTAssertEqual(sig.issuerKeyID, "DEADBEEF01020304")
         XCTAssertEqual(sig.issuerFingerprint, OpenPGP.hex(Self.fingerprint))
         XCTAssertEqual(sig.created?.timeIntervalSince1970, 1_700_000_000)
-        XCTAssertTrue(plain.description.contains("issuer \(OpenPGP.hex(Self.fingerprint))"), plain.description)
-        XCTAssertTrue(plain.description.contains("EdDSA/SHA-512"), plain.description)
+        // GAP-PGP: no such key in the (empty) keyring → "unknown key", named by the issuer fingerprint.
+        XCTAssertEqual(plain.verdicts, [.unknownKey(issuer: OpenPGP.hex(Self.fingerprint))])
+        XCTAssertTrue(plain.description.contains("signature by unknown key \(OpenPGP.hex(Self.fingerprint)) — import the signer's public key to verify it"), plain.description)
 
         let v3 = try OpenPGP.summarize(Data(Self.signatureV3(issuer: Self.keyB)))
         XCTAssertEqual(v3.signatures[0].version, 3)
@@ -241,8 +243,8 @@ final class OpenPGPTests: XCTestCase {
         let r = try DocumentTextExtractor.extract(fileURL: url, kind: .pgp)
         XCTAssertTrue(r.text.contains("The board meets on Monday."))
         XCTAssertEqual(r.components, ["Signed text"])
-        XCTAssertTrue(r.skipped.first?.contains("signature present, not verified (no OpenPGP trust store)") == true, r.skipped.description)
-        XCTAssertTrue(r.partial, "a signed text whose signature is unverified is partial, with the reason")
+        XCTAssertTrue(r.skipped.first?.contains("signature by unknown key \(OpenPGP.hex(Self.fingerprint))") == true, r.skipped.description)
+        XCTAssertTrue(r.partial, "a signed text whose signature is not verified good is partial, with the reason")
     }
 
     // MARK: Mail
