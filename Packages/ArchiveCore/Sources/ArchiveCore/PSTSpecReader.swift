@@ -118,7 +118,9 @@ enum PSTValue {
 
 final class PSTSpecReader {
     struct Node { let nid: UInt32; let dataBid: UInt64; let subBid: UInt64; let parent: UInt32 }
-    struct Block { let ib: UInt64; let cb: Int }
+    /// `cbInflated` is set only by the 4 KiB-page OST's BBTENTRY (`bid, ib, cb, cbInflated, cRef, pad`):
+    /// when it exceeds `cb` the stored bytes are a zlib stream (`PSTBlockInflate`).
+    struct Block { let ib: UInt64; let cb: Int; var cbInflated: Int? = nil }
 
     let bytes: Data
     let unicode: Bool
@@ -195,7 +197,10 @@ final class PSTSpecReader {
                 let bid = unicode ? Self.u64(bytes, e) : UInt64(Self.u32(bytes, e))
                 let bib = unicode ? Self.u64(bytes, e + 8) : UInt64(Self.u32(bytes, e + 4))
                 let cb = Int(Self.u16(bytes, e + (unicode ? 16 : 8)))
-                blocks[bid & ~1] = Block(ib: bib, cb: cb)
+                // The 4 KiB-page OST's BBTENTRY carries the inflated size after `cb`
+                // (real example-2013.ost: 62 of 310 blocks are compressed).
+                let inflated: Int? = geometry.pageSize == 4096 ? Int(Self.u16(bytes, e + 18)) : nil
+                blocks[bid & ~1] = Block(ib: bib, cb: cb, cbInflated: inflated)
             }
         }
     }
@@ -208,6 +213,11 @@ final class PSTSpecReader {
         let o = Int(b.ib)
         guard o >= 0, b.cb >= 0, o + b.cb <= bytes.count else { return nil }
         var d = [UInt8](bytes[(bytes.startIndex + o)..<(bytes.startIndex + o + b.cb)])
+        // 4 KiB-page OST: inflate first, then decode (libpst's order). A stream the
+        // decoder rejects stays as its raw bytes: the item then reads as unreadable.
+        if let inflated = b.cbInflated, inflated > b.cb, let plain = PSTBlockInflate.inflate(d, expected: inflated) {
+            d = plain
+        }
         if bid & 2 == 0 {   // external block
             if crypt == 1 { PSTSpec.decodePermute(&d) }
             // [MS-PST] 2.2.2.2: bit 0 of a BID is reserved and read as zero, also
@@ -558,15 +568,26 @@ final class PSTSpecReader {
                         var name = apc[0x3707]?.string ?? apc[0x3704]?.string ?? apc[0x3001]?.string ?? "attachment"
                         var bytes = apc[0x3701]?.bytes
                         var mime = apc[0x370E]?.string ?? "application/octet-stream"
+                        let method = apc[0x3705]?.int
                         // An attached email (method 5, ATTACH_EMBEDDED_MSG) becomes an .eml file
                         // instead of an empty attachment.
-                        if apc[0x3705]?.int == 5, let obj = bytes, obj.count >= 8,
+                        if method == 5, let obj = bytes, obj.count >= 8,
                            let inner = subnodes(a.1)[Self.u32(obj, 0)],
                            let eml = embeddedMessage(data: inner.0, sub: inner.1) {
                             bytes = eml.message
                             mime = "message/rfc822"
                             if apc[0x3707] == nil && apc[0x3704] == nil { name = eml.subject.isEmpty ? "attached message" : eml.subject }
                             if !name.lowercased().hasSuffix(".eml") { name += ".eml" }
+                        }
+                        // An OLE attachment (method 6, ATTACH_OLE): PidTagAttachDataObject is a PtypObject
+                        // cell — the subnode's NID and the object's size ([MS-PST] 2.3.3.5) — and the
+                        // bytes are that subnode's data stream. Found on the Aspose SampleOstFile.ost
+                        // (2026-11-07): the reader had stored the 8-byte cell as the attachment.
+                        else if method == 6, let obj = bytes, obj.count == 8,
+                                let inner = subnodes(a.1)[Self.u32(obj, 0)] {
+                            let stream = dataBlocks(inner.0).flatMap { $0 }
+                            let declared = Int(Self.u32(obj, 4))
+                            if !stream.isEmpty { bytes = declared > 0 && declared < stream.count ? Array(stream.prefix(declared)) : stream }
                         }
                         let size = bytes?.count ?? Int(apc[0x0E20]?.int ?? 0)
                         // The attachment's content travels with it, as the earlier reader

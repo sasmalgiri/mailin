@@ -134,7 +134,12 @@ public class EmailBodyExtractor {
         // RFC822 or nested message
         if lower.hasPrefix("message/rfc822") {
             if part.isAttachment {
-                if let md = extractAttachment(from: part, forceFilename: "attached.eml", materialize: materialize) {
+                // The part's own name when it has one (an Outlook for Mac record names its attached
+                // message, e.g. "message 1.eml" — directive §3 real-file run, 2026-11-07); "attached.eml"
+                // only for a nameless part, as before.
+                let ownName = part.filename ?? parseParam("filename", in: part.headers["Content-Disposition"])
+                    ?? parseParam("name", in: part.headers["Content-Type"])
+                if let md = extractAttachment(from: part, forceFilename: ownName ?? "attached.eml", materialize: materialize) {
                     attachments.append(md)
                 }
                 return
