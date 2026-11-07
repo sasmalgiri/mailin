@@ -119,8 +119,8 @@ enum FormatCapabilityRegistry {
               reads: "Visio: every page's shape text under its page name; Project XML: project name, tasks (id, name, start, finish, notes), resources, assignments",
               evidence: .realFixtures, limitation: "Visio-written .vsdx/.vsdm from Apache Tika; MSPDI plans from the MPXJ corpus"),
         .init("tnef", .attachmentDocument, "TNEF (winmail.dat)", ["winmail.dat", "ms-tnef"],
-              reads: "subject and body (plain, HTML, compressed RTF); every file inside as a child document with its name and type",
-              evidence: .realFixtures, limitation: "a message embedded inside the TNEF is listed, not expanded (Exchange-written winmail.dat from Apache Tika: five files out)"),
+              reads: "subject, sender, date and body (plain, HTML, compressed RTF); every file inside as a child document with its name and type; a message embedded in the TNEF (ATTACH_EMBEDDED_MSG, or a winmail.dat inside) expanded as an attached message with its own files as children, as many levels as the run's limit allows (three by default; Resume opens one more)",
+              evidence: .realFixtures, limitation: "files verified on an Exchange-written winmail.dat from Apache Tika (five files out); embedded-message expansion verified on spec-built TNEF streams only — no real nested winmail.dat fixture; a message deeper than the level ceiling is kept as a winmail.dat child and said to be unexpanded"),
         .init("other-office", .attachmentDocument, "OneNote, Visio binary, Project binary, Publisher, Access", ["one", "onepkg", "vsd", "mpp", "pub", "mdb", "accdb"], reads: "—",
               evidence: .notImplemented, limitation: "no reader; a new adapter project per family (the XML forms VSDX and Project XML are read)"),
 
