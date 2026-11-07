@@ -23,6 +23,19 @@
 //   • Read and flagged states become flags (never folders), like Apple Mail's.
 //   • Non-mail objects are counted out, never imported, and the count is on
 //     the receipt (`olm_contacts_not_imported`, …) — the same rule PSTs follow.
+//     Counted per RECORD, not per file: Outlook 16 writes one `Contacts.xml`
+//     (`<contacts>` with one `<contact>` each), `Groups.xml`, `Calendar.xml`
+//     (`<appointments>`), `Tasks.xml`, `Notes.xml`; `Categories.xml` is the
+//     colour table of the category names, not an object list.
+//
+//  Verified on real exports 2026-11-07 (directive §3; Aspose SampleOLM.olm and
+//  the Outlook 16 outlook_example.olm, `RealMailStoreFixtureTests`): Outlook
+//  writes `OPFMessageGetIsRead` as "1E0"/"0E0", the flag as
+//  `OPFMessageCopyGetFlagStatus`, categories as `OPFMessageCopyCategoryList/
+//  category@OPFCategoryCopyName` plus a nested `OPFMessageCopyPrimaryCategory`,
+//  priority 2 = high / 4 = low, attachment sizes as "7.39E3". The first
+//  version of this reader, written from the XML shape without a real file,
+//  read none of those.
 //   • Members stream one at a time through a scratch file; the archive is
 //     never loaded whole. There is no message or attachment cap of mailin's
 //     own; the ZIP reader's checks (size, CRC-32, free scratch space) apply.
@@ -38,14 +51,26 @@ struct OLMParser {
 
     static let messagesMarker = "com.microsoft.__Messages"
 
-    /// The sibling trees that are not mail, with the receipt category each
-    /// one is counted under.
+    /// The sibling trees that are not mail (older exports' folder names), with
+    /// the receipt category each one is counted under.
     static let nonMailTrees: [(marker: String, category: String)] = [
         ("com.microsoft.__Contacts", "olm_contacts_not_imported"),
         ("com.microsoft.__Calendar", "olm_calendar_not_imported"),
         ("com.microsoft.__Tasks", "olm_tasks_not_imported"),
         ("com.microsoft.__Notes", "olm_notes_not_imported"),
     ]
+
+    /// Root element of a non-mail XML file → receipt category; each top-level
+    /// child element is one object. `categories` (Categories.xml) is not an
+    /// object list and is not counted.
+    static let nonMailRootElements: [String: String] = [
+        "contacts": "olm_contacts_not_imported",
+        "groups": "olm_contact_groups_not_imported",
+        "appointments": "olm_calendar_not_imported",
+        "tasks": "olm_tasks_not_imported",
+        "notes": "olm_notes_not_imported",
+    ]
+    static let otherObjectsCategory = "olm_other_objects_not_imported"
 
     /// True when a ZIP's member list is an Outlook for Mac archive.
     static func isOLM(members: [ZIPArchiveReader.Member]) -> Bool {
@@ -128,7 +153,7 @@ struct OLMParser {
 
     /// FOLD-02: the folders the archive lists, message records or not.
     static func declaredFolders(fileURL: URL) -> [String] {
-        (try? plan(fileURL: fileURL).folders) ?? []
+        (try? plan(fileURL: fileURL, countNonMail: false).folders) ?? []
     }
 
     // MARK: - The archive's shape
@@ -140,12 +165,13 @@ struct OLMParser {
         var nonMailCounts: [String: Int]
     }
 
-    static func plan(fileURL: URL) throws -> Plan {
+    static func plan(fileURL: URL, countNonMail: Bool = true) throws -> Plan {
         let members = try ZIPArchiveReader.members(of: fileURL)
         var records: [ZIPArchiveReader.Member] = []
         var byName: [String: ZIPArchiveReader.Member] = [:]
         var folders = Set<String>()
         var nonMail: [String: Int] = [:]
+        var nonMailFiles: [ZIPArchiveReader.Member] = []
         for member in members {
             byName[member.name] = member
             if member.isJunk { continue }
@@ -157,11 +183,16 @@ struct OLMParser {
                 }
                 continue
             }
-            guard !member.isDirectory, member.name.lowercased().hasSuffix(".xml") else { continue }
-            if let tree = nonMailTrees.first(where: { member.name.contains($0.marker) }) {
-                nonMail[tree.category, default: 0] += 1
-            } else if !member.name.contains("com.microsoft.__Attachments") {
-                nonMail["olm_other_objects_not_imported", default: 0] += 1
+            guard !member.isDirectory, member.name.lowercased().hasSuffix(".xml"),
+                  !member.name.contains("com.microsoft.__Attachments") else { continue }
+            nonMailFiles.append(member)
+        }
+        if countNonMail, !nonMailFiles.isEmpty {
+            let scratch = try ParserFactory.containerScratchDirectory()
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            for member in nonMailFiles {
+                let (category, count) = nonMailObjects(in: member, fileURL: fileURL, scratch: scratch)
+                if let category, count > 0 { nonMail[category, default: 0] += count }
             }
         }
         // Archive order is Outlook's writing order; keep it, but make it
@@ -179,6 +210,23 @@ struct OLMParser {
         if parts.first == "Accounts" { parts.removeFirst() }
         let path = parts.joined(separator: "/")
         return path.isEmpty ? nil : path
+    }
+
+    /// One non-mail XML file → (receipt category, number of objects in it).
+    /// `Categories.xml` → (nil, 0). A file whose root is unknown counts its
+    /// top-level records (or 1 when it has none) under "other objects".
+    static func nonMailObjects(in member: ZIPArchiveReader.Member, fileURL: URL, scratch: URL) -> (String?, Int) {
+        let destination = scratch.appendingPathComponent(UUID().uuidString + ".xml")
+        defer { try? FileManager.default.removeItem(at: destination) }
+        guard (try? ZIPArchiveReader.extract(member, from: fileURL, to: destination)) != nil,
+              let data = try? Data(contentsOf: destination) else {
+            return (otherObjectsCategory, 1)
+        }
+        let shape = OLMObjectCounter.count(data)
+        if shape.root == "categories" { return (nil, 0) }
+        if let category = nonMailRootElements[shape.root] { return (category, shape.records) }
+        if let tree = nonMailTrees.first(where: { member.name.contains($0.marker) }) { return (tree.category, max(1, shape.records)) }
+        return (otherObjectsCategory, max(1, shape.records))
     }
 
     // MARK: - One record
@@ -218,7 +266,9 @@ struct OLMParser {
                 if message.isFlagged { flags.append("Flagged") }
                 email.flags = flags
                 email.tags.append(contentsOf: flags)
-                if let category = message.category, !category.isEmpty { email.tags.append(category) }
+                var categories = message.categories
+                if let primary = message.category, !primary.isEmpty, !categories.contains(primary) { categories.insert(primary, at: 0) }
+                for category in categories where !email.tags.contains(category) { email.tags.append(category) }
                 out.append(email)
                 outcome.parsed += 1
             } catch {
@@ -274,6 +324,11 @@ struct OLMParser {
         header("Reply-To", message.replyTo)
         header("Subject", message.subject)
         if let date = message.sentTime ?? message.receivedTime { lines.append("Date: \(rfc2822(date))") }
+        // Both of Outlook's times survive: the sent time is the Date, the received time a
+        // reconstruction header (they differ on the Aspose Inbox test messages by eight years).
+        if message.sentTime != nil, let received = message.receivedTime {
+            lines.append("X-Mailin-Received-Time: \(iso8601(received))")
+        }
         header("Message-ID", angled(message.messageID))
         header("In-Reply-To", angled(message.inReplyTo))
         if !message.references.isEmpty {
@@ -382,6 +437,12 @@ struct OLMParser {
         return result.joined(separator: "\n")
     }
 
+    private static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
+    }
+
     private static func rfc2822(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -428,8 +489,25 @@ struct OLMRecordReader {
         var htmlBody = ""
         var isRead = false
         var isFlagged = false
+        /// `OPFMessageCopyPrimaryCategory`.
         var category: String?
+        /// `OPFMessageCopyCategoryList`, in Outlook's order.
+        var categories: [String] = []
         var attachments: [Attachment] = []
+    }
+
+    /// Outlook writes booleans as "1"/"0", "true"/"false" or the float form "1E0"/"0E0".
+    static func truthy(_ value: String) -> Bool {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if v == "true" { return true }
+        if v == "false" || v.isEmpty { return false }
+        return (Double(v) ?? 0) != 0
+    }
+
+    /// Sizes are written as "7.39E3" (and sometimes as plain integers).
+    static func integer(_ value: String?) -> Int {
+        guard let value, let d = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) else { return 0 }
+        return Int(d)
     }
 
     static func read(_ data: Data) -> [Message] {
@@ -447,7 +525,8 @@ struct OLMRecordReader {
         private var text = ""
         private var listElement: String?
         private var addresses: [String] = []
-        private var elementDepthInsideEmail = 0
+        private var insideCategoryList = false
+        private var insidePrimaryCategory = false
 
         func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
                     qualifiedName: String?, attributes: [String: String]) {
@@ -473,7 +552,15 @@ struct OLMRecordReader {
                     contentType: attributes["OPFAttachmentContentType"] ?? "",
                     contentID: attributes["OPFAttachmentContentID"] ?? "",
                     url: attributes["OPFAttachmentURL"] ?? "",
-                    declaredSize: Int(attributes["OPFAttachmentContentFileSize"] ?? "") ?? 0))
+                    declaredSize: OLMRecordReader.integer(attributes["OPFAttachmentContentFileSize"])))
+            case "OPFMessageCopyCategoryList":
+                insideCategoryList = true
+            case "OPFMessageCopyPrimaryCategory":
+                insidePrimaryCategory = true
+            case "category" where insideCategoryList:
+                if let name = attributes["OPFCategoryCopyName"], !name.isEmpty, current?.categories.contains(name) == false {
+                    current?.categories.append(name)
+                }
             default:
                 break
             }
@@ -512,15 +599,24 @@ struct OLMRecordReader {
             case "OPFMessageCopyReceivedTime": message.receivedTime = OLMRecordReader.date(value)
             case "OPFMessageCopyBody": message.plainBody = text.trimmingCharacters(in: .newlines)
             case "OPFMessageCopyHTMLBody": message.htmlBody = text.trimmingCharacters(in: .newlines)
-            case "OPFMessageIsRead": message.isRead = value == "1" || value.lowercased() == "true"
-            case "OPFMessageGetIsFlagged", "OPFMessageCopyFlagStatus":
-                if value == "1" || value.lowercased() == "true" || value == "2" { message.isFlagged = true }
-            case "OPFMessageCopyPrimaryCategory": message.category = value.isEmpty ? nil : value
+            case "OPFMessageIsRead", "OPFMessageGetIsRead": message.isRead = OLMRecordReader.truthy(value)
+            case "OPFMessageGetIsFlagged", "OPFMessageCopyFlagStatus", "OPFMessageCopyGetFlagStatus":
+                // 0 = no flag; 1 = flagged for follow-up; 2 = flag completed (still a flagged item).
+                if OLMRecordReader.truthy(value) { message.isFlagged = true }
+            case "OPFMessageCopyCategoryList": insideCategoryList = false
+            case "OPFMessageCopyPrimaryCategory":
+                insidePrimaryCategory = false
+                // Older shape: the name as the element's own text.
+                if message.category == nil, !value.isEmpty, !value.contains("\n"), message.categories.isEmpty { message.category = value }
+            case "OPFCategoryCopyName" where insidePrimaryCategory:
+                message.category = value.isEmpty ? nil : value
             case "OPFMessageGetPriority", "OPFMessageCopyPriority":
-                // Outlook: 1 = high, 3 = normal, 5 = low (MAPI PR_PRIORITY-style values also seen: 1/0/-1).
+                // Outlook for Mac writes the X-Priority scale: 1 highest, 2 high, 3 normal (no header),
+                // 4 low, 5 lowest (real exports: 2 = "high", 4 = "low"). Words and MAPI -1/0/1 also seen.
                 switch value {
-                case "1", "high": message.priority = "1"
-                case "5", "-1", "low": message.priority = "5"
+                case "1", "2", "4", "5": message.priority = value
+                case "high": message.priority = "2"
+                case "-1", "low": message.priority = "4"
                 default: break
                 }
             default: break
@@ -538,5 +634,36 @@ struct OLMRecordReader {
         if let date = iso.date(from: text + "Z") { return date }
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return iso.date(from: text) ?? iso.date(from: text + "Z")
+    }
+}
+
+// MARK: - Non-mail object files
+
+/// Root element and number of top-level records of a non-mail OLM file
+/// (`<contacts elementCount="5"><contact>…`). Element names only — nothing
+/// of the records is read.
+struct OLMObjectCounter {
+    struct Shape { var root = ""; var records = 0 }
+
+    static func count(_ data: Data) -> Shape {
+        let parser = XMLParser(data: data)
+        let delegate = Delegate()
+        parser.delegate = delegate
+        parser.parse()
+        return delegate.shape
+    }
+
+    private final class Delegate: NSObject, XMLParserDelegate {
+        var shape = Shape()
+        private var depth = 0
+        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
+                    qualifiedName: String?, attributes: [String: String]) {
+            depth += 1
+            if depth == 1 { shape.root = name }
+            if depth == 2 { shape.records += 1 }
+        }
+        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+            depth -= 1
+        }
     }
 }

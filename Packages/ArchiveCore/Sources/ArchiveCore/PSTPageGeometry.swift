@@ -11,18 +11,28 @@
 //  writer both take their sizes from here, so the 512-byte path is unchanged
 //  byte for byte (rule 14).
 //
-//  What a real `example-2013.ost` must confirm (no real fixture was on this
-//  Mac; the test fixture is written by `PSTSpecWriter` with `.ost4K`):
+//  Confirmed on the real `example-2013.ost` (java-libpst test resource,
+//  Outlook 2013; `RealMailStoreFixtureTests`, 2026-11-07):
 //   • header: the 564-byte Unicode HEADER layout (ROOT at 180, bCryptMethod
 //     at 513, BBT/NBT BREFs at 216–247), `wVer` 36, `wMagicClient` "SO";
 //   • BTPAGE: 4096 bytes; rgentries 4056 bytes; then cEnt (2 bytes), cEntMax
-//     (2), cbEnt (1), cLevel (1), 10 bytes padding; then a 24-byte trailer
-//     ptype, ptypeRepeat, wSig, dwCRC (over the first 4072 bytes), bid, 8
-//     reserved bytes;
-//   • BTENTRY / BBTENTRY / NBTENTRY: the Unicode sizes (24 / 24 / 32);
+//     (2) = 169 for 24-byte entries / 126 for 32-byte, cbEnt (1), cLevel (1);
+//     then the 24-byte trailer at 4072: ptype, ptypeRepeat, wSig, dwCRC over
+//     the first 4072 bytes, bid, 8 reserved bytes;
+//   • BTENTRY / NBTENTRY: the Unicode sizes (24 / 32). **BBTENTRY differs
+//     from [MS-PST]**: `bid(8) ib(8) cb(2) cbInflated(2) cRef(2) pad(2)` —
+//     the stored block is zlib-compressed when cbInflated > cb
+//     (`PSTBlockInflate`; the synthetic fixture had no compressed block, so
+//     this was invisible until the real file ran);
 //   • blocks: Unicode XBLOCK / SLBLOCK layouts, a 24-byte BLOCKTRAILER (cb,
-//     wSig, dwCRC, bid, 8 reserved), rounded up to 512 bytes;
-//   • AMap: one bit per 512 bytes, 4072 map bytes per page.
+//     wSig, dwCRC, bid, 8 reserved), rounded up to 512 bytes (a 172-byte
+//     block's trailer sits at +488);
+//   • AMap: one bit per 512 bytes, 4072 map bytes per page — the file ends
+//     exactly one AMap region after ROOT.ibAMapLast.
+//  NOT as `PSTWriterLayout.ost4K` assumed: Outlook 2013 put the DList at
+//  0x21000 and the first AMap at 0x22000 (no PMap / FMap pages); the writer's
+//  fixed-page positions are its own, the reader takes every position from the
+//  header and never relies on them.
 //
 
 import Foundation

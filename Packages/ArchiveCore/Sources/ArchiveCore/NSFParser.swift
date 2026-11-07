@@ -305,14 +305,13 @@ struct NSFReader {
     // MARK: - OPEN-02: one note at a time
 
     /// Where the structured read is: the next byte to try, how many bytes in
-    /// a row held no record, and how many notes were found.
+    /// a row held no record (progress information only), and how many notes
+    /// were found.
     struct Cursor {
         var offset: Int
         var consecutiveFailures = 0
         var notes = 0
     }
-
-    private static let maxConsecutiveFailures = 100_000
 
     /// Signature and header checks, then the cursor at the first record.
     func structuredStart() throws -> Cursor {
@@ -325,10 +324,13 @@ struct NSFReader {
     }
 
     /// The next note record after the cursor, or nil at the end of the
-    /// database (or after `maxConsecutiveFailures` bytes without a record).
+    /// database. The whole file is scanned: the earlier give-up after 100,000
+    /// bytes without a record was a hidden cap (rule 6) that read the public
+    /// Aspose SampleNSF.nsf — 47 MB whose first megabytes are design notes —
+    /// as empty after its first 100 KB (directive §3 run, 2026-11-07).
     /// No note cap: the caller holds one batch, not the database.
     func nextStructuredNote(_ cursor: inout Cursor) -> NSFNote? {
-        while cursor.offset < data.count - 64 && cursor.consecutiveFailures < Self.maxConsecutiveFailures {
+        while cursor.offset < data.count - 64 {
             if let (note, nextOffset) = try? readNoteRecord(at: cursor.offset), nextOffset > cursor.offset {
                 cursor.offset = nextOffset
                 cursor.consecutiveFailures = 0
@@ -379,17 +381,14 @@ struct NSFReader {
         var notes: [NSFNote] = []
         var offset = max(dbInfoOffset, 256)
         let totalBytes = Double(data.count)
-        var consecutiveFailures = 0
-        let maxConsecutiveFailures = 100_000
 
-        while offset < data.count - 64 && notes.count < Self.maxNotes && consecutiveFailures < maxConsecutiveFailures {
+        // The whole file, not the first 100 KB after the last record (see `nextStructuredNote`).
+        while offset < data.count - 64 && notes.count < Self.maxNotes {
             if let (note, nextOffset) = try? readNoteRecord(at: offset), nextOffset > offset {
                 notes.append(note)
                 offset = nextOffset
-                consecutiveFailures = 0
             } else {
                 offset += 1
-                consecutiveFailures += 1
             }
 
             if notes.count % 100 == 0 {
