@@ -167,9 +167,34 @@ fixed with a test that fails on the old behaviour. "verified" = the named test r
 | A11 (P2) | exFAT 4 GiB warning factually wrong | verified — file-system type from the mount table; FAT32 warns about 4 GiB, exFAT about its missing journal; Limits row, audit and docs corrected | 189b87e | `testCAP06_*` (Limits lists FAT32), location tests |
 | §4 | Plan §13 / COMP-01…20 not in the repository plan | **open — owner**: the repository holds plan v3 (ends at §12); the consolidated plan with §13 was not supplied. Attach it and the tracker gets a COMP table | — | — |
 
-## Completion contract (handoff 7481852, 6 November 2026) — R01…R07 and COMP-01…20
+## Completion contract — consolidated plan v4 (`FIVE_JOBS_MASTER_PLAN.md`, owner 2026-11-07) §13, handoff 7481852 R01…R07, audit b4b502f
 
-Plan §13 (transcribed from the owner's handoff; the consolidated plan v7 file itself was not supplied).
+The goal documents are now the three the owner supplied on 2026-11-07: the consolidated master plan (version 4,
+with §13), the implementation audit of b4b502f and the completion handoff of 7481852. §13.8 fixes the order:
+(1) reconcile the candidate, (2) lock down the shared document / coverage model (nested identities, section
+locations, registry, recovery states, query parity, exact navigation), (3) Microsoft mail intake (PST/OST/MSG
+fixes, OLM/OFT/TNEF/embedded messages), (4) document depth (legacy/modern Word/Excel/PowerPoint, then the other
+Office / OpenDocument / iWork rows), (5) recursive and protected workflows, (6) duplicates and outputs across
+representations, (7) release evidence and presentation.
+
+### §13.3 depth and coverage contract — state
+
+| # | Requirement | State | Evidence / what is open |
+|---|---|---|---|
+| 1 | Word depth: text, tables, headers/footers, notes, text boxes, comments; revisions labelled; embedded files as children | in progress | Word body, tables, headers/footers, footnotes, comments read (OOXML, .doc piece table). Open: text boxes, revision labels, embedded files as children — §13.8 step 4. |
+| 2 | Excel depth: every sheet and cell incl. hidden, addresses, cached/raw/formula distinguishable, both date systems | in progress | XLSX cells with addresses, formulas, shared strings (A03/A05); legacy XLS cells, formula results, comments, hidden sheets. Open: XLSX comments and hidden-sheet flag, date systems — §13.8 step 4. |
+| 3 | PowerPoint depth: slides, tables/text boxes, notes, hidden slides, comments, chart text | in progress | PPTX slides and notes; legacy PPT slide text. Open: hidden slides, comments, chart text — §13.8 step 4. |
+| 4 | Other business documents: page/shape/task/table/row locations | not started | No reader for Visio, Project, Publisher, OneNote, Access (registry says so). §13.8 step 4 (VSDX, Project XML first). |
+| 5 | Nested content chain with distinct same-named files and parent references | verified | `attachment_children` (schema v25): path chain “a.zip › b/c.docx”, filename, kind, SHA-256, bytes, state, note per child; nested containers and attached messages contribute children under the parent's chain; two files named the same stay distinct. `testWP2_childDocuments_identity_sameChildConditions_evidence_andOpening` — 68b8c88. |
+| 6 | Full incremental chunk indexing; no false phrases across cells/sections/files | implemented | Each child is its own `childText` document (ordinal = position × 1,000,000 + child index) chunked contiguously (R02); the parent's text is only the listing, so no phrase bridges two files (tested in WP2). Incremental: a new extractor version requeues by extractor (`emailIDs(extractors:below:)`). Open: cell/section boundaries inside one document still share one text. |
+| 7 | One search meaning; same-descendant conditions | verified | Attachment conditions compile to `attachments ag OR attachment_children ch`; type/name hold for the child or its containing attachment, content for the child alone; a sibling's words never count. WP2 test + `testFIND04_attachmentConditionsMustHoldForTheSameAttachment`, `testA02_…` — 68b8c88. |
+| 8 | Honest negatives through unfinished/locked children; unknown extent | in progress | Every child carries a state (locked, unsupported, failed, partial, noText); the parent is `partial` when any child was not read. Open: the no-match notice counts attachments, not children; unlock/resume for locked or budget-stopped children — §13.8 step 5. |
+| 9 | Navigation to the exact child and section; extracted-content view + Open Original | in progress | Evidence names the child by its chain (`.childText`), the chip opens that very file (`ContainerTextExtractor.materialize`), and the detail view lists each attachment's Contents with state and Open (`AttachmentChildrenList`). Open: extracted-content view with the match highlighted; Open Original for a section. |
+| 10 | Coverage UX states and actions (Unlock, Retry, Resume, Locate, Attach) | in progress | Coverage states shown per attachment and per child; Retry via extractor requeue. Open: Unlock, Resume, Locate, Attach actions — §13.8 step 5. |
+| 11 | Migration on extractor upgrades keeps identities, rebuilds derived documents atomically | in progress | Extractor version 5 requeues archives/messages; children rows and documents for one attachment are replaced together inside `recordAttachmentChildren`. Open: whole-archive rebuild report after an upgrade. |
+| 12 | Protected derived content: session decryption vs persistent indexing, explicit retention | not started | Protected children are recorded `locked`; no decryption session or retention choice yet — §13.8 step 5. |
+
+Earlier note (6 November): the §13 acceptance cases below were first transcribed from the handoff; the owner's plan v4 now carries them verbatim.
 Columns: **Implemented** = code on the branch; **Test executed** = the named test ran on this Mac at the commit;
 **Result**; **Evidence**; **Known limitation**; **External dependency** = what only the owner or an environment
 can supply. A synthetic-fixture pass never implies real-origin compatibility.
