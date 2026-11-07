@@ -1229,10 +1229,31 @@ enum ContainerTextExtractor {
                 try ZIPArchiveReader.gunzip(url, to: $0, maxOutputBytes: limit)
             }]
         default:
+            // Directive §6: a volume of a spanned set (archive.z01 … archive.zip)
+            // is read with its siblings laid end to end; a member on or
+            // running into a missing volume is named, the rest still read.
+            let set = SplitVolumeSet.zipSet(primary: url, primaryName: logicalName, siblings: siblings)
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
             let members: [ZIPArchiveReader.Member]
-            do { members = try ZIPArchiveReader.members(of: url) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
-            return members.filter { !$0.isDirectory && !$0.isJunk }
-                .map { member in Child(name: member.name, size: member.uncompressedSize, encrypted: member.isEncrypted) { try ZIPArchiveReader.extract(member, from: url, to: $0, password: password) } }
+            do { members = try ZIPArchiveReader.members(source: source) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
+            return members.filter { !$0.isDirectory && !$0.isJunk }.map { member in
+                var note: String?
+                if let set {
+                    let disk = member.diskNumberStart
+                    if set.isDiskMissing(disk) || set.diskBase(disk) == nil {
+                        let name = disk < set.volumes.count ? set.volumes[disk].expectedName : "volume \(disk + 1)"
+                        note = "not opened: volume \(disk + 1) (\(name)) missing"
+                    } else {
+                        let end = member.localHeaderOffset + 30 + Int64(member.name.utf8.count) + max(0, member.compressedSize)
+                        if let missing = set.missingVolumes(in: member.localHeaderOffset..<max(end, member.localHeaderOffset + 1)).first {
+                            note = "not opened: volume \(missing) (\(set.volumes[missing - 1].expectedName)) missing"
+                        }
+                    }
+                }
+                return Child(name: member.name, size: member.uncompressedSize, encrypted: member.isEncrypted, note: note) {
+                    try ZIPArchiveReader.extract(member, source: source, to: $0, password: password)
+                }
+            }
         }
     }
 

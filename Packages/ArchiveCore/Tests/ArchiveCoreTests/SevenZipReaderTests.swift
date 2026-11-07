@@ -370,8 +370,10 @@ enum SevenZipFixtureWriter {
     static func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8(v >> 24)] }
     static func le64(_ v: UInt64) -> [UInt8] { (0..<8).map { UInt8(truncatingIfNeeded: v >> UInt64(8 * $0)) } }
 
-    /// One folder (Copy, or filter + Copy) holding every non-empty file in order.
-    static func write(_ entries: [Entry], to url: URL, filter: Filter? = nil) throws {
+    /// One folder (Copy, or filter + Copy) holding every non-empty file in
+    /// order; `solid: false` writes one Copy folder per file (as 7-Zip's
+    /// -ms=off does), so members live in separate pack streams.
+    static func write(_ entries: [Entry], to url: URL, filter: Filter? = nil, solid: Bool = true) throws {
         let withData = entries.filter { ($0.data?.count ?? 0) > 0 }
         var packed = Data()
         for e in withData { packed.append(e.data!) }
@@ -381,7 +383,20 @@ enum SevenZipFixtureWriter {
             }
         }
         var header: [UInt8] = [0x01]
-        if !withData.isEmpty {
+        if !withData.isEmpty, !solid {
+            header += [0x04]
+            header += [0x06] + number(0) + number(UInt64(withData.count)) + [0x09]
+            for e in withData { header += number(UInt64(e.data!.count)) }
+            header += [0x00]
+            header += [0x07, 0x0B] + number(UInt64(withData.count)) + [0x00]
+            for _ in withData { header += number(1) + [0x01, 0x00] }                                   // each folder: one Copy coder
+            header += [0x0C]
+            for e in withData { header += number(UInt64(e.data!.count)) }
+            header += [0x00]
+            header += [0x08, 0x0A, 0x01]                                                                  // SubStreamsInfo: one per folder, digests
+            for e in withData { header += le32(ZIPArchiveReader.CRC32.checksum(e.data!)) }
+            header += [0x00, 0x00]
+        } else if !withData.isEmpty {
             header += [0x04]                      // MainStreamsInfo
             header += [0x06] + number(0) + number(1) + [0x09] + number(UInt64(packed.count)) + [0x00]   // PackInfo
             header += [0x07, 0x0B] + number(1) + [0x00]                                               // UnpackInfo, one folder, inline
