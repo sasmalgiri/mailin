@@ -18,7 +18,8 @@ three open-source projects. They are test data and are used here only to verify 
 | `poi/Sample.pub`, `poi/Sample.txt` | Publisher | every line of `Sample.txt`; hyperlinks `http://poi.apache.org/`, `mailto:dev@poi.apache.org` |
 | `poi/LinkAt10.pub` | Publisher | one hyperlink |
 | `tika/testVISIO.vsd` | Visio 2003 (author Hogwarts) | `Some random text, on a page` (Tika `VisioParserTest`) |
-| `poi/44594.vsd`, `poi/44501.vsd`, `poi/SimpleMacro.vsd` | Visio | opened and read; `NegativeChunkLength.vsd`, `ShortChunk1.vsd` are malformed files that must not trap |
+| `poi/44501.vsd` (Visio 2000), `poi/44594.vsd`, `poi/SimpleMacro.vsd` (Visio 2003) | Visio | `Penible`, `Nouveau farine`; `Drag the side handles to change the width of the text block.`; `This is a macro vector graphics drawing` (no VBA storage despite the name) |
+| `poi/NegativeChunkLength.vsd`, `poi/ShortChunk1.vsd` | Visio 2003, damaged | POI regression files: text still read (`Feldbreite einstellen, um Absatzbreite festzulegen.`, `Betätigung des`), the over-long chunk recorded by position, no trap |
 | `tika/testPROJECT2003.mpp`, `tika/testPROJECT2007.mpp` | Project 2003 / 2007 (author Nevin Nollop) | summary title `The quick brown fox jumps over the lazy dog`; Tika reads only metadata from these |
 | `mpxj/*.mpp` | Project 98 / 2000–2003 / 2007 / 2013 | task and resource names read; MPXJ's own tests compare against MSPDI, not reproduced here |
 | `tika/testACCESS.mdb`, `tika/testAccess_V1997.mdb` | Access 2000–2003 (Jet 4) / Access 97 (Jet 3) | tables and rows read |

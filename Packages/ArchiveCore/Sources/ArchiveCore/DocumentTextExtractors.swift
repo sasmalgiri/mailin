@@ -35,9 +35,11 @@ enum DocumentKind: String, Sendable, CaseIterable {
     /// that was not read listed by name.
     case zip, tar, gzip
     /// Directive 2026-11-07 §6: the other business formats — Publisher,
-    /// OneNote section (.one) and notebook package (.onepkg, a cabinet).
+    /// OneNote section (.one) and notebook package (.onepkg, a cabinet),
+    /// binary Visio (.vsd/.vss/.vst, Visio 5–2010).
     case pub
     case one, onepkg
+    case vsd
 
     var isContainer: Bool { self == .zip || self == .tar || self == .gzip }
 
@@ -65,10 +67,12 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case "pub": return .pub
         case "one": return .one
         case "onepkg": return .onepkg
+        case "vsd", "vss", "vst": return .vsd
         default: break
         }
         if mime.contains("mspublisher") { return .pub }
         if mime.contains("onenote") { return .one }
+        if mime == "application/vnd.visio" || mime == "application/vnd.ms-visio" { return .vsd }
         if mime.contains("opendocument.text") { return .odt }
         if mime.contains("opendocument.spreadsheet") { return .ods }
         if mime.contains("opendocument.presentation") { return .odp }
@@ -97,6 +101,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .zip, .tar, .gzip: return "archive"
         case .pub: return "publisher"
         case .one, .onepkg: return "onenote"
+        case .vsd: return "visio"
         }
     }
 }
@@ -135,6 +140,7 @@ enum DocumentTextExtractor {
         case .pub: return try PublisherTextExtractor.extract(fileURL: fileURL)
         case .one: return try OneNoteTextExtractor.extract(fileURL: fileURL, logicalName: logicalName)
         case .onepkg: return try OneNoteTextExtractor.extractPackage(fileURL: fileURL, logicalName: logicalName)
+        case .vsd: return try VisioBinaryTextExtractor.extract(fileURL: fileURL)
         }
     }
 
