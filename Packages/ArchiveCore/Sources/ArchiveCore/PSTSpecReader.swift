@@ -117,6 +117,9 @@ final class PSTSpecReader {
 
     let bytes: Data
     let unicode: Bool
+    /// Page geometry selected from the header's `wVer` (512-byte ANSI / Unicode pages, or the
+    /// 4 KiB pages of a version-36 OST) — the one seam between the layouts (`PSTPageGeometry`).
+    let geometry: PSTPageGeometry
     let crypt: UInt8
     private(set) var nodes: [UInt32: Node] = [:]
     private(set) var blocks: [UInt64: Block] = [:]
@@ -128,7 +131,8 @@ final class PSTSpecReader {
             throw PSTError.invalidFormat("not a PST/OST file")
         }
         let ver = Self.u16(data, 10)
-        unicode = ver >= 23
+        geometry = PSTPageGeometry.forHeaderVersion(ver)
+        unicode = geometry.unicode
         crypt = data[unicode ? 513 : 461]
         guard crypt <= 2 else { throw PSTError.invalidFormat("unknown encoding \(crypt)") }
         let nbtIB = unicode ? Self.u64(data, 224) : UInt64(Self.u32(data, 188))
@@ -158,17 +162,16 @@ final class PSTSpecReader {
 
     // MARK: NDB — B-trees
 
-    /// [MS-PST] 2.2.2.7: 512-byte pages; leaves hold NBT or BBT entries.
+    /// [MS-PST] 2.2.2.7: 512-byte pages (4 KiB in a version-36 OST — `geometry`);
+    /// leaves hold NBT or BBT entries.
     private func walk(page ib: UInt64, nbt: Bool, depth: Int) throws {
         guard depth < 32 else { throw PSTError.depthLimitExceeded }
         visitedPages += 1
         guard visitedPages < 5_000_000 else { throw PSTError.depthLimitExceeded }
         let o = Int(ib)
-        guard o >= 0, o + 512 <= bytes.count else { return }
-        let entriesEnd = unicode ? 488 : 496
-        let cEnt = Int(bytes[bytes.startIndex + o + entriesEnd])
-        let cbEnt = Int(bytes[bytes.startIndex + o + entriesEnd + 2])
-        let cLevel = Int(bytes[bytes.startIndex + o + entriesEnd + 3])
+        guard o >= 0, o + geometry.pageSize <= bytes.count else { return }
+        let entriesEnd = geometry.entriesEnd
+        let (cEnt, cbEnt, cLevel) = geometry.pageCounts(bytes, pageOffset: o)
         guard cbEnt > 0, cEnt * cbEnt <= entriesEnd else { return }
         for i in 0..<cEnt {
             let e = o + i * cbEnt
@@ -619,7 +622,7 @@ final class PSTSpecReader {
     /// reads, instead of every message, and carves afterwards.
     func carveUnallocated(listedKeys: Set<String>, listedSubjects: Set<String>) -> [PSTReader.PSTMessage] {
         let key: (String, String, String?, Date?) -> String = Self.carveKey
-        var allocated = blocks.values.map { (Int($0.ib), Int($0.ib) + $0.cb + (unicode ? 16 : 12)) }
+        var allocated = blocks.values.map { (Int($0.ib), Int($0.ib) + $0.cb + geometry.blockTrailer) }
         allocated.sort { $0.0 < $1.0 }
         var out: [PSTReader.PSTMessage] = []
         var seen = Set<String>()

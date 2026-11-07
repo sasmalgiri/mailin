@@ -24,6 +24,11 @@
 //  node and block index entries are spilled to scratch files in sorted
 //  order (ids only ever grow) and turned into B-tree pages at the end.
 //
+//  Page geometry comes from `PSTWriterLayout` (PSTPageGeometry.swift): the
+//  default is the Unicode 512-byte PST above; `.ost4K` writes the version-36
+//  4 KiB-page OST layout (synthetic fixtures for the reader until a real
+//  example-2013.ost exists; later the project's own OST export).
+//
 //  Checked with libpff (pypff) and libpst (readpst) as independent readers.
 //  Outlook itself has not opened its files yet: switch `v3PSTSpecWriter`
 //  is a preview until it does (rule 15).
@@ -159,8 +164,12 @@ final class PSTSpecWriter: PSTStreamWriting {
     private let handle: FileHandle
     private var finished = false
 
+    /// Page geometry and fixed-page positions: the Unicode 512-byte PST (default) or
+    /// the 4 KiB-page OST (`PSTWriterLayout.ost4K`); every size below comes from it.
+    let layout: PSTWriterLayout
+
     // NDB allocation: a bump allocator that steps over the fixed map pages.
-    private var eof: UInt64 = 0x4800
+    private var eof: UInt64
     private var nextBid: UInt64 = 4
     private var nextPageBid: UInt64 = 1
     private var allocated: [(UInt64, UInt64)] = []   // merged [start, end) runs
@@ -288,8 +297,10 @@ final class PSTSpecWriter: PSTStreamWriting {
 
     var dataBytesWritten: UInt64 { eof }
 
-    init(url: URL, exportFolderName: String = "mailin export") throws {
+    init(url: URL, exportFolderName: String = "mailin export", layout: PSTWriterLayout = .unicodePST) throws {
         self.url = url
+        self.layout = layout
+        eof = layout.firstDataIB
         FileManager.default.createFile(atPath: url.path, contents: nil)
         guard let h = try? FileHandle(forWritingTo: url) else { throw WriteError.io("Cannot open \(url.lastPathComponent) for writing") }
         handle = h
@@ -358,11 +369,12 @@ final class PSTSpecWriter: PSTStreamWriting {
 
     private func fixedPage(at ib: UInt64) -> UInt64? {
         // AMap at the start of each region; a PMap right after it in every 8th region.
-        guard ib >= F.amapBase else { return nil }
-        let k = (ib - F.amapBase) / F.amapRegion
-        let a = F.amapBase + k * F.amapRegion
-        if ib >= a && ib < a + 512 { return a + 512 }
-        if k % 8 == 0 && ib >= a + 512 && ib < a + 1024 { return a + 1024 }
+        guard ib >= layout.amapBase else { return nil }
+        let page = UInt64(layout.pageSize)
+        let k = (ib - layout.amapBase) / layout.amapRegion
+        let a = layout.amapBase + k * layout.amapRegion
+        if ib >= a && ib < a + page { return a + page }
+        if k % 8 == 0 && ib >= a + page && ib < a + 2 * page { return a + 2 * page }
         return nil
     }
 
@@ -393,16 +405,19 @@ final class PSTSpecWriter: PSTStreamWriting {
         try h.write(contentsOf: r)
     }
 
-    /// One block (≤ 8176 bytes), 64-byte aligned, with its trailer; recorded in the block index.
+    /// One block (≤ 8176 bytes), aligned to the layout's block alignment (64 bytes; 512 in
+    /// a 4 KiB-page file), with its trailer; recorded in the block index.
     func writeBlock(_ data: Data, isInternal: Bool) throws -> UInt64 {
         precondition(data.count <= F.blockDataMax)
         let bid = nextBid | (isInternal ? 2 : 0)
         nextBid += 4
-        let total = (data.count + 16 + 63) / 64 * 64
-        let ib = reserve(total, align: 64)
+        let align = layout.blockAlign, trailer = layout.blockTrailer
+        let total = (data.count + trailer + align - 1) / align * align
+        let ib = reserve(total, align: UInt64(align))
         var blk = data
-        blk.append(Data(repeating: 0, count: total - 16 - data.count))
+        blk.append(Data(repeating: 0, count: total - trailer - data.count))
         blk.u16(UInt16(data.count)); blk.u16(F.sig(ib, bid)); blk.u32(F.crc(data)); blk.u64(bid)
+        if trailer > 16 { blk.append(Data(count: trailer - 16)) }   // 4 KiB pages: 8 reserved bytes
         try writeAt(blk, ib)
         var r = Data(); r.u64(bid); r.u64(ib); r.u16(UInt16(data.count)); r.u16(2)
         try bbtSpill.write(contentsOf: r)
@@ -1199,33 +1214,35 @@ final class PSTSpecWriter: PSTStreamWriting {
         let bbtRoot = try writeBBT()
 
         // Density list, allocation maps, page maps, header.
-        let regions = Int((max(eof, F.amapBase + 1) - F.amapBase + F.amapRegion - 1) / F.amapRegion)
-        let fileEnd = F.amapBase + UInt64(regions) * F.amapRegion
+        let amapBase = layout.amapBase, amapRegion = layout.amapRegion, granule = layout.amapGranule
+        let page = UInt64(layout.pageSize)
+        let regions = Int((max(eof, amapBase + 1) - amapBase + amapRegion - 1) / amapRegion)
+        let fileEnd = amapBase + UInt64(regions) * amapRegion
         var amapFree: UInt64 = 0
         for r in 0..<regions {
-            let base = F.amapBase + UInt64(r) * F.amapRegion
-            var bits = Data(count: 496)
+            let base = amapBase + UInt64(r) * amapRegion
+            var bits = Data(count: layout.mapBytes)
             func mark(_ s: UInt64, _ e: UInt64) {
-                let lo = max(s, base), hi = min(e, base + F.amapRegion)
+                let lo = max(s, base), hi = min(e, base + amapRegion)
                 guard lo < hi else { return }
-                var u = (lo - base) / 64
-                while base + u * 64 < hi { bits[Int(u / 8)] |= UInt8(0x80 >> (u % 8)); u += 1 }
+                var u = (lo - base) / granule
+                while base + u * granule < hi { bits[Int(u / 8)] |= UInt8(0x80 >> (u % 8)); u += 1 }
             }
-            mark(base, base + 512)
-            if r % 8 == 0 { mark(base + 512, base + 1024) }
-            for (s, e) in allocated where e > base && s < base + F.amapRegion { mark(s, e) }
-            amapFree += UInt64(bits.reduce(0) { $0 + (8 - $1.nonzeroBitCount) }) * 64
+            mark(base, base + page)
+            if r % 8 == 0 { mark(base + page, base + 2 * page) }
+            for (s, e) in allocated where e > base && s < base + amapRegion { mark(s, e) }
+            amapFree += UInt64(bits.reduce(0) { $0 + (8 - $1.nonzeroBitCount) }) * granule
             try writeMapPage(bits, ptype: 0x84, at: base)
-            if r % 8 == 0 { try writeMapPage(Data(repeating: 0xFF, count: 496), ptype: 0x83, at: base + 512) }
+            if r % 8 == 0 { try writeMapPage(Data(repeating: 0xFF, count: layout.mapBytes), ptype: 0x83, at: base + page) }
         }
-        var dlist = Data(count: 496)
+        var dlist = Data(count: layout.mapBytes)
         dlist[0] = 0                      // bFlags; no entries
         let dlistBid = nextPageBid; nextPageBid += 1
-        try writePage(dlist, ptype: 0x86, at: F.dlistIB, bid: dlistBid)
+        try writePage(dlist, ptype: 0x86, at: layout.dlistIB, bid: dlistBid)
         // The file ends where its last allocation map ends (as Outlook writes it).
         try handle.truncate(atOffset: fileEnd)
         try writeAt(header(nbt: nbtRoot, bbt: bbtRoot, eof: fileEnd,
-                           amapLast: F.amapBase + UInt64(regions - 1) * F.amapRegion, amapFree: amapFree), 0)
+                           amapLast: amapBase + UInt64(regions - 1) * amapRegion, amapFree: amapFree), 0)
         try handle.synchronize()
         try handle.close()
         try? FileManager.default.removeItem(at: scratch)
@@ -1235,27 +1252,36 @@ final class PSTSpecWriter: PSTStreamWriting {
     private func writeMapPage(_ content: Data, ptype: UInt8, at ib: UInt64) throws {
         var d = content
         d.u8(ptype); d.u8(ptype); d.u16(0); d.u32(F.crc(content)); d.u64(ib)
+        if layout.pageTrailer > 16 { d.append(Data(count: layout.pageTrailer - 16)) }
         try writeAt(d, ib)
     }
 
     private func writePage(_ content: Data, ptype: UInt8, at ib: UInt64, bid: UInt64) throws {
-        precondition(content.count == 496)
+        precondition(content.count == layout.mapBytes)
         var d = content
         d.u8(ptype); d.u8(ptype); d.u16(F.sig(ib, bid)); d.u32(F.crc(content)); d.u64(bid)
+        if layout.pageTrailer > 16 { d.append(Data(count: layout.pageTrailer - 16)) }
         try writeAt(d, ib)
     }
 
     /// Writes leaf pages from a sorted stream of entries, then the levels above; returns (bid, ib) of the root.
     private func writeTree(entries: AnyIterator<(key: UInt64, bytes: Data)>, leafSize: Int, ptype: UInt8) throws -> (UInt64, UInt64) {
-        let leafMax = 488 / leafSize
+        let entriesBytes = layout.entriesBytes                 // 488, or 4056 in a 4 KiB page
+        let leafMax = entriesBytes / leafSize
+        let innerMax = entriesBytes / 24                       // BTENTRY: key, BREF
         var level: [(UInt64, UInt64, UInt64)] = []      // (first key, bid, ib)
         var buf: [(key: UInt64, bytes: Data)] = []
         func page(_ items: [(key: UInt64, bytes: Data)], cbEnt: Int, max: Int, cLevel: UInt8) throws -> (UInt64, UInt64, UInt64) {
             var d = Data()
             for it in items { d.append(it.bytes) }
-            d.append(Data(count: 488 - d.count))
-            d.u8(UInt8(items.count)); d.u8(UInt8(max)); d.u8(UInt8(cbEnt)); d.u8(cLevel); d.u32(0)
-            let ib = reserve(512, align: 512)
+            d.append(Data(count: entriesBytes - d.count))
+            if layout.geometry.wideCounts {
+                // 4 KiB page: cEnt and cEntMax in two bytes each, cbEnt, cLevel, 10 bytes padding.
+                d.u16(UInt16(items.count)); d.u16(UInt16(max)); d.u8(UInt8(cbEnt)); d.u8(cLevel); d.append(Data(count: 10))
+            } else {
+                d.u8(UInt8(items.count)); d.u8(UInt8(max)); d.u8(UInt8(cbEnt)); d.u8(cLevel); d.u32(0)
+            }
+            let ib = reserve(layout.pageSize, align: UInt64(layout.pageSize))
             let bid = nextPageBid; nextPageBid += 1
             try writePage(d, ptype: ptype, at: ib, bid: bid)
             return (items.first?.key ?? 0, bid, ib)
@@ -1268,11 +1294,11 @@ final class PSTSpecWriter: PSTStreamWriting {
         var cLevel: UInt8 = 1
         while level.count > 1 {
             var up: [(UInt64, UInt64, UInt64)] = []
-            for start in stride(from: 0, to: level.count, by: 20) {
-                let items = level[start..<min(start + 20, level.count)].map { k, bid, ib -> (key: UInt64, bytes: Data) in
+            for start in stride(from: 0, to: level.count, by: innerMax) {
+                let items = level[start..<min(start + innerMax, level.count)].map { k, bid, ib -> (key: UInt64, bytes: Data) in
                     var d = Data(); d.u64(k); d.u64(bid); d.u64(ib); return (k, d)
                 }
-                up.append(try page(items, cbEnt: 24, max: 20, cLevel: cLevel))
+                up.append(try page(items, cbEnt: 24, max: innerMax, cLevel: cLevel))
             }
             level = up
             cLevel += 1
@@ -1328,8 +1354,8 @@ final class PSTSpecWriter: PSTStreamWriting {
     private func header(nbt: (UInt64, UInt64), bbt: (UInt64, UInt64), eof: UInt64, amapLast: UInt64, amapFree: UInt64) -> Data {
         var h = Data(count: 564)
         h.replaceSubrange(0..<4, with: Data([0x21, 0x42, 0x44, 0x4E]))      // "!BDN"
-        h.replaceSubrange(8..<10, with: Data([0x53, 0x4D]))                // "SM"
-        h.put16(10, 23); h.put16(12, 19); h[14] = 1; h[15] = 1
+        h.replaceSubrange(8..<10, with: Data(layout.magicClient))           // "SM" (PST) or "SO" (OST)
+        h.put16(10, layout.geometry.version); h.put16(12, 19); h[14] = 1; h[15] = 1
         h.put64(32, nextPageBid)                                           // bidNextP
         h.put32(40, UInt32(messages + 1))                                  // dwUnique
         // rgnid: next free index per NID type.
