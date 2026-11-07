@@ -918,6 +918,9 @@ extension ContainerImportTests {
             .init(name: "Local/com.microsoft.__Attachments/message_00001/report.pdf", payload: pdf, deflate: true),
             .init(name: "Local/com.microsoft.__Contacts/contact_00001.xml", payload: Data("<contacts><contact/></contacts>".utf8)),
             .init(name: "Local/com.microsoft.__Calendar/event_00001.xml", payload: Data("<appointments><appointment/></appointments>".utf8)),
+            // An object tree the parser does not know: counted under "other objects" by its records.
+            .init(name: "Local/com.microsoft.__Signatures/signature_00001.xml", payload: Data("<signatures><signature/></signatures>".utf8)),
+            // The category colour table is not an object list (directive §3 real-file run): present, never counted.
             .init(name: "Categories.xml", payload: Data("<categories/>".utf8)),
             .init(name: "__MACOSX/._Categories.xml", payload: Data([0, 1, 2])),
         ], to: url)
@@ -973,7 +976,7 @@ extension ContainerImportTests {
         // Plan §: non-mail objects are counted and disclosed, never imported.
         #expect(result.report.errorCategories["olm_contacts_not_imported"] == 1)
         #expect(result.report.errorCategories["olm_calendar_not_imported"] == 1)
-        #expect(result.report.errorCategories["olm_other_objects_not_imported"] == 1, "Categories.xml")
+        #expect(result.report.errorCategories["olm_other_objects_not_imported"] == 1, "the unknown Signatures tree, one record; Categories.xml is the colour table and is not an object")
         #expect(result.report.errorCategories["olm_attachment_bytes_missing"] == nil)
     }
 

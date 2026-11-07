@@ -3642,10 +3642,19 @@ final class V2CutoverTests: XCTestCase {
             XCTAssertTrue(r.components.contains("Tasks") || r.components.contains("Resources"), "\(name): \(r.components)")
         }
 
-        // 7. Formats without a reader stay honest: no text, named as unsupported, never garbage.
-        for name in ["testPUBLISHER.pub", "testACCESS.mdb", "testPROJECT2007.mpp"] {
-            XCTAssertNil(DocumentKind.detect(mimeType: "", filename: name), "\(name) must not pretend to be read")
-            XCTAssertNil(AttachmentTextIndexJob.extractText(from: AttachmentMetadata(filename: name, mimeType: "application/octet-stream", size: 0, fileURL: tika.appendingPathComponent(name))), name)
+        // 7. Directive §6 "other business formats": Publisher, Access and Project binary files are read
+        //    through the job, each under its reader's heading — real Tika/POI/MPXJ files, not spec-built ones.
+        let business: [(String, DocumentKind, String, String)] = [
+            ("testPUBLISHER.pub", .pub, "[Publisher text]", "0123456789abcdef"),
+            ("testACCESS.mdb", .mdb, "[Access database: testACCESS", "[Table: Titles]"),
+            ("testPROJECT2007.mpp", .mpp, "[Project: ", "Task"),
+        ]
+        for (name, kind, heading, inside) in business {
+            XCTAssertEqual(DocumentKind.detect(mimeType: "", filename: name), kind, name)
+            let text = try XCTUnwrap(AttachmentTextIndexJob.extractText(from: AttachmentMetadata(filename: name, mimeType: "application/octet-stream", size: 0, fileURL: tika.appendingPathComponent(name))), name)
+            XCTAssertTrue(text.hasPrefix(heading), "\(name): \(text.prefix(160))")
+            XCTAssertTrue(text.contains(inside), "\(name): \(text.prefix(300))")
+            print("REAL BUSINESS \(name): \(text.count) characters — \(text.prefix(120).replacingOccurrences(of: "\n", with: " ⏎ "))")
         }
     }
 
@@ -4757,6 +4766,13 @@ final class V2CutoverTests: XCTestCase {
             try await env.store.recordAttachmentChildren(emailID: id, position: 0, children: doubled, texts: texts, states: states, extractorVersion: extractorVersion)
         }
         for id in [a, b, c, d, e] { try await doubleHash(id, extractorVersion: 7) }
+        // The job now writes its parent documents at extractor 8 (directive §6); a real pre-fix archive
+        // carries them at ≤ 7, which is what the selection keys on — restate A–E's parent rows at 7.
+        // (Re-indexing a parent clears only the other attachment-content kinds at that ordinal, never childText.)
+        for id in [a, b, c, d, e] {
+            let parentText = try await env.store.attachmentDocumentText(emailID: id, ordinal: 0)
+            try await env.store.indexAttachmentSearchDocuments(emailID: id, documents: [AttachmentSearchDocument(ordinal: 0, filename: id == e ? "pack.zip" : "inner.eml", text: parentText, state: .complete, extractorVersion: 7, ocr: false)])
+        }
         try await doubleHash(f, extractorVersion: 8)
         // F's parent attachment was read by a (hypothetical) version-8 reader: not the affected path.
         try await env.store.indexAttachmentSearchDocuments(emailID: f, documents: [AttachmentSearchDocument(ordinal: 0, filename: "inner.eml", text: "inner", state: .complete, extractorVersion: 8, ocr: false)])
