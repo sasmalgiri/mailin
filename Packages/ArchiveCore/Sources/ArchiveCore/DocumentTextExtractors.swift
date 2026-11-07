@@ -34,6 +34,8 @@ enum DocumentKind: String, Sendable, CaseIterable {
     /// archives up to `ContainerTextExtractor.maxDepth` levels, every child
     /// that was not read listed by name.
     case zip, tar, gzip
+    /// Directive 2026-11-07 §6: the other business formats — Publisher.
+    case pub
 
     var isContainer: Bool { self == .zip || self == .tar || self == .gzip }
 
@@ -58,8 +60,10 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case "zip": return .zip
         case "tar": return .tar
         case "tgz", "gz", "gzip": return .gzip
+        case "pub": return .pub
         default: break
         }
+        if mime.contains("mspublisher") { return .pub }
         if mime.contains("opendocument.text") { return .odt }
         if mime.contains("opendocument.spreadsheet") { return .ods }
         if mime.contains("opendocument.presentation") { return .odp }
@@ -86,6 +90,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .vsdx: return "visio"
         case .projectXML: return "project"
         case .zip, .tar, .gzip: return "archive"
+        case .pub: return "publisher"
         }
     }
 }
@@ -121,6 +126,7 @@ enum DocumentTextExtractor {
         case .vsdx: return try VisioTextExtractor.extract(fileURL: fileURL)
         case .projectXML: return try ProjectXMLTextExtractor.extract(fileURL: fileURL)
         case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: password)
+        case .pub: return try PublisherTextExtractor.extract(fileURL: fileURL)
         }
     }
 
@@ -145,6 +151,8 @@ enum DocumentTextExtractor {
         if bytes[0] == 0x1F, bytes[1] == 0x8B { return .gzip }
         if bytes[0] == 0x50, bytes[1] == 0x4B, bytes[2] == 0x03 || bytes[2] == 0x05, bytes[3] == 0x04 || bytes[3] == 0x06 { return .zip }
         if bytes.count >= 262, Array(bytes[257..<262]) == [0x75, 0x73, 0x74, 0x61, 0x72] { return .tar }
+        // Directive 2026-11-07 §6: Publisher (and the other OLE2 business formats) by the root CLSID.
+        if Array(bytes[0..<8]) == OfficeTextExtractor.oleSignature { return OLE2CompoundSniff.kind(head: head) }
         return nil
     }
 

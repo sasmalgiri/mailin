@@ -607,6 +607,50 @@ struct OLE2Reader {
         return readEntryData(entry)
     }
 
+    // MARK: - Storage paths (directive 2026-11-07 §6: Publisher, Visio and Project readers)
+
+    /// One child of a storage, as the other-business-format readers see it.
+    struct StorageEntry {
+        let name: String
+        let isStorage: Bool
+        let size: Int
+        fileprivate let index: Int
+    }
+
+    /// The children of the storage at `path` (the root for `[]`), names matched
+    /// case-insensitively; nil when a component is missing or is a stream.
+    func entries(at path: [String]) -> [StorageEntry]? {
+        guard let storage = storageIndex(at: path) else { return nil }
+        return childrenOf(directoryIndex: storage).map { StorageEntry(name: $0.name, isStorage: $0.type == 1, size: $0.size, index: $0.index) }
+    }
+
+    /// The bytes of the stream at `path` — `["Quill", "QuillSub", "CONTENTS"]`
+    /// for Quill/QuillSub/CONTENTS — or nil when it is not there. Unlike
+    /// `streamData(named:)` this never confuses two streams of the same name
+    /// in different storages (Publisher has a root `Contents` and a Quill `CONTENTS`).
+    func streamData(at path: [String]) -> Data? {
+        guard let last = path.last, let storage = storageIndex(at: Array(path.dropLast())) else { return nil }
+        let wanted = last.lowercased()
+        guard let entry = childrenOf(directoryIndex: storage).first(where: { $0.type == 2 && $0.name.lowercased() == wanted }) else { return nil }
+        return readEntryData(entry)
+    }
+
+    /// The bytes of a stream found through `entries(at:)`; nil for a storage.
+    func data(of entry: StorageEntry) -> Data? {
+        guard entry.index >= 0, entry.index < directories.count, directories[entry.index].type == 2 else { return nil }
+        return readEntryData(directories[entry.index])
+    }
+
+    private func storageIndex(at path: [String]) -> Int? {
+        var current = 0
+        for component in path {
+            let wanted = component.lowercased()
+            guard let next = childrenOf(directoryIndex: current).first(where: { $0.type == 1 && $0.name.lowercased() == wanted }) else { return nil }
+            current = next.index
+        }
+        return current
+    }
+
     private func readEntryData(_ entry: DirectoryEntry) -> Data {
         if entry.size < miniStreamCutoff && entry.type != 5 {
             let chain = Self.buildChain(startSector: entry.startSector, fat: miniFat)
