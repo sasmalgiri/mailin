@@ -15,8 +15,9 @@ import SwiftUI
 struct MatchEvidenceChips: View {
     let evidence: [MatchEvidence]
     /// FIND-05: when set, a chip that names an attachment is a button that
-    /// opens that attachment (by its ordinal in the message).
-    var onOpenAttachment: ((Int) -> Void)? = nil
+    /// opens that attachment (by its ordinal in the message) or — §13.3 (9) —
+    /// the file inside it named by the child path.
+    var onOpenAttachment: ((Int, String?) -> Void)? = nil
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
@@ -25,7 +26,7 @@ struct MatchEvidenceChips: View {
                 HStack(spacing: 4) {
                     ForEach(Array(evidence.enumerated()), id: \.offset) { _, item in
                         if let onOpenAttachment, let ordinal = Self.attachmentOrdinal(item.location) {
-                            Button { onOpenAttachment(ordinal) } label: { chip(item) }
+                            Button { onOpenAttachment(ordinal, Self.childPath(item.location)) } label: { chip(item) }
                                 .buttonStyle(.plain)
                                 .help(String(localized: "Open \(Self.attachmentFilename(item.location) ?? "")") + " · " + item.condition)
                                 .accessibilityHint(String(localized: "Opens this attachment"))
@@ -64,14 +65,22 @@ struct MatchEvidenceChips: View {
         switch location {
         case .attachmentText(let ordinal, _, _, _): return ordinal
         case .speech(let ordinal, _, _): return ordinal
+        case .childText(let ordinal, _, _, _): return ordinal
         default: return nil
         }
+    }
+
+    /// §13.3 (9): the file inside the attachment, when the chip names one.
+    static func childPath(_ location: MatchEvidence.Location) -> String? {
+        if case .childText(_, _, let path, _) = location { return path }
+        return nil
     }
 
     static func attachmentFilename(_ location: MatchEvidence.Location) -> String? {
         switch location {
         case .attachmentText(_, let filename, _, _): return filename
         case .speech(_, let filename, _): return filename
+        case .childText(_, _, let path, _): return path.components(separatedBy: " › ").last ?? path
         default: return nil
         }
     }
@@ -96,6 +105,10 @@ struct MatchEvidenceChips: View {
             var text = String(localized: "Recognised speech: \(filename)")
             if let context, !context.isEmpty { text += " · " + context }
             return text
+        case .childText(_, _, let path, let context):
+            var text = String(localized: "Inside attachment: \(path)")
+            if let context, !context.isEmpty { text += " · " + context }
+            return text
         case .metadata: return String(localized: "Matches filters")
         case .unavailable: return String(localized: "Evidence unavailable — text not indexed yet")
         }
@@ -110,6 +123,7 @@ struct MatchEvidenceChips: View {
         case .attachmentName: return "paperclip"
         case .attachmentText(_, _, let ocr, _): return ocr ? "text.viewfinder" : "doc.text.magnifyingglass"
         case .speech: return "waveform"
+        case .childText: return "doc.on.doc"
         case .metadata: return "line.3.horizontal.decrease"
         case .unavailable: return "questionmark.circle"
         }

@@ -211,6 +211,25 @@ final class AttachmentCoverageStore {
 
     /// Emails holding an attachment a newer extractor should retry, oldest
     /// version first; `limit` bounds one page of the retry pass.
+    /// Emails whose attachments were read by one of `extractors` below
+    /// `version`, in any state (§13.3: a re-read that changes what a document IS).
+    func emailIDs(extractors: [String], below version: Int, limit: Int) throws -> [UUID] {
+        let list = extractors.map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }.joined(separator: ",")
+        let stmt = try prepare("""
+            SELECT DISTINCT email_id FROM coverage
+            WHERE extractor_version < ? AND extractor IN (\(list))
+            ORDER BY extractor_version, email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(version))
+        sqlite3_bind_int(stmt, 2, Int32(clamping: limit))
+        var out: [UUID] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let id = text(stmt, 0).flatMap(UUID.init(uuidString:)) { out.append(id) }
+        }
+        return out
+    }
+
     func emailIDs(staleBelow version: Int, limit: Int) throws -> [UUID] {
         let stmt = try prepare("""
             SELECT DISTINCT email_id FROM coverage

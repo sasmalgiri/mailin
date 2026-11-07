@@ -221,11 +221,11 @@ struct ArchiveThreePaneView: View {
 
     /// FIND-05: a chip that names an attachment opens that attachment — the
     /// one at the recorded ordinal — and selects its message, in one click.
-    private func openAttachmentFromEvidence(_ id: EmailID, _ ordinal: Int) {
+    private func openAttachmentFromEvidence(_ id: EmailID, _ ordinal: Int, _ childPath: String?) {
         selectedID = id
         let archive = model.archive
         Task { @MainActor in
-            attachmentOpenFailure = await EvidenceAttachmentOpener.open(emailID: id, ordinal: ordinal, archive: archive)
+            attachmentOpenFailure = await EvidenceAttachmentOpener.open(emailID: id, ordinal: ordinal, childPath: childPath, archive: archive)
         }
     }
 

@@ -39,12 +39,43 @@ enum SearchDocKind: String, CaseIterable, Sendable {
     case subject, sender, recipients, body, attachmentName, attachmentText, ocrText
     /// TYPE-05: words recognised in an audio or video attachment, on the device.
     case speechText
+    /// Plan v4 §13.3 (5): the text of ONE file inside an archive or message
+    /// attachment — its own document, so a phrase never bridges two files
+    /// and a type/name/content condition can address that file. Ordinal =
+    /// parent position × `childOrdinalBase` + child index.
+    case childText
+
+    static let childOrdinalBase = 1_000_000
+    static func childOrdinal(parent: Int, child: Int) -> Int { parent * childOrdinalBase + child }
 
     /// What "anywhere in this message" covers (stated on the summary).
-    static let anyText: [SearchDocKind] = [.subject, .sender, .recipients, .body, .attachmentName, .attachmentText, .ocrText, .speechText]
+    static let anyText: [SearchDocKind] = [.subject, .sender, .recipients, .body, .attachmentName, .attachmentText, .ocrText, .speechText, .childText]
+    /// Attachment content: the attachment's own text kinds. A child's text
+    /// belongs to the child (`childText`), addressed through `attachment_children`.
     static let attachmentContent: [SearchDocKind] = [.attachmentText, .ocrText, .speechText]
     /// SQL list of the attachment-content kinds.
     static let attachmentContentSQL = "'attachmentText','ocrText','speechText'"
+}
+
+/// One file inside an attachment (archive member, message attachment,
+/// embedded object), as the store records it — plan v4 §13.3 (5).
+struct AttachmentChildRow: Sendable, Equatable {
+    let emailID: UUID
+    /// The top-level attachment's position.
+    let position: Int
+    /// Index of this child among the attachment's children (depth-first).
+    let childIndex: Int
+    /// Container chain, "outer.zip › inner/minutes.docx".
+    let path: String
+    let filename: String
+    /// Detected kind (document kind raw value or lower-cased extension).
+    let kind: String
+    let sha256: String
+    let bytes: Int
+    let state: String
+    let note: String?
+
+    var ordinal: Int { SearchDocKind.childOrdinal(parent: position, child: childIndex) }
 }
 
 enum SearchDocState: String, Sendable {
@@ -121,8 +152,11 @@ struct AttachmentSearchDocument: Sendable {
     let ocr: Bool
     /// TYPE-05: the text is speech recognised from audio or video.
     var speech: Bool = false
+    /// §13.3 (5): the document is one file INSIDE the attachment; `ordinal`
+    /// is then `SearchDocKind.childOrdinal(parent:child:)`.
+    var child: Bool = false
 
-    var kind: SearchDocKind { speech ? .speechText : (ocr ? .ocrText : .attachmentText) }
+    var kind: SearchDocKind { child ? .childText : (speech ? .speechText : (ocr ? .ocrText : .attachmentText)) }
 }
 
 extension SQLiteEmailStore {
@@ -328,8 +362,9 @@ extension SQLiteEmailStore {
             let id = emailID.uuidString
             for document in documents {
                 let kind = document.kind
-                // One document per attachment: whichever extractor produced it.
-                for other in SearchDocKind.attachmentContent where other != kind {
+                // One document per attachment: whichever extractor produced it
+                // (children keep their own kind and never clear the parent's).
+                for other in SearchDocKind.attachmentContent where other != kind && kind != .childText {
                     let clear = try prepare(db, "DELETE FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = ?;")
                     bindText(clear, 1, id); bindText(clear, 2, other.rawValue); sqlite3_bind_int64(clear, 3, Int64(document.ordinal))
                     _ = sqlite3_step(clear); sqlite3_finalize(clear)
@@ -342,6 +377,90 @@ extension SQLiteEmailStore {
             }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    // MARK: Children of attachments (plan v4 §13.3 (5))
+
+    /// v25: one row per file inside an attachment, so a search condition can
+    /// address the child, evidence can name its path and the detail view can
+    /// list and open it. Rewritten whole per parent attachment.
+    func createSchemaV25(_ handle: OpaquePointer) throws {
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS attachment_children(
+                email_id    TEXT NOT NULL,
+                position    INTEGER NOT NULL,
+                child_index INTEGER NOT NULL,
+                path        TEXT NOT NULL,
+                filename    TEXT NOT NULL,
+                kind        TEXT NOT NULL DEFAULT '',
+                sha256      TEXT NOT NULL DEFAULT '',
+                bytes       INTEGER NOT NULL DEFAULT 0,
+                state       TEXT NOT NULL,
+                note        TEXT,
+                PRIMARY KEY(email_id, position, child_index)
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_attachment_children_email ON attachment_children(email_id);")
+    }
+
+    /// Replaces the recorded children of attachment `position` and indexes
+    /// each child's text as its own `childText` document (or its state).
+    func recordAttachmentChildren(emailID: UUID, position: Int, children: [AttachmentChildRow],
+                                  texts: [Int: String?], states: [Int: SearchDocState], extractorVersion: Int) throws {
+        let db = try ensureDB()
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let id = emailID.uuidString
+            let low = Int64(SearchDocKind.childOrdinal(parent: position, child: 0))
+            let high = Int64(SearchDocKind.childOrdinal(parent: position + 1, child: 0))
+            for sql in ["DELETE FROM search_chunks WHERE email_id = ? AND kind = 'childText' AND ordinal >= ? AND ordinal < ?;",
+                        "DELETE FROM search_docs WHERE email_id = ? AND kind = 'childText' AND ordinal >= ? AND ordinal < ?;"] {
+                let clear = try prepare(db, sql)
+                bindText(clear, 1, id); sqlite3_bind_int64(clear, 2, low); sqlite3_bind_int64(clear, 3, high)
+                _ = sqlite3_step(clear); sqlite3_finalize(clear)
+            }
+            let clearRows = try prepare(db, "DELETE FROM attachment_children WHERE email_id = ? AND position = ?;")
+            bindText(clearRows, 1, id); sqlite3_bind_int64(clearRows, 2, Int64(position))
+            _ = sqlite3_step(clearRows); sqlite3_finalize(clearRows)
+            let insert = try prepare(db, """
+                INSERT INTO attachment_children(email_id, position, child_index, path, filename, kind, sha256, bytes, state, note)
+                VALUES (?,?,?,?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(insert) }
+            for child in children {
+                sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+                bindText(insert, 1, id); sqlite3_bind_int64(insert, 2, Int64(position)); sqlite3_bind_int64(insert, 3, Int64(child.childIndex))
+                bindText(insert, 4, child.path); bindText(insert, 5, child.filename); bindText(insert, 6, child.kind)
+                bindText(insert, 7, child.sha256); sqlite3_bind_int64(insert, 8, Int64(child.bytes)); bindText(insert, 9, child.state)
+                if let note = child.note { bindText(insert, 10, note) } else { sqlite3_bind_null(insert, 10) }
+                guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                let text = texts[child.childIndex] ?? nil
+                let state = states[child.childIndex] ?? .unsupported
+                try indexSearchDocument(db, emailID: id, kind: .childText, ordinal: child.ordinal, text: text, state: state,
+                                        extractorVersion: extractorVersion, ocr: false)
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// The recorded children of every attachment of one message.
+    func attachmentChildren(forEmailID emailID: UUID) throws -> [AttachmentChildRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT position, child_index, path, filename, kind, sha256, bytes, state, note
+            FROM attachment_children WHERE email_id = ? ORDER BY position, child_index;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, emailID.uuidString)
+        var out: [AttachmentChildRow] = []
+        while try stepRow(stmt, db) {
+            out.append(AttachmentChildRow(
+                emailID: emailID, position: Int(sqlite3_column_int64(stmt, 0)), childIndex: Int(sqlite3_column_int64(stmt, 1)),
+                path: columnText(stmt, 2), filename: columnText(stmt, 3), kind: columnText(stmt, 4), sha256: columnText(stmt, 5),
+                bytes: Int(sqlite3_column_int64(stmt, 6)), state: columnText(stmt, 7),
+                note: sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : columnText(stmt, 8)))
+        }
+        return out
     }
 
     // MARK: Backfill for existing archives

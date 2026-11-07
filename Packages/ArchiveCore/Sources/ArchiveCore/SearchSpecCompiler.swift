@@ -241,74 +241,108 @@ extension SQLiteEmailStore {
 
     // MARK: Attachments — one file must satisfy everything in the group
 
+    /// Plan v4 §13.3 (7): the group holds for ONE file — a top-level
+    /// attachment, or one file inside an attachment (`attachment_children`
+    /// with its own `childText` document). Type, name and content are tested
+    /// on the same row either way, so a DOCX named "minutes" containing
+    /// "quorum" inside a ZIP is found, and a sibling PDF's words never count.
     private static func attachmentGroupClause(_ g: AttachmentConditionGroup) -> (String, [QueryBind]) {
+        let (top, topBinds) = attachmentGroupTests(g, alias: "ag", nameColumn: "ag.filename", mimeColumn: "ag.mime_type",
+                                                   ordinalExpr: "ag.position", kindList: SearchDocKind.attachmentContentSQL)
+        // A child's name and type are its own OR its containing attachment's
+        // ("a ZIP that contains 'treasure'" names the archive, not the text
+        // file); its content is only ever its own.
+        let (child, childBinds) = attachmentGroupTests(g, alias: "ch", nameColumn: "ch.path", mimeColumn: "ch.kind",
+                                                       parent: (name: "pa.filename", mime: "pa.mime_type"),
+                                                       ordinalExpr: "(ch.position * \(SearchDocKind.childOrdinalBase) + ch.child_index)", kindList: "'childText'")
+        guard let top, let child else { return ("1", []) }
+        return ("(EXISTS (SELECT 1 FROM attachments ag WHERE ag.email_id = e.id AND \(top))"
+                + " OR EXISTS (SELECT 1 FROM attachment_children ch JOIN attachments pa ON pa.email_id = ch.email_id AND pa.position = ch.position"
+                + " WHERE ch.email_id = e.id AND \(child)))", topBinds + childBinds)
+    }
+
+    /// The group's tests against one file row (`alias`), with its text in
+    /// the chunk documents whose ordinal is `ordinalExpr`. Nil when the
+    /// group has no live condition.
+    private static func attachmentGroupTests(_ g: AttachmentConditionGroup, alias: String, nameColumn: String, mimeColumn: String,
+                                             parent: (name: String, mime: String)? = nil,
+                                             ordinalExpr: String, kindList: String) -> (String?, [QueryBind]) {
         var tests: [String] = []
         var binds: [QueryBind] = []
         if let name = g.nameContains?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
-            tests.append("instr(lower(ag.filename), lower(?)) > 0")
-            binds.append(.text(name))
+            if let parent {
+                tests.append("(instr(lower(\(nameColumn)), lower(?)) > 0 OR instr(lower(\(parent.name)), lower(?)) > 0)")
+                binds.append(.text(name)); binds.append(.text(name))
+            } else {
+                tests.append("instr(lower(\(nameColumn)), lower(?)) > 0")
+                binds.append(.text(name))
+            }
         }
         if let type = g.type?.trimmingCharacters(in: .whitespaces), !type.isEmpty {
-            let (sql, b) = attachmentTypePredicate(type)
-            tests.append(sql); binds.append(contentsOf: b)
+            let (sql, b) = attachmentTypePredicate(type, nameColumn: nameColumn, mimeColumn: mimeColumn)
+            if let parent {
+                let (parentSQL, parentBinds) = attachmentTypePredicate(type, nameColumn: parent.name, mimeColumn: parent.mime)
+                tests.append("(\(sql) OR \(parentSQL))"); binds.append(contentsOf: b); binds.append(contentsOf: parentBinds)
+            } else {
+                tests.append(sql); binds.append(contentsOf: b)
+            }
         }
         if let content = g.content?.trimmingCharacters(in: .whitespaces), !content.isEmpty {
-            // Same attachment throughout: a chunk's (email, ordinal) is this file's (email, position).
-            // Audit A02: the same four forms as `textClause`, correlated on the file.
+            // Same file throughout (audit A02 forms), correlated on this row's document.
             let words = SearchTextTokens.words(in: content)
-            let kindList = SearchDocKind.attachmentContentSQL
             let prefix = g.contentMatch == .contains
+            let inDocs = "(\(alias).email_id, \(ordinalExpr)) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND "
             if words.isEmpty {
-                tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND instr(lower(ac.text), lower(?)) > 0)")
+                tests.append(inDocs + "instr(lower(ac.text), lower(?)) > 0)")
                 binds.append(.text(SearchTextTokens.collapsed(content)))
             } else {
                 switch g.contentMatch {
                 case .anyWords:
-                    tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND search_chunks MATCH ?)")
+                    tests.append(inDocs + "search_chunks MATCH ?)")
                     binds.append(.text(words.map(SearchTextTokens.quoted).joined(separator: " OR ")))
                 case .allWords:
                     for word in words {
-                        tests.append("(ag.email_id, ag.position) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND search_chunks MATCH ?)")
+                        tests.append(inDocs + "search_chunks MATCH ?)")
                         binds.append(.text(SearchTextTokens.quoted(word)))
                     }
                 case .contains, .phrase, .equals:
                     let (sql, b) = literalClause(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(content),
-                                                 sameDocument: "c1.email_id = ag.email_id AND c1.ordinal = ag.position",
+                                                 sameDocument: "c1.email_id = \(alias).email_id AND c1.ordinal = \(ordinalExpr)",
                                                  mayExceedChunk: content.count > SearchChunker.chunkCharacters)
                     tests.append(sql); binds.append(contentsOf: b)
                 }
             }
         }
-        guard !tests.isEmpty else { return ("1", []) }
-        return ("EXISTS (SELECT 1 FROM attachments ag WHERE ag.email_id = e.id AND \(tests.joined(separator: " AND ")))", binds)
+        guard !tests.isEmpty else { return (nil, []) }
+        return (tests.joined(separator: " AND "), binds)
     }
 
     /// A declared family, or a bare extension. The extension is supporting
     /// metadata: the family test also reads the declared MIME type.
-    private static func attachmentTypePredicate(_ type: String) -> (String, [QueryBind]) {
+    private static func attachmentTypePredicate(_ type: String, nameColumn: String, mimeColumn: String) -> (String, [QueryBind]) {
         func ext(_ list: [String]) -> String {
-            "(" + list.map { _ in "lower(ag.filename) LIKE ?" }.joined(separator: " OR ") + ")"
+            "(" + list.map { _ in "lower(\(nameColumn)) LIKE ?" }.joined(separator: " OR ") + ")"
         }
         switch type.lowercased() {
         case "pdf":
-            return ("(lower(ag.mime_type) LIKE '%pdf%' OR lower(ag.filename) LIKE '%.pdf')", [])
+            return ("(lower(\(mimeColumn)) LIKE '%pdf%' OR lower(\(nameColumn)) LIKE '%.pdf')", [])
         case "images", "image":
             let exts = ["png", "jpg", "jpeg", "gif", "heic", "tiff", "tif", "bmp", "webp"]
-            return ("(lower(ag.mime_type) LIKE 'image/%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
+            return ("(lower(\(mimeColumn)) LIKE 'image/%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
         case "office documents", "office", "documents":
             let exts = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf"]
-            return ("(lower(ag.mime_type) LIKE '%officedocument%' OR lower(ag.mime_type) LIKE '%msword%' OR lower(ag.mime_type) LIKE '%ms-excel%' OR lower(ag.mime_type) LIKE '%ms-powerpoint%' OR lower(ag.mime_type) LIKE '%opendocument%' OR \(ext(exts)))",
+            return ("(lower(\(mimeColumn)) LIKE '%officedocument%' OR lower(\(mimeColumn)) LIKE '%msword%' OR lower(\(mimeColumn)) LIKE '%ms-excel%' OR lower(\(mimeColumn)) LIKE '%ms-powerpoint%' OR lower(\(mimeColumn)) LIKE '%opendocument%' OR \(ext(exts)))",
                     exts.map { .text("%.\($0)") })
         case "archives", "archive", "zip":
             let exts = ["zip", "gz", "tgz", "7z", "rar", "tar"]
-            return ("(lower(ag.mime_type) LIKE '%zip%' OR lower(ag.mime_type) LIKE '%compressed%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
+            return ("(lower(\(mimeColumn)) LIKE '%zip%' OR lower(\(mimeColumn)) LIKE '%compressed%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
         case "text":
             let exts = ["txt", "csv", "md", "log", "json", "xml", "html", "htm"]
-            return ("(lower(ag.mime_type) LIKE 'text/%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
+            return ("(lower(\(mimeColumn)) LIKE 'text/%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
         default:
             // A bare extension such as "docx".
             let clean = type.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))
-            return ("lower(ag.filename) LIKE ?", [.text("%.\(clean)")])
+            return ("lower(\(nameColumn)) LIKE ?", [.text("%.\(clean)")])
         }
     }
 }

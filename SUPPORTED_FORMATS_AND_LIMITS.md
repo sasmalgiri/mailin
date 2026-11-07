@@ -120,11 +120,11 @@ fixtures" is not "real files", and "not implemented" is said plainly.
 | Attachment | Rich Text | rtf | decoded text | spec-built fixtures | — | — |
 | Attachment | HTML | html, htm | text with tags removed | spec-built fixtures | — | — |
 | Attachment | Plain text families | txt, csv, log, md, json, xml, ics, vcf, yml, yaml | the text, UTF-8 or Latin-1 | spec-built fixtures | — | — |
-| Attachment | Attached message | eml, message/rfc822 | decoded headers and body, its own attachments as children (three levels) | spec-built fixtures | children are read into the parent's text, not as separate search targets | — |
+| Attachment | Attached message | eml, message/rfc822 | decoded headers and body, its own attachments as children (three levels) | spec-built fixtures | each attachment of the message is its own child document (name, hash, state); MSG/TNEF children not yet | — |
 | Attachment | Excel Binary Workbook | xlsb | — | **not implemented** | no reader; kept and listed as unsupported | — |
 | Attachment | Outlook template / TNEF | oft, winmail.dat | — | **not implemented** | no reader | — |
 | Attachment | OneNote, Visio, Project, Publisher, Access | one, onepkg, vsd, vsdx, mpp, pub, mdb, accdb | — | **not implemented** | no reader; a new adapter project per family | — |
-| Archive attachment | ZIP, tar, gzip attachments | zip, tar, tgz, gz, gzip | every child accounted for: documents, text, PDFs/images/recordings through the same readers; unread children listed; three levels; 1 GiB per attachment | spec-built fixtures | children are flattened into the parent attachment's text; 7z/RAR/split volumes not opened | — |
+| Archive attachment | ZIP, tar, gzip attachments | zip, tar, tgz, gz, gzip | every child accounted for: documents, text, PDFs/images/recordings through the same readers; unread children listed; three levels; 1 GiB per attachment | spec-built fixtures | each member is its own child document with path, hash and state, searchable and openable on its own; 7z/RAR/split volumes not opened | — |
 | Archive attachment | 7z, RAR, bz2, xz | 7z, rar, bz2, xz | — | **not implemented** | kept as files, stated | — |
 | Protected content | Password-protected PDF / Office / archive members |  | detected and reported as locked | spec-built fixtures | no password entry, retry or credential retention | — |
 | Protected content | S/MIME and OpenPGP |  | originals kept; signatures verified where present | not executed | no decrypt-and-index path | — |

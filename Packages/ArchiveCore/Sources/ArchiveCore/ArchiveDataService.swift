@@ -214,6 +214,12 @@ final class ArchiveDataService {
         (repository as? EmailStoreRepository)?.store as? SQLiteEmailStore
     }
 
+    /// §13.3 (5): the files inside the attachments of one message, as recorded by the indexing job.
+    func attachmentChildren(emailID: EmailID) async -> [AttachmentChildRow] {
+        guard let sqlite = sqliteStore else { return [] }
+        return (try? await sqlite.attachmentChildren(forEmailID: emailID)) ?? []
+    }
+
     /// LIFE-06 (audit A08): the paid tier recorded inside the archive (raw
     /// value; 0 = none) and the write that records one.
     func paidTierRecord() async -> Int {

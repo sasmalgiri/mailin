@@ -1,13 +1,13 @@
 # mailin — consolidated next-release master plan
 
 **Prepared:** 5 November 2026  
-**Updated:** 6 November 2026 — LIFE-06 adopted; five-job product identity confirmed; testing scope distinguished from product capacity.  
+**Updated:** 6 November 2026 — Outlook and Office compatibility expanded into the five-job requirements; 20 additional acceptance cases added; LIFE-06, five-job identity and the scale-evidence decision retained.  
 **Purpose:** one implementation and acceptance brief for the next archive-focused release.  
 **State:** planning consolidated; app changes and release acceptance are not established by this document.
 
 This replaces the earlier fragmented mailin scope descriptions with one governing plan. It combines the archive-focus review, source-gap analysis, five-job implementation plan, format clarification, removal of artificial limits, and the later preservation, recovery, privacy, usability and access checks. Earlier reviews remain evidence and history; they are not separate competing backlogs.
 
-**Execution scope:** 30 core work items, six cross-cutting LIFE checks and ten release gates. Preserve the identifiers below when creating issues, tests and release evidence. No version number, price, delivery date or new format promise is invented by this consolidation.
+**Execution scope:** 30 core work items, six cross-cutting LIFE checks and ten release gates, now including the owner's expanded Outlook/Office compatibility goal in sections 4 and 13. Preserve these IDs; the 20 COMP cases are additional acceptance evidence under them. No version number, price or delivery date is implied. Required formats are implementation targets, not claims that the current app already supports them.
 
 | Classification | Meaning |
 |---|---|
@@ -28,9 +28,10 @@ This replaces the earlier fragmented mailin scope descriptions with one governin
 7. Delivery sequence and dependencies
 8. Fixtures, performance, usability and recovery validation
 9. Ten release gates and the evidence tracker
-10. Proposed decisions and deferred expansion
+10. Adopted decisions, proposals and deferred expansion
 11. Implementation handoff and release deliverables
 12. Owner decisions and final-release closure, 6 November 2026
+13. Researched Outlook and Office completion pass, adapter choices and 20 acceptance cases
 
 ## 1. Release goal and meaning of completion
 
@@ -219,77 +220,85 @@ Apple's metadata rules require descriptions and screenshots to reflect the core 
 
 ## 4. Format support: inputs, attachments and outputs
 
-Format support is part of the five core jobs. Track **import**, **content/attachment extraction**, **folder preservation**, **search coverage**, **duplicate comparison** and **export** separately. A recognised extension or parser class is not a passed compatibility test.
+**Expanded 6 November 2026:** the owner's request makes Outlook interoperability and Office attachment retrieval core strengths of the five-job release. OLM import, legacy Office extraction, common Office variants, and searching inside compressed attachments are now required work, not later suggestions. Section 13 defines the new acceptance cases and implementation sequence. The 30 core IDs remain; reopen affected rows for the broader contract while retaining valid evidence for their earlier scope.
 
-The current-state notes below refer to the reviewed v3 source and repository evidence. They are not results from a new executed release test.
+Keep separate evidence for **opening/importing**, **preserving original content and folders**, **extracting/searching**, **comparing duplicates**, **exporting**, and **independent verification**. A recognised extension, a preview, a library's advertised format or a passing synthetic import does not prove all six.
+
+The historical source notes in section 2 describe the older reviewed commit. The subsequent agent report and the owner's 6 November screenshot report newer functionality, but the local unpushed candidate has not been independently audited in this document. The screenshot reports modern DOCX/XLSX/PPTX extraction, while explicitly marking older Office/OpenDocument/iWork as not read, compressed attachment contents as not searched, and protected Office/PDF as locked. Do not describe all Microsoft Office support as absent; do not infer broad compatibility from the three modern extensions.
 
 ### 4.1 Incoming mail and archive formats
 
-| Input family | Current evidence | Next-release treatment |
-|---|---|---|
-| MBOX, including extensionless mailbox files and Gmail/Thunderbird exports | Streaming/offset paths and executed fixtures exist; some very large messages are stored as source locators and are not fully searchable | Required: complete MIME/attachment handling, Gmail-label preservation, quoted From-line handling, documented MBOX variants, large-message reading/search/export and independently reconciled results |
-| EML and folders of EML | Reader and directory path exist | Required: individual and batch import with original relative paths, nested attachments, Unicode headers/filenames and source identity; test nested folder layouts |
-| EMLX and Apple Mail mailbox packages | Readers exist; repository evidence includes synthetic directory layouts using real message content | Required: genuine Apple Mail exports and EMLX examples, original hierarchy, inline/attached content and any required companion data; do not equate an exported mailbox with every arbitrary live Apple Mail database layout |
-| Maildir and supported Thunderbird directory layouts | Maildir reader exists; MBOX handles appropriate Thunderbird mailbox payloads | Required: cur/new membership, supported flags, subfolders and source mapping; explicitly identify which complete profile layouts can be imported. A Thunderbird index file alone is not a mailbox |
-| PST: supported ANSI and Unicode variants | Parser exists and fixtures have run; whole-result materialisation and variant coverage remain gaps | Required: real independent fixtures, scalable parsing, folder/body/attachment fidelity and inventory by variant. Preserve format-specific size constraints and declare protected/unreadable content |
-| OST | Reader shares the PST parser; the checked format report records no real-file OST execution | Required before promoting complete support: genuine offline-store fixtures from claimed variants, full folder/message/attachment reconciliation and honest handling of unavailable/protected records |
-| MSG | MAPI reader exists and real fixtures have run; current implementation is not fully streamed | Required: sender/recipient metadata, HTML/plain/RTF bodies as applicable, inline and embedded-message attachments, valid large-message handling and independent Outlook comparison |
-| NSF | Parser exists; heuristic text fallback and lack of real-file evidence prevent a full-fidelity claim | Required before promoting complete support: real Notes/Domino fixtures, tested database variants and structured message/attachment/folder extraction. Heuristic salvage remains a separate partial recovery result |
-| ZIP/ZIP64 containing supported mail; GZip containing a supported payload | Container support exists for named methods; encrypted members and nested archives have limitations | Required: member accounting, integrity checks, path safety, streamed extraction, reliable handling of supported mail members and explicit reporting of others. Compression does not itself define a mailbox format |
-| OLM: Outlook for Mac archive | No dedicated OLM type/reader is present in the reviewed classifier/parser routing | **Proposed high-priority addition:** implement and verify OLM mail/folder/attachment import. This is a format gap in the current Mac archive proposition, not an existing capability |
-| TAR and TGZ/TAR.GZ mail bundles | No TAR source reader is present in the reviewed routing; GZip support alone does not implement TAR member extraction | **Proposed addition:** complete this wrapper path for Takeout-style bundles, with member accounting, integrity and extraction safety |
-| DBX, legacy MBX, Outlook OLK/profile databases and other historical client stores | Not established by this review | Later additions with explicit demand and their own parser/fixture matrix; do not advertise them as covered by generic “all email archives” wording |
+These are required families for the expanded mail-archive contract. Publish a version/variant matrix for each; "required" describes the target, not current readiness.
 
-Existing advertised input families remain required. OLM and TAR/TGZ are explicit proposed additions to the format roadmap, rather than silently claimed implementations. Their inclusion in a release promise requires the same evidence as the other rows.
+| Input family | Required result and current evidence boundary |
+|---|---|
+| Outlook PST | Read ANSI and Unicode variants, enumerate real folder hierarchy and all accessible mail/attachments/properties, preserve source identity, and support checkpointed processing. Parser and synthetic 100 MB execution are reported; real-origin fidelity and variant coverage still need evidence. |
+| Outlook OST | Read the local records actually present, including tested compressed variants; distinguish complete local records, headers/stubs and unavailable data. A shared PST parser is not OST acceptance evidence. Never equate an offline cache with an entire server mailbox. |
+| Outlook for Mac OLM | Required direct archive import, with folders, mail, original attachments, available categories and dates. No OLM reader was established by the historical review or supplied implementation report. Do not route an OLM ZIP envelope through a generic ZIP reader and claim semantic OLM support. |
+| Outlook MSG and OFT mail items | Decode supported Unicode/ANSI MAPI message variants, recipient tables, available SMTP/Exchange address forms, plain/HTML/compressed-RTF bodies, inline parts, embedded messages and attachments. Validate OFT separately; its extension alone is not proof of MSG compatibility. MSG support is reported; the complete variant contract is not demonstrated. |
+| MIME EML and nested EML directories | Single and batch import; original relative paths, encodings, long/Unicode names, inline content, nested messages, large parts and stable source identity. Preserve original MIME bytes where available. |
+| MBOX, including extensionless mailboxes | Explicit mbox variants and From-line escaping, complete MIME content, Gmail labels, multiple mailbox files and source identity. Retain the reported streaming/import work. |
+| Apple Mail EMLX and exported mailbox packages | Real exports and EMLX fixtures, required companion data, folders, inline resources and supported message flags. Do not mistake a live profile's indexes for self-contained mail. |
+| Maildir and supported Thunderbird layouts | cur/new, flags, nested folders, supported profile/export structures and source mapping. Preserve tags/labels separately from physical membership. |
+| Existing NSF support | Reconcile every advertised variant against real Notes/Domino fixtures; structured mail/folder/attachment fidelity is required for a full-support badge. A heuristic salvage result stays partial and separate. The Microsoft focus does not waive an existing promise. |
+| ZIP/ZIP64, TAR, TGZ/TAR.GZ and GZip mail bundles | Enumerate members, dispatch by actual content, validate the enclosed mail format, preserve paths and reconcile every member. Test multipart export sets where the source tool emits them. GZip decompression alone is not TAR extraction. |
+| 7z, RAR/RAR5 and other declared compressed mail bundles | Use the same safely isolated container traversal as attachment search; certify compression/encryption/solid/split variants individually. Missing volumes and unsupported methods are explicit recoverable states. |
+| Live Outlook profiles/OLK files, Outlook web/Microsoft 365 accounts, DBX/other historical stores | Publish the actual intake route: an explicitly tested direct adapter or guided export to a supported archive. Do not claim direct support for every profile/version or online mailbox. Live account synchronization remains outside the five-job scope; obtaining an archive is an intake step. Historical formats without an adapter remain visibly unclaimed. |
 
-Microsoft identifies OLM as an Outlook for Mac archive format and PST as the corresponding Windows archive format. This supports prioritising an OLM reader for a Mac archive product; it does not establish mailin support or compatibility with every current Outlook edition. [Microsoft format guidance](https://support.microsoft.com/en-gb/outlook/import-email-messages-contacts-and-other-items-into-outlook-for-mac)
+Outlook archives also contain contacts, appointments, tasks and notes. Inventory these objects and retain the original store in self-contained preservation mode. Preserve/export existing supported non-mail objects and their associated files without forcing them into fake messages. A mail conversion must disclose non-mail omissions; it is not a complete Outlook-profile backup. This does not require rebuilding Outlook's calendar or contact-management application.
 
-Google documents ZIP/TGZ download packaging and the X-Gmail-Labels header used to preserve Gmail labels. Direct Gmail/Takeout support therefore needs label semantics and container completeness as well as an MBOX reader. [Google data export guidance](https://support.google.com/accounts/answer/3024190?hl=en)
+Microsoft distinguishes PST and OLM archive workflows, and documents version-specific Outlook import behavior. Its OST documentation also explains that only a subset of a server mailbox may be cached. These facts require explicit source and destination versions in mailin's compatibility tests. [Outlook Mac import](https://support.microsoft.com/en-us/outlook/import-email-messages-contacts-and-other-items-into-outlook-for-mac) · [OST cached subset](https://learn.microsoft.com/en-us/troubleshoot/outlook/user-interface/only-subset-items-synchronized)
 
 ### 4.2 Attachment preservation and searchable content
 
-Preserve the original bytes, filename, MIME type, parent-message link and available metadata for every attachment that can be read from the source, including types with no text extractor. A type can be safely retained/exported without its internal contents being searchable. The UI and product copy must distinguish those capabilities.
+For every accessible attachment, preserve original bytes, original name, declared and detected type, parent relationship, source locator, size and digest. Retain an original Office file unchanged even when its searchable text or preview is generated. The expanded contract adds the following extraction targets; no row is a statement of existing implementation.
 
-| Attachment family | Release scope |
+| Family and explicit extensions | Required search content and treatment |
 |---|---|
-| PDF with embedded text | Required complete text extraction, page association and direct opening from a hit |
-| Image-only/scanned PDFs, JPEG, PNG and TIFF | Required OCR integration for explicitly tested languages/image classes; preserve original bytes and label recognised text |
-| DOCX, XLSX and PPTX | Required text extraction with document/sheet/slide context where available; do not execute macros or formulas |
-| TXT, CSV, HTML/HTM and RTF | Required encoding-aware extraction and full-content search; safe HTML handling |
-| Attached EML/MSG and nested MIME messages | Required where currently advertised: retain the parent/child relationship, child attachments and searchable supported text |
-| ZIP and other compressed attachments | Preserve/export original bytes now; searchable supported contents require a separately tested safe extraction path. Container import support does not automatically provide attachment-content indexing |
-| Legacy DOC/XLS/PPT, ODT/ODS/ODP and Pages/Numbers/Keynote | Explicit next extraction candidates; do not imply modern Office support covers these different formats |
-| Other images, audio/video, CAD, executables and arbitrary binary files | Preserve/export readable bytes and searchable filename/metadata. OCR, transcription and format-specific content search require their own tested capabilities |
+| Word: DOC, DOCX, DOCM; DOT, DOTX, DOTM; supported Word XML variants | Main text, tables, headers/footers, footnotes/endnotes, text boxes, comments and tracked-change text with current/deleted/revision distinctions. Test older binary generations separately from OOXML, including Strict/Transitional variants where claimed. |
+| Excel: XLS, XLSX, XLSM, XLSB; XLT, XLTX, XLTM; supported SpreadsheetML | Sheet/cell addresses, stored strings/numbers/dates, cached displayed results, comments/notes, hidden sheets/rows/columns and available formulas as a separately labelled field. Never run formulas, VBA, DDE, external links or data refresh. Missing cached results and unsupported formula extraction are explicit partial coverage. |
+| PowerPoint: PPT, PPTX, PPTM; PPS, PPSX, PPSM; POT, POTX, POTM | Slide text, tables, text boxes, speaker notes, comments, hidden slides and available chart labels. Label slide/notes/hidden content; do not execute macros or active objects. |
+| Other Microsoft business documents: OneNote ONE/ONEPKG; Visio VSD/VSDX and declared templates; Project MPP/MPT/XML; Publisher PUB; Access MDB/ACCDB | Part of the broad Office-compatibility target: extract stored text and embedded supported documents with page/shape/task/table/row context as applicable. Enumerate exact tested versions and properties. Do not execute queries, database code, project calculations or linked-data refresh. An internet notebook link or linked Access table is not local document content. These adapters are new requirements, not established capabilities. |
+| OpenDocument: ODT/ODS/ODP, templates and declared flat-XML variants | Corresponding document/table/slide text, annotations, embedded objects and original structure context. Do not classify these as unsupported merely because they are not Microsoft formats. |
+| iWork: Pages, Numbers, Keynote | Full stored body/table/slide text for explicitly tested generations, with relevant annotations and embedded files. Identify legacy packages versus newer IWA-based generations. A thumbnail/metadata-only extractor cannot pass this row. |
+| PDF | Full embedded text with page association, annotations/form text where extractable, and OCR for scanned/mixed pages. Preserve the file and signatures; do not rewrite it to create the search index. |
+| Images and scanned documents | OCR for the declared image formats and tested languages; include JPEG/PNG/TIFF and ordinary screenshot/scan formats supported by the chosen decoder. Label recognition as derived, record coverage and allow retry. OCR does not prove every visible word was recognised correctly. |
+| TXT/CSV/TSV, HTML, RTF, JSON/XML/logs, calendar/contact text | Encoding-aware full text with meaningful structural context; safe HTML, no external entity resolution or spreadsheet execution. Do not flatten structured data in a way that invents associations. |
+| Attached EML/MSG, MIME message parts, TNEF/winmail.dat | Recursively expose supported messages and actual enclosed attachments; preserve outer and inner bytes and their lineage. TNEF is a message/attachment encoding, not an ordinary document whose visible filename is sufficient. |
+| ZIP/ZIP64, 7z, RAR/RAR5, TAR/TGZ/GZip and declared common compression methods | Search supported contents recursively, at both import-container and attachment levels. Preserve the outer archive and member paths; test supported encryption, split-volume and solid variants individually. Safety-paused members remain partial/unknown and resumable, not silently skipped. |
+| Embedded Office/OLE/package objects | Decode supported embedded files into child documents with independent types/hashes/coverage. Keep the enclosing Office file and relationships; do not execute an object or follow an external link. |
+| Password-protected PDF/Office/containers | Accept the user's password for supported encryption schemes, retry only affected items, and reveal exact progress/coverage. The common PDF and Office password route is required; "locked forever" is not completion when a valid password is supplied. Scheme-level gaps remain explicit until implemented. |
+| Other readable binary attachments, including audio/video/executables/CAD | Preserve/export originals and search filenames/available metadata. Spoken-word transcription, executable behavior and arbitrary proprietary-format interpretation are separate capabilities, not implicitly covered by "attachment search." Never execute an attachment. |
 
-Digital signatures, password protection, S/MIME encryption, external attachment links and missing companion files are additional conditions, not new file formats. Retain original bytes and clearly state whether content could be decoded, authenticated, decrypted or retrieved. A valid parser must not fabricate inaccessible content or silently fetch remote material.
+**Depth is part of support.** "Searches Excel" must not mean only the first sheet; "searches Word" must not mean only paragraphs in the main body. Hidden, historical and annotation text needs distinct evidence labels and filters. Document revisions and comments must not be quoted as current body text. The exact extraction contract and acceptance cases are in section 13.
+
+Signatures, passwords, S/MIME/OpenPGP encryption, Microsoft rights management, remote links and damaged records are conditions across formats. Preserve originals; distinguish signature integrity from trust, decryption from permission, and an external reference from locally preserved content. Implement user-supplied credential/key workflows for supported schemes; protected enterprise content requires rights-aware authorization, not a password guess or a generic Office parser. Do not fetch remotely or persist decrypted text without the relevant user choice and rights.
 
 ### 4.3 Outgoing formats
 
-An import reader is not an export writer. Record output capabilities independently, including which fields can be preserved and which are transformed.
+Import and export are separate capabilities. The latest implementation report says PST export exists; that supersedes the historical statement that it was absent from the reviewed export enum, but it is still a report requiring independent verification.
 
-| Output | Role in the next release |
+| Output | Required role and verification |
 |---|---|
-| EML files in a source/folder directory layout | Required preservation output: complete email content, attachments, original location mapping and a durable verification manifest. Ordinary EML export alone does not encode a whole mailbox hierarchy |
-| MBOX, including partitioned output where needed | Required portable mailbox output: correct envelope/MIME handling and destination-client tests. Preserve hierarchy through separate mailbox files/directories plus an inventory rather than implying one MBOX contains every source folder relationship |
-| MSG | Existing writer to verify and retain: require actual Outlook-readable results and attachment/metadata reconciliation before making a compatibility claim |
-| PDF and portable HTML | Readable viewing/sharing outputs; distinguish rendering from a restorable archive. State how attachment originals accompany the report |
-| CSV and JSON | Structured metadata/report outputs, with exact schemas and explicit inclusion/omission of bodies/attachments. A JSON result is only a restorable archive if a compatible importer and fidelity checks exist |
-| Original attachments plus inventory | Required extraction output: byte hashes, parent messages, collision-safe filenames and original filename mapping |
-| Word, Markdown, text, TIFF, vCard/ICS and existing professional productions | Preserve existing entitlements and verify their stated purpose. These formats do not substitute for mail-preserving EML/MBOX output |
-| PST or OLM archive output | Separate writer projects requiring independent Outlook compatibility tests. They are not present as ordinary options in the reviewed unified export format enum; no new fully supported export promise is made by this plan |
-| OST or NSF output | Separate native-store generation capabilities; no default promise to create them from an imported archive |
+| EML in source/folder directories | Portable mail with complete attachments and an explicit original-folder/membership mapping. Preserve original MIME when available; label regenerated MIME from MAPI/OLM as a conversion. |
+| MBOX per folder, with safe partitioning where necessary | Portable mailbox output with MIME/envelope correctness, independent-reader checks, folder map and durable inventory. A single MBOX does not encode a complete hierarchy by itself. |
+| PST | Required Outlook destination for the expanded Microsoft bridge. Verify the reported writer or complete it; validate actual Outlook readability, folders, bodies, attachment digests and declared property mapping. Test the declared PST generation/size strategy; split safely for destination constraints without losing selection accounting. |
+| MSG | Retain and verify the reported existing writer for individual Outlook items, including embedded messages, bodies, recipients and attachments. Creating an OLE file is not enough. |
+| Original attachments and optional expanded members | Preserve exact bytes/names through safe collision handling; each file maps to its message and container/member chain. Expanded or converted derivatives must never replace the original attachment silently. |
+| Full mailin preservation package/backup | Preserve the database, original/retained source material, blobs, mappings, extraction records and necessary metadata through a documented inventory and clean-profile restore. This is the way to keep information that a destination mail format cannot represent. |
+| PDF/HTML, CSV/JSON and existing specialist outputs | Viewing/report/extract roles remain explicit; verify their declared fields and attachments. They are not a substitute for a mail-preserving archive or a backup. |
+| OLM output | Not required merely because OLM input is required: the tested PST/EML/MBOX routes provide portability. If mailin advertises an OLM writer or a named destination requires one, it becomes a separately tested writer requirement; do not imply it exists. |
+| OST/NSF native-store output | No implicit promise to manufacture a live cache or native database. Preserve original stores and provide the tested portable-mail route. |
 
-The reviewed folder-export layout enum only offers flat or by-year layouts. Original source/folder layout therefore needs explicit implementation and acceptance evidence under FOLD-05 and OUT-03; preserving a folder name inside metadata is not equivalent to reproducing the selected output tree.
-
-PST/OLM/NSF stores may contain non-email objects. Count and disclose the object types outside mail import scope; keep source material available. Do not describe an email-only extraction as a complete backup/conversion of contacts, calendars, tasks, notes and every native property. Preserve existing contact/calendar features without allowing them to displace the five core mail jobs.
+Verification has three distinct results: **file bytes checked**, **selected mail/content reconciled**, and **destination compatibility tested**. File hashes alone cannot prove that the importer omitted nothing or that another app can read the mail. Keep source-specific metadata that cannot be expressed in the target in a documented sidecar/preservation package and disclose that mapping. Never label a lossy transformation as a byte-for-byte original.
 
 ### 4.4 Evidence required for each format
 
-For each promised input variant and each output format, record: actual originating application/version, fixtures and ground truth, source size/count, folder memberships, body/attachment checks, search targets, duplicate scenarios, interrupted-run recovery, conversion losses, destination reader/version and evidence tied to the release commit.
+Each matrix row needs exact extension/container variant, originating application/version, fixture permission/hash and known truth; import counts/folders/items; extracted text and section coverage; nested attachment digests/lineage; duplicate comparisons; output field transformations; destination reader/version; interruption behavior; and build/commit/platform.
 
-Use “implemented,” “tested,” “partially supported” and “unsupported” distinctly. An executed MBOX fixture does not validate PST; a ZIP path does not validate OLM or TGZ; a shared parser must not be the only oracle for an exporter. No feature badge or marketing list may collapse these differences.
+Publish independent columns for preserved, readable/previewable, content-searchable, exportable, and independently verified. Use implemented, tested, partial, unsupported and not executed distinctly. For the expanded required families, "unsupported but disclosed" is an honest current state, not a completed requirement.
 
-Current-code references: [format classification](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/SourceFormatClassifier.swift#L28), [parser routing](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/EmailParserProtocol.swift#L66), [export formats and layout](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/Packages/ArchiveCore/Sources/ArchiveCore/ExportRequest.swift#L11), and [format evidence/limitations](https://github.com/sasmalgiri/mailin/blob/a8e875883b7888fb59efc093402996370ad37594/SUPPORTED_FORMATS_AND_LIMITS.md).
+Real format-fidelity fixtures can be small. Preserve the owner's 100 MB scale-evidence decision; format correctness and scale are separate tests. Do not mark the 100 MB synthetic matrix as evidence for real OST/OLM/legacy Office or protected/nested documents it never contained.
 
 ## 5. Thirty core implementation items
 
@@ -302,7 +311,7 @@ The “Status” column below describes source evidence at review time; it is no
 | ID | Status | Required work |
 |---|---|---|
 | OPEN-01 | Complete or verify | Preflight detects the actual archive/container format, readable access, available destination storage and relevant limitations. Distinguish corrupt, unsupported, inaccessible and encrypted inputs. Do not request account credentials to open an ordinary local archive. |
-| OPEN-02 | Fix | Replace whole-result materialisation in the PST/OST/NSF/MSG ingest paths with bounded parsing/storage and cancellable work. Keep database writes, indexing and UI browsing bounded too. A batch writer cannot fix an upstream parser that retains the whole archive. |
+| OPEN-02 | Fix | Use bounded parsing/storage and cancellable work in every required ingest path, including PST/OST/NSF/MSG, the new OLM reader and nested containers. Resolve historical whole-result materialisation and keep database writes, indexing and UI browsing bounded too. A batch writer cannot fix an upstream parser that retains the whole archive. |
 | OPEN-03 | Complete or verify | Persist import checkpoints and restart without creating unintended repeated records. Detect changed source content before resuming. Recover after force quit, low disk, permission loss and external-drive removal; never overwrite the original archive. |
 | OPEN-04 | Complete or verify | Allow browsing of committed messages while remaining work continues, when safe for that format. Distinguish “mail imported” from “attachment text still indexing.” If no reliable total is available, show processed counts/bytes rather than a fabricated percentage. |
 | OPEN-05 | Complete or verify | Produce a per-source import receipt: discovered records where knowable, imported occurrences, intentionally skipped records, unreadable items and unresolved regions. Duplicate grouping is a classification on imported occurrences, not an extra count to double-count. Unknown source totals remain unknown. |
@@ -325,7 +334,7 @@ Use the engineering benchmark matrix in section 8.1, beginning with small ground
 | FOLD-01 | Fix | Replace the 200-entry sidebar ceiling with lazy loading, pagination or a searchable complete tree. Do not render tens of thousands of rows at once simply to remove the cap. Every imported folder must remain reachable. |
 | FOLD-02 | Complete or verify | Preserve original source identity, parent/child paths, names and folder memberships. Keep same-named folders from separate archives distinct. Preserve empty folders when the source represents them; disclose when it does not. |
 | FOLD-03 | Complete or verify | Represent multiple labels/memberships separately from message content. A message in two labels must not become two unrelated messages, nor should deduplication erase one of its locations. Explain unique-message versus folder-occurrence counts. |
-| FOLD-04 | Complete or verify | Keep original location metadata immutable. User-created tags, saved searches and renamed display labels must not rewrite the historical source path. Preserve attachment-to-message relationships. |
+| FOLD-04 | Complete or verify | Keep original location metadata immutable. User-created tags, saved searches and renamed display labels must not rewrite historical paths. Preserve the full parent chain through messages, attachments, winmail.dat, compressed members and embedded documents, as well as direct attachment-to-message relationships. |
 | FOLD-05 | Complete or verify | Test Unicode names, nesting, repeated names, long paths and filename/case collisions on export. Use safe output names plus a mapping back to original names when exact filesystem naming is impossible. Never let source names escape the export directory. |
 
 **Later:** folder pinning, saved virtual folders, side-by-side comparison of two archive snapshots, and a user-controlled combined view across sources. Combined views should retain the original locations.
@@ -360,11 +369,11 @@ These remain the same seven FIND identifiers; the following detail is their impl
 
 | ID | Status | Required work |
 |---|---|---|
-| FIND-01 | Fix | Complete ordinary content extraction for TXT/CSV, HTML, RTF, text PDF, DOCX, XLSX and PPTX; retain supported nested-email handling. Store each attachment's extracted text with its stable parent, part/document identity, version and available page/sheet/slide context. Do not execute macros, formulas or remote content. |
+| FIND-01 | Fix and expand | Complete all required attachment extractors and section-depth contracts in section 4.2, including old/new Office variants, OpenDocument/iWork, supported embedded mail/documents, nested container contents and credential-based processing. Store full extracted text with stable parent/child identity, engine version and actual page/sheet/cell/slide/section context. See section 13 for implementation options and acceptance cases. Never execute macros, formulas, queries or remote content. |
 | FIND-02 | Fix | Connect OCR for supported JPEG/PNG/TIFF and scanned PDF pages to ordinary search. Process mixed text/scan PDFs without duplicating equivalent text; label OCR results, record language/model revision where available and retain original bytes. Test actual advertised languages/image classes. |
 | FIND-03 | Fix | Persist honest processing/coverage states per message field and attachment, including queued, running, text extracted, processed with no text found, unsupported, locked, failed, cancelled, paused, partial and stale. Show scope-relevant coverage and recovery actions. A missing counter or failed coverage query is unknown, not zero. |
 | FIND-04 | Complete or verify | Extend the existing guided form into the visual advanced search builder specified below. Support field filters, all/any/exclude conditions, clear source/folder scope, active editable filters, defined dates and attachment predicates through one validated query model. All visible conditions must reach execution. |
-| FIND-05 | Fix | Return actual match evidence with results: field, matched condition, parent message, attachment identity and available location/snippet. Show truthful highlights and open the correct matching content. Remove invented Body attribution. Filter-only results explain which filters passed without inventing a text hit. |
+| FIND-05 | Fix | Return actual match evidence: field/section, matched condition, parent message, exact attachment/member identity and available location/snippet. Open the matching document, including nested children, at a real location or an accurately labelled extracted-content anchor. Remove invented Body attribution. Filter-only results explain passed filters without inventing a text hit. |
 | FIND-06 | Complete or verify | Keep extraction and queries bounded, cancellable and recoverable. Validate typed conditions, bind SQL values, safely compile text expressions and retain central scope enforcement. Enforce resource budgets visibly; never substitute a bounded first-page scan for complete search. |
 | FIND-07 | Fix | Replace permanent prefix-only indexing with complete logical-document/chunk indexing for supported message and attachment text. Remove the 500,000-character attachment cutoff and former body cutoff. Verify phrase matches across chunk boundaries without matching across unrelated documents, attachments or messages. |
 
@@ -451,7 +460,7 @@ Use existing tables/jobs where sound. The following are required data relationsh
 
 **Migration:** add compatible schema/index revisions and run resumable backfill over existing archives. Do not require reimporting all mail merely to obtain newly supported extraction. Reuse available original/managed bytes and the existing missing-source/relink behavior. Preflight additional disk space; preserve a working old index where safe while labelling stale/incomplete coverage until replacement is ready. Interrupted migration/backfill must resume without duplicate documents. Test current archives, professional records, holds and saved queries through upgrade.
 
-**FIND-06:** use bounded memory, task concurrency, decompression/nesting limits and cancellable time budgets. Resource-paused, locked, unsupported or failed items remain visible with actionable next steps. A guard stopping an extraction cannot count as successful full processing. This release still has the same supported attachment families and deferred extraction formats as section 4.
+**FIND-06:** use bounded memory, task concurrency, decompression/nesting limits and cancellable time budgets. Resource-paused, locked, unsupported or failed items remain visible with actionable next steps. A guard stopping an extraction cannot count as successful full processing. The required attachment families and processing depth are the expanded contract in sections 4 and 13; resource safety does not defer those extractors.
 
 SQLite FTS5 provides phrase/Boolean querying and snippet/highlight primitives. The document/chunk relationships, coverage rules and cross-boundary correctness above are mailin requirements to implement and test, not automatic guarantees supplied by the engine. [SQLite FTS5](https://sqlite.org/fts5.html)
 
@@ -538,9 +547,9 @@ Deliver within the existing master-plan release package:
 4. Automated/integration/UI results for the acceptance cases, measured scale evidence, and any remaining blocker.
 5. Updated in-app search help and advertised coverage consistent with the tested implementation.
 
-**Later:** new saved-search management, search-within-results, a separate attachment-only browser, typo/synonym expansion, new extraction formats, searching inside compressed attachments and optional natural-language assistance. Retain existing working features. Raw SQL editing and AI-generated SQL are not required to deliver this plan.
+**Later:** new saved-search management, search-within-results, a separate attachment-only browser, typo/synonym expansion and optional natural-language assistance. Retain existing working features. The named document formats and compressed-attachment search in section 4.2 are now required under the 6 November expansion. Raw SQL editing and AI-generated SQL are not required.
 
-This amendment expands FIND-04 and its dependencies within FIND-01–07. It does not add formats, change entitlement policy, expand AI/analytics, or change OPEN, FOLD, DUP, OUT, LIFE or the ten master release gates.
+The earlier Advanced Search amendment expanded FIND-04 and its FIND-01–07 dependencies without adding formats. The later 6 November Outlook/Office decision explicitly broadens the format and acceptance contracts in sections 4 and 13 across the same five jobs. The 30 core IDs, six LIFE checks and ten gates remain; AI/analytics expansion remains excluded.
 
 ### 5.4. Identify duplicates without losing information
 
@@ -568,11 +577,11 @@ RFC 5322 describes Message-ID as a message identifier and explicitly permits cer
 
 | ID | Status | Required work |
 |---|---|---|
-| OUT-01 | Complete or verify | Offer clear export choices: mail-preserving formats such as supported EML/MBOX paths, attachment-only output, and human-readable reports. Explain that PDF/CSV reports are not automatically complete restorable email archives. Keep only formats the release can actually write and validate. |
+| OUT-01 | Complete or verify | Offer clear mail-preserving EML/MBOX/PST/MSG choices according to the verified writer matrix, original-attachment output, full preservation backup, and human-readable reports. Explain that PDF/CSV reports are not automatically restorable mail archives. Complete the required Outlook export route; do not list unverified writers as supported. |
 | OUT-02 | Complete or verify | Snapshot the selected messages and memberships before writing. Exporting a filtered view must not drift because background import/search changes. Let users decide whether the export includes unique messages or each folder occurrence and disclose any intentional duplication. |
 | OUT-03 | Complete or verify | Preserve supported headers, bodies, inline MIME parts, attachments, names and source/folder mapping. Record format-induced changes and omissions. Verify decoded attachment bytes, not filenames alone. |
 | OUT-04 | Complete or verify | Extend existing receipts/manifests into a clear reconciliation of selected, written, checked, excluded and failed items. Reopen/reparse all outputs for a full-verification status; a sampled check must say sampled. Verify exported payload against source records as well as output-file integrity. |
-| OUT-05 | Complete or verify | Exercise destination compatibility with supported versions of Apple Mail and, where claimed, Thunderbird. Use an independent reader or fixture oracle so a shared bug in mailin's importer and exporter cannot validate itself. Record exact software versions and workflows tested. |
+| OUT-05 | Complete or verify | Exercise destination compatibility in appropriate actual versions of Windows/Mac Outlook for the promised PST/MSG route, and Apple Mail/Thunderbird for the declared EML/MBOX route. An independent reader or known fixture oracle must prevent a shared importer/exporter bug from validating itself. Record exact versions, import steps, field mapping, folders and attachment reconciliation. |
 | OUT-06 | Complete or verify | Make cancellation, full disk, partial output and resumable jobs explicit. Use a partial-work area and finalise only after the chosen checks pass. Resume must validate existing files and never overwrite unrelated output. |
 | OUT-07 | Fix | Preserve a final per-file verification inventory instead of deleting all per-file hashes after successful folder export. Finalise the resume journal into a durable portable manifest linking output files to source records, selection identity, attachment checks and any transformations. A successful write or unchanged file hash alone must not imply semantic reconciliation. |
 
@@ -624,7 +633,7 @@ For LIFE-06, maintain one tested capability table covering reading, search, impo
 
 Stages are dependencies, not calendar promises. Privacy, safe handling, accessibility and data integrity apply throughout; final-stage testing must not postpone their design. Small independent fixes may proceed together. Reuse passing components and avoid a broad rewrite solely to satisfy the plan.
 
-Do not spend this release expanding analytics, studios, personas or live mail. Proposed new formats join the required matrix only after an explicit scope decision; they must not silently displace completion of existing advertised formats.
+Do not spend this release expanding analytics, studios, personas or live mail. The owner's 6 November Outlook/Office request is the scope decision for the expanded required matrix in sections 4 and 13. Complete those rows together with existing advertised formats; preserve valid Stage A–E work and add the missing adapters and evidence.
 
 ## 8. Validation protocol
 
@@ -720,22 +729,22 @@ Use a single tracker with one row for every OPEN/FOLD/FIND/DUP/OUT/LIFE identifi
 
 The final release record must state the exact build, supported input variants, attachment extraction/OCR coverage, output/destination compatibility, measured scale envelope and remaining inherent constraints. A known required implementation gap keeps the release open; a declared unsupported input does not become a passed supported-format case.
 
-## 10. Proposed decisions and deferred expansion
+## 10. Adopted decisions, proposals and deferred expansion
 
-These boundaries resolve the differences between earlier recommendations without silently expanding the owner's approved five-job goal.
+These decisions reconcile earlier recommendations with the owner's 6 November request for Outlook/Office to become a main strength. Compatibility expands within the same five jobs; unrelated product modules remain outside this release.
 
 | Item | Consolidated treatment |
 |---|---|
-| OLM input | High-priority proposal for a Mac archive product. No reader was established in reviewed routing. If adopted, add real fixtures and all six dimensions of format acceptance before promising support |
-| TAR/TGZ input | Proposed wrapper addition. GZip alone does not imply TAR extraction. If adopted, test all members, integrity, path safety and supported enclosed mail |
+| OLM input | Required under the 6 November Outlook/Office expansion. Add a dedicated reader, real-origin fixtures and every applicable dimension of format acceptance before promising support. |
+| TAR/TGZ input | Required with the expanded container/attachment workflow. GZip alone does not imply TAR extraction; reconcile members, integrity, path safety and supported enclosed content. |
 | Post-expiry reading and basic portability export | **Adopted by the owner, 6 November 2026.** The policy decision is closed; implement and test the access matrix in section 12.2. Preserve all existing data and purchased rights |
 | Exact performance thresholds | Engineering targets in section 8.1, not demonstrated speed claims or artificial maximums. Record executed results; identify unexecuted larger-file tiers under the owner's resource-budget decision. No 100 MB app cap or universal capacity claim follows |
 | New saved-search tools, search-within-results, typo assistance and richer attachment browsing | Later retrieval improvements; retain existing working conveniences |
 | Batch archive queues, selective mailbox import and incremental snapshot comparison | Later import improvements with stable source identity; not substitutes for reliable current imports |
 | Guided storage relocation and cross-archive comparison | Later convenience work unless needed to make an already advertised workflow safe |
 | Shared attachment-storage deduplication | Later, after reference integrity, deletion, backup, migration and honest physical-space accounting are proven |
-| Legacy document extraction and searching inside compressed attachments | Later format projects with their own extraction, security and fixture evidence |
-| Additional native-store formats and PST/OLM writers | Separate reader/writer projects; no blanket “all formats” promise |
+| Legacy/modern Office variants, OpenDocument/iWork and compressed-attachment contents | Required under sections 4.2 and 13. Add supported credential/rights workflows and detailed section-level coverage. Preserve the distinction between new requirements and verified capabilities. |
+| PST/MSG output and other native-store writers | Complete and independently verify the reported PST/MSG writers as Outlook portability routes. OLM writing is separate from OLM reading; direct OST/NSF generation and unclaimed historical-store adapters are not implicitly promised. |
 | Standalone output verifier and extra destination presets | Later trust/portability improvements; durable verification inventories are required now |
 | More AI, analytics, investigation workflows/personas and general inbox/live-mail features | Expansion frozen/deferred for this release; preserve existing customer access and records |
 
@@ -743,14 +752,14 @@ If a proposed item is adopted, update this master, the requirement matrix, tests
 
 ## 11. Implementation handoff and required deliverables
 
-Use this document as the sole mailin next-release execution brief. First reconcile its baseline with the actual app source; then implement or verify all 30 core items and six LIFE checks. Keep existing data, purchase rights and holds intact. Do not mark work complete based only on parser classes, successful compilation, file creation or a demonstration on a small archive.
+Use this document as the sole mailin next-release execution brief. First reconcile its baseline with the actual app source; then implement or verify all 30 core items and six LIFE checks, including sections 4 and 13's expanded format contracts. Retain valid prior evidence; reopen affected rows for their additional scope. Keep existing data, purchase rights and holds intact. Parser classes, compilation, file creation or a demonstration on a small archive do not establish complete compatibility.
 
 Deliver the following together:
 
 1. The focused application changes, with safe schema migration and preserved existing customer capabilities.
 2. The requirement tracker covering all 36 IDs, with actual pass/fail evidence and unresolved issues.
-3. A per-format support matrix covering import, extraction, folders, search, duplicate comparison and export independently.
-4. Reproducible fixtures and automated/integration checks for content correctness, complete scope, recovery and output fidelity.
+3. A machine-readable capability registry and per-format/per-platform matrix covering import, preservation, extraction sections, folders, search, duplicate comparison, exports and independent verification.
+4. Reproducible fixtures and automated/integration checks for content correctness, complete scope, recovery and output fidelity, including COMP-01–20 and the original acceptance cases.
 5. Executed performance, clean-restore, fault, platform and independent destination-client results tied to the candidate.
 6. Quick-start/sample data, task help, recovery guidance, accessibility evidence and the real-user pilot results.
 7. A tested entitlement/access matrix consistent with adopted policy, plus reconciled app, website and store claims.
@@ -768,7 +777,7 @@ The owner's phrase “unlimited everything” is recorded here as the ambition t
 
 The implementation report supplied by the owner describes 17 local commits on `v3-architecture` ending at `e48f556`, not pushed. That report describes substantial implemented work and passing checks. This planning document has not independently inspected those commits or logs. Do not replace the historical code baseline with an invented verified release state.
 
-Two search requirements are expressly still open in the report: the ordinary search box uses the previous engine, and attachment evidence opens only the parent message. Keep FIND-04/FIND-05 partial until these paths meet section 5.3. Implementation of the new LIFE-06 policy and the presentation change also needs evidence.
+Two search requirements are expressly still open in the report: the ordinary search box uses the previous engine, and attachment evidence opens only the parent message. Keep FIND-04/FIND-05 partial until these paths meet sections 5.3 and 13. The later screenshot reports an AccessPolicy/LIFE-06 change, but the complete policy test matrix and presentation change still need candidate evidence. The owner's subsequent Outlook/Office request also adds the required compatibility completion pass in section 13; Stage E completion for the old scope does not establish that expanded coverage.
 
 ### 12.2 LIFE-06 policy to implement and test
 
@@ -789,10 +798,11 @@ Test active purchase, trial, confirmed expiry, refund/revocation, offline refres
 
 ### 12.3 Remaining final-release work
 
-Use existing valid evidence rather than repeating completed work without a reason. The following is a closure list based on the supplied report, not a new feature expansion.
+Use existing valid evidence rather than repeating completed work without a reason. This closure list now includes the owner's expanded Outlook/Office contract as well as the unfinished work in the supplied report. Section 13 specifies new compatibility requirements; do not present them as already implemented.
 
 | Remaining item | Exact closure condition |
 |---|---|
+| Complete the expanded format contract | Implement/verify sections 4 and 13: Outlook PST/OST/OLM/MSG and declared variants; old/new Office and the remaining named business formats; safe nested extraction; password/key/rights workflows; correct folder/duplicate semantics and Outlook portability. COMP-01–20 need recorded results. Disclosing an unsupported healthy required file does not close the implementation gap. |
 | Finish the two search paths | Ordinary search and Advanced Search share the validated model, coverage/unknown rules and scope; attachment evidence opens the specific matching attachment/location where supported. Execute the affected section 5.3 tests, including incomplete negative searches. |
 | Implement and verify LIFE-06 | Apply section 12.2 and run relevant purchase/expiry/offline/refund/restore tests. Owner policy approval is complete; app verification is not inferred from it. |
 | Validate real supported inputs | Add real originating-client fixtures or permitted independent samples for every advertised format/variant, with known content/folders/attachment expectations. These can be small files within available resources; larger file size is not required to establish real-format fidelity. Synthetic fixtures remain useful edge-case tests. |
@@ -808,59 +818,190 @@ The reported uncommitted change to the legacy Xcode project is housekeeping: ins
 
 ### 12.4 The final release claim
 
-Release the complete five-job product when the remaining functionality and required evidence above pass, with the owner's explicit scale-evidence limitation recorded. Do not impose an artificial 100 MB product cap and do not market untested infinity. Keep the planned larger workload matrix available for future verification.
+Release the complete five-job product when the remaining functionality and required evidence above, including the expanded sections 4 and 13 compatibility contract, pass, with the owner's explicit scale-evidence limitation recorded. Do not impose an artificial 100 MB product cap and do not market untested infinity. Keep the planned larger workload matrix available for future verification.
 
 The release record must distinguish **implemented**, **executed and passed**, **not executed**, **observed limitation** and **owner-approved validation scope**. A final release label is not proof that every conceivable file/device combination has been tested.
 
 Apple asks for tested device/OS information and accurate, complete feature and purchase information during review. Prepare that information for the actual candidate. [Complete review information](https://developer.apple.com/help/app-review/before-submitting-for-review/complete-review) · [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
 
-## 13. Completion contract — COMP-01…20 and the R01…R07 regressions (6 November 2026)
+## 13. Outlook and Office completion pass — researched 6 November 2026
 
-Transcribed into the repository from the owner's handoff `Mailin_Product_Completion_Instructions_7481852_2026-11-06.md`
-(§4 "Acceptance cases", §2 "Immediate remaining defects"), which reproduces the scope of the consolidated plan
-version 7 §13. The consolidated plan file itself was not supplied to the repository; this section is the
-authoritative copy of its acceptance cases until it is. These cases extend the 30 job rows and six LIFE checks;
-they do not replace them. Decision in force: preserve completed work; finish architecture, format coverage,
-recovery and verification; the five jobs remain the product. The owner has approved the five-job identity and
-LIFE-06 — neither is asked again.
+### 13.1 Why the previous completion statement was too broad
 
-### 13.1 Regressions found at 7481852
+The earlier plan explicitly left OLM as a proposal and legacy Office/container-content extraction as later work. An agent could complete that narrower implementation and still leave the exact gaps shown in the owner's screenshot. This was a scope shortcoming in the earlier plan. It does not establish that the agent failed to implement an assigned reader.
 
-| ID | Defect | Instruction |
-|---|---|---|
-| R01 | The ordinary-search translator expands OR alternatives into conjunctive groups (exponential; 64-group cap then folds to all-words; unchecked multiplication) | Represent Boolean structure without expansion; preserve phrases, branch-local negation and same-document conditions; checked arithmetic; never silently run a different query |
-| R02 | Literal verification removes 512 SQLite code points where the chunker overlapped 512 Swift Characters (Unicode mismatch); literals longer than a chunk change mode; Limits text stale | One offset unit across storage, SQL, snippets; verify long phrases without changing mode; Unicode boundary tests |
-| R03 | GZip payload name derived from the temporary file URL; dispatch trusts temporary extensions | Pass an immutable logical filename; sniff the payload; preserve `.tar.gz` / `.txt.gz` semantics |
-| R04 | EML and RTF inside archives decoded as raw strings before their readers | Route EML/MSG/TNEF/embedded packages through semantic adapters producing children; RTF through the decoder |
-| R05 | Budgets are stopping rules; the gzip budget is checked after full decompression | Enforce budgets inside the production of bytes; turn exhaustion into a paused, resumable state; never call paused work complete |
-| R06 | An unverified export (inventory failed) has no repair or Verify action | "Finish inventory" / "Verify export" from the retained manifest; keep written / hashes recorded / rehash checked / content reconciled distinct |
-| R07 | LIFE-06 archive-access record has no production clean-profile transition test; refresh after restore/switch missing | Explicit initialisation; refresh after restore and archive change; visible failures; sandbox journeys |
+The owner's new instruction expands compatibility within the same five jobs. Sections 4 and 10 are reconciled accordingly. Do not create a second roadmap or restart passing Stage A–E work. Reopen only the affected requirement/evidence rows and their regressions.
 
-### 13.2 Acceptance cases
-
-| ID | Required customer outcome |
+| Evidence supplied by the owner | What it establishes for planning |
 |---|---|
-| COMP-01 | Real ANSI/Unicode PST: empty/deep/repeated/Unicode folders, varied bodies/attachments/properties and non-mail inventory reconcile. |
-| COMP-02 | Real OST: accessible content works; cache-only headers and missing server content remain distinct. |
-| COMP-03 | Real OLM: hierarchy, categories, dates and embedded documents survive import and search. |
-| COMP-04 | MSG/OFT/TNEF/embedded messages: correct recipients, body variants, CID and complete child tree with original hashes. |
-| COMP-05 | Actual legacy Word/Excel/PowerPoint: known section/cell/annotation terms are found without Office installed. |
-| COMP-06 | Declared macros/templates/shows/XLSB and Strict/Transitional variants: correct detection/extraction; active content never runs. |
-| COMP-07 | Excel hidden/comment/late-cell/formula-result-only matches: accurate location, raw/displayed/formula classification and no invented result. |
-| COMP-08 | Word header/text-box/footnote/comment/deleted-revision-only matches: correct section/revision labels. |
-| COMP-09 | PowerPoint notes/hidden slides/tables/chart labels: accurate evidence and navigation. |
-| COMP-10 | Declared OneNote/Visio/Project/Publisher/Access versions: stored content searchable with appropriate location; linked-only content distinct. |
-| COMP-11 | Real ODF and old/new iWork: actual document content found; thumbnail-only extraction fails this case. |
-| COMP-12 | Nested ZIP/7z/RAR/TAR/GZip: full tree, repeated filenames, encrypted members and missing volumes handled; no path escape. |
-| COMP-13 | Protected PDF/Office/container: correct/wrong password, cancel/retry/restart and chosen credential retention work. |
-| COMP-14 | Mail encryption/signatures/IRM/cloud references: authorized paths work; unavailable credentials/rights/content never become false no-matches or complete exports. |
-| COMP-15 | PST/OLM/EML equivalents and changed attachments/revisions: correct duplicate classes, preserved memberships/notes/holds, undo. |
-| COMP-16 | EML/MBOX/PST/MSG consumed independently: selection, folder, content and attachment reconciliation with durable inventory. |
-| COMP-17 | Ordinary/advanced equivalent searches, incomplete negative queries and same-child predicates: identical semantics and honest coverage. Includes R01/R02. |
-| COMP-18 | Import → detach original → restart → find nested Office file → backup → clean-profile restore → export: originals/relationships survive. |
-| COMP-19 | Malformed documents, expansion attacks, worker crash, disk-full and external interruption: contained failure, checkpoints and recovery. Includes R03–R06. |
-| COMP-20 | Clean install, entitlement changes and human five-job pilot: ordinary work needs no Office installation, existing-data access survives, people notice partial results. |
+| Agent reports PST/MSG/MBOX/EML work and a 100 MB synthetic matrix | A reported implementation baseline; not independent real-format or large-workload certification. |
+| Screenshot says DOCX/XLSX/PPTX text is searchable | Modern Office extraction is reported. Its coverage of comments, hidden content, embedded objects and variants still needs a section-level contract and tests. |
+| Screenshot says DOC/XLS/PPT, OpenDocument and iWork are retained but not read | Known extraction gaps against this expanded target. |
+| Screenshot says compressed attachments are retained but contents are not searched | A known recursive retrieval gap, even if ZIP source import already works. |
+| Screenshot says protected Office/PDF stays locked | Recognition/preservation exists in the report; a successful user-password unlock-and-index workflow is not demonstrated. |
+| Prior report admits legacy ordinary search and imprecise attachment navigation | FIND-04/FIND-05 remain unfinished until the actual candidate proves both paths. |
+| Screenshot shows an AccessPolicy/LIFE-06 change and passing module-gating tests | Work on the approved policy is reported. The complete expiry/refund/offline/restore capability matrix is not independently established by those visible lines. |
 
-For each case the tracker records: implemented / test executed / passed or failed / evidence location / known
-limitation / external dependency. A synthetic-fixture pass never implies real-origin compatibility. Expected
-unsupported or locked states are conditional cases, not successful extraction of healthy required content.
+Microsoft's documentation gives a strong reason to make this a central use case: its Mac archive guidance identifies PST/OLM workflows, while Windows PST operations differ by Outlook edition and currently have version/installation prerequisites. This is an opportunity for a dependable local archive bridge, not evidence that no competing product exists. Do not claim every current Outlook edition can import every output. [R1–R3]
+
+### 13.2 The five end-to-end customer outcomes
+
+| Job | Expanded completion contract | Existing requirement mapping |
+|---|---|---|
+| Open archives | Import the required mail families without requiring Outlook or Office to be installed for ordinary unprotected files. Read messages while work continues; checkpoint bounded work; expose damaged, missing, protected and non-mail records. Leave source files unchanged. | OPEN-01–06; LIFE-01/03/04 |
+| Preserve folders and relationships | Keep every actual source folder, original name, empty folders and message membership. Preserve categories/labels/flags separately. Distinguish virtual/search-folder views from physical copies. Retain the parent chain through embedded mail, winmail.dat, compressed members and embedded Office objects. | FOLD-01–05; LIFE-01–03 |
+| Find messages and attachments | Search all required document families and their declared sections through the same simple/advanced query model. Show active filters, real snippets, exact file/section location and coverage. Open the actual matching child document, including a file inside a ZIP. Offer retry/unlock actions. | FIND-01–07 |
+| Identify duplicates safely | Scan the whole selection and retain the four existing classes. Distinguish original byte identity, explicitly defined normalised content equality, candidate identity and near similarity. Across PST/OLM/EML, compare full declared content and attachments with format-aware rules; never equate converted messages using subject, Message-ID or extracted text alone. Preserve all source memberships, metadata, holds and undo. | DUP-01–05; FOLD-03; LIFE-03 |
+| Export and verify | Produce the complete frozen selection as usable EML/MBOX/PST/MSG as appropriate, with original attachments, folder mapping and a durable inventory. Reconcile content with the imported source and independently test destinations. Preserve nonrepresentable information in the full preservation package and disclose conversion losses. | OUT-01–07; FOLD-05; LIFE-01/02/06 |
+
+An exact byte comparison of two encrypted attachments can establish that those encrypted bytes are identical. It cannot establish equality of different encrypted containers' hidden content. Similarly, two Word files with identical extracted text but different revisions, images, macros or metadata are not byte-identical. Keep storage consolidation separate from message removal.
+
+### 13.3 Extraction depth, location and coverage contract
+
+Create one machine-readable capability registry used by import dispatch, extraction, Help, the public format matrix and tests. Each entry names the actual format signature/version, encryption/container variants, engine version, applicable platforms, extracted sections, navigable locations, known exclusions and fixture results. Read actual content signatures; treat extension/MIME mismatches as evidence to inspect, not a reason to route blindly.
+
+Each document record carries: stable source/message/attachment identity; parent document; full container/member path; immutable original hash; detected format/version; extractor version; protection status; extraction sections and coverage; content chunks with actual location spans; and errors/retry checkpoints. Keep imported original data, decoded text, OCR text and rendered previews distinct.
+
+Implementation requirements:
+
+1. **Word depth:** index ordinary text, tables, headers/footers, notes, text boxes and comments. Represent insertions/deletions/revisions explicitly. A comment-only match must say "Comment"; historical deleted text must not appear as a current quotation. Index embedded supported files as children.
+2. **Excel depth:** enumerate all sheets and stored cells, including hidden sheets/rows/columns, with sheet names and cell addresses. Keep formatted/cached values, raw values and formulas as distinguishable fields where available. Do not recalculate or fetch data. A formula with no stored result has no verified result to search. Test both date systems, number formatting and text encodings without silently changing original values.
+3. **PowerPoint depth:** include slides, tables/text boxes, notes, hidden slides, comments and available chart text, each labelled. Do not lose notes merely because a preview image does not show them.
+4. **Other business documents:** define equivalent page/shape/task/table/row locations. Search stored textual values; preserve unsupported objects. A registry entry must say exactly which sections remain unprocessed.
+5. **Nested content:** represent a chain such as "message → winmail.dat → forwarded.msg → documents.zip → budget.xls → Forecast!D27". Different files with the same name remain distinct. Keep the outer archive, enclosed file and all parent references.
+6. **Full indexing:** feed the existing complete chunk index incrementally. Avoid flattening a whole archive or document into one giant string/array. Preserve cross-chunk phrase matching within a logical document without joining different cells/sections/files into false phrases.
+7. **One search meaning:** the ordinary box, advanced builder, saved query and export selection share the validated query model. Type, filename and content conditions scoped to one attachment must refer to the same actual descendant, not different files in the same ZIP.
+8. **Honest negatives:** unfinished or locked children may change the answer to a negative query. Propagate unknown through the existing three-valued rules. If the number of children cannot yet be known, show an unknown extent instead of a fabricated "N".
+9. **Navigation:** selecting evidence opens the exact matching attachment/member and its supported location. Where native layout rendering is unavailable, provide a readable extracted-content view with an accurate section anchor and an Open Original action. This fulfils retrieval without requiring Office for text navigation; do not invent a page/cell coordinate.
+10. **Coverage UX:** distinguish original preserved, extracted, indexed, no text found, partly processed, locked, rights required, remote-only, missing member, unsupported version, failed, paused and stale. Offer applicable Unlock, Retry, Resume, Locate missing part or Attach downloaded original actions. Report affected items rather than a reassuring global green badge.
+11. **Migration:** on extractor upgrades, keep original hashes and identities, rebuild affected derived documents and invalidate stale hits atomically. A newly failed parser must not silently delete previously indexed evidence or mark the remaining index complete.
+12. **Protected derived content:** session decryption and persistent indexing are different choices. Protect temporary plaintext, keys and credentials; make retention of decrypted search content explicit and permitted. A rights-managed record must not leave a permanent searchable plaintext copy that ignores expiry/revocation/export rights.
+
+### 13.4 Passwords, signatures and unavailable content
+
+| Condition | Required behavior |
+|---|---|
+| Ordinary password-protected PDF/Office/archive | Ask for the supplied password, verify it, process the supported scheme, clear in-memory credentials and continue affected work without reimporting the whole mailbox. Wrong password, unknown password and unsupported encryption are different states. Test each advertised encryption family; do not call every protected file supported because one AES example worked. |
+| Office editing/worksheet protection | Detect separately from encryption. Read permitted stored content without treating edit restrictions as proof that the document cannot be searched; never execute or modify it. |
+| S/MIME and OpenPGP encrypted messages/attachments | Detect the envelope and provide a tested unlock path using the user's eligible certificate/private key or key material for explicitly supported schemes. Missing keys remain visible. Preserve the encrypted original; derived plaintext and exported copies must be labelled and protected. |
+| Signed mail or signed Office/PDF | Preserve the signed original. If verification is offered, distinguish checked integrity, certificate/trust status, unknown/offline revocation and unverified signatures. A conversion's digest does not preserve the original signature's validity. |
+| Microsoft Purview/IRM-protected items | Detect and retain the item, explain required identity/rights, and support an authorized access route. A native MIP adapter is a separate, rights-aware integration; it may need authentication/network access. Never silently substitute tenant-wide privileges, bypass restrictions or claim that a document password unlocks enterprise rights. If access is provided through the authorized originating app, let the user bring back a permitted readable copy with provenance; label the original's search coverage honestly. |
+| OneDrive/SharePoint or other remote attachment reference | Preserve the URL/reference and available metadata, explicitly say "content not stored in this archive", and offer user-directed retrieval or association of an authorized downloaded copy. No background crawling, fabricated text or assumption that a link points forever to the original version. |
+| OST cache omits content, missing archive volume or corrupt source | Explain what is actually present, preserve readable records, and offer re-export/download/locate/retry as applicable. Recovery/salvage output remains separate from a fully reconciled import. |
+
+Password handling has practical implementation paths: POI documents standard/agile OOXML decryption and format-specific older Office schemes. Its matrix also has gaps, so the chosen adapter must be tested rather than treated as a universal decryptor. Microsoft's MIP documentation describes authorization and rights checks for protected content. [R8–R10] S/MIME is a distinct secure MIME protocol, not ordinary Office password protection. [R11]
+
+These are external conditions that a completed workflow must handle transparently. No local tool can manufacture absent server data, a missing decryption key or authorization that the customer does not have. The target is comprehensive handling and successful processing of accessible supported content, not an impossible promise about inaccessible information.
+
+### 13.5 Build on existing engines, with explicit adapter decisions
+
+Preserve ArchiveCore, source/occurrence identity, the chunk index, advanced builder, duplicate classes, export receipts and backup work already reported. Add adapters and acceptance evidence; do not rewrite those components merely to introduce a format library.
+
+| Layer | Recommended implementation investigation | Constraint to prove before choosing |
+|---|---|---|
+| PST/OST/MSG | First test the existing native readers/writers against Microsoft specifications and real fixtures. Use an independent implementation as a comparison oracle; evaluate a maintained library/SDK only for demonstrated gaps. | Correct MAPI properties, compressed RTF, nested attachments, bounded traversal and real destination readability. A PST reader does not supply a PST writer. |
+| OLM | Add a dedicated semantic reader. Benchmark native implementation versus a suitable SDK using actual Mac exports; Aspose.Email documents an OLM reader with folder/message traversal and OLM-to-PST conversion. | Actual supported versions, full member/folder/property fidelity, memory, cancellation, runtime footprint, platform support and distribution rights. Vendor documentation establishes an option, not mailin compatibility. [R12] |
+| Office extraction | Use Apache Tika/POI as a concrete benchmark candidate for old/new Office and structured text extraction; keep or extend native parsers where they meet the same contract. Compare results against known content from originating apps. | Tika/POI is Java-based, so prove a bundled, signed, offline macOS helper or choose another compliant implementation. Do not require the customer to install Java or Office. Plain text output alone may lose required locations. [R5–R7] |
+| iWork/older document fallback | Evaluate a dedicated version-aware parser or controlled conversion engine. LibreOffice publishes filters for many legacy and iWork formats. | A listed filter is not proof of full extraction fidelity. Current Tika documentation explicitly says newer iWork generations yield metadata/resources/previews without full body text. Resolve that gap with a tested engine; do not mark it complete with OCR of a thumbnail. [R5, R13] |
+| Compressed containers | Prefer an embedded native library such as libarchive where its tested methods meet the matrix; add another licensed adapter for actual method gaps. | Verify encryption, ZIP64, solid/split and RAR variants individually. Libarchive's own documentation says library support does not guarantee that an application enabled it. [R14] |
+| Other Office business families | Evaluate targeted extractors for OneNote/Publisher/Visio, MPXJ for declared Project variants and Jackcess for declared Access variants. | Only claim tested stored text/properties. Parser-specific omissions, linked content, encryption and platform/runtime requirements remain acceptance work. [R6, R16–R18] |
+| PDF/OCR | Reuse the existing PDF and OCR path, extending coverage and location mapping where fixtures find gaps. | Test supported languages and mixed/scanned pages; extraction completeness is distinct from OCR recognition accuracy. |
+| Protected enterprise documents | Evaluate Microsoft's rights-aware MIP APIs for the separately consented access workflow. | Supported platform/build, user authentication, tenant policies, relevant read/extract/export rights, expiry behavior, and truthful network/privacy disclosure. No universal offline rights-management promise. [R9–R10] |
+
+Make the parser choice with a short comparative fixture run, not by counting extensions on a sales page. POI's XLSB extractor, for example, documents text extraction but says its formula-text option is unsupported; that is a concrete section-level gap to close or label, not a reason to call the whole workbook "fully searchable". [R7]
+
+Run untrusted parsers in a restricted worker with bounded memory, cancellable work, private temporary storage and restart after failure. On macOS, assess an XPC service with appropriately narrow capabilities. Do not grant the parsing worker network or broad filesystem access just for convenience. POI itself recommends isolation for resource failures, and Apple documents separation into helpers/XPC for limiting capabilities. [R15, R19]
+
+For nested archives, reject traversal/absolute output paths, unsafe links and malformed lengths; track expansion, disk and time budgets. Legitimate large work can pause and resume with a visible reason or an explicit resource decision. Do not remove protection against decompression bombs to satisfy "no artificial limits"; do not count paused work as finished.
+
+The Mac engine does not automatically establish iPhone/iPad parity. Keep a per-platform capability matrix and upgrade regression for existing purchases/data. Before advertising the same new extraction support on mobile, execute it there; a Java desktop helper cannot simply be assumed available in an iOS app.
+
+### 13.6 Distribution and maintenance requirements
+
+This is a dependency/distribution review, not permission to buy a licence or publish a release.
+
+- Record pinned versions, dependency inventory, licence texts/notices, redistribution obligations and update ownership for every bundled parser, runtime and cryptography component. Apache projects normally use Apache-2.0, but bundled dependencies need their own review. [R20]
+- libpff's project describes itself as alpha and LGPL-3.0-or-later. That makes it a candidate to evaluate, not a drop-in proof of commercial readiness or a licence-free SDK. Review exact linkage/distribution terms before bundling. [R21]
+- A commercial SDK needs a licence covering distribution inside this customer-facing app and the chosen platforms. Aspose distinguishes developer/site/OEM/SDK/metered categories; obtain the applicable terms rather than assuming a developer evaluation licence is sufficient. A no-cloud offline promise must also fit any licence validation/metering behavior. [R22]
+- Validate bundled helper/runtime signing, sandbox access, architectures and startup on a clean Mac with no Office/Outlook/Java installed. Include all necessary code through the permitted distribution route; do not silently download executable parser code after installation.
+- Test local-only operation and disable automatic remote parsers, external-entity fetching, remote images, macro execution and document data refresh. Rights-authorized retrieval/authentication is a separate, clearly described user action.
+- Use Microsoft format/product names factually to describe tested compatibility. Keep mailin's branding distinct and avoid implying Microsoft endorsement. Update supported formats, privacy/help, review notes and actual screenshots together.
+- Maintain a fixture regression set when Microsoft/Apple formats or parser dependencies change. "Final five-job release" means the defined workflows are complete; maintained compatibility continues after release.
+
+### 13.7 Required additional acceptance cases
+
+These are test/evidence cases mapped to existing IDs, not 20 new product pillars. Each needs a real-origin fixture where available, independently authored expected content, a recorded candidate build and an actual result. Public fixtures need appropriate usage permission; no private customer mail is necessary.
+
+| Case | Scenario and pass condition | Requirement mapping |
+|---|---|---|
+| COMP-01 | ANSI and Unicode PST with Unicode/empty/deep folders, diverse bodies, real attachments and non-mail items: complete record accounting, original bytes and declared property mapping. | OPEN/FOLD; LIFE-01 |
+| COMP-02 | Real OST with full messages plus cache-only headers/missing bodies: distinguish both, import accessible content, never promise missing server history. | OPEN-01/05/06; FIND-03 |
+| COMP-03 | Real OLM with nested folders, repeated names, categories, dates and embedded documents: all declared mail content accessible; non-mail inventory disclosed. | OPEN/FOLD/FIND |
+| COMP-04 | ANSI/Unicode MSG, tested OFT, compressed RTF, CID inline content, winmail.dat and embedded MSG: correct recipients/body and entire child tree with original hashes. | OPEN; FIND-01/03/05 |
+| COMP-05 | Actual DOC/XLS/PPT and their declared older generations: known body/table/sheet/slide/annotation terms are found, without Office installed. | FIND-01/07 |
+| COMP-06 | Modern macro/template/show variants plus XLSB and claimed Strict/Transitional XML: correct detection and extraction; active content never runs. | FIND-01/06; LIFE-04 |
+| COMP-07 | Excel term only in a hidden sheet, cell comment, late cell, or stored formula result: exact location and text class; no false result when a cache is missing. | FIND-01/03/05/07 |
+| COMP-08 | Word term only in header, text box, footnote, comment or deleted revision: correct section and revision label; original remains unchanged. | FIND-01/05 |
+| COMP-09 | PowerPoint term only in speaker notes, hidden slide, table or chart label: correct match evidence and navigation. | FIND-01/05 |
+| COMP-10 | Declared OneNote/Visio/Project/Publisher/Access variants: known local text is found with appropriate context; linked/not-stored content is distinct. | FIND-01/03/05 |
+| COMP-11 | Real OpenDocument and both legacy/newer iWork generations: known body/table/slide text found; metadata/thumbnail-only output fails the body-text requirement. | FIND-01/03/07 |
+| COMP-12 | Nested ZIP/7z/RAR/TAR/GZip with same-named files, mixed formats, encrypted members and missing split volumes: complete tree, truthful unresolved scope and no path escape. | OPEN; FIND-01/03/06 |
+| COMP-13 | Password-protected Office/PDF/container: wrong-password, correct-password, cancel/retry, restart and any chosen retention policy work as specified. | FIND-01/03/06; LIFE-04 |
+| COMP-14 | S/MIME/OpenPGP, signed files, IRM and cloud references: available credentials/rights take the tested authorized path; absent rights/content never becomes a false no-match or complete export. | FIND-03; OUT; LIFE-04 |
+| COMP-15 | Same mail represented in PST/OLM/EML plus changed attachment/revision cases: safe classes, no false exact identity, all memberships/notes/holds retained, undo works. | DUP-01–05; FOLD-03 |
+| COMP-16 | EML/MBOX/PST/MSG output consumed by appropriate independent readers: folder/selection/content/attachment reconciliation plus durable hash inventory. | OUT-01–07 |
+| COMP-17 | Equivalent ordinary/advanced queries, negative queries during partial indexing and same-child conditions inside a ZIP: identical semantics and honest unknown results. | FIND-03/04/05/07 |
+| COMP-18 | Import → detach original test source → restart → find nested Office document → backup → clean-profile restore → export: originals and relationships survive. | LIFE-01/02/03; all five |
+| COMP-19 | Malformed document, decompression bomb, worker crash, disk exhaustion and external-process interruption: contain failure, retain checkpoints, reconcile partial work and resume. | OPEN-03/05; FIND-06; OUT-06; LIFE-04 |
+| COMP-20 | Clean machine, entitlement changes and human five-job pilot: ordinary supported work needs no Office installation; existing-data access follows LIFE-06; users notice partial results. | LIFE-05/06; release gates |
+
+Put a unique target word in each required section and known non-target words in nearby sections/files to catch both omissions and false matches. Include English, Hindi/Bengali and the other advertised scripts/encodings in fixtures. For duplicates, use intentional same-body/different-attachment and same-text/different-document cases. For conversions, validate attachment hashes plus semantic fields against an independent source inventory rather than assuming entire converted-message bytes stay identical.
+
+Destination testing must name actual client/OS versions and import steps. Use Windows Outlook for promised PST/MSG behavior and applicable Mac Outlook versions for their documented route. Apple Mail and Thunderbird remain part of the EML/MBOX portability checks. The writer and reader must not share the only implementation used to declare a pass.
+
+Real-origin Office/Outlook fidelity fixtures can be much smaller than 100 MB. Run them within the available Mac resources; the scale evidence stays exactly what was measured. Repeat broader scale testing only when justified/resources permit, without implying it already passed.
+
+### 13.8 Implementation order and final completion rule
+
+1. **Reconcile the actual candidate.** Preserve uncommitted work and local commits. Compare every section 4 family with implemented adapters and tests; replace blanket "Office supported" and "all rows verified" labels with precise evidence. Retain valid Stage A–E results.
+2. **Lock down the shared document/coverage model.** Add stable nested identities, section locations, capability registry and recovery states. Finish ordinary/advanced query parity and exact attachment navigation.
+3. **Complete Microsoft mail intake.** Validate/fix PST/OST/MSG and add OLM/OFT/TNEF/embedded-message gaps. Keep source metadata and folder semantics through the same model.
+4. **Complete document extraction.** Legacy/modern Word/Excel/PowerPoint variants and depths first, then the remaining named Office/OpenDocument/iWork rows. This is sequencing within the expanded goal, not a promise to leave required rows unsupported at release.
+5. **Complete recursive and protected workflows.** Shared container traversal, user-password processing, supported key-based decryption and explicit rights/remote-content paths; then exercise combined queries.
+6. **Reconcile duplicates and outputs.** Validate full fingerprints across representations and independently read every promised mail output, including the reported PST writer. Keep originals and conversion sidecars.
+7. **Close release evidence and presentation.** Run the added compatibility cases plus affected original tests, the LIFE-06 matrix, recovery rehearsal and real-user pilot. Record unexecuted scale tiers honestly and ship only the claims supported by the candidate.
+
+For each required, accessible test fixture, completion means zero unexplained missing records/folders/attachment bytes/search sections and no false exact-duplicate classifications. Every selected export item is accounted for and the declared portable format is independently readable. Unsupported processing of an ordinary required fixture is a gap to fix; displaying "unsupported" alone does not close it.
+
+Conditional cases such as wrong credentials, absent server content, revoked rights and damaged files pass by truthful handling, preservation and recovery actions—not by pretending the unavailable content was extracted. Keep these distinct from parser omissions on healthy accessible files.
+
+The main positioning remains **mailin: Email Archive Manager**. Lead with opening Outlook and other archives on Mac, preserving folders, finding Office attachments, reviewing copies safely and exporting with verification. Demonstrate those five jobs in the first screenshots. AI/Professional tools remain optional and secondary; do not remove existing rights or protections.
+
+A suitable claim after the relevant checks pass is: "Open Outlook and other supported email archives on your Mac. Keep their folders, search supported Office documents and attachments, review duplicates safely, and export with verification." "No Outlook or Office installation required" is an additional claim only after the clean-machine test passes. Link the exact compatibility matrix nearby. This document is the research/implementation contract; it does not certify that those additions are already built.
+
+### 13.9 Primary research references
+
+Checked 6 November 2026. Documentation establishes available specifications, implementation options and product-version conditions; mailin's acceptance evidence must be produced separately.
+
+- **R1. Microsoft — Outlook for Mac import, PST and OLM:** https://support.microsoft.com/en-us/outlook/import-email-messages-contacts-and-other-items-into-outlook-for-mac
+- **R2. Microsoft — open/find PST, edition-specific requirements:** https://support.microsoft.com/en-us/outlook/open-and-find-items-in-an-outlook-data-file-pst
+- **R3. Microsoft — OST contains only synchronized subset:** https://learn.microsoft.com/en-us/troubleshoot/outlook/user-interface/only-subset-items-synchronized
+- **R4. Microsoft format specifications — PST, MSG and TNEF:** https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/141923d5-15ab-4ef1-a524-6dce75aae546 ; https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxmsg/b046868c-9fbf-41ae-9ffb-8de2bd4eec82 ; https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxtnef/1f0544d7-30b7-4194-b58f-adc82f3763bb
+- **R5. Apache Tika — documented extraction families and iWork generation distinction:** https://tika.apache.org/docs/4.2.x/formats.html
+- **R6. Apache POI — component capabilities and text extraction:** https://poi.apache.org/components/index.html ; https://poi.apache.org/text-extraction.html
+- **R7. Apache POI — XLSB extractor and formula-text limitation:** https://poi.apache.org/apidocs/6.0/org/apache/poi/xssf/extractor/XSSFBEventBasedExcelExtractor.html
+- **R8. Apache POI — encryption support matrix:** https://poi.apache.org/encryption.html
+- **R9. Microsoft — Office cryptography structures and MIP SDK:** https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-offcrypto/4c132f1a-f4a0-42cc-9046-15af9afa9b9e ; https://learn.microsoft.com/en-us/information-protection/develop/overview
+- **R10. Microsoft — rights checks/decryption and API permissions:** https://learn.microsoft.com/en-us/information-protection/develop/concept-republishing ; https://learn.microsoft.com/en-us/information-protection/develop/concept-api-permissions
+- **R11. IETF — S/MIME 4.0 and OpenPGP/MIME:** https://www.rfc-editor.org/rfc/rfc8551.html ; https://www.rfc-editor.org/rfc/rfc3156.html ; https://www.rfc-editor.org/rfc/rfc9580.html
+- **R12. Aspose — OLM traversal and conversion API:** https://docs.aspose.com/email/java/read-outlook-for-mac-olm-file-and-get-folders-and-subfolders-information/
+- **R13. LibreOffice — conversion filter names and format families:** https://help.libreoffice.org/latest/en-US/text/shared/guide/convertfilters.html
+- **R14. libarchive — architecture, licensing and actual format/method support:** https://www.libarchive.org/ ; https://github.com/libarchive/libarchive/wiki/LibarchiveFormats
+- **R15. Apache POI — security, memory/temp handling and process isolation:** https://poi.apache.org/security.html
+- **R16. Apache POI — Visio binary/XML extraction:** https://poi.apache.org/components/diagram/index.html
+- **R17. MPXJ — Project file and field coverage:** https://www.mpxj.org/supported-formats/ ; https://www.mpxj.org/field-guide/
+- **R18. Jackcess — Access database reader:** https://jackcess.sourceforge.io/
+- **R19. Apple — sandbox violations and separating helper capabilities:** https://developer.apple.com/documentation/security/discovering-and-diagnosing-app-sandbox-violations
+- **R20. Apache Software Foundation — licence/redistribution terms:** https://www.apache.org/licenses/LICENSE-2.0
+- **R21. libpff — project status, formats and licence:** https://github.com/libyal/libpff
+- **R22. Aspose — commercial licence categories:** https://purchase.aspose.com/policies/license-types/

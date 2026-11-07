@@ -28,6 +28,9 @@ struct MatchEvidence: Sendable, Equatable {
         case attachmentText(ordinal: Int, filename: String, ocr: Bool, context: String?)
         /// TYPE-05: words recognised in an audio or video attachment.
         case speech(ordinal: Int, filename: String, context: String?)
+        /// §13.3 (5): the text of one file INSIDE attachment `ordinal`, by its
+        /// container path ("inner.zip › minutes.docx").
+        case childText(ordinal: Int, childIndex: Int, path: String, context: String?)
         /// A condition on metadata (dates, attachments yes/no, tags, folders…) that the row passed.
         case metadata
         /// A text condition whose evidence could not be found in the index.
@@ -128,15 +131,22 @@ extension SQLiteEmailStore {
         }
         let words = SearchTextTokens.words(in: content)
         let literal = (g.contentMatch == .contains || g.contentMatch == .phrase) ? SearchTextTokens.collapsed(content) : nil
-        var hits = try textHits(emailID: emailID, kinds: SearchDocKind.attachmentContent, words: words, literal: literal,
+        let kinds = SearchDocKind.attachmentContent + [.childText]
+        var hits = try textHits(emailID: emailID, kinds: kinds, words: words, literal: literal,
                                 prefix: g.contentMatch == .contains, anyWord: g.contentMatch == .anyWords, limit: 3)
         if hits.isEmpty, let first = words.first, words.count > 1 || literal != nil {
-            hits = try textHits(emailID: emailID, kinds: SearchDocKind.attachmentContent, words: [first], literal: nil,
+            hits = try textHits(emailID: emailID, kinds: kinds, words: [first], literal: nil,
                                 prefix: g.contentMatch == .contains, limit: 3)
         }
-        // Only files that also satisfy the group's name/type belong to this evidence.
+        // Only files that also satisfy the group's name/type belong to this evidence —
+        // a top-level attachment, or (§13.3) one file inside an attachment.
         let qualifying = hits.filter { hit in
-            guard case .attachmentText(_, let filename, _, _) = hit.location else { return false }
+            let filename: String
+            switch hit.location {
+            case .attachmentText(_, let name, _, _): filename = name
+            case .childText(_, _, let path, _): filename = (path.components(separatedBy: " › ").last ?? path)
+            default: return false
+            }
             if let name = g.nameContains?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
                !filename.lowercased().contains(name.lowercased()) { return false }
             return true
@@ -176,6 +186,7 @@ extension SQLiteEmailStore {
         var hits: [Hit] = []
         var seenDocs = Set<String>()
         let filenames = (try? attachmentMetadata(forEmailID: emailID))?.map(\.filename) ?? []
+        let children = Dictionary(((try? attachmentChildren(forEmailID: emailID)) ?? []).map { ($0.ordinal, $0) }, uniquingKeysWith: { a, _ in a })
         while try stepRow(stmt, db), hits.count < limit {
             guard let kind = SearchDocKind(rawValue: columnText(stmt, 0)) else { continue }
             let ordinal = Int(sqlite3_column_int64(stmt, 1))
@@ -198,6 +209,12 @@ extension SQLiteEmailStore {
                 let filename = filenames.indices.contains(ordinal) ? filenames[ordinal] : ""
                 location = .speech(ordinal: ordinal, filename: filename,
                                    context: Self.nearestLabel(in: text, before: excerpt.marks.first?.lowerBound))
+            case .childText:
+                let row = children[ordinal]
+                location = .childText(ordinal: row?.position ?? ordinal / SearchDocKind.childOrdinalBase,
+                                      childIndex: row?.childIndex ?? ordinal % SearchDocKind.childOrdinalBase,
+                                      path: row?.path ?? "",
+                                      context: Self.nearestLabel(in: text, before: excerpt.marks.first?.lowerBound))
             }
             hits.append(Hit(location: location, excerpt: excerpt))
         }

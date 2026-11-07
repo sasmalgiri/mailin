@@ -999,7 +999,31 @@ enum LegacyOfficeTextExtractor {
 struct ArchiveChildReading: Sendable {
     var text: String?
     var notRead: String?
-    init(text: String?, notRead: String?) { self.text = text; self.notRead = notRead }
+    /// Children of the child (a message's attachments), already read.
+    var children: [ChildDocument] = []
+    init(text: String?, notRead: String?, children: [ChildDocument] = []) { self.text = text; self.notRead = notRead; self.children = children }
+}
+
+/// One file inside an attachment, with its own text, identity and state —
+/// plan v4 §13.3 (5): "message → documents.zip → budget.xls" keeps each
+/// link distinct, same-named files stay apart, and no phrase bridges files.
+struct ChildDocument: Sendable, Equatable {
+    enum State: String, Sendable {
+        case extracted, noText, partial, unsupported, locked, failed
+        var isSearchable: Bool { self == .extracted || self == .partial }
+    }
+    /// Container chain inside the attachment, "inner.zip › dir/minutes.docx".
+    var path: String
+    var filename: String
+    /// Detected kind (DocumentKind raw value, or the lower-cased extension).
+    var kind: String
+    var sha256: String
+    var bytes: Int
+    var text: String?
+    var state: State
+    var note: String?
+    /// Sections read inside the child ("Sheet: Q3", "Slide 2"), for evidence.
+    var components: [String] = []
 }
 
 /// Audit 2026-11-06 A04. Every child of an archive attachment is accounted
@@ -1071,102 +1095,175 @@ enum ContainerTextExtractor {
         }
     }
 
+    /// Plan v4 §13.3 (5): every member becomes a `ChildDocument` with its own
+    /// text, hash and state — nothing is joined into the parent's text. The
+    /// parent's own text is the listing of its members. Nested containers
+    /// contribute their members with the chain in `path`; a member nothing
+    /// can read is a child in a named state, never dropped.
     private static func extract(fileURL: URL, kind: DocumentKind, logicalName: String, depth: Int, prefix: String, budget: inout Int64) throws -> OfficeTextExtractor.Result {
-        let children = try children(of: fileURL, kind: kind, logicalName: logicalName, budget: budget)
+        let members = try children(of: fileURL, kind: kind, logicalName: logicalName, budget: budget)
         let scratch = try DocumentTextExtractor.scratchDirectory("archive")
         defer { try? FileManager.default.removeItem(at: scratch) }
-        let tag = kind.rawValue.uppercased()
-        var text = ""
-        var components: [String] = []
+        var listing: [String] = []
+        var documents: [ChildDocument] = []
         var skipped: [String] = []
         var notText: [String] = []
         var unextractable = 0
-        func add(_ label: String, _ body: String) {
-            components.append(label)
-            text += "[\(label)]\n" + body + "\n"
+        func record(_ name: String, _ member: Child, _ state: ChildDocument.State, text: String? = nil, note: String? = nil,
+                    components: [String] = [], sha256: String = "", bytes: Int = 0, detected: String? = nil) {
+            let ext = (member.name as NSString).pathExtension.lowercased()
+            documents.append(ChildDocument(path: name, filename: (member.name as NSString).lastPathComponent, kind: detected ?? ext,
+                                           sha256: sha256, bytes: bytes, text: text, state: state, note: note, components: components))
         }
-        for child in children {
-            let name = prefix + child.name
-            let ext = (child.name as NSString).pathExtension.lowercased()
-            if child.encrypted { skipped.append("\(name) (password-protected)"); continue }
-            if let size = child.size, size > OfficeTextExtractor.maxPartBytes {
-                skipped.append("\(name) (\(size) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard)"); continue
+        for member in members {
+            let name = prefix + member.name
+            let ext = (member.name as NSString).pathExtension.lowercased()
+            listing.append(name)
+            if member.encrypted {
+                skipped.append("\(name) (password-protected)"); record(name, member, .locked, note: "password-protected"); continue
             }
-            if let size = child.size, size > budget {
-                skipped.append("\(name) (the \(maxTotalBytes)-byte budget for one attachment's archives is used up)"); continue
+            if let size = member.size, size > OfficeTextExtractor.maxPartBytes {
+                let why = "\(size) bytes, over the \(OfficeTextExtractor.maxPartBytes)-byte guard"
+                skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, bytes: Int(size)); continue
+            }
+            if let size = member.size, size > budget {
+                let why = "the \(maxTotalBytes)-byte budget for one attachment's archives is used up"
+                skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, bytes: Int(size)); continue
             }
             let destination = scratch.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : "." + ext))
-            do { try child.extract(destination) } catch ZIPArchiveReader.ReadError.budgetExceeded(_, let limit) {
+            do { try member.extract(destination) } catch ZIPArchiveReader.ReadError.budgetExceeded(_, let limit) {
                 // R05: stopped inside decompression at the budget — stated, not failed.
-                skipped.append("\(name) (decompression stopped at the \(limit)-byte budget)"); continue
+                let why = "decompression stopped at the \(limit)-byte budget"
+                skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why); continue
             } catch {
                 unextractable += 1
-                skipped.append("\(name) (\(error))"); continue
+                skipped.append("\(name) (\(error))"); record(name, member, .failed, note: "\(error)"); continue
             }
             defer { try? FileManager.default.removeItem(at: destination) }
             let written = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
             budget -= written
             if budget < 0 {
-                skipped.append("\(name) (the \(maxTotalBytes)-byte budget for one attachment's archives is used up)"); continue
+                let why = "the \(maxTotalBytes)-byte budget for one attachment's archives is used up"
+                skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, bytes: Int(written)); continue
             }
+            let sha = (try? ExportInventory.sha256(of: destination)) ?? ""
+            let size = Int(written)
             // R03: the logical name decides; when it says nothing, the bytes do.
-            if let innerKind = DocumentKind.detect(mimeType: "", filename: child.name) ?? DocumentTextExtractor.sniff(fileURL: destination) {
+            if let innerKind = DocumentKind.detect(mimeType: "", filename: member.name) ?? DocumentTextExtractor.sniff(fileURL: destination) {
                 if innerKind.isContainer {
                     guard depth < maxDepth else {
-                        skipped.append("\(name) (an archive nested deeper than \(maxDepth) levels)"); continue
+                        let why = "an archive nested deeper than \(maxDepth) levels"
+                        skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, sha256: sha, bytes: size, detected: innerKind.rawValue); continue
                     }
                     do {
-                        let inner = try extract(fileURL: destination, kind: innerKind, logicalName: child.name, depth: depth + 1, prefix: name + " › ", budget: &budget)
-                        components.append(contentsOf: inner.components)
-                        text += inner.text
+                        let inner = try extract(fileURL: destination, kind: innerKind, logicalName: member.name, depth: depth + 1, prefix: name + " › ", budget: &budget)
+                        documents.append(contentsOf: inner.children)
                         skipped.append(contentsOf: inner.skipped)
                         notText.append(contentsOf: inner.notText)
                     } catch OfficeTextExtractor.ExtractError.noTextParts {
-                        notText.append(name)
+                        notText.append(name); record(name, member, .noText, sha256: sha, bytes: size, detected: innerKind.rawValue)
                     } catch OfficeTextExtractor.ExtractError.encrypted {
-                        skipped.append("\(name) (password-protected)")
+                        skipped.append("\(name) (password-protected)"); record(name, member, .locked, note: "password-protected", sha256: sha, bytes: size, detected: innerKind.rawValue)
                     } catch {
-                        skipped.append("\(name) (\(error))")
+                        skipped.append("\(name) (\(error))"); record(name, member, .failed, note: "\(error)", sha256: sha, bytes: size, detected: innerKind.rawValue)
                     }
                     continue
                 }
                 do {
-                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: child.name)
-                    add("\(tag): \(name)", inner.text)
+                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: member.name)
                     skipped.append(contentsOf: inner.skipped.map { "\(name): \($0)" })
+                    record(name, member, inner.partial ? .partial : .extracted, text: inner.text,
+                           note: inner.skipped.isEmpty ? nil : "not read: " + inner.skipped.joined(separator: "; "),
+                           components: inner.components, sha256: sha, bytes: size, detected: innerKind.rawValue)
+                    documents.append(contentsOf: inner.children.map { child in
+                        var nested = child; nested.path = name + " › " + child.path; return nested
+                    })
                 } catch OfficeTextExtractor.ExtractError.encrypted {
-                    skipped.append("\(name) (password-protected)")
+                    skipped.append("\(name) (password-protected)"); record(name, member, .locked, note: "password-protected", sha256: sha, bytes: size, detected: innerKind.rawValue)
                 } catch OfficeTextExtractor.ExtractError.noTextParts {
-                    notText.append(name)
+                    notText.append(name); record(name, member, .noText, sha256: sha, bytes: size, detected: innerKind.rawValue)
                 } catch {
-                    skipped.append("\(name) (\(error))")
+                    skipped.append("\(name) (\(error))"); record(name, member, .failed, note: "\(error)", sha256: sha, bytes: size, detected: innerKind.rawValue)
                 }
             } else if textualExtensions.contains(ext) {
                 let data = (try? Data(contentsOf: destination)) ?? Data()
                 var body = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
                 if ext == "html" || ext == "htm" { body = body.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) }
-                if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { notText.append(name) } else { add("\(tag): \(name)", body) }
-            } else if let reader = childReader {
-                let reading = reader(destination, child.name)
-                if let body = reading.text, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    add("\(tag): \(name)", body)
-                    if let why = reading.notRead { skipped.append("\(name): \(why)") }
-                } else if let why = reading.notRead {
-                    skipped.append("\(name) (\(why))")
+                if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    notText.append(name); record(name, member, .noText, sha256: sha, bytes: size)
                 } else {
-                    notText.append(name)
+                    record(name, member, .extracted, text: body, sha256: sha, bytes: size)
                 }
+            } else if let reader = childReader {
+                let reading = reader(destination, member.name)
+                if let body = reading.text, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if let why = reading.notRead { skipped.append("\(name): \(why)") }
+                    record(name, member, reading.notRead == nil ? .extracted : .partial, text: body, note: reading.notRead, sha256: sha, bytes: size)
+                } else if let why = reading.notRead {
+                    skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, sha256: sha, bytes: size)
+                } else {
+                    notText.append(name); record(name, member, .noText, sha256: sha, bytes: size)
+                }
+                // A message's own attachments are children too, under the message's name.
+                documents.append(contentsOf: reading.children.map { child in
+                    var nested = child; nested.path = name + " › " + child.path; return nested
+                })
             } else {
-                skipped.append("\(name) (not read inside archives: .\(ext.isEmpty ? "?" : ext))")
+                let why = "not read inside archives: .\(ext.isEmpty ? "?" : ext)"
+                skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, sha256: sha, bytes: size)
             }
         }
-        // Not one child could even be extracted: the file is not the archive
+        // Not one member could even be extracted: the file is not the archive
         // its name claims (a bogus .gz, a truncated .zip) — a failure, not "partly read".
-        if components.isEmpty, !children.isEmpty, unextractable == children.count {
+        if !members.isEmpty, unextractable == members.count {
             throw OfficeTextExtractor.ExtractError.notAPackage(skipped.joined(separator: "; "))
         }
-        if components.isEmpty && skipped.isEmpty { throw OfficeTextExtractor.ExtractError.noTextParts }
-        return OfficeTextExtractor.Result(text: text, components: components, skipped: skipped, notText: notText.sorted())
+        if members.isEmpty { throw OfficeTextExtractor.ExtractError.noTextParts }
+        let text = "[Contents]\n" + listing.joined(separator: "\n") + "\n"
+        return OfficeTextExtractor.Result(text: text, components: ["Contents"], skipped: skipped, notText: notText.sorted(), children: documents)
+    }
+
+    /// §13.3 (9): the bytes of one child, by its recorded path ("a.zip › b/c.docx"),
+    /// extracted level by level into `scratch`. An attached message along the
+    /// chain is opened by its MIME parts. Returns the child's file URL.
+    static func materialize(childPath: String, in fileURL: URL, kind: DocumentKind?, logicalName: String, scratch: URL) throws -> URL {
+        var segments = childPath.components(separatedBy: " › ")
+        var currentURL = fileURL
+        var currentName = logicalName
+        var currentKind: DocumentKind? = kind ?? DocumentKind.detect(mimeType: "", filename: logicalName) ?? DocumentTextExtractor.sniff(fileURL: fileURL)
+        while !segments.isEmpty {
+            let segment = segments.removeFirst()
+            let ext = (currentName as NSString).pathExtension.lowercased()
+            if ext == "eml" || currentKind == nil {
+                // A message: the child is one of its attachments.
+                let bytes = try Data(contentsOf: currentURL)
+                guard let raw = String(data: bytes, encoding: .utf8) ?? String(data: bytes, encoding: .isoLatin1) else {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) is not readable text")
+                }
+                let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+                defer { for attachment in email.attachments { if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) } } }
+                guard let attachment = email.attachments.first(where: { $0.filename == segment }),
+                      let data = AttachmentHydrator.data(for: attachment, index: email.attachments.firstIndex { $0.filename == segment } ?? 0, email: email) else {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) has no attachment named \(segment)")
+                }
+                let destination = scratch.appendingPathComponent(UUID().uuidString + "-" + (segment as NSString).lastPathComponent)
+                try data.write(to: destination)
+                currentURL = destination; currentName = segment
+            } else {
+                guard let containerKind = currentKind, containerKind.isContainer else {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) is not an archive")
+                }
+                let members = try children(of: currentURL, kind: containerKind, logicalName: currentName, budget: maxTotalBytes)
+                guard let member = members.first(where: { $0.name == segment }) else {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) has no member named \(segment)")
+                }
+                let destination = scratch.appendingPathComponent(UUID().uuidString + "-" + (segment as NSString).lastPathComponent)
+                try member.extract(destination)
+                currentURL = destination; currentName = member.name
+            }
+            currentKind = DocumentKind.detect(mimeType: "", filename: currentName) ?? DocumentTextExtractor.sniff(fileURL: currentURL)
+        }
+        return currentURL
     }
 }
 

@@ -50,6 +50,10 @@ enum OfficeTextExtractor {
         let skipped: [String]
         /// Parts that are not text and were not read (media, charts, embedded objects, macros).
         let notText: [String]
+        /// Plan v4 §13.3 (5): files INSIDE this attachment (archive members,
+        /// a message's attachments), each its own document with its own
+        /// state — never joined into this text.
+        var children: [ChildDocument] = []
         var partial: Bool { !skipped.isEmpty }
     }
 

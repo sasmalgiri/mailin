@@ -779,7 +779,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
     ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
-    static let currentSchemaVersion = 24   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks; v24: contiguous chunks (R02)
+    static let currentSchemaVersion = 25   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks; v24: contiguous chunks (R02); v25: attachment children
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1257,6 +1257,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 24;")
             }
             v = 24
+        }
+        if v == 24 {
+            // v25 (plan v4 §13.3 (5)): files inside attachments get their own
+            // identity — a table and their own search documents.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV25(handle)
+                try exec(handle, "PRAGMA user_version = 25;")
+            }
+            v = 25
         }
     }
 

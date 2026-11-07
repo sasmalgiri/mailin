@@ -22,6 +22,7 @@
 //
 
 import Foundation
+import CryptoKit
 import PDFKit
 import os.log
 
@@ -68,7 +69,7 @@ final class AttachmentTextIndexJob {
     /// 2 = per-attachment states; 3 = DOCX/XLSX/PPTX (FIND-01).
     /// 4 (2026-11-06): OpenDocument, iWork, Office 97–2003 and ZIP contents
     /// are read — rows those kinds left as unsupported are retried.
-    nonisolated static let extractorVersion = 4
+    nonisolated static let extractorVersion = 5   // v5: children of archives and messages are their own documents (§13.3)
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -91,6 +92,8 @@ final class AttachmentTextIndexJob {
         let state: AttachmentCoverageState
         let extractor: String
         let note: String?
+        /// §13.3 (5): the files inside this attachment, each its own document.
+        var children: [ChildDocument] = []
 
         /// The chunk index's document for this attachment.
         var searchDocument: AttachmentSearchDocument {
@@ -323,6 +326,27 @@ final class AttachmentTextIndexJob {
         if SearchChunkPolicy.isEnabled, let extractions {
             do {
                 try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: extractions.map(\.searchDocument))
+                // §13.3 (5): every file inside an attachment is its own document and row.
+                for extraction in extractions {
+                    let rows = extraction.children.enumerated().map { index, child in
+                        AttachmentChildRow(emailID: emailID, position: extraction.ordinal, childIndex: index, path: child.path, filename: child.filename,
+                                           kind: child.kind, sha256: child.sha256, bytes: child.bytes, state: child.state.rawValue, note: child.note)
+                    }
+                    var texts: [Int: String?] = [:], states: [Int: SearchDocState] = [:]
+                    for (index, child) in extraction.children.enumerated() {
+                        texts[index] = child.state.isSearchable ? child.text : nil
+                        switch child.state {
+                        case .extracted: states[index] = .complete
+                        case .noText: states[index] = .noText
+                        case .partial: states[index] = .partial
+                        case .unsupported: states[index] = .unsupported
+                        case .locked: states[index] = .locked
+                        case .failed: states[index] = .failed
+                        }
+                    }
+                    try await store.recordAttachmentChildren(emailID: emailID, position: extraction.ordinal, children: rows,
+                                                             texts: texts, states: states, extractorVersion: Self.extractorVersion)
+                }
             } catch {
                 Self.logger.error("attachment search documents not written for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -351,6 +375,15 @@ final class AttachmentTextIndexJob {
         var total = 0
         while !Task.isCancelled {
             let ids = try coverage.emailIDs(staleBelow: extractorVersion, limit: 500)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            try coverage.remove(emailIDs: ids)
+            total += ids.count
+        }
+        // §13.3 (5): archives and attached messages read before children had
+        // their own identity are re-read even when they were "extracted".
+        while !Task.isCancelled {
+            let ids = try coverage.emailIDs(extractors: ["zip", "archive", "eml"], below: 5, limit: 500)
             if ids.isEmpty { break }
             try await store.attachmentTextStateReset(emailIDs: ids)
             try coverage.remove(emailIDs: ids)
@@ -449,7 +482,7 @@ final class AttachmentTextIndexJob {
             }
         }
         return Extraction(ordinal: ordinal, filename: attachment.filename, mimeType: attachment.mimeType,
-                          text: text, fullText: fullText, state: state, extractor: result.extractor, note: result.note)
+                          text: text, fullText: fullText, state: state, extractor: result.extractor, note: result.note, children: result.children)
     }
 
     /// Audit 2026-11-06 A06: the coverage state an OCR outcome earns.
@@ -457,21 +490,34 @@ final class AttachmentTextIndexJob {
     /// words → noText (the picture has no text); some pages failed but
     /// others were read → partial, the note lists the failed pages; nothing
     /// could be read → failed with the reasons. A failure is never "no text".
+    /// What reading one attachment produced: its text and state, and (§13.3)
+    /// the files inside it as children with their own identity.
+    nonisolated struct Reading: Sendable {
+        let text: String?
+        let state: AttachmentCoverageState
+        let extractor: String
+        let note: String?
+        var children: [ChildDocument] = []
+        init(_ text: String?, _ state: AttachmentCoverageState, _ extractor: String, _ note: String?, children: [ChildDocument] = []) {
+            self.text = text; self.state = state; self.extractor = extractor; self.note = note; self.children = children
+        }
+    }
+
     nonisolated static func ocrState(_ outcome: AttachmentOCR.Outcome, pages: Int)
-        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        -> Reading {
         let read = outcome.recognised + outcome.layerPages
         let reasons = outcome.failures.prefix(3).joined(separator: "; ")
             + (outcome.failures.count > 3 ? String(localized: "; and \(outcome.failures.count - 3) more") : "")
         if outcome.isComplete {
             let words = outcome.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if words.isEmpty { return ("", .noText, "ocr", String(localized: "no text was recognised in the image")) }
-            return (outcome.text, .extracted, "ocr", nil)
+            if words.isEmpty { return Reading("", .noText, "ocr", String(localized: "no text was recognised in the image")) }
+            return Reading(outcome.text, .extracted, "ocr", nil)
         }
         if read > 0 {
-            return (outcome.text, .partial, "ocr",
+            return Reading(outcome.text, .partial, "ocr",
                     String(localized: "\(outcome.failed) of \(max(pages, read + outcome.failed)) pages could not be read: \(reasons)"))
         }
-        return (nil, .failed, "ocr", reasons)
+        return Reading(nil, .failed, "ocr", reasons)
     }
 
     /// FIND-01: an Office Open XML package. Needs a file: the extractor's
@@ -479,12 +525,12 @@ final class AttachmentTextIndexJob {
     /// TYPE-01…04: every document kind through the one facade — Office Open
     /// XML, OpenDocument, iWork, Office 97–2003 and one level inside ZIPs.
     nonisolated private static func readDocument(_ attachment: AttachmentMetadata, kind: DocumentKind, data: Data)
-        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        -> Reading {
         var url = attachment.fileURL
         var temporary: URL?
         if url == nil {
             let t = FileManager.default.temporaryDirectory.appendingPathComponent("document-\(UUID().uuidString).\(kind.rawValue)")
-            do { try data.write(to: t) } catch { return (nil, .failed, kind.extractorName, error.localizedDescription) }
+            do { try data.write(to: t) } catch { return Reading(nil, .failed, kind.extractorName, error.localizedDescription) }
             temporary = t; url = t
         }
         defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
@@ -495,13 +541,13 @@ final class AttachmentTextIndexJob {
             if !result.skipped.isEmpty {
                 note = String(localized: "not read: \(result.skipped.joined(separator: "; "))")
             }
-            return (result.text, result.partial ? .partial : .extracted, kind.extractorName, note)
+            return Reading(result.text, result.partial ? .partial : .extracted, kind.extractorName, note, children: result.children)
         } catch OfficeTextExtractor.ExtractError.encrypted {
-            return (nil, .locked, kind.extractorName, String(localized: "password-protected document"))
+            return Reading(nil, .locked, kind.extractorName, String(localized: "password-protected document"))
         } catch OfficeTextExtractor.ExtractError.noTextParts {
-            return ("", .noText, kind.extractorName, nil)
+            return Reading("", .noText, kind.extractorName, nil)
         } catch {
-            return (nil, .failed, kind.extractorName, error.localizedDescription)
+            return Reading(nil, .failed, kind.extractorName, error.localizedDescription)
         }
     }
 
@@ -513,10 +559,10 @@ final class AttachmentTextIndexJob {
         let child = AttachmentMetadata(filename: name, mimeType: "", size: 0, fileURL: url)
         let reading = read(child, ocr: AttachmentOCR.isEnabled)
         switch reading.state {
-        case .extracted, .truncated: return ArchiveChildReading(text: reading.text, notRead: nil)
-        case .partial: return ArchiveChildReading(text: reading.text, notRead: reading.note)
-        case .noText: return ArchiveChildReading(text: "", notRead: nil)
-        case .unsupported, .locked, .failed: return ArchiveChildReading(text: nil, notRead: reading.note ?? reading.state.rawValue)
+        case .extracted, .truncated: return ArchiveChildReading(text: reading.text, notRead: nil, children: reading.children)
+        case .partial: return ArchiveChildReading(text: reading.text, notRead: reading.note, children: reading.children)
+        case .noText: return ArchiveChildReading(text: "", notRead: nil, children: reading.children)
+        case .unsupported, .locked, .failed: return ArchiveChildReading(text: nil, notRead: reading.note ?? reading.state.rawValue, children: reading.children)
         }
     }
 
@@ -534,16 +580,16 @@ final class AttachmentTextIndexJob {
     nonisolated static let maxMessageDepth = 3
 
     nonisolated private static func readEmbeddedMessage(_ data: Data, ocr: Bool, depth: Int)
-        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        -> Reading {
         guard depth < maxMessageDepth else {
-            return (nil, .unsupported, "eml", String(localized: "a message nested deeper than \(maxMessageDepth) levels"))
+            return Reading(nil, .unsupported, "eml", String(localized: "a message nested deeper than \(maxMessageDepth) levels"))
         }
         guard let raw = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
-            return (nil, .failed, "eml", String(localized: "text encoding not recognised"))
+            return Reading(nil, .failed, "eml", String(localized: "text encoding not recognised"))
         }
         let email: MBOXParser.RawEmail
         do { email = try MBOXParser.processRawMessage(raw, senderEmail: "") } catch {
-            return (nil, .failed, "eml", error.localizedDescription)
+            return Reading(nil, .failed, "eml", error.localizedDescription)
         }
         defer { for attachment in email.attachments { if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) } } }
         var text = ""
@@ -554,25 +600,35 @@ final class AttachmentTextIndexJob {
         text += "\n" + body + "\n"
         var notes: [String] = []
         var partial = false
+        var children: [ChildDocument] = []
         for attachment in email.attachments {
+            let data = attachment.fileURL.flatMap { try? Data(contentsOf: $0) } ?? attachment.base64.flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) } ?? Data()
             let child = attachment.mimeType.lowercased().contains("message/rfc822") || (attachment.filename as NSString).pathExtension.lowercased() == "eml"
-                ? readEmbeddedMessage((attachment.fileURL.flatMap { try? Data(contentsOf: $0) }) ?? Data(), ocr: ocr, depth: depth + 1)
+                ? readEmbeddedMessage(data, ocr: ocr, depth: depth + 1)
                 : read(attachment, ocr: ocr)
-            if let childText = child.text, !childText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                text += "[EML: \(attachment.filename)]\n" + childText + "\n"
-            }
+            let state: ChildDocument.State
             switch child.state {
-            case .extracted, .truncated, .noText: break
-            case .partial: partial = true; if let note = child.note { notes.append("\(attachment.filename): \(note)") }
-            case .unsupported, .locked, .failed: partial = true; notes.append("\(attachment.filename) (\(child.note ?? child.state.rawValue))")
+            case .extracted, .truncated: state = .extracted
+            case .noText: state = .noText
+            case .partial: state = .partial; partial = true; if let note = child.note { notes.append("\(attachment.filename): \(note)") }
+            case .unsupported: state = .unsupported; partial = true; notes.append("\(attachment.filename) (\(child.note ?? "unsupported"))")
+            case .locked: state = .locked; partial = true; notes.append("\(attachment.filename) (\(child.note ?? "locked"))")
+            case .failed: state = .failed; partial = true; notes.append("\(attachment.filename) (\(child.note ?? "failed"))")
             }
+            children.append(ChildDocument(path: attachment.filename, filename: attachment.filename,
+                                          kind: (attachment.filename as NSString).pathExtension.lowercased(),
+                                          sha256: ExportFolderManifest.hex(Data(SHA256.hash(data: data))), bytes: data.count,
+                                          text: child.text, state: state, note: child.note))
+            children.append(contentsOf: child.children.map { nested in
+                var moved = nested; moved.path = attachment.filename + " › " + nested.path; return moved
+            })
         }
-        return (text, partial ? .partial : .extracted, "eml", notes.isEmpty ? nil : String(localized: "not read: \(notes.joined(separator: "; "))"))
+        return Reading(text, partial ? .partial : .extracted, "eml", notes.isEmpty ? nil : String(localized: "not read: \(notes.joined(separator: "; "))"), children: children)
     }
 
     /// One attachment through the extractor that fits it.
     nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool)
-        -> (text: String?, state: AttachmentCoverageState, extractor: String, note: String?) {
+        -> Reading {
         _ = childReaderInstalled
         let data: Data?
         if let url = attachment.fileURL {
@@ -583,7 +639,7 @@ final class AttachmentTextIndexJob {
             data = nil
         }
         guard let data, !data.isEmpty else {
-            return (nil, .failed, "none", String(localized: "attachment has no stored bytes"))
+            return Reading(nil, .failed, "none", String(localized: "attachment has no stored bytes"))
         }
 
         let mime = attachment.mimeType.lowercased()
@@ -591,10 +647,10 @@ final class AttachmentTextIndexJob {
 
         if mime.contains("pdf") || ext == "pdf" {
             guard let document = PDFDocument(data: data) else {
-                return (nil, .failed, "pdfkit", String(localized: "PDF could not be opened"))
+                return Reading(nil, .failed, "pdfkit", String(localized: "PDF could not be opened"))
             }
             if document.isLocked {
-                return (nil, .locked, "pdfkit", String(localized: "password-protected PDF"))
+                return Reading(nil, .locked, "pdfkit", String(localized: "password-protected PDF"))
             }
             let layer = document.string
             // E1: a PDF without a real text layer is read by OCR, page by page
@@ -604,37 +660,37 @@ final class AttachmentTextIndexJob {
                 return ocrState(AttachmentOCR.outcome(fromPDF: document), pages: document.pageCount)
             }
             if !ocr, AttachmentOCR.pdfNeedsOCR(document) {
-                return (nil, .unsupported, "pdfkit", String(localized: "scanned PDF — turn on attachment OCR to read it"))
+                return Reading(nil, .unsupported, "pdfkit", String(localized: "scanned PDF — turn on attachment OCR to read it"))
             }
-            return (layer, .extracted, "pdfkit", nil)
+            return Reading(layer, .extracted, "pdfkit", nil)
         }
         if AttachmentOCR.isImage(mimeType: mime, filename: attachment.filename) {
             guard ocr else {
-                return (nil, .unsupported, "none", String(localized: "image — turn on attachment OCR to read it"))
+                return Reading(nil, .unsupported, "none", String(localized: "image — turn on attachment OCR to read it"))
             }
             return ocrState(AttachmentOCR.outcome(fromImageData: data), pages: 1)
         }
         // TYPE-05: audio and video — the spoken words, recognised on this device.
         if AttachmentSpeech.isMedia(mimeType: mime, filename: attachment.filename) {
             guard AttachmentSpeech.isEnabled else {
-                return (nil, .unsupported, "none", String(localized: "audio or video — turn on speech in attachments (Settings ▸ Modules) to read it"))
+                return Reading(nil, .unsupported, "none", String(localized: "audio or video — turn on speech in attachments (Settings ▸ Modules) to read it"))
             }
             var url = attachment.fileURL
             var temporary: URL?
             if url == nil {
                 let ext = (attachment.filename as NSString).pathExtension.lowercased()
                 let t = FileManager.default.temporaryDirectory.appendingPathComponent("media-\(UUID().uuidString).\(ext.isEmpty ? "m4a" : ext)")
-                do { try data.write(to: t) } catch { return (nil, .failed, "speech", error.localizedDescription) }
+                do { try data.write(to: t) } catch { return Reading(nil, .failed, "speech", error.localizedDescription) }
                 temporary = t; url = t
             }
             defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
             let transcript = AttachmentSpeech.transcribe(fileURL: url!)
             if let failure = transcript.failure, transcript.text == nil {
-                return (nil, transcript.notAuthorized ? .unsupported : .failed, "speech", failure)
+                return Reading(nil, transcript.notAuthorized ? .unsupported : .failed, "speech", failure)
             }
             let words = transcript.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if words.isEmpty { return ("", .noText, "speech", String(localized: "no speech was recognised in the recording")) }
-            return ("[Recognised speech (\(transcript.locale ?? "?"))]\n" + words, .extracted, "speech", transcript.failure)
+            if words.isEmpty { return Reading("", .noText, "speech", String(localized: "no speech was recognised in the recording")) }
+            return Reading("[Recognised speech (\(transcript.locale ?? "?"))]\n" + words, .extracted, "speech", transcript.failure)
         }
         // FIND-01 + TYPE-01…04: Office Open XML, OpenDocument, iWork, Office
         // 97–2003 and ZIP (one level inside) through the document facade —
@@ -650,32 +706,32 @@ final class AttachmentTextIndexJob {
         // A04: ZIP, tar and gzip attachments are read above (DocumentKind); these formats are not opened.
         let otherContainers: Set<String> = ["7z", "rar", "bz2", "xz"]
         if otherContainers.contains(ext) || mime.contains("x-7z") || mime.contains("x-rar") || mime.contains("bzip2") || mime.contains("x-xz") {
-            return (nil, .unsupported, "none", String(localized: "archive format not opened (7z, rar, bz2, xz) — ZIP, tar and gzip attachments are read; this one is kept as a file"))
+            return Reading(nil, .unsupported, "none", String(localized: "archive format not opened (7z, rar, bz2, xz) — ZIP, tar and gzip attachments are read; this one is kept as a file"))
         }
         if mime.contains("rtf") || ext == "rtf" {
             guard let text = (try? NSAttributedString(
                 data: data, options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil))?.string else {
-                return (nil, .failed, "rtf", String(localized: "RTF could not be read"))
+                return Reading(nil, .failed, "rtf", String(localized: "RTF could not be read"))
             }
-            return (text, .extracted, "rtf", nil)
+            return Reading(text, .extracted, "rtf", nil)
         }
         if mime.contains("html") || ext == "html" || ext == "htm" {
             // Regex strip instead of NSAttributedString(html:) — the latter
             // requires the main thread (WebKit) and this runs detached.
             let html = String(data: data, encoding: .utf8) ?? ""
-            return (html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression), .extracted, "html", nil)
+            return Reading(html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression), .extracted, "html", nil)
         }
         let textualExts: Set<String> = ["txt", "csv", "log", "md", "json", "xml", "ics", "vcf", "yml", "yaml"]
         if mime.hasPrefix("text/") || mime.contains("json") || mime.contains("xml") || textualExts.contains(ext) {
             guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
-                return (nil, .failed, "text", String(localized: "text encoding not recognised"))
+                return Reading(nil, .failed, "text", String(localized: "text encoding not recognised"))
             }
-            return (text, .extracted, "text", nil)
+            return Reading(text, .extracted, "text", nil)
         }
         // Binary formats without an extractor (docx/xlsx/pptx/zip/…): recorded
         // as unsupported; FIND-01 adds Office extraction and bumps the version
         // so these are retried.
-        return (nil, .unsupported, "none", nil)
+        return Reading(nil, .unsupported, "none", nil)
     }
 }

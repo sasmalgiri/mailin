@@ -613,7 +613,7 @@ struct EmailDetailView: View {
                 .accessibilityLabel("Download all \(shown.attachments.count) attachments")
                 .accessibilityHint("Save all attachments to a folder")
 
-                ForEach(Array(shown.attachments.enumerated()), id: \.offset) { _, att in
+                ForEach(Array(shown.attachments.enumerated()), id: \.offset) { index, att in
                     VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: attachmentIcon(for: att.mimeType))
@@ -655,9 +655,12 @@ struct EmailDetailView: View {
 
                         attachmentPreview(for: att)
                             .padding(.leading, Spacing.large)
+                        // §13.3 (9): the files inside an archive or attached message, with their states.
+                        AttachmentChildrenList(emailID: shown.id, position: index)
+                            .padding(.leading, Spacing.large)
                     }
                     .padding(.vertical, Spacing.xxSmall)
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(children: .contain)
                 }
             }
         }

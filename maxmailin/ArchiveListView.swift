@@ -114,8 +114,8 @@ struct ArchiveListPane: View {
     var matchTerms: SearchMatchTerms? = nil
     /// FIND-05: evidence from the index per row (the search model on); nil = heuristic chips.
     var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
-    /// FIND-05: a chip naming an attachment opens it (email id, attachment ordinal).
-    var onOpenAttachment: ((EmailID, Int) -> Void)? = nil
+    /// FIND-05 / §13.3 (9): a chip naming an attachment opens it (email id, attachment ordinal, file inside it).
+    var onOpenAttachment: ((EmailID, Int, String?) -> Void)? = nil
     /// True while a search string is active — decides which empty state shows.
     var isSearching: Bool = false
 
@@ -277,8 +277,8 @@ struct ArchiveSummaryRow: View {
     /// FIND-05: when set, the strip shows evidence the index returned for
     /// this row instead of the heuristic attribution.
     var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
-    /// FIND-05: opens the attachment a chip names.
-    var onOpenAttachment: ((EmailID, Int) -> Void)? = nil
+    /// FIND-05: opens the attachment (or the file inside it) a chip names.
+    var onOpenAttachment: ((EmailID, Int, String?) -> Void)? = nil
     @State private var evidence: [MatchEvidence] = []
 
     private var matchedFields: [SearchMatchField] {
@@ -302,7 +302,7 @@ struct ArchiveSummaryRow: View {
                 .font(.subheadline).lineLimit(1)
             if evidenceProvider != nil {
                 MatchEvidenceChips(evidence: evidence,
-                                   onOpenAttachment: onOpenAttachment.map { open in { ordinal in open(summary.id, ordinal) } })
+                                   onOpenAttachment: onOpenAttachment.map { open in { ordinal, childPath in open(summary.id, ordinal, childPath) } })
             } else {
                 SearchMatchFieldChips(fields: matchedFields)
             }

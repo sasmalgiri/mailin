@@ -106,7 +106,7 @@ enum FormatCapabilityRegistry {
         .init("text", .attachmentDocument, "Plain text families", ["txt", "csv", "log", "md", "json", "xml", "ics", "vcf", "yml", "yaml"], reads: "the text, UTF-8 or Latin-1",
               evidence: .syntheticFixtures),
         .init("eml-attached", .attachmentDocument, "Attached message", ["eml", "message/rfc822"], reads: "decoded headers and body, its own attachments as children (three levels)",
-              evidence: .syntheticFixtures, limitation: "children are read into the parent's text, not as separate search targets"),
+              evidence: .syntheticFixtures, limitation: "each attachment of the message is its own child document (name, hash, state); MSG/TNEF children not yet"),
         .init("xlsb", .attachmentDocument, "Excel Binary Workbook", ["xlsb"], reads: "—", evidence: .notImplemented, limitation: "no reader; kept and listed as unsupported"),
         .init("oft-tnef", .attachmentDocument, "Outlook template / TNEF", ["oft", "winmail.dat"], reads: "—", evidence: .notImplemented, limitation: "no reader"),
         .init("other-office", .attachmentDocument, "OneNote, Visio, Project, Publisher, Access", ["one", "onepkg", "vsd", "vsdx", "mpp", "pub", "mdb", "accdb"], reads: "—",
@@ -115,7 +115,7 @@ enum FormatCapabilityRegistry {
         // MARK: Archive attachments
         .init("zip-attached", .archiveAttachment, "ZIP, tar, gzip attachments", ["zip", "tar", "tgz", "gz", "gzip"],
               reads: "every child accounted for: documents, text, PDFs/images/recordings through the same readers; unread children listed; three levels; 1 GiB per attachment",
-              evidence: .syntheticFixtures, limitation: "children are flattened into the parent attachment's text; 7z/RAR/split volumes not opened"),
+              evidence: .syntheticFixtures, limitation: "each member is its own child document with path, hash and state, searchable and openable on its own; 7z/RAR/split volumes not opened"),
         .init("7z-rar", .archiveAttachment, "7z, RAR, bz2, xz", ["7z", "rar", "bz2", "xz"], reads: "—", evidence: .notImplemented, limitation: "kept as files, stated"),
 
         // MARK: Protected content

@@ -63,17 +63,50 @@ enum EvidenceAttachmentOpener {
         return .success(url)
     }
 
-    /// Loads the full message by id, writes the attachment and opens it with
-    /// the system. Returns nil on success, otherwise the failure to show.
+    /// Loads the full message by id, writes the attachment — or, §13.3 (9),
+    /// the file inside it named by `childPath` — and opens it with the
+    /// system. Returns nil on success, otherwise the failure to show.
     @MainActor
-    static func open(emailID: EmailID, ordinal: Int, archive: ArchiveDataService) async -> Failure? {
+    static func open(emailID: EmailID, ordinal: Int, childPath: String? = nil, archive: ArchiveDataService) async -> Failure? {
         guard let email = try? await archive.fullEmails(ids: [emailID]).first else { return .messageUnreadable }
-        switch temporaryFile(for: email, ordinal: ordinal) {
+        let result = childPath.map { temporaryFile(for: email, ordinal: ordinal, childPath: $0) } ?? temporaryFile(for: email, ordinal: ordinal)
+        switch result {
         case .success(let url):
             PlatformURLOpener.open(url)
             return nil
         case .failure(let failure):
             return failure
+        }
+    }
+
+    /// The file inside attachment `ordinal` at `childPath` ("inner.zip › minutes.docx"),
+    /// extracted level by level from the attachment's own bytes and written
+    /// under the child's name.
+    static func temporaryFile(for email: MBOXParser.RawEmail, ordinal: Int, childPath: String) -> Result<URL, Failure> {
+        guard ordinal >= 0, ordinal < email.attachments.count else {
+            return .failure(.noAttachment(ordinal: ordinal, count: email.attachments.count))
+        }
+        let attachment = email.attachments[ordinal]
+        guard let data = AttachmentHydrator.data(for: attachment, index: ordinal, email: email) else {
+            return .failure(.bytesUnavailable(filename: attachment.filename))
+        }
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-child-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        do {
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            let parent = scratch.appendingPathComponent("parent-" + safeFilename(attachment.filename, mimeType: attachment.mimeType))
+            try data.write(to: parent)
+            let kind = DocumentKind.detect(mimeType: attachment.mimeType, filename: attachment.filename)
+            let child = try ContainerTextExtractor.materialize(childPath: childPath, in: parent, kind: kind,
+                                                                logicalName: attachment.filename, scratch: scratch)
+            let name = childPath.components(separatedBy: " › ").last ?? childPath
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-open-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appendingPathComponent(safeFilename((name as NSString).lastPathComponent, mimeType: ""))
+            try FileManager.default.copyItem(at: child, to: url)
+            return .success(url)
+        } catch {
+            return .failure(.bytesUnavailable(filename: childPath))
         }
     }
 

@@ -1607,7 +1607,7 @@ final class V2CutoverTests: XCTestCase {
     func testFOLD02_schemaGuardMatchesTheMigrationChain() async throws {
         let env = try makeEnv()
         let v = try await env.store.schemaVersion()
-        XCTAssertEqual(v, 24, "v21 adds folders, v22/v23 the search chunks, v24 contiguous chunks (R02)")
+        XCTAssertEqual(v, 25, "v21 adds folders, v22/v23 the search chunks, v24 contiguous chunks (R02), v25 attachment children (§13.3)")
         XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion, "the guard follows the chain")
         // Reopening the same directory is the real check: a lagging guard refuses here.
         let reopened = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
@@ -2864,6 +2864,92 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(receipt.shortfall, 0)
     }
 
+    /// Plan v4 §13.3 (5)(7)(9): every file inside an attachment is its own
+    /// document — recorded with path, hash and state, searchable by a
+    /// same-child condition, named by evidence, and openable on its own.
+    /// A sibling's words are never borrowed and no phrase bridges two files.
+    func testWP2_childDocuments_identity_sameChildConditions_evidence_andOpening() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+
+        let minutes = Self.docx(body: "Board quorum reached at nine.", header: "")
+        let memo = Self.docx(body: "Nested quorum memo for the auditors.", header: "")
+        let otherMinutes = Self.docx(body: "Different minutes text entirely.", header: "")
+        let pdf = Self.pdfData(pages: ["Budget approved without objection."])
+        let inner = Self.zipPackage([("memo.docx", memo), ("minutes.docx", otherMinutes)])
+        let bundle = Self.zipPackage([("minutes.docx", minutes), ("report.pdf", pdf), ("inner.zip", inner)])
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Children
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <children@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see the bundle
+        \(mimeAttachment("bundle.zip", "application/zip", bundle))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+
+        // Identity: four files, with their chains, hashes and states.
+        let children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map(\.path), ["minutes.docx", "report.pdf", "inner.zip › memo.docx", "inner.zip › minutes.docx"])
+        XCTAssertEqual(Set(children.map(\.state)), ["extracted"], "\(children.map { ($0.path, $0.state, $0.note ?? "") })")
+        XCTAssertTrue(children.allSatisfy { !$0.sha256.isEmpty && $0.bytes > 0 })
+        XCTAssertEqual(children.map(\.position), [0, 0, 0, 0])
+        XCTAssertEqual(children[2].filename, "memo.docx")
+        XCTAssertNotEqual(children[0].sha256, children[3].sha256, "two files named minutes.docx stay distinct")
+
+        // Same-child conditions: type + name + content on ONE file inside the ZIP.
+        func group(type: String? = nil, name: String? = nil, _ match: SearchCondition.Match, _ content: String) -> SearchSpec {
+            SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: name, type: type, contentMatch: match, content: content)])])
+        }
+        try await expectIDs(env, group(type: "docx", name: "minutes", .allWords, "quorum"), ["Children"])
+        try await expectIDs(env, group(type: "pdf", .allWords, "quorum"), [], "the PDF's sibling has the word, the PDF does not")
+        try await expectIDs(env, group(type: "pdf", .phrase, "budget approved"), ["Children"])
+        try await expectIDs(env, group(name: "memo", .allWords, "quorum"), ["Children"], "a file two levels down")
+        try await expectIDs(env, group(.phrase, "reached at nine. Budget"), [], "no phrase bridges two files")
+        try await expectIDs(env, group(type: "docx", name: "minutes", .allWords, "different entirely"), ["Children"], "the second minutes.docx is its own document")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .allWords, "auditors")])]), ["Children"], "anywhere reaches children")
+
+        // Evidence names the child by its path; the chip would open that very file.
+        let evidence = try await env.store.matchEvidence(emailID: email.id, spec: group(name: "memo", .allWords, "quorum"), freeText: nil)
+        guard case .childText(let ordinal, let childIndex, let path, _)? = evidence.first?.location else {
+            return XCTFail("expected child evidence, got \(evidence)")
+        }
+        XCTAssertEqual(ordinal, 0); XCTAssertEqual(childIndex, 2); XCTAssertEqual(path, "inner.zip › memo.docx")
+        XCTAssertEqual(MatchEvidenceChips.childPath(evidence[0].location), "inner.zip › memo.docx")
+        XCTAssertEqual(MatchEvidenceChips.attachmentOrdinal(evidence[0].location), 0)
+        XCTAssertTrue(MatchEvidenceChips.label(evidence[0].location).contains("inner.zip › memo.docx"))
+        let storedEmail = try await env.store.fullEmail(id: email.id)
+        let stored = try XCTUnwrap(storedEmail)
+        let opened = try EvidenceAttachmentOpener.temporaryFile(for: stored, ordinal: 0, childPath: "inner.zip › memo.docx").get()
+        defer { try? FileManager.default.removeItem(at: opened.deletingLastPathComponent()) }
+        XCTAssertEqual(opened.lastPathComponent, "memo.docx")
+        XCTAssertEqual(try Data(contentsOf: opened), memo, "the exact bytes of the file two levels down")
+        XCTAssertEqual(AttachmentChildrenList.stateLabel("extracted"), "read for search")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated
@@ -2983,14 +3069,16 @@ final class V2CutoverTests: XCTestCase {
         let url = dir.appendingPathComponent("bundle.zip")
         try bundle.write(to: url)
         let result = try DocumentTextExtractor.extract(fileURL: url, kind: .zip, logicalName: "bundle.zip")
-        XCTAssertTrue(result.components.contains("GZIP: report.txt.gz › report.txt"), "\(result.components)")
-        XCTAssertTrue(result.components.contains("GZIP: UPPER.TXT.GZ › UPPER.TXT"), "uppercase extensions: \(result.components)")
-        XCTAssertTrue(result.text.contains("Gzipped minutes mention the quorum"))
-        XCTAssertTrue(result.text.contains("Rich text says hello world"), "RTF decoded, not read as control words: \(result.text)")
-        XCTAssertTrue(result.text.contains("zebracorn"), "the base64 body is decoded: \(result.text)")
-        XCTAssertTrue(result.text.contains("Nested docx payment terms"), "the message's own attachment is a child: \(result.text)")
-        XCTAssertTrue(result.components.contains("ZIP: unnamed-archive › sniffed.txt"), "a nameless member is identified by its bytes: \(result.components)")
-        XCTAssertFalse(result.text.contains("\\rtf1"))
+        let paths = result.children.map(\.path)
+        func text(_ path: String) -> String { result.children.first { $0.path == path }?.text ?? "" }
+        XCTAssertTrue(paths.contains("report.txt.gz › report.txt"), "\(paths)")
+        XCTAssertTrue(paths.contains("UPPER.TXT.GZ › UPPER.TXT"), "uppercase extensions: \(paths)")
+        XCTAssertTrue(text("report.txt.gz › report.txt").contains("Gzipped minutes mention the quorum"))
+        XCTAssertTrue(text("note.rtf").contains("Rich text says hello world"), "RTF decoded, not read as control words: \(text("note.rtf"))")
+        XCTAssertTrue(text("inner.eml").contains("zebracorn"), "the base64 body is decoded: \(text("inner.eml"))")
+        XCTAssertTrue(text("inner.eml › terms.docx").contains("Nested docx payment terms"), "the message's own attachment is a child of its own: \(paths)")
+        XCTAssertTrue(paths.contains("unnamed-archive › sniffed.txt"), "a nameless member is identified by its bytes: \(paths)")
+        XCTAssertFalse(text("note.rtf").contains("\\rtf1"))
 
         // R03 at the top level: a base64-backed .txt.gz attachment through the indexing path keeps its name.
         let raw = """
@@ -3012,7 +3100,9 @@ final class V2CutoverTests: XCTestCase {
         let extractions = try XCTUnwrap(AttachmentTextIndexJob.extractCoverage(fromRaw: raw))
         XCTAssertEqual(extractions.count, 1)
         XCTAssertEqual(extractions[0].state, .extracted, extractions[0].note ?? "")
-        XCTAssertTrue(extractions[0].text?.contains("GZIP: notes.txt") == true, extractions[0].text ?? "")
+        XCTAssertTrue(extractions[0].text?.contains("notes.txt") == true, "the listing names the payload by the logical name: \(extractions[0].text ?? "")")
+        XCTAssertEqual(extractions[0].children.map(\.path), ["notes.txt"])
+        XCTAssertTrue(extractions[0].children.first?.text?.contains("Gzipped minutes mention the quorum") == true, "\(extractions[0].children)")
 
         // R05: the gzip budget is enforced while inflating — nothing is left behind, the reason is named.
         let gzURL = dir.appendingPathComponent("big.gz")
@@ -3786,8 +3876,15 @@ final class V2CutoverTests: XCTestCase {
         ContainerTextExtractor.childReader = nil
         defer { ContainerTextExtractor.childReader = previousReader }
         let result = try DocumentTextExtractor.extract(fileURL: url, kind: .zip)
-        XCTAssertEqual(result.components, ["ZIP: report.docx", "ZIP: notes/readme.txt", "ZIP: nested.zip › deep.txt"], "the nested archive is opened too")
-        XCTAssertTrue(result.text.contains("quorum clause") && result.text.contains("Payment within thirty days") && result.text.contains("too deep"), result.text)
+        // Plan v4 §13.3 (5): the parent's own text is the listing; every member is a child document of its own.
+        XCTAssertEqual(result.components, ["Contents"])
+        XCTAssertTrue(result.text.hasPrefix("[Contents]\nreport.docx\nnotes/readme.txt\nphoto.png\nnested.zip\n"), result.text)
+        XCTAssertEqual(result.children.map(\.path), ["report.docx", "notes/readme.txt", "photo.png", "nested.zip › deep.txt"], "the nested archive is opened too")
+        XCTAssertEqual(result.children.map(\.state), [.extracted, .extracted, .unsupported, .extracted])
+        XCTAssertEqual(result.children.map(\.kind), ["docx", "txt", "png", "txt"])
+        XCTAssertTrue(result.children[0].text?.contains("quorum clause") == true && result.children[1].text?.contains("Payment within thirty days") == true
+                      && result.children[3].text?.contains("too deep") == true, "\(result.children.map { $0.text ?? "" })")
+        XCTAssertNil(result.children[2].text, "a child nothing read carries no text, only its state")
         XCTAssertEqual(result.notText, [])
         XCTAssertEqual(result.skipped, ["photo.png (not read inside archives: .png)"], "an image is not silently 'no text' — it was not read")
         XCTAssertTrue(result.partial, "something was not read, and the state says so")
@@ -3858,10 +3955,14 @@ final class V2CutoverTests: XCTestCase {
         let url = dir.appendingPathComponent("bundle.zip")
         try bundle.write(to: url)
         let result = try DocumentTextExtractor.extract(fileURL: url, kind: .zip)
-        XCTAssertTrue(result.components.contains("ZIP: invoice.pdf"), "\(result.components)")
-        XCTAssertTrue(result.text.contains("nine hundred and forty"), "the PDF's text layer, read inside the archive")
-        XCTAssertTrue(result.components.contains("ZIP: level2.zip › mid.txt") && result.components.contains("ZIP: level2.zip › level3.zip › deepest.txt"), "\(result.components)")
-        XCTAssertFalse(result.text.contains("four levels down"))
+        let paths = result.children.map(\.path)
+        func child(_ path: String) -> ChildDocument? { result.children.first { $0.path == path } }
+        XCTAssertTrue(paths.contains("invoice.pdf"), "\(paths)")
+        XCTAssertTrue(child("invoice.pdf")?.text?.contains("nine hundred and forty") == true, "the PDF's text layer, read inside the archive")
+        XCTAssertTrue(paths.contains("level2.zip › mid.txt") && paths.contains("level2.zip › level3.zip › deepest.txt"), "\(paths)")
+        XCTAssertEqual(child("level2.zip › level3.zip › deepest.txt")?.text, "three levels down")
+        XCTAssertFalse(result.children.contains { $0.text?.contains("four levels down") == true })
+        XCTAssertEqual(child("deep/level2b.zip › level3b.zip › level4.zip")?.state, .unsupported, "the fourth level is listed, not read")
         XCTAssertTrue(result.skipped.contains { $0.contains("level4.zip") && $0.contains("deeper than \(ContainerTextExtractor.maxDepth) levels") }, "\(result.skipped)")
         XCTAssertTrue(result.skipped.contains { $0.hasPrefix("drawing.dwg (") }, "a child nothing can read is listed: \(result.skipped)")
         XCTAssertTrue(result.skipped.contains { $0.hasPrefix("photo.png (") && $0.contains("OCR") }, "an image with OCR off is listed as not read: \(result.skipped)")
@@ -3873,13 +3974,14 @@ final class V2CutoverTests: XCTestCase {
         let tarURL = dir.appendingPathComponent("files.tar")
         try tar.write(to: tarURL)
         let tarResult = try DocumentTextExtractor.extract(fileURL: tarURL, kind: .tar)
-        XCTAssertEqual(tarResult.components, ["TAR: notes/minutes.txt", "TAR: report.docx"])
-        XCTAssertTrue(tarResult.text.contains("Quorum reached") && tarResult.text.contains("Payment within thirty days"), tarResult.text)
+        XCTAssertEqual(tarResult.children.map(\.path), ["notes/minutes.txt", "report.docx"])
+        XCTAssertTrue(tarResult.children[0].text?.contains("Quorum reached") == true && tarResult.children[1].text?.contains("Payment within thirty days") == true,
+                      "\(tarResult.children.map { $0.text ?? "" })")
         XCTAssertFalse(tarResult.partial)
         let tgzURL = dir.appendingPathComponent("files.tgz")
         try Self.gzipData(tar).write(to: tgzURL)
         let tgz = try DocumentTextExtractor.extract(fileURL: tgzURL, kind: .gzip)
-        XCTAssertEqual(tgz.components, ["TAR: files.tar › notes/minutes.txt", "TAR: files.tar › report.docx"])
+        XCTAssertEqual(tgz.children.map(\.path), ["files.tar › notes/minutes.txt", "files.tar › report.docx"])
         XCTAssertEqual(DocumentKind.detect(mimeType: "application/gzip", filename: "old.tar.gz"), .gzip)
         XCTAssertEqual(DocumentKind.detect(mimeType: "application/x-tar", filename: "backup"), .tar)
         // Bytes that are not a gzip at all: a named failure, never "no text".
