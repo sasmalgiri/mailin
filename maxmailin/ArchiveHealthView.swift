@@ -32,6 +32,7 @@ struct ArchiveHealthView: View {
     @State private var freeBytes: Int64?
     @State private var note: String?
     @State private var working = false
+    @State private var showingRawSourceRecovery = false
     @State private var featureCoverage: (indexed: Int, total: Int) = (0, 0)
     @State private var fingerprintRoot: String?
     @State private var legalCounts: SQLiteEmailStore.LegalStateCounts?
@@ -83,6 +84,11 @@ struct ArchiveHealthView: View {
                 .disabled(working)
                 .help("Rebuilds the full-text index from the stored emails, batch by batch; the archive itself is not modified")
                 .accessibilityIdentifier("health.rebuildIndex")
+                // Owner-approved 2026-11-07: messages from PST/MSG/NSF imported before the rendered source get their bytes back.
+                Button(String(localized: "Re-read attachments from the original files…")) { showingRawSourceRecovery = true }
+                    .help("Messages imported from Outlook or Notes files before 7 November 2026 have no stored source and so no openable attachments; this reads the original files again and fills the source in, message by message. Nothing else changes.")
+                    .accessibilityIdentifier("health.rereadRawSources")
+                    .sheet(isPresented: $showingRawSourceRecovery) { RawSourceRecoveryView() }
                 Text("Original files that moved: use “Relink…” in Original files below. A detached archive volume: reconnect it and relaunch (Archive location).")
                     .font(.caption2).foregroundStyle(.secondary)
             }

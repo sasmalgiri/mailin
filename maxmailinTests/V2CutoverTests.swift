@@ -4209,6 +4209,102 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    /// Owner-approved 2026-11-07 (item 6): an archive that imported Outlook
+    /// files before the rendered raw source has messages with no source and
+    /// no attachment bytes. The recovery lists them per source with counts
+    /// before running, re-reads the archive's copy of each source, fills the
+    /// source in for the matched rows only, names a source it cannot find,
+    /// and the attachments become openable and searchable again.
+    func testRECOVER_rawSourceRefilledFromTheOriginalFiles_attachmentsOpenAndSearchAgain() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        try FileManager.default.createDirectory(at: env.root, withIntermediateDirectories: true)
+        let docx = Self.docx(body: "Recovered minutes mention escrow.", header: "")
+        func message(_ n: Int) -> String {
+            """
+            From: ann@example.com
+            To: bob@example.com
+            Subject: Recover \(n)
+            Date: Wed, 15 Jan 2025 10:0\(n):00 +0000
+            Message-ID: <recover-\(n)@example.com>
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="B"
+
+            --B
+            Content-Type: text/plain
+
+            Body \(n).
+            \(mimeAttachment("minutes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", docx))
+            --B--
+            """
+        }
+        // Two sources the old build would have imported without a source: a .msg and a PST (two messages).
+        let msgURL = env.root.appendingPathComponent("one.msg")
+        try XCTUnwrap(MSGWriter.write(email: try MBOXParser.processRawMessage(message(1), senderEmail: ""))).write(to: msgURL)
+        let pstURL = env.root.appendingPathComponent("two.pst")
+        let writer = try PSTWriterFactory.make(url: pstURL)
+        try writer.appendMessage(try MBOXParser.processRawMessage(message(2), senderEmail: ""))
+        try writer.appendMessage(try MBOXParser.processRawMessage(message(3), senderEmail: ""))
+        try writer.finalize()
+        var imported: [UUID] = []
+        for url in [msgURL, pstURL] {
+            let hash = try ExportInventory.sha256(of: url)
+            _ = try await env.store.registerSource(SQLiteEmailStore.SourceDescriptor(sha256: hash, filename: url.lastPathComponent, byteSize: 0, parser: url.pathExtension))
+            _ = try SourceCopies.copyIntoArchive(original: url, sha256: hash, storeDirectory: env.store.storeDirectory)
+            let emails = try ParserFactory.parse(fileURL: url, senderEmail: "")
+            _ = try await env.store.insertBatch(emails, sourceFileHash: hash, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+            imported += emails.map(\.id)
+        }
+        // A third source whose file is gone (never copied), one message.
+        let lost = try MBOXParser.processRawMessage(message(4), senderEmail: "")
+        _ = try await env.store.insertBatch([lost], sourceFileHash: "deadbeefdeadbeef", accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        // The pre-fix state: no raw source anywhere.
+        for id in imported + [lost.id] { try await env.store.replaceRawSource(emailID: id, rawSource: "") }
+        let beforeOptional = try await env.store.fullEmail(id: imported[0])
+        let before = try XCTUnwrap(beforeOptional)
+        XCTAssertTrue(before.rawSource.isEmpty)
+        XCTAssertNil(AttachmentHydrator.data(for: try XCTUnwrap(before.attachments.first), index: 0, email: before), "the bytes are gone — the state this recovery exists for")
+
+        // The plan: counts per source before anything runs; the lost source named.
+        let plan = try await RawSourceRecovery.plan(store: env.store)
+        XCTAssertEqual(plan.total, 4); XCTAssertEqual(plan.recoverable, 3); XCTAssertEqual(plan.missing, 1)
+        XCTAssertEqual(plan.groups.count, 3)
+        XCTAssertEqual(plan.groups.first { $0.filename == "two.pst" }?.count, 2)
+        XCTAssertNil(plan.groups.first { $0.sourceHash == "deadbeefdeadbeef" }?.fileURL)
+
+        // The run: three recovered, the lost one listed by its source, nothing else touched.
+        let report = await RawSourceRecovery.run(store: env.store, plan: plan)
+        XCTAssertEqual(report.recovered, 3, report.line)
+        XCTAssertEqual(report.unmatched, 1)
+        XCTAssertEqual(report.missingSources, ["source deadbeefdead…"])
+        XCTAssertTrue(RawSourceRecoveryView.reportText(report).contains("Recovered 3 messages"))
+        for id in imported {
+            let afterOptional = try await env.store.fullEmail(id: id)
+            let after = try XCTUnwrap(afterOptional)
+            XCTAssertTrue(after.rawSource.contains("X-Mailin-Rendered"), "the source is marked as rendered")
+            XCTAssertEqual(after.headers["Subject"], before.id == id ? before.headers["Subject"] : after.headers["Subject"])
+            XCTAssertEqual(AttachmentHydrator.data(for: try XCTUnwrap(after.attachments.first), index: 0, email: after), docx, "the attachment bytes are back")
+        }
+        let stillLostOptional = try await env.store.fullEmail(id: lost.id)
+        let stillLost = try XCTUnwrap(stillLostOptional)
+        XCTAssertTrue(stillLost.rawSource.isEmpty, "a message whose source is not found is left as it was, and said so")
+        // Attachments searchable again through the normal pass.
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        _ = await AttachmentTextIndexJob.shared.run()
+        var query = EmailQuery.all
+        query.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "docx", contentMatch: .phrase, content: "recovered minutes")])])
+        let found = try await env.archive.count(query: query)
+        XCTAssertEqual(found, 3)
+        // Nothing to do on a healthy archive.
+        let again = try await RawSourceRecovery.plan(store: env.store)
+        XCTAssertEqual(again.total, 1, "only the lost one remains")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated
@@ -5711,7 +5807,7 @@ final class V2CutoverTests: XCTestCase {
     func testLIFE05_everyRecoveryActionIsReachableFromHealth() throws {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let health = try String(contentsOf: repo.appendingPathComponent("maxmailin/ArchiveHealthView.swift"), encoding: .utf8)
-        for identifier in ["health.retryFailedImports", "health.rebuildIndex", "health.restoreBackup", "health.backup", "health.relink"] {
+        for identifier in ["health.retryFailedImports", "health.rebuildIndex", "health.rereadRawSources", "health.restoreBackup", "health.backup", "health.relink"] {
             XCTAssertTrue(health.contains("\"\(identifier)\""), "Health must offer \(identifier)")
         }
         XCTAssertTrue(health.contains("Restore latest…"), "the snapshot restore stays reachable")
