@@ -9,13 +9,25 @@
 //  per component so a hit can say where it was:
 //
 //    DOCX  [Document] body, tables, text boxes ("[Text box] …"); tracked
-//          changes labelled inline ({inserted: …} / {deleted: …});
-//          [Header], [Footer], [Footnotes], [Endnotes], [Comments]
-//    XLSX  [Sheet: <name>] one line per row, each cell as "A1: value";
-//          a stored formula result is the value, the formula itself follows
-//          as {=…} so the two are distinguishable and nothing is evaluated;
-//          hidden sheets labelled "(hidden)"; [Comments: <sheet>] "A1: text";
-//          the 1904 date system is stated when the workbook uses it
+//          changes labelled inline with their author and date when recorded
+//          ({inserted by Ann 2025-01-15: …} / {deleted …: …} / {moved from …: …}
+//          / {moved to …: …}), formatting revisions as {formatting changed …}
+//          markers at their place, a revised paragraph mark as
+//          {paragraph mark deleted …}; every revision is also listed in
+//          `Result.revisions` with the part it lives in (body, header N,
+//          footer N, footnote N, endnote N, comment N, text box) and its
+//          paragraph index; [Header], [Footer], [Footnotes], [Endnotes],
+//          [Comments] parts are walked the same way as the body
+//    XLSX  [Sheet: <name>] one line per row, each cell as "A1: value"; a
+//          formula cell shows its stored result and the formula text
+//          ("A1: 42 (formula =SUM(B1:B3))"), shared formulas re-based on the
+//          cell; a date-formatted serial is rendered as the ISO date it
+//          displays with the serial kept ("B2: 2025-01-15 (serial 45672)");
+//          percentages and currencies keep the raw number and name the
+//          format; hidden rows, hidden columns and very hidden sheets are
+//          labelled and still read; [Workbook] lists defined names (hidden
+//          ones marked), external workbook references (never refreshed) and
+//          the 1904 date system; [Comments: <sheet>] "A1: text"
 //    PPTX  [Slide N] text (hidden slides labelled), [Notes N] speaker notes,
 //          [Comments N]
 //    all   [Chart N] titles, labels and plotted values of embedded charts;
@@ -52,6 +64,32 @@ enum OfficeTextExtractor {
         }
     }
 
+    /// Directive §6 "Word": one tracked change, located. The inline marker in
+    /// `Result.text` carries the same author/date; this record adds the part
+    /// and paragraph so a hit can say "deleted by Ann in footnote 2".
+    struct Revision: Sendable, Equatable {
+        enum Kind: String, Sendable {
+            case inserted, deleted
+            case movedFrom = "moved from", movedTo = "moved to"
+            case formattingChanged = "formatting changed"
+            case paragraphMarkInserted = "paragraph mark inserted", paragraphMarkDeleted = "paragraph mark deleted"
+            case paragraphMarkMovedFrom = "paragraph mark moved from", paragraphMarkMovedTo = "paragraph mark moved to"
+            case tableRowInserted = "table row inserted", tableRowDeleted = "table row deleted"
+        }
+        let kind: Kind
+        /// The inserted / deleted / moved text; empty for formatting and mark revisions.
+        let text: String
+        /// `w:id` of the revision element, when present.
+        let id: String?
+        let author: String?
+        /// `w:date` as written (ISO 8601).
+        let date: String?
+        /// "body", "header 1", "footer 2", "footnote 3", "endnote 1", "comment 2", "text box in body".
+        let part: String
+        /// 1-based paragraph ordinal within `part`.
+        let paragraph: Int
+    }
+
     struct Result: Sendable, Equatable {
         let text: String
         /// Components read, in document order ("Document", "Header", "Sheet: Budget", "Slide 3").
@@ -64,6 +102,8 @@ enum OfficeTextExtractor {
         /// a message's attachments, embedded documents), each its own
         /// document with its own state — never joined into this text.
         var children: [ChildDocument] = []
+        /// Word tracked changes, located (empty for the other kinds).
+        var revisions: [Revision] = []
         var partial: Bool { !skipped.isEmpty }
     }
 
@@ -148,7 +188,7 @@ enum OfficeTextExtractor {
             guard try read(relsName, into: collector, skipped: &ignored) else { return [:] }
             var out: [String: String] = [:]
             for rel in collector.relationships {
-                out[rel.id] = rel.target.hasPrefix("/") ? String(rel.target.dropFirst()) : resolve(folder, rel.target)
+                out[rel.id] = rel.external ? rel.target : rel.target.hasPrefix("/") ? String(rel.target.dropFirst()) : resolve(folder, rel.target)
             }
             return out
         }
@@ -156,23 +196,30 @@ enum OfficeTextExtractor {
         var text = ""
         var components: [String] = []
         var skipped: [String] = []
+        var revisions: [Revision] = []
 
         switch kind {
         case .docx:
             let main = OOXMLTextCollector(.wordprocessing)
+            main.partLabel = "body"
             if try read("word/document.xml", into: main, skipped: &skipped) {
                 components.append("Document")
                 text += "[Document]\n" + main.text + "\n"
+                revisions += main.revisions
             }
-            let extras: [(prefix: String, label: String)] = [("word/header", "Header"), ("word/footer", "Footer"),
-                                                             ("word/footnotes", "Footnotes"), ("word/endnotes", "Endnotes"),
-                                                             ("word/comments", "Comments")]
+            let extras: [(prefix: String, label: String, part: String)] = [
+                ("word/header", "Header", "header"), ("word/footer", "Footer", "footer"),
+                ("word/footnotes", "Footnotes", "footnote"), ("word/endnotes", "Endnotes", "endnote"),
+                ("word/comments", "Comments", "comment")]
             for extra in extras {
                 for name in parts.keys.filter({ $0.hasPrefix(extra.prefix) && $0.hasSuffix(".xml") }).sorted() {
                     let collector = OOXMLTextCollector(.wordprocessing)
+                    let number = sheetNumber(name)
+                    collector.partLabel = number > 0 ? "\(extra.part) \(number)" : extra.part
                     if try read(name, into: collector, skipped: &skipped), !collector.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         components.append(extra.label)
                         text += "[\(extra.label)]\n" + collector.text + "\n"
+                        revisions += collector.revisions
                     }
                 }
             }
@@ -184,6 +231,8 @@ enum OfficeTextExtractor {
             let workbook = OOXMLTextCollector(.raw)
             var ignored: [String] = []
             _ = try read("xl/workbook.xml", into: workbook, skipped: &ignored)
+            let styles = OOXMLTextCollector(.styles)
+            _ = try read("xl/styles.xml", into: styles, skipped: &ignored)
             let names = try sheetNames(workbook: workbook, parts: parts, read: { name in
                 let c = OOXMLTextCollector(.raw)
                 var s: [String] = []
@@ -192,16 +241,30 @@ enum OfficeTextExtractor {
             let sheetFiles = parts.keys.filter { $0.hasPrefix("xl/worksheets/sheet") && $0.hasSuffix(".xml") }
                 .sorted { sheetNumber($0) < sheetNumber($1) }
             if sheetFiles.isEmpty && skipped.isEmpty { throw ExtractError.noTextParts }
-            if workbook.date1904 {
+
+            // [Workbook]: the date system, defined names (hidden ones marked), external workbooks (never refreshed).
+            var workbookLines: [String] = []
+            if workbook.date1904 { workbookLines.append("1904 date system: serial dates count from 1 January 1904") }
+            for name in workbook.definedNames {
+                let formula = name.formula.trimmingCharacters(in: .whitespacesAndNewlines)
+                workbookLines.append((name.hidden ? "[hidden name \(name.name)]" : "name \(name.name)") + (formula.isEmpty ? "" : ": " + formula))
+            }
+            for link in parts.keys.filter({ $0.hasPrefix("xl/externalLinks/externalLink") && $0.hasSuffix(".xml") }).sorted(by: { sheetNumber($0) < sheetNumber($1) }) {
+                let targets = try relationships(of: link).values.sorted()
+                workbookLines.append("[external reference: \(targets.isEmpty ? link : targets.joined(separator: ", "))] not refreshed")
+            }
+            if !workbookLines.isEmpty {
                 components.append("Workbook")
-                text += "[Workbook]\n1904 date system: serial dates count from 1 January 1904\n\n"
+                text += "[Workbook]\n" + workbookLines.joined(separator: "\n") + "\n\n"
             }
             for file in sheetFiles {
-                let collector = OOXMLTextCollector(.worksheet(sharedStrings: shared.sharedStrings))
+                let collector = OOXMLTextCollector(.worksheet(sharedStrings: shared.sharedStrings, formats: styles.cellFormats, date1904: workbook.date1904))
                 if try read(file, into: collector, skipped: &skipped) {
                     let sheet = names[file]
                     var label = "Sheet: " + (sheet?.name ?? "Sheet \(sheetNumber(file))")
-                    if let state = sheet?.state, state == "hidden" || state == "veryHidden" { label += " (hidden)" }
+                    if let state = sheet?.state {
+                        if state == "veryHidden" { label += " (very hidden)" } else if state == "hidden" { label += " (hidden)" }
+                    }
                     components.append(label)
                     text += "[\(label)]\n" + collector.text + "\n"
                     // Comments and drawings (text boxes, shapes) attached to this sheet, by its relationships.
@@ -303,7 +366,7 @@ enum OfficeTextExtractor {
                 children.append(ChildDocument(path: member.name, filename: filename, kind: innerKind.rawValue, sha256: sha, bytes: size, text: nil, state: .failed, note: "\(error)"))
             }
         }
-        return Result(text: text, components: components, skipped: skipped, notText: notText.sorted(), children: children)
+        return Result(text: text, components: components, skipped: skipped, notText: notText.sorted(), children: children, revisions: revisions)
     }
 
     /// "xl/worksheets/sheet12.xml" → 12.
@@ -349,6 +412,47 @@ enum OfficeTextExtractor {
         }
         return out
     }
+
+    /// Directive §6 "Word": the inline marker head of a revision —
+    /// "{deleted by Ann 2025-01-15: " / "{inserted: " / "{formatting changed by Ann}".
+    static func revisionMarker(_ kind: Revision.Kind, author: String?, date: String?, opensText: Bool) -> String {
+        var head = "{" + kind.rawValue
+        if let author, !author.isEmpty { head += " by " + author }
+        if let date, !date.isEmpty { head += " " + revisionDay(date) }
+        return head + (opensText ? ": " : "}")
+    }
+
+    /// "2026-09-28T20:59:00Z" → "2026-09-28"; anything else as written.
+    static func revisionDay(_ date: String) -> String {
+        let scalars = Array(date)
+        guard scalars.count >= 10, scalars[4] == "-", scalars[7] == "-", scalars.count == 10 || scalars[10] == "T" else { return date }
+        return String(scalars[0..<10])
+    }
+
+    /// Directive §6 "Excel": one cell's text — the displayed value, then the
+    /// raw serial / format name / formula in one parenthesis.
+    static func cellText(value: String, isNumber: Bool, format: ExcelNumberFormat.Format?, date1904: Bool, formulaNote: String?) -> String {
+        var shown = value
+        var notes: [String] = []
+        if isNumber, let format, let serial = Double(value.trimmingCharacters(in: .whitespaces)) {
+            switch format.kind {
+            case .date, .time, .dateTime, .elapsedTime:
+                if let rendered = ExcelNumberFormat.render(serial: serial, kind: format.kind, date1904: date1904) {
+                    shown = rendered
+                    notes.append("serial " + value.trimmingCharacters(in: .whitespaces))
+                } else {
+                    notes.append("format " + format.code)
+                }
+            case .percent, .currency:
+                notes.append("format " + format.code)
+            case .general, .other:
+                break
+            }
+        }
+        if let formulaNote { notes.append(formulaNote) }
+        if notes.isEmpty { return shown }
+        return (shown.isEmpty ? "" : shown + " ") + "(" + notes.joined(separator: "; ") + ")"
+    }
 }
 
 /// Collects the text of one OOXML part. Mode decides which elements carry
@@ -358,27 +462,43 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
         case wordprocessing
         case drawing
         case sharedStrings
-        case worksheet(sharedStrings: [String])
+        /// A worksheet: shared strings, the cell formats by style index, the workbook's date system.
+        case worksheet(sharedStrings: [String], formats: [Int: ExcelNumberFormat.Format], date1904: Bool)
         /// Excel comments part: "A1: text" per comment.
         case comments
         /// DrawingML chart: titles, labels and plotted values.
         case chart
-        /// Only structure (sheet names, relationships, workbook properties).
+        /// styles.xml: number formats and the cell style table.
+        case styles
+        /// Only structure (sheet names, relationships, workbook properties, defined names).
         case raw
     }
 
     struct Sheet { let name: String; let relationshipID: String; let state: String? }
-    struct Relationship { let id: String; let target: String }
+    struct Relationship {
+        let id: String
+        let target: String
+        /// `TargetMode="External"`: the target is outside the package (another workbook, a URL) and is never followed.
+        let external: Bool
+    }
+    struct DefinedName { let name: String; let hidden: Bool; let formula: String }
 
     private let mode: Mode
     private(set) var text = ""
     private(set) var sharedStrings: [String] = []
     private(set) var sheets: [Sheet] = []
     private(set) var relationships: [Relationship] = []
+    private(set) var definedNames: [DefinedName] = []
     /// `<workbookPr date1904="1"/>`: serial dates start in 1904.
     private(set) var date1904 = false
     /// `<p:sld show="0">`: the slide is hidden in the show.
     private(set) var hiddenSlide = false
+    /// styles.xml: cellXfs index → number format.
+    private(set) var cellFormats: [Int: ExcelNumberFormat.Format] = [:]
+    /// Word: tracked changes found in this part, located.
+    private(set) var revisions: [OfficeTextExtractor.Revision] = []
+    /// Word: the part this collector reads ("body", "header 1", "footnote", "comment"); set before `parse`.
+    var partLabel = "body"
 
     private var current = ""
     private var capturing = false
@@ -386,21 +506,43 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
     private var cellValue = ""
     private var cellFormula = ""
     private var cellReference = ""
+    private var cellStyle = ""
     private var inFormula = false
     private var inValue = false
     private var inInlineString = false
     private var rowCells: [String] = []
+    private var rowHidden = false
+    private var rowNumber = ""
+    private var hiddenColumns = Set<Int>()
+    private var formulaAttributes: [String: String] = [:]
+    /// Shared formulas by `si`: the master cell and its text.
+    private var sharedFormulas: [String: (cell: String, text: String)] = [:]
     private var sharedCurrent = ""
     private var cellInRow = 0
     private var cellDepth = 0
     private var failed = false
     private var depth = 0
-    /// Depth at which an `mc:Fallback` subtree started (its text duplicates the Choice's).
-    private var fallbackDepth: Int?
+    /// Depth at which a subtree whose text must not be read started (`mc:Fallback`
+    /// duplicates the Choice; `w:rPrChange` and the other *PrChange elements
+    /// hold the previous formatting, no text).
+    private var suppressedDepth: Int?
     private var commentReference = ""
     private var chartValues: [String] = []
     private var inChartPoint = false
     private var rootSeen = false
+    // styles.xml
+    private var numberFormatCodes: [Int: String] = [:]
+    private var inCellXfs = false
+    private var cellXfIndex = 0
+    private var definedNameAttributes: [String: String]?
+    // Word revisions
+    private var elementStack: [String] = []
+    private struct Location { var part: String; var paragraphs: Int }
+    private var locations: [Location] = []
+    private struct OpenRevision { let kind: OfficeTextExtractor.Revision.Kind; let id: String?; let author: String?; let date: String?; let part: String; let paragraph: Int; var text: String; let depth: Int }
+    private var openRevisions: [OpenRevision] = []
+    /// Markers to emit when the current paragraph ends (a revised paragraph mark), one frame per open paragraph.
+    private var paragraphMarkNotes: [[String]] = []
 
     init(_ mode: Mode) {
         self.mode = mode
@@ -408,6 +550,7 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
 
     /// False when the XML could not be parsed.
     func parse(_ data: Data) -> Bool {
+        locations = [Location(part: partLabel, paragraphs: 0)]
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.shouldResolveExternalEntities = false
@@ -420,6 +563,25 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
         name.split(separator: ":").last.map(String.init) ?? name
     }
 
+    private var currentLocation: Location { locations.last ?? Location(part: partLabel, paragraphs: 0) }
+
+    private func record(_ kind: OfficeTextExtractor.Revision.Kind, text: String, attributes: [String: String]) {
+        let where_ = currentLocation
+        revisions.append(OfficeTextExtractor.Revision(kind: kind, text: text, id: attributes["w:id"] ?? attributes["id"],
+                                                      author: attributes["w:author"] ?? attributes["author"],
+                                                      date: attributes["w:date"] ?? attributes["date"], part: where_.part, paragraph: where_.paragraphs))
+    }
+
+    private func marker(_ kind: OfficeTextExtractor.Revision.Kind, attributes: [String: String], opensText: Bool) -> String {
+        OfficeTextExtractor.revisionMarker(kind, author: attributes["w:author"] ?? attributes["author"], date: attributes["w:date"] ?? attributes["date"], opensText: opensText)
+    }
+
+    /// Text that belongs to the current text stream and to the innermost open revision.
+    private func emit(_ piece: String) {
+        text += piece
+        if !openRevisions.isEmpty { openRevisions[openRevisions.count - 1].text += piece }
+    }
+
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes: [String: String] = [:]) {
         let name = local(elementName)
@@ -428,22 +590,59 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
             rootSeen = true
             if case .drawing = mode, name == "sld", attributes["show"] == "0" { hiddenSlide = true }
         }
-        if name == "Fallback", fallbackDepth == nil, elementName.lowercased().hasPrefix("mc:") { fallbackDepth = depth }
-        if fallbackDepth != nil { return }
+        if name == "Fallback", suppressedDepth == nil, elementName.lowercased().hasPrefix("mc:") { suppressedDepth = depth }
+        if suppressedDepth != nil { elementStack.append(name); return }
         switch mode {
         case .wordprocessing:
+            let parent = elementStack.last ?? ""
+            let grandparent = elementStack.count >= 2 ? elementStack[elementStack.count - 2] : ""
             switch name {
             case "t", "delText": capturing = true; current = ""
-            case "tab": text += "\t"
-            case "br", "cr": text += "\n"
+            case "tab": emit("\t")
+            case "br", "cr": emit("\n")
+            case "p":
+                locations[locations.count - 1].paragraphs += 1
+                paragraphMarkNotes.append([])
             case "tr": cellInRow = 0
             case "tc":
                 if cellInRow > 0 { text += "\t" }   // cells of one row on one line
                 cellInRow += 1
                 cellDepth += 1
-            case "ins": text += "{inserted: "
-            case "del": text += "{deleted: "
-            case "txbxContent": text += "\n[Text box] "
+            case "ins", "del", "moveFrom", "moveTo":
+                let containerKind: OfficeTextExtractor.Revision.Kind = name == "ins" ? .inserted : name == "del" ? .deleted : name == "moveFrom" ? .movedFrom : .movedTo
+                if parent == "rPr" {
+                    // The paragraph mark itself was revised (w:pPr/w:rPr/w:del): say so at the paragraph's end
+                    // instead of silently merging the paragraphs. A run-level rPr never carries these.
+                    guard grandparent == "pPr" else { break }
+                    let markKind: OfficeTextExtractor.Revision.Kind = name == "ins" ? .paragraphMarkInserted : name == "del" ? .paragraphMarkDeleted
+                        : name == "moveFrom" ? .paragraphMarkMovedFrom : .paragraphMarkMovedTo
+                    record(markKind, text: "", attributes: attributes)
+                    if !paragraphMarkNotes.isEmpty { paragraphMarkNotes[paragraphMarkNotes.count - 1].append(marker(markKind, attributes: attributes, opensText: false)) }
+                } else if parent == "trPr" {
+                    let rowKind: OfficeTextExtractor.Revision.Kind = name == "del" ? .tableRowDeleted : .tableRowInserted
+                    record(rowKind, text: "", attributes: attributes)
+                    text += marker(rowKind, attributes: attributes, opensText: false)
+                } else if parent == "numPr" || parent == "tcPr" || parent == "tblPr" {
+                    // Numbering / cell-level revision: the formatting changed, the text is not duplicated.
+                    record(.formattingChanged, text: "", attributes: attributes)
+                    text += marker(.formattingChanged, attributes: attributes, opensText: false)
+                } else {
+                    let where_ = currentLocation
+                    openRevisions.append(OpenRevision(kind: containerKind, id: attributes["w:id"] ?? attributes["id"],
+                                                      author: attributes["w:author"] ?? attributes["author"], date: attributes["w:date"] ?? attributes["date"],
+                                                      part: where_.part, paragraph: where_.paragraphs, text: "", depth: depth))
+                    text += marker(containerKind, attributes: attributes, opensText: true)
+                }
+            case "rPrChange", "pPrChange", "sectPrChange", "tblPrChange", "tblPrExChange", "trPrChange", "tcPrChange", "tblGridChange", "numberingChange":
+                record(.formattingChanged, text: "", attributes: attributes)
+                text += marker(.formattingChanged, attributes: attributes, opensText: false)
+                suppressedDepth = depth   // the previous formatting inside holds no text
+            case "txbxContent":
+                text += "\n[Text box] "
+                locations.append(Location(part: "text box in " + currentLocation.part, paragraphs: 0))
+            case "footnote", "endnote", "comment":
+                let id = attributes["w:id"] ?? attributes["id"] ?? ""
+                locations.append(Location(part: id.isEmpty ? name : "\(name) \(id)", paragraphs: 0))
             default: break
             }
         case .drawing:
@@ -455,13 +654,23 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
             if name == "t" { capturing = true; current = "" }
         case .worksheet:
             switch name {
-            case "row": rowCells = []
+            case "col":
+                if let flag = attributes["hidden"], flag == "1" || flag.lowercased() == "true",
+                   let first = Int(attributes["min"] ?? ""), let last = Int(attributes["max"] ?? ""), first >= 1, last >= first {
+                    // Column indexes are 1-based in the part; at most the sheet's width is ever named.
+                    for column in first...min(last, ExcelFormulaText.maxColumn) { hiddenColumns.insert(column - 1) }
+                }
+            case "row":
+                rowCells = []
+                rowNumber = attributes["r"] ?? ""
+                rowHidden = attributes["hidden"].map { $0 == "1" || $0.lowercased() == "true" } ?? false
             case "c":
                 cellType = attributes["t"] ?? ""
                 cellReference = attributes["r"] ?? ""
-                cellValue = ""; cellFormula = ""
+                cellStyle = attributes["s"] ?? ""
+                cellValue = ""; cellFormula = ""; formulaAttributes = [:]
             case "v": inValue = true; current = ""
-            case "f": inFormula = true; current = ""
+            case "f": inFormula = true; current = ""; formulaAttributes = attributes
             case "is": inInlineString = true; cellValue = ""
             case "t": if inInlineString { capturing = true; current = "" }
             default: break
@@ -477,38 +686,63 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
             case "ser": chartValues = []
             default: break
             }
+        case .styles:
+            switch name {
+            case "numFmt":
+                if let id = Int(attributes["numFmtId"] ?? ""), let code = attributes["formatCode"] { numberFormatCodes[id] = code }
+            case "cellXfs": inCellXfs = true; cellXfIndex = 0
+            case "xf":
+                guard inCellXfs else { break }
+                let id = Int(attributes["numFmtId"] ?? "") ?? 0
+                cellFormats[cellXfIndex] = ExcelNumberFormat.classify(id: id, code: numberFormatCodes[id])
+                cellXfIndex += 1
+            default: break
+            }
         case .raw:
             if name == "sheet" {
                 let rid = attributes["r:id"] ?? attributes.first { $0.key.hasSuffix(":id") }?.value ?? ""
                 sheets.append(Sheet(name: attributes["name"] ?? "", relationshipID: rid, state: attributes["state"]))
             }
             if name == "Relationship", let id = attributes["Id"], let target = attributes["Target"] {
-                relationships.append(Relationship(id: id, target: target))
+                relationships.append(Relationship(id: id, target: target, external: attributes["TargetMode"]?.lowercased() == "external"))
             }
             if name == "workbookPr", let flag = attributes["date1904"], flag == "1" || flag.lowercased() == "true" { date1904 = true }
+            if name == "definedName" { definedNameAttributes = attributes; capturing = true; current = "" }
         }
+        elementStack.append(name)
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if fallbackDepth != nil { return }
+        if suppressedDepth != nil { return }
         if capturing || inValue || inFormula { current += string }
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         let name = local(elementName)
         defer { depth -= 1 }
-        if let fallback = fallbackDepth {
-            if depth == fallback { fallbackDepth = nil }
+        if !elementStack.isEmpty { elementStack.removeLast() }
+        if let suppressed = suppressedDepth {
+            if depth == suppressed { suppressedDepth = nil }
             return
         }
         switch mode {
         case .wordprocessing:
-            if name == "t" || name == "delText" { text += current; capturing = false }
-            if name == "p" { text += cellDepth > 0 ? " " : "\n" }   // paragraphs inside a cell stay on the row's line
+            if name == "t" || name == "delText" { emit(current); capturing = false }
+            if name == "p" {
+                let notes = paragraphMarkNotes.popLast() ?? []
+                if !notes.isEmpty { text += notes.joined() }
+                text += cellDepth > 0 ? " " : "\n"   // paragraphs inside a cell stay on the row's line
+            }
             if name == "tc" { cellDepth = max(0, cellDepth - 1) }
             if name == "tr" { text += "\n" }
-            if name == "ins" || name == "del" { text += "}" }
-            if name == "txbxContent" { text += "\n" }
+            if name == "ins" || name == "del" || name == "moveFrom" || name == "moveTo", let open = openRevisions.last, open.depth == depth {
+                openRevisions.removeLast()
+                text += "}"
+                revisions.append(OfficeTextExtractor.Revision(kind: open.kind, text: open.text, id: open.id, author: open.author, date: open.date,
+                                                              part: open.part, paragraph: open.paragraph))
+            }
+            if name == "txbxContent" { text += "\n"; if locations.count > 1 { locations.removeLast() } }
+            if name == "footnote" || name == "endnote" || name == "comment" { if locations.count > 1 { locations.removeLast() } }
         case .drawing:
             if name == "t" { text += current; capturing = false }
             if name == "text", elementName.lowercased().hasPrefix("p:") { text += current + "\n"; capturing = false }
@@ -516,7 +750,7 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
         case .sharedStrings:
             if name == "t" { sharedCurrent += current; capturing = false }
             if name == "si" { sharedStrings.append(sharedCurrent) }
-        case .worksheet(let shared):
+        case .worksheet(let shared, let formats, let date1904):
             switch name {
             case "v":
                 inValue = false
@@ -526,17 +760,28 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
                 } else {
                     cellValue = current
                 }
-            case "f": inFormula = false; cellFormula = current
+            case "f":
+                inFormula = false
+                cellFormula = current
+                if formulaAttributes["t"] == "shared", let si = formulaAttributes["si"], !current.isEmpty, sharedFormulas[si] == nil {
+                    sharedFormulas[si] = (cellReference, current)
+                }
             case "t": if inInlineString { cellValue += current; capturing = false }
             case "is": inInlineString = false
             case "c":
-                var cell = cellValue
-                if !cellFormula.isEmpty { cell += " {=" + cellFormula + "}" }
+                let isNumber = cellType.isEmpty || cellType == "n"
+                if cellType == "b" { let flag = cellValue.trimmingCharacters(in: .whitespaces); if flag == "1" || flag == "0" { cellValue = flag == "1" ? "TRUE" : "FALSE" } }
+                let format = Int(cellStyle).flatMap { formats[$0] }
+                let cell = OfficeTextExtractor.cellText(value: cellValue, isNumber: isNumber, format: format, date1904: date1904, formulaNote: formulaNote())
                 guard !cell.isEmpty else { break }   // an empty cell carries no address worth a word
-                rowCells.append(cellReference.isEmpty ? cell : cellReference + ": " + cell)
+                var line = cellReference.isEmpty ? cell : cellReference + ": " + cell
+                if let position = ExcelFormulaText.parseA1(cellReference), hiddenColumns.contains(position.column) {
+                    line = "[hidden column \(OfficeTextExtractor.columnName(position.column))] " + line
+                }
+                rowCells.append(line)
             case "row":
                 let line = rowCells.joined(separator: "\t").trimmingCharacters(in: .whitespaces)
-                if !line.isEmpty { text += line + "\n" }
+                if !line.isEmpty { text += (rowHidden ? "[hidden row \(rowNumber)] " : "") + line + "\n" }
             default: break
             }
         case .comments:
@@ -553,8 +798,35 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
             case "ser": if !chartValues.isEmpty { text += chartValues.joined(separator: "\t") + "\n" }
             default: break
             }
+        case .styles:
+            if name == "cellXfs" { inCellXfs = false }
         case .raw:
-            break
+            if name == "definedName", let attributes = definedNameAttributes {
+                let hidden = attributes["hidden"].map { $0 == "1" || $0.lowercased() == "true" } ?? false
+                definedNames.append(DefinedName(name: attributes["name"] ?? "", hidden: hidden, formula: current))
+                definedNameAttributes = nil; capturing = false
+            }
+        }
+    }
+
+    /// "formula =SUM(A1:A2)" for the cell just closed; a shared formula's
+    /// dependent cell gets the master text re-based on this cell, or a note
+    /// naming what could not be shifted. Nil when the cell has no formula.
+    private func formulaNote() -> String? {
+        if !cellFormula.isEmpty { return "formula =" + cellFormula }
+        guard formulaAttributes["t"] == "shared", let si = formulaAttributes["si"] else {
+            return formulaAttributes.isEmpty ? nil : "formula not stored"
+        }
+        guard let master = sharedFormulas[si] else { return "shared formula \(si) without its master cell" }
+        guard let from = ExcelFormulaText.parseA1(master.cell), let to = ExcelFormulaText.parseA1(cellReference) else {
+            return "formula =\(master.text) shared from \(master.cell); not shifted"
+        }
+        do {
+            return "formula =" + (try ExcelFormulaText.shift(master.text, rowDelta: to.row - from.row, columnDelta: to.column - from.column))
+        } catch ExcelFormulaText.ShiftError.outOfRange(let reference) {
+            return "formula =\(master.text) shared from \(master.cell); not shifted: \(reference) leaves the sheet"
+        } catch {
+            return "formula =\(master.text) shared from \(master.cell); not shifted"
         }
     }
 
