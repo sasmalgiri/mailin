@@ -122,6 +122,15 @@ final class ContainerReaderTests: XCTestCase {
         XCTAssertEqual(children(right)["bar_encrypted.txt"]?.state, .extracted)
     }
 
+    /// A member or attachment of 4–7 bytes is sniffed without trapping (the OLE
+    /// check read 8 bytes after a 4-byte guard).
+    func testSniff_fourToSevenByteFiles_doNotTrap() {
+        for length in 4...7 {
+            XCTAssertNil(DocumentTextExtractor.sniff(head: Data("abcdefg".utf8.prefix(length))), "\(length) bytes")
+        }
+        XCTAssertNil(DocumentTextExtractor.sniff(head: Data([0xD0, 0xCF, 0x11, 0xE0, 0xA1])), "an OLE prefix of 5 bytes is not an OLE file")
+    }
+
     // MARK: - Continuation (directive §6: resumable by ExtractionLimits.round)
 
     func testCeilingStopIsNamed_andRoundOneReadsTheRestWithoutDuplicates() throws {

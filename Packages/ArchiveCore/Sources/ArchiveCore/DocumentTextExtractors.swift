@@ -210,7 +210,8 @@ enum DocumentTextExtractor {
         if bytes.count >= 262, Array(bytes[257..<262]) == [0x75, 0x73, 0x74, 0x61, 0x72] { return .tar }
         // Directive 2026-11-07 §6: Publisher (and the other OLE2 business formats) by the root CLSID;
         // a OneNote section by its file-type GUID; a notebook package by the cabinet signature.
-        if Array(bytes[0..<8]) == OfficeTextExtractor.oleSignature { return OLE2CompoundSniff.kind(head: head) }
+        // A file of 4–7 bytes is too short for the 8-byte OLE signature (and was a trap here).
+        if bytes.count >= 8, Array(bytes[0..<8]) == OfficeTextExtractor.oleSignature { return OLE2CompoundSniff.kind(head: head) }
         if OneNoteTextExtractor.hasSectionSignature(head) { return .one }
         if CabinetReader.hasSignature(head) { return .onepkg }
         if AccessTextExtractor.hasSignature(head) { return .mdb }
