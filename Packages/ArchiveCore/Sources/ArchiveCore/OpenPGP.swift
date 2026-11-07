@@ -436,8 +436,7 @@ enum OpenPGP {
     static func summarize(_ data: Data, keyring: OpenPGPKeyring = .active, signedData: Data? = nil) throws -> Summary {
         var summary = Summary()
         var binary = data
-        if let text = String(data: data.prefix(16_384), encoding: .utf8) ?? String(data: data.prefix(16_384), encoding: .isoLatin1),
-           text.contains("-----BEGIN PGP ") {
+        if OpenPGP.hasArmor(data) {
             let whole = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
             let armor = try dearmor(whole)
             summary.armorType = armor.type
@@ -649,10 +648,16 @@ enum OpenPGP {
         throw OfficeTextExtractor.ExtractError.noTextParts
     }
 
+    /// Whether `data` holds an ASCII-armor line anywhere — the whole data is
+    /// searched (a byte search, no head window), so armor after a long preamble
+    /// is still found.
+    static func hasArmor(_ data: Data) -> Bool {
+        data.range(of: Data("-----BEGIN PGP ".utf8)) != nil
+    }
+
     /// The binary packets of `data`, de-armored when it is ASCII armor.
     static func armoredOrBinary(_ data: Data) -> Data {
-        guard let head = String(data: data.prefix(16_384), encoding: .utf8) ?? String(data: data.prefix(16_384), encoding: .isoLatin1),
-              head.contains("-----BEGIN PGP "),
+        guard OpenPGP.hasArmor(data),
               let armor = try? dearmor(String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)) else { return data }
         return armor.data
     }

@@ -120,6 +120,27 @@ public class MIMEParser {
     private static let filenameStarRegex = try? NSRegularExpression(pattern: #"filename\*\s*=\s*(?:[\w-]+'[\w-]*')?([^;"]+)"#, options: .caseInsensitive)
     private static let filenameQuotedRegex = try? NSRegularExpression(pattern: #"filename\s*=\s*"([^"]+)""#, options: .caseInsensitive)
     private static let filenameBareRegex = try? NSRegularExpression(pattern: #"filename\s*=\s*([^;\s]+)"#, options: .caseInsensitive)
+    // RFC 2045 §5.1 `name` on Content-Type — the only name many clients give a
+    // part (mutt's signature.asc, older mailers' attachments); `\b` keeps it
+    // from matching inside `filename`.
+    private static let nameStarRegex = try? NSRegularExpression(pattern: #"\bname\*\s*=\s*(?:[\w-]+'[\w-]*')?([^;"\r\n]+)"#, options: .caseInsensitive)
+    private static let nameQuotedRegex = try? NSRegularExpression(pattern: #"\bname\s*=\s*"([^"]+)""#, options: .caseInsensitive)
+    private static let nameBareRegex = try? NSRegularExpression(pattern: #"\bname\s*=\s*([^;\s"]+)"#, options: .caseInsensitive)
+
+    /// The `name` parameter of a Content-Type header, as MIMEPartScanner reads it,
+    /// so a part named only there is kept as an attachment by both parsers.
+    static func extractContentTypeName(_ header: String?) -> String? {
+        guard let header, header.range(of: "name", options: .caseInsensitive) != nil else { return nil }
+        let range = NSRange(header.startIndex..., in: header)
+        for (regex, percent) in [(nameStarRegex, true), (nameQuotedRegex, false), (nameBareRegex, false)] {
+            guard let regex, let match = regex.firstMatch(in: header, range: range),
+                  let r = Range(match.range(at: 1), in: header) else { continue }
+            let value = (percent ? header[r].removingPercentEncoding : String(header[r]))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value, !value.isEmpty { return value }
+        }
+        return nil
+    }
 
     public static func extractBoundary(_ contentType: String) -> String? {
         if let regex = boundaryRegex,
@@ -162,7 +183,8 @@ public class MIMEParser {
                     rawBody: rawBody,
                     mimeType: contentType,
                     contentDisposition: headers["Content-Disposition"] ?? "",
-                    filename: extractFilename(headers["Content-Disposition"]) ?? extractFilename(headers["Content-Type"]),
+                    filename: extractFilename(headers["Content-Disposition"]) ?? extractFilename(headers["Content-Type"])
+                        ?? extractContentTypeName(headers["Content-Type"]),
                     transferEncoding: encoding,
                     charset: charset,
                     subparts: []
@@ -261,7 +283,8 @@ public class MIMEParser {
             rawBody: content,
             mimeType: contentType,
             contentDisposition: headers["Content-Disposition"] ?? "",
-            filename: extractFilename(headers["Content-Disposition"]) ?? extractFilename(headers["Content-Type"]),
+            filename: extractFilename(headers["Content-Disposition"]) ?? extractFilename(headers["Content-Type"])
+                        ?? extractContentTypeName(headers["Content-Type"]),
             transferEncoding: encoding,
             charset: charset,
             subparts: []

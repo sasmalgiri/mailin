@@ -171,8 +171,7 @@ final class OpenPGPKeyring: @unchecked Sendable {
 
     /// Key packets from armored or binary data.
     static func keyPackets(in data: Data) throws -> [OpenPGP.Packet] {
-        if let text = String(data: data.prefix(16_384), encoding: .utf8) ?? String(data: data.prefix(16_384), encoding: .isoLatin1),
-           text.contains("-----BEGIN PGP ") {
+        if OpenPGP.hasArmor(data) {
             let whole = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
             // Every armored block in the file (people paste several keys into one .asc).
             var packets: [OpenPGP.Packet] = []

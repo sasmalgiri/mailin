@@ -302,4 +302,61 @@ final class OpenPGPTests: XCTestCase {
         let s = try OpenPGP.summarize(Data((parts.first?.body ?? "").utf8))
         XCTAssertEqual(s.symmetricSessionKeys, ["AES-128"])
     }
+
+    /// GAP-PGP finding: a part named only by Content-Type `name=` (mutt's
+    /// signature.asc, older mailers' attachments) was dropped by MIMEParser —
+    /// its fallback looked for `filename=` in Content-Type. Kept now, as
+    /// MIMEPartScanner already did; `filename=` still wins and is not read as `name`.
+    func testContentTypeNameOnly_partIsKeptAsAnAttachment() throws {
+        let raw = """
+        From: a@example.org\r
+        Subject: s\r
+        MIME-Version: 1.0\r
+        Content-Type: multipart/signed; micalg=pgp-sha256;\r
+         protocol="application/pgp-signature"; boundary="b1"\r
+        \r
+        --b1\r
+        Content-Type: text/plain\r
+        \r
+        hello\r
+        --b1\r
+        Content-Type: application/pgp-signature; name="signature.asc"\r
+        \r
+        -----BEGIN PGP SIGNATURE-----\r
+        \r
+        xWFZylMa\r
+        -----END PGP SIGNATURE-----\r
+        --b1\r
+        Content-Type: application/msword; name=old.doc\r
+        Content-Transfer-Encoding: base64\r
+        \r
+        AAEC\r
+        --b1\r
+        Content-Type: application/pdf; name="ct.pdf"\r
+        Content-Disposition: attachment; filename="disposition.pdf"\r
+        \r
+        %PDF\r
+        --b1--\r
+        """
+        let (_, parts) = MIMEParser.parseEmail(rawEmail: raw)
+        let contents = try EmailBodyExtractor.extractContents(parts: parts)
+        XCTAssertEqual(contents.attachments.map(\.filename), ["signature.asc", "old.doc", "disposition.pdf"])
+        XCTAssertNil(MIMEParser.extractContentTypeName(#"application/pdf; filename="x.pdf""#), "filename= is not name=")
+        XCTAssertEqual(MIMEParser.extractContentTypeName("text/plain; name*=UTF-8''r%C3%A9sum%C3%A9.txt"), "résumé.txt")
+    }
+
+    /// No head window (rule 6): armor that starts after a long preamble is found —
+    /// the old check looked only at the first 16 KiB and read such a file as binary.
+    func testArmorAfterALongPreamble_isFound() throws {
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/openpgp/pgpy")
+        let key = try Data(contentsOf: fixtures.appendingPathComponent("rsa3072.pub.asc"))
+        let preamble = Data(String(repeating: "Notes from the key-signing party, kept above the key block.\n", count: 400).utf8)
+        XCTAssertGreaterThan(preamble.count, 20_000)
+        let keyring = OpenPGPKeyring(fileURL: nil)
+        let result = try keyring.importKeys(data: preamble + key)
+        XCTAssertEqual(result.imported.count, 1, "\(result.rejected)")
+        XCTAssertTrue(OpenPGP.hasArmor(preamble + key))
+        XCTAssertFalse(OpenPGP.hasArmor(preamble))
+    }
 }
+
