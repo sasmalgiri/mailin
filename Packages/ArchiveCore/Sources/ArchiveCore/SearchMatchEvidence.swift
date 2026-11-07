@@ -176,7 +176,7 @@ extension SQLiteEmailStore {
             binds.append(.text(tokens.joined(separator: anyWord ? " OR " : " AND ")))
         }
         if let literal {
-            sql += " AND instr(lower(sc.text), lower(?)) > 0"
+            sql += " AND mailin_phrase(sc.text, ?)"
             binds.append(.text(literal))
         }
         sql += " ORDER BY sc.kind, sc.ordinal, sc.chunk LIMIT 24;"
@@ -228,8 +228,10 @@ extension SQLiteEmailStore {
         let ns = text as NSString
         var ranges: [NSRange] = []
         if let literal, !literal.isEmpty {
+            // FIND-08: the literal as the search verified it — across a line
+            // wrap or a double space, never across a section boundary.
             let r = ns.range(of: literal, options: [.caseInsensitive, .diacriticInsensitive])
-            if r.location != NSNotFound { ranges.append(r) }
+            if r.location != NSNotFound { ranges.append(r) } else if let wrapped = SectionBoundary.range(of: literal, in: text) { ranges.append(wrapped) }
         }
         if ranges.isEmpty {
             for word in words {
@@ -245,9 +247,17 @@ extension SQLiteEmailStore {
         if start > 0 { window = "…" + window }
         if end < ns.length { window += "…" }
         let shift = (start > 0 ? 1 : 0) - start
-        let marks = ranges.compactMap { r -> Range<Int>? in
+        var marks = ranges.compactMap { r -> Range<Int>? in
             let lo = r.location + shift, hi = r.location + r.length + shift
             return lo >= 0 && hi <= (window as NSString).length ? lo..<hi : nil
+        }
+        // FIND-08: boundary characters are not shown; the marks move with the text.
+        let units = Array(window.utf16)
+        if units.contains(0x1E) {
+            var removedBefore = [Int](repeating: 0, count: units.count + 1)
+            for (i, u) in units.enumerated() { removedBefore[i + 1] = removedBefore[i] + (u == 0x1E ? 1 : 0) }
+            marks = marks.map { (($0.lowerBound - removedBefore[$0.lowerBound])..<($0.upperBound - removedBefore[$0.upperBound])) }
+            window = SectionBoundary.hidden(window)
         }
         return MatchEvidence.Excerpt(text: window, marks: marks)
     }
