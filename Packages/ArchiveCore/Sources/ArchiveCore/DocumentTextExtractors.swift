@@ -36,11 +36,13 @@ enum DocumentKind: String, Sendable, CaseIterable {
     case zip, tar, gzip
     /// Directive 2026-11-07 §6: the other business formats — Publisher,
     /// OneNote section (.one) and notebook package (.onepkg, a cabinet),
-    /// binary Visio (.vsd/.vss/.vst, Visio 5–2010), Project binary (.mpp/.mpt).
+    /// binary Visio (.vsd/.vss/.vst, Visio 5–2010), Project binary (.mpp/.mpt),
+    /// Access databases (.mdb/.accdb, Jet 3/4 and ACE).
     case pub
     case one, onepkg
     case vsd
     case mpp
+    case mdb
 
     var isContainer: Bool { self == .zip || self == .tar || self == .gzip }
 
@@ -70,8 +72,10 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case "onepkg": return .onepkg
         case "vsd", "vss", "vst": return .vsd
         case "mpp", "mpt": return .mpp
+        case "mdb", "accdb", "mde", "accde", "mda", "accda", "accdt", "accdr": return .mdb
         default: break
         }
+        if mime.contains("msaccess") || mime.contains("x-msaccess") || mime.contains("vnd.ms-access") { return .mdb }
         if mime.contains("mspublisher") { return .pub }
         if mime.contains("onenote") { return .one }
         if mime == "application/vnd.visio" || mime == "application/vnd.ms-visio" { return .vsd }
@@ -106,6 +110,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .one, .onepkg: return "onenote"
         case .vsd: return "visio"
         case .mpp: return "project"
+        case .mdb: return "access"
         }
     }
 }
@@ -146,6 +151,7 @@ enum DocumentTextExtractor {
         case .onepkg: return try OneNoteTextExtractor.extractPackage(fileURL: fileURL, logicalName: logicalName)
         case .vsd: return try VisioBinaryTextExtractor.extract(fileURL: fileURL)
         case .mpp: return try ProjectBinaryTextExtractor.extract(fileURL: fileURL)
+        case .mdb: return try AccessTextExtractor.extract(fileURL: fileURL)
         }
     }
 
@@ -175,6 +181,7 @@ enum DocumentTextExtractor {
         if Array(bytes[0..<8]) == OfficeTextExtractor.oleSignature { return OLE2CompoundSniff.kind(head: head) }
         if OneNoteTextExtractor.hasSectionSignature(head) { return .one }
         if CabinetReader.hasSignature(head) { return .onepkg }
+        if AccessTextExtractor.hasSignature(head) { return .mdb }
         return nil
     }
 
