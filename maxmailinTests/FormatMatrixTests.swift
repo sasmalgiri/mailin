@@ -143,7 +143,7 @@ final class RealBinaryFixtureTests: XCTestCase {
     /// The owner's download folder first; otherwise the in-repo open-source set
     /// (`Fixtures/opensource/tika`, Apache Tika test documents, 2026-11-07).
     private static let fixtures: URL = {
-        let downloads = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Fixtures/tika")
+        let downloads = ExternalFixtures.resolvedRoot().appendingPathComponent("tika")   // $MAILIN_FIXTURE_ROOT, else ~/Downloads/Mail/Fixtures
         if FileManager.default.fileExists(atPath: downloads.path) { return downloads }
         return URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/opensource/tika", isDirectory: true)
     }()

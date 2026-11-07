@@ -3665,9 +3665,10 @@ final class V2CutoverTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         // 1. Microsoft's .oft: routed to the MSG reader; subject and all 22 inline images byte-exact, with their content ids.
-        let oftURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Fixtures/public-pack/01_outlook/Set_Up_Mobile_Thru_Admin.oft")
+        // Directive §3: the external pack is verified against its SHA256SUMS before use (ExternalFixtures twin in TestPreconditions.swift).
+        let oftStatus = ExternalFixtures.shared.status(of: "public-pack/01_outlook/Set_Up_Mobile_Thru_Admin.oft")
         let outlook = try XCTUnwrap(oracle["outlook"] as? [String: Any])
-        if FileManager.default.fileExists(atPath: oftURL.path) {
+        if case .verified(let oftURL) = oftStatus {
             let bytes = try Data(contentsOf: oftURL)
             XCTAssertEqual(sha(bytes), outlook["sha256"] as? String, "the fixture is the official download")
             let classification = SourceFormatClassifier.classify(url: oftURL)
@@ -3770,14 +3771,16 @@ final class V2CutoverTests: XCTestCase {
         AttachmentTextIndexJob.installChildReader()
         var emails: [MBOXParser.RawEmail] = []
         var wrapperNames = ["03_W05_tracked_retained", "04_W06_tracked_accepted", "06_test_read_format_zip_winzip_aes256", "07_7zip_AES256"]
-        let oftWrapper = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Fixtures/public-pack/04_import_ready_eml/01_Set_Up_Mobile_Thru_Admin.eml")
+        let wrapperStatus = ExternalFixtures.shared.status(of: "public-pack/04_import_ready_eml/01_Set_Up_Mobile_Thru_Admin.eml")
         for name in wrapperNames {
             let raw = try String(contentsOf: pack.appendingPathComponent("04_import_ready_eml/\(name).eml"), encoding: .utf8)
             emails.append(try MBOXParser.processRawMessage(raw, senderEmail: ""))
         }
-        if FileManager.default.fileExists(atPath: oftWrapper.path) {
+        if case .verified(let oftWrapper) = wrapperStatus {
             emails.append(try MBOXParser.processRawMessage(try String(contentsOf: oftWrapper, encoding: .utf8), senderEmail: ""))
             wrapperNames.append("01_Set_Up_Mobile_Thru_Admin")
+        } else if !wrapperStatus.isAbsent {
+            XCTFail(wrapperStatus.description)
         }
         _ = try await env.store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
         let outcome = await AttachmentTextIndexJob.shared.run()
@@ -4103,7 +4106,7 @@ final class V2CutoverTests: XCTestCase {
     /// and the message inside is read with its attachment as a child. Skips
     /// when the fixture is absent (the identity is created and removed by hand).
     func testCOMP14_smimeEnvelopeDecodedWithTheKeychainIdentity_whenTheSwitchIsOn() async throws {
-        let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Fixtures/smime")
+        let folder = ExternalFixtures.resolvedRoot().appendingPathComponent("smime")   // owner-made identity material, outside Git
         let enveloped = folder.appendingPathComponent("enveloped.p7m"), signed = folder.appendingPathComponent("signed.p7m")
         try XCTSkipUnless(FileManager.default.fileExists(atPath: enveloped.path), "S/MIME fixture not present")
         #if os(macOS)
