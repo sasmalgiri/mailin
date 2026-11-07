@@ -9,8 +9,17 @@
 //  attachment level (2), each `level(1) id(4) length(4) data checksum(2)`.
 //  The message's subject and bodies (plain, HTML, compressed RTF) come out as
 //  text; every attachment comes out with its name, MIME type and bytes so it
-//  becomes a child document of the winmail.dat attachment. An embedded
-//  message inside the TNEF is listed, not expanded (stated in the registry).
+//  becomes a child document of the winmail.dat attachment.
+//
+//  Directive 2026-11-07 §6: a message embedded in the TNEF — an attAttachment
+//  whose PR_ATTACH_METHOD is ATTACH_EMBEDDED_MSG (5) and whose PR_ATTACH_DATA_OBJ
+//  (PtypObject) carries IID_IMessage followed by the embedded message as its
+//  own TNEF stream, or a winmail.dat attached by value — is read the same
+//  way and rendered by `RFC822Renderer` as an attached `.eml`
+//  (message/rfc822), as `MSGParser` does for embedded messages, so it appears
+//  as a child with its own attachments reachable. Levels are bounded by
+//  `ExtractionLimits.effective.archiveDepth`; a message deeper than that is
+//  listed, not expanded, and the note says so (Resume opens one more level).
 //
 
 import Foundation
@@ -19,12 +28,20 @@ enum TNEFReader {
 
     static let signature: UInt32 = 0x223E_9F78
 
+    /// IID_IMessage ({00020307-0000-0000-C000-000000000046}), which precedes the
+    /// embedded message's TNEF stream in a PtypObject attachment value.
+    static let iidIMessage = Data([0x07, 0x03, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46])
+
     struct Attachment: Sendable, Equatable {
         var filename: String
         var mimeType: String
         var data: Data
-        /// PR_ATTACH_METHOD 5: a message, which this reader does not expand.
+        /// PR_ATTACH_METHOD 5 (or a nested winmail.dat) that was NOT expanded — deeper
+        /// than the run's level ceiling, or not a readable TNEF stream. Listed only.
         var isEmbeddedMessage = false
+        /// A message embedded in the TNEF, expanded: `data` is its RFC 5322 rendering
+        /// (`message/rfc822`), its own attachments inside it.
+        var isAttachedMessage = false
     }
 
     struct Content: Sendable {
@@ -33,6 +50,13 @@ enum TNEFReader {
         var body: String?
         var html: String?
         var rtfText: String?
+        /// Envelope from attFrom / attDateSent and the message-level MAPI properties.
+        var fromName: String?
+        var fromAddress: String?
+        var displayTo: String?
+        var displayCc: String?
+        var dateSent: Date?
+        var messageID: String?
         var attachments: [Attachment] = []
         /// What was not read whole — a checksum that did not match, an embedded message.
         var notes: [String] = []
@@ -69,13 +93,40 @@ enum TNEFReader {
         case tnefVersion = 0x9006, oemCodepage = 0x9007
     }
 
-    static func read(_ data: Data) throws -> Content {
+    /// - Parameter depth: how many messages this TNEF is already nested inside
+    ///   (0 for the winmail.dat on the message itself); embedded messages are
+    ///   expanded while `depth + 1 < ExtractionLimits.effective.archiveDepth`.
+    static func read(_ data: Data, depth: Int = 0) throws -> Content {
         guard isTNEF(data) else { throw ReadError.notTNEF }
         var content = Content()
         var encoding = String.Encoding.windowsCP1252
         var current: Attachment?
         var position = 6   // signature + key
         var index = 0
+        let levels = ExtractionLimits.effective.archiveDepth
+        /// Closes the open attachment: an embedded message (method 5, or a winmail.dat by
+        /// value) is expanded into an attached .eml when the level ceiling allows.
+        func finish(_ attachment: Attachment) {
+            var done = attachment
+            if let nested = nestedTNEF(in: done) {
+                if depth + 1 < levels, let inner = try? read(nested, depth: depth + 1) {
+                    let rendered = RFC822Renderer.render(email(from: inner), provenance: "TNEF embedded message")
+                    done.filename = MSGParser.attachedMessageName(subject: inner.subject, fallback: done.filename.isEmpty ? "attachment" : done.filename)
+                    done.mimeType = "message/rfc822"
+                    done.data = rendered
+                    done.isEmbeddedMessage = false
+                    done.isAttachedMessage = true
+                    content.notes.append(contentsOf: inner.notes.map { "\(done.filename): \($0)" })
+                } else {
+                    done.isEmbeddedMessage = true
+                    content.notes.append("\(done.filename.isEmpty ? "an attachment" : done.filename): a message embedded in the TNEF is listed, not expanded"
+                                         + (depth + 1 < levels ? "" : " (nested deeper than \(levels) level\(levels == 1 ? "" : "s"); Resume opens one more)"))
+                }
+            } else if done.isEmbeddedMessage {
+                content.notes.append("\(done.filename.isEmpty ? "an attachment" : done.filename): a message embedded in the TNEF is listed, not expanded (its object is not a TNEF stream)")
+            }
+            content.attachments.append(done)
+        }
         while position + 9 <= data.count {
             let level = data[data.startIndex + position]
             let word = readUInt32(data, position + 1)
@@ -107,8 +158,35 @@ enum TNEFReader {
                 if content.body == nil { content.body = props.strings[0x1000] }
                 if let html = props.binaries[0x1013] { content.html = String(data: html, encoding: .utf8) ?? String(data: html, encoding: .isoLatin1) }
                 if let rtf = props.binaries[0x1009] { content.rtfText = MSGParser.decompressRTF(rtf) }
+                if content.fromName == nil { content.fromName = props.strings[0x0C1A] ?? props.strings[0x0042] }
+                if content.fromAddress == nil { content.fromAddress = props.strings[0x5D01] ?? props.strings[0x0C1F] ?? props.strings[0x0065] }
+                if content.displayTo == nil { content.displayTo = props.strings[0x0E04] }
+                if content.displayCc == nil { content.displayCc = props.strings[0x0E03] }
+                if content.messageID == nil { content.messageID = props.strings[0x1035] }
+                if content.dateSent == nil { content.dateSent = props.dates[0x0039] ?? props.dates[0x0E06] }
+            case .from:
+                // TRP: trpidOneOff, cbgrtrp, cch, cbRgb, then the display name and "SMTP:address".
+                if payload.count >= 8 {
+                    let cch = Int(readUInt16(payload, 4)), cbRgb = Int(readUInt16(payload, 6))
+                    if 8 + cch + cbRgb <= payload.count {
+                        let name = trimmedString(payload.subdata(in: 8..<(8 + cch)), encoding) ?? ""
+                        var address = trimmedString(payload.subdata(in: (8 + cch)..<(8 + cch + cbRgb)), encoding) ?? ""
+                        if let colon = address.firstIndex(of: ":"), address[..<colon].uppercased() == "SMTP" { address = String(address[address.index(after: colon)...]) }
+                        if content.fromName == nil, !name.isEmpty { content.fromName = name }
+                        if content.fromAddress == nil, !address.isEmpty { content.fromAddress = address }
+                    }
+                }
+            case .dateSent:
+                // DTR: year, month, day, hour, minute, second, day of week — 16-bit each, UTC.
+                if payload.count >= 12, content.dateSent == nil {
+                    var c = DateComponents()
+                    c.year = Int(readUInt16(payload, 0)); c.month = Int(readUInt16(payload, 2)); c.day = Int(readUInt16(payload, 4))
+                    c.hour = Int(readUInt16(payload, 6)); c.minute = Int(readUInt16(payload, 8)); c.second = Int(readUInt16(payload, 10))
+                    var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+                    if let year = c.year, year > 1900 { content.dateSent = calendar.date(from: c) }
+                }
             case .attachRendData:
-                if let done = current { content.attachments.append(done) }
+                if let done = current { finish(done) }
                 current = Attachment(filename: "", mimeType: "application/octet-stream", data: Data())
             case .attachTitle:
                 if current == nil { current = Attachment(filename: "", mimeType: "application/octet-stream", data: Data()) }
@@ -123,19 +201,61 @@ enum TNEFReader {
                 else if let short = props.strings[0x3704], current?.filename.isEmpty == true { current?.filename = short }
                 if let mime = props.strings[0x370E], !mime.isEmpty { current?.mimeType = mime }
                 if current?.data.isEmpty == true, let bytes = props.binaries[0x3701] { current?.data = bytes }
-                if props.ints[0x3705] == 5 {
-                    current?.isEmbeddedMessage = true
-                    content.notes.append("\(current?.filename ?? "an attachment"): a message embedded in the TNEF is listed, not expanded")
-                }
-            case .from, .dateSent, .tnefVersion, .mapiProps:
+                if props.ints[0x3705] == 5 { current?.isEmbeddedMessage = true }   // expanded (or not) when the attachment closes
+            case .tnefVersion, .mapiProps:
                 break
             }
         }
-        if let done = current { content.attachments.append(done) }
+        if let done = current { finish(done) }
         for i in content.attachments.indices where content.attachments[i].filename.isEmpty {
             content.attachments[i].filename = "attachment-\(i + 1)"
         }
         return content
+    }
+
+    /// The TNEF stream of a message embedded in `attachment`, if there is one: the
+    /// PtypObject value (IID_IMessage, then the stream), a bare stream in the object
+    /// value, or a winmail.dat attached by value.
+    static func nestedTNEF(in attachment: Attachment) -> Data? {
+        let d = attachment.data
+        if isTNEF(d) { return d }
+        if d.count > 16 + 6 {
+            let rest = d.subdata(in: (d.startIndex + 16)..<d.endIndex)
+            if isTNEF(rest) { return rest }
+        }
+        return nil
+    }
+
+    /// The content as the archive's message record (no raw source of its own); what
+    /// `RFC822Renderer` turns into the attached `.eml` of an embedded message.
+    static func email(from content: Content) -> MBOXParser.RawEmail {
+        var headers: [String: String] = [:]
+        if let subject = content.subject, !subject.isEmpty { headers["Subject"] = subject }
+        let name = content.fromName ?? "", address = content.fromAddress ?? ""
+        if !name.isEmpty || !address.isEmpty {
+            headers["From"] = address.isEmpty ? name : (name.isEmpty || name == address ? address : "\"\(name)\" <\(address)>")
+        }
+        if let to = content.displayTo, !to.isEmpty { headers["To"] = to }
+        if let cc = content.displayCc, !cc.isEmpty { headers["Cc"] = cc }
+        if let id = content.messageID, !id.isEmpty { headers["Message-ID"] = id }
+        if let date = content.dateSent { headers["Date"] = RFC822Renderer.rfc2822(date) }
+        let attachments = content.attachments.map { file -> AttachmentMetadata in
+            guard file.isEmbeddedMessage else {
+                return AttachmentMetadata(filename: file.filename, mimeType: file.mimeType, size: file.data.count, base64: file.data.base64EncodedString())
+            }
+            // Not expanded at this level: its TNEF stream travels as a winmail.dat so nothing is
+            // dropped and a later round (one more level) can open it; no stream → Outlook's type.
+            if let stream = nestedTNEF(in: file) {
+                let name = file.filename.lowercased().hasSuffix(".dat") ? file.filename : "winmail.dat"
+                return AttachmentMetadata(filename: name, mimeType: "application/ms-tnef", size: stream.count, base64: stream.base64EncodedString())
+            }
+            return AttachmentMetadata(filename: file.filename, mimeType: "application/vnd.ms-outlook", size: file.data.count,
+                                      base64: file.data.isEmpty ? nil : file.data.base64EncodedString())
+        }
+        let plain = content.body ?? (content.html == nil ? content.rtfText ?? "" : "")
+        return MBOXParser.RawEmail(headers: headers, rawSource: "", messageType: "received", attachments: attachments,
+                                   timestamp: content.dateSent.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+                                   domains: [], plainBody: plain, htmlBody: content.html ?? "")
     }
 
     /// MAPI properties as TNEF encodes them: count, then per property the

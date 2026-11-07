@@ -979,8 +979,9 @@ final class BulkImportCoordinator {
                         try await store.registerFolders(sourceID: sourceID, paths: report.declaredFolders)
                     }
                     // OPEN-05: this file's own accounting; container members that
-                    // were not mail, encrypted or nested are "unresolved".
-                    let unresolved = report.errorCategories.filter { $0.key.hasPrefix("container_") }.values.reduce(0, +)
+                    // were not mail, encrypted or nested are "unresolved", as are
+                    // Maildir tmp/ files the layout says are not messages.
+                    let unresolved = report.errorCategories.filter { $0.key.hasPrefix("container_") || $0.key.hasPrefix("maildir_") }.values.reduce(0, +)
                     noteSource {
                         $0.discovered = report.totalMessages
                         $0.parsed = parsedInFile

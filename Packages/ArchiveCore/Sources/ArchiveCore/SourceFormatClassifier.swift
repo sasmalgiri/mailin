@@ -428,11 +428,16 @@ enum SourceFormatClassifier {
                 extensionHint: ext, nameContentMismatch: false, warning: nil)
         }
 
-        let emlCount = names.filter { $0.lowercased().hasSuffix(".eml") }.count
+        // Directive 2026-11-07 §6: the .eml files may sit in sub-folders (an export
+        // of a folder tree); those folders are the mailboxes, so the whole tree counts.
+        let emlDirect = names.filter { $0.lowercased().hasSuffix(".eml") }.count
+        let emlCount = emlDirect > 0 ? emlDirect : emlFiles(under: url).count
         if emlCount > 0 {
             return SourceClassification(
                 format: .emlFolder,
-                evidence: "directory containing \(emlCount) .eml message file\(emlCount == 1 ? "" : "s")",
+                evidence: emlDirect > 0
+                    ? "directory containing \(emlCount) .eml message file\(emlCount == 1 ? "" : "s")"
+                    : "directory with \(emlCount) .eml message file\(emlCount == 1 ? "" : "s") in its sub-folders",
                 extensionHint: ext, nameContentMismatch: false, warning: nil)
         }
 
@@ -455,6 +460,112 @@ enum SourceFormatClassifier {
     /// an I/O error instead of reading the mailbox. Any other format returns
     /// itself, so callers can treat every source uniformly.
     static func expand(_ url: URL, format: SourceFormat) -> [URL] {
+        expandDirectory(url, format: format).members
+    }
+
+    /// What a directory source expands to: the files to parse, the files the
+    /// layout says are not messages (Maildir `tmp/`, counted as skipped), and
+    /// every mailbox the layout declares — empty ones too (FOLD-02).
+    struct DirectoryExpansion {
+        var members: [URL] = []
+        var skipped: [URL] = []
+        var declaredFolders: [String] = []
+    }
+
+    /// Directive 2026-11-07 §6: Maildir++ and nested .eml folders keep their
+    /// folders. A Maildir root is the inbox (`cur/`, `new/`); every directory
+    /// below it that holds `cur/` or `new/` is a mailbox — Maildir++ names them
+    /// with leading dots (`.Sent`, `.Archive.2024` → `Sent`, `Archive/2024`),
+    /// Dovecot's fs layout nests them as plain directories (`Archive/2024/cur`).
+    /// `cur`, `new` and `tmp` are never folder names; `tmp/` holds deliveries in
+    /// progress and is skipped and counted. A folder of .eml files is walked
+    /// whole; each file's directory, relative to the root, is its folder.
+    static func expandDirectory(_ url: URL, format: SourceFormat) -> DirectoryExpansion {
+        let fm = FileManager.default
+        switch format {
+        case .maildir:
+            var out = DirectoryExpansion()
+            func files(in directory: URL) -> [URL] {
+                ((try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])) ?? [])
+                    .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true }
+            }
+            func isMailbox(_ directory: URL) -> Bool {
+                fm.fileExists(atPath: directory.appendingPathComponent("cur").path) || fm.fileExists(atPath: directory.appendingPathComponent("new").path)
+            }
+            var visited = Set<String>()   // against symlink loops; not a limit on the tree
+            func visit(_ directory: URL, mailbox: Bool) {
+                guard visited.insert(directory.standardizedFileURL.resolvingSymlinksInPath().path).inserted else { return }
+                if mailbox {
+                    if let folder = maildirMailboxPath(directory, root: url) { out.declaredFolders.append(folder) }
+                    for sub in ["cur", "new"] { out.members += files(in: directory.appendingPathComponent(sub, isDirectory: true)) }
+                    out.skipped += files(in: directory.appendingPathComponent("tmp", isDirectory: true))
+                }
+                // Sub-mailboxes (dot-named or plain directories holding cur/ or new/) and the plain
+                // directories on the way to them (Dovecot fs layout: Lists/Swift/cur).
+                let children = ((try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [])) ?? [])
+                    .filter { child in
+                        let name = child.lastPathComponent
+                        guard name != ".", name != "..", !(mailbox && maildirInternalNames.contains(name)) else { return false }
+                        return (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                    }
+                    .sorted { $0.lastPathComponent < $1.lastPathComponent }
+                for child in children { visit(child, mailbox: isMailbox(child)) }
+            }
+            visit(url, mailbox: true)
+            out.members.sort { $0.path < $1.path }
+            out.skipped.sort { $0.path < $1.path }
+            out.declaredFolders = Array(Set(out.declaredFolders)).sorted()
+            return out
+
+        case .emlFolder:
+            var out = DirectoryExpansion()
+            out.members = emlFiles(under: url)
+            out.declaredFolders = Array(Set(out.members.compactMap { folderPath(member: $0, root: url, format: .emlFolder) })).sorted()
+            return out
+
+        default:
+            return DirectoryExpansion(members: expandLegacy(url, format: format))
+        }
+    }
+
+    /// The three directories of a Maildir mailbox; never folder names.
+    static let maildirInternalNames: Set<String> = ["cur", "new", "tmp"]
+
+    /// A Maildir mailbox directory's folder path: the root is the folder's own name;
+    /// below it, Maildir++ dot names decode to a path (".Archive.2024" → "Archive/2024")
+    /// and plain nested directories are the path as they are ("Archive/2024").
+    static func maildirMailboxPath(_ mailbox: URL, root: URL) -> String? {
+        let rootName = root.lastPathComponent
+        guard let components = relativeComponents(of: mailbox, below: root), !components.isEmpty else {
+            return rootName.isEmpty ? nil : rootName
+        }
+        let parts = components.flatMap { name -> [String] in
+            name.hasPrefix(".") ? name.split(separator: ".", omittingEmptySubsequences: true).map(String.init) : [name]
+        }.filter { !$0.isEmpty && !maildirInternalNames.contains($0) }
+        return parts.isEmpty ? (rootName.isEmpty ? nil : rootName) : parts.joined(separator: "/")
+    }
+
+    /// Every .eml file under `url`, sub-folders included, hidden entries skipped, sorted by path.
+    static func emlFiles(under url: URL) -> [URL] {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
+        var found: [URL] = []
+        for case let child as URL in walker where child.pathExtension.lowercased() == "eml" {
+            guard (try? child.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            found.append(child)
+        }
+        return found.sorted { $0.path < $1.path }
+    }
+
+    /// The directory walk of a mailbox member: its path components below `root`.
+    private static func relativeComponents(of url: URL, below root: URL) -> [String]? {
+        let member = url.standardizedFileURL.pathComponents
+        let base = root.standardizedFileURL.pathComponents
+        guard member.count >= base.count, Array(member.prefix(base.count)) == base else { return nil }
+        return Array(member.dropFirst(base.count))
+    }
+
+    private static func expandLegacy(_ url: URL, format: SourceFormat) -> [URL] {
         let fm = FileManager.default
         switch format {
         case .appleMailMailbox:
@@ -475,26 +586,6 @@ enum SourceFormatClassifier {
         case .appleMailLibrary:
             return emlxDirectories(under: url, limit: .max)
 
-        case .emlFolder:
-            return (((try? fm.contentsOfDirectory(at: url,
-                                                  includingPropertiesForKeys: nil,
-                                                  options: [.skipsHiddenFiles])) ?? [])
-                .filter { $0.pathExtension.lowercased() == "eml" })
-                .sorted { $0.path < $1.path }
-
-        case .maildir:
-            // `cur` holds read mail, `new` holds unread; `tmp` is delivery
-            // scratch space and is deliberately skipped. Each file is one
-            // RFC 822 message.
-            return ["cur", "new"]
-                .map { url.appendingPathComponent($0, isDirectory: true) }
-                .flatMap { directory -> [URL] in
-                    ((try? fm.contentsOfDirectory(at: directory,
-                                                  includingPropertiesForKeys: nil,
-                                                  options: [.skipsHiddenFiles])) ?? [])
-                }
-                .sorted { $0.path < $1.path }
-
         default:
             return [url]
         }
@@ -503,8 +594,12 @@ enum SourceFormatClassifier {
     /// FOLD-02: the mailbox a member file belongs to, as a "/"-separated
     /// path, for the formats whose directory layout IS the folder structure.
     /// Apple Mail: the chain of `.mbox` packages ("Work.mbox/Clients.mbox" →
-    /// "Work/Clients"). Maildir and EML folders: the folder's own name (their
-    /// members are not expanded into sub-folders). Nil for everything else.
+    /// "Work/Clients"). Maildir: the root mailbox is the folder's own name;
+    /// a sub-mailbox is its Maildir++ name decoded (".Archive.2024" →
+    /// "Archive/2024") or its directory path below the root ("Archive/2024/cur"
+    /// → "Archive/2024"); `cur`, `new`, `tmp` never appear. EML folders: files
+    /// in the root carry the folder's own name, files below it the directory
+    /// path relative to the root. Nil for everything else.
     static func folderPath(member: URL, root: URL, format: SourceFormat) -> String? {
         switch format {
         case .appleMailMailbox, .appleMailLibrary:
@@ -513,9 +608,15 @@ enum SourceFormatClassifier {
                 .map { String($0.dropLast(5)) }
                 .filter { !$0.isEmpty }
             return names.isEmpty ? nil : names.joined(separator: "/")
-        case .maildir, .emlFolder:
-            let name = root.lastPathComponent
-            return name.isEmpty ? nil : name
+        case .maildir:
+            // member = <mailbox>/cur|new|tmp/<file>: the mailbox is two levels up.
+            return maildirMailboxPath(member.deletingLastPathComponent().deletingLastPathComponent(), root: root)
+        case .emlFolder:
+            let rootName = root.lastPathComponent
+            guard let components = relativeComponents(of: member.deletingLastPathComponent(), below: root), !components.isEmpty else {
+                return rootName.isEmpty ? nil : rootName
+            }
+            return components.joined(separator: "/")
         default:
             return nil
         }
