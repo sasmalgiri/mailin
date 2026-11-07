@@ -86,8 +86,14 @@ enum FormatCapabilityRegistry {
               evidence: .syntheticFixtures, limitation: "fallback path is not byte-exact", dependency: "a real NSF"),
         .init("olm", .mailSource, "Outlook for Mac archive", ["olm"], reads: "every message record rebuilt as RFC 5322 with folder, flags, category, attachments' bytes; contacts/calendar/tasks/notes counted out",
               evidence: .syntheticFixtures, dependency: "a real Outlook for Mac export"),
-        .init("zip-source", .mailSource, "ZIP / gzip / tar of mailboxes", ["zip", "gz", "tgz", "tar"], reads: "each member classified on its bytes and imported; one level of nesting followed",
-              evidence: .syntheticFixtures, limitation: "encrypted members and other compression methods refused and counted"),
+        .init("zip-source", .mailSource, "ZIP / gzip / tar of mailboxes", ["zip", "z01…zNN (spanned)", "gz", "tgz", "tar"],
+              reads: "each member classified on its bytes and imported; one level of nesting followed; a spanned ZIP set (archive.z01 … archive.zip) is read with the volumes in the same folder, a member on a missing volume refused and counted",
+              evidence: .syntheticFixtures, limitation: "encrypted members and other compression methods refused and counted; spanned sets verified on Info-ZIP (zip -s) output written at test time"),
+        .init("7z-rar-source", .mailSource, "7z / RAR of mailboxes", ["7z", "7z.001…", "rar"],
+              reads: "7z: each member decoded (Copy, LZMA, LZMA2, BCJ x86, Delta, Deflate) and classified on its bytes, a split .7z.001 set read with the volumes beside it; RAR: stored members imported",
+              evidence: .syntheticFixtures,
+              limitation: "7z members in BZip2/PPMd/BCJ2/ARM…, encrypted members (no password on import) and members on a missing volume are refused and counted; RAR-compressed and encrypted members refused and counted (RAR compression is not opened); the import run on spec-built archives, the readers themselves on bsdtar/7-Zip files",
+              dependency: "a real 7z / RAR mail export (owner)"),
 
         // MARK: Attachment documents
         .init("ooxml", .attachmentDocument, "Word, Excel, PowerPoint (Office Open XML)", ["docx", "docm", "dotx", "xlsx", "xlsm", "xltx", "pptx", "pptm", "ppsx", "potx"],
@@ -127,10 +133,19 @@ enum FormatCapabilityRegistry {
               evidence: .notImplemented, limitation: "no reader; a new adapter project per family (the XML forms VSDX and Project XML are read)"),
 
         // MARK: Archive attachments
-        .init("zip-attached", .archiveAttachment, "ZIP, tar, gzip attachments", ["zip", "tar", "tgz", "gz", "gzip"],
-              reads: "every child accounted for: documents, text, PDFs/images/recordings through the same readers; unread children listed; three levels; 1 GiB per attachment",
-              evidence: .syntheticFixtures, limitation: "each member is its own child document with path, hash and state, searchable and openable on its own; 7z/RAR/split volumes not opened"),
-        .init("7z-rar", .archiveAttachment, "7z, RAR, bz2, xz", ["7z", "rar", "bz2", "xz"], reads: "—", evidence: .notImplemented, limitation: "kept as files, stated"),
+        .init("zip-attached", .archiveAttachment, "ZIP, tar, gzip attachments", ["zip", "z01…zNN (spanned)", "tar", "tgz", "gz", "gzip"],
+              reads: "every child accounted for: documents, text, PDFs/images/recordings through the same readers; unread children listed; three levels; 1 GiB per attachment; a spanned ZIP read with its sibling volumes (the message's other attachments)",
+              evidence: .syntheticFixtures, limitation: "each member is its own child document with path, hash and state, searchable and openable on its own; a member on a missing volume is \"not opened: volume N missing\" and the rest read; spanned sets verified on Info-ZIP output"),
+        .init("7z", .archiveAttachment, "7z", ["7z", "7z.001…"],
+              reads: "every member as a child document: Copy, LZMA, LZMA2, BCJ x86, Delta and Deflate decoded; 7zAES (AES-256) members and encrypted headers opened with Unlock…; solid blocks decoded once in order; split .7z.001 sets read with the sibling volumes",
+              evidence: .realFixtures,
+              limitation: "BZip2, PPMd, BCJ2, the ARM/ARM64/PowerPC/SPARC/IA-64/RISC-V filters and Zstandard/Brotli/LZ4 are named per member as \"compression method X not opened\"; a block whose LZMA dictionary exceeds the run's per-part ceiling is stopped with the ceiling named (Resume opens it); verified on bsdtar/libarchive 3.7.4 archives (Copy, LZMA, LZMA2, Deflate, BZip2, PPMd) and on official 7-Zip 26.05 AES-256 encrypted-header and libarchive's encrypted 7z corpus, every member's SHA-256 equal to the pack's oracle"),
+        .init("rar", .archiveAttachment, "RAR", ["rar", "r00…rNN"],
+              reads: "RAR 5.0 and RAR 1.5–4.x headers exact: every member's name, sizes, CRC-32, method, encryption, solid and split flags; stored (uncompressed) members read as child documents",
+              evidence: .syntheticFixtures,
+              limitation: "compressed members are \"RAR compression not opened (needs a RAR decompressor)\"; encrypted members and encrypted headers reported locked, not decrypted; members continuing in another volume not opened; verified on spec-built RAR5/RAR4 archives only — no RAR writer exists on the development Mac",
+              dependency: "a WinRAR-written archive (owner); a decision on a RAR decompressor (unrar source licence vs libarchive's BSD RAR5 reader)"),
+        .init("bz2-xz", .archiveAttachment, "bz2, xz", ["bz2", "xz"], reads: "—", evidence: .notImplemented, limitation: "kept as files, stated"),
 
         // MARK: Protected content
         .init("locked", .protectedContent, "Password-protected PDF / Office / archive members", [],

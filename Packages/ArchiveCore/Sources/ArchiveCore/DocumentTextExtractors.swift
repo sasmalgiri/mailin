@@ -34,8 +34,14 @@ enum DocumentKind: String, Sendable, CaseIterable {
     /// archives up to `ContainerTextExtractor.maxDepth` levels, every child
     /// that was not read listed by name.
     case zip, tar, gzip
+    /// Directive 2026-11-07 §6 "Containers": 7z through `SevenZipReader`
+    /// (LZMA, LZMA2, BCJ, Delta, Deflate, 7zAES; split `.7z.001` sets) and
+    /// RAR through `RARReader` (headers exact, stored members read,
+    /// compressed members named). Volumes of a spanned ZIP (`.z01`) are `.zip`.
+    case sevenZip = "7z"
+    case rar
 
-    var isContainer: Bool { self == .zip || self == .tar || self == .gzip }
+    var isContainer: Bool { self == .zip || self == .tar || self == .gzip || self == .sevenZip || self == .rar }
 
     static func detect(mimeType: String, filename: String) -> DocumentKind? {
         if let office = OfficeTextExtractor.Kind.detect(mimeType: mimeType, filename: filename) {
@@ -58,8 +64,17 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case "zip": return .zip
         case "tar": return .tar
         case "tgz", "gz", "gzip": return .gzip
+        case "7z": return .sevenZip
+        case "rar": return .rar
         default: break
         }
+        // Volumes of a split set: archive.z01 (spanned ZIP), archive.7z.001, archive.r00 (RAR).
+        if let part = SplitVolumeSet.part(ofName: filename), part.number != nil {
+            switch part.kind { case .zipSpanned: return .zip; case .sevenZipSplit: return .sevenZip }
+        }
+        if ext.count == 3, ext.hasPrefix("r"), Int(ext.dropFirst()) != nil { return .rar }
+        if mime.contains("x-7z-compressed") { return .sevenZip }
+        if mime.contains("rar") { return .rar }
         if mime.contains("opendocument.text") { return .odt }
         if mime.contains("opendocument.spreadsheet") { return .ods }
         if mime.contains("opendocument.presentation") { return .odp }
@@ -85,7 +100,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .xlsb: return "office"
         case .vsdx: return "visio"
         case .projectXML: return "project"
-        case .zip, .tar, .gzip: return "archive"
+        case .zip, .tar, .gzip, .sevenZip, .rar: return "archive"
         }
     }
 }
@@ -98,7 +113,11 @@ enum DocumentTextExtractor {
     /// - Parameter password: §13.8 step 5 — opens an encrypted Office package
     ///   (Standard or Agile) or the encrypted members of a ZIP; used for this
     ///   call only. Without it those are reported locked.
-    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil) throws -> OfficeTextExtractor.Result {
+    /// - Parameter siblings: directive §6 "Containers" — the other files next
+    ///   to this one (a message's other attachments, an import source's
+    ///   directory) in which the remaining volumes of a split archive are looked for.
+    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil,
+                        siblings: [SplitVolumeSet.Sibling] = []) throws -> OfficeTextExtractor.Result {
         if let password, [.docx, .xlsx, .pptx, .xlsb, .vsdx].contains(kind), OfficeCryptoUnlocker.isEncryptedPackage((try? Data(contentsOf: fileURL)) ?? Data()) {
             let plain: Data
             do { plain = try OfficeCryptoUnlocker.decrypt(data: try Data(contentsOf: fileURL), password: password) }
@@ -120,7 +139,8 @@ enum DocumentTextExtractor {
         case .xlsb: return try XLSBReader.extract(fileURL: fileURL)
         case .vsdx: return try VisioTextExtractor.extract(fileURL: fileURL)
         case .projectXML: return try ProjectXMLTextExtractor.extract(fileURL: fileURL)
-        case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: password)
+        case .zip, .tar, .gzip, .sevenZip, .rar:
+            return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: password, siblings: siblings)
         }
     }
 
@@ -144,6 +164,9 @@ enum DocumentTextExtractor {
         }
         if bytes[0] == 0x1F, bytes[1] == 0x8B { return .gzip }
         if bytes[0] == 0x50, bytes[1] == 0x4B, bytes[2] == 0x03 || bytes[2] == 0x05, bytes[3] == 0x04 || bytes[3] == 0x06 { return .zip }
+        if bytes[0] == 0x50, bytes[1] == 0x4B, bytes[2] == 0x07, bytes[3] == 0x08 { return .zip }   // first volume of a spanned ZIP
+        if SevenZipReader.isSevenZip(head: head) { return .sevenZip }
+        if RARReader.isRAR(head: head) { return .rar }
         if bytes.count >= 262, Array(bytes[257..<262]) == [0x75, 0x73, 0x74, 0x61, 0x72] { return .tar }
         return nil
     }
@@ -1080,17 +1103,61 @@ enum ContainerTextExtractor {
     static var maxTotalBytes: Int64 { ExtractionLimits.base.totalArchiveBytes }
     /// The app's reader for children the package cannot read itself.
     nonisolated(unsafe) static var childReader: (@Sendable (URL, String) -> ArchiveChildReading)?
+    /// Directive §6 "Containers": the app's way of finding the other volumes
+    /// of a split archive attachment (the message's other attachments), by
+    /// the attachment's file URL and logical name. Used when the caller
+    /// passes no `siblings`.
+    nonisolated(unsafe) static var siblingResolver: (@Sendable (URL, String) -> [SplitVolumeSet.Sibling])?
 
     private struct Child {
         let name: String
         let size: Int64?
         let encrypted: Bool
+        /// Known before any byte is read: unsupported method, unsafe path, link, missing volume.
+        var note: String? = nil
         let extract: (URL) throws -> Void
     }
 
-    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil) throws -> OfficeTextExtractor.Result {
+    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil,
+                        siblings: [SplitVolumeSet.Sibling] = []) throws -> OfficeTextExtractor.Result {
         var budget = ExtractionLimits.effective.totalArchiveBytes
-        return try extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, depth: 1, prefix: "", budget: &budget, password: password)
+        let name = logicalName ?? fileURL.lastPathComponent
+        let neighbours = siblings.isEmpty ? (siblingResolver?(fileURL, name) ?? []) : siblings
+        return try extract(fileURL: fileURL, kind: kind, logicalName: name, depth: 1, prefix: "", budget: &budget, password: password, siblings: neighbours)
+    }
+
+    /// What a failed extraction means for the child — one vocabulary for
+    /// every container reader: a ceiling that bit (resumable), a lock, a
+    /// method this reader does not open, a volume that is not there, or a
+    /// real failure.
+    static func classify(_ error: Error) -> (state: ChildDocument.State, note: String) {
+        switch error {
+        case ZIPArchiveReader.ReadError.budgetExceeded(_, let limit), SevenZipReader.ReadError.budgetExceeded(_, let limit),
+             RARReader.ReadError.budgetExceeded(_, let limit):
+            // R05: stopped inside decompression at the budget — stated, not failed.
+            return (.unsupported, "decompression stopped at the \(limit)-byte budget")
+        case ZIPArchiveReader.ReadError.wrongPassword, SevenZipReader.ReadError.wrongPassword:
+            // §13.8 step 5: the password did not open this member — still locked, said so.
+            return (.locked, "the password did not open it")
+        case ZIPArchiveReader.ReadError.encrypted, SevenZipReader.ReadError.encrypted, RARReader.ReadError.encrypted:
+            return (.locked, "password-protected")
+        case SevenZipReader.ReadError.dictionaryOverLimit(_, let needed, let limit):
+            return (.unsupported, "needs a \(needed)-byte LZMA dictionary, over the \(limit)-byte guard")
+        case ZIPArchiveReader.ReadError.unsupportedMethod(let method, _):
+            return (.unsupported, "compression method \(method) not opened")
+        case SevenZipReader.ReadError.unsupportedMethod(let method, _):
+            return (.unsupported, "compression method \(method) not opened")
+        case RARReader.ReadError.compressed(_, let method):
+            return (.unsupported, "RAR compression (\(method)) not opened (needs a RAR decompressor)")
+        case RARReader.ReadError.splitAcrossVolumes(_, let detail):
+            return (.unsupported, "not opened: \(detail)")
+        case SevenZipReader.ReadError.unsafePath(_, let reason):
+            return (.unsupported, "unsafe path (\(reason)), not opened")
+        case SplitVolumeError.volumeMissing(let n, let expected):
+            return (.unsupported, "not opened: volume \(n) (\(expected)) missing")
+        default:
+            return (.failed, "\(error)")
+        }
     }
 
     /// R03: the gzip payload's name comes from the archive's LOGICAL name
@@ -1107,8 +1174,49 @@ enum ContainerTextExtractor {
         return name.isEmpty ? "payload" : name
     }
 
-    private static func children(of url: URL, kind: DocumentKind, logicalName: String, budget: Int64, password: String?) throws -> [Child] {
+    private static func children(of url: URL, kind: DocumentKind, logicalName: String, budget: Int64, password: String?,
+                                 siblings: [SplitVolumeSet.Sibling] = []) throws -> [Child] {
+        let limit = min(ExtractionLimits.effective.partBytes, max(0, budget))
         switch kind {
+        case .sevenZip:
+            // One session per archive: a solid folder is decoded once and
+            // handed out member by member as the loop below asks.
+            let set = SplitVolumeSet.sevenZipSet(primary: url, primaryName: logicalName, siblings: siblings)
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
+            let reader: SevenZipReader
+            do { reader = try SevenZipReader(source: source, password: password) }
+            catch SevenZipReader.ReadError.encrypted { throw OfficeTextExtractor.ExtractError.encrypted }
+            catch SevenZipReader.ReadError.wrongPassword { throw OfficeTextExtractor.ExtractError.wrongPassword }
+            catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
+            return reader.members.filter { !$0.isDirectory && !$0.isJunk && !$0.isAnti }.map { member in
+                var note: String?
+                if let reason = member.unsafePath { note = "unsafe path (\(reason)), not opened" }
+                else if member.isSymlink { note = "a symbolic link, not followed" }
+                else if let method = member.unsupportedMethod { note = "compression method \(method) not opened" }
+                else if let set, let folder = member.folderIndex, let range = reader.packedByteRange(forFolder: folder),
+                        let missing = set.missingVolumes(in: range).first {
+                    note = "not opened: volume \(missing) (\(set.volumes[missing - 1].expectedName)) missing"
+                }
+                return Child(name: member.name, size: member.size, encrypted: member.isEncrypted, note: note) {
+                    try reader.extract(member, to: $0, maxOutputBytes: limit)
+                }
+            }
+        case .rar:
+            let archive: RARReader.Archive
+            let source = try FileRandomAccessSource(url: url)
+            do { archive = try RARReader.read(source: source) }
+            catch RARReader.ReadError.encryptedHeaders { throw OfficeTextExtractor.ExtractError.encrypted }
+            catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
+            return archive.members.filter { !$0.isDirectory && !$0.isJunk }.map { member in
+                var note: String?
+                if let reason = member.unsafePath { note = "unsafe path (\(reason)), not opened" }
+                else if member.isSymlink { note = "a symbolic link, not followed" }
+                else if member.isSplitBefore || member.isSplitAfter { note = "not opened: continues in another volume" }
+                else if !member.isEncrypted, member.method != 0 { note = "RAR compression (\(member.methodName)) not opened (needs a RAR decompressor)" }
+                return Child(name: member.name, size: member.unpackedSize, encrypted: member.isEncrypted, note: note) {
+                    try RARReader.extract(member, source: source, to: $0, maxOutputBytes: limit)
+                }
+            }
         case .tar:
             let members: [TARReader.Member]
             do { members = try TARReader.members(of: url) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
@@ -1117,15 +1225,35 @@ enum ContainerTextExtractor {
         case .gzip:
             // R05: the uncompressed size is unknown in advance, so the budget
             // is enforced inside the inflate sink.
-            let limit = min(ExtractionLimits.effective.partBytes, max(0, budget))
             return [Child(name: gzipPayloadName(for: logicalName), size: nil, encrypted: false) {
                 try ZIPArchiveReader.gunzip(url, to: $0, maxOutputBytes: limit)
             }]
         default:
+            // Directive §6: a volume of a spanned set (archive.z01 … archive.zip)
+            // is read with its siblings laid end to end; a member on or
+            // running into a missing volume is named, the rest still read.
+            let set = SplitVolumeSet.zipSet(primary: url, primaryName: logicalName, siblings: siblings)
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
             let members: [ZIPArchiveReader.Member]
-            do { members = try ZIPArchiveReader.members(of: url) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
-            return members.filter { !$0.isDirectory && !$0.isJunk }
-                .map { member in Child(name: member.name, size: member.uncompressedSize, encrypted: member.isEncrypted) { try ZIPArchiveReader.extract(member, from: url, to: $0, password: password) } }
+            do { members = try ZIPArchiveReader.members(source: source) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
+            return members.filter { !$0.isDirectory && !$0.isJunk }.map { member in
+                var note: String?
+                if let set {
+                    let disk = member.diskNumberStart
+                    if set.isDiskMissing(disk) || set.diskBase(disk) == nil {
+                        let name = disk < set.volumes.count ? set.volumes[disk].expectedName : "volume \(disk + 1)"
+                        note = "not opened: volume \(disk + 1) (\(name)) missing"
+                    } else {
+                        let end = member.localHeaderOffset + 30 + Int64(member.name.utf8.count) + max(0, member.compressedSize)
+                        if let missing = set.missingVolumes(in: member.localHeaderOffset..<max(end, member.localHeaderOffset + 1)).first {
+                            note = "not opened: volume \(missing) (\(set.volumes[missing - 1].expectedName)) missing"
+                        }
+                    }
+                }
+                return Child(name: member.name, size: member.uncompressedSize, encrypted: member.isEncrypted, note: note) {
+                    try ZIPArchiveReader.extract(member, source: source, to: $0, password: password)
+                }
+            }
         }
     }
 
@@ -1134,8 +1262,9 @@ enum ContainerTextExtractor {
     /// parent's own text is the listing of its members. Nested containers
     /// contribute their members with the chain in `path`; a member nothing
     /// can read is a child in a named state, never dropped.
-    private static func extract(fileURL: URL, kind: DocumentKind, logicalName: String, depth: Int, prefix: String, budget: inout Int64, password: String? = nil) throws -> OfficeTextExtractor.Result {
-        let members = try children(of: fileURL, kind: kind, logicalName: logicalName, budget: budget, password: password)
+    private static func extract(fileURL: URL, kind: DocumentKind, logicalName: String, depth: Int, prefix: String, budget: inout Int64,
+                                password: String? = nil, siblings: [SplitVolumeSet.Sibling] = []) throws -> OfficeTextExtractor.Result {
+        let members = try children(of: fileURL, kind: kind, logicalName: logicalName, budget: budget, password: password, siblings: siblings)
         let scratch = try DocumentTextExtractor.scratchDirectory("archive")
         defer { try? FileManager.default.removeItem(at: scratch) }
         var listing: [String] = []
@@ -1153,6 +1282,10 @@ enum ContainerTextExtractor {
             let name = prefix + member.name
             let ext = (member.name as NSString).pathExtension.lowercased()
             listing.append(name)
+            if let note = member.note {
+                // Known without reading a byte: named, never silent.
+                skipped.append("\(name) (\(note))"); record(name, member, .unsupported, note: note, bytes: Int(member.size ?? 0)); continue
+            }
             if member.encrypted, password == nil {
                 skipped.append("\(name) (password-protected)"); record(name, member, .locked, note: "password-protected"); continue
             }
@@ -1165,16 +1298,10 @@ enum ContainerTextExtractor {
                 skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, bytes: Int(size)); continue
             }
             let destination = scratch.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : "." + ext))
-            do { try member.extract(destination) } catch ZIPArchiveReader.ReadError.budgetExceeded(_, let limit) {
-                // R05: stopped inside decompression at the budget — stated, not failed.
-                let why = "decompression stopped at the \(limit)-byte budget"
-                skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why); continue
-            } catch ZIPArchiveReader.ReadError.wrongPassword {
-                // §13.8 step 5: the password did not open this member — still locked, said so.
-                skipped.append("\(name) (the password did not open it)"); record(name, member, .locked, note: "the password did not open it"); continue
-            } catch {
-                unextractable += 1
-                skipped.append("\(name) (\(error))"); record(name, member, .failed, note: "\(error)"); continue
+            do { try member.extract(destination) } catch {
+                let outcome = classify(error)
+                if outcome.state == .failed { unextractable += 1 }
+                skipped.append("\(name) (\(outcome.note))"); record(name, member, outcome.state, note: outcome.note); continue
             }
             defer { try? FileManager.default.removeItem(at: destination) }
             let written = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
@@ -1265,7 +1392,9 @@ enum ContainerTextExtractor {
     /// §13.3 (9): the bytes of one child, by its recorded path ("a.zip › b/c.docx"),
     /// extracted level by level into `scratch`. An attached message along the
     /// chain is opened by its MIME parts. Returns the child's file URL.
-    static func materialize(childPath: String, in fileURL: URL, kind: DocumentKind?, logicalName: String, scratch: URL, password: String? = nil) throws -> URL {
+    static func materialize(childPath: String, in fileURL: URL, kind: DocumentKind?, logicalName: String, scratch: URL, password: String? = nil,
+                            siblings: [SplitVolumeSet.Sibling] = []) throws -> URL {
+        let neighbours = siblings.isEmpty ? (siblingResolver?(fileURL, logicalName) ?? []) : siblings
         var segments = childPath.components(separatedBy: " › ")
         var currentURL = fileURL
         var currentName = logicalName
@@ -1316,10 +1445,13 @@ enum ContainerTextExtractor {
                 guard let containerKind = currentKind, containerKind.isContainer else {
                     throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) is not an archive")
                 }
-                let members = try children(of: currentURL, kind: containerKind, logicalName: currentName, budget: ExtractionLimits.effective.totalArchiveBytes, password: password)
+                // Siblings apply to the attachment itself; a nested archive has none.
+                let members = try children(of: currentURL, kind: containerKind, logicalName: currentName, budget: ExtractionLimits.effective.totalArchiveBytes,
+                                           password: password, siblings: currentURL == fileURL ? neighbours : [])
                 guard let member = members.first(where: { $0.name == segment }) else {
                     throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) has no member named \(segment)")
                 }
+                if let note = member.note { throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) › \(segment): \(note)") }
                 let destination = scratch.appendingPathComponent(UUID().uuidString + "-" + (segment as NSString).lastPathComponent)
                 try member.extract(destination)
                 currentURL = destination; currentName = member.name

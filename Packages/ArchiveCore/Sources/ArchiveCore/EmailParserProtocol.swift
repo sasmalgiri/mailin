@@ -97,7 +97,7 @@ struct ParserFactory {
     }
 
     static let allSupportedExtensions: [String] = [
-        "mbox", "eml", "emlx", "msg", "oft", "pst", "ost", "nsf", "zip", "gz", "olm", "tar", "tgz"
+        "mbox", "eml", "emlx", "msg", "oft", "pst", "ost", "nsf", "zip", "gz", "olm", "tar", "tgz", "7z", "rar"
     ]
 
     // MARK: - Containers (ZIP / gzip) — v2.1 backlog #1
@@ -131,11 +131,45 @@ struct ParserFactory {
                 : url.lastPathComponent
             return [ContainerStep(name: name) { dest in try ZIPArchiveReader.gunzip(url, to: dest) }]
         case .zip:
-            return try ZIPArchiveReader.members(of: url)
+            // Directive §6: a volume of a spanned set is read with the
+            // other volumes in the same folder; a member on a missing
+            // volume is refused and counted (SplitVolumeError), the rest import.
+            let set = SplitVolumeSet.zipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
+            return try ZIPArchiveReader.members(source: source)
                 .filter { !$0.isDirectory && !$0.isJunk }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
-                        try ZIPArchiveReader.extract(member, from: url, to: dest)
+                        if let set, set.isDiskMissing(member.diskNumberStart) || set.diskBase(member.diskNumberStart) == nil {
+                            throw SplitVolumeError.volumeMissing(member.diskNumberStart + 1,
+                                                                 expectedName: member.diskNumberStart < set.volumes.count ? set.volumes[member.diskNumberStart].expectedName : "volume \(member.diskNumberStart + 1)")
+                        }
+                        try ZIPArchiveReader.extract(member, source: source, to: dest)
+                    }
+                }
+        case .sevenZip:
+            // One reader per archive: a solid folder is decoded once, in order.
+            let set = SplitVolumeSet.sevenZipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
+            let reader = try SevenZipReader(source: source)
+            return reader.members
+                .filter { !$0.isDirectory && !$0.isJunk && !$0.isAnti }
+                .map { member in
+                    ContainerStep(name: member.name) { dest in
+                        if member.isSymlink { throw SevenZipReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
+                        try reader.extract(member, to: dest)
+                    }
+                }
+        case .rar:
+            // Stored members only; compressed / encrypted / split ones are refused by name and counted.
+            let source = try FileRandomAccessSource(url: url)
+            let archive = try RARReader.read(source: source)
+            return archive.members
+                .filter { !$0.isDirectory && !$0.isJunk }
+                .map { member in
+                    ContainerStep(name: member.name) { dest in
+                        if member.isSymlink { throw RARReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
+                        try RARReader.extract(member, source: source, to: dest)
                     }
                 }
         case .tar:
@@ -183,6 +217,15 @@ struct ParserFactory {
             containerLog.error("container member refused: \(error.description, privacy: .private)")
             return .refused
         } catch let error as TARReader.ReadError {
+            containerLog.error("container member refused: \(error.description, privacy: .private)")
+            return .refused
+        } catch let error as SevenZipReader.ReadError {
+            containerLog.error("container member refused: \(error.description, privacy: .private)")
+            return .refused
+        } catch let error as RARReader.ReadError {
+            containerLog.error("container member refused: \(error.description, privacy: .private)")
+            return .refused
+        } catch let error as SplitVolumeError {
             containerLog.error("container member refused: \(error.description, privacy: .private)")
             return .refused
         }
@@ -264,6 +307,10 @@ struct ParserFactory {
             return ("container", ZIPArchiveReader.version)
         case "tar":
             return ("container-tar", TARReader.version)
+        case "7z":
+            return ("container-7z", SevenZipReader.version)
+        case "rar":
+            return ("container-rar", RARReader.version)
         case "olm":
             return ("olm", OLMParser.parserVersion)
         default:
