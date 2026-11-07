@@ -4891,6 +4891,10 @@ final class V2CutoverTests: XCTestCase {
     /// attached, the member on it is named with the missing volume and the rest
     /// is still read; a lone .z01 says which entry volume is missing.
     func testSPLIT01_splitZipAttachedAsVolumes_readAsOneSet_missingVolumeNamed() async throws {
+        #if !os(macOS)
+        // Info-ZIP is run as a child process to write the spanned set; iOS has no Process.
+        throw XCTSkip("needs /usr/bin/zip (macOS)")
+        #else
         let zip = URL(fileURLWithPath: "/usr/bin/zip")
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: zip.path), "/usr/bin/zip is not available")
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("split-\(UUID().uuidString)", isDirectory: true)
@@ -4976,6 +4980,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(firstRows.count, 1)
         XCTAssertEqual(firstRows[0].state, .unsupported, firstRows[0].note ?? "")
         XCTAssertTrue(firstRows[0].note?.contains("set.zip") == true && firstRows[0].note?.contains("not attached") == true, firstRows[0].note ?? "")
+        #endif
     }
 
     /// Directive 2026-11-07 §6 "OpenPGP": OpenPGP attachments and the PGP/MIME
