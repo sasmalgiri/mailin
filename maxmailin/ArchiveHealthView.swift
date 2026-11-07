@@ -85,8 +85,8 @@ struct ArchiveHealthView: View {
                 .help("Rebuilds the full-text index from the stored emails, batch by batch; the archive itself is not modified")
                 .accessibilityIdentifier("health.rebuildIndex")
                 // Owner-approved 2026-11-07: messages from PST/MSG/NSF imported before the rendered source get their bytes back.
-                Button(String(localized: "Re-read attachments from the original files…")) { showingRawSourceRecovery = true }
-                    .help("Messages imported from Outlook or Notes files before 7 November 2026 have no stored source and so no openable attachments; this reads the original files again and fills the source in, message by message. Nothing else changes.")
+                Button(String(localized: "Recover missing imported attachments…")) { showingRawSourceRecovery = true }
+                    .help("Messages imported from Outlook or Notes files before 7 November 2026 have no stored source and so no openable attachments; this backs the archive up, reads the original files again and stores a reconstructed source for every message that matches on Message-ID and content. Nothing else changes; uncertain matches are listed, not written.")
                     .accessibilityIdentifier("health.rereadRawSources")
                     .sheet(isPresented: $showingRawSourceRecovery) { RawSourceRecoveryView() }
                 Text("Original files that moved: use “Relink…” in Original files below. A detached archive volume: reconnect it and relaunch (Archive location).")

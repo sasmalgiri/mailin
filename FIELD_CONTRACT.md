@@ -101,3 +101,36 @@ original record fields (headers, bodies, attachment metadata) are unchanged; the
 derived from them and from the attachment bytes the parser produced. Real source bytes (mbox,
 .eml, .emlx) are never replaced. Duplicate verification therefore classifies four renderings of
 one message as **content-equivalent** (never byte-identical: the rendered boundaries differ).
+
+### Reconstructed raw source (added 2026-11-07, directive §2 "Recover existing imports")
+
+Messages imported from PST, OST, MSG, OFT or NSF files before 2026-11-07 have an EMPTY raw source
+(and therefore no attachment bytes). Health ▸ Recovery ▸ **Recover missing imported attachments**
+puts the bytes back from the original file (`RawSourceRecovery`). What it stores is a rendered
+RFC 5322 text, and it is labelled as such — twice:
+
+- `X-Mailin-Rendered: <source format>` — first line, as for every rendered source above;
+- `X-Mailin-Reconstructed: from <file name> on <ISO 8601 date>[; file hash differs from the
+  registered source]` — second line, written only by the recovery.
+
+Both headers live only in the rendered text, so they travel with every .eml / mbox export and
+with backups. `RawSourceProvenance.label(for:)` reads them; the detail view shows "Source
+reconstructed from <file> on <date> — built from the <format> record, not captured wire bytes"
+(`ReconstructedSourceNotice`) and marks the hash panel as hashes of the reconstruction. A
+reconstructed source is NEVER presented as captured wire bytes; duplicate verification treats
+it like any rendered source (content-equivalent, never byte-identical).
+
+**Detection** is from provenance AND availability (not import date): a message of a binary-source
+import is affected when its raw source is empty OR an attachment has no retrievable bytes
+(`AttachmentHydrator.data(for:index:email:)` is nil). **Matching** is Message-ID AND
+corroborating content (subject, date to the second, from address, attachment count and names);
+without a Message-ID, the source ordinal AND the same content; one weak signal, or more than one
+row, is *ambiguous* — listed with both sides, never written. **Repair** changes only the raw
+columns of `email_bodies`; identity (`id`, `message_id`, `source_id`/`source_ordinal`), headers,
+folder occurrences, tags, notes, legal holds and Trash state are unchanged
+(`SQLiteEmailStore.recoveryInvariants(id:)` proves it). The archive is snapshotted
+(`before-attachment-recovery`) before the first write. The receipt carries six counts — affected,
+recovered, already intact, ambiguous, missing source, failed — and is saved under
+`receipts/recovery/` (`RawSourceRecoveryReceiptStore`).
+
+Tests: `V2CutoverTests.testRECOVER_*`.

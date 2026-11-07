@@ -621,7 +621,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let safeReason = reason.replacingOccurrences(of: "[^A-Za-z0-9-]", with: "-", options: .regularExpression)
-        let url = target.appendingPathComponent("emails-\(stamp)-\(safeReason).db")
+        var url = target.appendingPathComponent("emails-\(stamp)-\(safeReason).db")
+        // Two snapshots within one second (a repair run twice) must not collide: VACUUM INTO refuses
+        // an existing file, and the earlier snapshot is never overwritten.
+        var serial = 1
+        while fm.fileExists(atPath: url.path) {
+            serial += 1
+            url = target.appendingPathComponent("emails-\(stamp)-\(safeReason)-\(serial).db")
+        }
         let escaped = url.path.replacingOccurrences(of: "'", with: "''")
         do {
             try exec(handle, "VACUUM INTO '\(escaped)';")

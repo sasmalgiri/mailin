@@ -4209,86 +4209,181 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
-    /// Owner-approved 2026-11-07 (item 6): an archive that imported Outlook
-    /// files before the rendered raw source has messages with no source and
-    /// no attachment bytes. The recovery lists them per source with counts
-    /// before running, re-reads the archive's copy of each source, fills the
-    /// source in for the matched rows only, names a source it cannot find,
-    /// and the attachments become openable and searchable again.
-    func testRECOVER_rawSourceRefilledFromTheOriginalFiles_attachmentsOpenAndSearchAgain() async throws {
-        let wasOn = SearchChunkPolicy.isEnabled
-        defer { SearchChunkPolicy.isEnabled = wasOn }
+    /// Owner-approved 2026-11-07 (item 6), hardened per the completion
+    /// directive §2 "Recover existing imports": the fixture every testRECOVER_*
+    /// method starts from. Two binary sources the old build imported without
+    /// a source — one.msg (message 1) and two.pst (messages 2, 3, 5) — plus a
+    /// message whose source was never copied and is gone (4). The pre-fix
+    /// state is produced directly: 1 and 2 have an EMPTY raw source, 5 has a
+    /// raw source WITHOUT its attachment bytes (headers only), 3 is intact.
+    /// Message 1 carries a tag, a note, a hold and the Trash flag.
+    private struct RecoverFixture {
+        let env: Env
+        let docx: Data
+        let msgURL: URL
+        let pstURL: URL
+        let msgHash: String
+        let pstHash: String
+        /// Imported ids in order: [1, 2, 3, 5].
+        let imported: [UUID]
+        let lostID: UUID
+        var emptied: [UUID] { [imported[0], imported[1]] }
+        var stripped: UUID { imported[3] }
+        var intact: UUID { imported[2] }
+        var affected: [UUID] { emptied + [stripped] }
+    }
+
+    private static func recoverMessage(_ n: Int, docx: Data, messageID: Bool = true) -> String {
+        """
+        From: Ann <ann@example.com>
+        To: bob@example.com
+        Subject: Recover \(n)
+        Date: Wed, 15 Jan 2025 10:0\(n):00 +0000
+        \(messageID ? "Message-ID: <recover-\(n)@example.com>" : "X-Nothing: here")
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        Body \(n).
+        --B
+        Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document; name="minutes.docx"
+        Content-Disposition: attachment; filename="minutes.docx"
+        Content-Transfer-Encoding: base64
+
+        \(docx.base64EncodedString())
+        --B--
+        """
+    }
+
+    private func recoverFixture(copyPST: Bool = true) async throws -> RecoverFixture {
         let env = try chunkedEnv()
         try FileManager.default.createDirectory(at: env.root, withIntermediateDirectories: true)
         let docx = Self.docx(body: "Recovered minutes mention escrow.", header: "")
-        func message(_ n: Int) -> String {
-            """
-            From: ann@example.com
-            To: bob@example.com
-            Subject: Recover \(n)
-            Date: Wed, 15 Jan 2025 10:0\(n):00 +0000
-            Message-ID: <recover-\(n)@example.com>
-            MIME-Version: 1.0
-            Content-Type: multipart/mixed; boundary="B"
-
-            --B
-            Content-Type: text/plain
-
-            Body \(n).
-            \(mimeAttachment("minutes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", docx))
-            --B--
-            """
-        }
-        // Two sources the old build would have imported without a source: a .msg and a PST (two messages).
         let msgURL = env.root.appendingPathComponent("one.msg")
-        try XCTUnwrap(MSGWriter.write(email: try MBOXParser.processRawMessage(message(1), senderEmail: ""))).write(to: msgURL)
+        try XCTUnwrap(MSGWriter.write(email: try MBOXParser.processRawMessage(Self.recoverMessage(1, docx: docx), senderEmail: ""))).write(to: msgURL)
         let pstURL = env.root.appendingPathComponent("two.pst")
         let writer = try PSTWriterFactory.make(url: pstURL)
-        try writer.appendMessage(try MBOXParser.processRawMessage(message(2), senderEmail: ""))
-        try writer.appendMessage(try MBOXParser.processRawMessage(message(3), senderEmail: ""))
-        try writer.finalize()
+        for n in [2, 3, 5] { try writer.appendMessage(try MBOXParser.processRawMessage(Self.recoverMessage(n, docx: docx), senderEmail: "")) }
+        _ = try writer.finalize()
         var imported: [UUID] = []
-        for url in [msgURL, pstURL] {
+        var hashes: [String] = []
+        for (url, copy) in [(msgURL, true), (pstURL, copyPST)] {
             let hash = try ExportInventory.sha256(of: url)
-            _ = try await env.store.registerSource(SQLiteEmailStore.SourceDescriptor(sha256: hash, filename: url.lastPathComponent, byteSize: 0, parser: url.pathExtension))
-            _ = try SourceCopies.copyIntoArchive(original: url, sha256: hash, storeDirectory: env.store.storeDirectory)
-            let emails = try ParserFactory.parse(fileURL: url, senderEmail: "")
-            _ = try await env.store.insertBatch(emails, sourceFileHash: hash, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+            hashes.append(hash)
+            let sourceID = try await env.store.registerSource(SQLiteEmailStore.SourceDescriptor(sha256: hash, filename: url.lastPathComponent, byteSize: 0, parser: url.pathExtension, sourceKind: url.pathExtension))
+            if copy { _ = try SourceCopies.copyIntoArchive(original: url, sha256: hash, storeDirectory: env.store.storeDirectory) }
+            let emails = try ParserFactory.parse(fileURL: url, senderEmail: "").map { email -> MBOXParser.RawEmail in
+                var e = email; e.folderPath = "Inbox/Recovered"; return e
+            }
+            _ = try await env.store.insertBatch(emails, sourceFileHash: hash, accountID: nil, sourceID: sourceID, firstOrdinal: 0, dedupPolicy: .messageID, batchSize: 10, progress: nil)
             imported += emails.map(\.id)
+            for e in emails { for a in e.attachments { if let u = a.fileURL { try? FileManager.default.removeItem(at: u) } } }
         }
         // A third source whose file is gone (never copied), one message.
-        let lost = try MBOXParser.processRawMessage(message(4), senderEmail: "")
+        let lost = try MBOXParser.processRawMessage(Self.recoverMessage(4, docx: docx), senderEmail: "")
         _ = try await env.store.insertBatch([lost], sourceFileHash: "deadbeefdeadbeef", accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
-        // The pre-fix state: no raw source anywhere.
-        for id in imported + [lost.id] { try await env.store.replaceRawSource(emailID: id, rawSource: "") }
-        let beforeOptional = try await env.store.fullEmail(id: imported[0])
+        // Review state on message 1: tag, note, hold, Trash — the repair must leave every one of them.
+        try await env.store.userTagAdd("escrow", ids: [imported[0]])
+        try await env.store.annotationSet("check the minutes", id: imported[0])
+        _ = try await env.store.legalHoldsAdd([imported[0]], matter: "M-1")
+        try await env.store.reviewSetFlag(.trashed, ids: [imported[0]], value: true)
+        // The pre-fix state.
+        for id in [imported[0], imported[1], lost.id] { try await env.store.replaceRawSource(emailID: id, rawSource: "") }
+        try await env.store.replaceRawSource(emailID: imported[3], rawSource: "From: ann@example.com\r\nSubject: Recover 5\r\n\r\nBody 5 without its parts.\r\n")
+        return RecoverFixture(env: env, docx: docx, msgURL: msgURL, pstURL: pstURL, msgHash: hashes[0], pstHash: hashes[1], imported: imported, lostID: lost.id)
+    }
+
+    private func recoverInvariants(_ f: RecoverFixture) async throws -> [UUID: SQLiteEmailStore.RecoveryInvariants] {
+        var out: [UUID: SQLiteEmailStore.RecoveryInvariants] = [:]
+        for id in f.imported + [f.lostID] { out[id] = try await f.env.store.recoveryInvariants(id: id) }
+        return out
+    }
+
+    /// Detection from provenance AND availability; counts before the run (affected, recoverable,
+    /// already intact, source not found); snapshot before the first write; only the raw columns
+    /// change (identity, headers, folders, tags, note, hold, Trash equal before and after); the
+    /// reconstruction is labelled; the receipt has six counts and is saved; attachments open and
+    /// are searchable again; a second run writes nothing and says already intact = all.
+    func testRECOVER_rawSourceRefilledFromTheOriginalFiles_attachmentsOpenAndSearchAgain() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let f = try await recoverFixture()
+        let env = f.env
+        let beforeOptional = try await env.store.fullEmail(id: f.imported[0])
         let before = try XCTUnwrap(beforeOptional)
         XCTAssertTrue(before.rawSource.isEmpty)
         XCTAssertNil(AttachmentHydrator.data(for: try XCTUnwrap(before.attachments.first), index: 0, email: before), "the bytes are gone — the state this recovery exists for")
+        let strippedOptional = try await env.store.fullEmail(id: f.stripped)
+        let strippedEmail = try XCTUnwrap(strippedOptional)
+        XCTAssertFalse(strippedEmail.rawSource.isEmpty, "message 5 HAS a raw source …")
+        XCTAssertNil(AttachmentHydrator.data(for: try XCTUnwrap(strippedEmail.attachments.first), index: 0, email: strippedEmail), "… but no attachment bytes: affected by availability, not by an empty column")
+        let invariantsBefore = try await recoverInvariants(f)
+        XCTAssertEqual(invariantsBefore[f.imported[0]]?.tags, ["escrow"])
+        XCTAssertEqual(invariantsBefore[f.imported[0]]?.note, "check the minutes")
+        XCTAssertEqual(invariantsBefore[f.imported[0]]?.held, true)
+        XCTAssertEqual(invariantsBefore[f.imported[0]]?.trashed, true)
+        XCTAssertFalse(invariantsBefore[f.imported[1]]?.folderIDs.isEmpty ?? true, "folder occurrences exist to be preserved")
+        XCTAssertEqual(invariantsBefore[f.imported[1]]?.sourceOrdinal, 0)
 
         // The plan: counts per source before anything runs; the lost source named.
         let plan = try await RawSourceRecovery.plan(store: env.store)
-        XCTAssertEqual(plan.total, 4); XCTAssertEqual(plan.recoverable, 3); XCTAssertEqual(plan.missing, 1)
-        XCTAssertEqual(plan.groups.count, 3)
-        XCTAssertEqual(plan.groups.first { $0.filename == "two.pst" }?.count, 2)
+        XCTAssertEqual(plan.total, 4, "1, 2, 5 and the lost one")
+        XCTAssertEqual(plan.recoverable, 3); XCTAssertEqual(plan.missing, 1)
+        XCTAssertEqual(plan.alreadyIntact, 1, "message 3")
+        XCTAssertEqual(plan.affectedGroups.count, 3)
+        let pstGroup = try XCTUnwrap(plan.groups.first { $0.filename == "two.pst" })
+        XCTAssertEqual(pstGroup.count, 2); XCTAssertEqual(pstGroup.alreadyIntact, 1)
         XCTAssertNil(plan.groups.first { $0.sourceHash == "deadbeefdeadbeef" }?.fileURL)
 
-        // The run: three recovered, the lost one listed by its source, nothing else touched.
-        let report = await RawSourceRecovery.run(store: env.store, plan: plan)
-        XCTAssertEqual(report.recovered, 3, report.line)
-        XCTAssertEqual(report.unmatched, 1)
-        XCTAssertEqual(report.missingSources, ["source deadbeefdead…"])
-        XCTAssertTrue(RawSourceRecoveryView.reportText(report).contains("Recovered 3 messages"))
-        for id in imported {
+        // The run: three recovered, the lost one listed by its source with its count, nothing else touched.
+        let receipts = RawSourceRecoveryReceiptStore(directory: env.root.appendingPathComponent("receipts"))
+        let receipt = await RawSourceRecovery.run(store: env.store, plan: plan, receipts: receipts)
+        XCTAssertEqual(receipt.affected, 4, receipt.line)
+        XCTAssertEqual(receipt.recovered, 3, receipt.line)
+        XCTAssertEqual(receipt.alreadyIntact, 1)
+        XCTAssertEqual(receipt.ambiguous, 0)
+        XCTAssertEqual(receipt.missingSource, 1)
+        XCTAssertEqual(receipt.failed, 0)
+        XCTAssertFalse(receipt.cancelled)
+        XCTAssertEqual(receipt.missingSources, ["source deadbeefdead…"])
+        XCTAssertEqual(receipt.sources.first { $0.missing }?.affected, 1, "the missing source is named with its count")
+        let snapshotPath = try XCTUnwrap(receipt.snapshotPath, "the archive was backed up before the first write")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath))
+        XCTAssertTrue(snapshotPath.contains("before-attachment-recovery"))
+        let saved = receipts.list()
+        XCTAssertEqual(saved.count, 1)
+        let loaded = try receipts.load(saved[0])
+        XCTAssertEqual(loaded.sources, receipt.sources, "the receipt on disk is the receipt shown")
+        XCTAssertEqual(loaded.recoveredIDs, receipt.recoveredIDs); XCTAssertEqual(loaded.snapshotPath, receipt.snapshotPath)
+        XCTAssertEqual(loaded.ambiguousItems, receipt.ambiguousItems); XCTAssertEqual(loaded.line, receipt.line)
+        let text = RawSourceRecoveryView.receiptText(receipt)
+        XCTAssertTrue(text.contains("recovered 3") && text.contains("already intact 1") && text.contains("missing source 1"), text)
+
+        // Repair preserved stable identity, folder occurrences, tags, notes, holds, Trash.
+        let invariantsAfter = try await recoverInvariants(f)
+        XCTAssertEqual(invariantsAfter, invariantsBefore)
+        for id in f.affected {
             let afterOptional = try await env.store.fullEmail(id: id)
             let after = try XCTUnwrap(afterOptional)
-            XCTAssertTrue(after.rawSource.contains("X-Mailin-Rendered"), "the source is marked as rendered")
-            XCTAssertEqual(after.headers["Subject"], before.id == id ? before.headers["Subject"] : after.headers["Subject"])
-            XCTAssertEqual(AttachmentHydrator.data(for: try XCTUnwrap(after.attachments.first), index: 0, email: after), docx, "the attachment bytes are back")
+            let label = RawSourceProvenance.label(for: after.rawSource)
+            XCTAssertTrue(after.rawSource.hasPrefix("X-Mailin-Rendered:"), "the source is marked as rendered")
+            XCTAssertTrue(label.isReconstructed, after.rawSource.prefix(200).description)
+            XCTAssertEqual(label.sourceFilename, id == f.imported[0] ? "one.msg" : "two.pst")
+            XCTAssertNotNil(label.date)
+            XCTAssertFalse(label.fromUnverifiedFile)
+            XCTAssertTrue(ReconstructedSourceNotice.text(label).contains("reconstructed from \(label.sourceFilename ?? "")"))
+            XCTAssertTrue(ReconstructedSourceNotice.text(label).contains("not captured wire bytes"))
+            XCTAssertEqual(AttachmentHydrator.data(for: try XCTUnwrap(after.attachments.first), index: 0, email: after), f.docx, "the attachment bytes are back")
         }
-        let stillLostOptional = try await env.store.fullEmail(id: lost.id)
+        let stillLostOptional = try await env.store.fullEmail(id: f.lostID)
         let stillLost = try XCTUnwrap(stillLostOptional)
         XCTAssertTrue(stillLost.rawSource.isEmpty, "a message whose source is not found is left as it was, and said so")
+        let intactOptional = try await env.store.fullEmail(id: f.intact)
+        let intactEmail = try XCTUnwrap(intactOptional)
+        XCTAssertFalse(RawSourceProvenance.label(for: intactEmail.rawSource).isReconstructed, "an intact row is not rewritten")
+
         // Attachments searchable again through the normal pass.
         AttachmentTextIndexJob.testSuppressKicks = true
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
@@ -4298,11 +4393,234 @@ final class V2CutoverTests: XCTestCase {
         var query = EmailQuery.all
         query.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "docx", contentMatch: .phrase, content: "recovered minutes")])])
         let found = try await env.archive.count(query: query)
-        XCTAssertEqual(found, 3)
-        // Nothing to do on a healthy archive.
+        XCTAssertEqual(found, 3, "2 and 5 recovered and 3 intact; 1 is in the Trash, which search hides by design (§19.1)")
+        query.includeTrashed = true
+        let foundWithTrash = try await env.archive.count(query: query)
+        XCTAssertEqual(foundWithTrash, 4, "with the Trash included, the recovered message 1 is searchable too — its Trash state survived the repair")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+
+        // Repeated repair: idempotent — nothing recoverable remains, already intact = all.
         let again = try await RawSourceRecovery.plan(store: env.store)
         XCTAssertEqual(again.total, 1, "only the lost one remains")
-        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        XCTAssertEqual(again.recoverable, 0)
+        XCTAssertEqual(again.alreadyIntact, 4)
+        let second = await RawSourceRecovery.run(store: env.store, plan: again, receipts: receipts)
+        XCTAssertEqual(second.recovered, 0); XCTAssertEqual(second.alreadyIntact, 4); XCTAssertEqual(second.missingSource, 1)
+        XCTAssertNil(second.snapshotPath, "nothing to write, nothing snapshotted")
+        let invariantsAfterSecond = try await recoverInvariants(f)
+        XCTAssertEqual(invariantsAfterSecond, invariantsBefore)
+        XCTAssertEqual(receipts.list().count, 2)
+    }
+
+    /// Recovery survives a process restart (a fresh store on the same directory sees the repaired rows
+    /// and has nothing left to do) and a clean-profile backup restore — both before the repair (the
+    /// restored archive can be recovered there, from the copies the backup carried) and after it.
+    func testRECOVER_survivesProcessRestart_andCleanProfileBackupRestore() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let f = try await recoverFixture()
+        let invariantsBefore = try await recoverInvariants(f)
+
+        // A backup taken BEFORE the repair, restored into a clean profile: recovered there.
+        let backup = f.env.root.appendingPathComponent("backup-before", isDirectory: true)
+        _ = try await ArchiveBackup.create(store: f.env.store, to: backup)
+        let cleanRoot = f.env.root.appendingPathComponent("clean-profile", isDirectory: true)
+        try ArchiveBackup.restore(backup: backup, intoStoreDirectory: cleanRoot, mode: .cleanProfile)
+        let restored = SQLiteEmailStore(directory: cleanRoot)
+        let restoredPlan = try await RawSourceRecovery.plan(store: restored)
+        XCTAssertEqual(restoredPlan.total, 4); XCTAssertEqual(restoredPlan.recoverable, 3, "the copies travelled with the backup")
+        let restoredReceipt = await RawSourceRecovery.run(store: restored, plan: restoredPlan)
+        XCTAssertEqual(restoredReceipt.recovered, 3, restoredReceipt.line)
+        for id in f.affected {
+            let rowOptional = try await restored.fullEmail(id: id)
+            let row = try XCTUnwrap(rowOptional)
+            XCTAssertEqual(AttachmentHydrator.data(for: try XCTUnwrap(row.attachments.first), index: 0, email: row), f.docx)
+            let restoredInvariants = try await restored.recoveryInvariants(id: id)
+            XCTAssertEqual(restoredInvariants, invariantsBefore[id], "the restored copy keeps the same identity and review state")
+        }
+        await restored.reopenConnection()
+
+        // The live archive: repair, then "restart" — a new store object on the same directory.
+        let plan = try await RawSourceRecovery.plan(store: f.env.store)
+        let receipt = await RawSourceRecovery.run(store: f.env.store, plan: plan)
+        XCTAssertEqual(receipt.recovered, 3, receipt.line)
+        await f.env.store.reopenConnection()
+        let reopened = SQLiteEmailStore(directory: f.env.store.storeDirectory)
+        let afterRestart = try await RawSourceRecovery.plan(store: reopened)
+        XCTAssertEqual(afterRestart.total, 1, "only the lost one; nothing left to do")
+        XCTAssertEqual(afterRestart.recoverable, 0)
+        XCTAssertEqual(afterRestart.alreadyIntact, 4)
+        for id in f.affected {
+            let rowOptional = try await reopened.fullEmail(id: id)
+            let row = try XCTUnwrap(rowOptional)
+            XCTAssertTrue(RawSourceProvenance.label(for: row.rawSource).isReconstructed)
+            XCTAssertEqual(AttachmentHydrator.data(for: try XCTUnwrap(row.attachments.first), index: 0, email: row), f.docx)
+            let reopenedInvariants = try await reopened.recoveryInvariants(id: id)
+            XCTAssertEqual(reopenedInvariants, invariantsBefore[id])
+        }
+        let afterRestartReceipt = await RawSourceRecovery.run(store: reopened, plan: afterRestart)
+        XCTAssertEqual(afterRestartReceipt.recovered, 0); XCTAssertEqual(afterRestartReceipt.alreadyIntact, 4)
+
+        // A backup taken AFTER the repair, restored into another clean profile: the repair is in it.
+        let backupAfter = f.env.root.appendingPathComponent("backup-after", isDirectory: true)
+        _ = try await ArchiveBackup.create(store: reopened, to: backupAfter)
+        let cleanRoot2 = f.env.root.appendingPathComponent("clean-profile-2", isDirectory: true)
+        try ArchiveBackup.restore(backup: backupAfter, intoStoreDirectory: cleanRoot2, mode: .cleanProfile)
+        let restored2 = SQLiteEmailStore(directory: cleanRoot2)
+        let plan2 = try await RawSourceRecovery.plan(store: restored2)
+        XCTAssertEqual(plan2.total, 1); XCTAssertEqual(plan2.alreadyIntact, 4)
+        await restored2.reopenConnection()
+        await reopened.reopenConnection()
+    }
+
+    /// Cancellation mid-run: the first source is committed whole, the file being read when the person
+    /// stopped is not written at all (no half-written rows), the receipt is partial and says so.
+    func testRECOVER_cancellationMidRun_partialReceipt_noHalfWrittenRows() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let f = try await recoverFixture()
+        let plan = try await RawSourceRecovery.plan(store: f.env.store)
+        XCTAssertEqual(plan.recoverable, 3)
+        final class Box: @unchecked Sendable { var task: Task<RawSourceRecovery.Receipt, Never>?; var calls = 0; let lock = NSLock() }
+        let box = Box()
+        let store = f.env.store
+        box.task = Task {
+            await RawSourceRecovery.run(store: store, plan: plan) { _ in
+                box.lock.lock(); box.calls += 1; let n = box.calls; box.lock.unlock()
+                if n == 2 { box.task?.cancel() }   // stop while the second source is being read
+            }
+        }
+        let receipt = await box.task!.value
+        XCTAssertTrue(receipt.cancelled, receipt.line)
+        XCTAssertEqual(plan.affectedGroups.filter { $0.fileURL != nil }.map(\.filename), ["one.msg", "two.pst"], "sources are read in name order")
+        XCTAssertEqual(receipt.recovered, 1, "the first source (one.msg) was committed whole")
+        XCTAssertEqual(receipt.sourcesRead, 1)
+        XCTAssertEqual(receipt.sources.first { $0.filename == "two.pst" }?.cancelled, true)
+        XCTAssertEqual(receipt.sources.first { $0.filename == "two.pst" }?.recovered, 0)
+        XCTAssertTrue(receipt.line.contains("cancelled after 1 of 3 sources"), receipt.line)
+        XCTAssertTrue(RawSourceRecoveryView.receiptText(receipt).contains("Stopped after 1 of 3 sources"))
+        let firstOptional = try await store.fullEmail(id: f.imported[0])
+        let first = try XCTUnwrap(firstOptional)
+        XCTAssertTrue(RawSourceProvenance.label(for: first.rawSource).isReconstructed)
+        for id in [f.imported[1]] {
+            let rowOptional = try await store.fullEmail(id: id)
+            let row = try XCTUnwrap(rowOptional)
+            XCTAssertTrue(row.rawSource.isEmpty, "a row of the cancelled file is exactly as it was")
+        }
+        let strippedOptional = try await store.fullEmail(id: f.stripped)
+        let strippedRow = try XCTUnwrap(strippedOptional)
+        XCTAssertFalse(RawSourceProvenance.label(for: strippedRow.rawSource).isReconstructed)
+        // Running again finishes the job.
+        let rest = try await RawSourceRecovery.plan(store: store)
+        XCTAssertEqual(rest.recoverable, 2)
+        let second = await RawSourceRecovery.run(store: store, plan: rest)
+        XCTAssertEqual(second.recovered, 2, second.line)
+    }
+
+    /// The wrong source: a chosen file whose SHA-256 differs from the registered import is reported
+    /// as such and nothing is written from it — a message in it with the SAME Message-ID but other
+    /// content is ambiguous (listed with both sides), one with an unknown Message-ID is ignored.
+    /// The right file, chosen afterwards, recovers the rows.
+    func testRECOVER_wrongSource_reportedNothingWritten_ambiguousListed_thenRightFileRecovers() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let f = try await recoverFixture(copyPST: false)
+        let plan = try await RawSourceRecovery.plan(store: f.env.store)
+        XCTAssertEqual(plan.total, 4); XCTAssertEqual(plan.recoverable, 1, "one.msg has a copy; two.pst does not")
+        let pstGroup = try XCTUnwrap(plan.groups.first { $0.filename == "two.pst" })
+        XCTAssertNil(pstGroup.fileURL)
+        // Another PST: same Message-ID as message 2 but a different subject; one unrelated message.
+        let other = f.env.root.appendingPathComponent("other.pst")
+        let writer = try PSTWriterFactory.make(url: other)
+        var impostor = try MBOXParser.processRawMessage(Self.recoverMessage(2, docx: f.docx), senderEmail: "")
+        impostor.headers["Subject"] = "Different subject"
+        try writer.appendMessage(impostor)
+        try writer.appendMessage(try MBOXParser.processRawMessage(Self.recoverMessage(7, docx: f.docx), senderEmail: ""))
+        _ = try writer.finalize()
+        let invariantsBefore = try await recoverInvariants(f)
+        let receipt = await RawSourceRecovery.run(store: f.env.store, plan: plan, files: [pstGroup.id: other])
+        XCTAssertEqual(receipt.wrongSources, ["two.pst"], receipt.line)
+        XCTAssertEqual(receipt.recovered, 1, "only one.msg, from its verified copy")
+        let pst = try XCTUnwrap(receipt.sources.first { $0.filename == "two.pst" })
+        XCTAssertTrue(pst.wrongSource); XCTAssertEqual(pst.recovered, 0); XCTAssertEqual(pst.ambiguous, 1); XCTAssertEqual(pst.unmatched, 1)
+        XCTAssertEqual(receipt.ambiguousItems.count, 1)
+        XCTAssertEqual(receipt.ambiguousItems[0].emailID, f.imported[1])
+        XCTAssertEqual(receipt.ambiguousItems[0].storedSubject, "Recover 2")
+        XCTAssertEqual(receipt.ambiguousItems[0].fileSubject, "Different subject")
+        XCTAssertTrue(receipt.ambiguousItems[0].reason.contains("Message-ID matches but"), receipt.ambiguousItems[0].reason)
+        XCTAssertTrue(RawSourceRecoveryView.receiptText(receipt).contains("Wrong source"))
+        for id in [f.imported[1]] {
+            let rowOptional = try await f.env.store.fullEmail(id: id)
+            let row = try XCTUnwrap(rowOptional)
+            XCTAssertTrue(row.rawSource.isEmpty, "nothing was written from the wrong file")
+        }
+        let invariantsAfterWrong = try await recoverInvariants(f)
+        XCTAssertEqual(invariantsAfterWrong, invariantsBefore)
+        // The right file, chosen: its hash matches the registered source; the rows are recovered.
+        let rest = try await RawSourceRecovery.plan(store: f.env.store)
+        let group = try XCTUnwrap(rest.groups.first { $0.filename == "two.pst" })
+        XCTAssertEqual(group.count, 2)
+        let second = await RawSourceRecovery.run(store: f.env.store, plan: rest, files: [group.id: f.pstURL])
+        XCTAssertEqual(second.recovered, 2, second.line)
+        XCTAssertEqual(second.wrongSources, [])
+        XCTAssertEqual(second.sources.first { $0.filename == "two.pst" }?.fileSHA256, f.pstHash)
+        let rowOptional = try await f.env.store.fullEmail(id: f.imported[1])
+        let row = try XCTUnwrap(rowOptional)
+        XCTAssertEqual(AttachmentHydrator.data(for: try XCTUnwrap(row.attachments.first), index: 0, email: row), f.docx)
+        let invariantsAfterRight = try await recoverInvariants(f)
+        XCTAssertEqual(invariantsAfterRight, invariantsBefore)
+    }
+
+    /// The matcher itself: Message-ID alone is not enough; one weak signal is not enough; the ordinal
+    /// stands in for a missing Message-ID only with corroboration; two rows for one message is ambiguous.
+    func testRECOVER_matcher_messageIDNeedsCorroboration_ordinalFallback_oneWeakSignalNever() throws {
+        func candidate(_ id: String?, subject: String, date: Int64 = 1_736_935_320, from: String = "ann@example.com", ordinal: Int64? = nil, names: [String] = ["minutes.docx"]) -> SQLiteEmailStore.RecoveryCandidate {
+            SQLiteEmailStore.RecoveryCandidate(id: UUID(), messageID: id, subject: subject, date: date, from: from, sourceHash: "h",
+                                               sourceOrdinal: ordinal, attachmentNames: names, hasRawSource: false)
+        }
+        func parsed(_ id: String?, subject: String, date: String = "Wed, 15 Jan 2025 10:02:00 +0000", from: String = "Ann <ann@example.com>", names: [String] = ["minutes.docx"]) -> MBOXParser.RawEmail {
+            var headers = ["Subject": subject, "From": from, "Date": date]
+            if let id { headers["Message-ID"] = id }
+            return MBOXParser.RawEmail(id: UUID(), headers: headers, rawSource: "x", messageType: "received",
+                                       attachments: names.map { AttachmentMetadata(filename: $0, mimeType: "application/octet-stream", size: 1) },
+                                       timestamp: "", domains: [], plainBody: "", htmlBody: "", mimeRoot: nil, mimeSummary: nil, mimeDiagnostics: [],
+                                       threadID: nil, inReplyTo: nil, references: nil)
+        }
+        let a = candidate("<a@x>", subject: "Alpha", ordinal: 0)
+        let b = candidate(nil, subject: "Beta", ordinal: 1)
+        let c1 = candidate("<c@x>", subject: "Gamma", ordinal: 2), c2 = candidate("<c@x>", subject: "Gamma", ordinal: 3)
+        let matcher = RawSourceRecovery.Matcher(candidates: [a, b, c1, c2], verifiedFile: true)
+        // Message-ID + content.
+        XCTAssertEqual(matcher.match(parsed("<A@X>", subject: "Alpha"), ordinal: 0), .match(a, strong: true), "Message-ID is case- and bracket-insensitive")
+        // Message-ID alone: the subject differs → ambiguous, never written.
+        if case .ambiguous(let item) = matcher.match(parsed("<a@x>", subject: "Alpha changed"), ordinal: 0) {
+            XCTAssertEqual(item.storedSubject, "Alpha"); XCTAssertEqual(item.fileSubject, "Alpha changed")
+        } else { XCTFail("Message-ID alone must not match") }
+        // Message-ID + content but the date differs by a second → ambiguous.
+        guard case .ambiguous = matcher.match(parsed("<a@x>", subject: "Alpha", date: "Wed, 15 Jan 2025 10:02:01 +0000"), ordinal: 0) else { return XCTFail("date to the second") }
+        // Message-ID + content but one attachment fewer → ambiguous.
+        guard case .ambiguous = matcher.match(parsed("<a@x>", subject: "Alpha", names: []), ordinal: 0) else { return XCTFail("attachment count") }
+        // No Message-ID: the ordinal plus content.
+        XCTAssertEqual(matcher.match(parsed(nil, subject: "Beta"), ordinal: 1), .match(b, strong: false))
+        guard case .ambiguous = matcher.match(parsed(nil, subject: "Beta changed"), ordinal: 1) else { return XCTFail("ordinal alone is one weak signal") }
+        // No Message-ID, no ordinal row: all content signals and exactly one row.
+        XCTAssertEqual(matcher.match(parsed(nil, subject: "Beta"), ordinal: 9), .match(b, strong: false))
+        XCTAssertEqual(matcher.match(parsed(nil, subject: "Beta", from: ""), ordinal: 9), .none, "subject + date without a sender is too weak")
+        XCTAssertEqual(matcher.match(parsed(nil, subject: "Nobody"), ordinal: 9), .none)
+        // Two rows share the Message-ID and the content → ambiguous.
+        guard case .ambiguous(let twin) = matcher.match(parsed("<c@x>", subject: "Gamma"), ordinal: 2) else { return XCTFail("two rows") }
+        XCTAssertTrue(twin.reason.contains("2 rows"), twin.reason)
+        // A file whose hash differs is trusted on Message-ID + content only.
+        let unverified = RawSourceRecovery.Matcher(candidates: [a, b], verifiedFile: false)
+        XCTAssertEqual(unverified.match(parsed("<a@x>", subject: "Alpha"), ordinal: 0), .match(a, strong: true))
+        XCTAssertEqual(unverified.match(parsed(nil, subject: "Beta"), ordinal: 1), .none, "no ordinal fallback in an unverified file")
+        // The provenance label round-trips.
+        let stamped = RawSourceProvenance.stamp(rawSource: "X-Mailin-Rendered: Outlook\r\nSubject: s\r\n\r\nbody", sourceFilename: "two.pst", date: Date(timeIntervalSince1970: 1_762_500_000), verified: false)
+        XCTAssertTrue(stamped.hasPrefix("X-Mailin-Rendered: Outlook\r\nX-Mailin-Reconstructed: from two.pst on "), stamped)
+        let label = RawSourceProvenance.label(for: stamped)
+        XCTAssertEqual(label.rendered, "Outlook"); XCTAssertEqual(label.sourceFilename, "two.pst")
+        XCTAssertEqual(label.date, Date(timeIntervalSince1970: 1_762_500_000)); XCTAssertTrue(label.fromUnverifiedFile)
+        XCTAssertFalse(RawSourceProvenance.label(for: "From: a\r\nSubject: real bytes\r\n\r\nbody").isReconstructed)
     }
 
     /// WP4 (handoff 7481852): one registry says what is read and on what

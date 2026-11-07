@@ -128,6 +128,7 @@ struct EmailDetailView: View {
                     subjectView
                     riskScoreBadge
                     RecoveryBadgeView(emailID: shown.id)
+                    ReconstructedSourceNotice(rawSource: shown.rawSource)
                     if forensicManager.isEnabled || personaManager.selectedPersona == .legal || (showAdvancedFeatures && personaManager.selectedPersona == .forensic) {
                         evidenceTagBar
                     }
@@ -1204,6 +1205,12 @@ struct EmailDetailView: View {
                 Text("Raw source: \(shown.rawSource.utf8.count) bytes")
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
+                if RawSourceProvenance.label(for: shown.rawSource).isReconstructed {
+                    Text("These hashes are of the reconstructed source, not of captured wire bytes.")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.orange)
+                        .accessibilityIdentifier("detail.hashes.reconstructed")
+                }
             }
         }
     }
