@@ -37,7 +37,8 @@ enum DocumentKind: String, Sendable, CaseIterable {
     /// Directive 2026-11-07 §6 "Containers": 7z through `SevenZipReader`
     /// (LZMA, LZMA2, BCJ, Delta, Deflate, 7zAES; split `.7z.001` sets) and
     /// RAR through `RARReader` (headers exact, stored members read,
-    /// compressed members named). Volumes of a spanned ZIP (`.z01`) are `.zip`.
+    /// RAR 2.9–4.x and RAR 5.0 compression decoded by the vendored libarchive
+    /// reader, what it does not open named). Volumes of a spanned ZIP (`.z01`) are `.zip`.
     case sevenZip = "7z"
     case rar
     /// Directive 2026-11-07 §6: the other business formats — Publisher,
@@ -1192,8 +1193,8 @@ enum ContainerTextExtractor {
             return (.unsupported, "compression method \(method) not opened")
         case SevenZipReader.ReadError.unsupportedMethod(let method, _):
             return (.unsupported, "compression method \(method) not opened")
-        case RARReader.ReadError.compressed(_, let method):
-            return (.unsupported, "RAR compression (\(method)) not opened (needs a RAR decompressor)")
+        case RARReader.ReadError.compressionNotOpened(_, let reason):
+            return (.unsupported, reason)
         case RARReader.ReadError.splitAcrossVolumes(_, let detail):
             return (.unsupported, "not opened: \(detail)")
         case SevenZipReader.ReadError.unsafePath(_, let reason):
@@ -1247,19 +1248,18 @@ enum ContainerTextExtractor {
                 }
             }
         case .rar:
-            let archive: RARReader.Archive
-            let source = try FileRandomAccessSource(url: url)
-            do { archive = try RARReader.read(source: source) }
+            // GAP-RAR: stored members copied, compressed ones decoded by the
+            // vendored libarchive reader in one pass per archive (a solid
+            // stream is decoded once, in order); a volume of a set is read
+            // with the set's other volumes among `siblings`.
+            let extractor: RARReader.Extractor
+            do { extractor = try RARReader.Extractor(url: url, logicalName: logicalName, siblings: siblings) }
             catch RARReader.ReadError.encryptedHeaders { throw OfficeTextExtractor.ExtractError.encrypted }
             catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
-            return archive.members.filter { !$0.isDirectory && !$0.isJunk }.map { member in
-                var note: String?
-                if let reason = member.unsafePath { note = "unsafe path (\(reason)), not opened" }
-                else if member.isSymlink { note = "a symbolic link, not followed" }
-                else if member.isSplitBefore || member.isSplitAfter { note = "not opened: continues in another volume" }
-                else if !member.isEncrypted, member.method != 0 { note = "RAR compression (\(member.methodName)) not opened (needs a RAR decompressor)" }
-                return Child(name: member.name, size: member.unpackedSize, encrypted: member.isEncrypted, note: note) {
-                    try RARReader.extract(member, source: source, to: $0, maxOutputBytes: limit)
+            return extractor.archive.members.filter { !$0.isDirectory && !$0.isJunk }.map { member in
+                Child(name: member.name, size: member.sizeIsKnown ? member.unpackedSize : nil, encrypted: member.isEncrypted,
+                      note: extractor.refusal(for: member)) {
+                    try extractor.extract(member, to: $0, maxOutputBytes: limit)
                 }
             }
         case .tar:

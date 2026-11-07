@@ -151,7 +151,10 @@ final class ImportContainerTests: XCTestCase {
         ], to: url)
         let preflight = SourceFormatClassifier.preflight(url: url)
         XCTAssertEqual(preflight.condition, .ready)
-        XCTAssertTrue(preflight.detail.contains("1 of 3 files are RAR-compressed"), preflight.detail)
+        // GAP-RAR: RAR 5.0 compression is decoded, so the preflight no longer
+        // refuses b.mbox; its two arbitrary "packed" bytes fail in the decoder
+        // during the import and are refused and counted there.
+        XCTAssertFalse(preflight.detail.contains("compress"), preflight.detail)
         XCTAssertEqual(preflight.encryptedMembers, 1)
         let result = try await importBothWays(url)
         XCTAssertEqual(result.streamed, 2)
@@ -162,11 +165,13 @@ final class ImportContainerTests: XCTestCase {
     }
 
     func testRARSource_allCompressedIsUnsupported_encryptedHeadersIsEncrypted() throws {
+        // GAP-RAR: only compressions the vendored decoder does not open make
+        // an archive "nothing to import" — here RAR 2.0 (UNP_VER 20).
         let compressed = dir.appendingPathComponent("c.rar")
-        try RARFixtureWriter.writeRAR5([.init(name: "a.mbox", data: Data([1]), method: 5, unpackedSize: 10)], to: compressed)
+        try RARFixtureWriter.writeRAR4([.init(name: "a.mbox", data: Data([1]), method: 5, unpackedSize: 10, rar4UnpackVersion: 20)], to: compressed)
         let p = SourceFormatClassifier.preflight(url: compressed)
         XCTAssertEqual(p.condition, .unsupported)
-        XCTAssertTrue(p.detail.contains("needs a RAR decompressor"), p.detail)
+        XCTAssertTrue(p.detail.contains("RAR 2.0 compression not opened"), p.detail)
         let locked = dir.appendingPathComponent("l.rar")
         try RARFixtureWriter.writeRAR5EncryptedHeaders(to: locked)
         XCTAssertEqual(SourceFormatClassifier.preflight(url: locked).condition, .encrypted)
@@ -229,9 +234,10 @@ final class ImportContainerTests: XCTestCase {
             let line = try XCTUnwrap(table.first { $0.contains("| \(row.name) | \(row.extensions.joined(separator: ", ")) |") }, "\(id) not in the generated table")
             XCTAssertTrue(doc.contains(line), "SUPPORTED_FORMATS_AND_LIMITS.md does not carry the generated row for \(id):\n\(line)")
         }
-        // The readers' real-file evidence is stated as such, RAR's spec-built evidence likewise.
+        // The readers' real-file evidence is stated as such — RAR's since GAP-RAR
+        // (WinRAR-written archives from libarchive's test suite, LibArchiveRARTests).
         XCTAssertEqual(FormatCapabilityRegistry.capability(id: "7z")?.evidence, .realFixtures)
-        XCTAssertEqual(FormatCapabilityRegistry.capability(id: "rar")?.evidence, .syntheticFixtures)
+        XCTAssertEqual(FormatCapabilityRegistry.capability(id: "rar")?.evidence, .realFixtures)
         XCTAssertNotNil(FormatCapabilityRegistry.capability(id: "rar")?.externalDependency)
         // Every document kind the dispatch knows has a row.
         for kind in [DocumentKind.sevenZip, .rar, .zip] {

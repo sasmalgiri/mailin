@@ -206,8 +206,12 @@ final class ContainerReaderTests: XCTestCase {
         let byPath = children(result)
         XCTAssertEqual(byPath["docs/plain.txt"]?.state, .extracted)
         XCTAssertTrue(byPath["docs/plain.txt"]?.text?.contains("MAILIN-RAR5-STORED") == true)
-        XCTAssertEqual(byPath["docs/packed.txt"]?.state, .unsupported)
-        XCTAssertEqual(byPath["docs/packed.txt"]?.note, "RAR compression (RAR5.0 method 3) not opened (needs a RAR decompressor)")
+        // GAP-RAR: compressed members now go to the vendored decoder; this
+        // fixture's "packed" bytes are 4 arbitrary bytes, so the member is
+        // named as damaged with the decoder's reason (real archives:
+        // LibArchiveRARTests).
+        XCTAssertEqual(byPath["docs/packed.txt"]?.state, .failed)
+        XCTAssertTrue(byPath["docs/packed.txt"]?.note?.hasPrefix("docs/packed.txt: the RAR data could not be decoded (") == true, byPath["docs/packed.txt"]?.note ?? "")
         XCTAssertEqual(byPath["docs/secret.txt"]?.state, .locked)
         XCTAssertEqual(byPath["docs/link"]?.state, .unsupported)
         XCTAssertEqual(byPath["docs/link"]?.note, "a symbolic link, not followed")
@@ -255,7 +259,9 @@ final class ContainerReaderTests: XCTestCase {
         let byPath = children(result)
         XCTAssertEqual(byPath["notes.txt"]?.state, .extracted)
         XCTAssertEqual(byPath["notes.txt"]?.sha256, SevenZipReaderTests.sha256(stored))
-        XCTAssertEqual(byPath["deep.txt"]?.state, .unsupported)
+        // GAP-RAR: two arbitrary "packed" bytes reach the decoder and are named as damaged.
+        XCTAssertEqual(byPath["deep.txt"]?.state, .failed)
+        XCTAssertTrue(byPath["deep.txt"]?.note?.hasPrefix("deep.txt: ") == true, byPath["deep.txt"]?.note ?? "")
         XCTAssertEqual(byPath["locked.txt"]?.state, .locked)
 
         // RAR 2.9 Unicode names: a run copied from the 8-bit name; a high-byte character.
@@ -308,9 +314,13 @@ enum RARFixtureWriter {
         var unpackedSize: Int64? = nil
         var encrypted = false
         var symlinkTo: String? = nil
-        init(name: String, data: Data, isDirectory: Bool = false, method: Int = 0, unpackedSize: Int64? = nil, encrypted: Bool = false, symlinkTo: String? = nil) {
+        /// RAR 1.5–4.x UNP_VER: 29 = RAR 2.9–4.x; 15 / 20 = the older algorithms.
+        var rar4UnpackVersion: UInt8 = 29
+        init(name: String, data: Data, isDirectory: Bool = false, method: Int = 0, unpackedSize: Int64? = nil, encrypted: Bool = false, symlinkTo: String? = nil,
+             rar4UnpackVersion: UInt8 = 29) {
             self.name = name; self.data = data; self.isDirectory = isDirectory; self.method = method
             self.unpackedSize = unpackedSize; self.encrypted = encrypted; self.symlinkTo = symlinkTo
+            self.rar4UnpackVersion = rar4UnpackVersion
         }
     }
 
@@ -425,7 +435,7 @@ enum RARFixtureWriter {
             if e.isDirectory { flags |= 0x00E0 }
             let name = Array(e.name.utf8)
             let body = le32(UInt32(e.data.count)) + le32(unpacked) + [3] + le32(ZIPArchiveReader.CRC32.checksum(e.data)) + le32(0)
-                + [29, UInt8(0x30 + e.method)] + le16(UInt16(name.count)) + le32(e.isDirectory ? 0x4000 : 0x81A4) + name
+                + [e.rar4UnpackVersion, UInt8(0x30 + e.method)] + le16(UInt16(name.count)) + le32(e.isDirectory ? 0x4000 : 0x81A4) + name
             out += rar4Block(type: 0x74, flags: flags, body: body)
             out += [UInt8](e.data)
         }

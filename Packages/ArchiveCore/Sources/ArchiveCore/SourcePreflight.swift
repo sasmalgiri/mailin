@@ -160,34 +160,41 @@ extension SourceFormatClassifier {
         return SourcePreflight(condition: .ready, detail: notes.joined(separator: "; "), encryptedMembers: encrypted)
     }
 
-    /// RAR (directive §6): headers readable; stored members import, the
-    /// rest is refused by name — an archive with no stored member has
-    /// nothing mailin can import.
+    /// RAR (directive §6, GAP-RAR): headers readable; stored and compressed
+    /// members import (a volume set with the volumes beside it); encrypted
+    /// members, compressions the vendored decoder does not open and members
+    /// on a missing volume are refused by name — an archive where every file
+    /// is refused has nothing mailin can import.
     private static func rarPreflight(url: URL) -> SourcePreflight {
-        let archive: RARReader.Archive
-        do { archive = try RARReader.read(url: url) }
+        let extractor: RARReader.Extractor
+        do { extractor = try RARReader.Extractor(url: url, logicalName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url)) }
         catch RARReader.ReadError.encryptedHeaders {
             return SourcePreflight(condition: .encrypted, detail: "the archive's headers are encrypted; its members are unknown until it is unlocked (RAR decryption is not implemented)")
         } catch {
             return SourcePreflight(condition: .damaged, detail: "the RAR headers could not be read: \(error)")
         }
+        let archive = extractor.archive
         let files = archive.members.filter { !$0.isDirectory && !$0.isJunk }
         let encrypted = files.filter(\.isEncrypted).count
-        let compressed = files.filter { !$0.isEncrypted && $0.method != 0 }.count
-        let split = files.filter { !$0.isEncrypted && $0.method == 0 && ($0.isSplitBefore || $0.isSplitAfter) }.count
-        let stored = files.count - encrypted - compressed - split
+        let refusals = files.filter { !$0.isEncrypted }.compactMap { member -> String? in
+            guard let refusal = extractor.refusal(for: member) else { return nil }
+            return refusal.hasPrefix("not opened:") || refusal == member.compressionRefusal ? refusal : nil
+        }
+        let onMissingVolume = refusals.filter { $0.hasPrefix("not opened:") }.count
+        let notOpened = refusals.count - onMissingVolume
+        let readable = files.count - encrypted - refusals.count
         if !files.isEmpty, encrypted == files.count {
             return SourcePreflight(condition: .encrypted, detail: "every one of its \(files.count) files is encrypted; RAR decryption is not implemented", encryptedMembers: encrypted)
         }
-        if !files.isEmpty, stored == 0 {
+        if !files.isEmpty, readable == 0 {
             return SourcePreflight(condition: .unsupported,
-                                   detail: "none of its \(files.count) files is stored uncompressed: RAR compression is not opened (needs a RAR decompressor), so there is nothing mailin can import",
+                                   detail: "none of its \(files.count) files can be read: \(Set(refusals).sorted().joined(separator: "; "))",
                                    encryptedMembers: encrypted)
         }
         var notes: [String] = []
-        if compressed > 0 { notes.append("\(compressed) of \(files.count) files are RAR-compressed and will be skipped and counted (RAR compression is not opened)") }
+        if notOpened > 0 { notes.append("\(notOpened) of \(files.count) files use a RAR compression this reader does not open and will be skipped and counted") }
         if encrypted > 0 { notes.append("\(encrypted) of \(files.count) files are encrypted and will be skipped and counted") }
-        if split > 0 { notes.append("\(split) of \(files.count) files continue in another volume and will be skipped and counted") }
+        if onMissingVolume > 0 { notes.append("\(onMissingVolume) of \(files.count) files continue in another volume that is not in the folder and will be skipped and counted") }
         if let damage = archive.damage { notes.append("the header walk stopped: \(damage)") }
         return SourcePreflight(condition: archive.damage == nil ? .ready : .damaged, detail: notes.joined(separator: "; "), encryptedMembers: encrypted)
     }

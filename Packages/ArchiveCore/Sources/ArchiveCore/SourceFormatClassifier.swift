@@ -45,8 +45,9 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     case olm
     /// Directive 2026-11-07 §6 "Containers": a 7z archive (`SevenZipReader`;
     /// `.7z.001` split sets with their sibling volumes) and a RAR archive
-    /// (`RARReader`: stored members imported, compressed ones refused and
-    /// counted), imported member by member like ZIP.
+    /// (`RARReader`: stored and compressed members imported — RAR 2.9–4.x
+    /// and RAR 5.0 through the vendored libarchive reader — the rest refused
+    /// and counted), imported member by member like ZIP.
     case sevenZip
     case rar
     /// Directory forms.
@@ -126,7 +127,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .sevenZip:
             return "Each mailbox file inside will be imported (a split .7z.001 set is read with the volumes next to it); encrypted members, methods this reader does not open and nested archives are skipped and counted."
         case .rar:
-            return "Stored mailbox files inside will be imported; compressed and encrypted members are skipped and counted (RAR compression is not opened)."
+            return "Each mailbox file inside will be imported (a multi-volume set is read with the volumes next to it); encrypted members, compressions this reader does not open and nested archives are skipped and counted."
         case .olm:
             return "Every message record is imported with its folder, flags and attachments; contacts, calendar items, tasks and notes are counted and left in the file."
         case .unknown:

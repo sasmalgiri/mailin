@@ -161,15 +161,19 @@ struct ParserFactory {
                     }
                 }
         case .rar:
-            // Stored members only; compressed / encrypted / split ones are refused by name and counted.
-            let source = try FileRandomAccessSource(url: url)
-            let archive = try RARReader.read(source: source)
-            return archive.members
+            // GAP-RAR: stored and compressed members (RAR 2.9–4.x, RAR 5.0,
+            // solid included) are imported; a volume of a set is read with
+            // the other volumes in the same folder. Encrypted members, the
+            // compressions the vendored decoder does not open and members on a
+            // missing volume are refused by name and counted.
+            let extractor = try RARReader.Extractor(url: url, logicalName: url.lastPathComponent,
+                                                    siblings: SplitVolumeSet.directorySiblings(of: url))
+            return extractor.archive.members
                 .filter { !$0.isDirectory && !$0.isJunk }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         if member.isSymlink { throw RARReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
-                        try RARReader.extract(member, source: source, to: dest)
+                        try extractor.extract(member, to: dest)
                     }
                 }
         case .tar:

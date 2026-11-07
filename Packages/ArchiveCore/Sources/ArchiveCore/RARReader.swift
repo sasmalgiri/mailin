@@ -2,18 +2,22 @@
 //  RARReader.swift
 //  ArchiveCore
 //
-//  Completion directive 2026-11-07 §6 "Containers": RAR archives read for
-//  what the published format descriptions allow without a RAR decompressor
-//  — the RAR 5.0 header layout (rarlab.com/technote.htm) and the RAR 1.5–4.x
-//  block layout (unrarsrc's headers). Every member is listed exactly: name,
-//  sizes, CRC-32, compression method and algorithm version, encryption,
-//  solid and split flags, directory / link kind. Stored members (method 0)
-//  are extracted and CRC-verified. Compressed members are NAMED per member
-//  as "RAR compression not opened (needs a RAR decompressor)": the RAR LZSS
-//  + PPMd + filter decoder is not ported here (see the report's dependency
-//  recommendation). Encrypted headers (RAR5 type-4 header, RAR4 MHD_PASSWORD)
-//  stop the listing with `encryptedHeaders`, which the container reader
-//  shows as "locked".
+//  Completion directive 2026-11-07 §6 "Containers": RAR archives read from
+//  the published format descriptions — the RAR 5.0 header layout
+//  (rarlab.com/technote.htm) and the RAR 1.5–4.x block layout (unrarsrc's
+//  headers). Every member is listed exactly: name, sizes, CRC-32, compression
+//  method and algorithm version, dictionary, encryption, solid and split
+//  flags, directory / link kind. Stored members (method 0) are copied and
+//  CRC-verified here. GAP-RAR (owner 2026-11-07): compressed members are
+//  decoded by the vendored libarchive reader (RARDecompressor.swift) — the
+//  RAR 2.9–4.x algorithm (LZSS, PPMd, the standard filters) and the RAR 5.0
+//  algorithm (solid archives included, x86/ARM/delta filters). What it does
+//  not open is refused per member with the reason (`compressionRefusal`):
+//  the RAR 1.5 and 2.0 algorithms, RAR 1.5–4.x solid members after the first,
+//  the RAR 7.0 algorithm, and RAR 5.0 dictionaries over 64 MiB. Encrypted
+//  members and headers (RAR5 type-4 header, RAR4 MHD_PASSWORD) stay locked:
+//  no password is asked for. Multi-volume sets are read as one archive by
+//  RARVolumeSet.swift.
 //
 //  Every header is CRC-checked; a damaged header ends the walk with a note
 //  instead of a crash, and what was read before it is kept.
@@ -24,7 +28,8 @@ import Foundation
 struct RARReader {
 
     /// Bound into import identities; bump when extraction behaviour changes.
-    static let version = 1
+    /// 2: compressed members decoded (vendored libarchive); volume sets read as one.
+    static let version = 2
     static let diskMarginBytes: Int64 = ZIPArchiveReader.diskMarginBytes
     private static let windowSize = 64 * 1024
     /// RAR 5.0 caps a header at 2 MiB; a larger declared size is damage.
@@ -39,8 +44,8 @@ struct RARReader {
     struct Member: Sendable, Equatable {
         let name: String
         let unpackedSize: Int64
-        let packedSize: Int64
-        let crc32: UInt32?
+        var packedSize: Int64
+        var crc32: UInt32?
         /// 0 = stored; 1…5 = RAR's compression levels (RAR4 0x31…0x35, RAR5 method field).
         let method: Int
         /// RAR4: the unpack version the member needs (20, 29 …); RAR5: 0 for the 5.0 algorithm, 1 for 7.0.
@@ -49,11 +54,20 @@ struct RARReader {
         let isEncrypted: Bool
         let isSolid: Bool
         let isSplitBefore: Bool
-        let isSplitAfter: Bool
+        var isSplitAfter: Bool
         let isSymlink: Bool
         let hostOS: String
         let dataOffset: Int64
         let format: Format
+        /// RAR 5.0: the dictionary the member declares (nil for RAR 1.5–4.x, directories, RAR 7.0).
+        var dictionaryBytes: Int64? = nil
+        /// False when a RAR 5.0 header says the unpacked size is unknown.
+        var sizeIsKnown = true
+        /// Index among the archive's file headers (one per member of a merged volume set) — the decoder's entry number.
+        var ordinal = 0
+        /// Volumes (0-based, within a set) holding the member's first and last part; 0 for a single archive.
+        var firstVolume = 0
+        var lastVolume = 0
 
         var methodName: String {
             if method == 0 { return "store" }
@@ -67,6 +81,28 @@ struct RARReader {
             return name.hasPrefix("__MACOSX/") || base == ".DS_Store" || base == "Thumbs.db" || base.hasPrefix("._") || name.hasPrefix(".")
         }
         var unsafePath: String? { SevenZipReader.unsafePathReason(name) }
+
+        /// Why the vendored decoder is not asked for this compressed member,
+        /// or nil when it will be (always nil for a stored member).
+        var compressionRefusal: String? {
+            guard method != 0, !isDirectory else { return nil }
+            switch format {
+            case .rar4:
+                // unrar: 15 = RAR 1.5, 20/26 = RAR 2.x, 29/36 = RAR 2.9–4.x; libarchive implements only the last.
+                guard algorithmVersion == 29 || algorithmVersion == 36 else {
+                    return "RAR \(algorithmVersion / 10).\(algorithmVersion % 10) compression not opened (the RAR 1.5 and 2.0 algorithms are not in the vendored decoder)"
+                }
+                if isSolid {
+                    return "RAR 4 solid compression not opened (the vendored decoder reads only the first member of a RAR 4 solid archive)"
+                }
+            case .rar5:
+                guard algorithmVersion == 0 else { return "RAR 7.0 compression not opened (the vendored decoder reads the RAR 5.0 algorithm)" }
+                if let dictionaryBytes, dictionaryBytes > RARReader.maxDecoderDictionaryBytes {
+                    return "needs a \(dictionaryBytes)-byte RAR dictionary, over the \(RARReader.maxDecoderDictionaryBytes)-byte limit of the vendored decoder"
+                }
+            }
+            return nil
+        }
     }
 
     struct Archive: Sendable {
@@ -89,7 +125,10 @@ struct RARReader {
         case malformed(String)
         case encryptedHeaders
         case encrypted(member: String)
-        case compressed(member: String, method: String)
+        /// A compressed member the vendored decoder does not open, with the reason.
+        case compressionNotOpened(member: String, reason: String)
+        /// The decoder stopped inside the member's data (damaged data, a failed BLAKE2 check …).
+        case decodeFailed(member: String, detail: String)
         case splitAcrossVolumes(member: String, detail: String)
         case crcMismatch(member: String)
         case sizeMismatch(member: String, declared: Int64, actual: Int64)
@@ -104,7 +143,8 @@ struct RARReader {
             case .malformed(let what): return "Archive is malformed: \(what)."
             case .encryptedHeaders: return "The archive's headers are encrypted; its members are unknown until it is unlocked (RAR decryption is not implemented)."
             case .encrypted(let member): return "\(member): encrypted; RAR decryption is not implemented."
-            case .compressed(let member, let method): return "\(member): RAR compression (\(method)) not opened (needs a RAR decompressor)."
+            case .compressionNotOpened(let member, let reason): return "\(member): \(reason)."
+            case .decodeFailed(let member, let detail): return "\(member): the RAR data could not be decoded (\(detail)) — the member is damaged."
             case .splitAcrossVolumes(let member, let detail): return "\(member): \(detail)."
             case .crcMismatch(let member): return "\(member): CRC-32 does not match — the member is damaged."
             case .sizeMismatch(let member, let declared, let actual): return "\(member): declared \(declared) bytes, produced \(actual) — refused."
@@ -245,11 +285,14 @@ struct RARReader {
                 let version = Int(compression & 0x3F)
                 let unixMode = hostOS == 1 ? attributes : 0
                 if (unixMode & 0xF000) == 0xA000 { isSymlink = true }
+                // Bits 10–14: dictionary = 128 KiB << N (RAR 5.0 algorithm; RAR 7.0 adds a fraction).
+                let dictionary: Int64? = isDirectory || version != 0 ? nil : Int64(0x20000) << Int64((compression >> 10) & 0x0F)
                 archive.members.append(Member(name: name, unpackedSize: unpacked, packedSize: dataSize, crc32: crc, method: method,
                                               algorithmVersion: version, isDirectory: isDirectory, isEncrypted: isEncrypted,
                                               isSolid: compression & 0x40 != 0, isSplitBefore: flags & 0x0008 != 0, isSplitAfter: flags & 0x0010 != 0,
                                               isSymlink: isSymlink, hostOS: hostOS == 0 ? "Windows" : (hostOS == 1 ? "Unix" : "OS \(hostOS)"),
-                                              dataOffset: dataOffset, format: .rar5))
+                                              dataOffset: dataOffset, format: .rar5, dictionaryBytes: dictionary, sizeIsKnown: !unknownSize,
+                                              ordinal: archive.members.count))
             case 4:   // archive encryption header: everything after it is encrypted
                 throw ReadError.encryptedHeaders
             case 5:   // end of archive
@@ -318,14 +361,17 @@ struct RARReader {
                 }
                 guard cursor + nameSize <= headerSize else { archive.damage = "file header at \(position) has a name longer than the header"; break }
                 let nameBytes = Array(header[cursor..<(cursor + nameSize)])
-                let name = flags & 0x0200 != 0 ? decodeRAR4UnicodeName(nameBytes) : (String(bytes: nameBytes, encoding: .utf8) ?? String(bytes: nameBytes, encoding: .isoLatin1) ?? "member")
+                // RAR 1.5–4.x stores paths with "\" whatever the host (unrar and libarchive turn them into "/").
+                let name = (flags & 0x0200 != 0 ? decodeRAR4UnicodeName(nameBytes) : (String(bytes: nameBytes, encoding: .utf8) ?? String(bytes: nameBytes, encoding: .isoLatin1) ?? "member"))
+                    .replacingOccurrences(of: "\\", with: "/")
                 addSize = packed
                 let isDirectory = flags & 0xE0 == 0xE0
                 let isSymlink = hostOS == 3 && (attributes & 0xF000) == 0xA000
                 archive.members.append(Member(name: name, unpackedSize: unpacked, packedSize: packed, crc32: fileCRC, method: max(0, method),
                                               algorithmVersion: unpVer, isDirectory: isDirectory, isEncrypted: flags & 0x0004 != 0,
                                               isSolid: flags & 0x0010 != 0, isSplitBefore: flags & 0x0001 != 0, isSplitAfter: flags & 0x0002 != 0,
-                                              isSymlink: isSymlink, hostOS: rar4HostOS(hostOS), dataOffset: position + Int64(headerSize), format: .rar4))
+                                              isSymlink: isSymlink, hostOS: rar4HostOS(hostOS), dataOffset: position + Int64(headerSize), format: .rar4,
+                                              ordinal: archive.members.count))
             case 0x7B:   // end of archive
                 archive.isLastVolume = flags & 0x0001 == 0
                 return archive
@@ -404,8 +450,10 @@ struct RARReader {
 
     // MARK: - Extraction (stored members)
 
-    /// Copies a stored member to `destination`, CRC-32 verified. Compressed,
-    /// encrypted and split members throw their named refusal.
+    /// Copies a stored member to `destination`, CRC-32 verified. Encrypted
+    /// and split members throw their named refusal; a compressed member is
+    /// decoded only through `RARReader.Extractor`, which has the archive's
+    /// file(s) for the libarchive pass.
     static func extract(_ member: Member, source: RandomAccessSource, to destination: URL,
                         maxOutputBytes: Int64? = nil, availableDiskBytes: Int64? = nil) throws {
         if let reason = member.unsafePath { throw ReadError.unsafePath(member: member.name, reason: reason) }
@@ -414,7 +462,9 @@ struct RARReader {
         if member.isSplitBefore || member.isSplitAfter {
             throw ReadError.splitAcrossVolumes(member: member.name, detail: member.isSplitBefore ? "continues from the previous volume" : "continues in the next volume")
         }
-        guard member.method == 0 else { throw ReadError.compressed(member: member.name, method: member.methodName) }
+        guard member.method == 0 else {
+            throw ReadError.compressionNotOpened(member: member.name, reason: member.compressionRefusal ?? "\(member.methodName) is decoded from the archive file, not from a byte source")
+        }
         guard member.packedSize == member.unpackedSize else {
             throw ReadError.sizeMismatch(member: member.name, declared: member.unpackedSize, actual: member.packedSize)
         }

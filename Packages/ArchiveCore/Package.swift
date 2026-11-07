@@ -13,7 +13,22 @@ let package = Package(
     targets: [
         // §3-P1: Swift 6 language mode — full data-race checking is an error,
         // not a warning, for the archive engine.
+        // GAP-RAR (owner 2026-11-07): libarchive 3.8.11's RAR 1.5–4.x and
+        // RAR 5.0 readers, vendored verbatim (BSD-2-Clause; COPYING and
+        // VENDORED.md in the target folder), behind a small C surface
+        // (include/mailin_rar.h). Only libSystem is used — no zlib, bzip2,
+        // lzma, iconv, OpenSSL or libxml2 (libarchive/config.h).
+        .target(name: "CLibArchiveRAR",
+                path: "Sources/CLibArchiveRAR",
+                exclude: ["COPYING", "VENDORED.md", "VENDORED-SHA256SUMS"],
+                sources: ["mailin_rar.c", "libarchive"],
+                publicHeadersPath: "include",
+                // Upstream code kept verbatim: its 64→32-bit shortening
+                // warnings (-Wshorten-64-to-32, on by default for Apple
+                // targets) are silenced for this target only.
+                cSettings: [.define("HAVE_CONFIG_H"), .headerSearchPath("libarchive"), .unsafeFlags(["-w"])]),
         .target(name: "ArchiveCore",
+                dependencies: ["CLibArchiveRAR"],
                 path: "Sources/ArchiveCore",
                 swiftSettings: [.unsafeFlags(["-enable-testing"]), .swiftLanguageMode(.v6)]),
         // Runs UNSANDBOXED under `swift test` (no host app), which is what the
