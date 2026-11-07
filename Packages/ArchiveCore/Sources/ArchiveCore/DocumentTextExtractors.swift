@@ -40,6 +40,15 @@ enum DocumentKind: String, Sendable, CaseIterable {
     /// compressed members named). Volumes of a spanned ZIP (`.z01`) are `.zip`.
     case sevenZip = "7z"
     case rar
+    /// Directive 2026-11-07 §6: the other business formats — Publisher,
+    /// OneNote section (.one) and notebook package (.onepkg, a cabinet),
+    /// binary Visio (.vsd/.vss/.vst, Visio 5–2010), Project binary (.mpp/.mpt),
+    /// Access databases (.mdb/.accdb, Jet 3/4 and ACE).
+    case pub
+    case one, onepkg
+    case vsd
+    case mpp
+    case mdb
 
     var isContainer: Bool { self == .zip || self == .tar || self == .gzip || self == .sevenZip || self == .rar }
 
@@ -66,6 +75,12 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case "tgz", "gz", "gzip": return .gzip
         case "7z": return .sevenZip
         case "rar": return .rar
+        case "pub": return .pub
+        case "one": return .one
+        case "onepkg": return .onepkg
+        case "vsd", "vss", "vst": return .vsd
+        case "mpp", "mpt": return .mpp
+        case "mdb", "accdb", "mde", "accde", "mda", "accda", "accdt", "accdr": return .mdb
         default: break
         }
         // Volumes of a split set: archive.z01 (spanned ZIP), archive.7z.001, archive.r00 (RAR).
@@ -75,6 +90,11 @@ enum DocumentKind: String, Sendable, CaseIterable {
         if ext.count == 3, ext.hasPrefix("r"), Int(ext.dropFirst()) != nil { return .rar }
         if mime.contains("x-7z-compressed") { return .sevenZip }
         if mime.contains("rar") { return .rar }
+        if mime.contains("msaccess") || mime.contains("x-msaccess") || mime.contains("vnd.ms-access") { return .mdb }
+        if mime.contains("mspublisher") { return .pub }
+        if mime.contains("onenote") { return .one }
+        if mime == "application/vnd.visio" || mime == "application/vnd.ms-visio" { return .vsd }
+        if mime.contains("ms-project") || mime.contains("x-project") { return .mpp }
         if mime.contains("opendocument.text") { return .odt }
         if mime.contains("opendocument.spreadsheet") { return .ods }
         if mime.contains("opendocument.presentation") { return .odp }
@@ -101,6 +121,11 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .vsdx: return "visio"
         case .projectXML: return "project"
         case .zip, .tar, .gzip, .sevenZip, .rar: return "archive"
+        case .pub: return "publisher"
+        case .one, .onepkg: return "onenote"
+        case .vsd: return "visio"
+        case .mpp: return "project"
+        case .mdb: return "access"
         }
     }
 }
@@ -141,6 +166,12 @@ enum DocumentTextExtractor {
         case .projectXML: return try ProjectXMLTextExtractor.extract(fileURL: fileURL)
         case .zip, .tar, .gzip, .sevenZip, .rar:
             return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: password, siblings: siblings)
+        case .pub: return try PublisherTextExtractor.extract(fileURL: fileURL)
+        case .one: return try OneNoteTextExtractor.extract(fileURL: fileURL, logicalName: logicalName)
+        case .onepkg: return try OneNoteTextExtractor.extractPackage(fileURL: fileURL, logicalName: logicalName)
+        case .vsd: return try VisioBinaryTextExtractor.extract(fileURL: fileURL)
+        case .mpp: return try ProjectBinaryTextExtractor.extract(fileURL: fileURL)
+        case .mdb: return try AccessTextExtractor.extract(fileURL: fileURL)
         }
     }
 
@@ -168,6 +199,12 @@ enum DocumentTextExtractor {
         if SevenZipReader.isSevenZip(head: head) { return .sevenZip }
         if RARReader.isRAR(head: head) { return .rar }
         if bytes.count >= 262, Array(bytes[257..<262]) == [0x75, 0x73, 0x74, 0x61, 0x72] { return .tar }
+        // Directive 2026-11-07 §6: Publisher (and the other OLE2 business formats) by the root CLSID;
+        // a OneNote section by its file-type GUID; a notebook package by the cabinet signature.
+        if Array(bytes[0..<8]) == OfficeTextExtractor.oleSignature { return OLE2CompoundSniff.kind(head: head) }
+        if OneNoteTextExtractor.hasSectionSignature(head) { return .one }
+        if CabinetReader.hasSignature(head) { return .onepkg }
+        if AccessTextExtractor.hasSignature(head) { return .mdb }
         return nil
     }
 
