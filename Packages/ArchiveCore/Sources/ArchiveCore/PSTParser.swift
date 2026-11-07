@@ -340,7 +340,8 @@ struct PSTReader {
             throw PSTError.invalidFormat(
                 "This \(isOST ? "OST" : "PST") file uses cyclic encoding (bCryptMethod 2), which mailin does not decode yet. Re-save it from Outlook with compressible encryption or none.")
         default:
-            throw PSTError.invalidFormat("Unsupported \(isOST ? "OST" : "PST") encryption type: \(encType)")
+            // Directive 2026-11-07 §6: 0x10 (Windows Information Protection) named as locked, like the spec reader.
+            throw PSTError.invalidFormat(PSTProtection.CryptMethod(raw: encType).lockedDescription)
         }
     }
 

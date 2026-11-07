@@ -633,6 +633,12 @@ final class BulkImportCoordinator {
                     filename: sourceName, sizeBytes: sizeBytes,
                     sha256: hash, parser: parserID.name, parserVersion: parserID.version
                 ))
+                // Directive 2026-11-07 §6: an Outlook file's protection is stated on the
+                // receipt — a password CRC is not encryption and the file is read in full;
+                // encoded blocks are decoded; Windows-protected files are named as locked.
+                if ["pst", "ost"].contains(url.pathExtension.lowercased()), let note = PSTProtection.receiptNote(fileURL: importURL) {
+                    summary.warnings.append("\(sourceName): \(note)")
+                }
 
                 // §3.1/§3.2: first-class source identity. Every row this file
                 // produces is stamped (source_id, source_ordinal), so resume /

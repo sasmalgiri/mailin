@@ -167,6 +167,12 @@ final class PSTSpecWriter: PSTStreamWriting {
     /// Page geometry and fixed-page positions: the Unicode 512-byte PST (default) or
     /// the 4 KiB-page OST (`PSTWriterLayout.ost4K`); every size below comes from it.
     let layout: PSTWriterLayout
+    /// Directive 2026-11-07 §6: bCryptMethod of the file — 0 none, 1 permutation
+    /// ("compressible encryption"), 2 cyclic ("high encryption"); external data
+    /// blocks are encoded as written. Fixtures for the reader's decoders.
+    let cryptMethod: UInt8
+    /// PidTagPstPassword (0x67FF) on the message store: Outlook's password CRC — not encryption.
+    let storePasswordCRC: UInt32
 
     // NDB allocation: a bump allocator that steps over the fixed map pages.
     private var eof: UInt64
@@ -297,9 +303,13 @@ final class PSTSpecWriter: PSTStreamWriting {
 
     var dataBytesWritten: UInt64 { eof }
 
-    init(url: URL, exportFolderName: String = "mailin export", layout: PSTWriterLayout = .unicodePST) throws {
+    init(url: URL, exportFolderName: String = "mailin export", layout: PSTWriterLayout = .unicodePST,
+         cryptMethod: UInt8 = 0, storePasswordCRC: UInt32 = 0) throws {
+        precondition(cryptMethod <= 2, "bCryptMethod 0, 1 or 2")
         self.url = url
         self.layout = layout
+        self.cryptMethod = cryptMethod
+        self.storePasswordCRC = storePasswordCRC
         eof = layout.firstDataIB
         FileManager.default.createFile(atPath: url.path, contents: nil)
         guard let h = try? FileHandle(forWritingTo: url) else { throw WriteError.io("Cannot open \(url.lastPathComponent) for writing") }
@@ -414,9 +424,17 @@ final class PSTSpecWriter: PSTStreamWriting {
         let align = layout.blockAlign, trailer = layout.blockTrailer
         let total = (data.count + trailer + align - 1) / align * align
         let ib = reserve(total, align: UInt64(align))
-        var blk = data
+        // External (data) blocks are stored encoded per bCryptMethod; internal
+        // blocks never are ([MS-PST] 2.2.2.6). The trailer CRC covers the bytes as stored.
+        var stored = data
+        if !isInternal, cryptMethod != 0 {
+            var bytes = [UInt8](data)
+            if cryptMethod == 1 { PSTSpec.encodePermute(&bytes) } else { PSTSpec.cyclic(&bytes, key: UInt32(truncatingIfNeeded: bid)) }
+            stored = Data(bytes)
+        }
+        var blk = stored
         blk.append(Data(repeating: 0, count: total - trailer - data.count))
-        blk.u16(UInt16(data.count)); blk.u16(F.sig(ib, bid)); blk.u32(F.crc(data)); blk.u64(bid)
+        blk.u16(UInt16(data.count)); blk.u16(F.sig(ib, bid)); blk.u32(F.crc(stored)); blk.u64(bid)
         if trailer > 16 { blk.append(Data(count: trailer - 16)) }   // 4 KiB pages: 8 reserved bytes
         try writeAt(blk, ib)
         var r = Data(); r.u64(bid); r.u64(ib); r.u16(UInt16(data.count)); r.u16(2)
@@ -1102,7 +1120,7 @@ final class PSTSpecWriter: PSTStreamWriting {
             (0x0FF9, .binary(storeKey)), (0x3001, .unicode(url.deletingPathExtension().lastPathComponent)),
             (0x35DF, .long(0x89)), (0x35E0, .binary(entryID(Self.ipmSubtreeNid))),
             (0x35E3, .binary(entryID(Self.deletedItemsNid))), (0x35E7, .binary(entryID(Self.searchRootNid))),
-            (0x67FF, .long(0)), (0x0E34, .binary(replVersionHistory)),
+            (0x67FF, .long(storePasswordCRC)), (0x0E34, .binary(replVersionHistory)),
         ], nextSubnodeIndex: &unused)
         specialNodes.append((0x21, store.data, store.sub, 0))
         // Name-to-ID map ([MS-PST] 2.4.7): one standard named property, PidLidCommonStart
@@ -1368,7 +1386,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         h[248] = 2                                                         // fAMapValid = VALID_AMAP2
         for i in 256..<512 { h[i] = 0xFF }                                 // rgbFM, rgbFP (unused, 0xFF)
         h[512] = 0x80                                                      // bSentinel
-        h[513] = 0                                                         // bCryptMethod: none
+        h[513] = cryptMethod                                               // bCryptMethod: 0 none, 1 permute, 2 cyclic
         h.put64(516, nextBid)                                              // bidNextB
         h.put32(4, F.crc(h.subdata(in: 8..<(8 + 471))))                   // dwCRCPartial
         h.put32(524, F.crc(h.subdata(in: 8..<(8 + 516))))                 // dwCRCFull

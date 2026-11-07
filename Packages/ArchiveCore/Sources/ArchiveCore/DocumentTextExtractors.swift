@@ -49,6 +49,9 @@ enum DocumentKind: String, Sendable, CaseIterable {
     case vsd
     case mpp
     case mdb
+    /// Directive 2026-11-07 §6: OpenPGP files (.gpg/.pgp/.asc) — described from
+    /// their packet headers, never decrypted (`OpenPGP.swift`).
+    case pgp
 
     var isContainer: Bool { self == .zip || self == .tar || self == .gzip || self == .sevenZip || self == .rar }
 
@@ -59,6 +62,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         let mime = mimeType.lowercased()
         let ext = (filename as NSString).pathExtension.lowercased()
         if ext == "xlsb" || mime.contains("ms-excel.sheet.binary") { return .xlsb }
+        if OpenPGP.isOpenPGPAttachment(mimeType: mime, filename: filename) { return .pgp }
         if ["vsdx", "vsdm", "vstx", "vstm"].contains(ext) || mime.contains("ms-visio.drawing") || mime.contains("ms-visio.template") { return .vsdx }
         switch ext {
         case "odt", "ott": return .odt
@@ -126,6 +130,7 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .vsd: return "visio"
         case .mpp: return "project"
         case .mdb: return "access"
+        case .pgp: return "openpgp"
         }
     }
 }
@@ -158,8 +163,10 @@ enum DocumentTextExtractor {
         case .docx: return try OfficeTextExtractor.extract(fileURL: fileURL, kind: .docx)
         case .xlsx: return try OfficeTextExtractor.extract(fileURL: fileURL, kind: .xlsx)
         case .pptx: return try OfficeTextExtractor.extract(fileURL: fileURL, kind: .pptx)
-        case .odt, .ods, .odp: return try ODFTextExtractor.extract(fileURL: fileURL, kind: kind)
-        case .pages, .numbers, .key: return try IWorkTextExtractor.extract(fileURL: fileURL, kind: kind)
+        // Directive 2026-11-07 §6: the readers verified on real producer files
+        // (ODFDocumentReader also unlocks encrypted packages with `password`).
+        case .odt, .ods, .odp: return try ODFDocumentReader.extract(fileURL: fileURL, kind: kind, password: password)
+        case .pages, .numbers, .key: return try IWorkDocumentReader.extract(fileURL: fileURL, kind: kind)
         case .doc, .xls, .ppt: return try LegacyOfficeTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .xlsb: return try XLSBReader.extract(fileURL: fileURL)
         case .vsdx: return try VisioTextExtractor.extract(fileURL: fileURL)
@@ -172,6 +179,7 @@ enum DocumentTextExtractor {
         case .vsd: return try VisioBinaryTextExtractor.extract(fileURL: fileURL)
         case .mpp: return try ProjectBinaryTextExtractor.extract(fileURL: fileURL)
         case .mdb: return try AccessTextExtractor.extract(fileURL: fileURL)
+        case .pgp: return try OpenPGP.extract(fileURL: fileURL)
         }
     }
 
