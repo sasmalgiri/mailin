@@ -43,6 +43,12 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     /// TYPE-06: an Outlook for Mac archive — a ZIP whose records are
     /// Outlook's message XML; read by `OLMParser`, never member-classified.
     case olm
+    /// Directive 2026-11-07 §6 "Containers": a 7z archive (`SevenZipReader`;
+    /// `.7z.001` split sets with their sibling volumes) and a RAR archive
+    /// (`RARReader`: stored members imported, compressed ones refused and
+    /// counted), imported member by member like ZIP.
+    case sevenZip
+    case rar
     /// Directory forms.
     case appleMailMailbox     // Apple Mail's .mbox *package*
     case appleMailLibrary     // Mail's own folders: <box>.mbox/<UUID>/Data/…/Messages/*.emlx
@@ -53,16 +59,16 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     var isSupported: Bool {
         switch self {
         case .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf,
-             .appleMailMailbox, .appleMailLibrary, .maildir, .emlFolder, .zip, .gzip, .tar, .olm:
+             .appleMailMailbox, .appleMailLibrary, .maildir, .emlFolder, .zip, .gzip, .tar, .olm, .sevenZip, .rar:
             return true
         case .unknown:
             return false
         }
     }
 
-    /// ZIP and gzip: the messages are inside; each member is extracted to a
-    /// scratch file and classified on its own contents.
-    var isContainer: Bool { self == .zip || self == .gzip || self == .tar }
+    /// ZIP, gzip, tar, 7z, RAR: the messages are inside; each member is
+    /// extracted to a scratch file and classified on its own contents.
+    var isContainer: Bool { self == .zip || self == .gzip || self == .tar || self == .sevenZip || self == .rar }
 
     /// The parser that handles this format, as an extension token the existing
     /// `ParserFactory` dispatch understands.
@@ -79,6 +85,8 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .gzip: return "gzip"
         case .tar: return "tar"
         case .olm: return "olm"
+        case .sevenZip: return "7z"
+        case .rar: return "rar"
         case .unknown: return ""
         }
     }
@@ -95,6 +103,8 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .zip: return "ZIP archive"
         case .gzip: return "gzip-compressed file"
         case .tar: return "tar archive"
+        case .sevenZip: return "7z archive"
+        case .rar: return "RAR archive"
         case .olm: return "Outlook for Mac archive (.olm)"
         case .appleMailMailbox: return "Apple Mail mailbox package"
         case .appleMailLibrary: return "Apple Mail folder (.emlx messages)"
@@ -113,6 +123,10 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
             return "The compressed mailbox inside will be imported."
         case .tar:
             return "Each mailbox file inside will be imported; other files and archives nested more than one level down are skipped and counted."
+        case .sevenZip:
+            return "Each mailbox file inside will be imported (a split .7z.001 set is read with the volumes next to it); encrypted members, methods this reader does not open and nested archives are skipped and counted."
+        case .rar:
+            return "Stored mailbox files inside will be imported; compressed and encrypted members are skipped and counted (RAR compression is not opened)."
         case .olm:
             return "Every message record is imported with its folder, flags and attachments; contacts, calendar items, tasks and notes are counted and left in the file."
         case .unknown:
@@ -172,6 +186,20 @@ enum SourceFormatClassifier {
                 extensionHint: ext, nameContentMismatch: false, warning: nil)
         }
 
+        // Directive §6 "Containers": the LAST volume of a spanned ZIP set
+        // (`set.zip` beside `set.z01 …`) begins with the tail of whatever
+        // member ran over from the previous volume — often mailbox text — and
+        // only its end-of-central-directory record says what it is. Decided
+        // from that record for files named as ZIP volumes, before any text rule.
+        if let part = SplitVolumeSet.part(ofName: url.lastPathComponent), part.kind == .zipSpanned,
+           !(probe.count >= 2 && probe[probe.startIndex] == 0x50 && probe[probe.startIndex + 1] == 0x4B),
+           let disks = ZIPArchiveReader.spannedDiskCount(url: url) {
+            return SourceClassification(
+                format: .zip,
+                evidence: "end-of-central-directory record of a spanned ZIP set (\(disks) volumes; this is volume \(disks))",
+                extensionHint: ext, nameContentMismatch: false, warning: nil)
+        }
+
         if var byMagic = classifyByMagic(probe, ext: ext, currentURL: url) {
             // S1: attach the documented size verdict now, so the pre-import
             // sheet can warn before a parse is attempted rather than after.
@@ -221,6 +249,35 @@ enum SourceFormatClassifier {
                 warning: nil)
         }
 
+        // Directive §6 "Containers": 7z, RAR (4.x and 5.0), and the first
+        // volume of a spanned ZIP (PK\x07\x08 spanning marker before the
+        // first local header).
+        if has([0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]) {
+            let isVolume = SplitVolumeSet.part(ofName: currentURL?.lastPathComponent ?? "")?.kind == .sevenZipSplit
+            return SourceClassification(
+                format: .sevenZip,
+                evidence: isVolume ? "7z signature at offset 0 (first volume of a split set)" : "7z signature at offset 0",
+                extensionHint: ext,
+                nameContentMismatch: ext != "7z" && !isVolume,
+                warning: nil)
+        }
+        if has([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00]) || has([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]) {
+            let isNewFormat = has([0x01], at: 6)
+            return SourceClassification(
+                format: .rar,
+                evidence: isNewFormat ? "RAR 5.0 signature at offset 0" : "RAR 1.5–4.x signature at offset 0",
+                extensionHint: ext,
+                nameContentMismatch: ext != "rar" && !(ext.count == 3 && ext.hasPrefix("r") && Int(ext.dropFirst()) != nil),
+                warning: nil)
+        }
+        if has([0x50, 0x4B, 0x07, 0x08]) {
+            return SourceClassification(
+                format: .zip,
+                evidence: "ZIP spanning marker PK\\x07\\x08 at offset 0 (first volume of a split set; the other volumes are read from the same folder)",
+                extensionHint: ext,
+                nameContentMismatch: SplitVolumeSet.part(ofName: currentURL?.lastPathComponent ?? "")?.kind != .zipSpanned,
+                warning: nil)
+        }
         if has([0x50, 0x4B, 0x03, 0x04]) || has([0x50, 0x4B, 0x05, 0x06]) {
             // TYPE-06: an Outlook for Mac archive is a ZIP whose directory
             // holds `com.microsoft.__Messages/` records. Decided from the

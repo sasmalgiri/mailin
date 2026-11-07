@@ -76,6 +76,10 @@ extension SourceFormatClassifier {
             return pstPreflight(url: url, size: size)
         case .zip, .olm:
             return zipPreflight(url: url)
+        case .sevenZip:
+            return sevenZipPreflight(url: url)
+        case .rar:
+            return rarPreflight(url: url)
         case .tar:
             // TYPE-06: the header chain must walk; a bad checksum or a member
             // running past the end is damage, named before the import starts.
@@ -131,11 +135,73 @@ extension SourceFormatClassifier {
         return .ready
     }
 
+    /// 7z (directive §6): a readable index (through the sibling volumes of a
+    /// split set); encrypted members counted; an encrypted index cannot be
+    /// listed without a password mailin does not ask for on import.
+    private static func sevenZipPreflight(url: URL) -> SourcePreflight {
+        let reader: SevenZipReader
+        do {
+            let set = SplitVolumeSet.sevenZipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
+            reader = try SevenZipReader(source: try set ?? FileRandomAccessSource(url: url))
+        } catch SevenZipReader.ReadError.encrypted {
+            return SourcePreflight(condition: .encrypted, detail: "the archive index is encrypted; its members are unknown until it is unlocked, and mailin does not ask for passwords on import")
+        } catch {
+            return SourcePreflight(condition: .damaged, detail: "the 7z index could not be read: \(error)")
+        }
+        let files = reader.members.filter { !$0.isDirectory && !$0.isJunk && !$0.isAnti }
+        let encrypted = files.filter(\.isEncrypted).count
+        let unopened = files.filter { !$0.isEncrypted && $0.unsupportedMethod != nil }.count
+        if !files.isEmpty, encrypted == files.count {
+            return SourcePreflight(condition: .encrypted, detail: "every one of its \(files.count) files is encrypted; mailin does not ask for passwords", encryptedMembers: encrypted)
+        }
+        var notes: [String] = []
+        if encrypted > 0 { notes.append("\(encrypted) of \(files.count) files are encrypted and will be skipped and counted") }
+        if unopened > 0 { notes.append("\(unopened) of \(files.count) files use a compression method this reader does not open (\(Set(files.compactMap(\.unsupportedMethod)).sorted().joined(separator: ", "))) and will be skipped and counted") }
+        return SourcePreflight(condition: .ready, detail: notes.joined(separator: "; "), encryptedMembers: encrypted)
+    }
+
+    /// RAR (directive §6): headers readable; stored members import, the
+    /// rest is refused by name — an archive with no stored member has
+    /// nothing mailin can import.
+    private static func rarPreflight(url: URL) -> SourcePreflight {
+        let archive: RARReader.Archive
+        do { archive = try RARReader.read(url: url) }
+        catch RARReader.ReadError.encryptedHeaders {
+            return SourcePreflight(condition: .encrypted, detail: "the archive's headers are encrypted; its members are unknown until it is unlocked (RAR decryption is not implemented)")
+        } catch {
+            return SourcePreflight(condition: .damaged, detail: "the RAR headers could not be read: \(error)")
+        }
+        let files = archive.members.filter { !$0.isDirectory && !$0.isJunk }
+        let encrypted = files.filter(\.isEncrypted).count
+        let compressed = files.filter { !$0.isEncrypted && $0.method != 0 }.count
+        let split = files.filter { !$0.isEncrypted && $0.method == 0 && ($0.isSplitBefore || $0.isSplitAfter) }.count
+        let stored = files.count - encrypted - compressed - split
+        if !files.isEmpty, encrypted == files.count {
+            return SourcePreflight(condition: .encrypted, detail: "every one of its \(files.count) files is encrypted; RAR decryption is not implemented", encryptedMembers: encrypted)
+        }
+        if !files.isEmpty, stored == 0 {
+            return SourcePreflight(condition: .unsupported,
+                                   detail: "none of its \(files.count) files is stored uncompressed: RAR compression is not opened (needs a RAR decompressor), so there is nothing mailin can import",
+                                   encryptedMembers: encrypted)
+        }
+        var notes: [String] = []
+        if compressed > 0 { notes.append("\(compressed) of \(files.count) files are RAR-compressed and will be skipped and counted (RAR compression is not opened)") }
+        if encrypted > 0 { notes.append("\(encrypted) of \(files.count) files are encrypted and will be skipped and counted") }
+        if split > 0 { notes.append("\(split) of \(files.count) files continue in another volume and will be skipped and counted") }
+        if let damage = archive.damage { notes.append("the header walk stopped: \(damage)") }
+        return SourcePreflight(condition: archive.damage == nil ? .ready : .damaged, detail: notes.joined(separator: "; "), encryptedMembers: encrypted)
+    }
+
     /// ZIP: a readable central directory; encrypted members counted. A
     /// container whose every file member is encrypted cannot be imported.
     private static func zipPreflight(url: URL) -> SourcePreflight {
         let members: [ZIPArchiveReader.Member]
-        do { members = try ZIPArchiveReader.members(of: url) } catch {
+        // Directive §6: a volume of a spanned set is judged with the volumes beside it.
+        let set = SplitVolumeSet.zipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
+        do {
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
+            members = try ZIPArchiveReader.members(source: source)
+        } catch {
             return SourcePreflight(condition: .damaged, detail: "the ZIP directory could not be read: \(error.localizedDescription)")
         }
         let files = members.filter { !$0.isDirectory && !$0.isJunk }
@@ -145,11 +211,13 @@ extension SourceFormatClassifier {
                                    detail: "every one of its \(files.count) files is encrypted; mailin does not ask for passwords",
                                    encryptedMembers: encrypted)
         }
-        if encrypted > 0 {
-            return SourcePreflight(condition: .ready,
-                                   detail: "\(encrypted) of \(files.count) files are encrypted and will be skipped and counted",
-                                   encryptedMembers: encrypted)
+        var notes: [String] = []
+        if encrypted > 0 { notes.append("\(encrypted) of \(files.count) files are encrypted and will be skipped and counted") }
+        if let set, !set.missingVolumeNumbers.isEmpty {
+            let onMissing = files.filter { set.isDiskMissing($0.diskNumberStart) || set.diskBase($0.diskNumberStart) == nil }.count
+            let names = set.missingVolumeNumbers.map { set.volumes[$0 - 1].expectedName }.joined(separator: ", ")
+            notes.append("volume\(set.missingVolumeNumbers.count == 1 ? "" : "s") \(names) of the spanned set \(set.missingVolumeNumbers.count == 1 ? "is" : "are") not in the folder; \(onMissing) of \(files.count) files start there and will be skipped and counted")
         }
-        return .ready
+        return SourcePreflight(condition: .ready, detail: notes.joined(separator: "; "), encryptedMembers: encrypted)
     }
 }
