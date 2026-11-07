@@ -73,7 +73,10 @@ final class AttachmentTextIndexJob {
     /// 6 (§13.8 step 3): winmail.dat (TNEF) opened, .msg/.oft attachments read
     /// as messages, embedded Outlook messages expanded — rows those kinds
     /// left as unsupported are retried.
-    nonisolated static let extractorVersion = 6
+    /// 7 (§13.8 step 4): Office depth — tracked changes, text boxes, Excel
+    /// comments and hidden sheets, hidden slides, charts, embedded documents
+    /// as children; XLSB, Visio (VSDX) and Project XML readers.
+    nonisolated static let extractorVersion = 7
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -387,7 +390,7 @@ final class AttachmentTextIndexJob {
         // §13.3 (5): archives and attached messages read before children had
         // their own identity are re-read even when they were "extracted".
         while !Task.isCancelled {
-            let ids = try coverage.emailIDs(extractors: ["zip", "archive", "eml"], below: 5, limit: 500)
+            let ids = try coverage.emailIDs(extractors: ["zip", "archive", "eml", "office"], below: 7, limit: 500)
             if ids.isEmpty { break }
             try await store.attachmentTextStateReset(emailIDs: ids)
             try coverage.remove(emailIDs: ids)
@@ -774,6 +777,10 @@ final class AttachmentTextIndexJob {
         // before the text families, because their MIME types contain "xml"
         // and were once decoded as Latin-1 text, indexing bytes as words.
         if let kind = DocumentKind.detect(mimeType: mime, filename: attachment.filename) {
+            return readDocument(attachment, kind: kind, data: data)
+        }
+        // §13.8 step 4: an .xml that is a Microsoft Project plan is read as one, not as plain text.
+        if ext == "xml", let kind = DocumentTextExtractor.sniff(head: data.prefix(4096)), kind == .projectXML {
             return readDocument(attachment, kind: kind, data: data)
         }
         // R04: an attached message is decoded as a message, with its own attachments as children.

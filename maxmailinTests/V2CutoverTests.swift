@@ -2486,7 +2486,8 @@ final class V2CutoverTests: XCTestCase {
 
         let xlsx = try OfficeTextExtractor.extract(fileURL: try write("b.xlsx", Self.xlsx(sheetName: "Budget", sharedText: "Gross margin", inlineText: "inline note")), kind: .xlsx)
         XCTAssertEqual(xlsx.components, ["Sheet: Budget"])
-        XCTAssertTrue(xlsx.text.contains("[Sheet: Budget]\nGross margin\tinline note\n42\t84 {=SUM(A1:A2)}\trich run"), xlsx.text)
+        // §13.3 (2): every cell carries its address; a formula's cached value comes first, the formula after it.
+        XCTAssertTrue(xlsx.text.contains("[Sheet: Budget]\nA1: Gross margin\tB1: inline note\nA2: 42\tB2: 84 {=SUM(A1:A2)}\tC2: rich run"), xlsx.text)
 
         let pptx = try OfficeTextExtractor.extract(fileURL: try write("c.pptx", Self.pptx(slide: "Roadmap overview", notes: "remember the demo")), kind: .pptx)
         XCTAssertEqual(pptx.components, ["Slide 1", "Slide 2", "Notes 1"])
@@ -3116,6 +3117,218 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    /// A BIFF12 (xlsb) record: type and size as 7-bit groups, then the payload.
+    static func biff12(_ type: Int, _ payload: Data) -> Data {
+        var out = Data()
+        var t = type
+        repeat { var b = UInt8(t & 0x7F); t >>= 7; if t > 0 { b |= 0x80 }; out.append(b) } while t > 0
+        var n = payload.count
+        repeat { var b = UInt8(n & 0x7F); n >>= 7; if n > 0 { b |= 0x80 }; out.append(b) } while n > 0
+        out.append(payload)
+        return out
+    }
+
+    static func le32(_ v: UInt32) -> Data { Data((0..<4).map { UInt8((v >> (8 * $0)) & 0xFF) }) }
+
+    /// An XLWideString: cch then UTF-16LE.
+    static func xlString(_ s: String) -> Data { le32(UInt32(s.utf16.count)) + s.data(using: .utf16LittleEndian)! }
+
+    /// Plan v4 §13.3 (1)(2)(3), §13.8 step 4: depth inside Office Open XML —
+    /// tracked changes and text boxes labelled, embedded documents as
+    /// children, Excel comments, hidden sheets and the 1904 date system,
+    /// hidden slides, slide comments and chart text, and the Strict
+    /// namespace read like the Transitional one.
+    func testDEPTH01_officeOpenXML_revisionsTextBoxesEmbedded_commentsHiddenDates_slidesCharts_strict() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("depth-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func write(_ name: String, _ data: Data) throws -> URL { let u = root.appendingPathComponent(name); try data.write(to: u); return u }
+        let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+        // Word: a text box (with the duplicate mc:Fallback), an insertion, a deletion, an embedded workbook and an OLE object.
+        let embeddedXLSX = Self.xlsx(sheetName: "Embedded", sharedText: "Embedded margin", inlineText: "x")
+        let docx = Self.zipPackage([
+            ("word/document.xml", Data("""
+            <w:document xmlns:w="\(w)" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:body>
+            <w:p><w:r><w:t>Body before</w:t></w:r><w:ins w:id="1" w:author="A"><w:r><w:t>added words</w:t></w:r></w:ins>
+            <w:del w:id="2" w:author="A"><w:r><w:delText>removed words</w:delText></w:r></w:del></w:p>
+            <w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><w:txbxContent><w:p><w:r><w:t>Boxed sidebar note</w:t></w:r></w:p></w:txbxContent></w:drawing></mc:Choice>
+            <mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>Boxed sidebar note</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>
+            </w:body></w:document>
+            """.utf8)),
+            ("word/embeddings/Microsoft_Excel_Worksheet.xlsx", embeddedXLSX),
+            ("word/embeddings/oleObject1.bin", Data([0xD0, 0xCF, 0x11, 0xE0, 0, 0, 0, 0])),
+        ])
+        let word = try OfficeTextExtractor.extract(fileURL: try write("r.docx", docx), kind: .docx)
+        XCTAssertTrue(word.text.contains("Body before{inserted: added words}{deleted: removed words}"), word.text)
+        XCTAssertEqual(word.text.components(separatedBy: "Boxed sidebar note").count - 1, 1, "the Fallback copy of a text box is not read twice: \(word.text)")
+        XCTAssertTrue(word.text.contains("[Text box] Boxed sidebar note"), word.text)
+        XCTAssertEqual(word.children.map { "\($0.path)|\($0.state.rawValue)" },
+                       ["word/embeddings/Microsoft_Excel_Worksheet.xlsx|extracted", "word/embeddings/oleObject1.bin|unsupported"])
+        XCTAssertTrue(word.children[0].text?.contains("A1: Embedded margin") == true, word.children[0].text ?? "")
+        XCTAssertEqual(word.children[1].note, "embedded OLE object; not read")
+        XCTAssertEqual(word.notText, [], "embedded objects are children now, not an inventory line")
+
+        // Excel: a hidden sheet, comments bound to a sheet by its relationships, the 1904 date system, a chart.
+        let xlsx = Self.zipPackage([
+            ("xl/workbook.xml", Data("<workbook xmlns:r=\"r\"><workbookPr date1904=\"1\"/><sheets><sheet name=\"Visible\" sheetId=\"1\" r:id=\"rId1\"/><sheet name=\"Secret\" sheetId=\"2\" state=\"hidden\" r:id=\"rId2\"/></sheets></workbook>".utf8)),
+            ("xl/_rels/workbook.xml.rels", Data("<Relationships><Relationship Id=\"rId1\" Type=\"x\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"x\" Target=\"worksheets/sheet2.xml\"/></Relationships>".utf8)),
+            ("xl/worksheets/sheet1.xml", Data("<worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Open figure</t></is></c><c r=\"B1\"/><c r=\"C1\"><v>7</v></c></row></sheetData></worksheet>".utf8)),
+            ("xl/worksheets/sheet2.xml", Data("<worksheet><sheetData><row r=\"3\"><c r=\"B3\" t=\"inlineStr\"><is><t>Hidden figure</t></is></c></row></sheetData></worksheet>".utf8)),
+            ("xl/worksheets/_rels/sheet1.xml.rels", Data("<Relationships><Relationship Id=\"rId9\" Type=\"c\" Target=\"../comments1.xml\"/></Relationships>".utf8)),
+            ("xl/comments1.xml", Data("<comments><commentList><comment ref=\"C1\" authorId=\"0\"><text><r><t>Check this total</t></r></text></comment></commentList></comments>".utf8)),
+            ("xl/charts/chart1.xml", Data("<c:chartSpace xmlns:c=\"c\" xmlns:a=\"a\"><c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue by quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:cat><c:strRef><c:strCache><c:pt idx=\"0\"><c:v>Q1</c:v></c:pt><c:pt idx=\"1\"><c:v>Q2</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:pt idx=\"0\"><c:v>120</c:v></c:pt><c:pt idx=\"1\"><c:v>135</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>".utf8)),
+        ])
+        let excel = try OfficeTextExtractor.extract(fileURL: try write("d.xlsx", xlsx), kind: .xlsx)
+        XCTAssertEqual(excel.components, ["Workbook", "Sheet: Visible", "Comments: Visible", "Sheet: Secret (hidden)", "Chart 1"])
+        XCTAssertTrue(excel.text.contains("1904 date system"), excel.text)
+        XCTAssertTrue(excel.text.contains("[Sheet: Visible]\nA1: Open figure\tC1: 7\n"), "empty B1 carries no word: \(excel.text)")
+        XCTAssertTrue(excel.text.contains("[Comments: Visible]\nC1: Check this total"), excel.text)
+        XCTAssertTrue(excel.text.contains("[Sheet: Secret (hidden)]\nB3: Hidden figure"), excel.text)
+        XCTAssertTrue(excel.text.contains("[Chart 1]\nRevenue by quarter\nQ1\tQ2\t120\t135"), excel.text)
+        XCTAssertEqual(excel.notText, [])
+
+        // PowerPoint: a hidden slide, a comment part, a chart.
+        let pptx = Self.zipPackage([
+            ("ppt/slides/slide1.xml", Data("<p:sld xmlns:p=\"p\" xmlns:a=\"a\"><a:p><a:r><a:t>Shown slide</a:t></a:r></a:p></p:sld>".utf8)),
+            ("ppt/slides/slide2.xml", Data("<p:sld xmlns:p=\"p\" xmlns:a=\"a\" show=\"0\"><a:p><a:r><a:t>Hidden slide words</a:t></a:r></a:p></p:sld>".utf8)),
+            ("ppt/comments/comment1.xml", Data("<p:cmLst xmlns:p=\"p\"><p:cm authorId=\"0\" idx=\"1\"><p:text>Tighten the title</p:text></p:cm></p:cmLst>".utf8)),
+            ("ppt/charts/chart1.xml", Data("<c:chartSpace xmlns:c=\"c\" xmlns:a=\"a\"><c:chart><c:plotArea><c:lineChart><c:ser><c:tx><c:strRef><c:strCache><c:pt idx=\"0\"><c:v>Visitors</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:numCache><c:pt idx=\"0\"><c:v>42</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:lineChart></c:plotArea></c:chart></c:chartSpace>".utf8)),
+        ])
+        let deck = try OfficeTextExtractor.extract(fileURL: try write("e.pptx", pptx), kind: .pptx)
+        XCTAssertEqual(deck.components, ["Slide 1", "Slide 2 (hidden)", "Comments 1", "Chart 1"])
+        XCTAssertTrue(deck.text.contains("[Slide 2 (hidden)]\nHidden slide words") && deck.text.contains("[Comments 1]\nTighten the title") && deck.text.contains("[Chart 1]\nVisitors\t42"), deck.text)
+
+        // Strict OOXML: the purl.oclc.org namespaces read like the Transitional ones.
+        let strict = Self.zipPackage([
+            ("word/document.xml", Data("<w:document xmlns:w=\"http://purl.oclc.org/ooxml/wordprocessingml/main\"><w:body><w:p><w:r><w:t>Strict body text</w:t></w:r></w:p></w:body></w:document>".utf8)),
+        ])
+        let strictResult = try OfficeTextExtractor.extract(fileURL: try write("s.docx", strict), kind: .docx)
+        XCTAssertTrue(strictResult.text.contains("[Document]\nStrict body text"), strictResult.text)
+        XCTAssertEqual(OfficeTextExtractor.Kind.detect(mimeType: "", filename: "t.dotx"), .docx)
+        XCTAssertEqual(OfficeTextExtractor.Kind.detect(mimeType: "", filename: "t.ppsx"), .pptx)
+        XCTAssertEqual(OfficeTextExtractor.columnName(0), "A"); XCTAssertEqual(OfficeTextExtractor.columnName(26), "AA"); XCTAssertEqual(OfficeTextExtractor.columnName(701), "ZZ")
+    }
+
+    /// §13.8 step 4 (COMP-06/COMP-10): the binary workbook, the Visio drawing
+    /// and the Project plan are read with locations, through the same facade
+    /// and the indexing job; what stays unread is named in the registry.
+    func testDEPTH02_xlsbVisioAndProjectXML_areReadWithLocations_andThroughTheJob() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("depth2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func write(_ name: String, _ data: Data) throws -> URL { let u = root.appendingPathComponent(name); try data.write(to: u); return u }
+
+        // XLSB: workbook (two sheets, one hidden, 1904), shared strings, cells of every kind.
+        func cell(_ column: UInt32, _ tail: Data) -> Data { Self.le32(column) + Self.le32(0) + tail }
+        var sst = Data()
+        sst += Self.biff12(0x009F, Self.le32(2) + Self.le32(2))                                   // BrtBeginSst
+        sst += Self.biff12(0x0013, Data([0]) + Self.xlString("Binary margin"))                   // BrtSSTItem
+        sst += Self.biff12(0x0013, Data([0]) + Self.xlString("Second string"))
+        var workbook = Data()
+        workbook += Self.biff12(0x0099, Self.le32(1) + Data(count: 8))                           // BrtWbProp, f1904
+        workbook += Self.biff12(0x009C, Self.le32(0) + Self.le32(1) + Self.xlString("rId1") + Self.xlString("Figures"))
+        workbook += Self.biff12(0x009C, Self.le32(1) + Self.le32(2) + Self.xlString("rId2") + Self.xlString("Backstage"))
+        var sheet1 = Data()
+        sheet1 += Self.biff12(0x0000, Self.le32(0) + Data(count: 13))                             // row 1
+        sheet1 += Self.biff12(0x0007, cell(0, Self.le32(0)))                                      // A1 shared string 0
+        sheet1 += Self.biff12(0x0002, cell(1, Self.le32(UInt32(bitPattern: (4250 << 2) | 0x3))))  // B1 RK 42.50 (int, /100)
+        sheet1 += Self.biff12(0x0006, cell(2, Self.xlString("inline text")))                       // C1
+        sheet1 += Self.biff12(0x0000, Self.le32(2) + Data(count: 13))                             // row 3
+        var real = Data(); var bits = 3.5.bitPattern; for _ in 0..<8 { real.append(UInt8(bits & 0xFF)); bits >>= 8 }
+        sheet1 += Self.biff12(0x0005, cell(0, real))                                              // A3 3.5
+        sheet1 += Self.biff12(0x0004, cell(1, Data([1])))                                         // B3 TRUE
+        sheet1 += Self.biff12(0x0003, cell(2, Data([0x07])))                                      // C3 #DIV/0!
+        sheet1 += Self.biff12(0x0009, cell(3, real + Data([0, 0]) + Self.le32(0)))               // D3 formula with cached 3.5
+        var sheet2 = Data()
+        sheet2 += Self.biff12(0x0000, Self.le32(4) + Data(count: 13))
+        sheet2 += Self.biff12(0x0007, cell(0, Self.le32(1)))                                      // A5 shared string 1
+        let xlsb = Self.zipPackage([
+            ("xl/workbook.bin", workbook),
+            ("xl/_rels/workbook.bin.rels", Data("<Relationships><Relationship Id=\"rId1\" Type=\"x\" Target=\"worksheets/sheet1.bin\"/><Relationship Id=\"rId2\" Type=\"x\" Target=\"worksheets/sheet2.bin\"/></Relationships>".utf8)),
+            ("xl/sharedStrings.bin", sst),
+            ("xl/worksheets/sheet1.bin", sheet1),
+            ("xl/worksheets/sheet2.bin", sheet2),
+        ])
+        let binary = try DocumentTextExtractor.extract(fileURL: try write("b.xlsb", xlsb), kind: .xlsb)
+        XCTAssertEqual(binary.components, ["Workbook", "Sheet: Figures", "Sheet: Backstage (hidden)"])
+        XCTAssertTrue(binary.text.contains("[Sheet: Figures]\nA1: Binary margin\tB1: 42.5\tC1: inline text\nA3: 3.5\tB3: TRUE\tC3: #DIV/0!\tD3: 3.5 {formula}\n"), binary.text)
+        XCTAssertTrue(binary.text.contains("[Sheet: Backstage (hidden)]\nA5: Second string"), binary.text)
+        XCTAssertEqual(DocumentKind.detect(mimeType: "application/vnd.ms-excel.sheet.binary.macroEnabled.12", filename: "x"), .xlsb)
+        XCTAssertEqual(XLSBReader.rk(UInt32(bitPattern: (7 << 2) | 0x2)), "7")
+
+        // Visio: two pages named in pages.xml, shapes with text (field markers inside carry no words).
+        let vsdx = Self.zipPackage([
+            ("visio/pages/pages.xml", Data("<Pages xmlns:r=\"r\"><Page ID=\"0\" Name=\"Overview\"><Rel r:id=\"rId1\"/></Page><Page ID=\"1\" Name=\"Detail\"><Rel r:id=\"rId2\"/></Page></Pages>".utf8)),
+            ("visio/pages/_rels/pages.xml.rels", Data("<Relationships><Relationship Id=\"rId1\" Type=\"p\" Target=\"page1.xml\"/><Relationship Id=\"rId2\" Type=\"p\" Target=\"page2.xml\"/></Relationships>".utf8)),
+            ("visio/pages/page1.xml", Data("<PageContents><Shapes><Shape ID=\"1\"><Text><cp IX=\"0\"/>Start here</Text></Shape><Shape ID=\"2\"><Text>Approve the quorum\n</Text></Shape></Shapes></PageContents>".utf8)),
+            ("visio/pages/page2.xml", Data("<PageContents><Shapes><Shape ID=\"3\"><Text>Detail step</Text></Shape></Shapes></PageContents>".utf8)),
+        ])
+        let drawing = try DocumentTextExtractor.extract(fileURL: try write("flow.vsdx", vsdx), kind: .vsdx)
+        XCTAssertEqual(drawing.components, ["Page: Overview", "Page: Detail"])
+        XCTAssertTrue(drawing.text.contains("[Page: Overview]\nStart here\nApprove the quorum\n") && drawing.text.contains("[Page: Detail]\nDetail step"), drawing.text)
+        XCTAssertEqual(DocumentKind.detect(mimeType: "", filename: "flow.VSDX"), .vsdx)
+
+        // Project XML: recognised by its namespace even though it is ".xml".
+        let project = Data("""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <Project xmlns="http://schemas.microsoft.com/project"><Name>Archive rollout</Name>
+        <Tasks><Task><UID>1</UID><ID>1</ID><Name>Collect mailboxes</Name><Start>2026-11-10T08:00:00</Start><Finish>2026-11-12T17:00:00</Finish><Notes>Quorum of custodians first</Notes></Task>
+        <Task><UID>2</UID><ID>2</ID><Name>Verify exports</Name><Start>2026-11-13T08:00:00</Start><Finish>2026-11-13T17:00:00</Finish></Task></Tasks>
+        <Resources><Resource><UID>1</UID><Name>Records officer</Name></Resource></Resources>
+        <Assignments><Assignment><TaskUID>1</TaskUID><ResourceUID>1</ResourceUID></Assignment></Assignments></Project>
+        """.utf8)
+        let projectURL = try write("plan.xml", project)
+        XCTAssertEqual(DocumentTextExtractor.sniff(fileURL: projectURL), .projectXML)
+        XCTAssertNil(DocumentTextExtractor.sniff(head: Data("<note>plain xml</note>".utf8)))
+        let plan = try DocumentTextExtractor.extract(fileURL: projectURL, kind: .projectXML)
+        XCTAssertEqual(plan.components, ["Project: Archive rollout", "Tasks", "Resources", "Assignments"])
+        XCTAssertTrue(plan.text.contains("[Tasks]\n1\tCollect mailboxes\t2026-11-10T08:00:00\t2026-11-12T17:00:00\tQuorum of custodians first\n2\tVerify exports"), plan.text)
+        XCTAssertTrue(plan.text.contains("[Resources]\nRecords officer") && plan.text.contains("task 1 → resource 1"), plan.text)
+
+        // Through the job: each is searchable by its content, with its own extractor name.
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Other Office kinds
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <depth2@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see attached
+        \(mimeAttachment("figures.xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12", xlsb))
+        \(mimeAttachment("flow.vsdx", "application/vnd.ms-visio.drawing", vsdx))
+        \(mimeAttachment("plan.xml", "text/xml", project))
+        \(mimeAttachment("notes.xml", "text/xml", Data("<note>plain xml stays text</note>".utf8)))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        let rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.extractor), ["office", "visio", "project", "text"], "\(rows.map { ($0.filename, $0.extractor, $0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows.map(\.state), [.extracted, .extracted, .extracted, .extracted])
+        for (type, phrase) in [("xlsb", "binary margin"), ("vsdx", "approve the quorum"), ("xml", "collect mailboxes")] {
+            try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: type, contentMatch: .phrase, content: phrase)])]), ["Other Office kinds"], type)
+        }
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated
@@ -3130,7 +3343,9 @@ final class V2CutoverTests: XCTestCase {
             XCTAssertTrue(covered, "source format \(format) has no registry row")
         }
         for kind in DocumentKind.allCases {
-            let covered = registry.contains { c in c.family != .mailSource && c.extensions.contains(kind.rawValue) }
+            // Project XML has no extension of its own: it is an .xml told apart by its namespace.
+            let token = kind == .projectXML ? "xml (MSPDI)" : kind.rawValue
+            let covered = registry.contains { c in c.family != .mailSource && c.extensions.contains(token) }
             XCTAssertTrue(covered, "document kind \(kind) has no registry row")
         }
         for row in registry where row.evidence == .notImplemented {

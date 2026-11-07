@@ -28,6 +28,8 @@ enum DocumentKind: String, Sendable, CaseIterable {
     case odt, ods, odp
     case pages, numbers, key
     case doc, xls, ppt
+    /// §13.8 step 4: Excel Binary Workbook, Visio drawing, Project XML.
+    case xlsb, vsdx, projectXML
     /// Archives (audit 2026-11-06 A04): the files inside are read, nested
     /// archives up to `ContainerTextExtractor.maxDepth` levels, every child
     /// that was not read listed by name.
@@ -41,6 +43,8 @@ enum DocumentKind: String, Sendable, CaseIterable {
         }
         let mime = mimeType.lowercased()
         let ext = (filename as NSString).pathExtension.lowercased()
+        if ext == "xlsb" || mime.contains("ms-excel.sheet.binary") { return .xlsb }
+        if ["vsdx", "vsdm", "vstx", "vstm"].contains(ext) || mime.contains("ms-visio.drawing") || mime.contains("ms-visio.template") { return .vsdx }
         switch ext {
         case "odt", "ott": return .odt
         case "ods", "ots": return .ods
@@ -78,6 +82,9 @@ enum DocumentKind: String, Sendable, CaseIterable {
         case .odt, .ods, .odp: return "odf"
         case .pages, .numbers, .key: return "iwork"
         case .doc, .xls, .ppt: return "ole"
+        case .xlsb: return "office"
+        case .vsdx: return "visio"
+        case .projectXML: return "project"
         case .zip, .tar, .gzip: return "archive"
         }
     }
@@ -96,18 +103,31 @@ enum DocumentTextExtractor {
         case .odt, .ods, .odp: return try ODFTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .pages, .numbers, .key: return try IWorkTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .doc, .xls, .ppt: return try LegacyOfficeTextExtractor.extract(fileURL: fileURL, kind: kind)
+        case .xlsb: return try XLSBReader.extract(fileURL: fileURL)
+        case .vsdx: return try VisioTextExtractor.extract(fileURL: fileURL)
+        case .projectXML: return try ProjectXMLTextExtractor.extract(fileURL: fileURL)
         case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent)
         }
     }
 
     /// R03: what the bytes say a file is, when the name says nothing
-    /// (ZIP / tar / gzip signatures; an OLE compound file needs its name to
-    /// tell .doc from .xls from .ppt and is reported as nil).
+    /// (ZIP / tar / gzip signatures, the Project XML namespace; an OLE
+    /// compound file needs its name to tell .doc from .xls from .ppt and is
+    /// reported as nil).
     static func sniff(fileURL: URL) -> DocumentKind? {
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
         defer { try? handle.close() }
-        guard let head = try? handle.read(upToCount: 512), head.count >= 4 else { return nil }
+        guard let head = try? handle.read(upToCount: 4096), head.count >= 4 else { return nil }
+        return sniff(head: head)
+    }
+
+    /// The same decision from the first bytes already in memory.
+    static func sniff(head: Data) -> DocumentKind? {
         let bytes = [UInt8](head)
+        guard bytes.count >= 4 else { return nil }
+        if bytes[0] == 0x3C || (bytes[0] == 0xEF && bytes[1] == 0xBB) || (bytes[0] == 0xFF && bytes[1] == 0xFE) {
+            if ProjectXMLTextExtractor.looksLikeProjectXML(head) { return .projectXML }
+        }
         if bytes[0] == 0x1F, bytes[1] == 0x8B { return .gzip }
         if bytes[0] == 0x50, bytes[1] == 0x4B, bytes[2] == 0x03 || bytes[2] == 0x05, bytes[3] == 0x04 || bytes[3] == 0x06 { return .zip }
         if bytes.count >= 262, Array(bytes[257..<262]) == [0x75, 0x73, 0x74, 0x61, 0x72] { return .tar }

@@ -87,8 +87,8 @@ enum FormatCapabilityRegistry {
 
         // MARK: Attachment documents
         .init("ooxml", .attachmentDocument, "Word, Excel, PowerPoint (Office Open XML)", ["docx", "docm", "dotx", "xlsx", "xlsm", "xltx", "pptx", "pptm", "ppsx", "potx"],
-              reads: "body, tables, headers/footers, footnotes, comments; sheets with cell addresses, formulas, shared strings; slides and notes",
-              evidence: .syntheticFixtures, limitation: "Strict OOXML namespaces, XLSB, text boxes, deleted revisions, chart labels not read",
+              reads: "body, tables, text boxes, headers/footers, footnotes, comments, tracked changes labelled; every sheet (hidden ones marked) with cell addresses, cached values and formulas, comments, the 1904 date system stated; slides (hidden marked), notes, comments; chart titles, labels and values; embedded documents as child documents; Transitional and Strict namespaces",
+              evidence: .syntheticFixtures, limitation: "displayed (number-formatted) values are not derived from raw values",
               dependency: "real files from each program for the candidate run"),
         .init("ole", .attachmentDocument, "Word, Excel, PowerPoint 97–2003", ["doc", "dot", "xls", "xlt", "ppt", "pps", "pot"],
               reads: "Word text through the piece table; Excel cells with addresses, formula results, comments, hidden sheets; PowerPoint slide text",
@@ -111,12 +111,18 @@ enum FormatCapabilityRegistry {
         .init("eml-attached", .attachmentDocument, "Attached message", ["eml", "msg", "oft", "message/rfc822"],
               reads: "decoded headers and body (MIME for .eml, MAPI for .msg/.oft), its own attachments as children (three levels)",
               evidence: .syntheticFixtures, limitation: "each attachment of the message is its own child document (name, hash, state)"),
-        .init("xlsb", .attachmentDocument, "Excel Binary Workbook", ["xlsb"], reads: "—", evidence: .notImplemented, limitation: "no reader; kept and listed as unsupported"),
+        .init("xlsb", .attachmentDocument, "Excel Binary Workbook", ["xlsb"],
+              reads: "every sheet (hidden ones marked) with cell addresses, cached values, booleans, errors; shared strings; the 1904 date system stated",
+              evidence: .syntheticFixtures, limitation: "formula cells show their cached value and {formula}; the formula text itself is not rebuilt from the binary tokens",
+              dependency: "a real .xlsb saved by Excel (owner)"),
+        .init("visio-project", .attachmentDocument, "Visio drawing (VSDX), Project XML", ["vsdx", "vsdm", "vstx", "xml (MSPDI)"],
+              reads: "Visio: every page's shape text under its page name; Project XML: project name, tasks (id, name, start, finish, notes), resources, assignments",
+              evidence: .syntheticFixtures, dependency: "real Visio and Project files (owner)"),
         .init("tnef", .attachmentDocument, "TNEF (winmail.dat)", ["winmail.dat", "ms-tnef"],
               reads: "subject and body (plain, HTML, compressed RTF); every file inside as a child document with its name and type",
               evidence: .syntheticFixtures, limitation: "a message embedded inside the TNEF is listed, not expanded", dependency: "a real winmail.dat from Exchange (owner)"),
-        .init("other-office", .attachmentDocument, "OneNote, Visio, Project, Publisher, Access", ["one", "onepkg", "vsd", "vsdx", "mpp", "pub", "mdb", "accdb"], reads: "—",
-              evidence: .notImplemented, limitation: "no reader; a new adapter project per family"),
+        .init("other-office", .attachmentDocument, "OneNote, Visio binary, Project binary, Publisher, Access", ["one", "onepkg", "vsd", "mpp", "pub", "mdb", "accdb"], reads: "—",
+              evidence: .notImplemented, limitation: "no reader; a new adapter project per family (the XML forms VSDX and Project XML are read)"),
 
         // MARK: Archive attachments
         .init("zip-attached", .archiveAttachment, "ZIP, tar, gzip attachments", ["zip", "tar", "tgz", "gz", "gzip"],
