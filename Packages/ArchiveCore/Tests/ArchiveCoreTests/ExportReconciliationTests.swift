@@ -365,6 +365,39 @@ final class ExportReconciliationTests: XCTestCase {
         XCTAssertEqual(badReport.findings.first?.lostFields, [.plainBody])
     }
 
+    /// The app wires `AttachmentHydrator.locatorProvider` under
+    /// `Capability.locatorReads`; through it a header-only record is read
+    /// from its own source bytes and verified for real — in the streaming
+    /// engine without a `hydrate` closure AND in the old synchronous shim.
+    func testHeaderOnlySource_hydratedThroughTheLocatorRoute_isVerifiedInEngineAndShim() async throws {
+        let full = try Self.message(Self.raw(parts: [Part(name: "a.txt", bytes: Data("alpha".utf8))]))
+        let headerOnly = MBOXParser.RawEmail(id: full.id, headers: full.headers, rawSource: "", messageType: full.messageType,
+                                             attachments: [], timestamp: full.timestamp, domains: full.domains, plainBody: "", htmlBody: "")
+        let sourceFile = dir.appendingPathComponent("located.mbox")
+        let bytes = Data(full.rawSource.utf8)
+        try bytes.write(to: sourceFile)
+        let locator = MessageLocator(sourceDigest: nil, sourcePath: sourceFile.path,
+                                     messageRange: ByteRange(offset: 0, length: Int64(bytes.count)), envelopeRange: nil,
+                                     headerRange: ByteRange(offset: 0, length: 0), bodyRange: ByteRange(offset: 0, length: 0), ordinal: 0)
+        let saved = AttachmentHydrator.locatorProvider
+        defer { AttachmentHydrator.locatorProvider = saved }
+        let id = full.id
+        AttachmentHydrator.locatorProvider = { $0 == id ? locator : nil }
+
+        let folder = try writeFolder([("m.eml", bytes, full.id, nil)])
+        let engine = await ExportReconciliation.reconcile(folder: folder, lookup: lookup([headerOnly]))
+        XCTAssertEqual(engine.outcome, .complete, engine.summary)
+        XCTAssertEqual(engine.hydrated, 1)
+        let shim = try ExportReconciliation.reconcile(folder: folder, records: [full.id: headerOnly])
+        XCTAssertTrue(shim.isClean, "\(shim)"); XCTAssertEqual(shim.hydrated, 1)
+        // The hydrated record is compared, not assumed: a tampered body is caught.
+        let bad = try writeFolder([("m.eml", Data(full.rawSource.replacingOccurrences(of: "Line two.", with: "Line 2.").utf8), full.id, nil)])
+        XCTAssertEqual(try ExportReconciliation.reconcile(folder: bad, records: [full.id: headerOnly]).mismatches.map(\.differences), [["body"]])
+        // Without the route (a record the provider does not know) it is not verifiable.
+        AttachmentHydrator.locatorProvider = { _ in nil }
+        XCTAssertFalse(try ExportReconciliation.reconcile(folder: folder, records: [full.id: headerOnly]).isClean)
+    }
+
     // MARK: - 2/3. .msg output: named writer limits, no silent pass
 
     func testMSGOutput_namedTransformationsAndDetectedLoss() async throws {

@@ -292,6 +292,11 @@ enum ExportReconciliation {
         /// (e.g. "date compared to the minute because the output carries no seconds": 12).
         var transformations: [String: Int] = [:]
 
+        /// Header-only (located) records whose content was fetched for the
+        /// comparison — through the caller's `hydrate` closure or the
+        /// hydrator's locator route. The rest of such records are `unverifiable`.
+        var hydrated = 0
+
         /// Non-matching items only (mismatched, unverifiable, withoutRecord, unparsed).
         var findings: [Item] = []
 
@@ -312,6 +317,7 @@ enum ExportReconciliation {
             if unverifiable > 0 { line += " · not verifiable \(unverifiable)" }
             if withoutRecord > 0 { line += " · no record \(withoutRecord)" }
             if unparsed > 0 { line += " · unparsable \(unparsed)" }
+            if hydrated > 0 { line += " · \(hydrated) located record(s) read from their source bytes" }
             if !transformations.isEmpty {
                 line += " · " + transformations.sorted { $0.key < $1.key }.map { "\($0.key) (\($0.value))" }.joined(separator: "; ")
             }
@@ -572,6 +578,8 @@ enum ExportReconciliation {
             let lookup = self.lookup
             let kind = output.kind
             let path = output.path
+            var hydratedCount = 0
+            defer { report.hydrated += hydratedCount }
             func handle(_ batch: [MBOXParser.RawEmail]) async throws -> [Item] {
                 defer { for email in batch { ExportReconciliation.removeScratch(of: email) } }
                 let mids = batch.compactMap { ExportReconciliation.header("Message-ID", $0.headers).map(ExportReconciliation.identifier) }.filter { !$0.isEmpty }
@@ -598,9 +606,13 @@ enum ExportReconciliation {
                                           reason: "no record with Message-ID \(mid) is in the archive", fields: [])); continue
                     }
                     var hydrated = false
-                    if ExportReconciliation.isHeaderOnly(source), let hydrate = lookup.hydrate,
-                       let full = try await hydrate(source.id), !ExportReconciliation.isHeaderOnly(full) {
-                        source = full; hydrated = true
+                    if ExportReconciliation.isHeaderOnly(source) {
+                        if let hydrate = lookup.hydrate, let full = try await hydrate(source.id), !ExportReconciliation.isHeaderOnly(full) {
+                            source = full; hydrated = true
+                        } else if let full = ExportReconciliation.hydrateFromLocatedSource(source) {
+                            source = full; hydrated = true
+                        }
+                        if hydrated { hydratedCount += 1 }
                     }
                     let fields = ExportReconciliation.compare(output: parsed, source: source, rules: FormatRules.rules(for: kind),
                                                               outputFolder: parsed.folderPath, sourceHydrated: hydrated)
@@ -644,11 +656,18 @@ enum ExportReconciliation {
         }
 
         /// A located, header-only record is completed through the caller's
-        /// closure when one is given. Returns whether it was.
-        func hydrateIfHeaderOnly(_ source: inout MBOXParser.RawEmail) async throws -> Bool {
-            guard ExportReconciliation.isHeaderOnly(source), let hydrate = lookup.hydrate else { return false }
-            if let full = try await hydrate(source.id), !ExportReconciliation.isHeaderOnly(full) {
+        /// closure when one is given, else through the hydrator's locator
+        /// route. Returns whether it was.
+        mutating func hydrateIfHeaderOnly(_ source: inout MBOXParser.RawEmail) async throws -> Bool {
+            guard ExportReconciliation.isHeaderOnly(source) else { return false }
+            if let hydrate = lookup.hydrate, let full = try await hydrate(source.id), !ExportReconciliation.isHeaderOnly(full) {
                 source = full
+                report.hydrated += 1
+                return true
+            }
+            if let full = ExportReconciliation.hydrateFromLocatedSource(source) {
+                source = full
+                report.hydrated += 1
                 return true
             }
             return false
@@ -698,6 +717,30 @@ enum ExportReconciliation {
     /// body text at all. Its content cannot be compared without hydration.
     static func isHeaderOnly(_ email: MBOXParser.RawEmail) -> Bool {
         email.rawSource.isEmpty && email.plainBody.isEmpty && email.htmlBody.isEmpty
+    }
+
+    /// The located message's own bytes, read through the hydrator's locator
+    /// route (`AttachmentHydrator.locatorProvider`, wired by the app under
+    /// `Capability.locatorReads`) and parsed with the import reader. The
+    /// record's headers and folder stay the archive's statement; bodies,
+    /// attachments and raw source come from the located bytes. Nil when no
+    /// locator route is available or the bytes do not parse — the caller then
+    /// reports the body as not verifiable.
+    static func hydrateFromLocatedSource(_ source: MBOXParser.RawEmail) -> MBOXParser.RawEmail? {
+        guard isHeaderOnly(source),
+              let raw = AttachmentHydrator.rawSource(for: source), !raw.isEmpty,
+              looksLikeMessage(raw),
+              let parsed = try? MBOXParser.processRawMessage(raw, senderEmail: "", materializeAttachments: false),
+              !isHeaderOnly(parsed) else { return nil }
+        var full = MBOXParser.RawEmail(id: source.id, headers: source.headers, rawSource: parsed.rawSource, messageType: source.messageType,
+                                       attachments: parsed.attachments, timestamp: source.timestamp, domains: source.domains,
+                                       plainBody: parsed.plainBody, htmlBody: parsed.htmlBody, mimeRoot: parsed.mimeRoot,
+                                       mimeSummary: parsed.mimeSummary, mimeDiagnostics: parsed.mimeDiagnostics,
+                                       threadID: source.threadID, inReplyTo: source.inReplyTo, references: source.references,
+                                       tags: source.tags, anomalies: source.anomalies)
+        full.folderPath = source.folderPath
+        full.flags = source.flags
+        return full
     }
 
     // MARK: - Comparison
@@ -1015,9 +1058,10 @@ enum ExportReconciliation {
     // `reconcile(folder:records:)` takes the records as a dictionary and runs
     // synchronously. It is the old entry point kept working; it uses the same
     // comparison as the streaming engine, so its answers are no weaker — a
-    // header-only record is `unverifiable` here too (no hydration is
-    // possible through this signature), and `isClean` now requires every
-    // listed per-message file to be tied to a record and verified.
+    // header-only record is hydrated through the hydrator's locator route
+    // when the app has wired it (`Capability.locatorReads`) and is
+    // `unverifiable` otherwise, and `isClean` now requires every listed
+    // per-message file to be tied to a record and verified.
 
     struct Mismatch: Sendable, Equatable {
         let path: String
@@ -1039,6 +1083,8 @@ enum ExportReconciliation {
         var notApplicable = 0
         /// Named transformations seen (format limits, precision drops) with counts.
         var transformations: [String: Int] = [:]
+        /// Header-only (located) records read from their source bytes for the comparison.
+        var hydrated = 0
 
         var isClean: Bool {
             mismatches.isEmpty && unparsed.isEmpty && unverifiable.isEmpty && withoutRecord == 0 && checked > 0 && matching == checked
@@ -1055,15 +1101,18 @@ enum ExportReconciliation {
             let url = folder.appendingPathComponent(file.path)
             let kind = OutputKind.of(url: url)
             guard kind.isPerMessageFile else { report.notApplicable += 1; continue }
-            guard let idString = file.emailID, let id = UUID(uuidString: idString), let source = records[id] else { report.withoutRecord += 1; continue }
+            guard let idString = file.emailID, let id = UUID(uuidString: idString), var source = records[id] else { report.withoutRecord += 1; continue }
             let output: MBOXParser.RawEmail
             do { output = try parseOutput(url: url, kind: kind) } catch {
                 report.unparsed.append("\(file.path): \(error.localizedDescription)"); continue
             }
             defer { removeScratch(of: output) }
             report.checked += 1
+            var hydrated = false
+            if let full = hydrateFromLocatedSource(source) { source = full; hydrated = true; report.hydrated += 1 }
             let item = item(path: file.path, emailID: id, messageID: source.headers["Message-ID"],
-                            fields: compare(output: output, source: source, rules: FormatRules.rules(for: kind), outputFolder: file.originalFolder))
+                            fields: compare(output: output, source: source, rules: FormatRules.rules(for: kind),
+                                            outputFolder: file.originalFolder, sourceHydrated: hydrated))
             for name in item.transformations { report.transformations[name, default: 0] += 1 }
             switch item.status {
             case .matching: report.matching += 1
