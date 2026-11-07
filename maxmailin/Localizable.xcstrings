@@ -786,6 +786,71 @@
         }
       }
     },
+    " Not finished — continues at the next pass." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Nicht abgeschlossen – wird beim nächsten Durchlauf fortgesetzt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " No terminado: continúa en la siguiente pasada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Non terminé — reprend à la prochaine passe."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " पूरा नहीं हुआ — अगले पास में जारी रहेगा।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Non terminato: continua al prossimo passaggio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 未完了 — 次のパスで続行します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 완료되지 않음 — 다음 패스에서 계속됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Não concluído — continua na próxima passagem."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 未完成 — 将在下一轮继续。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 未完成 — 將在下一輪繼續。"
+          }
+        }
+      }
+    },
     " once" : {
       "localizations" : {
         "de" : {
@@ -8417,16 +8482,16 @@
     },
     "%lld affected, %lld intact · copy inside the archive" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld affected, %2$lld intact · copy inside the archive"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld betroffen, %2$lld intakt · Kopie im Archiv"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld affected, %2$lld intact · copy inside the archive"
           }
         },
         "es" : {
@@ -8487,16 +8552,16 @@
     },
     "%lld affected, %lld intact · file chosen: %@" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld affected, %2$lld intact · file chosen: %3$@"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld betroffen, %2$lld intakt · gewählte Datei: %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld affected, %2$lld intact · file chosen: %3$@"
           }
         },
         "es" : {
@@ -8557,16 +8622,16 @@
     },
     "%lld affected, %lld intact · file not found — choose the original to re-read them" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld affected, %2$lld intact · file not found — choose the original to re-read them"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld betroffen, %2$lld intakt · Datei nicht gefunden – das Original wählen, um sie erneut zu lesen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld affected, %2$lld intact · file not found — choose the original to re-read them"
           }
         },
         "es" : {
@@ -16651,16 +16716,16 @@
     },
     "%lld messages from %lld sources are affected; %lld can be re-read now; %lld messages of the same sources are already intact." : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld messages from %2$lld sources are affected; %3$lld can be re-read now; %4$lld messages of the same sources are already intact."
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld Nachrichten aus %2$lld Quellen sind betroffen; %3$lld können jetzt erneut gelesen werden; %4$lld Nachrichten derselben Quellen sind bereits intakt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld messages from %2$lld sources are affected; %3$lld can be re-read now; %4$lld messages of the same sources are already intact."
           }
         },
         "es" : {
@@ -35915,16 +35980,16 @@
       "comment" : "A six-line summary of the results of a raw source recovery operation. The first argument is the number of affected messages. The second argument is the number of recovered messages. The third argument is the number of messages that were already intact. The fourth argument is the number of ambiguous messages. The fifth argument is the number of messages missing their source. The sixth argument is the number of messages that failed to recover. If the recovery succeeded, a note is added to the end of the summary that says \"Recovered attachments are being indexed again.\" If the recovery succeeded, a note is added to the end of the summary that says \"Backup before the repair: ….\" If the recovery was cancelled, a note is added to the end of the summary that says \"Stopped after … of … sources; the",
       "isCommentAutoGenerated" : true,
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Affected %1$lld · recovered %2$lld · already intact %3$lld · ambiguous %4$lld · missing source %5$lld · failed %6$lld."
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Betroffen %1$lld · wiederhergestellt %2$lld · bereits intakt %3$lld · mehrdeutig %4$lld · Quelle fehlt %5$lld · fehlgeschlagen %6$lld."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Affected %1$lld · recovered %2$lld · already intact %3$lld · ambiguous %4$lld · missing source %5$lld · failed %6$lld."
           }
         },
         "es" : {
@@ -50948,7 +51013,9 @@
         }
       }
     },
-    "archive format not opened (7z, rar, bz2, xz) — ZIP, tar and gzip attachments are read; this one is kept as a file" : {},
+    "archive format not opened (7z, rar, bz2, xz) — ZIP, tar and gzip attachments are read; this one is kept as a file" : {
+
+    },
     "Archive health: 80+ = Excellent (clean, well-threaded), 50-79 = Fair, below 50 = Needs attention (high anomalies or negative tone)" : {
       "localizations" : {
         "de" : {
@@ -51465,16 +51532,16 @@
     },
     "Archive: %@ · %@ · %@" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Archive: %1$@ · %2$@ · %3$@"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Archiv: %1$@ · %2$@ · %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Archive: %1$@ · %2$@ · %3$@"
           }
         },
         "es" : {
@@ -68670,7 +68737,9 @@
         }
       }
     },
-    "Build a search from conditions: all / any / exclude, dates, attachments" : {},
+    "Build a search from conditions: all / any / exclude, dates, attachments" : {
+
+    },
     "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft." : {
       "localizations" : {
         "de" : {
@@ -150095,16 +150164,16 @@
     },
     "File: %@ · %@ · %@" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "File: %1$@ · %2$@ · %3$@"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Datei: %1$@ · %2$@ · %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File: %1$@ · %2$@ · %3$@"
           }
         },
         "es" : {
@@ -155635,7 +155704,9 @@
         }
       }
     },
-    "first %lld characters of a body" : {},
+    "first %lld characters of a body" : {
+
+    },
     "First %lld of %lld emails · Unlock Full Archive" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -169184,6 +169255,71 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "雜湊驗證"
+          }
+        }
+      }
+    },
+    "Hashes of files inside attached messages: %@ rows checked, %@ repaired, %@ unverifiable, last on %@.%@" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hashes der Dateien in angehängten Nachrichten: %1$@ Zeilen geprüft, %2$@ repariert, %3$@ nicht überprüfbar, zuletzt am %4$@.%5$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hashes de los archivos dentro de mensajes adjuntos: %1$@ filas comprobadas, %2$@ reparadas, %3$@ no verificables, por última vez el %4$@.%5$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hachages des fichiers dans les messages joints : %1$@ lignes vérifiées, %2$@ réparées, %3$@ invérifiables, pour la dernière fois le %4$@.%5$@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संलग्न संदेशों के अंदर की फ़ाइलों के हैश: %1$@ पंक्तियाँ जाँची गईं, %2$@ सुधारी गईं, %3$@ सत्यापन योग्य नहीं, अंतिम बार %4$@ को।%5$@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hash dei file dentro i messaggi allegati: %1$@ righe controllate, %2$@ riparate, %3$@ non verificabili, l'ultima volta il %4$@.%5$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添付メッセージ内のファイルのハッシュ：%1$@ 行を確認、%2$@ 行を修復、%3$@ 行は検証不能、最終 %4$@。%5$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부된 메시지 안 파일의 해시: %1$@개 행 확인, %2$@개 수정, %3$@개 검증 불가, 마지막 %4$@.%5$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hashes dos arquivos dentro de mensagens anexadas: %1$@ linhas verificadas, %2$@ reparadas, %3$@ não verificáveis, pela última vez em %4$@.%5$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件邮件内文件的哈希：已检查 %1$@ 行，已修复 %2$@ 行，%3$@ 行无法核验，最近一次为 %4$@。%5$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件郵件內檔案的雜湊：已檢查 %1$@ 行，已修復 %2$@ 行，%3$@ 行無法核驗，最近一次為 %4$@。%5$@"
           }
         }
       }
@@ -327144,16 +327280,16 @@
       "comment" : "\"Source reconstructed from <file> on <date>\"",
       "isCommentAutoGenerated" : true,
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Source reconstructed from %1$@ on %2$@"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quelle rekonstruiert aus %1$@ am %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Source reconstructed from %1$@ on %2$@"
           }
         },
         "es" : {
@@ -332971,16 +333107,16 @@
       "comment" : "A note that the repair was stopped early, and the file being read was not written.",
       "isCommentAutoGenerated" : true,
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Stopped after %1$lld of %2$lld sources; the file being read was not written."
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nach %1$lld von %2$lld Quellen angehalten; die gerade gelesene Datei wurde nicht geschrieben."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stopped after %1$lld of %2$lld sources; the file being read was not written."
           }
         },
         "es" : {
@@ -392175,134 +392311,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "非真實 PII 項目的從零開始編號 — Unix 時間戳記、訂單/參照/追蹤/序號、訊息 ID、版本字串。若所有項目均為真實則為空。"
-          }
-        }
-      }
-    },
-    "Hashes of files inside attached messages: %@ rows checked, %@ repaired, %@ unverifiable, last on %@.%@" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hashes der Dateien in angehängten Nachrichten: %1$@ Zeilen geprüft, %2$@ repariert, %3$@ nicht überprüfbar, zuletzt am %4$@.%5$@"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hashes de los archivos dentro de mensajes adjuntos: %1$@ filas comprobadas, %2$@ reparadas, %3$@ no verificables, por última vez el %4$@.%5$@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hachages des fichiers dans les messages joints : %1$@ lignes vérifiées, %2$@ réparées, %3$@ invérifiables, pour la dernière fois le %4$@.%5$@"
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "संलग्न संदेशों के अंदर की फ़ाइलों के हैश: %1$@ पंक्तियाँ जाँची गईं, %2$@ सुधारी गईं, %3$@ सत्यापन योग्य नहीं, अंतिम बार %4$@ को।%5$@"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hash dei file dentro i messaggi allegati: %1$@ righe controllate, %2$@ riparate, %3$@ non verificabili, l'ultima volta il %4$@.%5$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添付メッセージ内のファイルのハッシュ：%1$@ 行を確認、%2$@ 行を修復、%3$@ 行は検証不能、最終 %4$@。%5$@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "첨부된 메시지 안 파일의 해시: %1$@개 행 확인, %2$@개 수정, %3$@개 검증 불가, 마지막 %4$@.%5$@"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hashes dos arquivos dentro de mensagens anexadas: %1$@ linhas verificadas, %2$@ reparadas, %3$@ não verificáveis, pela última vez em %4$@.%5$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "附件邮件内文件的哈希：已检查 %1$@ 行，已修复 %2$@ 行，%3$@ 行无法核验，最近一次为 %4$@。%5$@"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "附件郵件內檔案的雜湊：已檢查 %1$@ 行，已修復 %2$@ 行，%3$@ 行無法核驗，最近一次為 %4$@。%5$@"
-          }
-        }
-      }
-    },
-    " Not finished — continues at the next pass." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " Nicht abgeschlossen – wird beim nächsten Durchlauf fortgesetzt."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " No terminado: continúa en la siguiente pasada."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " Non terminé — reprend à la prochaine passe."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " पूरा नहीं हुआ — अगले पास में जारी रहेगा।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " Non terminato: continua al prossimo passaggio."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " 未完了 — 次のパスで続行します。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " 완료되지 않음 — 다음 패스에서 계속됩니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " Não concluído — continua na próxima passagem."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " 未完成 — 将在下一轮继续。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : " 未完成 — 將在下一輪繼續。"
           }
         }
       }
