@@ -20,7 +20,8 @@
 //      overlap is found even where it crosses a chunk. No cutoff: the whole
 //      text is indexed, chunk by chunk. Tokeniser unicode61 with diacritics
 //      folded and NO stemming — word matches are whole tokens; literal
-//      phrase/contains tests are verified with instr() on the chunk text.
+//      phrase/contains tests are verified with mailin_phrase() on the chunk
+//      text (FIND-08, SectionBoundary.swift).
 //
 //  Dual write (rule 16): the previous per-year FTS shards keep being
 //  written; this index is written next to them when the switch is on and
@@ -372,7 +373,9 @@ extension SQLiteEmailStore {
                     bindText(clearDoc, 1, id); bindText(clearDoc, 2, other.rawValue); sqlite3_bind_int64(clearDoc, 3, Int64(document.ordinal))
                     _ = sqlite3_step(clearDoc); sqlite3_finalize(clearDoc)
                 }
-                try indexSearchDocument(db, emailID: id, kind: kind, ordinal: document.ordinal, text: document.text,
+                // FIND-08: cells, rows, slides, sheets and pages carry an explicit boundary.
+                let text = document.text.map { SectionBoundary.marked($0, layout: SectionBoundary.layout(filename: document.filename)) }
+                try indexSearchDocument(db, emailID: id, kind: kind, ordinal: document.ordinal, text: text,
                                         state: document.state, extractorVersion: document.extractorVersion, ocr: document.ocr)
             }
             try exec(db, "COMMIT;")
@@ -434,7 +437,9 @@ extension SQLiteEmailStore {
                 bindText(insert, 7, child.sha256); sqlite3_bind_int64(insert, 8, Int64(child.bytes)); bindText(insert, 9, child.state)
                 if let note = child.note { bindText(insert, 10, note) } else { sqlite3_bind_null(insert, 10) }
                 guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
-                let text = texts[child.childIndex] ?? nil
+                let text = (texts[child.childIndex] ?? nil).map {
+                    SectionBoundary.marked($0, layout: SectionBoundary.layout(filename: child.filename, recordedKind: child.kind))   // FIND-08
+                }
                 let state = states[child.childIndex] ?? .unsupported
                 try indexSearchDocument(db, emailID: id, kind: .childText, ordinal: child.ordinal, text: text, state: state,
                                         extractorVersion: extractorVersion, ocr: false)
@@ -454,7 +459,8 @@ extension SQLiteEmailStore {
     }
 
     /// §13.3 (9): the whole extracted text of one attachment document (or of
-    /// one file inside it, by its child ordinal), joined from its chunks.
+    /// one file inside it, by its child ordinal), joined from its chunks —
+    /// for reading, so the FIND-08 boundary characters are hidden.
     func attachmentDocumentText(emailID: UUID, ordinal: Int) throws -> String? {
         let db = try ensureDB()
         let stmt = try prepare(db, """
@@ -464,7 +470,7 @@ extension SQLiteEmailStore {
         bindText(stmt, 1, emailID.uuidString); sqlite3_bind_int64(stmt, 2, Int64(ordinal))
         var pieces: [String] = []
         while try stepRow(stmt, db) { pieces.append(columnText(stmt, 0)) }
-        return pieces.isEmpty ? nil : pieces.joined()
+        return pieces.isEmpty ? nil : SectionBoundary.hidden(pieces.joined())
     }
 
     /// The recorded children of every attachment of one message.

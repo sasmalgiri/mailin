@@ -185,7 +185,7 @@ extension SQLiteEmailStore {
         let prefix = match == .contains
         if words.isEmpty {
             // No indexable word at all ("++"): the literal alone, on any chunk of these kinds.
-            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND instr(lower(sc.text), lower(?)) > 0)",
+            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND mailin_phrase(sc.text, ?))",
                     [.text(SearchTextTokens.collapsed(value))])
         }
         switch match {
@@ -218,22 +218,26 @@ extension SQLiteEmailStore {
     /// The table-valued form `search_chunks(?)` carries the FTS query;
     /// `sameDocument` correlates `c1` with the outer row. Nothing ever falls
     /// back to "all the words".
+    /// FIND-08: the literal is verified by `mailin_phrase` (SectionBoundary):
+    /// any whitespace run in the text equals one space (a line wrap, a double
+    /// space left by removed HTML), and a cell / row / slide / page boundary
+    /// (U+001E) is never crossed — the same on one chunk and on the join.
     static func literalClause(kindList: String, words: [String], prefix: Bool, literal: String,
                               sameDocument: String, mayExceedChunk: Bool) -> (String, [QueryBind]) {
         func token(_ word: String) -> String { SearchTextTokens.quoted(word) + (prefix ? "*" : "") }
         let all = words.map(token).joined(separator: " AND ")
         let first = token(words[0]), last = token(words[words.count - 1])
         let single = "EXISTS (SELECT 1 FROM search_chunks(?) c1 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
-            + " AND instr(lower(c1.text), lower(?)) > 0)"
+            + " AND mailin_phrase(c1.text, ?))"
         let pair = "EXISTS (SELECT 1 FROM search_chunks(?) c1, search_chunks(?) c2 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
             + " AND c2.email_id = c1.email_id AND c2.kind = c1.kind AND c2.ordinal = c1.ordinal AND c2.chunk = c1.chunk + 1"
-            + " AND instr(lower(c1.text || c2.text), lower(?)) > 0)"
+            + " AND mailin_phrase(c1.text || c2.text, ?))"
         var parts = [single, pair]
         var binds: [QueryBind] = [.text(all), .text(literal), .text(first), .text(last), .text(literal)]
         if mayExceedChunk {
             parts.append("EXISTS (SELECT 1 FROM search_chunks(?) c1 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
-                + " AND instr(lower((SELECT group_concat(c.text, '' ORDER BY c.chunk) FROM search_chunks c"
-                + " WHERE c.email_id = c1.email_id AND c.kind = c1.kind AND c.ordinal = c1.ordinal AND c.chunk >= c1.chunk)), lower(?)) > 0)")
+                + " AND mailin_phrase((SELECT group_concat(c.text, '' ORDER BY c.chunk) FROM search_chunks c"
+                + " WHERE c.email_id = c1.email_id AND c.kind = c1.kind AND c.ordinal = c1.ordinal AND c.chunk >= c1.chunk), ?))")
             binds.append(contentsOf: [.text(first), .text(literal)])
         }
         return ("(" + parts.joined(separator: " OR ") + ")", binds)
@@ -293,7 +297,7 @@ extension SQLiteEmailStore {
             let prefix = g.contentMatch == .contains
             let inDocs = "(\(alias).email_id, \(ordinalExpr)) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND "
             if words.isEmpty {
-                tests.append(inDocs + "instr(lower(ac.text), lower(?)) > 0)")
+                tests.append(inDocs + "mailin_phrase(ac.text, ?))")
                 binds.append(.text(SearchTextTokens.collapsed(content)))
             } else {
                 switch g.contentMatch {

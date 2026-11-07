@@ -550,6 +550,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try exec(handle, "PRAGMA temp_store = MEMORY;")
         try exec(handle, "PRAGMA busy_timeout = 5000;")
         SQLiteHygiene.apply(to: handle)
+        // FIND-08: the phrase matcher the chunk-index literals are verified with.
+        SectionBoundary.register(on: handle)
         // §3-S1: an existing archive about to be upgraded gets a snapshot first.
         // A failed snapshot does not block opening (the archive must stay
         // usable); it is logged and the Health page shows the missing snapshot.
@@ -5111,7 +5113,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 sqlite3_reset(insert); sqlite3_clear_bindings(insert)
                 bindText(insert, 1, emailID.uuidString)
                 bindText(insert, 2, text.filename)
-                bindText(insert, 3, text.content)
+                bindText(insert, 3, SectionBoundary.hidden(text.content))   // FIND-08: boundaries belong to the chunk index
                 guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
             }
             let state = try prepare(db, """

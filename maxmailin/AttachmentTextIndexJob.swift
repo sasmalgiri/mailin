@@ -87,7 +87,18 @@ final class AttachmentTextIndexJob {
     /// (libarchive) with attached volume sets read as one; OpenPGP signatures
     /// verified against the archive's public keyring — rows are re-read so
     /// RAR members reach the index and signatures carry their verdict.
-    nonisolated static let extractorVersion = 9
+    /// 10 (FIND-08, 2026-11-08): a phrase may wrap across a line but never
+    /// cross a cell, table row, slide, sheet or page — PDF pages are joined
+    /// with the U+001E boundary and the store marks the structured readers'
+    /// cells, rows and sections when it indexes them; completed rows of those
+    /// readers are re-read so the boundaries reach the index (OCR and speech
+    /// rows are kept: re-reading them needs their module on).
+    nonisolated static let extractorVersion = 10
+
+    /// FIND-08: the readers whose output gains section boundaries at version 10.
+    nonisolated static let boundaryExtractors = ["office", "odf", "iwork", "ole", "visio", "project", "archive", "zip",
+                                                 "publisher", "onenote", "access", "openpgp", "pdfkit", "rtf", "text",
+                                                 "eml", "msg", "tnef"]
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0
@@ -455,6 +466,15 @@ final class AttachmentTextIndexJob {
         // GAP-PGP: OpenPGP rows read before signatures were verified ("present,
         // not verified") are re-read so they carry a verdict.
         total += try await requeueOpenPGP(store: store, coverage: coverage, below: 9)
+        // FIND-08: rows read before section boundaries existed are re-read in
+        // any state, so a phrase never joins two cells, rows, slides or pages.
+        while !Task.isCancelled {
+            let ids = try coverage.emailIDs(extractors: boundaryExtractors, below: 10, limit: 500)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            try coverage.remove(emailIDs: ids)
+            total += ids.count
+        }
         return total
     }
 
@@ -975,7 +995,7 @@ final class AttachmentTextIndexJob {
             }
             NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
         }
-        return .unlocked(text: target.fullText ?? "", children: target.children, stored: retain)
+        return .unlocked(text: SectionBoundary.hidden(target.fullText ?? ""), children: target.children, stored: retain)   // FIND-08: shown, so no boundaries
     }
 
     // MARK: - A10 / §13.3 (10): Resume an attachment that stopped at a per-run ceiling
@@ -1175,7 +1195,8 @@ final class AttachmentTextIndexJob {
                     return Reading(nil, .locked, "pdfkit", String(localized: "the password did not open the PDF"))
                 }
             }
-            let layer = document.string
+            // FIND-08: page by page, joined with the section boundary.
+            let layer = SectionBoundary.pdfText(document)
             // E1: a PDF without a real text layer is read by OCR, page by page
             // (audit A06: text-layer pages and scanned pages mixed; every
             // failed page named, never "no text").

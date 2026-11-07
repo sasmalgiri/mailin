@@ -171,7 +171,9 @@ enum AttachmentOCR {
                 }
             }
         }
-        outcome.text = pages.isEmpty ? nil : pages.joined(separator: "\n\n")
+        // FIND-08: pages are joined with the section boundary (U+001E, ArchiveCore
+        // `SectionBoundary`) so a phrase never runs from one page onto the next.
+        outcome.text = pages.isEmpty ? nil : pages.joined(separator: "\n\n\u{1E}")
         return outcome
     }
 
