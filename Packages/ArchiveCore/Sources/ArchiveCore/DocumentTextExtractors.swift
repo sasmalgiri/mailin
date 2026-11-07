@@ -179,7 +179,7 @@ enum DocumentTextExtractor {
         case .vsd: return try VisioBinaryTextExtractor.extract(fileURL: fileURL)
         case .mpp: return try ProjectBinaryTextExtractor.extract(fileURL: fileURL)
         case .mdb: return try AccessTextExtractor.extract(fileURL: fileURL)
-        case .pgp: return try OpenPGP.extract(fileURL: fileURL)
+        case .pgp: return try OpenPGP.extract(fileURL: fileURL, logicalName: logicalName, siblings: siblings)
         }
     }
 
