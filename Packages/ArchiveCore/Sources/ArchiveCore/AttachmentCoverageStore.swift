@@ -161,6 +161,27 @@ final class AttachmentCoverageStore {
         } catch { try? exec("ROLLBACK;"); throw error }
     }
 
+    /// §13.8 step 5: one attachment's row replaced on its own (an Unlock),
+    /// the other attachments of the message left exactly as they were.
+    func record(row: AttachmentCoverageRow) throws {
+        let upsert = try prepare("""
+            INSERT OR REPLACE INTO coverage(email_id, ordinal, filename, mime_type, state, extractor, extractor_version, characters, note, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?);
+        """)
+        defer { sqlite3_finalize(upsert) }
+        sqlite3_bind_text(upsert, 1, row.emailID.uuidString, -1, Self.transient)
+        sqlite3_bind_int64(upsert, 2, Int64(row.ordinal))
+        sqlite3_bind_text(upsert, 3, row.filename, -1, Self.transient)
+        sqlite3_bind_text(upsert, 4, row.mimeType, -1, Self.transient)
+        sqlite3_bind_text(upsert, 5, row.state.rawValue, -1, Self.transient)
+        sqlite3_bind_text(upsert, 6, row.extractor, -1, Self.transient)
+        sqlite3_bind_int64(upsert, 7, Int64(row.extractorVersion))
+        sqlite3_bind_int64(upsert, 8, Int64(row.characters))
+        if let note = row.note { sqlite3_bind_text(upsert, 9, note, -1, Self.transient) } else { sqlite3_bind_null(upsert, 9) }
+        sqlite3_bind_int64(upsert, 10, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(upsert) == SQLITE_DONE else { throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(db))) }
+    }
+
     /// Every attachment's state for one email, in attachment order.
     func rows(for emailID: UUID) throws -> [AttachmentCoverageRow] {
         let stmt = try prepare("""

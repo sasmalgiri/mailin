@@ -334,26 +334,7 @@ final class AttachmentTextIndexJob {
             do {
                 try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: extractions.map(\.searchDocument))
                 // §13.3 (5): every file inside an attachment is its own document and row.
-                for extraction in extractions {
-                    let rows = extraction.children.enumerated().map { index, child in
-                        AttachmentChildRow(emailID: emailID, position: extraction.ordinal, childIndex: index, path: child.path, filename: child.filename,
-                                           kind: child.kind, sha256: child.sha256, bytes: child.bytes, state: child.state.rawValue, note: child.note)
-                    }
-                    var texts: [Int: String?] = [:], states: [Int: SearchDocState] = [:]
-                    for (index, child) in extraction.children.enumerated() {
-                        texts[index] = child.state.isSearchable ? child.text : nil
-                        switch child.state {
-                        case .extracted: states[index] = .complete
-                        case .noText: states[index] = .noText
-                        case .partial: states[index] = .partial
-                        case .unsupported: states[index] = .unsupported
-                        case .locked: states[index] = .locked
-                        case .failed: states[index] = .failed
-                        }
-                    }
-                    try await store.recordAttachmentChildren(emailID: emailID, position: extraction.ordinal, children: rows,
-                                                             texts: texts, states: states, extractorVersion: Self.extractorVersion)
-                }
+                for extraction in extractions { try await recordChildren(emailID: emailID, extraction: extraction) }
             } catch {
                 Self.logger.error("attachment search documents not written for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -374,6 +355,28 @@ final class AttachmentTextIndexJob {
         do { try coverage.record(emailID: emailID, rows: rows) } catch {
             Self.logger.error("attachment coverage not recorded for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// The files inside one attachment as child rows and `childText` documents.
+    private func recordChildren(emailID: UUID, extraction: Extraction) async throws {
+        let rows = extraction.children.enumerated().map { index, child in
+            AttachmentChildRow(emailID: emailID, position: extraction.ordinal, childIndex: index, path: child.path, filename: child.filename,
+                               kind: child.kind, sha256: child.sha256, bytes: child.bytes, state: child.state.rawValue, note: child.note)
+        }
+        var texts: [Int: String?] = [:], states: [Int: SearchDocState] = [:]
+        for (index, child) in extraction.children.enumerated() {
+            texts[index] = child.state.isSearchable ? child.text : nil
+            switch child.state {
+            case .extracted: states[index] = .complete
+            case .noText: states[index] = .noText
+            case .partial: states[index] = .partial
+            case .unsupported: states[index] = .unsupported
+            case .locked: states[index] = .locked
+            case .failed: states[index] = .failed
+            }
+        }
+        try await store.recordAttachmentChildren(emailID: emailID, position: extraction.ordinal, children: rows,
+                                                 texts: texts, states: states, extractorVersion: Self.extractorVersion)
     }
 
     /// Emails an older extractor left unsupported, failed or cut short go back
@@ -454,14 +457,16 @@ final class AttachmentTextIndexJob {
 
     /// FIND-03: every attachment of one raw MIME message with its state. Nil
     /// when the message itself cannot be parsed.
-    nonisolated static func extractCoverage(fromRaw raw: String, ocr: Bool = false) -> [Extraction]? {
+    /// - Parameter passwords: §13.8 step 5 — passwords the person typed for
+    ///   specific attachments (by ordinal), used for this read and not kept.
+    nonisolated static func extractCoverage(fromRaw raw: String, ocr: Bool = false, passwords: [Int: String] = [:]) -> [Extraction]? {
         guard let extraction = try? EmailBodyExtractor.extractContents(from: raw) else { return nil }
         var out: [Extraction] = []
         for (ordinal, attachment) in extraction.attachments.enumerated() {
             defer {
                 if let url = attachment.fileURL { try? FileManager.default.removeItem(at: url) }
             }
-            out.append(classify(attachment, ordinal: ordinal, ocr: ocr))
+            out.append(classify(attachment, ordinal: ordinal, ocr: ocr, password: passwords[ordinal]))
         }
         return out
     }
@@ -473,8 +478,13 @@ final class AttachmentTextIndexJob {
 
     /// FIND-03: read one attachment and say what happened. Text longer than
     /// the cap is cut and the state says so.
-    nonisolated static func classify(_ attachment: AttachmentMetadata, ordinal: Int, ocr: Bool) -> Extraction {
-        let result = read(attachment, ocr: ocr)
+    nonisolated static func classify(_ attachment: AttachmentMetadata, ordinal: Int, ocr: Bool, password: String? = nil) -> Extraction {
+        var result = read(attachment, ocr: ocr, password: password)
+        if password != nil, result.state != .locked, result.state != .failed, result.state != .unsupported {
+            // The record says how this came to be readable — and that nothing was kept.
+            let unlocked = String(localized: "unlocked with a password you entered; the password was not kept")
+            result.note = result.note.map { $0 + "; " + unlocked } ?? unlocked
+        }
         var text = result.text
         var fullText = result.text
         var state = result.state
@@ -531,7 +541,7 @@ final class AttachmentTextIndexJob {
     /// temp file when there is one, otherwise the bytes written to one.
     /// TYPE-01…04: every document kind through the one facade — Office Open
     /// XML, OpenDocument, iWork, Office 97–2003 and one level inside ZIPs.
-    nonisolated private static func readDocument(_ attachment: AttachmentMetadata, kind: DocumentKind, data: Data)
+    nonisolated private static func readDocument(_ attachment: AttachmentMetadata, kind: DocumentKind, data: Data, password: String? = nil)
         -> Reading {
         var url = attachment.fileURL
         var temporary: URL?
@@ -543,14 +553,25 @@ final class AttachmentTextIndexJob {
         defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
         do {
             // R03: the attachment's own name travels with the bytes, whatever the temp file is called.
-            let result = try DocumentTextExtractor.extract(fileURL: url!, kind: kind, logicalName: attachment.filename)
+            let result = try DocumentTextExtractor.extract(fileURL: url!, kind: kind, logicalName: attachment.filename, password: password)
             var note: String? = nil
             if !result.skipped.isEmpty {
                 note = String(localized: "not read: \(result.skipped.joined(separator: "; "))")
             }
+            // §13.8 step 5: an archive whose every file is password-protected is
+            // itself locked — the listing of names is not its content, and the
+            // lock row offers Unlock… for it.
+            if kind.isContainer, !result.children.isEmpty, result.children.allSatisfy({ $0.state == .locked }) {
+                let why = result.children.count == 1
+                    ? String(localized: "the file inside is password-protected")
+                    : String(localized: "every file inside is password-protected (\(result.children.count))")
+                return Reading(nil, .locked, kind.extractorName, why, children: result.children)
+            }
             return Reading(result.text, result.partial ? .partial : .extracted, kind.extractorName, note, children: result.children)
         } catch OfficeTextExtractor.ExtractError.encrypted {
             return Reading(nil, .locked, kind.extractorName, String(localized: "password-protected document"))
+        } catch OfficeTextExtractor.ExtractError.wrongPassword {
+            return Reading(nil, .locked, kind.extractorName, String(localized: "the password did not open the document"))
         } catch OfficeTextExtractor.ExtractError.noTextParts {
             return Reading("", .noText, kind.extractorName, nil)
         } catch {
@@ -586,19 +607,96 @@ final class AttachmentTextIndexJob {
     /// `maxMessageDepth`, stated.
     nonisolated static let maxMessageDepth = 3
 
-    nonisolated private static func readEmbeddedMessage(_ data: Data, ocr: Bool, depth: Int)
+    nonisolated private static func readEmbeddedMessage(_ data: Data, ocr: Bool, depth: Int, extractor: String = "eml")
         -> Reading {
         guard depth < maxMessageDepth else {
-            return Reading(nil, .unsupported, "eml", String(localized: "a message nested deeper than \(maxMessageDepth) levels"))
+            return Reading(nil, .unsupported, extractor, String(localized: "a message nested deeper than \(maxMessageDepth) levels"))
         }
         guard let raw = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
-            return Reading(nil, .failed, "eml", String(localized: "text encoding not recognised"))
+            return Reading(nil, .failed, extractor, String(localized: "text encoding not recognised"))
         }
         let email: MBOXParser.RawEmail
         do { email = try MBOXParser.processRawMessage(raw, senderEmail: "") } catch {
-            return Reading(nil, .failed, "eml", error.localizedDescription)
+            return Reading(nil, .failed, extractor, error.localizedDescription)
         }
-        return messageReading(email, extractor: "eml", ocr: ocr, depth: depth)
+        return messageReading(email, extractor: extractor, ocr: ocr, depth: depth)
+    }
+
+    /// §13.8 step 5 (COMP-14): an S/MIME part (enveloped or signed). With the
+    /// module off it is recorded locked and says what would open it. With it
+    /// on, the Mac's keychain identity decrypts it here, offline, and the
+    /// message inside is read like any attached message. Nothing is retained
+    /// beyond what the person chose for the index.
+    nonisolated private static func readSMIME(_ data: Data, ocr: Bool, depth: Int) -> Reading {
+        guard ProtectedContentPolicy.decryptSMIME else {
+            return Reading(nil, .locked, "smime", String(localized: "S/MIME-protected content — turn on \"Read S/MIME with your keychain key\" in Settings ▸ Modules to read it on this Mac"))
+        }
+        #if os(macOS)
+        guard let plain = SMIMEHandler.decodeCMS(data) else {
+            return Reading(nil, .locked, "smime", String(localized: "no matching private key in the keychain, or the part is not an S/MIME envelope"))
+        }
+        return readEmbeddedMessage(plain, ocr: ocr, depth: depth, extractor: "smime")
+        #else
+        return Reading(nil, .locked, "smime", String(localized: "S/MIME decryption runs on the Mac"))
+        #endif
+    }
+
+    // MARK: - §13.8 step 5: Unlock (one password, one attachment, once)
+
+    enum UnlockOutcome: Sendable, Equatable {
+        case wrongPassword(String)
+        case unreadable(String)
+        /// Read. `stored` says whether the text went into the archive's index.
+        case unlocked(text: String, children: [ChildDocument], stored: Bool)
+    }
+
+    /// Reads one attachment with the password the person typed. `retain`
+    /// decides between showing the text once (nothing written) and recording
+    /// it like any other attachment (the message's attachments are re-read
+    /// and re-recorded together, so the archive stays consistent). The
+    /// password is used for this call and not kept.
+    func unlock(emailID: UUID, position: Int, password: String, retain: Bool) async -> UnlockOutcome {
+        guard let page = try? await store.rawCandidates(ids: [emailID]), let candidate = page.candidates.first else {
+            return .unreadable(String(localized: "message source not stored"))
+        }
+        let ocr = AttachmentOCR.isEnabled
+        let raw = candidate.raw
+        let extractions: [Extraction]? = await Task.detached(priority: .userInitiated) {
+            Self.extractCoverage(fromRaw: raw, ocr: ocr, passwords: [position: password])
+        }.value
+        guard let extractions, position < extractions.count else {
+            return .unreadable(String(localized: "message could not be parsed"))
+        }
+        let target = extractions[position]
+        switch target.state {
+        case .locked: return .wrongPassword(target.note ?? String(localized: "the password did not open the file"))
+        case .failed, .unsupported: return .unreadable(target.note ?? target.state.rawValue)
+        case .extracted, .partial, .noText, .truncated: break
+        }
+        if retain {
+            // Only THIS attachment's record changes: an earlier unlock of a
+            // sibling is not undone by re-reading the message without its password.
+            do {
+                if SearchChunkPolicy.isEnabled {
+                    try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: [target.searchDocument])
+                    try await recordChildren(emailID: emailID, extraction: target)
+                }
+                let coverage = try AttachmentCoverageStore(url: await store.attachmentCoverageURL)
+                try coverage.record(row: target.coverageRow(emailID: emailID))
+            } catch {
+                Self.logger.error("unlock not recorded for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                return .unreadable(String(localized: "the text was read but could not be stored: \(error.localizedDescription)"))
+            }
+            NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
+        }
+        return .unlocked(text: target.fullText ?? "", children: target.children, stored: retain)
+    }
+
+    /// The recorded state of one attachment, for the detail view's lock row.
+    func coverageRow(emailID: UUID, position: Int) async -> AttachmentCoverageRow? {
+        let url = await store.attachmentCoverageURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? AttachmentCoverageStore(url: url).rows(for: emailID).first { $0.ordinal == position }
     }
 
     /// §13.8 step 3: an Outlook message (.msg) or template (.oft) attached as
@@ -700,7 +798,7 @@ final class AttachmentTextIndexJob {
 
     /// One attachment through the extractor that fits it. `depth` counts
     /// messages inside messages (eml, msg, TNEF), bounded by `maxMessageDepth`.
-    nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool, depth: Int = 0)
+    nonisolated private static func read(_ attachment: AttachmentMetadata, ocr: Bool, depth: Int = 0, password: String? = nil)
         -> Reading {
         _ = childReaderInstalled
         let data: Data?
@@ -723,7 +821,11 @@ final class AttachmentTextIndexJob {
                 return Reading(nil, .failed, "pdfkit", String(localized: "PDF could not be opened"))
             }
             if document.isLocked {
-                return Reading(nil, .locked, "pdfkit", String(localized: "password-protected PDF"))
+                // §13.8 step 5: a password the person typed opens it for this read.
+                guard let password else { return Reading(nil, .locked, "pdfkit", String(localized: "password-protected PDF")) }
+                guard document.unlock(withPassword: password) else {
+                    return Reading(nil, .locked, "pdfkit", String(localized: "the password did not open the PDF"))
+                }
             }
             let layer = document.string
             // E1: a PDF without a real text layer is read by OCR, page by page
@@ -776,8 +878,12 @@ final class AttachmentTextIndexJob {
         // 97–2003 and ZIP (one level inside) through the document facade —
         // before the text families, because their MIME types contain "xml"
         // and were once decoded as Latin-1 text, indexing bytes as words.
+        // §13.8 step 5 (COMP-14): an S/MIME part is decoded with a key from the keychain only when the module is on.
+        if mime.contains("pkcs7-mime") || ext == "p7m" {
+            return readSMIME(data, ocr: ocr, depth: depth)
+        }
         if let kind = DocumentKind.detect(mimeType: mime, filename: attachment.filename) {
-            return readDocument(attachment, kind: kind, data: data)
+            return readDocument(attachment, kind: kind, data: data, password: password)
         }
         // §13.8 step 4: an .xml that is a Microsoft Project plan is read as one, not as plain text.
         if ext == "xml", let kind = DocumentTextExtractor.sniff(head: data.prefix(4096)), kind == .projectXML {

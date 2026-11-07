@@ -131,10 +131,13 @@ enum FormatCapabilityRegistry {
         .init("7z-rar", .archiveAttachment, "7z, RAR, bz2, xz", ["7z", "rar", "bz2", "xz"], reads: "—", evidence: .notImplemented, limitation: "kept as files, stated"),
 
         // MARK: Protected content
-        .init("locked", .protectedContent, "Password-protected PDF / Office / archive members", [], reads: "detected and reported as locked",
-              evidence: .syntheticFixtures, limitation: "no password entry, retry or credential retention"),
-        .init("smime", .protectedContent, "S/MIME and OpenPGP", [], reads: "originals kept; signatures verified where present", evidence: .notExecuted,
-              limitation: "no decrypt-and-index path"),
+        .init("locked", .protectedContent, "Password-protected PDF / Office / archive members", [],
+              reads: "detected and recorded as locked; Unlock… on the attachment takes a password once — PDF (PDFKit), Office Open XML Standard and Agile encryption, ZIP members (ZipCrypto and WinZip AES) — and either shows the text for this view or stores it for search, as the person chooses; passwords are never kept",
+              evidence: .syntheticFixtures, limitation: "encrypted OpenDocument packages and encrypted PST/OST are not unlocked; one file, one password, no retry list",
+              dependency: "a protected file each from Acrobat, Word, Excel and 7-Zip/WinZip (owner)"),
+        .init("smime", .protectedContent, "S/MIME and OpenPGP", [],
+              reads: "originals kept; signatures verified where present; with the module on (Mac), enveloped and signed S/MIME parts are decoded with a private key from the keychain and the message inside is read",
+              evidence: .notExecuted, limitation: "Mac only (CMSDecoder); off by default; OpenPGP not decrypted", dependency: "a test identity in the keychain (owner)"),
         .init("irm", .protectedContent, "Rights-managed files, cloud references", [], reads: "—", evidence: .notImplemented,
               limitation: "no rights-aware access; references are kept as references"),
     ]

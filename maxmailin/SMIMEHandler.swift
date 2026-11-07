@@ -231,25 +231,29 @@ struct SMIMEHandler {
 
     static func decrypt(_ email: MBOXParser.RawEmail) -> Data? {
         guard isEncrypted(email) else { return nil }
-
         #if os(macOS)
         guard let encryptedData = findEncryptedData(in: email) else { return nil }
-
-        var decoder: CMSDecoder?
-        guard CMSDecoderCreate(&decoder) == errSecSuccess, let cmsDecoder = decoder else { return nil }
-
-        guard CMSDecoderUpdateMessage(cmsDecoder, (encryptedData as NSData).bytes, encryptedData.count) == errSecSuccess,
-              CMSDecoderFinalizeMessage(cmsDecoder) == errSecSuccess else { return nil }
-
-        var content: CFData?
-        guard CMSDecoderCopyContent(cmsDecoder, &content) == errSecSuccess,
-              let decryptedData = content as Data? else { return nil }
-
-        return decryptedData
+        return decodeCMS(encryptedData)
         #else
         return nil
         #endif
     }
+
+    #if os(macOS)
+    /// §13.8 step 5 (COMP-14): the content of a CMS message — an envelope
+    /// decrypted with a private key from this Mac's keychain, or the content
+    /// of a signed-data part. Nothing leaves the device; nil when no key
+    /// matches or the bytes are not CMS.
+    static func decodeCMS(_ data: Data) -> Data? {
+        var decoder: CMSDecoder?
+        guard CMSDecoderCreate(&decoder) == errSecSuccess, let cmsDecoder = decoder else { return nil }
+        guard CMSDecoderUpdateMessage(cmsDecoder, (data as NSData).bytes, data.count) == errSecSuccess,
+              CMSDecoderFinalizeMessage(cmsDecoder) == errSecSuccess else { return nil }
+        var content: CFData?
+        guard CMSDecoderCopyContent(cmsDecoder, &content) == errSecSuccess, let plain = content as Data?, !plain.isEmpty else { return nil }
+        return plain
+    }
+    #endif
 
     #if os(macOS)
     private static func extractCertificateInfo(from cert: SecCertificate, chain: [SecCertificate]) -> CertificateInfo {

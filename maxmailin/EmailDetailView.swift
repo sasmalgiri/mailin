@@ -658,6 +658,9 @@ struct EmailDetailView: View {
                         // §13.3 (9): the files inside an archive or attached message, with their states.
                         AttachmentChildrenList(emailID: shown.id, position: index)
                             .padding(.leading, Spacing.large)
+                        // §13.8 step 5: a locked attachment offers Unlock… (one password, once).
+                        AttachmentUnlockView(emailID: shown.id, position: index, filename: att.filename)
+                            .padding(.leading, Spacing.large)
                     }
                     .padding(.vertical, Spacing.xxSmall)
                     .accessibilityElement(children: .contain)

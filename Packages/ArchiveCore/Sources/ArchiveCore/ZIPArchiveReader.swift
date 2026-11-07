@@ -30,6 +30,7 @@
 //
 
 import Foundation
+import CryptoKit
 import Compression
 
 struct ZIPArchiveReader {
@@ -69,6 +70,8 @@ struct ZIPArchiveReader {
         case malformed(String)
         case unsupportedMethod(UInt16, member: String)
         case encrypted(member: String)
+        /// §13.8 step 5: a password was given and did not open the member.
+        case wrongPassword(member: String)
         case sizeMismatch(member: String, declared: Int64, actual: Int64)
         case crcMismatch(member: String)
         case insufficientDisk(member: String, needed: Int64, available: Int64)
@@ -84,6 +87,7 @@ struct ZIPArchiveReader {
             case .malformed(let what): return "Archive is malformed: \(what)."
             case .unsupportedMethod(let m, let member): return "\(member): compression method \(m) is not supported (only stored and deflate)."
             case .encrypted(let member): return "\(member): encrypted members cannot be imported."
+            case .wrongPassword(let member): return "\(member): the password did not open it."
             case .sizeMismatch(let member, let declared, let actual): return "\(member): declared \(declared) bytes, produced \(actual) — refused."
             case .crcMismatch(let member): return "\(member): CRC-32 does not match — the member is damaged."
             case .insufficientDisk(let member, let needed, let available): return "\(member): needs \(needed) bytes of scratch space, \(available) available."
@@ -214,10 +218,14 @@ struct ZIPArchiveReader {
     /// - Parameter availableDiskBytes: room on the destination volume; when
     ///   nil it is read from the file system. The member is refused before a
     ///   byte is written if it would not fit with `diskMarginBytes` to spare.
+    /// - Parameter password: §13.8 step 5 — opens a ZipCrypto or WinZip AES
+    ///   member; without one an encrypted member is refused as `encrypted`,
+    ///   with a wrong one as `wrongPassword`. The password is used for this
+    ///   call and not kept.
     static func extract(_ member: Member, from url: URL, to destination: URL,
-                        availableDiskBytes: Int64? = nil) throws {
-        guard !member.isEncrypted else { throw ReadError.encrypted(member: member.name) }
-        guard member.method == 0 || member.method == 8 else {
+                        availableDiskBytes: Int64? = nil, password: String? = nil) throws {
+        if member.isEncrypted, password == nil { throw ReadError.encrypted(member: member.name) }
+        guard member.method == 0 || member.method == 8 || (member.method == 99 && member.isEncrypted) else {
             throw ReadError.unsupportedMethod(member.method, member: member.name)
         }
         let available = availableDiskBytes ?? freeSpace(at: destination.deletingLastPathComponent())
@@ -243,11 +251,60 @@ struct ZIPArchiveReader {
         guard local.count == 30, local.prefix(4).elementsEqual([0x50, 0x4B, 0x03, 0x04]) else {
             throw ReadError.malformed("\(member.name): local header signature")
         }
-        let dataStart = member.localHeaderOffset + 30 + Int64(u16(local, 26)) + Int64(u16(local, 28))
+        let localNameLength = Int64(u16(local, 26)), localExtraLength = Int64(u16(local, 28))
+        let dataStart = member.localHeaderOffset + 30 + localNameLength + localExtraLength
         guard try checkedSum(dataStart, member.compressedSize, "\(member.name): member data end") <= fileSize else {
             throw ReadError.truncated("\(member.name): member data")
         }
         try handle.seek(toOffset: UInt64(dataStart))
+
+        // Encrypted members: the data is read through a decrypting source.
+        var method = member.method
+        var compressedLength = member.compressedSize
+        var source: (Int) throws -> Data = { try handle.read(upToCount: $0) ?? Data() }
+        var finish: () throws -> Void = {}
+        var checkCRC = true
+        if member.isEncrypted, let password {
+            if member.method == 99 {
+                try handle.seek(toOffset: UInt64(member.localHeaderOffset + 30 + localNameLength))
+                let extra = try handle.read(upToCount: Int(localExtraLength)) ?? Data()
+                guard let aes = WinZipAES.extraField(in: extra) else { throw ReadError.malformed("\(member.name): AES member without its extra field") }
+                let saltLength = WinZipAES.saltLength(strength: aes.strength)
+                let prefix = try handle.read(upToCount: saltLength + 2) ?? Data()
+                guard prefix.count == saltLength + 2 else { throw ReadError.truncated("\(member.name): AES salt") }
+                let keys = WinZipAES.keys(password: password, salt: Array(prefix.prefix(saltLength)), strength: aes.strength)
+                guard Array(prefix.suffix(2)) == keys.verifier else { throw ReadError.wrongPassword(member: member.name) }
+                var stream = WinZipAES.CounterStream(key: keys.encryption)
+                var mac = HMAC<Insecure.SHA1>(key: SymmetricKey(data: keys.authentication))
+                compressedLength = member.compressedSize - Int64(saltLength) - 2 - 10
+                guard compressedLength >= 0 else { throw ReadError.truncated("\(member.name): AES payload") }
+                var remainingPayload = compressedLength
+                source = { want in
+                    let take = Int(min(Int64(want), remainingPayload))
+                    guard take > 0 else { return Data() }
+                    let chunk = try handle.read(upToCount: take) ?? Data()
+                    remainingPayload -= Int64(chunk.count)
+                    mac.update(data: chunk)
+                    return try stream.process(chunk)
+                }
+                finish = {
+                    let code = try handle.read(upToCount: 10) ?? Data()
+                    guard code.count == 10, Data(mac.finalize()).prefix(10) == code else { throw ReadError.wrongPassword(member: member.name) }
+                }
+                method = aes.actualMethod
+                checkCRC = aes.vendorVersion == 1 || member.crc32 != 0   // AE-2 stores no CRC
+            } else {
+                var cipher = ZipCryptoCipher(password: password)
+                let header = cipher.decrypt(try handle.read(upToCount: 12) ?? Data())
+                guard header.count == 12 else { throw ReadError.truncated("\(member.name): encryption header") }
+                let localFlags = u16(local, 6), localTime = u16(local, 10)
+                let check: UInt8 = (localFlags & 0x0008) != 0 ? UInt8(truncatingIfNeeded: localTime >> 8) : UInt8(truncatingIfNeeded: member.crc32 >> 24)
+                guard header[header.startIndex + 11] == check else { throw ReadError.wrongPassword(member: member.name) }
+                compressedLength = member.compressedSize - 12
+                source = { want in cipher.decrypt(try handle.read(upToCount: want) ?? Data()) }
+            }
+        }
+        guard method == 0 || method == 8 else { throw ReadError.unsupportedMethod(method, member: member.name) }
 
         FileManager.default.createFile(atPath: destination.path, contents: nil)
         let out = try FileHandle(forWritingTo: destination)
@@ -268,16 +325,20 @@ struct ZIPArchiveReader {
             try out.write(contentsOf: chunk)
         }
 
-        if member.method == 0 {
-            try copyStored(from: handle, count: member.compressedSize, member: member.name, sink: sink)
+        if method == 0 {
+            try copyStored(count: compressedLength, member: member.name, supply: source, sink: sink)
         } else {
-            try inflate(from: handle, count: member.compressedSize, member: member.name, sink: sink)
+            try inflate(count: compressedLength, member: member.name, supply: source, sink: sink)
         }
+        try finish()
 
         guard written == member.uncompressedSize else {
             throw ReadError.sizeMismatch(member: member.name, declared: member.uncompressedSize, actual: written)
         }
-        guard crc.value == member.crc32 else { throw ReadError.crcMismatch(member: member.name) }
+        if checkCRC, crc.value != member.crc32 {
+            // A ZipCrypto check byte passes one wrong password in 256; the CRC catches the rest.
+            throw member.isEncrypted ? ReadError.wrongPassword(member: member.name) : ReadError.crcMismatch(member: member.name)
+        }
         succeeded = true
     }
 
@@ -352,7 +413,7 @@ struct ZIPArchiveReader {
         var crc = CRC32()
         var written: Int64 = 0
         try handle.seek(toOffset: UInt64(offset))
-        try inflate(from: handle, count: compressedLength, member: url.lastPathComponent) { chunk in
+        try inflate(count: compressedLength, member: url.lastPathComponent, supply: { try handle.read(upToCount: $0) ?? Data() }) { chunk in
             written += Int64(chunk.count)
             if let maxOutputBytes, written > maxOutputBytes {
                 throw ReadError.budgetExceeded(member: url.lastPathComponent, limit: maxOutputBytes)
@@ -369,11 +430,11 @@ struct ZIPArchiveReader {
 
     // MARK: - Streaming primitives
 
-    private static func copyStored(from handle: FileHandle, count: Int64, member: String,
+    private static func copyStored(count: Int64, member: String, supply: (Int) throws -> Data,
                                    sink: (Data) throws -> Void) throws {
         var remaining = count
         while remaining > 0 {
-            let chunk = try handle.read(upToCount: Int(min(Int64(windowSize), remaining))) ?? Data()
+            let chunk = try supply(Int(min(Int64(windowSize), remaining)))
             guard !chunk.isEmpty else { throw ReadError.truncated("\(member): stored data") }
             remaining -= Int64(chunk.count)
             try sink(chunk)
@@ -390,7 +451,7 @@ struct ZIPArchiveReader {
     /// `source`; the decoder writes at most `dst_size` = `windowSize` bytes
     /// into `output`, and `produced` = `windowSize - dst_size` is therefore
     /// within `output`. All three allocations are freed by the `defer`s.
-    private static func inflate(from handle: FileHandle, count: Int64, member: String,
+    private static func inflate(count: Int64, member: String, supply: (Int) throws -> Data,
                                 sink: (Data) throws -> Void) throws {
         let streamPointer = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
         defer { unsafe streamPointer.deallocate() }
@@ -409,7 +470,7 @@ struct ZIPArchiveReader {
 
         while status == COMPRESSION_STATUS_OK {
             if unsafe streamPointer.pointee.src_size == 0 && remaining > 0 {
-                let chunk = try handle.read(upToCount: Int(min(Int64(windowSize), remaining))) ?? Data()
+                let chunk = try supply(Int(min(Int64(windowSize), remaining)))
                 guard !chunk.isEmpty else { throw ReadError.truncated("\(member): compressed data") }
                 unsafe chunk.copyBytes(to: source, count: chunk.count)
                 remaining -= Int64(chunk.count)

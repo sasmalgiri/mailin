@@ -68,6 +68,10 @@ enum CapabilityWiring {
                     AttachmentTextIndexJob.shared.kickIfNeeded()
                 }
             }
+        case .protectedMessageDecrypt:
+            // §13.8 step 5: read by AttachmentTextIndexJob; locked S/MIME rows are retried on the next pass.
+            ProtectedContentPolicy.decryptSMIME = isOn
+            if isOn { Task { @MainActor in try? await Task.sleep(for: .seconds(5)); AttachmentTextIndexJob.shared.kickIfNeeded() } }
         case .attachmentOCR:
             // E1: read by AttachmentTextIndexJob, which runs without a view.
             AttachmentOCR.isEnabled = isOn

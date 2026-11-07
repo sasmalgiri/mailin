@@ -95,7 +95,21 @@ enum DocumentTextExtractor {
     ///   filename or archive member path), independent of the temporary
     ///   storage URL, so a gzip payload is named `report.txt` and not after
     ///   a UUID. Falls back to the URL's name.
-    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil) throws -> OfficeTextExtractor.Result {
+    /// - Parameter password: §13.8 step 5 — opens an encrypted Office package
+    ///   (Standard or Agile) or the encrypted members of a ZIP; used for this
+    ///   call only. Without it those are reported locked.
+    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil) throws -> OfficeTextExtractor.Result {
+        if let password, [.docx, .xlsx, .pptx, .xlsb, .vsdx].contains(kind), OfficeCryptoUnlocker.isEncryptedPackage((try? Data(contentsOf: fileURL)) ?? Data()) {
+            let plain: Data
+            do { plain = try OfficeCryptoUnlocker.decrypt(data: try Data(contentsOf: fileURL), password: password) }
+            catch ProtectedContentError.wrongPassword { throw OfficeTextExtractor.ExtractError.wrongPassword }
+            catch { throw OfficeTextExtractor.ExtractError.notAPackage(error.localizedDescription) }
+            let scratch = try scratchDirectory("unlocked")
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let temp = scratch.appendingPathComponent(UUID().uuidString + "." + kind.rawValue)
+            try plain.write(to: temp)
+            return try extract(fileURL: temp, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: nil)
+        }
         switch kind {
         case .docx: return try OfficeTextExtractor.extract(fileURL: fileURL, kind: .docx)
         case .xlsx: return try OfficeTextExtractor.extract(fileURL: fileURL, kind: .xlsx)
@@ -106,7 +120,7 @@ enum DocumentTextExtractor {
         case .xlsb: return try XLSBReader.extract(fileURL: fileURL)
         case .vsdx: return try VisioTextExtractor.extract(fileURL: fileURL)
         case .projectXML: return try ProjectXMLTextExtractor.extract(fileURL: fileURL)
-        case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent)
+        case .zip, .tar, .gzip: return try ContainerTextExtractor.extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, password: password)
         }
     }
 
@@ -1074,9 +1088,9 @@ enum ContainerTextExtractor {
         let extract: (URL) throws -> Void
     }
 
-    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil) throws -> OfficeTextExtractor.Result {
+    static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil) throws -> OfficeTextExtractor.Result {
         var budget = maxTotalBytes
-        return try extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, depth: 1, prefix: "", budget: &budget)
+        return try extract(fileURL: fileURL, kind: kind, logicalName: logicalName ?? fileURL.lastPathComponent, depth: 1, prefix: "", budget: &budget, password: password)
     }
 
     /// R03: the gzip payload's name comes from the archive's LOGICAL name
@@ -1093,7 +1107,7 @@ enum ContainerTextExtractor {
         return name.isEmpty ? "payload" : name
     }
 
-    private static func children(of url: URL, kind: DocumentKind, logicalName: String, budget: Int64) throws -> [Child] {
+    private static func children(of url: URL, kind: DocumentKind, logicalName: String, budget: Int64, password: String?) throws -> [Child] {
         switch kind {
         case .tar:
             let members: [TARReader.Member]
@@ -1111,7 +1125,7 @@ enum ContainerTextExtractor {
             let members: [ZIPArchiveReader.Member]
             do { members = try ZIPArchiveReader.members(of: url) } catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
             return members.filter { !$0.isDirectory && !$0.isJunk }
-                .map { member in Child(name: member.name, size: member.uncompressedSize, encrypted: member.isEncrypted) { try ZIPArchiveReader.extract(member, from: url, to: $0) } }
+                .map { member in Child(name: member.name, size: member.uncompressedSize, encrypted: member.isEncrypted) { try ZIPArchiveReader.extract(member, from: url, to: $0, password: password) } }
         }
     }
 
@@ -1120,8 +1134,8 @@ enum ContainerTextExtractor {
     /// parent's own text is the listing of its members. Nested containers
     /// contribute their members with the chain in `path`; a member nothing
     /// can read is a child in a named state, never dropped.
-    private static func extract(fileURL: URL, kind: DocumentKind, logicalName: String, depth: Int, prefix: String, budget: inout Int64) throws -> OfficeTextExtractor.Result {
-        let members = try children(of: fileURL, kind: kind, logicalName: logicalName, budget: budget)
+    private static func extract(fileURL: URL, kind: DocumentKind, logicalName: String, depth: Int, prefix: String, budget: inout Int64, password: String? = nil) throws -> OfficeTextExtractor.Result {
+        let members = try children(of: fileURL, kind: kind, logicalName: logicalName, budget: budget, password: password)
         let scratch = try DocumentTextExtractor.scratchDirectory("archive")
         defer { try? FileManager.default.removeItem(at: scratch) }
         var listing: [String] = []
@@ -1139,7 +1153,7 @@ enum ContainerTextExtractor {
             let name = prefix + member.name
             let ext = (member.name as NSString).pathExtension.lowercased()
             listing.append(name)
-            if member.encrypted {
+            if member.encrypted, password == nil {
                 skipped.append("\(name) (password-protected)"); record(name, member, .locked, note: "password-protected"); continue
             }
             if let size = member.size, size > OfficeTextExtractor.maxPartBytes {
@@ -1155,6 +1169,9 @@ enum ContainerTextExtractor {
                 // R05: stopped inside decompression at the budget — stated, not failed.
                 let why = "decompression stopped at the \(limit)-byte budget"
                 skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why); continue
+            } catch ZIPArchiveReader.ReadError.wrongPassword {
+                // §13.8 step 5: the password did not open this member — still locked, said so.
+                skipped.append("\(name) (the password did not open it)"); record(name, member, .locked, note: "the password did not open it"); continue
             } catch {
                 unextractable += 1
                 skipped.append("\(name) (\(error))"); record(name, member, .failed, note: "\(error)"); continue
@@ -1176,7 +1193,7 @@ enum ContainerTextExtractor {
                         skipped.append("\(name) (\(why))"); record(name, member, .unsupported, note: why, sha256: sha, bytes: size, detected: innerKind.rawValue); continue
                     }
                     do {
-                        let inner = try extract(fileURL: destination, kind: innerKind, logicalName: member.name, depth: depth + 1, prefix: name + " › ", budget: &budget)
+                        let inner = try extract(fileURL: destination, kind: innerKind, logicalName: member.name, depth: depth + 1, prefix: name + " › ", budget: &budget, password: password)
                         documents.append(contentsOf: inner.children)
                         skipped.append(contentsOf: inner.skipped)
                         notText.append(contentsOf: inner.notText)
@@ -1190,7 +1207,7 @@ enum ContainerTextExtractor {
                     continue
                 }
                 do {
-                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: member.name)
+                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: member.name, password: password)
                     skipped.append(contentsOf: inner.skipped.map { "\(name): \($0)" })
                     record(name, member, inner.partial ? .partial : .extracted, text: inner.text,
                            note: inner.skipped.isEmpty ? nil : "not read: " + inner.skipped.joined(separator: "; "),
@@ -1200,6 +1217,8 @@ enum ContainerTextExtractor {
                     })
                 } catch OfficeTextExtractor.ExtractError.encrypted {
                     skipped.append("\(name) (password-protected)"); record(name, member, .locked, note: "password-protected", sha256: sha, bytes: size, detected: innerKind.rawValue)
+                } catch OfficeTextExtractor.ExtractError.wrongPassword {
+                    skipped.append("\(name) (the password did not open it)"); record(name, member, .locked, note: "the password did not open it", sha256: sha, bytes: size, detected: innerKind.rawValue)
                 } catch OfficeTextExtractor.ExtractError.noTextParts {
                     notText.append(name); record(name, member, .noText, sha256: sha, bytes: size, detected: innerKind.rawValue)
                 } catch {
@@ -1246,7 +1265,7 @@ enum ContainerTextExtractor {
     /// §13.3 (9): the bytes of one child, by its recorded path ("a.zip › b/c.docx"),
     /// extracted level by level into `scratch`. An attached message along the
     /// chain is opened by its MIME parts. Returns the child's file URL.
-    static func materialize(childPath: String, in fileURL: URL, kind: DocumentKind?, logicalName: String, scratch: URL) throws -> URL {
+    static func materialize(childPath: String, in fileURL: URL, kind: DocumentKind?, logicalName: String, scratch: URL, password: String? = nil) throws -> URL {
         var segments = childPath.components(separatedBy: " › ")
         var currentURL = fileURL
         var currentName = logicalName
@@ -1297,7 +1316,7 @@ enum ContainerTextExtractor {
                 guard let containerKind = currentKind, containerKind.isContainer else {
                     throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) is not an archive")
                 }
-                let members = try children(of: currentURL, kind: containerKind, logicalName: currentName, budget: maxTotalBytes)
+                let members = try children(of: currentURL, kind: containerKind, logicalName: currentName, budget: maxTotalBytes, password: password)
                 guard let member = members.first(where: { $0.name == segment }) else {
                     throw OfficeTextExtractor.ExtractError.notAPackage("\(currentName) has no member named \(segment)")
                 }

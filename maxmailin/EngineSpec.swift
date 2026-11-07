@@ -290,6 +290,11 @@ struct EngineSpec: Sendable {
             return EngineSpec(.archive, maturity: .stable,
                 name: String(localized: "Speech in audio and video attachments"),
                 detail: String(localized: "Recognises the words spoken in voice memos, calls and videos attached to emails, on this device, so search finds them and says \"Recognised speech\". Asks once for permission. No network."))
+        case .protectedMessageDecrypt:
+            // §13.8 step 5: CMSDecoder with the keychain's identities; preview until a real identity has run it.
+            return EngineSpec(.archive, maturity: .preview,
+                name: String(localized: "Read S/MIME with your keychain key"),
+                detail: String(localized: "Decrypts S/MIME-protected parts with a private key already in this Mac's keychain, then reads the message inside for search. Off, they are recorded as locked. Nothing leaves this Mac; no key is copied."))
         default:
             return nil
         }

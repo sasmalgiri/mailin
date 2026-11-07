@@ -3329,6 +3329,187 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
+    /// A ZIP whose entries carry their own flags, method, CRC and extra field
+    /// — for encrypted members (ZipCrypto flag 1, WinZip AES method 99).
+    static func zipRaw(_ entries: [(name: String, payload: Data, flags: UInt16, method: UInt16, crc: UInt32, size: UInt32, extra: Data)]) -> Data {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        var local = Data(), central = Data()
+        for e in entries {
+            let name = Array(e.name.utf8)
+            let offset = UInt32(local.count)
+            local.append(contentsOf: le32(0x04034b50) + le16(51) + le16(Int(e.flags)) + le16(Int(e.method)) + le16(0) + le16(0)
+                         + le32(e.crc) + le32(UInt32(e.payload.count)) + le32(e.size) + le16(name.count) + le16(e.extra.count) + name)
+            local.append(e.extra)
+            local.append(e.payload)
+            central.append(contentsOf: le32(0x02014b50) + le16(51) + le16(51) + le16(Int(e.flags)) + le16(Int(e.method)) + le16(0) + le16(0)
+                           + le32(e.crc) + le32(UInt32(e.payload.count)) + le32(e.size) + le16(name.count) + le16(e.extra.count) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(offset) + name)
+            central.append(e.extra)
+        }
+        var file = local
+        file.append(central)
+        file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(entries.count) + le16(entries.count)
+                    + le32(UInt32(central.count)) + le32(UInt32(local.count)) + le16(0))
+        return file
+    }
+
+    /// Plan v4 §13.3 (10)(12), §13.8 step 5 (COMP-13/14): protected content
+    /// opens with a password typed once — ZipCrypto and WinZip AES members,
+    /// Agile and Standard Office encryption, a PDF — a wrong password is
+    /// named, nothing is kept unless the person chooses to store the text,
+    /// and S/MIME parts stay locked until the keychain module is on.
+    func testWP5_protectedContent_zipOfficePDFUnlock_retentionChoice_wrongPasswordNamed_smimeStated() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("locked-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        let secret = Self.docx(body: "The sealed clause mentions escrow.", header: "")
+
+        // 1. ZipCrypto: header + stored payload; the check byte and the CRC tell a wrong password apart.
+        var cipher = ZipCryptoCipher(password: "open-sesame")
+        let crc = Self.crc32(secret)
+        let zcPayload = cipher.encrypt(ZipCryptoCipher.header(crc32: crc) + secret)
+        let zipCrypto = Self.zipRaw([("sealed.docx", zcPayload, 0x0001, 0, crc, UInt32(secret.count), Data())])
+        let zcURL = dir.appendingPathComponent("zipcrypto.zip"); try zipCrypto.write(to: zcURL)
+        let zcMember = try XCTUnwrap(try ZIPArchiveReader.members(of: zcURL).first)
+        XCTAssertTrue(zcMember.isEncrypted)
+        let out1 = dir.appendingPathComponent("out1.docx")
+        XCTAssertThrowsError(try ZIPArchiveReader.extract(zcMember, from: zcURL, to: out1)) { XCTAssertEqual($0 as? ZIPArchiveReader.ReadError, .encrypted(member: "sealed.docx")) }
+        XCTAssertThrowsError(try ZIPArchiveReader.extract(zcMember, from: zcURL, to: out1, password: "wrong")) { XCTAssertEqual($0 as? ZIPArchiveReader.ReadError, .wrongPassword(member: "sealed.docx")) }
+        try ZIPArchiveReader.extract(zcMember, from: zcURL, to: out1, password: "open-sesame")
+        XCTAssertEqual(try Data(contentsOf: out1), secret)
+
+        // 2. WinZip AES-256 (method 99, AE-2): PBKDF2, CTR, HMAC — the verifier and the auth code both guard the password.
+        let (aesPayload, aesExtra) = try WinZipAES.encryptMember(secret, password: "open-sesame", strength: 3, actualMethod: 0)
+        let aesZip = Self.zipRaw([("sealed.docx", aesPayload, 0x0001, 99, 0, UInt32(secret.count), aesExtra)])
+        let aesURL = dir.appendingPathComponent("aes.zip"); try aesZip.write(to: aesURL)
+        let aesMember = try XCTUnwrap(try ZIPArchiveReader.members(of: aesURL).first)
+        let out2 = dir.appendingPathComponent("out2.docx")
+        XCTAssertThrowsError(try ZIPArchiveReader.extract(aesMember, from: aesURL, to: out2, password: "wrong")) { XCTAssertEqual($0 as? ZIPArchiveReader.ReadError, .wrongPassword(member: "sealed.docx")) }
+        try ZIPArchiveReader.extract(aesMember, from: aesURL, to: out2, password: "open-sesame")
+        XCTAssertEqual(try Data(contentsOf: out2), secret)
+        // Through the archive reader: locked without a password, a child with text with it.
+        let locked = try DocumentTextExtractor.extract(fileURL: aesURL, kind: .zip)
+        XCTAssertEqual(locked.children.map { "\($0.path)|\($0.state.rawValue)|\($0.note ?? "")" }, ["sealed.docx|locked|password-protected"])
+        let wrong = try DocumentTextExtractor.extract(fileURL: aesURL, kind: .zip, password: "nope")
+        XCTAssertEqual(wrong.children.first?.state, .locked); XCTAssertEqual(wrong.children.first?.note, "the password did not open it")
+        let opened = try DocumentTextExtractor.extract(fileURL: aesURL, kind: .zip, password: "open-sesame")
+        XCTAssertEqual(opened.children.first?.state, .extracted)
+        XCTAssertTrue(opened.children.first?.text?.contains("sealed clause") == true, opened.children.first?.text ?? "")
+        let materialized = try ContainerTextExtractor.materialize(childPath: "sealed.docx", in: aesURL, kind: .zip, logicalName: "aes.zip", scratch: dir, password: "open-sesame")
+        XCTAssertEqual(try Data(contentsOf: materialized), secret)
+
+        // 3. Office Agile encryption (the EncryptedPackage of a compound file), built from the specification and read back.
+        let agile = try OfficeCryptoUnlocker.encryptAgile(package: secret, password: "open-sesame", spinCount: 500)
+        XCTAssertTrue(OfficeCryptoUnlocker.isEncryptedPackage(agile))
+        XCTAssertThrowsError(try OfficeCryptoUnlocker.decrypt(data: agile, password: "wrong")) { XCTAssertEqual($0 as? ProtectedContentError, .wrongPassword) }
+        XCTAssertEqual(try OfficeCryptoUnlocker.decrypt(data: agile, password: "open-sesame"), secret)
+        let agileURL = dir.appendingPathComponent("sealed.docx"); try agile.write(to: agileURL)
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: agileURL, kind: .docx)) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .encrypted) }
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: agileURL, kind: .docx, password: "wrong")) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .wrongPassword) }
+        let agileText = try DocumentTextExtractor.extract(fileURL: agileURL, kind: .docx, password: "open-sesame")
+        XCTAssertTrue(agileText.text.contains("The sealed clause mentions escrow."), agileText.text)
+        XCTAssertEqual(SourceFormatClassifier.classify(url: agileURL).format, .msg, "an encrypted Office file is a compound file; the attachment path, not the mail import, is where it belongs")
+
+        // 4. A PDF with a user password, through PDFKit.
+        let plainPDF = try XCTUnwrap(PDFDocument(data: Self.pdfData(pages: ["Sealed PDF budget line."])))
+        let lockedPDF = try XCTUnwrap(plainPDF.dataRepresentation(options: [PDFDocumentWriteOption.userPasswordOption: "open-sesame", PDFDocumentWriteOption.ownerPasswordOption: "owner-pw"]))
+        XCTAssertTrue(try XCTUnwrap(PDFDocument(data: lockedPDF)).isLocked)
+
+        // 5. Through the job: locked rows, then Unlock — once for this view only, once stored; a wrong password named.
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        let smimeWas = ProtectedContentPolicy.decryptSMIME
+        ProtectedContentPolicy.decryptSMIME = false
+        defer { ProtectedContentPolicy.decryptSMIME = smimeWas }
+        AttachmentTextIndexJob.installChildReader()
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Sealed files
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <sealed@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see the sealed files
+        \(mimeAttachment("sealed.docx", docxMime, agile))
+        \(mimeAttachment("sealed.zip", "application/zip", aesZip))
+        \(mimeAttachment("sealed.pdf", "application/pdf", lockedPDF))
+        \(mimeAttachment("smime.p7m", "application/pkcs7-mime; smime-type=enveloped-data", Data([0x30, 0x82, 0x01, 0x00, 0x06, 0x09])))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        var rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.state), [.locked, .locked, .locked, .locked], "\(rows.map { ($0.filename, $0.state, $0.note ?? "") })")
+        XCTAssertEqual(rows.map(\.extractor), ["office", "archive", "pdfkit", "smime"])
+        XCTAssertTrue(rows[3].note?.contains("Read S/MIME with your keychain key") == true, "the record says what would open it: \(rows[3].note ?? "")")
+        let summaryValue = await AttachmentTextIndexJob.coverageSummary(store: env.store)
+        let summary = try XCTUnwrap(summaryValue)
+        XCTAssertEqual(AttachmentTextIndexJob.noMatchNotice(summary), "No attachments matched. Searchable text covers 0 of 4 attachments — 4 locked.")
+        func sealed(_ type: String, _ content: String) -> SearchSpec {
+            SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: type, contentMatch: .allWords, content: content)])])
+        }
+        try await expectIDs(env, sealed("docx", "escrow"), [], "locked: nothing is read")
+
+        // Wrong password: named, nothing changes.
+        let wrongOutcome = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "wrong", retain: true)
+        guard case .wrongPassword(let why) = wrongOutcome else { return XCTFail("\(wrongOutcome)") }
+        XCTAssertEqual(why, "the password did not open the document")
+        XCTAssertEqual(try coverage.rows(for: email.id)[0].state, .locked)
+
+        // Right password, this view only: the text comes back, nothing is stored.
+        let viewOnly = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "open-sesame", retain: false)
+        guard case .unlocked(let text, _, let stored) = viewOnly else { return XCTFail("\(viewOnly)") }
+        XCTAssertFalse(stored); XCTAssertTrue(text.contains("sealed clause"), text)
+        XCTAssertEqual(try coverage.rows(for: email.id)[0].state, .locked, "session-only: the record is untouched")
+        try await expectIDs(env, sealed("docx", "escrow"), [], "session-only: not searchable")
+
+        // Right password, stored: searchable like any other attachment, the record says how, the others stay locked.
+        let kept = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "open-sesame", retain: true)
+        guard case .unlocked(_, _, true) = kept else { return XCTFail("\(kept)") }
+        rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.map(\.state), [.extracted, .locked, .locked, .locked], "\(rows.map { ($0.filename, $0.state) })")
+        XCTAssertTrue(rows[0].note?.contains("the password was not kept") == true, rows[0].note ?? "")
+        try await expectIDs(env, sealed("docx", "escrow"), ["Sealed files"], "stored: searchable")
+        let row = await AttachmentTextIndexJob.shared.coverageRow(emailID: email.id, position: 1)
+        XCTAssertEqual(row?.state, .locked)
+
+        // The ZIP: unlocking it stores its member as a child document.
+        let zipKept = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 1, password: "open-sesame", retain: true)
+        guard case .unlocked(_, let children, true) = zipKept else { return XCTFail("\(zipKept)") }
+        XCTAssertEqual(children.map { "\($0.path)|\($0.state.rawValue)" }, ["sealed.docx|extracted"])
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "sealed.zip", contentMatch: .allWords, content: "escrow")])]), ["Sealed files"])
+        // The PDF: PDFKit opens it with the user password.
+        let pdfKept = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 2, password: "open-sesame", retain: true)
+        guard case .unlocked(let pdfText, _, true) = pdfKept else { return XCTFail("\(pdfKept)") }
+        XCTAssertTrue(pdfText.contains("Sealed PDF budget line"), pdfText)
+        XCTAssertEqual(try coverage.rows(for: email.id).map(\.state), [.extracted, .extracted, .extracted, .locked])
+        // S/MIME with the module on but no key: still locked, and the reason changes to the key.
+        ProtectedContentPolicy.decryptSMIME = true
+        let smime = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 3, password: "", retain: false)
+        guard case .wrongPassword(let smimeWhy) = smime else { return XCTFail("\(smime)") }
+        XCTAssertTrue(smimeWhy.contains("keychain"), smimeWhy)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated

@@ -70,12 +70,15 @@ enum OfficeTextExtractor {
     enum ExtractError: Error, LocalizedError, Equatable {
         case notAPackage(String)
         case encrypted
+        /// §13.8 step 5: a password was given and did not open the file.
+        case wrongPassword
         case noTextParts
 
         var errorDescription: String? {
             switch self {
             case .notAPackage(let detail): return "not an Office Open XML package: \(detail)"
             case .encrypted: return "password-protected Office file"
+            case .wrongPassword: return "the password did not open the file"
             case .noTextParts: return "the package holds none of the parts that carry text"
             }
         }

@@ -165,6 +165,8 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     case attachmentOCR
     /// TYPE-05 (owner 2026-11-06): speech in audio and video attachments, recognised on the device.
     case attachmentSpeech
+    /// §13.8 step 5 (COMP-14): S/MIME parts decoded with a private key from the Mac's keychain, offline.
+    case protectedMessageDecrypt
     // Five jobs (FIVE_JOBS_TRACKER.md) — preview until each gate passes.
     /// OPEN-02: PST/OST read message by message in batches instead of all at once.
     case streamingBinaryParsers

@@ -64,6 +64,12 @@ struct MSGWriter {
         return try layoutOLE2(streams: streams, attachmentCount: email.attachments.count)
     }
 
+    /// Any compound file from named streams ("storage/sub/stream" paths) —
+    /// also how an encrypted Office package is assembled for fixtures.
+    static func compoundFile(streams: [(String, Data)]) throws -> Data {
+        try layoutOLE2(streams: streams, attachmentCount: 0)
+    }
+
     /// Messages attached as messages are written as embedded messages this
     /// many levels deep (matches `MSGParser.maxEmbeddedDepth`).
     static let maxEmbeddedDepth = 3

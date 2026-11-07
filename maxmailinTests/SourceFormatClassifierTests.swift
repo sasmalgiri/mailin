@@ -641,7 +641,11 @@ struct ContainerImportTests {
         }
     }
 
-    @Test("Encrypted members and nested archives are skipped by name, never imported")
+    /// TYPE-06 (ee97c52) made one level of nesting part of the import (a
+    /// ZIP inside the ZIP is opened; a second level is skipped and counted —
+    /// `tgzIsFollowedOneLevel_deeperIsCounted`). An encrypted member is still
+    /// refused and counted, never imported.
+    @Test("An encrypted member is refused and counted; a nested archive one level down is followed")
     func encryptedAndNestedAreSkipped() async throws {
         let inner = Self.scratchFile("inner.zip")
         defer { try? FileManager.default.removeItem(at: inner) }
@@ -657,10 +661,11 @@ struct ContainerImportTests {
         ], to: url)
 
         let result = try await Self.importBothWays(url)
-        #expect(result.streamed == 2)
-        #expect(result.subjects == ["Third", "Fourth"])
+        #expect(result.streamed == 4, "the nested ZIP's two messages come in with the plain mbox's two")
+        #expect(result.array == 4)
+        #expect(result.subjects == ["First", "Second", "Third", "Fourth"])
         #expect(result.report.errorCategories["container_member_refused"] == 1, "the encrypted member")
-        #expect(result.report.errorCategories["container_nested_skipped"] == 1)
+        #expect(result.report.errorCategories["container_nested_skipped"] == nil, "one level of nesting is followed; only a second level is skipped")
     }
 
     @Test("A member that would not fit on the scratch volume is refused before a byte is written")
