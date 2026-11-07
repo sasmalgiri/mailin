@@ -392178,6 +392178,134 @@
           }
         }
       }
+    },
+    "Hashes of files inside attached messages: %@ rows checked, %@ repaired, %@ unverifiable, last on %@.%@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hashes der Dateien in angehängten Nachrichten: %1$@ Zeilen geprüft, %2$@ repariert, %3$@ nicht überprüfbar, zuletzt am %4$@.%5$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hashes de los archivos dentro de mensajes adjuntos: %1$@ filas comprobadas, %2$@ reparadas, %3$@ no verificables, por última vez el %4$@.%5$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hachages des fichiers dans les messages joints : %1$@ lignes vérifiées, %2$@ réparées, %3$@ invérifiables, pour la dernière fois le %4$@.%5$@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संलग्न संदेशों के अंदर की फ़ाइलों के हैश: %1$@ पंक्तियाँ जाँची गईं, %2$@ सुधारी गईं, %3$@ सत्यापन योग्य नहीं, अंतिम बार %4$@ को।%5$@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hash dei file dentro i messaggi allegati: %1$@ righe controllate, %2$@ riparate, %3$@ non verificabili, l'ultima volta il %4$@.%5$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添付メッセージ内のファイルのハッシュ：%1$@ 行を確認、%2$@ 行を修復、%3$@ 行は検証不能、最終 %4$@。%5$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부된 메시지 안 파일의 해시: %1$@개 행 확인, %2$@개 수정, %3$@개 검증 불가, 마지막 %4$@.%5$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hashes dos arquivos dentro de mensagens anexadas: %1$@ linhas verificadas, %2$@ reparadas, %3$@ não verificáveis, pela última vez em %4$@.%5$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件邮件内文件的哈希：已检查 %1$@ 行，已修复 %2$@ 行，%3$@ 行无法核验，最近一次为 %4$@。%5$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件郵件內檔案的雜湊：已檢查 %1$@ 行，已修復 %2$@ 行，%3$@ 行無法核驗，最近一次為 %4$@。%5$@"
+          }
+        }
+      }
+    },
+    " Not finished — continues at the next pass." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Nicht abgeschlossen – wird beim nächsten Durchlauf fortgesetzt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " No terminado: continúa en la siguiente pasada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Non terminé — reprend à la prochaine passe."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " पूरा नहीं हुआ — अगले पास में जारी रहेगा।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Non terminato: continua al prossimo passaggio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 未完了 — 次のパスで続行します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 완료되지 않음 — 다음 패스에서 계속됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " Não concluído — continua na próxima passagem."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 未完成 — 将在下一轮继续。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 未完成 — 將在下一輪繼續。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

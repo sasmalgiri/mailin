@@ -122,6 +122,11 @@ struct ArchiveHealthView: View {
                     Text(rebuild).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("health.formats.rebuild")
                 }
+                // Directive §2: the versioned repair of double-hashed children of attached messages, as a record.
+                if let repair = ChildHashRepair.reportText(ChildHashRepair.record()) {
+                    Text(repair).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("health.formats.childHashRepair")
+                }
             }
             .accessibilityIdentifier("health.formats")
 

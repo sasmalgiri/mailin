@@ -4623,6 +4623,171 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertFalse(RawSourceProvenance.label(for: "From: a\r\nSubject: real bytes\r\n\r\nbody").isReconstructed)
     }
 
+    /// Directive §2 "Repair persisted child hashes": a pre-fix archive (double-hashed children of
+    /// attached messages written directly, at the completed version-7 state) is selected by version
+    /// AND kind — a zip's children and a version-8 message are not — recomputed from the preserved
+    /// bytes, corrected atomically with the evidence and the message untouched; an interrupted run
+    /// resumes from its cursor without processing a message twice; missing bytes are marked
+    /// "hash unverifiable", never invented; a second run repairs nothing; the record reads in Health.
+    func testCHILDHASH_versionedRepair_selectsAffectedCompletedRows_recomputes_resumes_marksUnverifiable_idempotent() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        AttachmentTextIndexJob.testSuppressChildHashRepair = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false; AttachmentTextIndexJob.testSuppressChildHashRepair = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        let docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        let terms = Self.docx(body: "Nested terms mention indemnity.", header: "")
+        let plain = Data("Plain file next to the document".utf8)
+        let innerRaw = """
+        From: inner@example.com
+        To: me@example.com
+        Subject: Inner subject
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        Inner body says quorum
+        \(mimeAttachment("terms.docx", docxMime, terms))
+        \(mimeAttachment("plain.txt", "text/plain", plain))
+        --B--
+        """
+        let inner = Data(innerRaw.utf8)
+        let zip = Self.zipPackage([("notes/open.txt", Data("Open words inside the archive.".utf8))])
+        func outer(_ n: Int, attachment: String) -> String {
+            """
+            From sender@example.com Wed Jan 15 10:00:00 2025
+            From: sender@example.com
+            To: user@dest.org
+            Subject: Carrier \(n)
+            Date: Wed, 15 Jan 2025 10:0\(n):00 +0000
+            Message-ID: <carrier-\(n)@t>
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="B"
+
+            --B
+            Content-Type: text/plain
+
+            carrier body \(n)
+            \(attachment)
+            --B--
+            """
+        }
+        var emails: [MBOXParser.RawEmail] = []
+        for n in 1...4 { emails.append(try MBOXParser.processRawMessage(outer(n, attachment: mimeAttachment("inner.eml", "message/rfc822", inner)), senderEmail: "")) }
+        emails.append(try MBOXParser.processRawMessage(outer(5, attachment: mimeAttachment("pack.zip", "application/zip", zip)), senderEmail: ""))
+        emails.append(try MBOXParser.processRawMessage(outer(6, attachment: mimeAttachment("inner.eml", "message/rfc822", inner)), senderEmail: ""))
+        let (a, b, c, d, e, f) = (emails[0].id, emails[1].id, emails[2].id, emails[3].id, emails[4].id, emails[5].id)
+        _ = try await env.store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 6)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        let correctTerms = ExportFolderManifest.hex(terms), correctPlain = ExportFolderManifest.hex(plain)
+        let doubleTerms = ExportFolderManifest.hex(Data(SHA256.hash(data: terms))), doublePlain = ExportFolderManifest.hex(Data(SHA256.hash(data: plain)))
+        let healthyA = try await env.store.attachmentChildren(forEmailID: a)
+        XCTAssertEqual(healthyA.map(\.sha256), [correctTerms, correctPlain], "the fixed reader writes single hashes")
+
+        // The pre-fix archive: every child row of the six messages rewritten with the double hash,
+        // its text documents kept (as a real version-7 archive has them).
+        func doubleHash(_ id: UUID, extractorVersion: Int) async throws {
+            let rows = try await env.store.attachmentChildren(forEmailID: id)
+            var texts: [Int: String?] = [:], states: [Int: SearchDocState] = [:]
+            for row in rows {
+                texts[row.childIndex] = try await env.store.attachmentDocumentText(emailID: id, ordinal: row.ordinal)
+                states[row.childIndex] = .complete
+            }
+            let doubled = rows.map { row -> AttachmentChildRow in
+                let bytes = row.filename == "terms.docx" ? terms : row.filename == "plain.txt" ? plain : Data("Open words inside the archive.".utf8)
+                return AttachmentChildRow(emailID: id, position: row.position, childIndex: row.childIndex, path: row.path, filename: row.filename, kind: row.kind,
+                                          sha256: ExportFolderManifest.hex(Data(SHA256.hash(data: bytes))), bytes: row.bytes, state: row.state, note: row.note)
+            }
+            try await env.store.recordAttachmentChildren(emailID: id, position: 0, children: doubled, texts: texts, states: states, extractorVersion: extractorVersion)
+        }
+        for id in [a, b, c, d, e] { try await doubleHash(id, extractorVersion: 7) }
+        try await doubleHash(f, extractorVersion: 8)
+        // F's parent attachment was read by a (hypothetical) version-8 reader: not the affected path.
+        try await env.store.indexAttachmentSearchDocuments(emailID: f, documents: [AttachmentSearchDocument(ordinal: 0, filename: "inner.eml", text: "inner", state: .complete, extractorVersion: 8, ocr: false)])
+        // D's bytes are gone: no raw source → the attached message cannot be read back.
+        try await env.store.replaceRawSource(emailID: d, rawSource: "")
+        let evidenceBefore = try await env.store.attachmentDocumentText(emailID: a, ordinal: SearchDocKind.childOrdinal(parent: 0, child: 0))
+        XCTAssertTrue(evidenceBefore?.contains("indemnity") ?? false, "the child's text is the evidence to preserve: \(evidenceBefore ?? "nil")")
+        let messageBeforeOptional = try await env.store.fullEmail(id: a)
+        let messageBefore = try XCTUnwrap(messageBeforeOptional)
+        let rowsBeforeE = try await env.store.attachmentChildren(forEmailID: e)
+        let rowsBeforeF = try await env.store.attachmentChildren(forEmailID: f)
+
+        // Selection: completed rows under a MESSAGE attachment at version ≤ 7 — A, B, C, D; not E (zip), not F (v8).
+        let selected = try await env.store.childHashRepairPage(after: nil, maxExtractorVersion: 7, limit: 100)
+        XCTAssertEqual(Set(selected), [a, b, c, d])
+        XCTAssertEqual(selected, selected.sorted { $0.uuidString < $1.uuidString }, "in id order, so a cursor can resume")
+
+        // Interrupted after one message; resumed; each message processed exactly once.
+        let suite = "childhash-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = await ChildHashRepair.run(store: env.store, defaults: defaults, stopAfterMessages: 1)
+        XCTAssertEqual(first.messages, 1); XCTAssertFalse(first.completed); XCTAssertFalse(first.alreadyDone)
+        let partial = try XCTUnwrap(ChildHashRepair.record(defaults: defaults))
+        XCTAssertFalse(partial.completed); XCTAssertEqual(partial.cursor, selected[0]); XCTAssertEqual(partial.messages, 1)
+        let second = await ChildHashRepair.run(store: env.store, defaults: defaults)
+        XCTAssertEqual(second.messages, 3, "the three that were left, not four: no message is processed twice")
+        XCTAssertTrue(second.completed)
+        let record = try XCTUnwrap(ChildHashRepair.record(defaults: defaults))
+        XCTAssertTrue(record.completed)
+        XCTAssertEqual(record.messages, 4)
+        XCTAssertEqual(record.rowsChecked, 6, "A, B, C: two children each")
+        XCTAssertEqual(record.rowsRepaired, 6)
+        XCTAssertEqual(record.rowsUnverifiable, 2, "D's two children: bytes not available")
+        XCTAssertEqual(record.rowsFailed, 0)
+        XCTAssertEqual(first.rowsRepaired + second.rowsRepaired, 6)
+        XCTAssertEqual(record.storePath, env.store.storeDirectory.path)
+
+        // Corrected from the bytes; evidence and the message untouched.
+        for id in [a, b, c] {
+            let rows = try await env.store.attachmentChildren(forEmailID: id)
+            XCTAssertEqual(rows.map(\.sha256), [correctTerms, correctPlain], "\(id)")
+            XCTAssertEqual(rows.map(\.note), [nil, nil])
+        }
+        let evidenceAfter = try await env.store.attachmentDocumentText(emailID: a, ordinal: SearchDocKind.childOrdinal(parent: 0, child: 0))
+        XCTAssertEqual(evidenceAfter, evidenceBefore, "the child's text documents are not rewritten")
+        let messageAfterOptional = try await env.store.fullEmail(id: a)
+        let messageAfter = try XCTUnwrap(messageAfterOptional)
+        XCTAssertEqual(messageAfter.id, messageBefore.id); XCTAssertEqual(messageAfter.rawSource, messageBefore.rawSource)
+        XCTAssertEqual(messageAfter.headers, messageBefore.headers); XCTAssertEqual(messageAfter.attachments.map(\.filename), messageBefore.attachments.map(\.filename))
+        // Missing bytes: marked, not invented.
+        let rowsD = try await env.store.attachmentChildren(forEmailID: d)
+        XCTAssertEqual(rowsD.map(\.sha256), [doubleTerms, doublePlain], "no hash was invented for D")
+        XCTAssertTrue(rowsD.allSatisfy { $0.note?.contains("hash unverifiable") ?? false }, "\(rowsD.map { $0.note ?? "nil" })")
+        // Not selected: untouched.
+        let rowsAfterE = try await env.store.attachmentChildren(forEmailID: e)
+        XCTAssertEqual(rowsAfterE, rowsBeforeE, "a zip's children were never double-hashed")
+        let rowsAfterF = try await env.store.attachmentChildren(forEmailID: f)
+        XCTAssertEqual(rowsAfterF, rowsBeforeF, "a version-8 row is outside the affected path")
+        // Second run: nothing to do.
+        let third = await ChildHashRepair.run(store: env.store, defaults: defaults)
+        XCTAssertTrue(third.alreadyDone); XCTAssertEqual(third.rowsRepaired, 0); XCTAssertEqual(third.messages, 0)
+        // Even from a blank record (another profile), the data is already right: zero repaired, D still marked once.
+        let otherSuite = "childhash-\(UUID().uuidString)"
+        let otherDefaults = try XCTUnwrap(UserDefaults(suiteName: otherSuite))
+        defer { otherDefaults.removePersistentDomain(forName: otherSuite) }
+        let fourth = await ChildHashRepair.run(store: env.store, defaults: otherDefaults)
+        XCTAssertEqual(fourth.rowsChecked, 6); XCTAssertEqual(fourth.rowsRepaired, 0); XCTAssertEqual(fourth.rowsUnverifiable, 2); XCTAssertTrue(fourth.completed)
+        let rowsDAgain = try await env.store.attachmentChildren(forEmailID: d)
+        XCTAssertEqual(rowsDAgain, rowsD, "marking is idempotent")
+        // The record reads in Health.
+        let text = try XCTUnwrap(ChildHashRepair.reportText(record))
+        XCTAssertTrue(text.contains("6 rows checked") && text.contains("6 repaired") && text.contains("2 unverifiable"), text)
+        XCTAssertNil(ChildHashRepair.reportText(nil))
+    }
+
     /// WP4 (handoff 7481852): one registry says what is read and on what
     /// evidence; every source format and document kind is in it, every
     /// "not implemented" row says so, and the public table is generated

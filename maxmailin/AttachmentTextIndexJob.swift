@@ -43,6 +43,8 @@ final class AttachmentTextIndexJob {
     static var testStoreOverride: SQLiteEmailStore?
     /// Test seam: the app's own launch/import kicks stay out while a test drives passes itself.
     static var testSuppressKicks = false
+    /// Test seam: a test that drives `ChildHashRepair` itself keeps the pass from running it first.
+    static var testSuppressChildHashRepair = false
     private var store: SQLiteEmailStore { Self.testStoreOverride ?? .shared }
 
     private var task: Task<Void, Never>?
@@ -216,6 +218,13 @@ final class AttachmentTextIndexJob {
                 if requeued > 0 { Self.logger.info("attachment index: \(requeued) email(s) re-queued for extractor v\(Self.extractorVersion)") }
                 // §13.3 (11): the upgrade's re-read is a visible record, not only a log line.
                 Self.recordRebuild(requeued: requeued)
+            }
+            // Directive §2 "Repair persisted child hashes": the versioned pass over completed
+            // version-7 rows whose attached-message children were double-hashed. Runs once per
+            // archive and version, resumes from its cursor, and is a no-op afterwards.
+            if !Self.testSuppressChildHashRepair {
+                let repair = await ChildHashRepair.run(store: store)
+                if !repair.alreadyDone { Self.logger.info("child hash repair: \(repair.line, privacy: .public)") }
             }
             // FIND-07: attachments indexed before the chunk index existed go
             // back on the work list so their whole text is indexed too.
