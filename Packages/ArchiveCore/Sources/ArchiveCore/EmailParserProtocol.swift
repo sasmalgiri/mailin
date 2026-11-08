@@ -46,7 +46,9 @@ struct ParserFactory {
         // mail, are encrypted, or are themselves containers are skipped; the
         // array path has no report to count them in, so they are logged.
         if classification.format.isContainer {
-            let steps = try containerSteps(fileURL, format: classification.format)
+            let listing = try containerListing(fileURL, format: classification.format)
+            let steps = listing.steps
+            let wrapper = listing.wrapper   // IPAD-01: member names carry the folders
             let scratch = try containerScratchDirectory()
             defer { try? FileManager.default.removeItem(at: scratch) }
             var all: [MBOXParser.RawEmail] = []
@@ -59,9 +61,10 @@ struct ParserFactory {
                     continue
                 case .mail:
                     sawMail = true
-                    all += try parse(fileURL: dest, senderEmail: senderEmail, onProgress: { fraction in
+                    all += stamp(try parse(fileURL: dest, senderEmail: senderEmail, onProgress: { fraction in
                         onProgress?((Double(index) + fraction) / Double(steps.count))
-                    }, nestedContainerAllowed: false)
+                    }, nestedContainerAllowed: false),
+                    folder: SourceFormatClassifier.containerFolderPath(memberName: step.name, wrapper: wrapper))
                 }
             }
             guard sawMail else {
@@ -126,6 +129,28 @@ struct ParserFactory {
     /// OS junk (`__MACOSX/`, `.DS_Store`, …) are dropped here; everything else
     /// is extracted and judged on its bytes.
     static func containerSteps(_ url: URL, format: SourceFormat) throws -> [ContainerStep] {
+        try containerListing(url, format: format).steps
+    }
+
+    /// IPAD-01: a container's extractable members and the names of its
+    /// directory entries. The members are extracted one at a time to a flat
+    /// scratch file, so their names (and the directory entries, which carry an
+    /// empty mailbox package) are the only record of the folder layout.
+    struct ContainerListing {
+        var steps: [ContainerStep]
+        var directories: [String] = []
+
+        /// The single top-level folder the members sit in (see `SourceFormatClassifier.containerWrapper`).
+        var wrapper: String? {
+            SourceFormatClassifier.containerWrapper(files: steps.map(\.name), directories: directories)
+        }
+        /// The mailbox packages the names declare, empty ones included.
+        func declaredFolders(wrapper: String?) -> [String] {
+            SourceFormatClassifier.containerDeclaredFolders(files: steps.map(\.name), directories: directories, wrapper: wrapper)
+        }
+    }
+
+    static func containerListing(_ url: URL, format: SourceFormat) throws -> ContainerListing {
         switch format {
         case .gzip:
             // gzip carries a single payload and no reliable member name; use
@@ -133,14 +158,15 @@ struct ParserFactory {
             let name = url.pathExtension.lowercased() == "gz" || url.pathExtension.lowercased() == "gzip"
                 ? url.deletingPathExtension().lastPathComponent
                 : url.lastPathComponent
-            return [ContainerStep(name: name) { dest in try ZIPArchiveReader.gunzip(url, to: dest) }]
+            return ContainerListing(steps: [ContainerStep(name: name) { dest in try ZIPArchiveReader.gunzip(url, to: dest) }])
         case .zip:
             // Directive §6: a volume of a spanned set is read with the
             // other volumes in the same folder; a member on a missing
             // volume is refused and counted (SplitVolumeError), the rest import.
             let set = SplitVolumeSet.zipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
             let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
-            return try ZIPArchiveReader.members(source: source)
+            let all = try ZIPArchiveReader.members(source: source)
+            return ContainerListing(steps: all
                 .filter { !$0.isDirectory && !$0.isJunk }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
@@ -150,20 +176,23 @@ struct ParserFactory {
                         }
                         try ZIPArchiveReader.extract(member, source: source, to: dest)
                     }
-                }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk }.map(\.name))
         case .sevenZip:
             // One reader per archive: a solid folder is decoded once, in order.
             let set = SplitVolumeSet.sevenZipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
             let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
             let reader = try SevenZipReader(source: source)
-            return reader.members
+            let all = reader.members
+            return ContainerListing(steps: all
                 .filter { !$0.isDirectory && !$0.isJunk && !$0.isAnti }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         if member.isSymlink { throw SevenZipReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
                         try reader.extract(member, to: dest)
                     }
-                }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk && !$0.isAnti }.map(\.name))
         case .rar:
             // GAP-RAR: stored and compressed members (RAR 2.9–4.x, RAR 5.0,
             // solid included) are imported; a volume of a set is read with
@@ -172,26 +201,30 @@ struct ParserFactory {
             // missing volume are refused by name and counted.
             let extractor = try RARReader.Extractor(url: url, logicalName: url.lastPathComponent,
                                                     siblings: SplitVolumeSet.directorySiblings(of: url))
-            return extractor.archive.members
+            let all = extractor.archive.members
+            return ContainerListing(steps: all
                 .filter { !$0.isDirectory && !$0.isJunk }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         if member.isSymlink { throw RARReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
                         try extractor.extract(member, to: dest)
                     }
-                }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk }.map(\.name))
         case .tar:
             // TYPE-06: regular files only; directories, links and OS junk
             // carry no mail and are not extracted.
-            return try TARReader.members(of: url)
+            let all = try TARReader.members(of: url)
+            return ContainerListing(steps: all
                 .filter { $0.isRegularFile && !$0.isDirectory && !$0.isJunk }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         try TARReader.extract(member, from: url, to: dest)
                     }
-                }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk }.map(\.name))
         default:
-            return []
+            return ContainerListing(steps: [])
         }
     }
 
@@ -374,12 +407,17 @@ struct ParserFactory {
         // Refused / non-mail / nested members are counted in the report's
         // categories (not as failed messages — they are not messages).
         if classification.format.isContainer {
-            let steps = try containerSteps(fileURL, format: classification.format)
+            let listing = try containerListing(fileURL, format: classification.format)
+            let steps = listing.steps
+            // IPAD-01: each member is extracted to a flat scratch file, so its
+            // folder comes from its name in the archive; mailbox packages the
+            // names list are declared even when empty (same as the unzipped tree).
+            let wrapper = listing.wrapper
             let scratch = try containerScratchDirectory()
             defer { try? FileManager.default.removeItem(at: scratch) }
             var total = 0, parsed = 0, failed = 0
             var categories: [String: Int] = [:]
-            var declaredFolders = Set<String>()
+            var declaredFolders = Set(listing.declaredFolders(wrapper: wrapper))
             var sawMail = false
             for (index, step) in steps.enumerated() {
                 try Task.checkCancellation()
@@ -391,6 +429,8 @@ struct ParserFactory {
                 case .nestedContainer: categories["container_nested_skipped", default: 0] += 1
                 case .mail:
                     sawMail = true
+                    let folder = SourceFormatClassifier.containerFolderPath(memberName: step.name, wrapper: wrapper)
+                    if let folder { declaredFolders.insert(folder) }
                     let report = try await parseStreamingCallback(
                         fileURL: dest,
                         senderEmail: senderEmail,
@@ -402,7 +442,7 @@ struct ParserFactory {
                             onProgress?((Double(index) + fraction) / Double(steps.count))
                         },
                         nestedContainerAllowed: false,
-                        onBatch: onBatch
+                        onBatch: { batch in try await onBatch(Self.stamp(batch, folder: folder)) }
                     )
                     total += report.totalMessages
                     parsed += report.successfullyParsed

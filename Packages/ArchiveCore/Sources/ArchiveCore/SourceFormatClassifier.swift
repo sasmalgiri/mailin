@@ -473,6 +473,17 @@ enum SourceFormatClassifier {
                 extensionHint: ext, nameContentMismatch: false, warning: nil)
         }
 
+        // IPAD-01: Apple Mail's "Export Mailbox…" of several mailboxes writes a
+        // plain folder holding one .mbox package per mailbox (nested ones inside
+        // their parent's package, or in a plain parent folder). Classified as
+        // "unknown" before, so the unzipped export could not be imported at all.
+        if hasMailboxPackage(under: url) {
+            return SourceClassification(
+                format: .appleMailMailbox,
+                evidence: "folder of Apple Mail mailbox packages (.mbox with an `mbox` file)",
+                extensionHint: ext, nameContentMismatch: false, warning: nil)
+        }
+
         // Plain folders of individual messages — what a Mail "Save As" or an
         // unpacked export usually produces. Routing these as "unknown" made
         // mailin reject message sets it can read file by file.
@@ -575,6 +586,22 @@ enum SourceFormatClassifier {
             out.declaredFolders = Array(Set(out.declaredFolders)).sorted()
             return out
 
+        case .appleMailMailbox:
+            // IPAD-01: every mailbox package below the root is a folder, empty ones too.
+            var out = DirectoryExpansion(members: expandLegacy(url, format: format))
+            var declared = Set<String>()
+            if url.lastPathComponent.lowercased().hasSuffix(".mbox"),
+               let own = folderPath(member: url.appendingPathComponent("mbox"), root: url, format: .appleMailMailbox) {
+                declared.insert(own)
+            }
+            for package in mailboxPackages(under: url) {
+                if let folder = folderPath(member: package.appendingPathComponent("mbox"), root: url, format: .appleMailMailbox) {
+                    declared.insert(folder)
+                }
+            }
+            out.declaredFolders = declared.sorted()
+            return out
+
         case .emlFolder:
             var out = DirectoryExpansion()
             out.members = emlFiles(under: url)
@@ -629,9 +656,16 @@ enum SourceFormatClassifier {
         case .appleMailMailbox:
             // Apple Mail keeps the mbox at the package root in some exports
             // and under `Data/…/Messages` in others. Take the root one when
-            // it exists, otherwise every `mbox` file in the package.
+            // it exists — with the `mbox` of every mailbox package nested in
+            // it (IPAD-01: a Work.mbox holding Clients.mbox read only Work) —
+            // otherwise every `mbox` file in the package.
             let root = url.appendingPathComponent("mbox")
-            if fm.fileExists(atPath: root.path) { return [root] }
+            if fm.fileExists(atPath: root.path) {
+                let nested = mailboxPackages(under: url)
+                    .map { $0.appendingPathComponent("mbox") }
+                    .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true }
+                return [root] + nested
+            }
             guard let walker = fm.enumerator(at: url,
                                              includingPropertiesForKeys: [.isRegularFileKey],
                                              options: [.skipsHiddenFiles]) else { return [] }
@@ -660,7 +694,21 @@ enum SourceFormatClassifier {
     /// path relative to the root. Nil for everything else.
     static func folderPath(member: URL, root: URL, format: SourceFormat) -> String? {
         switch format {
-        case .appleMailMailbox, .appleMailLibrary:
+        case .appleMailMailbox:
+            // IPAD-01: the root's own .mbox chain (as before), then the path below
+            // the root: plain folders above the first package are kept
+            // ("Work/Clients.mbox" → "Work/Clients"); inside a package only
+            // `.mbox` names are mailboxes (`Data/…` is Mail's storage, not a folder).
+            let rootChain = root.standardizedFileURL.pathComponents
+                .filter { $0.lowercased().hasSuffix(".mbox") }
+                .map { String($0.dropLast(5)) }
+                .filter { !$0.isEmpty }
+            guard let below = relativeComponents(of: member.deletingLastPathComponent(), below: root) else {
+                return rootChain.isEmpty ? nil : rootChain.joined(separator: "/")
+            }
+            let parts = rootChain + mailboxPathComponents(below, insidePackage: root.lastPathComponent.lowercased().hasSuffix(".mbox"))
+            return parts.isEmpty ? nil : parts.joined(separator: "/")
+        case .appleMailLibrary:
             let names = member.standardizedFileURL.pathComponents
                 .filter { $0.lowercased().hasSuffix(".mbox") }
                 .map { String($0.dropLast(5)) }
@@ -678,6 +726,116 @@ enum SourceFormatClassifier {
         default:
             return nil
         }
+    }
+
+    /// IPAD-01: a path through an Apple Mail export, as mailbox names: `.mbox`
+    /// names lose the suffix; plain folders count until the first package;
+    /// inside a package only nested `.mbox` packages are mailboxes.
+    static func mailboxPathComponents(_ components: [String], insidePackage: Bool = false) -> [String] {
+        var out: [String] = []
+        var inside = insidePackage
+        for name in components {
+            if name.lowercased().hasSuffix(".mbox") {
+                let base = String(name.dropLast(5))
+                if !base.isEmpty { out.append(base) }
+                inside = true
+            } else if !inside {
+                out.append(name)
+            }
+        }
+        return out
+    }
+
+    /// Directories named `*.mbox` holding an `mbox` file (Apple Mail mailbox
+    /// packages) anywhere below `url`, sorted by path; hidden entries skipped.
+    static func mailboxPackages(under url: URL) -> [URL] {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return [] }
+        var found: [URL] = []
+        for case let child as URL in walker where child.lastPathComponent.lowercased().hasSuffix(".mbox") {
+            guard (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+                  fm.fileExists(atPath: child.appendingPathComponent("mbox").path) else { continue }
+            found.append(child)
+        }
+        return found.sorted { $0.path < $1.path }
+    }
+
+    /// True when some directory below `url` is an Apple Mail mailbox package
+    /// (stops at the first one: an existence test, not a limit).
+    static func hasMailboxPackage(under url: URL) -> Bool {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return false }
+        for case let child as URL in walker where child.lastPathComponent.lowercased().hasSuffix(".mbox") {
+            if (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+               fm.fileExists(atPath: child.appendingPathComponent("mbox").path) { return true }
+        }
+        return false
+    }
+
+    // MARK: - Container members (IPAD-01)
+
+    // A container is read one member at a time into a flat scratch file, so
+    // the member's path inside the archive is the only record of its mailbox.
+    // These rules give a member the folder the unzipped tree would give it.
+
+    /// The single top-level folder every member sits in (Finder's Compress
+    /// wraps the folder it compresses), unless that folder is itself a
+    /// mailbox package. Importing the unzipped folder never makes its root a
+    /// mailbox of an Apple Mail export either.
+    static func containerWrapper(files: [String], directories: [String]) -> String? {
+        func parts(_ name: String) -> [String] { name.split(separator: "/", omittingEmptySubsequences: true).map(String.init) }
+        let fileParts = files.map(parts)
+        guard let first = fileParts.first?.first,
+              !first.lowercased().hasSuffix(".mbox"),
+              fileParts.allSatisfy({ $0.count >= 2 && $0[0] == first }),
+              directories.map(parts).allSatisfy({ $0.first == first }) else { return nil }
+        return first
+    }
+
+    /// The folder a container member belongs to, or nil (flat members and
+    /// stand-alone mailbox, PST, OLM or nested-archive files keep what their
+    /// own parser gives, as before). Apple Mail packages: the mailbox path
+    /// ("Work.mbox/Clients.mbox/mbox" → "Work/Clients"). Maildir members: the
+    /// mailbox (Maildir++ names decoded). `.eml` files: their directory. A
+    /// member directly in the stripped wrapper takes the wrapper's name, as the
+    /// unzipped Maildir or .eml folder names its root.
+    static func containerFolderPath(memberName: String, wrapper: String?) -> String? {
+        var dirs = memberName.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard let file = dirs.popLast() else { return nil }
+        var rootName: String? = nil
+        if let wrapper, dirs.first == wrapper { dirs.removeFirst(); rootName = wrapper }
+        func joined(_ parts: [String]) -> String? { parts.isEmpty ? rootName : parts.joined(separator: "/") }
+
+        if dirs.contains(where: { $0.lowercased().hasSuffix(".mbox") }) {
+            let parts = mailboxPathComponents(dirs)
+            return parts.isEmpty ? nil : parts.joined(separator: "/")
+        }
+        if file == "mbox" { return joined(dirs) }            // a package whose suffix was lost
+        if let index = dirs.firstIndex(where: { maildirInternalNames.contains($0) }) {
+            let box = dirs[..<index].flatMap { name -> [String] in
+                name.hasPrefix(".") ? name.split(separator: ".", omittingEmptySubsequences: true).map(String.init) : [name]
+            }
+            return joined(box)
+        }
+        if (file as NSString).pathExtension.lowercased() == "eml" { return joined(dirs) }
+        return nil
+    }
+
+    /// Every mailbox package a container's member list names — including a
+    /// package whose `mbox` is empty or that holds only Info.plist — so an
+    /// empty mailbox is declared (FOLD-02), as the unzipped folder declares it.
+    static func containerDeclaredFolders(files: [String], directories: [String], wrapper: String?) -> [String] {
+        var out = Set<String>()
+        func add(_ components: [String]) {
+            var dirs = components
+            if let wrapper, dirs.first == wrapper { dirs.removeFirst() }
+            guard let last = dirs.lastIndex(where: { $0.lowercased().hasSuffix(".mbox") }) else { return }
+            let parts = mailboxPathComponents(Array(dirs[...last]))
+            if !parts.isEmpty { out.insert(parts.joined(separator: "/")) }
+        }
+        for name in files { add(Array(name.split(separator: "/", omittingEmptySubsequences: true).map(String.init).dropLast())) }
+        for name in directories { add(name.split(separator: "/", omittingEmptySubsequences: true).map(String.init)) }
+        return out.sorted()
     }
 
     /// True when `format` needs `expand(_:format:)` before a parser can run.
