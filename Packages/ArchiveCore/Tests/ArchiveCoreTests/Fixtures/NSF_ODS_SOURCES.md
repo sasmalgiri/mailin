@@ -43,3 +43,37 @@ Scratch Python scripts (not shipped) scanned the raw bytes without using the ODS
 76 bucket signatures at 256-byte-aligned offsets. The prototype's reassembled messages were also parsed with
 Python's `email` package (MIME tree intact apart from the damaged bytes). The Swift tests repeat the checks
 that need no external tool.
+
+## R6 additions (2026-11-09): folders, Huffman objects, descriptor pages, sealed mail
+
+Code: `Sources/ArchiveCore/NSFODSFolders.swift` (`NotesFolders`, `NotesHuffman`), reader/parser changes.
+Tests: `NSFODSReaderTests` (sample) and `NSFODSDepthTests` (a database built byte by byte).
+
+Neither the folder ID table nor the attachment Huffman layout is described in the libnsfdb notes or the
+C API pages; both were worked out on the sample with scratch Python (not shipped) and are accepted only
+where the file checks itself:
+
+- **Folders.** 11 view-class design notes have "F" in `$Flags`; each has `$FolderIDTable` = object
+  descriptor (WORD 0x000A, DWORD RRV ID). The object record (LSIG 0x0007, 22-byte header) holds
+  `DWORD 4 · WORD ID count · WORD runs · WORD flags · TIMEDATE · runs of (BYTE extra, DWORD first ID)`;
+  a run is first, first+4, … first+4×extra. Every table's run sum equals its count (Inbox 343 in 6 runs,
+  Parus 24 in 2, ($EML) 8 in 4, eight empty). Independent check: the Inbox's `$FolderObject` /
+  `$FolderObject1` records hold 36-byte entries ending (UNID 16 bytes, note ID 4 bytes); all 45 mail notes
+  appear there with a UNID equal to the note header's OID (bytes 10–26), the same 45 the ID table gives.
+  Most table IDs (and most folder-object entries) are deleted notes (deletion stubs) — only live mail notes
+  get folders. The folder-object page layout itself (gaps, free space) is not decoded.
+- **Huffman** (FILEOBJECT CompressionType 1; libnsfdb's compression table names type 1 "Huffman").
+  `DWORD checksum · WORD tree bytes · tree as Int16 pairs (node 0 root, −k → pair k, 0–255 byte, 256 end)
+  · code bits MSB-first, bit 1 = first of the pair`. The sample's three objects (design note 0xDAA,
+  `dolcontroldefault.bmp`, `dolgooffline.bmp`, `dolgoonline.bmp`) decode to exactly 694/694/630 bytes, each
+  starts "BM" with that file size, the checksum equals the byte sum, and the stream is used to its last byte.
+- **LZ1** (type 2): libnsfdb says only "introduced in Notes 6"; a web search (2026-11-09) found no format
+  description or decoder, and the sample has no LZ1 object — named, not decoded.
+- **Objects longer than one record**: none in the sample (all 42 mail attachment objects are one record);
+  no source describes a continuation — named with "this record holds X of Y bytes".
+- **Several bucket descriptor pages**: the sample has one. Pages are taken as consecutive 8,206-byte
+  (summary) / 8,198-byte (non-summary) blocks; the per-page capacity is not stated anywhere, so a capacity
+  (570 physical first, then group-based figures) is accepted only when every descriptor points at a bucket
+  signature; otherwise the database is refused with that reason. Synthetic database only.
+- **Sealed mail**: a note with `$Seal`/`$SealData` (types 0x0009/0x000A/0x001F); its items flagged
+  ITEM_SEAL (0x0002) are ciphertext and are named "locked", never decoded as text. Synthetic only.

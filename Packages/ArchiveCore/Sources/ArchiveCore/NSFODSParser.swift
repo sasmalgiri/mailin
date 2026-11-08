@@ -19,6 +19,7 @@ enum NSFODSParser {
     struct Result {
         var emails: [MBOXParser.RawEmail]
         var inventory: NSFODSReader.Inventory
+        var declaredFolders: [String] = []
     }
 
     static func parse(fileURL: URL, senderEmail: String, onProgress: ((Double) -> Void)? = nil) throws -> [MBOXParser.RawEmail] {
@@ -28,8 +29,10 @@ enum NSFODSParser {
     /// Every mail note as a message plus the inventory of everything else.
     static func read(fileURL: URL, senderEmail: String, onProgress: ((Double) -> Void)? = nil) throws -> Result {
         var emails: [MBOXParser.RawEmail] = []
-        let inventory = try walk(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress) { emails.append($0) }
-        return Result(emails: emails, inventory: inventory)
+        var declared: [String] = []
+        let inventory = try walk(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress,
+                                 declared: &declared) { emails.append($0) }
+        return Result(emails: emails, inventory: inventory, declaredFolders: declared)
     }
 
     /// OPEN-02: one note at a time from the mapped file, handed out in batches.
@@ -48,6 +51,8 @@ enum NSFODSParser {
     struct Streamed {
         let emitted: Int
         let inventory: NSFODSReader.Inventory
+        /// FOLD-02: the database's folders, empty ones included.
+        var declaredFolders: [String] = []
     }
 
     static func parseStreamingWithInventory(
@@ -60,14 +65,15 @@ enum NSFODSParser {
         let size = max(1, batchSize)
         let data = try mapped(fileURL)
         let reader = try NSFODSReader(data: data)
-        var inventory = NSFODSReader.Inventory()
+        let folders = NotesFolders.read(reader)
+        var inventory = start(reader, folders)
         var cursor = NSFODSReader.Cursor()
         var batch: [MBOXParser.RawEmail] = []
         batch.reserveCapacity(size)
         var emitted = 0
         while let record = reader.next(&cursor) {
             try Task.checkCancellation()
-            if let email = account(record, reader: reader, senderEmail: senderEmail, inventory: &inventory) {
+            if let email = account(record, reader: reader, folders: folders, senderEmail: senderEmail, inventory: &inventory) {
                 batch.append(email)
                 if batch.count >= size {
                     try await onBatch(batch)
@@ -83,7 +89,20 @@ enum NSFODSParser {
         }
         onProgress?(1)
         logger.info("NSF ODS: streamed \(emitted) of \(inventory.mailNotes) mail notes")
-        return Streamed(emitted: emitted, inventory: inventory)
+        return Streamed(emitted: emitted, inventory: inventory, declaredFolders: folders.declared)
+    }
+
+    /// The inventory's database-level counts, before any note is read.
+    private static func start(_ reader: NSFODSReader, _ folders: NotesFolders.Directory) -> NSFODSReader.Inventory {
+        var inventory = NSFODSReader.Inventory()
+        inventory.odsVersion = reader.odsVersion
+        inventory.rrvBuckets = reader.rrvBucketCount
+        inventory.summaryDescriptorPages = reader.summaryDescriptorPages
+        inventory.nonSummaryDescriptorPages = reader.nonSummaryDescriptorPages
+        inventory.folders = folders.folders.count + folders.unread.count
+        inventory.foldersRead = folders.folders.count
+        inventory.foldersUnread = folders.unread
+        return inventory
     }
 
     /// The import report: every mail note is a message; the ones that could
@@ -95,24 +114,30 @@ enum NSFODSParser {
         if !inv.mailFailed.isEmpty { categories["nsf_mail_note_unreadable"] = inv.mailFailed.count }
         if !inv.unplacedDocuments.isEmpty { categories["nsf_document_items_unplaced"] = inv.unplacedDocuments.count }
         let failed = inv.mailFailed.count + inv.unplacedDocuments.count
-        return MBOXParser.ParseRecoveryReport(
+        var report = MBOXParser.ParseRecoveryReport(
             totalMessages: streamed.emitted + failed, successfullyParsed: streamed.emitted,
             failed: failed, errorCategories: categories)
+        report.declaredFolders = streamed.declaredFolders
+        return report
     }
 
     /// The inventory alone (still builds each message, to count failures honestly).
     static func inventory(fileURL: URL) throws -> NSFODSReader.Inventory {
-        try walk(fileURL: fileURL, senderEmail: "", onProgress: nil) { _ in }
+        var declared: [String] = []
+        return try walk(fileURL: fileURL, senderEmail: "", onProgress: nil, declared: &declared) { _ in }
     }
 
     private static func walk(fileURL: URL, senderEmail: String, onProgress: ((Double) -> Void)?,
+                             declared: inout [String],
                              emit: (MBOXParser.RawEmail) -> Void) throws -> NSFODSReader.Inventory {
         let data = try mapped(fileURL)
         let reader = try NSFODSReader(data: data)
-        var inventory = NSFODSReader.Inventory()
+        let folders = NotesFolders.read(reader)
+        declared = folders.declared
+        var inventory = start(reader, folders)
         var cursor = NSFODSReader.Cursor()
         while let record = reader.next(&cursor) {
-            if let email = account(record, reader: reader, senderEmail: senderEmail, inventory: &inventory) { emit(email) }
+            if let email = account(record, reader: reader, folders: folders, senderEmail: senderEmail, inventory: &inventory) { emit(email) }
             if cursor.index % 64 == 0 { onProgress?(Double(cursor.index) / Double(max(reader.entryCount, 1))) }
         }
         onProgress?(1)
@@ -131,10 +156,8 @@ enum NSFODSParser {
 
     // MARK: - One record
 
-    private static func account(_ record: NSFODSReader.Record, reader: NSFODSReader, senderEmail: String,
-                                inventory: inout NSFODSReader.Inventory) -> MBOXParser.RawEmail? {
-        inventory.odsVersion = reader.odsVersion
-        inventory.rrvBuckets = reader.rrvBucketCount
+    private static func account(_ record: NSFODSReader.Record, reader: NSFODSReader, folders: NotesFolders.Directory,
+                                senderEmail: String, inventory: inout NSFODSReader.Inventory) -> MBOXParser.RawEmail? {
         switch record {
         case .object:
             inventory.rrvEntries += 1; inventory.objects += 1
@@ -157,7 +180,15 @@ enum NSFODSParser {
             }
             inventory.mailNotes += 1
             do {
-                let email = try message(note, reader: reader, senderEmail: senderEmail, inventory: &inventory)
+                var email = try message(note, reader: reader, senderEmail: senderEmail, inventory: &inventory)
+                let paths = folders.paths(for: note.id)
+                if let first = paths.first {
+                    email.folderPath = first
+                    for extra in paths.dropFirst() where !email.tags.contains(extra) { email.tags.append(extra) }
+                    inventory.mailInFolders += 1
+                } else {
+                    inventory.mailWithoutFolder += 1
+                }
                 inventory.mailRead += 1
                 return email
             } catch {
@@ -208,23 +239,70 @@ enum NSFODSParser {
             if 36 + nameLength != v.count {
                 notes.append("NSF ODS: file object \(name) declares a \(nameLength)-byte name in a \(v.count - 36)-byte field; the stored bytes were used")
             }
-            guard compression == 0 else {
-                inventory.attachmentObjectsNotDecoded += 1
-                return FileRef(name: name, bytes: nil, reason: compression == 1 ? "Huffman-compressed" : "LZ1-compressed")
+            let (bytes, reason) = fileBytes(reader.objectPayload(rrvID: rrvID), compression: compression, size: size)
+            if let bytes {
+                inventory.attachmentObjectsDecoded += 1
+                if compression == 1 { inventory.attachmentObjectsHuffman += 1 }
+                return FileRef(name: name, bytes: bytes, reason: nil)
             }
-            guard let off = reader.object(rrvID: rrvID), NSFODSReader.u16(reader.data, off) == 0x0007,
-                  Int(NSFODSReader.u32(reader.data, off + 2)) == 22 + size, off + 22 + size <= reader.data.count else {
-                inventory.attachmentObjectsNotDecoded += 1
-                return FileRef(name: name, bytes: nil, reason: "object not stored as one record")
-            }
-            inventory.attachmentObjectsDecoded += 1
-            return FileRef(name: name, bytes: reader.data.subdata(in: (off + 22)..<(off + 22 + size)), reason: nil)
+            inventory.attachmentObjectsNotDecoded += 1
+            return FileRef(name: name, bytes: nil, reason: reason)
         }
     }
 
-    private static func message(_ note: NSFODSReader.Note, reader: NSFODSReader, senderEmail: String,
+    /// A FILEOBJECT's bytes from its object record, or why not.
+    static func fileBytes(_ payload: Data?, compression: UInt16, size: Int) -> (Data?, String?) {
+        guard let payload else { return (nil, "its object record is not in the file") }
+        switch compression {
+        case 0:
+            guard payload.count >= size else {
+                return (nil, "stored in more than one record — this record holds \(payload.count) of \(size) bytes; how Notes chains the rest is not described in any public source and the sample has no such object")
+            }
+            return (payload.prefix(size), nil)
+        case 1:
+            do { return (try NotesHuffman.decompress(payload, expectedSize: size), nil) }
+            catch { return (nil, error.localizedDescription) }
+        case 2:
+            return (nil, "LZ1-compressed (Notes 6+ attachment compression; its format has no public description and no sample was available to check a decoder against)")
+        default:
+            return (nil, "compression type \(compression) is unknown")
+        }
+    }
+
+    /// Item types of a note's encryption keys (TYPE_SEAL, TYPE_SEALDATA, TYPE_SEAL2).
+    static let sealTypes: Set<UInt16> = [0x0009, 0x000A, 0x001F]
+
+    /// A sealed (encrypted) note: it carries $Seal / $SealData. Its items
+    /// flagged ITEM_SEAL (0x0002) are ciphertext that only the recipient's
+    /// Notes ID file opens; they are taken out and named, never read as text.
+    static func unsealedPart(_ note: NSFODSReader.Note) -> (note: NSFODSReader.Note, locked: [String])? {
+        let sealed = note.items.contains { sealTypes.contains($0.type) || $0.name == "$Seal" || $0.name == "$SealData" }
+        guard sealed else { return nil }
+        var locked: [String] = []
+        var kept: [NSFODSReader.Item] = []
+        for item in note.items {
+            if sealTypes.contains(item.type) || item.name == "$Seal" || item.name == "$SealData" { continue }
+            if item.flags & 0x0002 != 0 {
+                if !locked.contains(item.name) { locked.append(item.name) }
+            } else {
+                kept.append(item)
+            }
+        }
+        return (NSFODSReader.Note(id: note.id, noteClass: note.noteClass, statusFlags: note.statusFlags, items: kept,
+                                  header: note.header), locked)
+    }
+
+    private static func message(_ stored: NSFODSReader.Note, reader: NSFODSReader, senderEmail: String,
                                 inventory: inout NSFODSReader.Inventory) throws -> MBOXParser.RawEmail {
         var notes: [String] = []
+        var note = stored
+        if let (open, locked) = unsealedPart(stored) {
+            inventory.sealedMailNotes += 1
+            note = open
+            notes.append("NSF ODS: the message is encrypted (sealed) for its recipients; "
+                         + (locked.isEmpty ? "no item is marked as sealed"
+                            : "\(locked.joined(separator: ", ")) stay locked — they need the recipient's Notes ID file, which mailin does not have"))
+        }
         let attachments = files(note, reader: reader, inventory: &inventory, notes: &notes)
         let raw: Data
         let parts = note.items.filter { $0.type == 0x0019 }
