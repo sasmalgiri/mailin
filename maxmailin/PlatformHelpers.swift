@@ -264,31 +264,19 @@ enum PlatformExport {
     /// IPAD-09 (rule 5): presents the Share sheet and waits for it to close, so
     /// the caller knows shared from cancelled — `.shared` only when an activity
     /// (Save to Files, AirDrop, …) completed, `.cancelled` when the sheet was
-    /// dismissed without one.
+    /// dismissed without one. R1: returns exactly once on every path — a sheet
+    /// that could not be shown is `.failed(reason)`, task cancellation is
+    /// `.cancelled` (see `ExportHandoff`).
     static func shareAndWait(_ url: URL) async -> ExportOutcome {
         if let why = OrgPolicy.denial(.export) { return .failed(why) }
-        guard let scene = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive })
-                ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
-              var top = scene.windows.first(where: \.isKeyWindow)?.rootViewController else {
-            return .failed(String(localized: "no window to share from"))
-        }
-        while let presented = top.presentedViewController { top = presented }
-        let presenter = top
-        return await withCheckedContinuation { continuation in
-            final class Once: @unchecked Sendable { var done = false }
-            let once = Once()
-            let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-            sheet.completionWithItemsHandler = { _, completed, _, error in
-                guard !once.done else { return }
-                once.done = true
-                continuation.resume(returning: shareOutcome(url: url, completed: completed, error: error))
-            }
-            sheet.popoverPresentationController?.sourceView = presenter.view
-            sheet.popoverPresentationController?.sourceRect = CGRect(
-                x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
-            presenter.present(sheet, animated: true)
-        }
+        return await ExportHandoff(presenter: ShareSheetHandoffPresenter()).run(url)
+    }
+
+    /// R1 (5): Save to Files — the system names the destination, so the saved
+    /// bytes are read back and compared: `.saved` only when they match.
+    static func saveToFilesAndWait(_ url: URL) async -> ExportOutcome {
+        if let why = OrgPolicy.denial(.export) { return .failed(why) }
+        return await ExportHandoff(presenter: FilesExportHandoffPresenter()).run(url)
     }
     #endif
 

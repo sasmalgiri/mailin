@@ -300,10 +300,6 @@ final class ExportJobRunner {
     /// The host's share closure. IPAD-09: no longer called by the runner — a
     /// host sheet cannot say whether it was dismissed — kept for the hosts that set it.
     var share: ((URL) -> Void)?
-    #if os(iOS)
-    /// IPAD-09: iOS delivery — the Share sheet, awaited, so the receipt knows shared from cancelled.
-    var deliver: @MainActor (URL) async -> ExportOutcome = { await PlatformExport.shareAndWait($0) }
-    #endif
     /// Host error binding (menus cannot host alerts themselves).
     var onError: ((String) -> Void)?
     /// Paywall + tier, when the host has a store manager.
@@ -642,12 +638,31 @@ final class ExportJobRunner {
             inventoryPath: result?.inventoryURL?.path,
             extraCopies: (result?.extraCopies ?? 0) > 0 ? result?.extraCopies : nil,
             selectionFrozen: request.scope.isFrozen)
+        // R1 (rule 5): on iOS the file was written inside the app. The receipt is
+        // recorded NOW as "awaiting delivery" — the run ends here — and the run
+        // center offers the Share sheet afterwards, as a separate step that can
+        // never hold the run open (IPAD-09 said what the sheet did; R1 makes sure
+        // waiting for it cannot leave "Exporting … 51 of 51" on screen).
         #if os(iOS)
-        // IPAD-09 (rule 5): the file was written inside the app; the receipt says
-        // whether the Share sheet really handed it on, or was closed without saving.
-        if !cancelled { receipt = Self.receipt(receipt, after: await deliver(request.destinationURL)) }
+        let handsOff = true
+        #else
+        let handsOff = false
         #endif
+        receipt = Self.receiptBeforeHandoff(receipt, cancelled: cancelled, handsOff: handsOff,
+                                            fileExists: FileManager.default.fileExists(atPath: request.destination))
         ExportRunCenter.shared.record(receipt)
+    }
+
+    /// R1: the receipt recorded when the write ends. Where the platform hands
+    /// the file on afterwards (iOS), a written, not-cancelled run is marked
+    /// `awaitingDelivery`; the Mac (destination chosen before writing) is unchanged.
+    nonisolated static func receiptBeforeHandoff(_ receipt: ExportReceipt, cancelled: Bool, handsOff: Bool,
+                                                 fileExists: Bool) -> ExportReceipt {
+        guard handsOff, !cancelled, fileExists else { return receipt }
+        var awaiting = receipt
+        awaiting.delivery = .awaitingDelivery
+        awaiting.deliveryNote = nil
+        return awaiting
     }
 
     /// IPAD-09: a written receipt plus what the hand-off did — saved / shared /
@@ -655,9 +670,17 @@ final class ExportJobRunner {
     nonisolated static func receipt(_ written: ExportReceipt, after outcome: ExportOutcome) -> ExportReceipt {
         var receipt = written
         switch outcome {
-        case .saved: receipt.delivery = .saved
-        case .shared: receipt.delivery = .shared
-        case .cancelled: receipt.delivery = .notSaved
+        case .saved(let destination):
+            // R1 (5): only after the bytes at the destination were read back and matched.
+            receipt.delivery = .saved
+            receipt.deliveryNote = String(localized: "saved copy read back identical — \(destination.lastPathComponent)")
+        case .shared:
+            // The Share sheet does not say where the file went: say so, never "verified".
+            receipt.delivery = .shared
+            receipt.deliveryNote = String(localized: "shared, destination not verifiable")
+        case .cancelled:
+            receipt.delivery = .notSaved
+            receipt.deliveryNote = nil
         case .failed(let why):
             receipt.delivery = .failed
             receipt.deliveryNote = why

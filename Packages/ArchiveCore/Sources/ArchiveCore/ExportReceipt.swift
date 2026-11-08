@@ -85,13 +85,17 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         /// The Share sheet was closed without saving or sending the file.
         case notSaved
         case failed
+        /// R1: written inside the app and recorded, but not yet handed on —
+        /// the Share sheet / Save to Files is still to come (or was interrupted
+        /// by a relaunch). The file stays offered until it is saved or shared.
+        case awaitingDelivery
     }
     var delivery: Delivery? = nil
     /// Why the hand-off failed, when it did.
     var deliveryNote: String? = nil
 
     /// False when the file was written but the person did not get it out of the app.
-    var isDelivered: Bool { delivery != .notSaved && delivery != .failed }
+    var isDelivered: Bool { delivery != .notSaved && delivery != .failed && delivery != .awaitingDelivery }
 
     var durationSeconds: Double { completedAt.timeIntervalSince(startedAt) }
 
@@ -135,13 +139,17 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         case .complete:
             // IPAD-09: written is not delivered — a Share sheet closed without saving is not "Complete".
             switch delivery {
+            case .awaitingDelivery:
+                return "Written — waiting for you to save or share it: \(written) written inside mailin; nothing has left the app yet"
             case .notSaved:
                 return "Written, not saved — \(written) written inside mailin; the Share sheet was closed without saving or sending the file"
             case .failed:
                 return "Written, not delivered — \(written) written inside mailin; the Share sheet could not hand the file on\(deliveryNote.map { " (\($0))" } ?? "")"
             case .shared:
                 return "Complete — \(written) written and handed on from the Share sheet"
-            case .saved, nil:
+            case .saved:
+                return "Complete — \(written) written and saved; the saved copy read back identical"
+            case nil:
                 return "Complete — \(written) written"
             }
         case .truncated:
