@@ -213,6 +213,10 @@ enum ExportReconciliation {
     struct Item: Sendable, Equatable, Codable {
         enum Status: String, Sendable, Codable {
             case matching, mismatched, unverifiable, withoutRecord, unparsed
+            /// R3: an occurrence the container's manifest expects that the output does not hold.
+            case missing
+            /// R3: an output message no expected occurrence accounts for (a second copy, an unselected record, …).
+            case extra
         }
         /// The output file's path relative to the export folder; for a
         /// container (mbox / PST) the message's ordinal is appended as `#n`.
@@ -297,8 +301,13 @@ enum ExportReconciliation {
         /// hydrator's locator route. The rest of such records are `unverifiable`.
         var hydrated = 0
 
-        /// Non-matching items only (mismatched, unverifiable, withoutRecord, unparsed).
+        /// Non-matching items only (mismatched, unverifiable, withoutRecord, unparsed, missing, extra).
         var findings: [Item] = []
+
+        /// R3: the one-to-one selection check of container outputs (mbox,
+        /// PST). Nil when the run reached no container. Optional so reports
+        /// saved before it existed still decode.
+        var selection: SelectionCheck? = nil
 
         var mismatches: [Item] { findings.filter { $0.status == .mismatched } }
         var isComplete: Bool { outcome == .complete }
@@ -318,11 +327,36 @@ enum ExportReconciliation {
             if withoutRecord > 0 { line += " · no record \(withoutRecord)" }
             if unparsed > 0 { line += " · unparsable \(unparsed)" }
             if hydrated > 0 { line += " · \(hydrated) located record(s) read from their source bytes" }
+            if let selection {
+                if selection.missing > 0 { line += " · missing \(selection.missing)" }
+                if selection.extra > 0 { line += " · extra \(selection.extra)" }
+            }
             if !transformations.isEmpty {
                 line += " · " + transformations.sorted { $0.key < $1.key }.map { "\($0.key) (\($0.value))" }.joined(separator: "; ")
             }
             return line
         }
+    }
+
+    /// R3: how container outputs were tied to the export's selection.
+    struct SelectionCheck: Sendable, Equatable, Codable {
+        /// Containers checked one-to-one against the manifest their export wrote.
+        var manifests = 0
+        /// Containers without a manifest (written before manifests existed):
+        /// tied to records by Message-ID only, which cannot prove one-to-one.
+        var withoutManifest = 0
+        /// Manifests without an end mark (the export did not finish).
+        var unfinishedManifests = 0
+        /// Expected occurrences the manifests list.
+        var expected = 0
+        /// Expected occurrences paired to exactly one output message.
+        var paired = 0
+        /// Of those, paired after the first pass (out of order, or by Message-ID / place hint).
+        var pairedOutOfOrder = 0
+        /// Expected occurrences no output message accounts for.
+        var missing = 0
+        /// Output messages no expected occurrence accounts for.
+        var extra = 0
     }
 
     // MARK: - Inputs
@@ -478,8 +512,11 @@ enum ExportReconciliation {
         if stoppedEarly != nil { return .partial }
         if r.eligibleFiles == 0 { return .unavailable }
         if r.mismatched > 0 || r.withoutRecord > 0 || r.unparsed > 0 { return .failed }
+        // R3: a missing or extra occurrence, or a count that is not exactly
+        // the promise in EITHER direction, is a failure, never complete.
+        if let s = r.selection, s.missing > 0 || s.extra > 0 { return .failed }
+        if let promised = r.promised, promised != r.eligible { return .failed }
         if r.unverifiable > 0 { return .partial }
-        if let promised = r.promised, promised > r.eligible { return .failed }
         if r.eligible == 0 { return .unavailable }
         return .complete
     }
@@ -498,6 +535,15 @@ enum ExportReconciliation {
         if let promised = r.promised, stoppedEarly == nil, failure == nil, promised != r.eligible {
             parts.append(promised > r.eligible ? "the export promised \(promised) messages, \(r.eligible) found"
                                                 : "\(r.eligible) messages found, the export promised \(promised)")
+        }
+        if let s = r.selection {
+            if s.missing > 0 {
+                let named = r.findings.filter { $0.status == .missing }.prefix(3).map { $0.emailID?.uuidString ?? $0.messageID ?? $0.path }
+                parts.append("\(s.missing) selected record(s) missing from the output (\(named.joined(separator: ", "))\(s.missing > 3 ? ", …" : ""))")
+            }
+            if s.extra > 0 { parts.append("\(s.extra) output message(s) not in the export's selection or written twice") }
+            if s.unfinishedManifests > 0 { parts.append("\(s.unfinishedManifests) manifest(s) have no end mark: the export did not finish") }
+            if s.withoutManifest > 0 { parts.append("no manifest — checked by Message-ID only") }
         }
         if r.withoutRecord > 0 { parts.append("\(r.withoutRecord) output(s) have no archive record to compare with") }
         if r.unparsed > 0 { parts.append("\(r.unparsed) output(s) could not be parsed back") }
@@ -518,15 +564,7 @@ enum ExportReconciliation {
 
         mutating func note(_ item: Item) {
             // A comparison ran when there are field results (parsed AND tied to a record).
-            if !item.fields.isEmpty { report.checked += 1 }
-            switch item.status {
-            case .matching: report.matching += 1
-            case .mismatched: report.mismatched += 1; report.findings.append(item)
-            case .unverifiable: report.unverifiable += 1; report.findings.append(item)
-            case .withoutRecord: report.withoutRecord += 1; report.findings.append(item)
-            case .unparsed: report.unparsed += 1; report.findings.append(item)
-            }
-            for name in item.transformations { report.transformations[name, default: 0] += 1 }
+            ExportReconciliation.tally(item, into: &report)
         }
 
         /// Per-message files: one lookup for the page, then each file in turn.
@@ -566,93 +604,94 @@ enum ExportReconciliation {
             if Task.isCancelled { throw CancellationError() }
         }
 
-        /// mbox / PST: the bounded readers hand out batches; each batch is one lookup by Message-ID.
+        /// mbox / PST. With the manifest the export wrote beside the file
+        /// (R3), every output message is tied one-to-one to an expected
+        /// occurrence and compared with the record it names, looked up by ID.
+        /// Without one (an export from before manifests), each message is
+        /// tied by Message-ID — which cannot prove one-to-one, and says so.
+        /// Either way counts are accumulated batch by batch; only
+        /// non-matching items are retained.
         mutating func reconcileContainer(_ output: OutputRecord) async throws {
             report.filesReached += 1
+            let manifestURL = ContainerManifest.url(for: output.url)
+            if FileManager.default.fileExists(atPath: manifestURL.path),
+               let scan = try? ContainerManifest.scan(url: manifestURL), scan.header?.version == ContainerManifest.version {
+                let before = report.eligible
+                do {
+                    try await ExportReconciliation.reconcileWithManifest(output, manifestURL: manifestURL, scan: scan,
+                                                                         lookup: lookup, pageSize: pageSize, report: &report)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    try containerReadFailed(output, error: error, readAny: report.eligible > before)
+                }
+                return
+            }
+            report.selection = report.selection ?? SelectionCheck()
+            report.selection?.withoutManifest += 1
             var ordinal = 0
-            var inner: Error? = nil
-            // The batch handler cannot mutate `self` (a struct captured by a
-            // non-escaping async closure may not be mutated across awaits), so
-            // the items are gathered per batch and applied after the call.
-            let page = pageSize
             let lookup = self.lookup
             let kind = output.kind
             let path = output.path
-            var hydratedCount = 0
-            defer { report.hydrated += hydratedCount }
-            func handle(_ batch: [MBOXParser.RawEmail]) async throws -> [Item] {
-                defer { for email in batch { ExportReconciliation.removeScratch(of: email) } }
-                let mids = batch.compactMap { ExportReconciliation.header("Message-ID", $0.headers).map(ExportReconciliation.identifier) }.filter { !$0.isEmpty }
-                var sources: [String: MBOXParser.RawEmail] = [:]
-                if let byMID = lookup.recordsByMessageID, !mids.isEmpty {
-                    for (key, value) in try await byMID(mids) { sources[ExportReconciliation.identifier(key)] = value }
-                }
-                var items: [Item] = []
-                items.reserveCapacity(batch.count)
-                for parsed in batch {
-                    ordinal += 1
-                    let itemPath = "\(path)#\(ordinal)"
-                    let mid = ExportReconciliation.header("Message-ID", parsed.headers).map(ExportReconciliation.identifier)
-                    guard let mid, !mid.isEmpty else {
-                        items.append(Item(path: itemPath, emailID: nil, messageID: nil, status: .withoutRecord,
-                                          reason: "the message carries no Message-ID to tie it to a record", fields: [])); continue
-                    }
-                    guard lookup.recordsByMessageID != nil else {
-                        items.append(Item(path: itemPath, emailID: nil, messageID: mid, status: .withoutRecord,
-                                          reason: "no Message-ID lookup was supplied for \(kind.label) output", fields: [])); continue
-                    }
-                    guard var source = sources[mid] else {
-                        items.append(Item(path: itemPath, emailID: nil, messageID: mid, status: .withoutRecord,
-                                          reason: "no record with Message-ID \(mid) is in the archive", fields: [])); continue
-                    }
-                    var hydrated = false
-                    if ExportReconciliation.isHeaderOnly(source) {
-                        if let hydrate = lookup.hydrate, let full = try await hydrate(source.id), !ExportReconciliation.isHeaderOnly(full) {
-                            source = full; hydrated = true
-                        } else if let full = ExportReconciliation.hydrateFromLocatedSource(source) {
-                            source = full; hydrated = true
-                        }
-                        if hydrated { hydratedCount += 1 }
-                    }
-                    let fields = ExportReconciliation.compare(output: parsed, source: source, rules: FormatRules.rules(for: kind),
-                                                              outputFolder: parsed.folderPath, sourceHydrated: hydrated)
-                    items.append(ExportReconciliation.item(path: itemPath, emailID: source.id, messageID: mid, fields: fields))
-                }
-                return items
-            }
-            var collected: [Item] = []
+            var local = report
+            var readAny = false
             do {
-                switch kind {
-                case .mbox:
-                    _ = try await MBOXParser.parseStreamingCallback(fileURL: output.url, senderEmail: "", batchSize: page) { batch in
-                        collected.append(contentsOf: try await handle(batch))
+                try await ExportReconciliation.readContainer(output.url, kind: kind, batchSize: pageSize) { batch in
+                    readAny = true
+                    let mids = batch.compactMap { ExportReconciliation.header("Message-ID", $0.headers).map(ExportReconciliation.identifier) }.filter { !$0.isEmpty }
+                    var sources: [String: MBOXParser.RawEmail] = [:]
+                    if let byMID = lookup.recordsByMessageID, !mids.isEmpty {
+                        for (key, value) in try await byMID(mids) { sources[ExportReconciliation.identifier(key)] = value }
                     }
-                case .pst:
-                    _ = try await PSTParser.parseStreaming(fileURL: output.url, senderEmail: "", batchSize: page) { batch in
-                        collected.append(contentsOf: try await handle(batch))
+                    for parsed in batch {
+                        ordinal += 1
+                        local.eligible += 1
+                        let itemPath = "\(path)#\(ordinal)"
+                        let mid = ExportReconciliation.header("Message-ID", parsed.headers).map(ExportReconciliation.identifier)
+                        guard let mid, !mid.isEmpty else {
+                            ExportReconciliation.tally(Item(path: itemPath, emailID: nil, messageID: nil, status: .withoutRecord,
+                                                            reason: "the message carries no Message-ID to tie it to a record", fields: []), into: &local); continue
+                        }
+                        guard lookup.recordsByMessageID != nil else {
+                            ExportReconciliation.tally(Item(path: itemPath, emailID: nil, messageID: mid, status: .withoutRecord,
+                                                            reason: "no Message-ID lookup was supplied for \(kind.label) output", fields: []), into: &local); continue
+                        }
+                        guard var source = sources[mid] else {
+                            ExportReconciliation.tally(Item(path: itemPath, emailID: nil, messageID: mid, status: .withoutRecord,
+                                                            reason: "no record with Message-ID \(mid) is in the archive", fields: []), into: &local); continue
+                        }
+                        var hydrated = false
+                        if ExportReconciliation.isHeaderOnly(source) {
+                            if let hydrate = lookup.hydrate, let full = try await hydrate(source.id), !ExportReconciliation.isHeaderOnly(full) {
+                                source = full; hydrated = true
+                            } else if let full = ExportReconciliation.hydrateFromLocatedSource(source) {
+                                source = full; hydrated = true
+                            }
+                            if hydrated { local.hydrated += 1 }
+                        }
+                        let fields = ExportReconciliation.compare(output: parsed, source: source, rules: FormatRules.rules(for: kind),
+                                                                  outputFolder: parsed.folderPath, sourceHydrated: hydrated)
+                        ExportReconciliation.tally(ExportReconciliation.item(path: itemPath, emailID: source.id, messageID: mid, fields: fields), into: &local)
                     }
-                default:
-                    break
                 }
             } catch is CancellationError {
-                inner = CancellationError()
+                report = local
+                throw CancellationError()
             } catch {
-                inner = error
+                report = local
+                try containerReadFailed(output, error: error, readAny: readAny)
+                return
             }
-            report.eligible += collected.count
-            for item in collected { note(item) }
-            if let inner {
-                if inner is CancellationError { throw inner }
-                // A container that failed to read at all is one unparsed output;
-                // one that failed mid-way keeps what was read and is named.
-                if collected.isEmpty {
-                    report.eligible += 1
-                    note(Item(path: path, emailID: nil, messageID: nil, status: .unparsed,
-                              reason: "\(kind.label) could not be read: \(inner.localizedDescription)", fields: []))
-                } else {
-                    throw inner
-                }
-            }
+            report = local
+        }
+
+        /// A container that failed to read at all is one unparsed output;
+        /// one that failed mid-way keeps what was read and is named.
+        mutating func containerReadFailed(_ output: OutputRecord, error: Error, readAny: Bool) throws {
+            if readAny { throw error }
+            report.eligible += 1
+            note(Item(path: output.path, emailID: nil, messageID: nil, status: .unparsed,
+                      reason: "\(output.kind.label) could not be read: \(error.localizedDescription)", fields: []))
         }
 
         /// A located, header-only record is completed through the caller's
@@ -783,7 +822,8 @@ enum ExportReconciliation {
             add(.htmlBody, compareText(output: output.htmlBody, source: source.htmlBody, field: .htmlBody, rules: rules))
             results.append(contentsOf: compareAttachments(output: output, source: source, rules: rules))
         }
-        add(.folder, compareFolder(output: outputFolder, source: source.folderPath, rules: rules))
+        add(.folder, compareFolder(output: outputFolder, source: source.folderPath, rules: rules,
+                                   memberships: SQLiteEmailStore.folderPaths(for: source)))
         return results
     }
 
@@ -833,9 +873,16 @@ enum ExportReconciliation {
         return .lost("changed")
     }
 
-    static func compareFolder(output: String?, source: String?, rules: FormatRules) -> FieldOutcome {
+    /// - Parameter memberships: every folder the record belongs to (its
+    ///   folder path, then its labels). A per-folder-occurrence export (OUT-02)
+    ///   writes one copy per membership; a copy in ANY of them is unchanged.
+    static func compareFolder(output: String?, source: String?, rules: FormatRules, memberships: [String] = []) -> FieldOutcome {
         let s = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let o = (output ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if rules.notCarried[.folder] == nil, !o.isEmpty,
+           memberships.contains(where: { $0.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")) == o.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")) }) {
+            return .unchanged
+        }
         if s.isEmpty { return .sourceAbsent }
         if let why = rules.notCarried[.folder] { return .permittedTransformation(why) }
         if o.isEmpty {
@@ -1120,6 +1167,7 @@ enum ExportReconciliation {
             case .unverifiable: report.unverifiable.append("\(file.path): \(item.differences.joined(separator: "; "))")
             case .withoutRecord: report.withoutRecord += 1
             case .unparsed: report.unparsed.append(file.path)
+            case .missing, .extra: break   // container outcomes; per-message files never produce them
             }
         }
         return report

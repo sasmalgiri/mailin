@@ -4692,6 +4692,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 if parts.count == 1, let only = parts.first {
                     try? FileManager.default.removeItem(at: url)
                     try FileManager.default.moveItem(at: only.url, to: url)
+                    // R3: the expected-record manifest goes with the file it describes.
+                    try ContainerManifest.moveSidecar(from: only.url, to: url)
                     return "Exported \(messages) emails to PST."
                 }
                 return "Exported \(messages) emails to \(parts.count) PST files (\(base)-0001.pst …) — each below the size this drive and Outlook accept."
