@@ -30,9 +30,13 @@ extension RARReader {
     /// The largest RAR 5.0 dictionary the vendored decoder accepts (libarchive refuses a larger one).
     static let maxDecoderDictionaryBytes: Int64 = 64 * 1_048_576
 
-    /// One sequential libarchive pass over a RAR file or a complete run of volumes.
+    /// One sequential libarchive pass over a RAR file or a complete run of
+    /// volumes — or (R6) over the decrypted view of an encrypted archive.
     final class Decoder {
         let volumePaths: [URL]
+        /// R6: makes a fresh decrypted view for every pass (nil: read the files).
+        private let streamMaker: (() throws -> DecryptedStream)?
+        private var stream: DecryptedStream?
         private var handle: OpaquePointer?
         /// Ordinal (index among file headers) of the entry libarchive is positioned on; -1 before the first.
         private var position = -1
@@ -41,24 +45,51 @@ extension RARReader {
         /// A header libarchive could not get past: no later entry is reachable in this archive.
         private var stoppedAt: (ordinal: Int, reason: String)?
 
-        init(volumePaths: [URL]) { self.volumePaths = volumePaths }
+        init(volumePaths: [URL]) { self.volumePaths = volumePaths; streamMaker = nil }
+        init(stream: @escaping () throws -> DecryptedStream) { volumePaths = []; streamMaker = stream }
         deinit { close() }
 
         private func close() {
             if let handle { mailin_rar_close(handle) }
             handle = nil
+            stream = nil
             position = -1
             entryTouched = false
         }
 
         private func lastError() -> String {
             guard let handle else { return "the decoder is not open" }
-            let message = String(cString: mailin_rar_error(handle))
+            var message = String(cString: mailin_rar_error(handle))
+            if let failure = stream?.failure { message += message.isEmpty ? "\(failure)" : " (\(failure))" }
             return message.isEmpty ? "unknown libarchive error" : message
         }
 
         private func open() throws {
             close()
+            if let streamMaker {
+                let stream = try streamMaker()
+                self.stream = stream
+                let context = Unmanaged.passUnretained(stream).toOpaque()
+                let read: mailin_rar_read_fn = { context, buffer in
+                    let stream = Unmanaged<DecryptedStream>.fromOpaque(context!).takeUnretainedValue()
+                    let n = stream.next()
+                    buffer?.pointee = stream.bufferPointer
+                    return n
+                }
+                let skip: mailin_rar_skip_fn = { context, request in
+                    Unmanaged<DecryptedStream>.fromOpaque(context!).takeUnretainedValue().skip(request)
+                }
+                guard let opened = mailin_rar_open_reader(context, read, skip) else {
+                    throw ReadError.malformed("the RAR decoder could not be started (out of memory)")
+                }
+                handle = opened
+                guard mailin_rar_open_status(opened) == Int32(MAILIN_RAR_OK) else {
+                    let reason = lastError()
+                    close()
+                    throw ReadError.malformed("the RAR decoder could not open the archive: \(reason)")
+                }
+                return
+            }
             let paths = volumePaths.map { $0.path }
             var cStrings = paths.map { strdup($0) }
             defer { cStrings.forEach { free($0) } }

@@ -7,14 +7,20 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include "libarchive/archive.h"
 #include "libarchive/archive_entry.h"
+#include "libarchive/archive_blake2.h"
 
 struct mailin_rar {
     struct archive *archive;
     struct archive_entry *entry;
     int open_status;
+    /* mailin_rar_open_reader: the caller's stream. */
+    void *reader_context;
+    mailin_rar_read_fn reader_read;
+    mailin_rar_skip_fn reader_skip;
 };
 
 static int map_status(int r) {
@@ -42,6 +48,46 @@ mailin_rar *mailin_rar_open(const char *const *paths, int count) {
     int r = archive_read_open_filenames(rar->archive, list, 64 * 1024);
     free(list);
     rar->open_status = map_status(r);
+    return rar;
+}
+
+static la_ssize_t reader_read_trampoline(struct archive *a, void *client, const void **buffer) {
+    (void)a;
+    mailin_rar *rar = client;
+    long n = rar->reader_read(rar->reader_context, buffer);
+    if (n < 0) {
+        archive_set_error(rar->archive, EIO, "the decrypted RAR stream could not be read");
+        return ARCHIVE_FATAL;
+    }
+    return (la_ssize_t)n;
+}
+
+static la_int64_t reader_skip_trampoline(struct archive *a, void *client, la_int64_t request) {
+    (void)a;
+    mailin_rar *rar = client;
+    if (rar->reader_skip == NULL || request <= 0) return 0;
+    int64_t n = rar->reader_skip(rar->reader_context, (int64_t)request);
+    return n < 0 ? 0 : (la_int64_t)n;
+}
+
+mailin_rar *mailin_rar_open_reader(void *context, mailin_rar_read_fn read, mailin_rar_skip_fn skip) {
+    mailin_rar *rar = calloc(1, sizeof *rar);
+    if (rar == NULL) return NULL;
+    rar->archive = archive_read_new();
+    if (rar->archive == NULL) { free(rar); return NULL; }
+    archive_read_support_format_rar(rar->archive);
+    archive_read_support_format_rar5(rar->archive);
+    rar->reader_context = context;
+    rar->reader_read = read;
+    rar->reader_skip = skip;
+    if (read == NULL) {
+        rar->open_status = MAILIN_RAR_FATAL;
+        return rar;
+    }
+    archive_read_set_read_callback(rar->archive, reader_read_trampoline);
+    archive_read_set_skip_callback(rar->archive, reader_skip_trampoline);
+    archive_read_set_callback_data(rar->archive, rar);
+    rar->open_status = map_status(archive_read_open1(rar->archive));
     return rar;
 }
 
@@ -100,4 +146,20 @@ void mailin_rar_close(mailin_rar *rar) {
 
 const char *mailin_rar_libarchive_version(void) {
     return archive_version_string();
+}
+
+void *mailin_blake2sp_new(void) {
+    blake2sp_state *state = calloc(1, sizeof *state);
+    if (state != NULL && blake2sp_init(state, 32) != 0) { free(state); return NULL; }
+    return state;
+}
+
+void mailin_blake2sp_update(void *state, const void *bytes, size_t length) {
+    if (state != NULL && length > 0) blake2sp_update((blake2sp_state *)state, bytes, length);
+}
+
+void mailin_blake2sp_final(void *state, uint8_t digest[32]) {
+    if (state == NULL) return;
+    blake2sp_final((blake2sp_state *)state, digest, 32);
+    free(state);
 }

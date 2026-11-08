@@ -72,7 +72,7 @@ enum RARVolumeSet {
 
     /// The set around `primary`, or nil when its name is not a volume name.
     static func assemble(primary: URL, primaryArchive: RARReader.Archive, primaryName: String,
-                         siblings: [SplitVolumeSet.Sibling]) throws -> Assembled? {
+                         siblings: [SplitVolumeSet.Sibling], keyring: RARKeyring? = nil) throws -> Assembled? {
         guard let part = part(ofName: primaryName) else { return nil }
         var byNumber: [Int: URL] = [part.number: primary]
         for sibling in siblings {
@@ -90,7 +90,7 @@ enum RARVolumeSet {
         var number = 1
         while number <= highest {
             if let url = byNumber[number] {
-                let archive = url == primary ? primaryArchive : try RARReader.read(url: url)
+                let archive = url == primary ? primaryArchive : try RARReader.read(source: try FileRandomAccessSource(url: url), keyring: keyring)
                 volumes.append(url)
                 parsed.append((number - 1, archive))
                 let continues = !archive.isLastVolume || (archive.members.last?.isSplitAfter ?? false)

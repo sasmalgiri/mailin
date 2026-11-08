@@ -1186,7 +1186,7 @@ enum ContainerTextExtractor {
              RARReader.ReadError.budgetExceeded(_, let limit):
             // R05: stopped inside decompression at the budget — stated, not failed.
             return (.unsupported, "decompression stopped at the \(limit)-byte budget")
-        case ZIPArchiveReader.ReadError.wrongPassword, SevenZipReader.ReadError.wrongPassword:
+        case ZIPArchiveReader.ReadError.wrongPassword, SevenZipReader.ReadError.wrongPassword, RARReader.ReadError.wrongPassword:
             // §13.8 step 5: the password did not open this member — still locked, said so.
             return (.locked, "the password did not open it")
         case ZIPArchiveReader.ReadError.encrypted, SevenZipReader.ReadError.encrypted, RARReader.ReadError.encrypted:
@@ -1255,10 +1255,12 @@ enum ContainerTextExtractor {
             // GAP-RAR: stored members copied, compressed ones decoded by the
             // vendored libarchive reader in one pass per archive (a solid
             // stream is decoded once, in order); a volume of a set is read
-            // with the set's other volumes among `siblings`.
+            // with the set's other volumes among `siblings`. R6: the Unlock…
+            // password opens encrypted members and encrypted headers.
             let extractor: RARReader.Extractor
-            do { extractor = try RARReader.Extractor(url: url, logicalName: logicalName, siblings: siblings) }
+            do { extractor = try RARReader.Extractor(url: url, logicalName: logicalName, siblings: siblings, password: password) }
             catch RARReader.ReadError.encryptedHeaders { throw OfficeTextExtractor.ExtractError.encrypted }
+            catch RARReader.ReadError.wrongPassword { throw OfficeTextExtractor.ExtractError.wrongPassword }
             catch { throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error)) }
             return extractor.archive.members.filter { !$0.isDirectory && !$0.isJunk }.map { member in
                 Child(name: member.name, size: member.sizeIsKnown ? member.unpackedSize : nil, encrypted: member.isEncrypted,
