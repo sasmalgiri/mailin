@@ -93,7 +93,12 @@ final class AttachmentTextIndexJob {
     /// cells, rows and sections when it indexes them; completed rows of those
     /// readers are re-read so the boundaries reach the index (OCR and speech
     /// rows are kept: re-reading them needs their module on).
-    nonisolated static let extractorVersion = 10
+    /// 11 (release audit R6, 2026-11-09): binary Visio grouped by page, Office 365
+    /// OneNote by page, MPP dates/durations/assignments, XLSB comments and every
+    /// formula token, Excel number formats rendered as Excel shows them, IWA table
+    /// cells with numbers and dates, RAR4 solid members, encrypted RAR / iWork '09 /
+    /// ODF Argon2id unlockable — completed rows of those readers are re-read.
+    nonisolated static let extractorVersion = 11
 
     /// FIND-08: the readers whose output gains section boundaries at version 10.
     nonisolated static let boundaryExtractors = ["office", "odf", "iwork", "ole", "visio", "project", "archive", "zip",
@@ -709,8 +714,22 @@ final class AttachmentTextIndexJob {
             try coverage.remove(emailIDs: ids, keepingUnlocked: true)
             total += ids.count
         }
+        // R6 (version 11): the Office, Visio, Project, OneNote, iWork, ODF and
+        // archive readers give richer text now (pages, dates, formulas, number
+        // formats, table cells, solid RAR) — their completed rows are re-read.
+        try coverage.markKeptUnlocks(below: 11, extractors: Self.version11Extractors, note: note)
+        while !Task.isCancelled {
+            let ids = try coverage.emailIDs(extractors: Self.version11Extractors, below: 11, limit: 500, excludingKeptUnlocks: true)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            try coverage.remove(emailIDs: ids, keepingUnlocked: true)
+            total += ids.count
+        }
         return total
     }
+
+    /// The readers whose output changed in extractor version 11 (release audit R6).
+    nonisolated static let version11Extractors = ["office", "ole", "visio", "project", "onenote", "iwork", "odf", "archive", "zip"]
 
     /// GAP-PGP: re-read the messages whose OpenPGP rows were written by an
     /// extractor older than `below` (Int.max: all of them — after a public key

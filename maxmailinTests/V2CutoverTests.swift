@@ -3508,7 +3508,10 @@ final class V2CutoverTests: XCTestCase {
         ProtectedContentPolicy.decryptSMIME = true
         let smime = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 3, password: "", retain: false)
         guard case .wrongPassword(let smimeWhy) = smime else { return XCTFail("\(smime)") }
-        XCTAssertTrue(smimeWhy.contains("keychain"), smimeWhy)
+        // The fixture is a 6-byte stub, not a real envelope: the portable reader (R6)
+        // now says so instead of blaming the keychain. A real envelope without its key
+        // is covered by SMIMEPortableTests (locked, reason names the missing key).
+        XCTAssertTrue(smimeWhy.contains("keychain") || smimeWhy.contains("not a readable S/MIME envelope"), smimeWhy)
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 
