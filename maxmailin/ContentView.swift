@@ -1708,6 +1708,25 @@ struct ContentView: View {
                         .padding(.vertical, Spacing.xSmall)
                         .background(AppColors.backgroundSecondary)
 
+                        // IPAD-03: what the search said (a no-match notice says what was
+                        // searched), and never a blank pane for a search with no hits.
+                        if let notice = modelVM.searchNotice {
+                            Label(notice, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, Spacing.small)
+                                .padding(.vertical, Spacing.xxSmall)
+                                .accessibilityLabel("Search notice: \(notice)")
+                                .accessibilityIdentifier("ipad.list.searchNotice")
+                        }
+                        if modelVM.visibleEmails.isEmpty && !modelVM.isLoadingPage
+                            && !modelVM.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            ContentUnavailableView("No matching emails", systemImage: "magnifyingglass")
+                                .frame(maxHeight: .infinity)
+                                .accessibilityIdentifier("ipad.list.noResults")
+                        } else {
+                        let evidenceProvider = modelVM.searchEvidenceProvider
                         List(modelVM.visibleEmails, id: \.id, selection: $iPadSelectedEmailID) { email in
                             // The open email stays blue. iPadOS greys the system
                             // selection as soon as the reading pane takes focus (or
@@ -1717,7 +1736,9 @@ struct ContentView: View {
                             // the emphasized look itself; the List keeps the real
                             // selection, so hardware-keyboard arrows still work.
                             let isOpen = email.id == iPadSelectedEmailID
-                            EmailRowView(email: email, searchText: modelVM.isNaturalLanguageMode ? "" : modelVM.windowSearchText, showRiskIndicator: forensicManager.isEnabled)
+                            EmailRowView(email: email, searchText: modelVM.isNaturalLanguageMode ? "" : modelVM.windowSearchText, showRiskIndicator: forensicManager.isEnabled,
+                                         evidenceProvider: evidenceProvider,
+                                         onOpenAttachment: evidenceProvider == nil ? nil : { id, ordinal, child in modelVM.openEvidenceAttachment(id, ordinal, child) })
                                 .padding(.vertical, Spacing.xxxSmall)
                                 .environment(\.backgroundProminence, isOpen ? .increased : .standard)
                                 .listRowBackground(isOpen ? EmailRowView.openRowFill : nil)
@@ -1725,6 +1746,13 @@ struct ContentView: View {
                                 .onAppear { modelVM.loadMoreIfNeeded(currentID: email.id) }
                         }
                         .listStyle(.plain)
+                        .alert(String(localized: "Could not open the attachment"),
+                               isPresented: Binding(get: { modelVM.evidenceOpenFailure != nil }, set: { if !$0 { modelVM.evidenceOpenFailure = nil } })) {
+                            Button("OK", role: .cancel) { modelVM.evidenceOpenFailure = nil }
+                        } message: {
+                            Text(modelVM.evidenceOpenFailure ?? "")
+                        }
+                        }
                     } else {
                         WelcomeHubView(onOpenArchive: { openPanelFallback() }, onBrowseFiles: { showFileImporter = true })
                     }

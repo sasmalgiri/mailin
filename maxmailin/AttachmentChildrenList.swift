@@ -15,13 +15,17 @@ import SwiftUI
 struct AttachmentChildrenList: View {
     let emailID: EmailID
     let position: Int
+    var archive: ArchiveDataService = .shared
     @State private var children: [AttachmentChildRow] = []
     @State private var failure: String?
+    /// IPAD-04: open on arrival, so the files inside are on screen without a
+    /// tap (a long list starts closed; its count is in the label).
+    @State private var isExpanded = true
 
     var body: some View {
         Group {
             if !children.isEmpty {
-                DisclosureGroup {
+                DisclosureGroup(isExpanded: $isExpanded) {
                     ForEach(children, id: \.childIndex) { child in
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: "doc.on.doc").foregroundStyle(.secondary)
@@ -37,7 +41,7 @@ struct AttachmentChildrenList: View {
                             Button {
                                 Task { @MainActor in
                                     failure = await EvidenceAttachmentOpener.open(emailID: emailID, ordinal: position, childPath: child.path,
-                                                                                 archive: .shared)?.message
+                                                                                 archive: archive)?.message
                                 }
                             } label: { Label(String(localized: "Open"), systemImage: "arrow.up.forward.square") }
                             .buttonStyle(.plain)
@@ -57,10 +61,29 @@ struct AttachmentChildrenList: View {
                 .accessibilityIdentifier("attachment.children.\(position)")
             }
         }
-        .task(id: "\(emailID.uuidString)#\(position)") {
-            children = await ArchiveDataService.shared.attachmentChildren(emailID: emailID).filter { $0.position == position }
+        .task(id: "\(emailID.uuidString)#\(position)") { await load() }
+        // IPAD-04: the indexing job records the files inside after import; a
+        // message opened before it reached this one fills in when it does.
+        .onReceive(NotificationCenter.default.publisher(for: .attachmentIndexUpdated)) { _ in
+            Task { @MainActor in await load() }
         }
     }
+
+    private func load() async {
+        let rows = await Self.rows(emailID: emailID, position: position, archive: archive)
+        if rows.map(\.childIndex) != children.map(\.childIndex) {
+            isExpanded = Self.startsExpanded(count: rows.count)
+        }
+        children = rows
+    }
+
+    /// The files inside attachment `position` of one message, as recorded.
+    static func rows(emailID: EmailID, position: Int, archive: ArchiveDataService) async -> [AttachmentChildRow] {
+        await archive.attachmentChildren(emailID: emailID).filter { $0.position == position }
+    }
+
+    /// Open when the list is short enough to read at a glance.
+    static func startsExpanded(count: Int) -> Bool { count <= 12 }
 
     /// The recorded state, in the person's words.
     static func stateLabel(_ state: String) -> String {

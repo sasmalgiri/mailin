@@ -66,6 +66,8 @@ struct EmailDetailView: View {
     @State private var shareItems: [Any] = []
     #endif
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
+    /// IPAD-04: today's Free attachment saves (shared with the list's save-all).
+    @AppStorage(AttachmentDownloadGate.usedTodayKey) private var freeAttachmentDownloadCount = 0
 
     // AI Reply Suggestion
     @State private var showReplySheet = false
@@ -614,6 +616,28 @@ struct EmailDetailView: View {
                 .accessibilityLabel("Download all \(shown.attachments.count) attachments")
                 .accessibilityHint("Save all attachments to a folder")
 
+                // IPAD-04: what the plan allows for single saves, said once above the list.
+                if let note = downloadDecision.note {
+                    HStack(spacing: Spacing.xSmall) {
+                        Image(systemName: downloadDecision.isEnabled ? "info.circle" : "lock.fill")
+                            .foregroundColor(AppColors.secondary)
+                        Text(note)
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if downloadDecision.offersUpgrade {
+                            Button(String(localized: "Upgrade")) {
+                                storeManager.requestPurchase(.personal, feature: String(localized: "Attachment Downloads"),
+                                                             reason: String(localized: "The Free plan saves 10 attachments a day. Personal and Professional have no daily limit."))
+                            }
+                            .font(Typography.caption1)
+                            .accessibilityIdentifier("attachment.download.upgrade")
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("attachment.download.note")
+                }
+
                 ForEach(Array(shown.attachments.enumerated()), id: \.offset) { index, att in
                     VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                         HStack(spacing: Spacing.xSmall) {
@@ -641,16 +665,16 @@ struct EmailDetailView: View {
                                 .accessibilityLabel("Preview \(att.filename)")
                             }
                             Button {
-                                if let fileURL = att.fileURL {
-                                    saveAttachmentToUserFolder(fileURL: fileURL, suggestedName: att.filename)
-                                }
+                                downloadAttachment(at: index)
                             } label: {
                                 Label("Download", systemImage: "arrow.down.circle")
                                     .font(Typography.caption1)
                             }
                             .buttonStyle(SecondaryButtonStyle())
                             .help("Save this attachment to a folder you choose")
-                            .disabled(att.fileURL == nil)
+                            // IPAD-04: the plan decides (Free: a daily allowance), not whether a
+                            // parse-time temp file still exists — the bytes come from the stored message.
+                            .disabled(!downloadDecision.isEnabled)
                             .accessibilityLabel("Download \(att.filename.isEmpty ? "attachment" : att.filename)")
                         }
 
@@ -1566,8 +1590,32 @@ struct EmailDetailView: View {
 
     // MARK: - Download Logic
 
-    // Save one file
-    private func saveAttachmentToUserFolder(fileURL: URL, suggestedName: String) {
+    /// IPAD-04: the plan's answer for single attachment saves.
+    private var downloadDecision: AttachmentDownloadDecision {
+        AttachmentDownloadGate.decide(policy: storeManager.accessPolicy, usedToday: freeAttachmentDownloadCount)
+    }
+
+    /// IPAD-04: saves attachment `index` from the stored message's own bytes
+    /// (a stored message has no parse-time temp file), counted against the
+    /// Free allowance only once it was really saved or handed to the share sheet.
+    private func downloadAttachment(at index: Int) {
+        StoreManager.resetDailyCountersIfNeeded()
+        guard downloadDecision.isEnabled else { return }
+        switch EvidenceAttachmentOpener.temporaryFile(for: shown, ordinal: index, cache: attachmentCache) {
+        case .success(let fileURL):
+            defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+            let name = shown.attachments[index].filename.isEmpty ? fileURL.lastPathComponent : shown.attachments[index].filename
+            if saveAttachmentToUserFolder(fileURL: fileURL, suggestedName: name) {
+                AttachmentDownloadGate.recordSave(policy: storeManager.accessPolicy)
+            }
+        case .failure(let failure):
+            exportError = failure.message
+        }
+    }
+
+    // Save one file. True when it was saved (Mac) or handed to the share sheet (iOS).
+    @discardableResult
+    private func saveAttachmentToUserFolder(fileURL: URL, suggestedName: String) -> Bool {
         #if os(macOS)
         let panel = ManagedSavePanel()
         panel.nameFieldStringValue = suggestedName
@@ -1576,17 +1624,21 @@ struct EmailDetailView: View {
         if result == .OK, let destinationURL = panel.url {
             do {
                 try FileUtils.copyFile(from: fileURL, to: destinationURL)
+                return true
             } catch {
                 exportError = "Failed to save attachment: \(error.localizedDescription)"
             }
         }
+        return false
         #else
-        let destinationURL = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
+        let destinationURL = FileManager.default.temporaryDirectory.appendingPathComponent(EvidenceAttachmentOpener.safeFilename(suggestedName, mimeType: ""))
         do {
             try FileUtils.copyFile(from: fileURL, to: destinationURL)
             iOSShareFile(at: destinationURL)
+            return true
         } catch {
             exportError = "Failed to save attachment: \(error.localizedDescription)"
+            return false
         }
         #endif
     }

@@ -376,3 +376,250 @@ final class AttachmentFilenameSearchTests: XCTestCase {
         XCTAssertEqual(combinedIDs, [fixtures[2].id])
     }
 }
+
+// MARK: - IPAD-03 / IPAD-04 — the full list (iPad, iPhone, Mac default) searches on the model
+
+extension V2SearchTests {
+
+    private static func ipadCRC32(_ data: Data) -> UInt32 {
+        var table = [UInt32](repeating: 0, count: 256)
+        for i in 0..<256 {
+            var c = UInt32(i)
+            for _ in 0..<8 { c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1 }
+            table[i] = c
+        }
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in data { crc = table[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8) }
+        return crc ^ 0xFFFFFFFF
+    }
+
+    /// A stored (uncompressed) ZIP with correct CRCs — an Office package is one.
+    private static func ipadZip(_ members: [(name: String, data: Data)]) -> Data {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        var local = Data(), central = Data()
+        for m in members {
+            let name = Array(m.name.utf8)
+            let crc = ipadCRC32(m.data)
+            let size = UInt32(m.data.count)
+            let offset = UInt32(local.count)
+            local.append(contentsOf: le32(0x04034b50) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                         + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + name)
+            local.append(m.data)
+            central.append(contentsOf: le32(0x02014b50) + le16(20) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(offset) + name)
+        }
+        var file = local
+        file.append(central)
+        file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(members.count) + le16(members.count)
+                    + le32(UInt32(central.count)) + le32(UInt32(local.count)) + le16(0))
+        return file
+    }
+
+    private static func ipadDocx(_ text: String) -> Data {
+        ipadZip([
+            ("[Content_Types].xml", Data("<Types/>".utf8)),
+            ("word/document.xml", Data("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+                <w:p><w:r><w:t>\(text)</w:t></w:r></w:p>
+                </w:body></w:document>
+                """.utf8)),
+        ])
+    }
+
+    private static func ipadMessage(_ id: String, subject: String, body: String,
+                                    attachment: (name: String, mime: String, data: Data)?) throws -> MBOXParser.RawEmail {
+        var raw = """
+        From sender@example.com Mon Oct 28 10:00:00 2024
+        From: Alice Example <alice@example.com>
+        To: bob@example.org
+        Subject: \(subject)
+        Date: Mon, 28 Oct 2024 10:00:00 +0000
+        Message-ID: <\(id)@gate1>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        \(body)
+
+        """
+        if let attachment {
+            raw += """
+            --B
+            Content-Type: \(attachment.mime); name="\(attachment.name)"
+            Content-Disposition: attachment; filename="\(attachment.name)"
+            Content-Transfer-Encoding: base64
+
+            \(attachment.data.base64EncodedString())
+
+            """
+        }
+        raw += "--B--\n"
+        return try MBOXParser.processRawMessage(raw, senderEmail: "")
+    }
+
+    /// The gate 1 archive in small: a DOCX, a ZIP holding `inner/Contract.docx`,
+    /// and ordinary bodies — indexed by the attachment job on an isolated store.
+    private func ipadArchive() async throws -> (env: Env, docx: MBOXParser.RawEmail, zip: MBOXParser.RawEmail) {
+        SearchChunkPolicy.isEnabled = true
+        let env = try makeEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        AttachmentOCR.isEnabled = false
+        AttachmentTextIndexJob.installChildReader()
+
+        let docx = try Self.ipadMessage("docx", subject: "Renovation notes", body: "See the document.",
+                                        attachment: ("Notes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                                     Self.ipadDocx("The lighthouse renovations start in spring.")))
+        let bundle = Self.ipadZip([("inner/Contract.docx", Self.ipadDocx("The secret codeword is zebracrossing quarterly."))])
+        let zip = try Self.ipadMessage("zip", subject: "Bundle of contracts", body: "Zip attached.",
+                                       attachment: ("Bundle.zip", "application/zip", bundle))
+        var all = [docx, zip]
+        for i in 0..<6 {
+            all.append(try Self.ipadMessage("plain-\(i)", subject: "Routine \(i)", body: "Routine update \(i).", attachment: nil))
+        }
+        try await seed(env, all)
+        _ = await AttachmentTextIndexJob.shared.run()
+        return (env, docx, zip)
+    }
+
+    /// IPAD-03: the iPad (and iPhone, and Mac default) list's view model finds
+    /// words that only an attachment holds — a DOCX, and a DOCX inside a ZIP —
+    /// with `in:attachments` too, names the file in the row's evidence, and a
+    /// search with no hits carries the notice, never a blank list.
+    func testIPAD03_fullListSearchesAttachmentsAndZipChildrenOnTheModel_andANoMatchSaysWhatWasSearched() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        let ocrWas = AttachmentOCR.isEnabled
+        defer {
+            SearchChunkPolicy.isEnabled = wasOn
+            AttachmentOCR.isEnabled = ocrWas
+            AttachmentTextIndexJob.testStoreOverride = nil
+            AttachmentTextIndexJob.testSuppressKicks = false
+        }
+        let (env, docx, zip) = try await ipadArchive()
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive, pageSize: 50, maxRetained: 200)
+        vm.isPremiumUser = true
+        func search(_ text: String) async -> [UUID] {
+            vm.searchText = text
+            await vm.reloadForQueryChangeNow()
+            return vm.visibleEmails.map(\.id)
+        }
+
+        let inZip = await search("zebracrossing")
+        XCTAssertTrue(vm.typedSearchRunsOnModel, "the plain box runs on the search model when it is on")
+        XCTAssertNil(vm.currentArchiveQuery.text, "the typed words are model conditions, not previous-index text")
+        XCTAssertEqual(inZip, [zip.id], "a DOCX inside a ZIP attachment is found from the list's search box")
+        XCTAssertNil(vm.searchNotice, "a search with hits carries no no-match notice")
+        let provider = try XCTUnwrap(vm.searchEvidenceProvider, "rows get the index's evidence")
+        let evidence = await provider(zip.id)
+        XCTAssertTrue(evidence.contains { MatchEvidenceChips.childPath($0.location) == "inner/Contract.docx" },
+                      "the chip names the file inside the ZIP: \(evidence)")
+
+        let inDocx = await search("lighthouse")
+        XCTAssertEqual(inDocx, [docx.id], "a DOCX attachment's text is found")
+        let scoped = await search("in:attachments zebracrossing")
+        XCTAssertEqual(scoped, [zip.id], "in:attachments reaches the files inside an attachment")
+        let body = await search("Routine")
+        XCTAssertEqual(body.count, 6, "body words still work")
+
+        let none = await search("nowhereword")
+        XCTAssertEqual(none, [])
+        let notice = try XCTUnwrap(vm.searchNotice, "a search with no hits says so — never a blank pane")
+        XCTAssertTrue(notice.contains("No match"), notice)
+        let expected = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: env.archive))
+        XCTAssertEqual(notice, expected)
+
+        // The model switched off: the previous path stays (rule 14), no model evidence.
+        SearchChunkPolicy.isEnabled = false
+        _ = await search("Routine")
+        XCTAssertFalse(vm.typedSearchRunsOnModel)
+        XCTAssertNotNil(vm.currentArchiveQuery.text)
+        XCTAssertNil(vm.searchEvidenceProvider)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    /// IPAD-03: the notice text for each coverage state (pure).
+    func testIPAD03_noMatchNoticeSaysWhatWasSearched() {
+        XCTAssertTrue(ModelSearchNotice.noMatch(coverage: nil).contains("coverage could not be checked"))
+        let full = SearchCoverageSnapshot(storedMessages: 8, indexedMessages: 8, partiallyIndexedMessages: 0,
+                                          chunks: SQLiteEmailStore.SearchDocCoverage(bodiesEvaluable: 8, emails: 8, attachmentsEvaluable: 2,
+                                                                                     attachments: 2, bodyChunks: 8))
+        XCTAssertTrue(ModelSearchNotice.noMatch(coverage: full).contains("Nothing in the fully indexed scope matches this search."))
+        let behind = SearchCoverageSnapshot(storedMessages: 8, indexedMessages: 8, partiallyIndexedMessages: 0,
+                                            chunks: SQLiteEmailStore.SearchDocCoverage(bodiesEvaluable: 5, emails: 8, attachmentsEvaluable: 2,
+                                                                                       attachments: 2, bodyChunks: 5))
+        let behindText = ModelSearchNotice.noMatch(coverage: behind)
+        XCTAssertTrue(behindText.contains("indexing is incomplete") && behindText.contains("5 of 8"), behindText)
+    }
+
+    /// IPAD-04 (a): the message view's Contents list reads the files inside a
+    /// ZIP attachment from the archive it is given, and opens short lists.
+    func testIPAD04_zipAttachmentContentsAreListedForTheMessage() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        let ocrWas = AttachmentOCR.isEnabled
+        defer {
+            SearchChunkPolicy.isEnabled = wasOn
+            AttachmentOCR.isEnabled = ocrWas
+            AttachmentTextIndexJob.testStoreOverride = nil
+            AttachmentTextIndexJob.testSuppressKicks = false
+        }
+        let (env, docx, zip) = try await ipadArchive()
+        let rows = await AttachmentChildrenList.rows(emailID: zip.id, position: 0, archive: env.archive)
+        XCTAssertEqual(rows.map(\.path), ["inner/Contract.docx"])
+        XCTAssertEqual(rows.first.map { AttachmentChildrenList.stateLabel($0.state) }, String(localized: "read for search"))
+        let none = await AttachmentChildrenList.rows(emailID: docx.id, position: 0, archive: env.archive)
+        XCTAssertTrue(none.isEmpty, "a DOCX is a document, not a container: no Contents list")
+        XCTAssertTrue(AttachmentChildrenList.startsExpanded(count: rows.count), "a short list is open on arrival — no tap to see the file")
+        XCTAssertFalse(AttachmentChildrenList.startsExpanded(count: 500))
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    /// IPAD-04 (b): the per-attachment Download follows the access policy —
+    /// enabled within Free's daily allowance with the count said, off with the
+    /// reason and the upgrade path when it is used, unlimited once a plan was held.
+    func testIPAD04_attachmentDownloadFollowsThePolicy_andSaysWhy() throws {
+        XCTAssertEqual(StoreManager.freeAttachmentDownloadsPerDay, 10)
+        let free = AccessPolicy(state: .free)
+        let fresh = AttachmentDownloadGate.decide(policy: free, usedToday: 0)
+        XCTAssertTrue(fresh.isEnabled, "Free includes downloads")
+        XCTAssertEqual(fresh.remainingToday, 10)
+        XCTAssertEqual(fresh.note, String(localized: "Free plan: \(10) of \(10) attachment saves left today."))
+        XCTAssertFalse(fresh.offersUpgrade)
+        let some = AttachmentDownloadGate.decide(policy: free, usedToday: 7)
+        XCTAssertTrue(some.isEnabled)
+        XCTAssertEqual(some.remainingToday, 3)
+        XCTAssertTrue(try XCTUnwrap(some.note).contains("3"))
+        let used = AttachmentDownloadGate.decide(policy: free, usedToday: 10)
+        XCTAssertFalse(used.isEnabled)
+        XCTAssertEqual(used.remainingToday, 0)
+        XCTAssertTrue(used.offersUpgrade, "a disabled button comes with the way past it")
+        let reason = try XCTUnwrap(used.note, "disabled is never silent")
+        XCTAssertTrue(reason.contains("10") && reason.contains("Personal"), reason)
+        XCTAssertFalse(AttachmentDownloadGate.decide(policy: free, usedToday: 25).isEnabled)
+        for state in [EntitlementState.active(.personal), .lifetime(.professional), .lapsed(previous: .personal)] {
+            let paid = AttachmentDownloadGate.decide(policy: AccessPolicy(state: state), usedToday: 99)
+            XCTAssertEqual(paid, AttachmentDownloadDecision(isEnabled: true, remainingToday: nil, note: nil, offersUpgrade: false), "\(state)")
+        }
+
+        // A save counts against today's allowance on Free only.
+        let suite = "ipad04-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        AttachmentDownloadGate.recordSave(policy: free, defaults: defaults)
+        AttachmentDownloadGate.recordSave(policy: free, defaults: defaults)
+        XCTAssertEqual(defaults.integer(forKey: AttachmentDownloadGate.usedTodayKey), 2)
+        AttachmentDownloadGate.recordSave(policy: AccessPolicy(state: .active(.personal)), defaults: defaults)
+        XCTAssertEqual(defaults.integer(forKey: AttachmentDownloadGate.usedTodayKey), 2)
+
+        // Source guard: the message view's button reads the policy, not a parse-time temp file.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let detail = try String(contentsOf: repo.appendingPathComponent("maxmailin/EmailDetailView.swift"), encoding: .utf8)
+        XCTAssertFalse(detail.contains(".disabled(att.fileURL == nil)"), "a stored message has no temp file; the bytes come from the message")
+        XCTAssertTrue(detail.contains(".disabled(!downloadDecision.isEnabled)"))
+    }
+}
