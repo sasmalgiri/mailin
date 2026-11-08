@@ -6,12 +6,12 @@
 //  I-11: author and read a v1-shaped JSON library at an arbitrary location,
 //  so the migration timing rows can run against a synthetic library derived
 //  from the owner's real mailbox instead of waiting for a customer's files.
-//  DEBUG only; production never writes the v1 store.
+//  Compiled in every configuration (R10: the tests also build against
+//  Release) but called only by tests; production never writes the v1 store.
 //
 
 import Foundation
 
-#if DEBUG
 extension EmailPersistence {
 
     /// Writes `saved_emails.json` (the v1 array shape, lightweight: no raw
@@ -49,4 +49,3 @@ extension EmailPersistence {
         return (emails, sender)
     }
 }
-#endif

@@ -3427,12 +3427,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - Counts
 
-    #if DEBUG
     /// Test-only: the schema version this file is at.
     func userVersionForTesting() throws -> Int {
         try scalarInt(try ensureDB(), "PRAGMA user_version;")
     }
-    #endif
 
     func totalCount() throws -> Int {
         let db = try ensureDB()
@@ -5071,7 +5069,6 @@ actor SQLiteEmailStore: EmailArchiveStore {
         } catch { try? exec(db, "ROLLBACK;"); throw error }
     }
 
-    #if DEBUG
     /// Test fixture: strip the structured fidelity fields so rows look like
     /// they were persisted by a pre-full-fidelity build.
     func simulateLegacyRowsForTesting() throws {
@@ -5092,7 +5089,6 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let db = try ensureDB()
         try exec(db, "DELETE FROM email_participants;")
     }
-    #endif
 
     // MARK: - Attachment-content search (v6)
 

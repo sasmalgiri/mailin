@@ -9,19 +9,15 @@ struct EmailPersistence {
     private static let saveQueue = DispatchQueue(label: "com.ecosanskriti.mailin.persistence", qos: .utility)
     private static let currentVersion = 1
 
-    #if DEBUG
     /// Test-only override for the base directory, so unit tests isolate the v1
     /// store to a temp dir instead of the real Application Support location.
     nonisolated(unsafe) static var testBaseDirectoryOverride: URL?
-    #endif
 
     private static var baseDirectory: URL {
-        #if DEBUG
         if let override = testBaseDirectoryOverride {
             try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
             return override
         }
-        #endif
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("mailin")
         let appDir = appSupport.appendingPathComponent("mailin", isDirectory: true)
@@ -75,7 +71,6 @@ struct EmailPersistence {
     // uncompressed→compressed rewrite below), and the retention/clear paths
     // keep `clear()`/`hasSavedData`.
 
-    #if DEBUG
     /// Test-only v1-store writer: lets migration tests author a legacy store
     /// exactly the way v1 did. Never called from production code.
     static func saveSync(emails: [MBOXParser.RawEmail], senderEmail: String) {
@@ -84,7 +79,6 @@ struct EmailPersistence {
             performSave(emails: emails, senderEmail: senderEmail)
         }
     }
-    #endif
 
     private static func stripRedundantData(_ emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail] {
         emails.map { email in

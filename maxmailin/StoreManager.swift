@@ -470,20 +470,25 @@ class StoreManager: ObservableObject {
         Task { await refreshArchiveAccessRecord() }
     }
 
-    #if DEBUG
     /// Test fixture: a deterministic Free / Personal / Professional manager
     /// that never touches StoreKit and does not take the debug unlock, so a
-    /// test can prove that a gate denies.
+    /// test can prove that a gate denies. Compiled in every configuration
+    /// (R10: the tests also build against Release) — it grants nothing: the
+    /// instance never claims `live`, so `publishAccessScope` ignores it, and
+    /// the app never calls it.
     init(testTier: PurchaseTier, lifetime: Bool = false, lapsedFrom: PurchaseTier? = nil, archiveRecord: PurchaseTier? = nil) {
         currentTier = testTier
         isLifetimePurchase = lifetime
+        #if DEBUG
         debugUnlocksAllTiers = false
+        #endif
         // LIFE-06: a fixture for "the plan ended" — Free now, paid before.
         if let lapsedFrom, lapsedFrom > .free { lastPaidTier = lapsedFrom }
         // A08: a fixture for "clean installation, the archive remembers the plan".
         if let archiveRecord, archiveRecord > .free { archivePaidTier = archiveRecord }
     }
 
+    #if DEBUG
     /// Developer switch: launching with `-mailinSimulateTier free|personal|
     /// professional` makes the LIVE manager behave as that tier in a Debug
     /// build (no all-unlocked shortcut), so the Free experience and every
