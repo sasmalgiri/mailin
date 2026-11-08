@@ -258,13 +258,24 @@ final class TikaODFIWorkFixtureTests: XCTestCase {
         XCTAssertTrue(r.components.contains("Comments"), r.components.description)
     }
 
-    func testREAL_Pages09_passwordProtected_lockedByName() throws {
-        // Password "tika" (Tika does not open it either: TIKA-903). Apple's own ZIP methods 25451/25452.
+    func testREAL_Pages09_passwordProtected_lockedWithoutPassword_opensWithTika() throws {
+        // Password "tika" (Tika does not open it: TIKA-903). Apple's own ZIP methods 25451/25452.
         XCTAssertThrowsError(try read("testPagesPwdProtected.pages")) { error in
             XCTAssertEqual(error as? OfficeTextExtractor.ExtractError, .encrypted)
         }
         let members = try ZIPArchiveReader.members(of: Self.fixture("testPagesPwdProtected.pages"))
         XCTAssertTrue(members.allSatisfy { IWorkDocumentReader.protectedMethods.contains($0.method) }, members.map(\.method).description)
+        // Audit R6: the verifier (central-directory "iwpv" field) and the key.
+        let verifier = try XCTUnwrap(try IWork09Encryption.verifier(in: Self.fixture("testPagesPwdProtected.pages")))
+        XCTAssertEqual(verifier.iterations, 4000)
+        XCTAssertThrowsError(try read("testPagesPwdProtected.pages", password: "Tika")) { error in
+            XCTAssertEqual(error as? OfficeTextExtractor.ExtractError, .wrongPassword)
+        }
+        let r = try read("testPagesPwdProtected.pages", password: "tika")
+        // The template's placeholder (ghost) lorem ipsum stays excluded, as in every '09 document.
+        assertContains(["Sample pages document", "A text box with text.", "Cell seven Cell eight Cell nine",
+                        "here is some embedded text in a text box", "Chart: A CRAZY COOL 3D LINE CHART WOW", "Nunc volutpat dapibus nisi."], r)
+        XCTAssertTrue(r.components.contains("Document"), r.components.description)
     }
 
     func testREAL_Numbers09_accountChecking_valuesAndSheets() throws {
@@ -318,5 +329,35 @@ final class TikaODFIWorkFixtureTests: XCTestCase {
         assertContains(["Category", "Home", "Checking Account: 300545668", "Credit Card", "Groceries", "Food",
                         "Try adding your own account transactions to this table."], r)
         XCTAssertTrue(r.components.contains { $0.contains("Checking") }, r.components.description)
+    }
+
+    /// Audit R6: IWA table tiles decoded cell by cell (pre-BNC v4 storage).
+    /// The values are the ones the '09 version of the same workbook shows
+    /// (`testREAL_Numbers09_accountChecking_valuesAndSheets`: -226, -137.5,
+    /// 4650, -210), now read from the 2013 file's tiles as numbers and dates.
+    func testREAL_Numbers2013_IWA_numericCellsDatesAndFormulaResults() throws {
+        let r = try read("testNumbers2013.numbers")
+        XCTAssertTrue(r.components.contains("Table cells: Transactions (sheet: Checking)"), r.components.description)
+        XCTAssertTrue(r.components.contains("Table cells: Account Categories (sheet: Checking)"), r.components.description)
+        XCTAssertTrue(r.components.contains("Table cells: Table 1 (sheet: Second sheet)"), r.components.description)
+        // Row by row, tab-separated, numbers as stored, dates ISO, formula results (Balance, Total) as values.
+        XCTAssertTrue(r.text.contains("Type\tDate\tDescription\tCategory\tAmount\tBalance"), r.text)
+        XCTAssertTrue(r.text.contains("101\t2009-10-01\tRent\t2\t-775\t3875"), r.text)
+        XCTAssertTrue(r.text.contains("Debit Card\t2009-11-02\tNight on the town\t6\t-210\t4279.1"), r.text)
+        XCTAssertTrue(r.text.contains("Beginning Balance\t4650"), r.text)
+        XCTAssertTrue(r.text.contains("Food\t-226"), r.text)
+        XCTAssertTrue(r.text.contains("Gas\t-137.5"), r.text)
+        XCTAssertTrue(r.text.contains("Total\t-2575.9"), r.text)
+        XCTAssertTrue(r.text.contains("0.5\t0.1"), "the second sheet's numbers: \(r.text)")
+        XCTAssertFalse(r.components.contains { $0 == "Table cells" || $0.hasPrefix("Table cells (sheets:") },
+                       "every list string was placed in a cell, none left in the unplaced section: \(r.components)")
+    }
+
+    func testREAL_Keynote2013_Pages2013_IWA_tablesRowByRow() throws {
+        let k = try read("testKeynote2013.key")
+        XCTAssertTrue(k.text.contains("Cell one\tCell two\tCell three\nCell four\tCell 5\tCell six\n7\tCell eight\t5/5/1985"), k.text)
+        let p = try read("testPages2013.pages")
+        XCTAssertTrue(p.text.contains("Column one\tColumn two\tColumn three\nCell one\tCell two\tCell three"), p.text)
+        XCTAssertTrue(p.text.contains("Cell seven\tCell eight\tCell nine"), p.text)
     }
 }

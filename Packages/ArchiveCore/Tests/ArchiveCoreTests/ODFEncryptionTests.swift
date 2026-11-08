@@ -7,7 +7,10 @@
 //  100,000 rounds, SHA-256 start key, SHA256/1K) and OpenOffice.org's legacy
 //  ones (Blowfish 8-bit CFB, SHA-1, 1,024 rounds, SHA1/1K), plus AES-256-GCM,
 //  round-trip through the facade; a wrong password is `wrongPassword`, no
-//  password is `encrypted` (locked), Argon2id is named, never guessed. The
+//  password is `encrypted` (locked); Argon2id (audit R6) opens files made by
+//  independent libargon2 + OpenSSL code (Fixtures/derived/make_odf_argon2id.py),
+//  per entry and LibreOffice 24.2's "wholesome" encrypted-package; an
+//  unknown key derivation is named, never guessed. The
 //  real LibreOffice-written file is `TikaODFIWorkFixtureTests
 //  .testREAL_ODT_encrypted_lockedWithoutPassword_opensWithTika`.
 //
@@ -103,13 +106,52 @@ final class ODFEncryptionTests: XCTestCase {
         XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: url, kind: .odt, password: "gcm ")) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .wrongPassword) }
     }
 
-    func testArgon2id_isNamedNotGuessed() throws {
-        var p = ODFEncryption.Parameters.libreOffice
-        p.keyDerivationName = "urn:org:documentfoundation:names:experimental:office:manifest:argon2id"
-        p.iterations = 1_000
-        let url = try write("argon.odt", password: "x", parameters: p)
+    static func derived(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/derived/\(name)")
+    }
+
+    /// Audit R6: Argon2id (t=3, m=65,536 KiB, p=4 — LibreOffice's values) + AES-256-GCM,
+    /// built by libargon2 and OpenSSL, not by this code.
+    func testArgon2id_independentlyBuiltFile_perEntry_opens() throws {
+        let url = Self.derived("testODT_argon2id_gcm.odt")
+        let scratch = try DocumentTextExtractor.scratchDirectory("t")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let manifest = try XCTUnwrap(try ZIPArchiveReader.members(of: url).first { $0.name == "META-INF/manifest.xml" })
+        let entry = try XCTUnwrap(ODFEncryption.encryptedEntries(manifest: try DocumentTextExtractor.memberData(manifest, from: url, scratch: scratch))["content.xml"])
+        XCTAssertEqual(entry.keyDerivationName, ODFEncryption.argon2idNameLibreOffice)
+        XCTAssertEqual(entry.argon2Iterations, 3); XCTAssertEqual(entry.argon2Memory, 65_536); XCTAssertEqual(entry.argon2Lanes, 4)
         XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: url, kind: .odt)) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .encrypted) }
-        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: url, kind: .odt, password: "x")) { error in
+        // (A wrong password is checked on the wholesome file; each Argon2id run at 64 MiB takes ~25 s in a debug build, ~0.5 s optimised.)
+        let r = try DocumentTextExtractor.extract(fileURL: url, kind: .odt, password: "mailin-argon2")
+        XCTAssertTrue(r.text.contains("MAILIN-ARGON2ID-SENTENCE-20261109 sits inside the protected document."), r.text)
+        XCTAssertTrue(r.text.contains("Argon2id footer"), "styles.xml decrypted too: \(r.text)")
+    }
+
+    /// LibreOffice 24.2+ wholesome encryption: one encrypted `encrypted-package` stream holding the plain package.
+    func testArgon2id_independentlyBuiltFile_wholesomeEncryptedPackage_opens() throws {
+        let url = Self.derived("testODT_argon2id_wholesome.odt")
+        XCTAssertEqual(try ZIPArchiveReader.members(of: url).map(\.name), ["mimetype", "encrypted-package", "META-INF/manifest.xml"])
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: url, kind: .odt)) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .encrypted) }
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: url, kind: .odt, password: "wrong")) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .wrongPassword) }
+        let r = try DocumentTextExtractor.extract(fileURL: url, kind: .odt, password: "mailin-argon2")
+        XCTAssertTrue(r.text.contains("MAILIN-ARGON2ID-SENTENCE-20261109"), r.text)
+        XCTAssertEqual(r.components, ["Document", "Footer"])
+    }
+
+    func testArgon2id_roundTripThroughTheBuilder_andOtherArgon2VariantsNamed() throws {
+        var p = ODFEncryption.Parameters.libreOffice
+        p.algorithm = .aes256GCM
+        p.keyDerivationName = ODFEncryption.argon2idName
+        p.argon2 = (t: 2, m: 256, p: 2)
+        let url = try write("argon.odt", password: "x", parameters: p)
+        XCTAssertTrue(try DocumentTextExtractor.extract(fileURL: url, kind: .odt, password: "x").text.contains(Self.secret))
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: url, kind: .odt, password: "y")) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .wrongPassword) }
+
+        var d = ODFEncryption.Parameters.libreOffice
+        d.keyDerivationName = "urn:example:argon2d"
+        let other = try write("argon2d.odt", password: "x", parameters: d)
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: other, kind: .odt)) { XCTAssertEqual($0 as? OfficeTextExtractor.ExtractError, .encrypted) }
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: other, kind: .odt, password: "x")) { error in
             XCTAssertEqual(error as? ODFEncryption.UnlockError, .keyDerivationUnsupported("Argon2"))
             XCTAssertEqual(error.localizedDescription, "locked: Argon2 key derivation not supported")
         }

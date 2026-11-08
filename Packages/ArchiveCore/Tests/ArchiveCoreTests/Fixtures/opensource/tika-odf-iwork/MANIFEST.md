@@ -9,8 +9,8 @@ own `ODFParserTest.java` and `IWorkParserTest.java` assert.
 
 Known passwords: `testODTEncrypted.odt` (LibreOffice, AES-256-CBC / PBKDF2 100,000 / SHA-256) opens with
 `tika`; `testPagesPwdProtected.pages` (iWork '09, Apple ZIP methods 25451/25452) has the password `tika`
-too but is reported locked by name — no unlock exists for that scheme in this build (Tika does not open it
-either, TIKA-903).
+too: locked without a password, opened with it since audit R6 (`IWork09Encryption`; Tika does not open
+it, TIKA-903).
 
 ## OpenDocument — `tika-parser-miscoffice-module/src/test/resources/test-documents/`
 

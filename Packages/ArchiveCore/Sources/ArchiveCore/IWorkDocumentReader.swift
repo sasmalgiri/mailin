@@ -16,8 +16,9 @@
 //    iWork 2018+      the same, but the document is a ZIP of a bundle whose
 //                     Index/ lives inside an inner Index.zip
 //  Password-protected '09 documents store their members under Apple's own ZIP
-//  methods 25451/25452 and are reported locked by that name; no unlock exists
-//  in this build.
+//  methods 25451/25452: reported locked without a password, opened with one
+//  (audit R6, IWork09Encryption.swift). IWA tables are decoded cell by cell
+//  by IWATableDecoder.swift (audit R6).
 //
 //  What the '09 collector reads (the elements Tika's handlers read, plus
 //  numbers and dates): paragraphs (sf:p, placeholder "ghost text" excluded),
@@ -35,13 +36,29 @@ enum IWorkDocumentReader {
     /// Apple's ZIP methods for password-protected iWork '09 members.
     static let protectedMethods: Set<UInt16> = [25451, 25452]
 
-    static func extract(fileURL: URL, kind: DocumentKind) throws -> OfficeTextExtractor.Result {
+    /// - Parameter password: audit R6 — opens a password-protected iWork '09
+    ///   document (`IWork09Encryption`) for this call only; without it the
+    ///   document is reported locked.
+    static func extract(fileURL: URL, kind: DocumentKind, password: String? = nil) throws -> OfficeTextExtractor.Result {
         let members: [ZIPArchiveReader.Member]
         do { members = try ZIPArchiveReader.members(of: fileURL) } catch {
             throw OfficeTextExtractor.ExtractError.notAPackage(String(describing: error))
         }
         let scratch = try DocumentTextExtractor.scratchDirectory("iwork")
         defer { try? FileManager.default.removeItem(at: scratch) }
+        if let password, members.contains(where: { protectedMethods.contains($0.method) }) {
+            let unlocked: (url: URL, leftOut: [String])
+            do {
+                unlocked = try IWork09Encryption.unlock(fileURL: fileURL, members: members, password: password, scratch: scratch,
+                                                        limit: ExtractionLimits.effective.partBytes)
+            } catch let error as ProtectedContentError {
+                throw OfficeTextExtractor.ExtractError.notAPackage(error.localizedDescription)
+            }
+            let plainMembers = try ZIPArchiveReader.members(of: unlocked.url)
+            let result = try extract(members: plainMembers, archive: unlocked.url, kind: kind, scratch: scratch, nested: false)
+            return OfficeTextExtractor.Result(text: result.text, components: result.components, skipped: result.skipped,
+                                              notText: (result.notText + unlocked.leftOut).sorted())
+        }
         return try extract(members: members, archive: fileURL, kind: kind, scratch: scratch, nested: false)
     }
 
@@ -157,13 +174,54 @@ enum IWorkDocumentReader {
                 text += "[\(label)]\n" + storages.joined(separator: "\n") + "\n"
             }
         }
-        if !cellStrings.isEmpty {
+        // Audit R6: the tables cell by cell (numbers, dates, durations,
+        // booleans, formula results, text), from every Index/*.iwa object.
+        var placed: Set<String> = []
+        for table in try decodedTables(members: members, archive: archive, scratch: scratch, limit: limit, skipped: &skipped) {
+            // "Table cells: …" — the earlier section's label, now one per table.
+            var label = "Table cells: " + (table.name.isEmpty ? "Table" : table.name)
+            if let sheet = table.sheet, !sheet.isEmpty { label += " (sheet: \(sheet))" }
+            components.append(label)
+            text += "[\(label)]\n" + table.rows.map { $0.joined(separator: "\t") }.joined(separator: "\n") + "\n"
+            placed.formUnion(table.strings)
+        }
+        // Strings of the table lists that no decoded cell showed (all of them
+        // when no table could be decoded) keep the earlier section.
+        let unplaced = cellStrings.filter { !placed.contains($0) }
+        if !unplaced.isEmpty {
             let label = sheetNames.isEmpty ? "Table cells" : "Table cells (sheets: \(sheetNames.joined(separator: ", ")))"
             components.append(label)
-            text += "[\(label)]\n" + cellStrings.joined(separator: "\n") + "\n"
+            text += "[\(label)]\n" + unplaced.joined(separator: "\n") + "\n"
         }
         if components.isEmpty && skipped.isEmpty { throw OfficeTextExtractor.ExtractError.noTextParts }
         return OfficeTextExtractor.Result(text: text, components: components, skipped: skipped, notText: notText.sorted())
+    }
+
+    /// Audit R6: tables with at least one cell, decoded from the objects of
+    /// every Index/*.iwa member (tables, tiles and lists live in Document,
+    /// CalculationEngine, Slide and Tables/* members). A member over the part
+    /// guard is named in `skipped`, never read partly.
+    private static func decodedTables(members: [ZIPArchiveReader.Member], archive: URL, scratch: URL, limit: Int64,
+                                      skipped: inout [String]) throws -> [IWATableDecoder.Table] {
+        var objects: [Int: IWAFile.Object] = [:]
+        var sawTableModel = false
+        for member in members where !member.isDirectory {
+            let name = stripBundlePrefix(member.name)
+            guard name.hasPrefix("Index/"), name.hasSuffix(".iwa") else { continue }
+            guard member.uncompressedSize <= limit else {
+                let note = "\(member.name) (\(member.uncompressedSize) bytes, over the \(limit)-byte guard)"
+                if !skipped.contains(note) { skipped.append(note) }
+                continue
+            }
+            let data = try DocumentTextExtractor.memberData(member, from: archive, scratch: scratch)
+            guard let found = try? IWAFile.identifiedObjects(in: data, limit: Int(limit)) else { continue }
+            for (id, object) in found where objects[id] == nil {
+                objects[id] = object
+                if object.type == IWATableDecoder.tableModelType { sawTableModel = true }
+            }
+        }
+        guard sawTableModel else { return [] }
+        return IWATableDecoder.tables(objects: objects).filter { !$0.rows.isEmpty }
     }
 
     /// IWA members that carry user text: the document, every slide (not the
