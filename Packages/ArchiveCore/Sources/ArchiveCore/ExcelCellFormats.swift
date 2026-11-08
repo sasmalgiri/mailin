@@ -8,14 +8,17 @@
 //
 //    ExcelNumberFormat   which number formats are dates, times, percentages
 //                        or currencies (built-in ids 14–22 / 45–47, custom
-//                        codes with d/m/y/h/s outside quotes), and the ISO
-//                        rendering of a date serial in the 1900 or 1904 system
+//                        codes with d/m/y/h/s outside quotes) and the code of
+//                        each built-in id; the displayed text itself comes
+//                        from ExcelNumberFormatRenderer (the older ISO
+//                        `render(serial:kind:date1904:)` stays for callers
+//                        that want a sortable date)
 //    ExcelFormulaText    a shared formula's master text re-based on another
 //                        cell: relative A1 references shifted, absolute ones
 //                        kept, anything that cannot be shifted named
 //
 //  Nothing here evaluates a formula; the stored serial stays in the output
-//  next to the rendered date ("2025-01-15 (serial 45672)").
+//  next to the rendered date ("1/15/2025 (serial 45672)").
 //
 
 import Foundation
@@ -31,8 +34,31 @@ enum ExcelNumberFormat {
         let code: String
     }
 
-    /// Built-in number formats (ECMA-376 §18.8.30) — the ones that decide a kind.
+    /// Built-in number formats (ECMA-376 §18.8.30). 14 and 22 follow the
+    /// reader's short-date setting; they are the en-US ones Excel shows
+    /// (`m/d/yyyy`, ECMA lists `mm-dd-yy`). The East Asian locale-implied ids
+    /// (27–36, 50–58) and the Thai ones (59–62, 67–81) have no en-US look of
+    /// their own; Excel en-US shows them as the short date (14) or the time
+    /// (21), the plain numbers (1–4), percentages (9, 10) and fractions
+    /// (12, 13) they stand for.
     static func builtinCode(_ id: Int) -> String? {
+        switch id {
+        case 14: return "m/d/yyyy"
+        case 22: return "m/d/yyyy h:mm"
+        case 27...31, 36, 50...58, 71, 72: return builtinCode(14)
+        case 32...35, 77: return builtinCode(21)
+        case 59...62: return builtinCode(id - 58)
+        case 67, 68: return builtinCode(id - 58)
+        case 69, 70: return builtinCode(id - 57)
+        case 73...75: return builtinCode(id - 58)
+        case 76: return builtinCode(20)
+        case 78: return builtinCode(22)
+        case 79...81: return builtinCode(id - 34)
+        default: return ecmaBuiltinCode(id)
+        }
+    }
+
+    private static func ecmaBuiltinCode(_ id: Int) -> String? {
         switch id {
         case 0: return "General"
         case 1: return "0"
@@ -84,12 +110,12 @@ enum ExcelNumberFormat {
         if code == nil {
             switch id {
             case 0: return Format(kind: .general, code: "General")
-            case 14...17: return Format(kind: .date, code: text)
-            case 18...21, 45, 47: return Format(kind: .time, code: text)
-            case 46: return Format(kind: .elapsedTime, code: text)
-            case 22: return Format(kind: .dateTime, code: text)
+            case 14...17, 27...31, 36, 50...58, 71...75: return Format(kind: .date, code: text)
+            case 18...21, 32...35, 45, 47, 76, 77, 79, 81: return Format(kind: .time, code: text)
+            case 46, 80: return Format(kind: .elapsedTime, code: text)
+            case 22, 78: return Format(kind: .dateTime, code: text)
             case 5...8, 42, 44: return Format(kind: .currency, code: text)
-            case 9, 10: return Format(kind: .percent, code: text)
+            case 9, 10, 67, 68: return Format(kind: .percent, code: text)
             default: return Format(kind: text.isEmpty ? .general : .other, code: text)
             }
         }

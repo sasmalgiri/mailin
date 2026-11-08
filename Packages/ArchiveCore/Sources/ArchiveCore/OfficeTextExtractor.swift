@@ -430,24 +430,38 @@ enum OfficeTextExtractor {
     }
 
     /// Directive §6 "Excel": one cell's text — the displayed value, then the
-    /// raw serial / format name / formula in one parenthesis.
+    /// raw serial / value / formula in one parenthesis. The displayed value is
+    /// Excel's own rendering of the number format, en-US
+    /// (`ExcelNumberFormatRenderer`), trimmed of the alignment spaces that
+    /// `_)` and `?` add at its ends; "1/15/2025 (serial 45672)",
+    /// "15% (raw 0.15)". A General cell keeps its stored text; a value
+    /// Excel cannot show in its format (a negative date) keeps the stored
+    /// value and names the format.
     static func cellText(value: String, isNumber: Bool, format: ExcelNumberFormat.Format?, date1904: Bool, formulaNote: String?) -> String {
         var shown = value
         var notes: [String] = []
-        if isNumber, let format, let serial = Double(value.trimmingCharacters(in: .whitespaces)) {
-            switch format.kind {
-            case .date, .time, .dateTime, .elapsedTime:
-                if let rendered = ExcelNumberFormat.render(serial: serial, kind: format.kind, date1904: date1904) {
+        let raw = value.trimmingCharacters(in: .whitespaces)
+        if isNumber, let format, format.kind != .general, let number = Double(raw) {
+            let isDate = [.date, .time, .dateTime, .elapsedTime].contains(format.kind)
+            if let rendered = ExcelNumberFormatRenderer.render(number, code: format.code, date1904: date1904)?.trimmingCharacters(in: .whitespaces) {
+                if isDate {
                     shown = rendered
-                    notes.append("serial " + value.trimmingCharacters(in: .whitespaces))
-                } else {
-                    notes.append("format " + format.code)
+                    notes.append("serial " + raw)
+                    if !date1904, number >= 60, number < 61, format.kind == .date || format.kind == .dateTime {
+                        notes.append("29 February 1900 is a day the 1900 date system counts but the calendar does not have")
+                    }
+                } else if rendered != raw {
+                    shown = rendered
+                    notes.append("raw " + raw)
                 }
-            case .percent, .currency:
+            } else {
                 notes.append("format " + format.code)
-            case .general, .other:
-                break
             }
+        } else if !isNumber, let format, format.kind != .general, !value.isEmpty,
+                  let rendered = ExcelNumberFormatRenderer.renderText(value, code: format.code)?.trimmingCharacters(in: .whitespaces),
+                  rendered != value.trimmingCharacters(in: .whitespaces) {
+            shown = rendered
+            notes.append("text " + value)
         }
         if let formulaNote { notes.append(formulaNote) }
         if notes.isEmpty { return shown }

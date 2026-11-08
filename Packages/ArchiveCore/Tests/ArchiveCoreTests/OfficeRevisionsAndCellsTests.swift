@@ -341,12 +341,12 @@ final class OfficeRevisionsAndCellsTests: XCTestCase {
         </sheetData>
         """
         let result = try OfficeTextExtractor.extract(fileURL: try write("d.xlsx", xlsx(sheetXML: sheet, styles: styles, sharedStrings: ["label"])), kind: .xlsx)
-        XCTAssertTrue(result.text.contains("A1: 2025-01-15 (serial 45672)\tB1: 2025-01-15 (serial 45672)\tC1: 14:30:00 (serial 0.604166666666667)\tD1: 2025-01-15 12:00:00 (serial 45672.5)\n"), result.text)
-        XCTAssertTrue(result.text.contains("A2: 0.15 (format 0%)\tB2: 1234.5 (format \"$\"#,##0.00)\tC2: 30\tD2: 45672\n"), "the 'days' word is quoted, not a day code; General stays raw: \(result.text)")
-        XCTAssertTrue(result.text.contains("A3: 2025-01-15 (serial 45672; formula =TODAY())\tB3: label\tC3: 1900-02-29 (a day the 1900 system counts but the calendar does not have) (serial 60)\tD3: TRUE\n"), result.text)
+        XCTAssertTrue(result.text.contains("A1: 1/15/2025 (serial 45672)\tB1: 2025-01-15 (serial 45672)\tC1: 14:30 (serial 0.604166666666667)\tD1: 1/15/2025 12:00 (serial 45672.5)\n"), "each serial as its format shows it (14 = m/d/yyyy, 20 = h:mm, 22 = m/d/yyyy h:mm in Excel en-US): \(result.text)")
+        XCTAssertTrue(result.text.contains("A2: 15% (raw 0.15)\tB2: $1,234.50 (raw 1234.5)\tC2: 30 days (raw 30)\tD2: 45672\n"), "the 'days' word is quoted, not a day code; General stays raw: \(result.text)")
+        XCTAssertTrue(result.text.contains("A3: 1/15/2025 (serial 45672; formula =TODAY())\tB3: label\tC3: 2/29/1900 (serial 60; 29 February 1900 is a day the 1900 date system counts but the calendar does not have)\tD3: TRUE\n"), result.text)
         // The 1904 system shifts every date.
         let mac = try OfficeTextExtractor.extract(fileURL: try write("m.xlsx", xlsx(sheetXML: "<sheetData><row r=\"1\"><c r=\"A1\" s=\"1\"><v>44210</v></c></row></sheetData>", styles: "<cellXfs><xf numFmtId=\"0\"/><xf numFmtId=\"14\"/></cellXfs>", workbookExtra: "<workbookPr date1904=\"1\"/>")), kind: .xlsx)
-        XCTAssertTrue(mac.text.contains("A1: 2025-01-15 (serial 44210)"), mac.text)
+        XCTAssertTrue(mac.text.contains("A1: 1/15/2025 (serial 44210)"), mac.text)
         XCTAssertEqual(ExcelNumberFormat.classify(id: 170, code: "[h]:mm:ss").kind, .elapsedTime)
         XCTAssertEqual(ExcelNumberFormat.render(serial: 1.5, kind: .elapsedTime, date1904: false), "36:00:00")
         XCTAssertEqual(ExcelNumberFormat.classify(id: 171, code: "[$€-407] #,##0.00").kind, .currency)
@@ -394,7 +394,7 @@ final class OfficeRevisionsAndCellsTests: XCTestCase {
         XCTAssertTrue(formulas.text.contains("B20: 15 (formula =+B19+1)\tC20: 225 (formula =+B20*B20)"), formulas.text)
         XCTAssertEqual(formulas.components, ["Sheet: Feuil1", "Sheet: Feuil2", "Sheet: Feuil3"])
         let dates = try OfficeTextExtractor.extract(fileURL: tika.appendingPathComponent("testEXCEL_dateFormats.xlsx"), kind: .xlsx)
-        XCTAssertTrue(dates.text.contains("A2: 2018-09-20 (serial 43363)\nA3: 1996-08-10 (serial 35287)\n"), "numFmtId 14 cells show the date they display, serial kept: \(dates.text)")
+        XCTAssertTrue(dates.text.contains("A2: 9/20/2018 (serial 43363)\nA3: 8/10/1996 (serial 35287)\n"), "numFmtId 14 cells show the date they display (Excel en-US), serial kept: \(dates.text)")
     }
 
     // MARK: - XLSB
@@ -516,7 +516,7 @@ final class OfficeRevisionsAndCellsTests: XCTestCase {
                                                ("xl/externalLinks/_rels/externalLink1.bin.rels", Data("<Relationships><Relationship Id=\"rId1\" Type=\"ext\" Target=\"file:///C:/Books/Other.xlsx\" TargetMode=\"External\"/></Relationships>".utf8))])
         let result = try DocumentTextExtractor.extract(fileURL: try write("h.xlsb", package), kind: .xlsb)
         XCTAssertTrue(result.text.contains("[Workbook]\n[hidden name NA]\n[external reference: file:///C:/Books/Other.xlsx] not refreshed\n"), result.text)
-        XCTAssertTrue(result.text.contains("A1: 2025-01-15 (serial 45672)\tB1: 2025-01-15 (serial 45672.5)\t[hidden column C] C1: 0.125 (format 0.00%)\n"), result.text)
+        XCTAssertTrue(result.text.contains("A1: 1/15/2025 (serial 45672)\tB1: 2025-01-15 (serial 45672.5)\t[hidden column C] C1: 12.50% (raw 0.125)\n"), result.text)
         XCTAssertTrue(result.text.contains("[hidden row 5] A5: hidden figure\n"), result.text)
         XCTAssertTrue(result.text.contains("A6: 99 (formula ='[file:///C:/Books/Other.xlsx]Q1'!$A$1)\n"), "the external cell is named from the stored reference, never fetched: \(result.text)")
     }
@@ -528,9 +528,9 @@ final class OfficeRevisionsAndCellsTests: XCTestCase {
         XCTAssertTrue(various.text.contains("A13: formula\tB13: 4 (formula =C13*2)\tC13: 2\n"), "cached 4 = C13 (2) × 2: \(various.text)")
         XCTAssertTrue(various.text.contains("A14: formulaErr\tB14: #NAME? (formula =COS(NA))\n"), various.text)
         XCTAssertTrue(various.text.contains("A15: formulaFloat\tB15: 0.5 (formula =1/C13)\t"), "cached 0.5 = 1 / C13 (2): \(various.text)")
-        XCTAssertTrue(various.text.contains("A10: date\tB10: 2017-03-09 (serial 42803)\n"), various.text)
-        XCTAssertTrue(various.text.contains("A5: percent\tB5: 0.2 (format 0%)\n"), various.text)
-        XCTAssertTrue(various.text.contains("A4: currency\tB4: 3.03 (format _(\"$\"* #,##0.00_)"), various.text)
+        XCTAssertTrue(various.text.contains("A10: date\tB10: 3/9/2017 (serial 42803)\n"), various.text)
+        XCTAssertTrue(various.text.contains("A5: percent\tB5: 20% (raw 0.2)\n"), various.text)
+        XCTAssertTrue(various.text.contains("A4: currency\tB4: $3.03 (raw 3.03)\n"), various.text)
         XCTAssertEqual(various.components, ["Workbook", "Sheet: mySheet1"])
         XCTAssertFalse(various.text.contains("not decoded"), various.text)
         let plain = try DocumentTextExtractor.extract(fileURL: tika.appendingPathComponent("testEXCEL.xlsb"), kind: .xlsb)
