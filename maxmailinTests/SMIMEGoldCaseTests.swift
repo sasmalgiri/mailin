@@ -45,7 +45,7 @@ import XCTest
 final class SMIMEGoldCaseTests: XCTestCase {
 
     /// Self-signed S/MIME signed-data (opaque, `-nodetach`), DER, base64.
-    private static let signedCMSBase64 =
+    static let signedCMSBase64 =   // R6: also read by SMIMEPortableTests
         "MIIGqQYJKoZIhvcNAQcCoIIGmjCCBpYCAQExDzANBglghkgBZQMEAgEFADBLBgkqhkiG9w0BBwGgPgQ8VGhpcyBpcyB0aGUgc2ln" +
         "bmVkIGNvbnRlbnQgb2YgdGhlIG1haWxpbiBTL01JTUUgZ29sZCBjYXNlLg0KoIIDrzCCA6swggKToAMCAQICFCMTLKNO/PvGDX++" +
         "M5xzuJMStyEPMA0GCSqGSIb3DQEBCwUAMFQxFDASBgNVBAMMC1Rlc3QgU2lnbmVyMSEwHwYJKoZIhvcNAQkBFhJzaWduZXJAZXhh" +
@@ -246,8 +246,8 @@ final class SMIMEGoldCaseTests: XCTestCase {
 final class SMIMEDetachedGoldCaseTests: XCTestCase {
 
     /// The message as stored (LF line endings throughout, as an mbox would
-    /// keep it). The signer digested the CRLF form.
-    private static let signedMessageLF = """
+    /// keep it). The signer digested the CRLF form. R6: also read by SMIMEPortableTests.
+    static let signedMessageLF = """
         To: recipient@example.com
         From: Detached Signer <detached@example.com>
         Subject: Detached S/MIME gold case

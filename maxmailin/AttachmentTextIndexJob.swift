@@ -182,6 +182,30 @@ final class AttachmentTextIndexJob {
         return await reverifySignatures()
     }
 
+    /// R6: after an S/MIME identity is imported, every S/MIME row is read
+    /// again so locked envelopes the new key opens become searchable. Only
+    /// with the module on (off, they would be locked again). Returns how many
+    /// messages were re-queued.
+    func rereadSMIME() async -> Int {
+        guard ProtectedContentPolicy.decryptSMIME,
+              let coverage = try? AttachmentCoverageStore(url: await store.attachmentCoverageURL),
+              let count = try? await Self.requeueSMIME(store: store, coverage: coverage) else { return 0 }
+        if count > 0 { kickIfNeeded() }
+        return count
+    }
+
+    static func requeueSMIME(store: SQLiteEmailStore, coverage: AttachmentCoverageStore) async throws -> Int {
+        var total = 0
+        while !Task.isCancelled {
+            let ids = try coverage.emailIDs(extractors: ["smime"], below: Int.max, limit: 500, excludingKeptUnlocks: true)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            try coverage.remove(emailIDs: ids, keepingUnlocked: true)
+            total += ids.count
+        }
+        return total
+    }
+
     private func reverifySignatures() async -> Int {
         guard let coverage = try? AttachmentCoverageStore(url: await store.attachmentCoverageURL),
               let count = try? await Self.requeueOpenPGP(store: store, coverage: coverage) else { return 0 }
@@ -1210,16 +1234,30 @@ final class AttachmentTextIndexJob {
     /// beyond what the person chose for the index.
     nonisolated private static func readSMIME(_ data: Data, ocr: Bool, depth: Int) -> Reading {
         guard ProtectedContentPolicy.decryptSMIME else {
+            #if os(macOS)
             return Reading(nil, .locked, "smime", String(localized: "S/MIME-protected content — turn on \"Read S/MIME with your keychain key\" in Settings ▸ Modules to read it on this Mac"))
+            #else
+            return Reading(nil, .locked, "smime", String(localized: "S/MIME-protected content — turn on \"Read S/MIME with your keychain key\" in Settings ▸ Modules to read it on this device"))
+            #endif
         }
         #if os(macOS)
-        guard let plain = SMIMEHandler.decodeCMS(data) else {
-            return Reading(nil, .locked, "smime", String(localized: "no matching private key in the keychain, or the part is not an S/MIME envelope"))
+        // The Mac's CMSDecoder path first, as before; R6's portable reader opens what it cannot.
+        if let plain = SMIMEHandler.decodeCMS(data) {
+            return readEmbeddedMessage(plain, ocr: ocr, depth: depth, extractor: "smime")
         }
-        return readEmbeddedMessage(plain, ocr: ocr, depth: depth, extractor: "smime")
-        #else
-        return Reading(nil, .locked, "smime", String(localized: "S/MIME decryption runs on the Mac"))
         #endif
+        return readSMIMEPortable(data, ocr: ocr, depth: depth, keyOperation: nil)
+    }
+
+    /// R6: the portable CMS reader — iPhone and iPad's only S/MIME path, the
+    /// Mac's fallback. `keyOperation` nil means this device's keychain
+    /// identities. Locked rows state why (no key for the named recipients,
+    /// the wrong key, an altered part, an algorithm not read).
+    nonisolated static func readSMIMEPortable(_ data: Data, ocr: Bool, depth: Int, keyOperation: CMSPrivateKeyOperation?) -> Reading {
+        switch SMIMEHandler.decodePortable(data, keyOperation: keyOperation) {
+        case .success(let plain): return readEmbeddedMessage(plain, ocr: ocr, depth: depth, extractor: "smime")
+        case .failure(let error): return Reading(nil, .locked, "smime", SMIMEHandler.lockedReason(error))
+        }
     }
 
     // MARK: - §13.8 step 5: Unlock (one password, one attachment, once)
