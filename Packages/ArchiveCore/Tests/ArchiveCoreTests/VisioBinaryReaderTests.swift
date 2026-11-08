@@ -30,7 +30,7 @@ final class VisioBinaryReaderTests: XCTestCase {
         XCTAssertEqual(DocumentTextExtractor.sniff(fileURL: url), .vsd, "the root CLSID names Visio without the extension")
         let result = try DocumentTextExtractor.extract(fileURL: url, kind: .vsd)
         XCTAssertTrue(result.text.contains("Some random text, on a page"), result.text)
-        XCTAssertTrue(result.text.hasPrefix("[Visio text]\n[Shapes]\n"), result.text)
+        XCTAssertTrue(result.text.hasPrefix("[Visio text]\n[Page: Page-1]\n"), result.text)
         XCTAssertEqual(result.components, ["Visio text"])
         XCTAssertTrue(result.skipped.isEmpty, "\(result.skipped)")
         XCTAssertTrue(result.notText.contains(where: { $0.contains("document properties") }), "\(result.notText)")
@@ -63,6 +63,62 @@ final class VisioBinaryReaderTests: XCTestCase {
         XCTAssertTrue(negative.skipped.contains(where: { $0.contains("declares") && $0.contains("read to the end") }), "\(negative.skipped)")
         let short = try DocumentTextExtractor.extract(fileURL: Self.fixture("poi/ShortChunk1.vsd"), kind: .vsd)
         XCTAssertTrue(!short.text.isEmpty || !short.skipped.isEmpty)
+    }
+
+    /// The lines under one heading, up to the next "[" heading line.
+    static func section(_ text: String, _ heading: String) -> [String]? {
+        let lines = text.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(of: heading) else { return nil }
+        return Array(lines[(start + 1)...].prefix { !($0.hasPrefix("[") && $0.hasSuffix("]")) && !$0.isEmpty })
+    }
+
+    static func headings(_ text: String) -> [String] {
+        text.components(separatedBy: "\n").filter { $0.hasPrefix("[") && $0.hasSuffix("]") }
+    }
+
+    /// Text is grouped by page under the page's own name, as libvisio names
+    /// it: the Pages table's name index (0xC9) maps the page pointer to a
+    /// name in the trailer's name list (0x32). testVISIO.vsd (Visio 2003):
+    /// one page "Page-1" (name id 2) holding the three shape texts; the
+    /// stencil masters' text ("text", "View") under their master names.
+    func testREAL_tikaVisio2003_textGroupedUnderItsNamedPage() throws {
+        let result = try DocumentTextExtractor.extract(fileURL: Self.fixture("tika/testVISIO.vsd"), kind: .vsd)
+        XCTAssertEqual(Self.headings(result.text), ["[Visio text]", "[Page: Page-1]", "[Master: Tracking Text]", "[Master: View]"], result.text)
+        XCTAssertEqual(Self.section(result.text, "[Page: Page-1]"), ["Test View", "I am a test view", "Some random text, on a page"], result.text)
+        XCTAssertEqual(Self.section(result.text, "[Master: View]"), ["View"], result.text)
+        XCTAssertFalse(result.text.contains("[Shapes]"), "every text is reached through a page or a master")
+    }
+
+    /// Visio 2000 (version 6, 8-bit names): 44501.vsd's page is named by
+    /// local name id 4, "Page 1" (its universal name, id 5, is "Page-1");
+    /// both shape texts sit on it.
+    func testREAL_poiVisio2000_textGroupedUnderItsNamedPage() throws {
+        let result = try DocumentTextExtractor.extract(fileURL: Self.fixture("poi/44501.vsd"), kind: .vsd)
+        XCTAssertEqual(Self.headings(result.text), ["[Visio text]", "[Page: Page 1]"], result.text)
+        XCTAssertEqual(Self.section(result.text, "[Page: Page 1]"), ["Penible", "Nouveau farine"], result.text)
+    }
+
+    /// Three named pages walked in the Pages table's order list [6, 4, 5]
+    /// (libvisio's order): "Übersicht", "Entladevorgang", "EA" (name ids
+    /// 369, 340, 35) — each page's text under its own name ("Entladevorgang"
+    /// /"Kalte Luft" on the discharge page, the input/output labels on "EA");
+    /// the damaged chunks are still recorded.
+    func testREAL_poiThreePages_inTableOrderWithTheirNames() throws {
+        let result = try DocumentTextExtractor.extract(fileURL: Self.fixture("poi/NegativeChunkLength.vsd"), kind: .vsd)
+        let pages = Self.headings(result.text).filter { $0.hasPrefix("[Page:") }
+        XCTAssertEqual(pages, ["[Page: Übersicht]", "[Page: Entladevorgang]", "[Page: EA]"], result.text.prefix(800).description)
+        XCTAssertTrue(Self.section(result.text, "[Page: Entladevorgang]")?.contains("Kalte Luft") == true, result.text.prefix(800).description)
+        let ea = Self.section(result.text, "[Page: EA]") ?? []
+        XCTAssertTrue(ea.contains("Statusanzeige") && ea.contains("Betätigung des"), "\(ea)")
+        XCTAssertFalse(ea.contains("Kalte Luft"), "another page's text is not under EA")
+        // Masters' text (here the field-width hint) is kept, under its master.
+        XCTAssertTrue(result.text.contains("Feldbreite einstellen, um Absatzbreite festzulegen."))
+        XCTAssertTrue(result.skipped.contains(where: { $0.contains("read to the end") }), "\(result.skipped)")
+
+        let uml = try DocumentTextExtractor.extract(fileURL: Self.fixture("poi/ShortChunk1.vsd"), kind: .vsd)
+        XCTAssertTrue(Self.section(uml.text, "[Page: Static Structure-1]")?.contains("Static Structure") == true, uml.text.prefix(500).description)
+        let callout = try DocumentTextExtractor.extract(fileURL: Self.fixture("poi/44594.vsd"), kind: .vsd)
+        XCTAssertEqual(Self.section(callout.text, "[Master: Mid line callout]"), ["Drag the side handles to change the width of the text block."], callout.text)
     }
 
     /// The LZW variant on a known vector: literals, then a back-reference

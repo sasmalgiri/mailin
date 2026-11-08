@@ -17,10 +17,20 @@
 //  byte 8 to the first 00 00, UTF-16LE from Visio 2003 (version 11) and
 //  8-bit before. Layout after Apache POI's HDGF and vsdump's command table.
 //
-//  Every Text record is emitted once, in document order, one line per
-//  paragraph, under "[Shapes]". The binary format keeps page names in
-//  string tables the public documentation does not map to pages, so text
-//  is not grouped by page here (the Visio 2013+ .vsdx reader does that).
+//  Every Text record is emitted once, one line per paragraph, under the
+//  page it is reached through, as the .vsdx reader does: "[Page: <name>]"
+//  for each page (type 0x15) in the Pages table's order, "[Background
+//  page: <name>]" when the page pointer's format has bit 0 clear, then
+//  "[Master: <name>]" for stencil masters (type 0x1E) that hold text, then
+//  "[Shapes]" for text reached through neither, so nothing is dropped.
+//  Names follow libvisio (VSDParser::handleStreams / _nameFromId): from
+//  Visio 2000 the trailer's name list (0x32) holds the names (0x33: a
+//  dword, then the name; UTF-16LE from Visio 2003, 8-bit before) by index,
+//  and each table's name index (0xC9: count, then 13-byte records of name
+//  id, universal name id, element id) names the table's pointer at that
+//  element index; tables are walked in their order list. Visio 5 files
+//  keep names in a different record layout that is not read: their pages,
+//  if reached, are labelled "Page 1", "Page 2"… by position.
 //  VBA storages are listed as not text and never executed; other OLE
 //  streams (summary information) are not read as drawing text. A pointer
 //  outside the stream, a chunk that runs past its stream, a corrupt
@@ -87,11 +97,11 @@ enum VisioBinaryTextExtractor {
         } catch { walker.issues.append(String(describing: error)) }
 
         let skipped = walker.issues.map { "\(name): \($0)" }
-        guard !walker.lines.isEmpty else {
+        guard walker.hasText else {
             if skipped.isEmpty { throw OfficeTextExtractor.ExtractError.noTextParts }
             return OfficeTextExtractor.Result(text: "", components: [], skipped: skipped, notText: notText)
         }
-        let text = "[\(component)]\n[Shapes]\n" + walker.lines.joined(separator: "\n") + "\n"
+        let text = "[\(component)]\n" + walker.renderedText()
         return OfficeTextExtractor.Result(text: text, components: [component], skipped: skipped, notText: notText)
     }
 
@@ -101,10 +111,44 @@ enum VisioBinaryTextExtractor {
         static let maxDepth = 500
         let doc: [UInt8]
         let version: Int
+        /// Text reached through no page and no master.
         var lines: [String] = []
+        /// Pages and masters in walk order, each with the text reached through it.
+        var sections: [Section] = []
         var issues: [String] = []
+        /// Name list id → name (Visio 2000+).
+        var names: [Int: String] = [:]
+        private var currentSection: Int?
+        private var pageCount = 0
+        private var masterCount = 0
         private var visited: Set<Int> = []
         private var depthLimitNoted = false
+
+        struct Section {
+            enum Kind { case page, background, master }
+            let kind: Kind
+            let name: String
+            var lines: [String] = []
+            var heading: String {
+                switch kind {
+                case .page: return "[Page: \(name)]"
+                case .background: return "[Background page: \(name)]"
+                case .master: return "[Master: \(name)]"
+                }
+            }
+        }
+
+        var hasText: Bool { !lines.isEmpty || sections.contains { !$0.lines.isEmpty } }
+
+        /// Pages in walk order (each page listed, with or without text), then
+        /// masters that hold text, then "[Shapes]" for text reached through neither.
+        func renderedText() -> String {
+            var out = ""
+            for s in sections where s.kind != .master { out += s.heading + "\n" + s.lines.map { $0 + "\n" }.joined() }
+            for s in sections where s.kind == .master && !s.lines.isEmpty { out += s.heading + "\n" + s.lines.map { $0 + "\n" }.joined() }
+            if !lines.isEmpty { out += "[Shapes]\n" + lines.map { $0 + "\n" }.joined() }
+            return out
+        }
 
         init(doc: [UInt8], version: Int) { self.doc = doc; self.version = version }
 
@@ -144,17 +188,47 @@ enum VisioBinaryTextExtractor {
             return (Array(inflated[4...]), Array(inflated[0..<4]))
         }
 
-        mutating func walk(_ p: Pointer, depth: Int) {
+        /// Walks one pointer. `name` is the name the parent table's name
+        /// index gives this pointer (pages and masters are named that way).
+        mutating func walk(_ p: Pointer, depth: Int, name: String? = nil) {
             guard depth < Self.maxDepth else {
                 if !depthLimitNoted { issues.append("pointer tables nested deeper than \(Self.maxDepth) levels were not followed"); depthLimitNoted = true }
                 return
             }
             guard p.length > 0 else { return }
             guard visited.insert(p.offset).inserted else { return }
+            let outer = currentSection
+            defer { currentSection = outer }
+            switch p.type {
+            case Self.pageType:
+                pageCount += 1
+                // libvisio: a page pointer whose format has bit 0 clear is a background page.
+                let background = p.format & 1 == 0
+                sections.append(Section(kind: background ? .background : .page, name: name ?? "Page \(pageCount)"))
+                currentSection = sections.count - 1
+            case Self.stencilPageType:
+                masterCount += 1
+                sections.append(Section(kind: .master, name: name ?? "Master \(masterCount)"))
+                currentSection = sections.count - 1
+            default: break
+            }
             do {
                 let (contents, blockHeader) = try store(p)
                 if hasPointers(p) {
-                    for child in try containerPointers(p, contents) { walk(child, depth: depth + 1) }
+                    let table = try containerPointers(p, contents)
+                    // As libvisio: the name list first, then this table's name index, then the rest.
+                    var nameIDs: [Int: Int] = [:]
+                    if version >= 6 {
+                        for child in table.pointers where child.type == Self.nameListType { readNameList(child) }
+                        for child in table.pointers where child.type == Self.nameIndexType {
+                            nameIDs.merge(readNameIndex(child)) { first, _ in first }
+                        }
+                    }
+                    for i in table.walkOrder {
+                        let child = table.pointers[i]
+                        if version >= 6, child.type == Self.nameListType || child.type == Self.nameIndexType { continue }
+                        walk(child, depth: depth + 1, name: nameIDs[i].flatMap { names[$0] })
+                    }
                 } else if hasChunks(p) {
                     let bytes = p.isCompressed ? blockHeader + contents : contents
                     readChunks(bytes, streamOffset: p.offset)
@@ -164,7 +238,52 @@ enum VisioBinaryTextExtractor {
             } catch { issues.append(String(describing: error)) }
         }
 
-        func containerPointers(_ parent: Pointer, _ contents: [UInt8]) throws -> [Pointer] {
+        // MARK: Page and master names (libvisio VSDParser / VSD6Parser)
+
+        static let pageType = 0x15, stencilPageType = 0x1E, nameListType = 0x32, nameType = 0x33, nameIndexType = 0xC9
+
+        /// A name list (type 0x32): child i is a name blob (type 0x33) — a
+        /// dword, then the name to its terminator: UTF-16LE from Visio 2003,
+        /// 8-bit before. Its id is the child's index.
+        mutating func readNameList(_ list: Pointer) {
+            guard list.length > 0, hasPointers(list), let (contents, _) = try? store(list),
+                  let table = try? containerPointers(list, contents) else { return }
+            for (i, child) in table.pointers.enumerated() where child.type == Self.nameType && child.length > 0 {
+                guard let (bytes, _) = try? store(child), bytes.count > 4 else { continue }
+                var s: String?
+                if version > 6 {
+                    var end = 4
+                    while end + 1 < bytes.count, !(bytes[end] == 0 && bytes[end + 1] == 0) { end += 2 }
+                    s = String(bytes: bytes[4..<min(end, bytes.count)], encoding: .utf16LittleEndian)
+                } else {
+                    s = String(bytes: bytes[4...].prefix { $0 != 0 }, encoding: .windowsCP1252)
+                }
+                if let s = s?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { names[i] = s }
+            }
+        }
+
+        /// A name index (type 0xC9): a count, then 13-byte records — name id,
+        /// universal name id, element id (the index of the named pointer in
+        /// the same table), one byte. The first id is the local name Visio shows.
+        func readNameIndex(_ p: Pointer) -> [Int: Int] {
+            guard p.length > 0, let (bytes, _) = try? store(p), bytes.count >= 4 else { return [:] }
+            let count = min(Int(le32(bytes, 0)), (bytes.count - 4) / 13)
+            var map: [Int: Int] = [:]
+            for r in 0..<count {
+                let at = 4 + r * 13
+                map[Int(le32(bytes, at + 8))] = Int(le32(bytes, at))
+            }
+            return map
+        }
+
+        struct Table {
+            let pointers: [Pointer]
+            /// The indices in the table's own order list first (when it has
+            /// one), then every other index — each once.
+            let walkOrder: [Int]
+        }
+
+        func containerPointers(_ parent: Pointer, _ contents: [UInt8]) throws -> Table {
             let countOffset: Int, count: Int, skip: Int
             if version >= 6 {
                 guard contents.count >= 4 else { throw Issue("pointer table at \(parent.offset) is shorter than its count") }
@@ -188,7 +307,22 @@ enum VisioBinaryTextExtractor {
                 pointers.append(try pointer(at: at, in: contents))
                 at += pointerSize
             }
-            return pointers
+            // Visio 2000+: the order list (its length in the dword before the
+            // count) follows the pointers; libvisio walks in that order. A
+            // damaged list is ignored, never fatal.
+            var order: [Int] = []
+            var listed = Set<Int>()
+            if version >= 6, countOffset >= 4 {
+                let listSize = Int(le32(contents, countOffset - 4))
+                if listSize > 1, listSize <= (contents.count - at) / 4 {
+                    for k in 0..<listSize {
+                        let i = Int(le32(contents, at + 4 * k))
+                        if i < pointers.count, listed.insert(i).inserted { order.append(i) }
+                    }
+                }
+            }
+            order += pointers.indices.filter { !listed.contains($0) }
+            return Table(pointers: pointers, walkOrder: order)
         }
 
         // MARK: Chunks
@@ -261,7 +395,8 @@ enum VisioBinaryTextExtractor {
             for piece in raw.split(whereSeparator: { $0 == "\n" || $0 == "\r" || $0 == "\u{000B}" }) {
                 // Control characters and U+FFFC (a text field's placeholder) are not words.
                 let line = String(piece.unicodeScalars.filter { ($0.value >= 0x20 || $0 == "\t") && $0.value != 0xFFFC }.map(Character.init)).trimmingCharacters(in: .whitespaces)
-                if !line.isEmpty { lines.append(line) }
+                guard !line.isEmpty else { continue }
+                if let i = currentSection { sections[i].lines.append(line) } else { lines.append(line) }
             }
         }
     }
