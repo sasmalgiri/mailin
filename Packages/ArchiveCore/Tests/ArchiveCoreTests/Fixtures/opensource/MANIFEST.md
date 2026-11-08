@@ -65,3 +65,27 @@ What is deliberately NOT here: `SampleOstFile.ost` (4 MB), `example-2013.ost` (1
 `RealMailStoreFixtureTests` reads the external copies through `ExternalFixtures.require(_:)` (SHA256SUMS-verified)
 and skips, naming the file, when a copy is absent; the in-repo copies above are for the two OLM anchors so
 the OLM reader tests also run on a Mac without the fixture root.
+
+---
+
+# Excel number-format oracles (added 2026-11-09)
+
+From https://github.com/apache/poi `test-data/spreadsheet/` (`trunk`, 2026-11-09), Apache-2.0, each under 60 KB,
+in `poi/`. Read by `ExcelNumberFormatTests`. In the `*FormatTests.xlsx` workbooks, sheet 2 column A is
+`=TEXT(C, B)` with the text Excel cached when it saved the file (a few rows, e.g. the negative half of
+FormatConditionTests, hold the expected text typed by POI's authors), B the format code, C the value, D a
+category. All were saved by Mac Excel in the 1904 date system. POI's `CellFormat` tests use them the same way.
+
+| File | SHA-256 | What is asserted |
+|---|---|---|
+| `poi/NumberFormatTests.xlsx` | `a11d437ee538abe36d630a4795dd30d5823a68dce02a404a45e085dd49c4435d` | every one of 300+ rows (placeholders, escapes, thousands, scaling, percent, `?` spacing, fractions with literals, improper fractions) renders to column A |
+| `poi/GeneralFormatTests.xlsx` | `607ff06ff0295d0920d81b27e09b91e86301b9f3862d1d22b093f8f8c5a4de28` | every numeric row of General (11-character rule, `1E+11`, `1E-10`) |
+| `poi/DateFormatTests.xlsx` | `16445dc0deba00671ee4315015a970d415ce9886da59c974532d946e99276c66` | every row: d/m/y in both cases, ddd/dddd, mmm/mmmm, yyy, h:m:s, AM/PM, a/p, fractions of a second, 1904 serials |
+| `poi/DateFormatNumberTests.xlsx` | `d18aade6ad10435baa4be3ac1c4ba4c15e48248bc24b91926920f3dec0aca033` | every row: seconds and `.0`/`.00`/`.000` rounded at the shown precision |
+| `poi/ElapsedFormatTests.xlsx` | `c3e574f098855b4d28e618353337c10941fc01d8e6c320c46a79731d5425c7ca` | every row: `[h]`, `[m]`, `[s]`, `[hh]`, mixed with plain units, negative elapsed values |
+| `poi/FormatConditionTests.xlsx` | `96afa10c8f1f633fc2eaebf21a0883c96a8be2cc5f38fc8c2e826b5d9c140d4f` | every row: `[<10]`, `[>=-10]`, `[<>10]` … with spaces, General fallback |
+| `poi/TextFormatTests.xlsx` | `c224c784e77f321c59c90f6d93380ff74a0e0013f0346e4b2cdf0a5ff5e3840b` | the six text rows whose code has `@`; the three literal-only codes are where `TEXT()` differs from a cell (a cell shows text as typed without a text section) |
+| `poi/Formatting.xlsx` | `5a0aa7c36c53b22cd26e3eeb2ee49bf16f7e4101aafa8b1503a0778f4010ddbc` | through the XLSX reader: 24 November 2006 (serial 39045) in built-in 14 (`11/24/2006`, en-US) and five custom date codes; 10.52 in General, `0.000`, `0.0`, `"£"#,##0.00` |
+
+`NumberFormatApproxTests.xlsx` (exotic `e-` exponent layouts with literals inside the mantissa) was looked at
+and not added: those layouts are not rendered.

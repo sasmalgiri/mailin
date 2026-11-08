@@ -23,11 +23,20 @@
 //  {638DE92F-A6D4-4BC1-9A36-B3FC2511A5B7}; Office 365 exports and some
 //  2007-era files) wraps the revision store in an MS-FSSHTTPB data element
 //  package. That package is read element by element (16/32-bit stream
-//  object headers, compact uint64, extended GUIDs); every object group's
-//  partition-1 objects carry the same ObjectSpaceObjectPropSet, so their
-//  text is read in storage order with the newest revision of each object
-//  winning. The page tree of that layout is not rebuilt: the output says
-//  so. A section whose structure cannot be followed (truncated, damaged,
+//  object headers, compact uint64, extended GUIDs) and its page tree is
+//  followed as onenote.rs does (MS-ONESTORE §2.7): the storage manifest
+//  names the data root cell (the section's object space); the storage
+//  index maps every cell to its cell manifest, whose current revision
+//  resolves to a revision manifest (base revisions followed, the newest
+//  object winning); its object groups pair declarations with object data,
+//  partition 1 holding the same ObjectSpaceObjectPropSet, whose OID stream
+//  entry i names the object's i-th referenced ExGUID; the cells an object
+//  references in other object spaces (the section's page series naming
+//  its pages) are the pages, walked from their content root (role 1) in
+//  that order. The text is grouped by page exactly as for the revision
+//  store. If that tree cannot be followed, every partition-1 object's text
+//  is read in storage order and the output says the pages were not
+//  separated. A section whose structure cannot be followed (truncated, damaged,
 //  or a pre-2010 layout that is not documented) falls back to scanning for
 //  ASCII and UTF-16LE strings, labelled as recovered text, so a damaged
 //  file still indexes what it visibly holds — the note says it is a scan.
@@ -112,11 +121,18 @@ enum OneNoteTextExtractor {
         } else if fileFormat == packagingFormatGUID {
             let package = PackagedStore(bytes: bytes)
             package.parse()
-            let lines = package.collectText()
-            if !lines.isEmpty { blocks.append(("Packaged layout (FSSHTTPB) — text in storage order, pages not separated", lines)) }
+            let collected = package.collectText()
+            if collected.pages.isEmpty {
+                // The page tree could not be followed: the text in storage order, labelled so.
+                if !collected.otherObjects.isEmpty { blocks.append(("Packaged layout (FSSHTTPB) — text in storage order, pages not separated", collected.otherObjects)) }
+            } else {
+                for (index, page) in collected.pages.enumerated() { blocks.append(("Page \(index + 1)", page)) }
+                if !collected.otherObjects.isEmpty { blocks.append(("Earlier revisions and other objects", collected.otherObjects)) }
+            }
             encrypted = package.encrypted
-            structureFailed = lines.isEmpty
+            structureFailed = blocks.isEmpty
             skipped.append(contentsOf: package.issues.map { "\(name): \($0)" })
+            if package.depthLimitHit { skipped.append("\(name): objects nested deeper than \(OneStoreFile.maxWalkDepth) levels were not followed") }
             notText.append(contentsOf: package.embeddedFiles.enumerated().map { "\(name): embedded file \($0.offset + 1) (\($0.element) bytes)" })
         } else {
             skipped.append("\(name): file format \(guidString(fileFormat)) is not the documented OneNote 2010+ layout; text recovered by scanning for strings")
@@ -268,27 +284,37 @@ enum OneNoteTextExtractor {
     /// ObjectSpaceObjectPropSet (MS-ONESTORE §2.6.1): the OID stream, the
     /// optional OSID and ContextID streams, then the PropertySet body.
     static func parsePropertySet(_ b: [UInt8], start: Int, end: Int, resolve: (UInt32) throws -> ObjectID?) throws -> PropertySet {
+        try parsePropertySet(b, start: start, end: end, resolveAt: { _, _, raw in try resolve(raw) })
+    }
+
+    /// Which reference stream a CompactID came from.
+    enum ReferenceStream { case objects, objectSpaces, contexts }
+
+    /// As above; the resolver also gets the stream and the CompactID's position
+    /// in it (the FSSHTTPB packaging maps OID stream entry i to the object's
+    /// i-th referenced ExGUID, MS-ONESTORE §2.7.8).
+    static func parsePropertySet(_ b: [UInt8], start: Int, end: Int, resolveAt: (ReferenceStream, Int, UInt32) throws -> ObjectID?) throws -> PropertySet {
         var c = Cursor(b, pos: start, end: end)
-        func readStream() throws -> (ids: [ObjectRef], extended: Bool, osidsAbsent: Bool) {
+        func readStream(_ stream: ReferenceStream) throws -> (ids: [ObjectRef], extended: Bool, osidsAbsent: Bool) {
             let header = try c.u32()
             let count = Int(header & 0xFF_FFFF)
             var ids: [ObjectRef] = []
             ids.reserveCapacity(min(count, max(c.remaining / 4, 0)))
-            for _ in 0..<count {
+            for position in 0..<count {
                 let raw = try c.u32()
-                ids.append(ObjectRef(raw: raw, resolved: try resolve(raw)))
+                ids.append(ObjectRef(raw: raw, resolved: try resolveAt(stream, position, raw)))
             }
             return (ids, (header >> 30) & 1 == 1, (header >> 31) & 1 == 1)
         }
-        let oids = try readStream()
+        let oids = try readStream(.objects)
         var osids: [ObjectRef] = [], contextIDs: [ObjectRef] = []
         var extended = oids.extended
         if !oids.osidsAbsent {
-            let s = try readStream()
+            let s = try readStream(.objectSpaces)
             osids = s.ids
             extended = extended || s.extended
         }
-        if extended { contextIDs = try readStream().ids }
+        if extended { contextIDs = try readStream(.contexts).ids }
         var counters = StreamCounters()
         return try parseSet(&c, oids: oids.ids, osids: osids, contextIDs: contextIDs, counters: &counters, depth: 0)
     }
@@ -816,21 +842,75 @@ extension OneNoteTextExtractor {
 
 extension OneNoteTextExtractor {
 
+    /// MS-ONESTORE §2.7–2.8 over MS-FSSHTTPB §2.2.1.12: the storage manifest
+    /// names the data root cell (the section's own object space); every cell
+    /// in the storage index is one object space whose cell manifest names its
+    /// newest revision; a revision manifest lists its roots and object groups
+    /// and names its base revision; an object's partition-1 data is its
+    /// ObjectSpaceObjectPropSet, with the object's referenced ExGUIDs in OID
+    /// stream order and the cells it references in other object spaces (the
+    /// section's pages) in OSID stream order.
     final class PackagedStore {
-        struct ExGuid: Hashable { let guid: [UInt8]; let value: UInt32 }
-        /// Root ExGUID {4A3717F8-1C14-49E7-9526-81D942DE1741}:3 — the encryption key of a protected section.
-        static let encryptionKeyRoot = ExGuid(guid: [0xF8, 0x17, 0x37, 0x4A, 0x14, 0x1C, 0xE7, 0x49, 0x95, 0x26, 0x81, 0xD9, 0x42, 0xDE, 0x17, 0x41], value: 3)
+        struct ExGuid: Hashable {
+            let guid: [UInt8]; let value: UInt32
+            var isNil: Bool { value == 0 && guid.allSatisfy { $0 == 0 } }
+            var objectID: ObjectID { ObjectID(guid: guid, n: value) }
+        }
+        /// A cell id: (context, object space).
+        struct CellID: Hashable { let context: ExGuid; let space: ExGuid }
+
+        /// {4A3717F8-1C14-49E7-9526-81D942DE1741} — the revision root role GUID.
+        static let rootRoleGUID: [UInt8] = [0xF8, 0x17, 0x37, 0x4A, 0x14, 0x1C, 0xE7, 0x49, 0x95, 0x26, 0x81, 0xD9, 0x42, 0xDE, 0x17, 0x41]
+        /// Root role 1 — the default content of an object space.
+        static let contentRoot = ExGuid(guid: rootRoleGUID, value: 1)
+        /// Root role 3 — the encryption key of a protected section.
+        static let encryptionKeyRoot = ExGuid(guid: rootRoleGUID, value: 3)
+        /// {1A5A319C-C26B-41AA-B9C5-9BD8C44E07D4}:1 — the storage manifest root of the header cell.
+        static let headerCellRoot = ExGuid(guid: [0x9C, 0x31, 0x5A, 0x1A, 0x6B, 0xC2, 0xAA, 0x41, 0xB9, 0xC5, 0x9B, 0xD8, 0xC4, 0x4E, 0x07, 0xD4], value: 1)
+        /// {84DEFAB9-AAA3-4A0D-A3A8-520C77AC7073}:2 — the storage manifest root of the data root cell.
+        static let dataRootCellRoot = ExGuid(guid: [0xB9, 0xFA, 0xDE, 0x84, 0xA3, 0xAA, 0x0D, 0x4A, 0xA3, 0xA8, 0x52, 0x0C, 0x77, 0xAC, 0x70, 0x73], value: 2)
 
         enum Header { case start(type: Int, length: Int, compound: Bool), end(type: Int) }
 
         struct Entry { let id: ExGuid; var propertySet: Range<Int>? }
+        struct CellMapping { let cell: CellID; let id: ExGuid; let serial: [UInt8]? }
+        struct StorageIndex {
+            var cells: [CellMapping] = []
+            var revisions: [ExGuid: (manifest: ExGuid, serial: [UInt8]?)] = [:]
+        }
+        struct RevisionManifest {
+            var baseID: ExGuid?
+            var roots: [(root: ExGuid, object: ExGuid)] = []
+            var groups: [ExGuid] = []
+        }
+        enum GroupData { case object(refs: [ExGuid], cells: [CellID], range: Range<Int>), other }
+        struct ObjectGroup { var declares: [(id: ExGuid, partition: UInt64)] = []; var datas: [GroupData] = [] }
+
+        final class PackedObject {
+            let refs: [ExGuid]
+            /// Referenced cells in another object space, in OSID stream order.
+            let spaceRefs: [CellID]
+            let range: Range<Int>
+            var parsed: PropertySet?
+            var failed = false
+            init(refs: [ExGuid], spaceRefs: [CellID], range: Range<Int>) { self.refs = refs; self.spaceRefs = spaceRefs; self.range = range }
+        }
 
         let b: [UInt8]
         var issues: [String] = []
         var encrypted = false
         var embeddedFiles: [Int] = []
+        var depthLimitHit = false
         private var order: [ExGuid] = []
         private var entries: [ExGuid: Entry] = [:]
+        private var storageIndexID: ExGuid?
+        private var storageIndexOrder: [ExGuid] = []
+        private var storageIndexes: [ExGuid: StorageIndex] = [:]
+        private var manifestRoots: [ExGuid: CellID]?
+        private var cellManifests: [ExGuid: ExGuid] = [:]
+        private var revisionManifests: [ExGuid: RevisionManifest] = [:]
+        private var groups: [ExGuid: ObjectGroup] = [:]
+        private var failedOffsets: Set<Int> = []
 
         init(bytes: [UInt8]) { b = bytes }
 
@@ -842,7 +922,7 @@ extension OneNoteTextExtractor {
             var c = Cursor(b, pos: 64, end: b.count)
             _ = try c.u32()                                           // rgbReserved
             guard case .start(0x7A, _, _) = try header(&c) else { throw Issue("no alternative packaging header after the file GUIDs") }
-            _ = try exGuid(&c)                                        // storage index
+            storageIndexID = try exGuid(&c)                           // storage index
             try c.skip(16)                                            // cell schema GUID
             guard case .start(0x15, let length, _) = try header(&c), length == 1 else { throw Issue("no data element package") }
             _ = try c.u8()                                            // reserved
@@ -862,32 +942,73 @@ extension OneNoteTextExtractor {
 
         private func parseDataElement(_ c: inout Cursor, itemsLength: Int) throws {
             let itemsEnd = c.pos + itemsLength
-            _ = try exGuid(&c)
-            try serialNumber(&c)
+            let elementID = try exGuid(&c)
+            _ = try serialNumber(&c)
             let type = try compactUInt(&c)
             guard c.pos <= itemsEnd, itemsEnd <= c.end else { throw Issue("data element header runs past its length") }
             c.pos = itemsEnd
-            var declares: [(id: ExGuid, partition: UInt64)] = []
-            var datas: [Range<Int>] = []
+            var group = ObjectGroup()
+            var index = StorageIndex()
+            var roots: [ExGuid: CellID] = [:]
+            var cellRevision: ExGuid?
+            var manifest = RevisionManifest()
             while c.pos < c.end {
                 switch try header(&c) {
                 case .end(let t):
                     guard t == 0x01 else { throw Issue("unexpected end marker \(t) in a data element") }
-                    if type == 5 { pair(declares, datas) }
+                    switch type {
+                    case 1:
+                        if storageIndexes[elementID] == nil { storageIndexOrder.append(elementID) }
+                        storageIndexes[elementID] = index
+                    case 2:
+                        if manifestRoots == nil { manifestRoots = roots }
+                    case 3:
+                        if let revision = cellRevision { cellManifests[elementID] = revision }
+                    case 4:
+                        revisionManifests[elementID] = manifest
+                    case 5:
+                        groups[elementID] = group
+                        pair(group)
+                    default:
+                        break
+                    }
                     return
                 case .start(let t, let length, let compound):
+                    let end = c.pos + length
                     switch (type, t) {
+                    case (1, 0x0E):                                   // storage index cell mapping
+                        let cell = try cellID(&c), id = try exGuid(&c), serial = try serialNumber(&c)
+                        index.cells.append(CellMapping(cell: cell, id: id, serial: serial))
+                        c.pos = end
+                    case (1, 0x0D):                                   // storage index revision mapping
+                        let id = try exGuid(&c), target = try exGuid(&c), serial = try serialNumber(&c)
+                        index.revisions[id] = (target, serial)
+                        c.pos = end
+                    case (2, 0x07):                                   // storage manifest root
+                        let root = try exGuid(&c), cell = try cellID(&c)
+                        roots[root] = cell
+                        c.pos = end
+                    case (3, 0x0B):                                   // cell manifest current revision
+                        cellRevision = try exGuid(&c)
+                        c.pos = end
+                    case (4, 0x1A):                                   // revision manifest: revision id, base revision id
+                        _ = try exGuid(&c)
+                        manifest.baseID = try exGuid(&c)
+                        c.pos = end
+                    case (4, 0x0A):                                   // revision manifest root declare
+                        let root = try exGuid(&c), object = try exGuid(&c)
+                        if root == Self.encryptionKeyRoot { encrypted = true }
+                        manifest.roots.append((root, object))
+                        c.pos = end
+                    case (4, 0x19):                                   // revision manifest object group reference
+                        manifest.groups.append(try exGuid(&c))
+                        c.pos = end
                     case (5, 0x1D):                                   // object group declarations
                         try c.skip(length)
-                        try parseDeclarations(&c, into: &declares)
+                        try parseDeclarations(&c, into: &group.declares)
                     case (5, 0x1E):                                   // object group data
                         try c.skip(length)
-                        try parseObjectData(&c, into: &datas)
-                    case (4, 0x0A):                                   // revision manifest root declare
-                        let end = c.pos + length
-                        let root = try exGuid(&c)
-                        if root == Self.encryptionKeyRoot { encrypted = true }
-                        c.pos = end
+                        try parseObjectData(&c, into: &group.datas)
                     default:
                         try c.skip(length)
                         if compound { try skipUntilEnd(&c, of: t) }
@@ -911,10 +1032,11 @@ extension OneNoteTextExtractor {
                     c.pos = end
                 case .start(0x05, let length, _):
                     let end = c.pos + length
-                    _ = try exGuid(&c); _ = try exGuid(&c)
+                    let id = try exGuid(&c); _ = try exGuid(&c)
                     let partition = try compactUInt(&c)
                     let size = try compactUInt(&c)
                     if partition == 2 { embeddedFiles.append(Int(clamping: size)) }
+                    declares.append((id, partition))
                     c.pos = end
                 case .start(let t, let length, let compound):
                     try c.skip(length)
@@ -924,7 +1046,7 @@ extension OneNoteTextExtractor {
             throw Issue("object group declarations are not closed")
         }
 
-        private func parseObjectData(_ c: inout Cursor, into datas: inout [Range<Int>]) throws {
+        private func parseObjectData(_ c: inout Cursor, into datas: inout [GroupData]) throws {
             while c.pos < c.end {
                 switch try header(&c) {
                 case .end(let t):
@@ -933,16 +1055,21 @@ extension OneNoteTextExtractor {
                 case .start(0x16, let length, _):
                     let end = c.pos + length
                     let referenceCount = try compactUInt(&c)
+                    var refs: [ExGuid] = []
                     var i: UInt64 = 0
-                    while i < referenceCount { _ = try exGuid(&c); i += 1 }
+                    while i < referenceCount { refs.append(try exGuid(&c)); i += 1 }
                     let cellCount = try compactUInt(&c)
+                    var cells: [CellID] = []
                     i = 0
-                    while i < cellCount { _ = try exGuid(&c); _ = try exGuid(&c); i += 1 }
+                    while i < cellCount { cells.append(try cellID(&c)); i += 1 }
                     let size = Int(clamping: try compactUInt(&c))
                     guard size <= c.remaining, c.pos + size <= end else { throw Issue("object data (\(size) bytes) runs past its element") }
-                    datas.append(c.pos..<(c.pos + size))
+                    datas.append(.object(refs: refs, cells: cells, range: c.pos..<(c.pos + size)))
                     c.pos = end
                 case .start(let t, let length, let compound):
+                    // An excluded object (0x03) or a blob reference (0x1C) keeps
+                    // its slot, so declaration i still pairs with data i.
+                    if t == 0x03 || t == 0x1C { datas.append(.other) }
                     try c.skip(length)
                     if compound { try skipUntilEnd(&c, of: t) }
                 }
@@ -951,10 +1078,11 @@ extension OneNoteTextExtractor {
         }
 
         /// Declaration i pairs with object data i; partition 1 is the property set.
-        private func pair(_ declares: [(id: ExGuid, partition: UInt64)], _ datas: [Range<Int>]) {
-            for (index, declare) in declares.enumerated() where index < datas.count && declare.partition == 1 {
+        private func pair(_ group: ObjectGroup) {
+            for (index, declare) in group.declares.enumerated() where index < group.datas.count && declare.partition == 1 {
+                guard case .object(_, _, let range) = group.datas[index] else { continue }
                 if entries[declare.id] == nil { order.append(declare.id) }
-                entries[declare.id] = Entry(id: declare.id, propertySet: datas[index])   // the newest revision wins
+                entries[declare.id] = Entry(id: declare.id, propertySet: range)   // the newest revision wins
             }
         }
 
@@ -1026,27 +1154,176 @@ extension OneNoteTextExtractor {
             throw Issue("extended GUID with undefined type byte \(b0)")
         }
 
-        private func serialNumber(_ c: inout Cursor) throws {
+        private func cellID(_ c: inout Cursor) throws -> CellID {
+            let context = try exGuid(&c)
+            return CellID(context: context, space: try exGuid(&c))
+        }
+
+        /// A serial number: nil for the null value, else its GUID and 64-bit value.
+        private func serialNumber(_ c: inout Cursor) throws -> [UInt8]? {
             let type = try c.u8()
-            if type == 0 { return }
+            if type == 0 { return nil }
             guard type == 128 else { throw Issue("serial number with undefined type \(type)") }
-            try c.skip(24)
+            return try c.bytes(24)
         }
 
         // MARK: Text
 
-        func collectText() -> [String] {
+        /// The text of every object space — the data root (the section's own
+        /// space) first, then the pages in the order the section references
+        /// them, then any other cell — each from its newest revision's content
+        /// root (role 1, base revisions followed) walked through child
+        /// references; then, as the revision-store path does, every other
+        /// object's text (earlier revisions, objects no page reaches), each
+        /// run once. When the page tree cannot be followed, `pages` is empty
+        /// and `otherObjects` holds the text in storage order.
+        func collectText() -> (pages: [[String]], otherObjects: [String]) {
             let sink = TextSink(bytes: b)
+            let pages = collectPages(sink)
+            if pages.isEmpty { return ([], storageOrderText(TextSink(bytes: b))) }
+            return (pages, storageOrderText(sink))
+        }
+
+        private func storageOrderText(_ sink: TextSink) -> [String] {
             for id in order {
                 guard let range = entries[id]?.propertySet else { continue }
                 do {
                     let set = try OneNoteTextExtractor.parsePropertySet(b, start: range.lowerBound, end: range.upperBound) { _ in nil }
                     OneNoteTextExtractor.emitText(of: set, parentProperty: nil, into: sink) { _, _ in }
                 } catch let issue as Issue {
-                    issues.append("object at offset \(range.lowerBound): \(issue.text)")
+                    note(range, issue.text)
                 } catch { issues.append(String(describing: error)) }
             }
-            return sink.lines
+            return sink.drain()
+        }
+
+        private func note(_ range: Range<Int>, _ text: String) {
+            if failedOffsets.insert(range.lowerBound).inserted { issues.append("object at offset \(range.lowerBound): \(text)") }
+        }
+
+        private func collectPages(_ sink: TextSink) -> [[String]] {
+            guard let roots = manifestRoots, let dataRoot = roots[Self.dataRootCellRoot] else { return [] }
+            let named = storageIndexID.flatMap { storageIndexes[$0] }
+            guard let index = named ?? storageIndexOrder.first.flatMap({ storageIndexes[$0] }) else { return [] }
+            var mappings: [CellID: CellMapping] = [:]
+            for mapping in index.cells where mappings[mapping.cell] == nil { mappings[mapping.cell] = mapping }
+
+            var queue: [CellID] = [dataRoot]
+            var queued: Set<CellID> = [dataRoot]
+            if let headerCell = roots[Self.headerCellRoot] { queued.insert(headerCell) }
+            var addedRemaining = false
+            var pages: [[String]] = []
+            var next = 0
+            while true {
+                if next == queue.count {
+                    guard !addedRemaining else { break }
+                    addedRemaining = true
+                    for mapping in index.cells where !mapping.id.isNil && queued.insert(mapping.cell).inserted { queue.append(mapping.cell) }
+                    continue
+                }
+                let cell = queue[next]
+                next += 1
+                guard let mapping = mappings[cell] else { continue }
+                let referenced = walkSpace(mapping, index: index, sink: sink)
+                let lines = sink.drain()
+                if !lines.isEmpty { pages.append(lines) }
+                for ref in referenced where queued.insert(ref).inserted { queue.append(ref) }
+            }
+            return pages
+        }
+
+        private func resolveRevision(_ id: ExGuid, _ index: StorageIndex) -> ExGuid? {
+            if let mapped = index.revisions[id]?.manifest { return mapped }
+            return revisionManifests[id] != nil ? id : nil
+        }
+
+        enum SpaceRevision { case manifest(ExGuid), empty, missing }
+
+        /// The newest revision manifest of a cell, with onenote.rs's fallbacks:
+        /// the cell manifest's revision, the mapping id itself, the serial number.
+        private func newestRevision(of mapping: CellMapping, _ index: StorageIndex) -> SpaceRevision {
+            let cellRevision = cellManifests[mapping.id]
+            if let revision = cellRevision, let id = resolveRevision(revision, index) { return .manifest(id) }
+            if let id = resolveRevision(mapping.id, index) { return .manifest(id) }
+            if let serial = mapping.serial, let id = index.revisions.values.first(where: { $0.serial == serial })?.manifest { return .manifest(id) }
+            return cellRevision?.isNil == true ? .empty : .missing
+        }
+
+        /// Walks one object space's content; returns the cells its objects reference.
+        private func walkSpace(_ mapping: CellMapping, index: StorageIndex, sink: TextSink) -> [CellID] {
+            guard !mapping.id.isNil else { return [] }
+            let newest: ExGuid
+            switch newestRevision(of: mapping, index) {
+            case .manifest(let id): newest = id
+            case .empty: return []
+            case .missing:
+                issues.append("object space \(guidString(mapping.cell.space.guid)) has no revision manifest")
+                return []
+            }
+            var objects: [ObjectID: PackedObject] = [:]
+            var contentRoot: ObjectID?
+            var revision: ExGuid? = newest
+            var seen: Set<ExGuid> = []
+            while let id = revision, seen.insert(id).inserted {
+                guard let manifest = revisionManifests[id] else {
+                    issues.append("revision manifest \(guidString(id.guid)):\(id.value) is missing")
+                    break
+                }
+                if contentRoot == nil, let root = manifest.roots.first(where: { $0.root == Self.contentRoot }) { contentRoot = root.object.objectID }
+                for groupID in manifest.groups {
+                    guard let group = groups[groupID] else {
+                        issues.append("object group \(guidString(groupID.guid)):\(groupID.value) is missing")
+                        continue
+                    }
+                    for (k, declare) in group.declares.enumerated() where declare.partition == 1 && k < group.datas.count {
+                        let oid = declare.id.objectID
+                        guard objects[oid] == nil, case .object(let refs, let cells, let range) = group.datas[k] else { continue }
+                        objects[oid] = PackedObject(refs: refs, spaceRefs: cells.filter { $0.space != mapping.cell.space }, range: range)
+                    }
+                }
+                revision = manifest.baseID.flatMap { $0.isNil ? nil : resolveRevision($0, index) }
+            }
+            guard let root = contentRoot else { return [] }
+            var visited: Set<Visit> = []
+            var referenced: [CellID] = []
+            walk(root, parentProperty: nil, depth: 0, objects: objects, visited: &visited, referenced: &referenced, sink: sink)
+            return referenced
+        }
+
+        private struct Visit: Hashable { let oid: ObjectID; let property: UInt32? }
+
+        /// Like the revision-store walk; an object is followed once per parent
+        /// property, so a damaged graph cannot multiply the work.
+        private func walk(_ oid: ObjectID, parentProperty: UInt32?, depth: Int, objects: [ObjectID: PackedObject], visited: inout Set<Visit>, referenced: inout [CellID], sink: TextSink) {
+            guard depth < OneStoreFile.maxWalkDepth else { depthLimitHit = true; return }
+            guard let object = objects[oid], visited.insert(Visit(oid: oid, property: parentProperty)).inserted else { return }
+            guard let set = propertySet(object) else { return }
+            referenced.append(contentsOf: object.spaceRefs)
+            var pending: [(ObjectID, UInt32)] = []
+            OneNoteTextExtractor.emitText(of: set, parentProperty: parentProperty, into: sink) { child, property in pending.append((child, property)) }
+            for (child, property) in pending {
+                walk(child, parentProperty: property, depth: depth + 1, objects: objects, visited: &visited, referenced: &referenced, sink: sink)
+            }
+        }
+
+        /// The object's property set; its OID stream entry i names refs[i].
+        private func propertySet(_ object: PackedObject) -> PropertySet? {
+            if let set = object.parsed { return set }
+            if object.failed { return nil }
+            let refs = object.refs
+            do {
+                let set = try OneNoteTextExtractor.parsePropertySet(b, start: object.range.lowerBound, end: object.range.upperBound, resolveAt: { stream, position, _ in
+                    stream == .objects && position < refs.count && !refs[position].isNil ? refs[position].objectID : nil
+                })
+                object.parsed = set
+                return set
+            } catch let issue as Issue {
+                note(object.range, issue.text)
+            } catch {
+                issues.append(String(describing: error))
+            }
+            object.failed = true
+            return nil
         }
     }
 }

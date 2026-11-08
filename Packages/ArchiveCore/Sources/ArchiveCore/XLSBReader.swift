@@ -13,9 +13,9 @@
 //    [Sheet: N]   one line per row, "A1: value"; a formula cell shows its
 //                 cached value and the formula text decoded from the token
 //                 stream (XLSBFormulaDecoder) — "B13: 4 (formula =C13*2)";
-//                 shared and array formulas re-based on the cell; a date-
-//                 formatted serial rendered as the ISO date with the serial
-//                 kept; percentages and currencies name their format; hidden
+//                 shared and array formulas re-based on the cell; a number-
+//                 formatted cell rendered as Excel displays it, with the
+//                 serial or stored value kept beside it; hidden
 //                 rows and columns labelled and still read; hidden and very
 //                 hidden sheets say so
 //    [Comments: N] the sheet's comments part (comments1.bin, by the sheet's
