@@ -255,22 +255,24 @@ Owner chose, for the four claim gaps found at bde389d:
 
 ### Found by the gap-closure agents (2026-11-08)
 
+Owner 2026-11-08 ("ok"): fix IPAD-01…10 and IOS-02 with agents; defaults — iPad backups go to a user-chosen Files location; the iPad gets a Trash with restore like the Mac.
+
 | ID | Item | State | Commit | Test / evidence |
 |---|---|---|---|---|
 | FIND-08 | A phrase that wraps onto a new line is not found (body or attachment text "quorum⏎clause" does not match the phrase "quorum clause"); HTML tags removed as spaces leave double spaces with the same effect. Fix: an explicit cell/section boundary (U+001E) from the extractors, phrase checking that treats any whitespace run as one space but never crosses a boundary, excerpt and Show text following the same rule; extractor version 9→10 | verified | 43ed50b, 8b32620 | `SectionBoundaryPhraseTests` 11/11 (package) incl. 8 `testFIND08_*`; app V2CutoverTests 200 passed after merge; extractor version 10 re-reads document/PDF/text/message rows; found by `SectionBoundaryPhraseTests` work (bf421a6) |
 | OUT-06a | After a drive is pulled mid-export, the partial file holds 41–65 more records than the receipt's "X of Y" (the last may be cut); the receipt is honest about what it counted, but the file cannot be trimmed or resumed while the drive is gone | not started | | `DriveRemovalProcessTests` (f617efd) |
 | IOS-01 | iOS target did not compile (ArchiveBackups) and the iOS test target did not compile (Process in testSPLIT01) | verified | ee3f3a1, f3d1a80 | iOS Release build and iOS simulator build-for-testing succeed |
-| IOS-02 | iOS binary lacks the `mailin.offline.attested` marker (its only caller is the Mac About window), so verify-no-network.sh cannot attest the iOS build | not started | | RC archive check 2026-11-08 |
-| IPAD-01 | A ZIP of an Apple Mail export imports with no folders (0 folders, 0 memberships); may affect the Mac too | not started | | GATE1_UI_WALK_2026-11-08.md |
-| IPAD-02 | No source-folder tree on iPad (folders only in the Mac three-pane view) | not started | | gate 1 walk |
-| IPAD-03 | iPad search box uses the old per-year index: attachment text (DOCX, DOCX inside ZIP) not found; a 0-result search shows a blank pane with no notice | not started | | gate 1 walk |
-| IPAD-04 | Files inside a ZIP attachment not listed on the message; per-attachment Download disabled on Free with no reason (plan says 10/day) | not started | | gate 1 walk |
-| IPAD-05 | Duplicates on iPad: no Trash / restore; counts stale after removal; near-duplicate never offered while the sheet says "no duplicate messages" | not started | | gate 1 walk |
-| IPAD-06 | Import receipt unreachable on iPad (Mac-only window); backup written to the app's temporary folder (user cannot reach it; iOS may purge it) | not started | | gate 1 walk |
-| IPAD-07 | Speech Recognition permission requested at first launch before any switch is on; system text contradicts "nothing is sent" | not started | | gate 1 walk |
-| IPAD-08 | "Clear & Start Fresh" offered without the affected count (rule 4) | not started | | gate 1 walk |
-| IPAD-09 | Export receipt says "Complete" after the share sheet is dismissed without saving (rule 5); pre-flight shows an internal temp path as destination | not started | | gate 1 walk |
-| IPAD-10 | Minor: Health "Done" overlaps text; "1 copies" / "1 groups" plurals; keyboard-shortcut conflicts logged each launch | not started | | gate 1 walk |
+| IOS-02 | iOS binary lacks the `mailin.offline.attested` marker (its only caller is the Mac About window), so verify-no-network.sh cannot attest the iOS build | in progress | | RC archive check 2026-11-08 |
+| IPAD-01 | A ZIP of an Apple Mail export imports with no folders (0 folders, 0 memberships); may affect the Mac too | in progress | | GATE1_UI_WALK_2026-11-08.md |
+| IPAD-02 | No source-folder tree on iPad (folders only in the Mac three-pane view) | in progress | | gate 1 walk |
+| IPAD-03 | iPad search box uses the old per-year index: attachment text (DOCX, DOCX inside ZIP) not found; a 0-result search shows a blank pane with no notice | in progress | | gate 1 walk |
+| IPAD-04 | Files inside a ZIP attachment not listed on the message; per-attachment Download disabled on Free with no reason (plan says 10/day) | in progress | | gate 1 walk |
+| IPAD-05 | Duplicates on iPad: no Trash / restore; counts stale after removal; near-duplicate never offered while the sheet says "no duplicate messages" | in progress | | gate 1 walk |
+| IPAD-06 | Import receipt unreachable on iPad (Mac-only window); backup written to the app's temporary folder (user cannot reach it; iOS may purge it) | in progress | | gate 1 walk |
+| IPAD-07 | Speech Recognition permission requested at first launch before any switch is on; system text contradicts "nothing is sent" | in progress | | gate 1 walk |
+| IPAD-08 | "Clear & Start Fresh" offered without the affected count (rule 4) | in progress | | gate 1 walk |
+| IPAD-09 | Export receipt says "Complete" after the share sheet is dismissed without saving (rule 5); pre-flight shows an internal temp path as destination | in progress | | gate 1 walk |
+| IPAD-10 | Minor: Health "Done" overlaps text; "1 copies" / "1 groups" plurals; keyboard-shortcut conflicts logged each launch | in progress | | gate 1 walk |
 
 ## Owner decisions needed
 - OLM reader and TAR/TGZ wrapper: adopted under the 2026-11-06 directive ("support all types") and built (TYPE-06). Still needed from the owner: one real `.olm` export from Outlook for Mac to run against.
