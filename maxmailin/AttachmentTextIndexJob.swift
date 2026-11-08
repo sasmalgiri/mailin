@@ -327,6 +327,11 @@ final class AttachmentTextIndexJob {
                 if pageProgress == 0 { break }
                 report(outcome)
             }
+            // R5b: messages kept by their byte range — their attachments are streamed
+            // out of the original file part by part and read like any other.
+            if !Task.isCancelled {
+                try await streamedAttachmentPass(coverage: coverage, ocr: ocr, ocrState: ocrState, batchSize: batchSize, outcome: &outcome)
+            }
             if let ocrState, !Task.isCancelled {
                 try await ocrSecondPass(state: ocrState, coverage: coverage, batchSize: batchSize, outcome: &outcome)
             }
@@ -358,7 +363,13 @@ final class AttachmentTextIndexJob {
             var pending = ids.filter { !done.contains($0) }
             while !pending.isEmpty, !Task.isCancelled {
                 let page = try await store.rawCandidates(ids: Array(pending.prefix(batchSize)))
-                if !page.rawless.isEmpty { try state.markDone(page.rawless) }
+                if !page.rawless.isEmpty {
+                    // R5b: a message kept by its byte range is read from its registered parts.
+                    for id in try await store.streamedAttachmentMessages(among: page.rawless) where !Task.isCancelled {
+                        if await indexStreamedAttachments(emailID: id, ocr: true, coverage: coverage) != nil { outcome.ocrEmails += 1 }
+                    }
+                    try state.markDone(page.rawless)
+                }
                 for candidate in page.candidates {
                     if Task.isCancelled { break }
                     let extractions: [Extraction]? = await Task.detached(priority: .utility) {
@@ -393,12 +404,22 @@ final class AttachmentTextIndexJob {
     /// lists is then `failed` with `unreadable` as the reason.
     private func recordCoverage(_ coverage: AttachmentCoverageStore?, emailID: UUID,
                                 extractions: [Extraction]?, unreadable: String) async {
+        // R5b: what a kept Unlock stored is not replaced by this passwordless read.
+        let kept = Dictionary(((try? coverage?.rows(for: emailID)) ?? []).filter(\.unlockedWithPassword).map { ($0.ordinal, $0) },
+                              uniquingKeysWith: { first, _ in first })
         // FIND-07: the chunk index gets each attachment's whole text (or its state).
         if SearchChunkPolicy.isEnabled, let extractions {
             do {
-                try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: extractions.map(\.searchDocument))
+                try await store.indexAttachmentSearchDocuments(emailID: emailID,
+                                                               documents: extractions.filter { kept[$0.ordinal] == nil }.map(\.searchDocument))
                 // §13.3 (5): every file inside an attachment is its own document and row.
-                for extraction in extractions { try await recordChildren(emailID: emailID, extraction: extraction) }
+                for extraction in extractions {
+                    if let row = kept[extraction.ordinal] {
+                        try await keepUnlockedChildren(emailID: emailID, reread: extraction, row: row)
+                    } else {
+                        try await recordChildren(emailID: emailID, extraction: extraction)
+                    }
+                }
             } catch {
                 Self.logger.error("attachment search documents not written for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -406,11 +427,12 @@ final class AttachmentTextIndexJob {
         guard let coverage else { return }
         let rows: [AttachmentCoverageRow]
         if let extractions {
-            rows = extractions.map { $0.coverageRow(emailID: emailID) }
+            rows = extractions.map { kept[$0.ordinal] ?? $0.coverageRow(emailID: emailID) }
         } else {
             let metadata = (try? await store.attachmentMetadata(forEmailID: emailID)) ?? []
             rows = metadata.enumerated().map { item in
-                AttachmentCoverageRow(
+                if let row = kept[item.offset] { return row }
+                return AttachmentCoverageRow(
                     emailID: emailID, ordinal: item.offset, filename: item.element.filename,
                     mimeType: item.element.mimeType, state: .failed, extractor: "none",
                     extractorVersion: Self.extractorVersion, characters: 0, note: unreadable)
@@ -443,24 +465,210 @@ final class AttachmentTextIndexJob {
                                                  texts: texts, states: states, extractorVersion: Self.extractorVersion)
     }
 
+    // MARK: - R5b: a reader upgrade never undoes a kept Unlock
+
+    /// The note a kept Unlock's attachment (or a file inside it) gets when a
+    /// newer reader would read it again but has no password to do so.
+    nonisolated static var needsPasswordForNewerReaderNote: String {
+        String(localized: "needs the password again for the newer reader — use Unlock…")
+    }
+
+    /// The children of an attachment a kept Unlock stored, after a passwordless
+    /// re-read (`reread`): every recorded child is kept with its text; a child
+    /// the re-read now reads without the password (and the record had not)
+    /// takes the new reading. Only what the newer reader would add is marked
+    /// as needing the password again: a recorded child that was not read
+    /// (when the row says a newer reader needs the password) and a new child,
+    /// that the re-read finds locked.
+    private func keepUnlockedChildren(emailID: UUID, reread: Extraction, row: AttachmentCoverageRow) async throws {
+        let position = reread.ordinal
+        let previous = try await store.attachmentChildren(forEmailID: emailID).filter { $0.position == position }
+        let newer = row.note?.contains(Self.needsPasswordForNewerReaderNote) == true
+        let fresh = Dictionary(reread.children.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        var children: [ChildDocument] = []
+        var carriedFrom: [Int: Int] = [:]
+        var known = Set<String>()
+        for old in previous {
+            known.insert(old.path)
+            let state = ChildDocument.State(rawValue: old.state) ?? .failed
+            let again = fresh[old.path]
+            if !state.isSearchable, state != .noText, let again, again.state.isSearchable || again.state == .noText {
+                children.append(again)
+                continue
+            }
+            var note = old.note
+            if newer, !state.isSearchable, state != .noText, (again?.state ?? .locked) == .locked,
+               note?.contains(Self.needsPasswordForNewerReaderNote) != true {
+                note = [note, Self.needsPasswordForNewerReaderNote].compactMap { $0 }.joined(separator: "; ")
+            }
+            var kept = ChildDocument(path: old.path, filename: old.filename, kind: old.kind, sha256: old.sha256, bytes: old.bytes,
+                                     text: nil, state: state, note: note)
+            kept.carried = true
+            carriedFrom[children.count] = old.childIndex
+            children.append(kept)
+        }
+        for child in reread.children where !known.contains(child.path) {
+            var added = child
+            if added.state == .locked { added.note = Self.needsPasswordForNewerReaderNote }
+            children.append(added)
+        }
+        try await recordChildrenContinuing(emailID: emailID, position: position, children: children, carriedFrom: carriedFrom)
+    }
+
+    // MARK: - R5b: attachments of a message kept by its byte range
+
+    /// Where one message's attachments are read from: its stored raw MIME, or —
+    /// for a message kept by its byte range — its registered parts in the original file.
+    enum MessageSource: Sendable {
+        case raw(String)
+        case streamed(sourcePath: String, parts: [PartLocator])
+    }
+
+    /// The message's source for Unlock and Resume; nil when neither is available.
+    private func messageSource(emailID: UUID) async -> MessageSource? {
+        if let page = try? await store.rawCandidates(ids: [emailID]), let candidate = page.candidates.first {
+            return .raw(candidate.raw)
+        }
+        if let located = try? await store.streamedAttachmentParts(emailID: emailID), !located.parts.isEmpty {
+            return .streamed(sourcePath: located.sourcePath, parts: located.parts.filter(\.isAttachment))
+        }
+        return nil
+    }
+
+    nonisolated static func extractCoverage(from source: MessageSource, ocr: Bool, passwords: [Int: String] = [:]) -> [Extraction]? {
+        switch source {
+        case .raw(let raw): return extractCoverage(fromRaw: raw, ocr: ocr, passwords: passwords)
+        case .streamed(let path, let parts): return extractStreamedCoverage(parts: parts, sourcePath: path, ocr: ocr, passwords: passwords)
+        }
+    }
+
+    /// The streamed messages whose attachments have not been read, a page at a time.
+    private func streamedAttachmentPass(coverage: AttachmentCoverageStore?, ocr: Bool, ocrState: AttachmentOCRState?,
+                                        batchSize: Int, outcome: inout Outcome) async throws {
+        var attempted = Set<UUID>()
+        while !Task.isCancelled {
+            let ids = try await store.streamedAttachmentWorkList(limit: batchSize).filter { !attempted.contains($0) }
+            if ids.isEmpty { break }   // what is left failed to record in this run; the next run takes it again
+            for id in ids {
+                if Task.isCancelled { break }
+                attempted.insert(id)
+                if let texts = await indexStreamedAttachments(emailID: id, ocr: ocr, coverage: coverage) {
+                    try? ocrState?.markDone([id])
+                    outcome.indexedEmails += 1
+                    outcome.extractedTexts += texts
+                } else {
+                    outcome.failed += 1
+                }
+            }
+            report(outcome)
+        }
+    }
+
+    /// Reads one streamed message's attachments from their byte ranges and
+    /// records them like any other. Returns how many texts were indexed, nil
+    /// when nothing could be recorded.
+    private func indexStreamedAttachments(emailID: UUID, ocr: Bool, coverage: AttachmentCoverageStore?) async -> Int? {
+        let located = try? await store.streamedAttachmentParts(emailID: emailID)
+        var extractions: [Extraction]? = nil
+        if let located, !located.parts.isEmpty {
+            let parts = located.parts.filter(\.isAttachment)
+            let path = located.sourcePath
+            extractions = await Task.detached(priority: .utility) {
+                Self.extractStreamedCoverage(parts: parts, sourcePath: path, ocr: ocr)
+            }.value
+        }
+        let texts = Self.texts(extractions ?? [])
+        do {
+            try await store.attachmentTextIndex(emailID: emailID, texts: texts)
+            await recordCoverage(coverage, emailID: emailID, extractions: extractions,
+                                 unreadable: String(localized: "message source not stored"))
+            return texts.count
+        } catch {
+            Self.logger.error("streamed attachment index failed for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Every attachment of a message kept by its byte range: each part's
+    /// decoded bytes are streamed from the original file to a temp file
+    /// (`StreamedPartDecoder` — bounded memory, whatever the attachment's
+    /// size), read by the normal reader with its children, and the file is
+    /// removed before the next part. The volumes of a split archive are kept
+    /// together until the message is read, as in `extractCoverage(fromRaw:)`.
+    nonisolated static func extractStreamedCoverage(parts: [PartLocator], sourcePath: String, ocr: Bool,
+                                                    passwords: [Int: String] = [:]) -> [Extraction] {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("streamed-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        var attachments = parts.enumerated().map { index, part in
+            AttachmentMetadata(filename: part.filename ?? "attachment-\(index + 1)", mimeType: part.mimeType, size: 0)
+        }
+        var failures: [Int: String] = [:]
+        func isVolume(_ name: String) -> Bool { SplitVolumeSet.part(ofName: name) != nil || RARVolumeSet.part(ofName: name) != nil }
+        func materialize(_ index: Int) {
+            guard attachments[index].fileURL == nil, failures[index] == nil else { return }
+            let name = attachments[index].filename
+            let ext = (name as NSString).pathExtension.filter { $0.isLetter || $0.isNumber }
+            let url = scratch.appendingPathComponent(ext.isEmpty ? "part-\(index)" : "part-\(index).\(ext)")
+            do {
+                let decoded = try StreamedPartDecoder.decode(part: parts[index], sourcePath: sourcePath, to: url)
+                attachments[index] = AttachmentMetadata(filename: name, mimeType: attachments[index].mimeType,
+                                                        size: Int(clamping: decoded.bytesWritten), fileURL: url)
+            } catch {
+                try? FileManager.default.removeItem(at: url)
+                failures[index] = error.localizedDescription
+            }
+        }
+        var out: [Extraction] = []
+        for index in parts.indices {
+            let volume = isVolume(attachments[index].filename)
+            if volume {
+                for other in parts.indices where isVolume(attachments[other].filename) { materialize(other) }
+            } else {
+                materialize(index)
+            }
+            if let why = failures[index] {
+                out.append(Extraction(ordinal: index, filename: attachments[index].filename, mimeType: attachments[index].mimeType,
+                                      text: nil, fullText: nil, state: .failed, extractor: "none", note: why))
+                continue
+            }
+            let siblings = volume ? volumeSiblings(of: index, among: attachments, scratch: scratch) : []
+            out.append(classify(attachments[index], ordinal: index, ocr: ocr, password: passwords[index], siblings: siblings))
+            if !volume, let url = attachments[index].fileURL {
+                try? FileManager.default.removeItem(at: url)
+                attachments[index] = AttachmentMetadata(filename: attachments[index].filename, mimeType: attachments[index].mimeType,
+                                                        size: attachments[index].size)
+            }
+        }
+        return out
+    }
+
     /// Emails an older extractor left unsupported, failed or cut short go back
     /// on the work list, a page at a time. Returns how many were re-queued.
+    /// R5b: an attachment a kept Unlock stored is never re-read without its
+    /// password — its row, text and children are kept (`remove(keepingUnlocked:)`,
+    /// `recordCoverage`) and, where the newer reader would read it again, its
+    /// row says the newer reader needs the password (`markKeptUnlocks`).
     static func requeueStale(store: SQLiteEmailStore, coverage: AttachmentCoverageStore) async throws -> Int {
         var total = 0
+        let note = needsPasswordForNewerReaderNote
+        try coverage.markKeptUnlocks(below: extractorVersion, note: note)
+        try coverage.markKeptUnlocks(below: 7, extractors: ["zip", "archive", "eml", "office"], note: note)
+        try coverage.markKeptUnlocks(below: 10, extractors: boundaryExtractors, note: note)
         while !Task.isCancelled {
-            let ids = try coverage.emailIDs(staleBelow: extractorVersion, limit: 500)
+            let ids = try coverage.emailIDs(staleBelow: extractorVersion, limit: 500, excludingKeptUnlocks: true)
             if ids.isEmpty { break }
             try await store.attachmentTextStateReset(emailIDs: ids)
-            try coverage.remove(emailIDs: ids)
+            try coverage.remove(emailIDs: ids, keepingUnlocked: true)
             total += ids.count
         }
         // §13.3 (5): archives and attached messages read before children had
         // their own identity are re-read even when they were "extracted".
         while !Task.isCancelled {
-            let ids = try coverage.emailIDs(extractors: ["zip", "archive", "eml", "office"], below: 7, limit: 500)
+            let ids = try coverage.emailIDs(extractors: ["zip", "archive", "eml", "office"], below: 7, limit: 500, excludingKeptUnlocks: true)
             if ids.isEmpty { break }
             try await store.attachmentTextStateReset(emailIDs: ids)
-            try coverage.remove(emailIDs: ids)
+            try coverage.remove(emailIDs: ids, keepingUnlocked: true)
             total += ids.count
         }
         // GAP-PGP: OpenPGP rows read before signatures were verified ("present,
@@ -469,10 +677,10 @@ final class AttachmentTextIndexJob {
         // FIND-08: rows read before section boundaries existed are re-read in
         // any state, so a phrase never joins two cells, rows, slides or pages.
         while !Task.isCancelled {
-            let ids = try coverage.emailIDs(extractors: boundaryExtractors, below: 10, limit: 500)
+            let ids = try coverage.emailIDs(extractors: boundaryExtractors, below: 10, limit: 500, excludingKeptUnlocks: true)
             if ids.isEmpty { break }
             try await store.attachmentTextStateReset(emailIDs: ids)
-            try coverage.remove(emailIDs: ids)
+            try coverage.remove(emailIDs: ids, keepingUnlocked: true)
             total += ids.count
         }
         return total
@@ -484,10 +692,10 @@ final class AttachmentTextIndexJob {
     static func requeueOpenPGP(store: SQLiteEmailStore, coverage: AttachmentCoverageStore, below version: Int = Int.max) async throws -> Int {
         var total = 0
         while !Task.isCancelled {
-            let ids = try coverage.emailIDs(extractors: ["openpgp"], below: version, limit: 500)
+            let ids = try coverage.emailIDs(extractors: ["openpgp"], below: version, limit: 500, excludingKeptUnlocks: true)
             if ids.isEmpty { break }
             try await store.attachmentTextStateReset(emailIDs: ids)
-            try coverage.remove(emailIDs: ids)
+            try coverage.remove(emailIDs: ids, keepingUnlocked: true)
             total += ids.count
         }
         return total
@@ -964,16 +1172,15 @@ final class AttachmentTextIndexJob {
     /// CONTINUES it — files inside that an earlier round read whole are carried
     /// over, so unlocking the rest after a Resume never re-reads or replaces them.
     func unlock(emailID: UUID, position: Int, password: String, retain: Bool) async -> UnlockOutcome {
-        guard let page = try? await store.rawCandidates(ids: [emailID]), let candidate = page.candidates.first else {
+        guard let source = await messageSource(emailID: emailID) else {
             return .unreadable(String(localized: "message source not stored"))
         }
         if retain {
-            return await unlockKept(emailID: emailID, position: position, raw: candidate.raw, password: password)
+            return await unlockKept(emailID: emailID, position: position, source: source, password: password)
         }
         let ocr = AttachmentOCR.isEnabled
-        let raw = candidate.raw
         let extractions: [Extraction]? = await Task.detached(priority: .userInitiated) {
-            Self.extractCoverage(fromRaw: raw, ocr: ocr, passwords: [position: password])
+            Self.extractCoverage(from: source, ocr: ocr, passwords: [position: password])
         }.value
         guard let extractions, position < extractions.count else {
             return .unreadable(String(localized: "message could not be parsed"))
@@ -993,7 +1200,7 @@ final class AttachmentTextIndexJob {
     /// The kept Unlock: only THIS attachment's record changes (an earlier unlock
     /// of a sibling is not undone by re-reading the message without its
     /// password), under the attachment's current round, continuing it.
-    private func unlockKept(emailID: UUID, position: Int, raw: String, password: String) async -> UnlockOutcome {
+    private func unlockKept(emailID: UUID, position: Int, source: MessageSource, password: String) async -> UnlockOutcome {
         let coverage: AttachmentCoverageStore
         let previous: AttachmentCoverageRow?
         do {
@@ -1005,7 +1212,7 @@ final class AttachmentTextIndexJob {
         let round = previous?.resumeRound ?? 0
         let read: ContinuedRead
         do {
-            read = try await readContinuing(emailID: emailID, position: position, raw: raw, limits: ExtractionLimits.round(round), password: password)
+            read = try await readContinuing(emailID: emailID, position: position, source: source, limits: ExtractionLimits.round(round), password: password)
         } catch {
             return .unreadable(String(localized: "message could not be parsed"))
         }
@@ -1081,7 +1288,7 @@ final class AttachmentTextIndexJob {
     /// marked as needing the password again. A coverage store that cannot be
     /// opened or written fails the round — never a silent "resumed".
     func resume(emailID: UUID, position: Int, password: String? = nil) async -> ResumeOutcome {
-        guard let page = try? await store.rawCandidates(ids: [emailID]), let candidate = page.candidates.first else {
+        guard let source = await messageSource(emailID: emailID) else {
             return .unreadable(String(localized: "message source not stored"))
         }
         let coverage: AttachmentCoverageStore
@@ -1096,7 +1303,7 @@ final class AttachmentTextIndexJob {
         let limits = ExtractionLimits.round(round)
         let read: ContinuedRead
         do {
-            read = try await readContinuing(emailID: emailID, position: position, raw: candidate.raw, limits: limits, password: password)
+            read = try await readContinuing(emailID: emailID, position: position, source: source, limits: limits, password: password)
         } catch {
             return .unreadable(String(localized: "message could not be parsed"))
         }
@@ -1164,7 +1371,7 @@ final class AttachmentTextIndexJob {
 
     /// Reads attachment `position` under `limits`, carrying over the files
     /// inside it that its recorded children say were read whole.
-    private func readContinuing(emailID: UUID, position: Int, raw: String, limits: ExtractionLimits, password: String?) async throws -> ContinuedRead {
+    private func readContinuing(emailID: UUID, position: Int, source: MessageSource, limits: ExtractionLimits, password: String?) async throws -> ContinuedRead {
         let previousChildren = SearchChunkPolicy.isEnabled
             ? try await store.attachmentChildren(forEmailID: emailID).filter { $0.position == position } : []
         let completed = ExtractionContinuation.carriablePaths(previousChildren)
@@ -1173,7 +1380,7 @@ final class AttachmentTextIndexJob {
         let extractions: [Extraction]? = await Task.detached(priority: .userInitiated) {
             ExtractionLimits.$current.withValue(limits) {
                 ExtractionContinuation.$completedPaths.withValue(completed) {
-                    Self.extractCoverage(fromRaw: raw, ocr: ocr, passwords: passwords)
+                    Self.extractCoverage(from: source, ocr: ocr, passwords: passwords)
                 }
             }
         }.value

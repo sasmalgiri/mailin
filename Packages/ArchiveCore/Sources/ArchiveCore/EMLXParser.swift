@@ -71,11 +71,15 @@ struct EMLXParser {
         return ParseResult(emails: emails, totalFiles: emlxFiles.count, failedFiles: errors.count, errors: errors)
     }
 
+    /// An .emlx file is read whole into memory; larger files are refused with
+    /// that reason. Listed in Settings ▸ Health ▸ Limits (R5b).
+    static let maxFileBytes: Int64 = 500_000_000
+
     private static func parseSingleEMLX(fileURL: URL, senderEmail: String) throws -> MBOXParser.RawEmail {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = attrs[.size] as? Int64 ?? 0
         guard fileSize > 0 else { throw EMLXError.invalidFormat("Empty file (0 bytes)") }
-        if fileSize > 500_000_000 { throw EMLXError.invalidFormat("EMLX file too large (\(fileSize / 1_000_000) MB)") }
+        if fileSize > maxFileBytes { throw EMLXError.invalidFormat("EMLX file too large (\(fileSize / 1_000_000) MB)") }
 
         let data = try Data(contentsOf: fileURL)
         guard let content = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {

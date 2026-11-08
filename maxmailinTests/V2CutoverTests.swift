@@ -5721,7 +5721,14 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(listed("\(Int(AttachmentOCR.maxPixels)) px"))
         XCTAssertFalse(listed("Phrase verification"), "R02: phrases of any length are verified on the stored text — no limit row")
         XCTAssertTrue(listed("\(AppLimits.previousEngineDuplicateWindow)"))
-        XCTAssertTrue(listed("\(FTSSearchIndex.indexedBodyCharacters)"), "the previous search index's body prefix is named")
+        XCTAssertTrue(listed(bytes(Int64(FTSSearchIndex.indexedTextBudgetBytes))), "R5b: the previous search index's real body budget is named")
+        // R5b: the remaining guards of the five jobs are named with what happens at them.
+        XCTAssertTrue(listed("\(MIMEParser.maxRecursionDepth) levels") && listed(bytes(Int64(OffsetMBOXScanner().maxLineBytes)))
+                      && listed(bytes(Int64(OffsetMBOXScanner().maxHeaderBytes))) && listed(bytes(MSGParser.maxFileBytes))
+                      && listed(bytes(EMLXParser.maxFileBytes)) && listed(bytes(Int64(MIMECarver.maxMessage)))
+                      && listed(bytes(RARReader.maxDecoderDictionaryBytes)) && listed("\(BoundedRegexSearch.literalCandidateCap) candidates")
+                      && listed(bytes(Int64(PSTStreamWriter.maxFileBytes))) && listed(bytes(Int64(MBOXParser.maxMessageBytes)))
+                      && listed("\(ArchiveSidebarModel.labelLimit) busiest folders"), "\(limits.map { plain($0.value) })")
         for job in ["Opening archives", "Folders", "Search", "Duplicates", "Exports"] {
             XCTAssertEqual(limits.first { $0.what == job }?.kind, AppLimit.Kind.none, "\(job) is listed as uncapped")
         }
@@ -8980,7 +8987,8 @@ final class V2CutoverTests: XCTestCase {
         try await expectUnresolved(env, q, 1, "until streamed its body may match — it is never counted as 'no text'")
 
         SearchDocBackfillJob.testStoreOverride = env.store
-        defer { SearchDocBackfillJob.testStoreOverride = nil }
+        AttachmentTextIndexJob.testSuppressKicks = true   // R5b: a streamed body kicks the attachment job
+        defer { SearchDocBackfillJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
         let outcome = await SearchDocBackfillJob.shared.run()
         XCTAssertEqual(outcome.streamedBodies, 1)
         XCTAssertEqual(outcome.streamedFailed, 0)
@@ -9296,6 +9304,204 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(row.resumeRound, 0, "no round was recorded")
         let children = try await env.store.attachmentChildren(forEmailID: email.id)
         XCTAssertEqual(children.map(\.state), ["extracted", "unsupported", "unsupported"], "nothing was rewritten")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    // MARK: - R5b — attachment contents of a message kept by its byte range; a reader upgrade keeps a kept Unlock
+
+    /// R5b item 1 (owner 2026-11-08: "there should be no limit at all"): a
+    /// message above the stream threshold (a 64 KiB stand-in ceiling) with a
+    /// DOCX and a ZIP holding a DOCX. Streaming its body registers each
+    /// attachment's byte range in the original file; the attachment job then
+    /// streams each one out decoded and reads it like any other — a word in
+    /// each is found, through the attachment condition and through any text.
+    /// The decode holds a slice and a carry, never the attachment.
+    func testR5b_attachmentContentsOfALargeMessageAreSearchable_docxAndZipWithDocx() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        try FileManager.default.createDirectory(at: env.root, withIntermediateDirectories: true)
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        SearchDocBackfillJob.testStoreOverride = env.store
+        defer {
+            AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false
+            SearchDocBackfillJob.testStoreOverride = nil
+        }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        ExtractionLimits.baseOverride = nil
+
+        let memo = Self.docx(body: "the memo mentions quetzalcoatlus", header: "memo header")
+        let inner = Self.docx(body: "the inner file mentions xenarthran", header: "inner header")
+        let bundle = Self.zipPackage([("folder/inner.docx", inner)])
+        let filler = String(repeating: "ordinary words about the quarterly ledger and the board.\n", count: 2_000)   // ~114 KB
+        let url = env.root.appendingPathComponent("r5b-large.mbox")
+        try """
+        From big@example.com Fri Mar 17 12:00:00 2017
+        From: big@example.com
+        To: me@example.com
+        Subject: R5b large with attachments
+        Date: Fri, 17 Mar 2017 12:00:00 +0000
+        Message-ID: <r5b-attach@example.com>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain; charset=utf-8
+
+        \(filler)
+        \(mimeAttachment("memo.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", memo))
+        \(mimeAttachment("bundle.zip", "application/zip", bundle))
+        --B--
+
+        """.write(to: url, atomically: true, encoding: .utf8)
+        let summary = try await importForLife01(env, url)
+        XCTAssertEqual(summary.bodiesNotDecoded, 1, "kept by its byte range")
+
+        func found(_ name: String, _ word: String) async throws -> Int {
+            var q = EmailQuery.all
+            q.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: name, contentMatch: .allWords, content: word)])])
+            return try await env.archive.count(query: q)
+        }
+        let before = try await found("memo", "quetzalcoatlus")
+        XCTAssertEqual(before, 0)
+
+        let streamed = await SearchDocBackfillJob.shared.run()
+        XCTAssertEqual(streamed.streamedBodies, 1)
+        var ids: [UUID] = []
+        for try await batch in env.archive.streamFullEmails(query: .all, batchSize: 10) { ids += batch.map(\.id) }
+        let id = try XCTUnwrap(ids.first)
+        let listed = try await env.store.attachmentMetadata(forEmailID: id)
+        XCTAssertEqual(listed.map(\.filename), ["memo.docx", "bundle.zip"], "the attachments are listed like any other")
+
+        _ = await AttachmentTextIndexJob.shared.run()
+        let memoFound = try await found("memo", "quetzalcoatlus")
+        XCTAssertEqual(memoFound, 1, "a word in the DOCX is found")
+        let innerFound = try await found("bundle", "xenarthran")
+        XCTAssertEqual(innerFound, 1, "a word in the DOCX inside the ZIP is found")
+        try await expectIDs(env, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .allWords, "xenarthran")])]),
+                            ["R5b large with attachments"], "any-text search reaches the file inside the attachment")
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        let rows = try coverage.rows(for: id)
+        XCTAssertEqual(rows.map(\.filename), ["memo.docx", "bundle.zip"])
+        XCTAssertTrue(rows.allSatisfy { $0.state.isSearchable }, "\(rows.map(\.state))")
+        let children = try await env.store.attachmentChildren(forEmailID: id)
+        XCTAssertTrue(children.contains { $0.path == "folder/inner.docx" && $0.state == "extracted" }, "\(children.map(\.path))")
+
+        // Bounded memory: the registered part streams out through a 4 KB slice.
+        let located = try await env.store.streamedAttachmentParts(emailID: id)
+        let (sourcePath, parts) = try XCTUnwrap(located)
+        let out = env.root.appendingPathComponent("memo.out")
+        let decoded = try StreamedPartDecoder.decode(part: parts[0], sourcePath: sourcePath, to: out, sliceBytes: 4_096)
+        XCTAssertEqual(try Data(contentsOf: out), memo)
+        XCTAssertLessThan(decoded.peakBufferedBytes, 3 * 4_096 + 1_024)
+
+        // The Limits screen no longer says these contents are not read.
+        let single = try XCTUnwrap(AppLimits.all.first { $0.what == "Single message size" })
+        XCTAssertFalse(single.why.contains("not yet read"), single.why)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    /// R5b item 2: a reader upgrade (rows below the current extractor version)
+    /// re-reads the message without any password. The attachment a kept Unlock
+    /// stored keeps its row, its text and its children; its row says the newer
+    /// reader needs the password again (once); the message's other attachment
+    /// is re-read by the newer reader. Unlocking again reads it with the newer reader.
+    func testR5b_readerUpgradeKeepsAKeptUnlock_andMarksOnlyWhatTheNewerReaderWouldAdd() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        ExtractionLimits.baseOverride = nil
+
+        let entries = Self.r5Members().map { member -> (name: String, payload: Data, flags: UInt16, method: UInt16, crc: UInt32, size: UInt32, extra: Data) in
+            var cipher = ZipCryptoCipher(password: "open-sesame")
+            let crc = Self.crc32(member.data)
+            return (member.name, cipher.encrypt(ZipCryptoCipher.header(crc32: crc) + member.data), 0x0001, 0, crc, UInt32(member.data.count), Data())
+        }
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Upgrade keeps unlock
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <r5b-upgrade@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        two files
+        \(mimeAttachment("three.zip", "application/zip", Self.zipRaw(entries)))
+        \(mimeAttachment("notes.txt", "text/plain", Data("the plain notes say ocelotword".utf8)))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        XCTAssertEqual(try coverage.rows(for: email.id).first?.state, .locked)
+        let kept = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "open-sesame", retain: true)
+        guard case .unlocked(_, _, true) = kept else { return XCTFail("\(kept)") }
+        let unlockedChildren = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(unlockedChildren.map(\.state), ["extracted", "extracted", "extracted"])
+
+        // The rows as an older reader (version 9) wrote them: both are re-read candidates for version 10.
+        for row in try coverage.rows(for: email.id) {
+            XCTAssertTrue(AttachmentTextIndexJob.boundaryExtractors.contains(row.extractor), row.extractor)
+            try coverage.record(row: AttachmentCoverageRow(emailID: row.emailID, ordinal: row.ordinal, filename: row.filename, mimeType: row.mimeType,
+                                                           state: row.state, extractor: row.extractor, extractorVersion: 9, characters: row.characters,
+                                                           note: row.note, resumeRound: row.resumeRound, unlockedWithPassword: row.unlockedWithPassword))
+        }
+        _ = await AttachmentTextIndexJob.shared.run()
+
+        for word in ["aardvarkword", "bisonword", "caracalword"] {
+            let n = try await r5Found(env, word)
+            XCTAssertEqual(n, 1, "\(word): the kept Unlock's text survives the upgrade's re-read")
+        }
+        let children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map(\.state), ["extracted", "extracted", "extracted"], "never re-read as locked")
+        XCTAssertEqual(children.map(\.sha256), unlockedChildren.map(\.sha256))
+        XCTAssertTrue(children.allSatisfy { $0.note?.contains(AttachmentTextIndexJob.needsPasswordForNewerReaderNote) != true },
+                      "files already read are not marked: the newer reader adds nothing to them that needs the password")
+        var rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].state, .extracted)
+        XCTAssertTrue(rows[0].unlockedWithPassword)
+        XCTAssertEqual(rows[0].extractorVersion, 9, "still the reading of the earlier reader")
+        XCTAssertEqual(rows[0].note?.components(separatedBy: AttachmentTextIndexJob.needsPasswordForNewerReaderNote).count, 2,
+                       "marked once: \(rows[0].note ?? "")")
+        XCTAssertEqual(rows[1].extractorVersion, AttachmentTextIndexJob.extractorVersion, "the other attachment is re-read by the newer reader")
+        var q = EmailQuery.all
+        q.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "notes", contentMatch: .allWords, content: "ocelotword")])])
+        let notes = try await env.archive.count(query: q)
+        XCTAssertEqual(notes, 1)
+
+        // A second pass changes nothing and marks nothing twice.
+        _ = await AttachmentTextIndexJob.shared.run()
+        rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows[0].note?.components(separatedBy: AttachmentTextIndexJob.needsPasswordForNewerReaderNote).count, 2)
+        let stillThere = try await r5Found(env, "bisonword")
+        XCTAssertEqual(stillThere, 1)
+
+        // Unlocking again reads it with the newer reader; the mark goes.
+        let again = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "open-sesame", retain: true)
+        guard case .unlocked(_, _, true) = again else { return XCTFail("\(again)") }
+        rows = try coverage.rows(for: email.id)
+        XCTAssertEqual(rows[0].extractorVersion, AttachmentTextIndexJob.extractorVersion)
+        XCTAssertFalse(rows[0].note?.contains(AttachmentTextIndexJob.needsPasswordForNewerReaderNote) == true)
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 }

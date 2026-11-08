@@ -80,7 +80,7 @@ final class PSTStreamWriter {
     /// Max payload bytes per data block (MS-PST block ceiling minus trailer).
     private static let chunkSize = 8176
     /// PST format / Outlook whole-file ceiling. Format-inherent, not ours.
-    private static let maxFileBytes: UInt64 = 50_000_000_000
+    static let maxFileBytes: UInt64 = 50_000_000_000   // listed in Settings ▸ Health ▸ Limits (R5b)
 
     private static let nidFolder: UInt32 = 0x02, nidMessage: UInt32 = 0x0C
     private static let nidContents: UInt32 = 0x0E, nidAttach: UInt32 = 0x0D

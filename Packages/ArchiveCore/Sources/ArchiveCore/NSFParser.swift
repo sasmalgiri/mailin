@@ -272,7 +272,7 @@ struct NSFReader {
     private let data: Data
     private static let logger = Logger(subsystem: "com.mailin", category: "NSFReader")
 
-    private static let maxNotes = 500_000
+    // R5b: no fixed note count (the former 500,000 stopped the rollback reader without a word).
 
     init(data: Data) {
         self.data = data
@@ -383,7 +383,7 @@ struct NSFReader {
         let totalBytes = Double(data.count)
 
         // The whole file, not the first 100 KB after the last record (see `nextStructuredNote`).
-        while offset < data.count - 64 && notes.count < Self.maxNotes {
+        while offset < data.count - 64 {
             if let (note, nextOffset) = try? readNoteRecord(at: offset), nextOffset > offset {
                 notes.append(note)
                 offset = nextOffset
@@ -425,7 +425,7 @@ struct NSFReader {
         let valueLenRaw = Int(readUInt32(at: offset + 4))
         let maxValueLen = data.count - headerPlusName
         let valueLen = min(valueLenRaw, maxValueLen)
-        guard valueLen >= 0 && valueLen < 10_000_000 else { return nil }
+        guard valueLen >= 0 else { return nil }   // R5b: no 10 MB item ceiling — the length is already bounded by the file
 
         let nameStart = offset + 8
         guard let name = readLMBCSString(at: nameStart, length: nameLen) else { return nil }
@@ -444,7 +444,9 @@ struct NSFReader {
         var note = NSFNote()
         var pos = offset
 
-        while pos < data.count - 8 && note.items.count < 200 {
+        // R5b: no 200-item ceiling — every item of the note is read; the walk
+        // always moves forward and ends at the note's end or an unreadable item.
+        while pos < data.count - 8 {
             if let (binName, binData, binNext) = readItemBinary(at: pos),
                binName == "$FILE" || binName.hasPrefix("$FILE_") || binName == "$AttachmentData" {
                 if let attachment = parseAttachmentItemWithData(name: binName, binaryValue: binData) {
@@ -495,7 +497,7 @@ struct NSFReader {
         let valueLenRaw = Int(readUInt32(at: offset + 4))
         let maxValueLen = data.count - headerPlusName
         let valueLen = min(valueLenRaw, maxValueLen)
-        guard valueLen >= 0 && valueLen < 10_000_000 else { return nil }
+        guard valueLen >= 0 else { return nil }   // R5b: no 10 MB item ceiling — the length is already bounded by the file
 
         let nameStart = offset + 8
         guard let name = readLMBCSString(at: nameStart, length: nameLen) else { return nil }
@@ -534,7 +536,7 @@ struct NSFReader {
         let valueLenRaw = Int(readUInt32(at: offset + 4))
         let maxValueLen = max(0, data.count - (offset + 8 + nameLen))
         let valueLen = min(valueLenRaw, maxValueLen)
-        guard valueLen >= 0 && valueLen < 50_000_000 else { return nil }
+        guard valueLen >= 0 else { return nil }   // R5b: no 50 MB attachment ceiling — bounded by the file
 
         let nameStart = offset + 8
         guard let name = readLMBCSString(at: nameStart, length: nameLen) else { return nil }
@@ -586,7 +588,9 @@ struct NSFReader {
     private func lzssDecompress(_ input: Data) -> Data? {
         guard input.count > 4 else { return nil }
         let expectedSize = Int(UInt32(input[0]) | (UInt32(input[1]) << 8) | (UInt32(input[2]) << 16) | (UInt32(input[3]) << 24))
-        guard expectedSize > 0 && expectedSize < 50_000_000 else { return nil }
+        // R5b: no fixed 50 MB ceiling; LZSS cannot expand past 18 bytes per 2 input bytes,
+        // so a larger declared size is damage, not a large body.
+        guard expectedSize > 0 && expectedSize <= input.count * 9 + 4_096 else { return nil }
 
         var output = Data(capacity: expectedSize)
         var window = [UInt8](repeating: 0x20, count: 4096)

@@ -244,9 +244,8 @@ struct EmailStoreRepository: EmailRepository {
             // so exports, fingerprints and scope jobs over a text search
             // silently stopped there.
             var rankedCursor = cursor?.ranked
-            var rounds = 0
             while true {
-                rounds += 1
+                try Task.checkCancellation()
                 let page = try await searchRanked(query: query, cursor: rankedCursor, limit: limit)
                 if let last = page.summaries.last {
                     let next = page.nextCursor.map { EmailPageCursor(beforeDate: last.date, beforeID: last.id, ranked: $0) }
@@ -254,7 +253,9 @@ struct EmailStoreRepository: EmailRepository {
                 }
                 // A short round with a live cursor (date filtering rejected a
                 // whole boundary shard) keeps going; exhaustion ends it.
-                guard let next = page.nextCursor, rounds < Self.maxRankedFillRounds else {
+                // R5b: no round ceiling — after 50 empty rounds the page used to
+                // end with no next cursor, so the list stopped as if complete.
+                guard let next = page.nextCursor else {
                     return EmailPage(summaries: [], nextCursor: nil)
                 }
                 rankedCursor = next

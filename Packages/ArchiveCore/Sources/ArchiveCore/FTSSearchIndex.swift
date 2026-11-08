@@ -1637,9 +1637,11 @@ enum RegexLiteralExtractor {
 /// `scanCap` — the outcome reports `truncated = true` whenever the cap cut the
 /// scope short, and callers must surface that.
 ///
-/// The verified text is the SAME document FTS indexes (subject / from /
-/// to+cc / body prefix), so the literal-derived path and a full scan of that
-/// scope agree exactly.
+/// The verified text is the message's subject / from / to+cc / WHOLE body.
+/// R5b: verification used to read only the first 50,000 characters of a body,
+/// so a match further in was found as a candidate and then silently rejected;
+/// candidates themselves come from the FTS document (its budget is listed in
+/// Settings ▸ Health ▸ Limits).
 enum BoundedRegexSearch {
 
     static let defaultNoLiteralScanCap = 5_000
@@ -1657,9 +1659,8 @@ enum BoundedRegexSearch {
         return trimmed.replacingOccurrences(of: "*", with: ".*")
     }
 
-    /// The exact text a regex is verified against — mirrors the FTS document
-    /// (subject, sender, recipients, body prefix) so candidate retrieval and
-    /// verification cover the same content.
+    /// The exact text a regex is verified against: subject, sender,
+    /// recipients and the whole body (R5b: no 50,000-character prefix).
     static func searchableText(_ email: MBOXParser.RawEmail) -> String {
         let subject = email.headers["Subject"] ?? ""
         let sender = email.headers["From"] ?? ""
@@ -1667,7 +1668,7 @@ enum BoundedRegexSearch {
         let body = email.plainBody.isEmpty
             ? FTSSearchIndex.stripHTMLText(email.htmlBody)
             : email.plainBody
-        return subject + "\n" + sender + "\n" + recipients + "\n" + String(body.prefix(FTSSearchIndex.indexedBodyCharacters))
+        return subject + "\n" + sender + "\n" + recipients + "\n" + body
     }
 
     static func matches(_ regex: NSRegularExpression, _ email: MBOXParser.RawEmail) -> Bool {
