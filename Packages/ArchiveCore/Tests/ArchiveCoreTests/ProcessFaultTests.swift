@@ -633,6 +633,21 @@ final class DriveRemovalProcessTests: XCTestCase {
         return (r.status, r.output)
     }
 
+    /// The pull lands while the writer is mid-export: the writer is frozen
+    /// (SIGSTOP), the disk detached, the writer thawed into a missing disk.
+    /// Without the freeze, `detach -force` can wait out the writer's own
+    /// durable flushes (F_FULLFSYNC per batch) and take effect only after the
+    /// export finished — a race a physically pulled drive does not have.
+    private func detachMidWrite(_ child: FaultHarness.Child) -> (Int32, String) {
+        // A random moment inside the next batch, so the pull usually finds
+        // written-but-unvouched records (and sometimes a cut one) on the disk.
+        usleep(UInt32.random(in: 10_000...120_000))
+        kill(child.process.processIdentifier, SIGSTOP)
+        let result = detach()
+        kill(child.process.processIdentifier, SIGCONT)
+        return result
+    }
+
     /// The archive lives on the removable disk; the importing process loses it
     /// mid-batch. Whatever the writer does (dies, pauses, fails the file), the
     /// re-attached store must be healthy, its checkpoint must vouch for exactly
@@ -720,7 +735,7 @@ final class DriveRemovalProcessTests: XCTestCase {
         while progress < total / 4, let line = child.next("PROGRESS", timeout: 120) {
             progress = Int(line.split(separator: " ")[1]) ?? progress
         }
-        let (status, text) = detach()
+        let (status, text) = detachMidWrite(child)
         print("DRIVE export: detached after PROGRESS \(progress) of \(total) (hdiutil \(status)): \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
         XCTAssertEqual(status, 0)
         let deadline = Date().addingTimeInterval(60)
@@ -754,15 +769,117 @@ final class DriveRemovalProcessTests: XCTestCase {
 
         // Nothing reported as written that is not on the disk: the "X of Y" the
         // writer reported is a prefix of what the re-attached file holds. (The
-        // tail past X could not be cut back on a vanished disk; the app offers
-        // no resume for it — `ExportJobRunner.resumeRequest` needs the file's
-        // length and SHA-256 at failure time — so those rows are never vouched for.)
+        // tail past X could not be cut back on a vanished disk; it is never
+        // vouched for. R8: `ContainerManifest.recover` cuts it back to the last
+        // verified checkpoint on reconnect — see the recover-and-resume test below.)
         if let verdict, verdict.hasPrefix("THREW"),
            let written = verdict.split(separator: " ").first(where: { $0.hasPrefix("written=") }).flatMap({ Int($0.dropFirst(8)) }) {
             XCTAssertTrue(onDisk, "the partial file is kept")
             XCTAssertGreaterThanOrEqual(records, written, "every record the writer reported is on the disk")
             XCTAssertLessThan(written, total, "a failed export says X of Y with X < Y")
         }
+    }
+
+    /// R8 / OUT-06a: the disk is pulled mid-export, plugged back in, and the
+    /// partial export is recovered and resumed. The file it leaves holds
+    /// records past the receipt's "X of Y" (the last may be cut); recovery
+    /// verifies the last durable checkpoint's prefix hash, inventories that
+    /// tail and cuts it away; the resume appends from exactly there. The
+    /// finished file parses to exactly the selection — no record twice, none
+    /// missing — the receipt's count equals the parsed count, its SHA-256 is
+    /// the file's, and the content check pairs every record one-to-one.
+    func testDetachDuringExport_reattach_recoverAndResume_outputIsExactlyTheSelection() async throws {
+        let total = 6_000
+        let root = work.appendingPathComponent("archive", isDirectory: true)   // boot volume
+        let source = work.appendingPathComponent("source.mbox")
+        let sourceIDs = try FaultHarness.writeMbox(count: total, bodyBytes: 4_000, to: source)
+        let importer = try FaultHarness.Child(role: "import", env: ["MAILIN_FAULT_ROOT": root.path, "MAILIN_FAULT_SOURCE": source.path, "MAILIN_FAULT_BATCH": "500"])
+        XCTAssertNotNil(importer.next("DONE", timeout: 600))
+        _ = importer.wait(timeout: 60)
+
+        let output = mountPoint.appendingPathComponent("export.mbox")
+        let child = try FaultHarness.Child(role: "export", env: ["MAILIN_FAULT_ROOT": root.path, "MAILIN_FAULT_OUTPUT": output.path])
+        XCTAssertNotNil(child.next("START", timeout: 120))
+        var progress = 0
+        while progress < total / 4, let line = child.next("PROGRESS", timeout: 120) {
+            progress = Int(line.split(separator: " ")[1]) ?? progress
+        }
+        let (status, _) = detachMidWrite(child)
+        XCTAssertEqual(status, 0)
+        let deadline = Date().addingTimeInterval(60)
+        var verdict: String?
+        repeat {
+            verdict = child.allLines.first(where: { $0.hasPrefix("DONE") || $0.hasPrefix("THREW") })
+            if verdict != nil || !child.process.isRunning { break }
+            usleep(100_000)
+        } while Date() < deadline
+        child.sigkill()
+        // What the receipt would say: the last PROGRESS the writer reported.
+        let reported = child.allLines.filter { $0.hasPrefix("PROGRESS") }.compactMap { Int($0.split(separator: " ")[1]) }.max() ?? 0
+        print("DRIVE resume: detached after PROGRESS \(progress); writer said \(verdict ?? "nothing"); receipt X = \(reported) of \(total)")
+        if let verdict { XCTAssertFalse(verdict.hasPrefix("DONE completed=true"), verdict) }
+
+        try attach()
+        let foundBytes = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        let foundRecords = (FileManager.default.contents(atPath: output.path) ?? Data())
+            .split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
+            .filter { $0.starts(with: Data("Message-ID: <fault-".utf8)) }.count
+        let recovery = try ContainerManifest.recover(output: output)
+        print("DRIVE resume: found \(foundBytes) bytes holding \(foundRecords) record(s) (\(foundRecords - reported) past the receipt); \(recovery.summary); vouched positions \(recovery.positions)")
+        XCTAssertGreaterThanOrEqual(recovery.positions, reported, "the durable checkpoint is never behind what the receipt reported")
+        XCTAssertEqual(recovery.records, recovery.positions, "one mbox record per selected message")
+        XCTAssertLessThan(recovery.positions, total)
+        // Every record found past the boundary is in the tail inventory (a cut
+        // one may have lost its Message-ID line, so it can be one fewer).
+        let inventoried = recovery.records + recovery.tailCompleteRecords
+        XCTAssertTrue(foundRecords == inventoried || (recovery.tailLastRecordCut && foundRecords == inventoried + 1),
+                      "found \(foundRecords), inventoried \(inventoried) + \(recovery.tailLastRecordCut ? "1 cut" : "none cut")")
+        let cutBack = try await Self.parse(output)
+        XCTAssertEqual(cutBack.count, recovery.records, "after recovery the file parses to exactly the vouched records")
+        XCTAssertEqual(Set(cutBack).count, cutBack.count)
+
+        let resumed = try await Self.resume(root: root, output: output, recovery: recovery)
+        print("DRIVE resume: resumed run completed=\(resumed.completed) records=\(resumed.recordsWritten) sha=\(resumed.sha256Hex ?? "-")")
+        XCTAssertTrue(resumed.completed)
+        XCTAssertEqual(resumed.recordsWritten, total, "the receipt: \(total) of \(total)")
+        let final = try await Self.parse(output)
+        XCTAssertEqual(final.count, total, "parsed count equals the receipt's")
+        XCTAssertEqual(Set(final).count, final.count, "no record twice")
+        XCTAssertEqual(FaultHarness.normalized(final), sourceIDs, "exactly the selection")
+        let sha = ContainerManifest.hex(try ArchiveExportService.sha256(ofFile: output))
+        XCTAssertEqual(sha, resumed.sha256Hex, "the hash the receipt carries is the file's")
+        let manifest = try ContainerManifest.scan(url: ContainerManifest.url(for: output))
+        XCTAssertEqual(manifest.recordLines, total); XCTAssertEqual(manifest.end?.records, total); XCTAssertEqual(manifest.end?.sha256, sha)
+        XCTAssertNil(manifest.inconsistent)
+
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let lookup = ExportReconciliation.SourceLookup(records: { ids in
+            var out: [UUID: MBOXParser.RawEmail] = [:]
+            for id in ids { if let e = try await store.fullEmail(id: id) { out[id] = e } }
+            return out
+        })
+        let report = await ExportReconciliation.reconcile(file: output, promised: resumed.recordsWritten, lookup: lookup)
+        print("DRIVE resume: content check \(report.summary)")
+        XCTAssertEqual(report.outcome, .complete, "\(report.summary)\n\(report.findings.prefix(3))")
+        XCTAssertEqual(report.selection?.paired, total)
+        XCTAssertEqual(report.selection?.missing, 0); XCTAssertEqual(report.selection?.extra, 0)
+    }
+
+    /// Message-IDs of every record an mbox parses to, in file order.
+    static func parse(_ url: URL) async throws -> [String] {
+        var ids: [String] = []
+        try await ExportReconciliation.readContainer(url, kind: .mbox, batchSize: 500) { batch in
+            ids.append(contentsOf: batch.map { ExportReconciliation.identifier($0.headers["Message-ID"] ?? "") })
+        }
+        return ids
+    }
+
+    @MainActor
+    static func resume(root: URL, output: URL, recovery: ContainerManifest.Recovery) async throws -> ArchiveExportResult {
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let service = ArchiveExportService(archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)))
+        return try await service.exportMBOXArchive(scope: .query(.all, exclusions: []), to: output, write: .resuming(from: recovery))
     }
 
     /// The export finishes; the disk is pulled immediately after the writer

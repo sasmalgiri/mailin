@@ -196,6 +196,7 @@ final class ArchiveExportService {
         write options: ExportWriteOptions = ExportWriteOptions(),
         startAt: Int = 0,
         maxBytes: Int? = nil,
+        manifestFormat: String? = nil,
         header: @MainActor (Int) -> String = { _ in "" },
         footer: @MainActor (Int) -> String = { _ in "" },
         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
@@ -223,6 +224,10 @@ final class ArchiveExportService {
         let appending = resuming
         if !appending { fm.createFile(atPath: url.path, contents: nil) }
         let handle = try FileHandle(forWritingTo: url)
+        // R3/R8: the running hash covers the WHOLE file, so a checkpoint can
+        // record the prefix hash at its offset; a resume seeds it from the
+        // bytes already there (read once, which is also the T2 check).
+        var digest = SHA256()
         if appending {
             // T2: the boundary is length AND content. Without both the resume
             // is refused; with both, the existing bytes are re-hashed first.
@@ -236,13 +241,32 @@ final class ArchiveExportService {
                 try? handle.close()
                 throw ArchiveExportError.partialArtifactChanged(path: url.path, expected: expectedOffset, actual: end)
             }
-            let actualHash = try Self.sha256(ofFile: url).map { String(format: "%02x", $0) }.joined()
+            digest = try Self.sha256State(ofFile: url)
+            let actualHash = ContainerManifest.hex(digest.finalize())
             if actualHash != expectedHash {
                 try? handle.close()
                 throw ArchiveExportError.partialArtifactContentChanged(path: url.path)
             }
         }
-        var digest = SHA256()
+        // R3/R8: a container format keeps its expected-record manifest beside
+        // the file — a fresh one for a fresh file, the existing one (checked
+        // against the resume point) for a resume.
+        var manifest: ContainerManifest.Writer? = nil
+        if let manifestFormat {
+            do {
+                if appending, let offset = options.expectedAppendOffset, let hash = options.expectedAppendSHA256 {
+                    manifest = try ContainerManifest.Writer(resumingFor: url, positions: options.skipFirst, offset: offset, sha256: hash)
+                } else if !appending {
+                    manifest = try ContainerManifest.Writer(creatingFor: url, format: manifestFormat, startPosition: startAt)
+                }
+            } catch {
+                try? handle.close()
+                if !appending { try? fm.removeItem(at: url) }
+                throw ArchiveExportError.partialManifestInvalid(error.localizedDescription)
+            }
+        }
+        defer { manifest?.close() }
+        let baseOffset: UInt64 = appending ? (options.expectedAppendOffset ?? 0) : 0
         // `position` is the index within the scope (what the receipt reports as
         // written, cumulatively across resumes); `bytes` is this run's output.
         var position = 0, bytes = 0, cancelled = false
@@ -272,6 +296,7 @@ final class ArchiveExportService {
         func abort() {
             try? handle.close()
             try? fm.removeItem(at: url)
+            manifest?.remove()
         }
         /// Cancel or error with `keepPartialOnCancel`: the artifact stays on
         /// disk, cut back to the last reported batch boundary, so a later run
@@ -280,6 +305,9 @@ final class ArchiveExportService {
         /// itself fails, the file is removed: a partial that cannot be
         /// trusted must not be offered for resume (R2).
         func keepPartial() {
+            // The manifest already ends at the checkpoint for `committedOffset`;
+            // record lines after it were never written.
+            manifest?.discardPending()
             do {
                 try handle.truncate(atOffset: committedOffset)
                 try? handle.close()
@@ -299,6 +327,7 @@ final class ArchiveExportService {
                     if position >= skip {
                         // S5: a located-not-stored message streams from its
                         // source; everything else renders through `row`.
+                        let recordStart = baseOffset + UInt64(bytes)
                         if let rawStream, let plan = try await rawStream(email) {
                             try write(plan.prefix)
                             // Q1: the source is checked against its verified
@@ -307,6 +336,8 @@ final class ArchiveExportService {
                         } else {
                             try write(try row(email, position))
                         }
+                        try manifest?.record(position: position, email: email, folder: SQLiteEmailStore.folderPaths(for: email).first,
+                                             offset: recordStart, length: baseOffset + UInt64(bytes) - recordStart)
                     }
                     position += 1
                     if let maxBytes, bytes >= maxBytes { break stream }
@@ -315,6 +346,16 @@ final class ArchiveExportService {
                 // interrupted run wrote) moves nothing — the checkpoint
                 // never goes backward.
                 if position > committedPosition {
+                    // R8: the batch's bytes reach the medium BEFORE the
+                    // manifest's checkpoint names them, and the checkpoint is
+                    // durable before the receipt counts them — so whatever
+                    // happens to the drive, the last checkpoint on it is a
+                    // boundary that verifies.
+                    if let manifest {
+                        try ContainerManifest.fullSync(handle)
+                        let prefix = ContainerManifest.hex(digest.finalize())
+                        try manifest.checkpoint(positions: position, bytes: baseOffset + UInt64(bytes), sha256: prefix)
+                    }
                     onProgress?(position, total)
                     committedOffset = try handle.offset()
                     committedPosition = position
@@ -338,11 +379,17 @@ final class ArchiveExportService {
             throw error
         }
 
-        // The hash always covers the WHOLE artifact. A resumed run's incremental
-        // digest only saw its own bytes, so it re-reads the file in bounded
-        // chunks; a fresh run keeps the streamed digest.
-        let finished: SHA256Digest = appending ? try Self.sha256(ofFile: url) : digest.finalize()
+        // The hash always covers the WHOLE artifact: a resumed run's digest
+        // was seeded from the bytes already there.
+        let finished: SHA256Digest = digest.finalize()
         let hex = finished.map { String(format: "%02x", $0) }.joined()
+        // R3: the manifest's end mark. The file itself is complete; a manifest
+        // that cannot be finished is carried to the receipt, never ignored.
+        var manifestFailure: String? = nil
+        if let manifest {
+            do { try manifest.finish(positions: position, bytes: baseOffset + UInt64(bytes), sha256: hex) }
+            catch { manifestFailure = "the container manifest could not be finished: \(error.localizedDescription)" }
+        }
         var sigURL: URL? = nil
         if signed {
             // Forensic-integrity formats: signature covers the streamed digest
@@ -358,7 +405,8 @@ final class ArchiveExportService {
                                    completed: true, cancelled: false,
                                    sha256Hex: hex, signatureURL: sigURL,
                                    unverifiedSources: sourceLedger.unverifiedPaths.count,
-                                   positionsConsumed: position)
+                                   positionsConsumed: position,
+                                   inventoryFailure: manifestFailure)
     }
 
     /// SHA-256 of a file in 1 MiB chunks — never the whole file in memory.
@@ -370,6 +418,17 @@ final class ArchiveExportService {
             digest.update(data: chunk)
         }
         return digest.finalize()
+    }
+
+    /// The running SHA-256 state over a whole file, to continue hashing after it.
+    nonisolated static func sha256State(ofFile url: URL) throws -> SHA256 {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 1 << 20) }), !chunk.isEmpty {
+            digest.update(data: chunk)
+        }
+        return digest
     }
 
     // MARK: - Part O shared core 2: one file per message into a folder
@@ -864,6 +923,7 @@ final class ArchiveExportService {
                            onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
             scope: scope, to: url, limit: limit, write: options,
+            manifestFormat: "mbox",
             onProgress: onProgress,
             rawStream: { [self] email in try await self.locatorStreamPlan(for: email) }
         ) { email, _ in
@@ -940,6 +1000,7 @@ final class ArchiveExportService {
                 limit: limit,
                 startAt: written,
                 maxBytes: partitionBytes,
+                manifestFormat: "mbox",
                 onProgress: onProgress,
                 rawStream: { [self] email in try await self.locatorStreamPlan(for: email) }
             ) { email, _ in
@@ -951,6 +1012,7 @@ final class ArchiveExportService {
                 // The scope ended exactly on the previous cap: nothing to
                 // write, so no empty file is left for a mail client to trip on.
                 try? FileManager.default.removeItem(at: target)
+                try? FileManager.default.removeItem(at: ContainerManifest.url(for: target))
                 break
             }
             results.append(result)
@@ -1049,39 +1111,48 @@ final class ArchiveExportService {
         let total = try await archive.count(scope: scope)
         var parts: [(url: URL, messages: Int)] = []
         var part = 1
-        func newWriter() throws -> (PSTStreamWriting, URL) {
-            let url = directory.appendingPathComponent(String(format: "%@-%04d.pst", baseName, part))
-            return (try PSTWriterFactory.make(url: url), url)
-        }
-        var (writer, url) = try newWriter()
-        var inPart = 0
         var done = 0
+        // R3: each part carries its own expected-record manifest.
+        func newWriter() throws -> (PSTStreamWriting, URL, ContainerManifest.Writer) {
+            let url = directory.appendingPathComponent(String(format: "%@-%04d.pst", baseName, part))
+            return (try PSTWriterFactory.make(url: url), url, try ContainerManifest.Writer(creatingFor: url, format: "pst", startPosition: done))
+        }
+        var (writer, url, manifest) = try newWriter()
+        var inPart = 0
         do {
             for try await batch in archive.streamSelected(scope: scope) {
                 try Task.checkCancellation()
                 for email in batch {
                     if inPart > 0, writer.dataBytesWritten >= limit {
                         let n = try writer.finalize()
+                        try manifest.finish(positions: done, bytes: nil, sha256: nil)
+                        manifest.close()
                         parts.append((url, n))
                         part += 1
-                        (writer, url) = try newWriter()
+                        (writer, url, manifest) = try newWriter()
                         inPart = 0
                     }
                     try writer.appendMessage(email)
+                    try manifest.record(position: done, email: email, folder: SQLiteEmailStore.folderPaths(for: email).first, offset: nil, length: nil)
                     inPart += 1
                     done += 1
                 }
+                try manifest.flush()
                 onProgress?(done, total)
             }
             if inPart > 0 {
                 parts.append((url, try writer.finalize()))
+                try manifest.finish(positions: done, bytes: nil, sha256: nil)
+                manifest.close()
             } else {
                 writer.abort()
+                manifest.remove()
                 try? FileManager.default.removeItem(at: url)
             }
             return parts
         } catch {
             writer.abort()
+            manifest.remove()
             throw error
         }
     }
@@ -1096,19 +1167,31 @@ final class ArchiveExportService {
                    onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> Int {
         let total = try await archive.count(scope: scope)
         let writer = try PSTWriterFactory.make(url: url)
+        // R3: the expected-record manifest beside the PST.
+        let manifest: ContainerManifest.Writer
+        do { manifest = try ContainerManifest.Writer(creatingFor: url, format: "pst", startPosition: 0) } catch {
+            writer.abort()
+            throw error
+        }
         do {
             var done = 0
             for try await batch in archive.streamSelected(scope: scope) {
                 try Task.checkCancellation()
                 for email in batch {
                     try writer.appendMessage(email)
+                    try manifest.record(position: done, email: email, folder: SQLiteEmailStore.folderPaths(for: email).first, offset: nil, length: nil)
                     done += 1
                 }
+                try manifest.flush()
                 onProgress?(done, total)
             }
-            return try writer.finalize()
+            let written = try writer.finalize()
+            try manifest.finish(positions: done, bytes: nil, sha256: nil)
+            manifest.close()
+            return written
         } catch {
             writer.abort()
+            manifest.remove()
             throw error
         }
     }
