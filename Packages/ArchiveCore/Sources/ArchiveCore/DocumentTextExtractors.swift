@@ -167,7 +167,7 @@ enum DocumentTextExtractor {
         // Directive 2026-11-07 §6: the readers verified on real producer files
         // (ODFDocumentReader also unlocks encrypted packages with `password`).
         case .odt, .ods, .odp: return try ODFDocumentReader.extract(fileURL: fileURL, kind: kind, password: password)
-        case .pages, .numbers, .key: return try IWorkDocumentReader.extract(fileURL: fileURL, kind: kind)
+        case .pages, .numbers, .key: return try IWorkDocumentReader.extract(fileURL: fileURL, kind: kind, password: password)
         case .doc, .xls, .ppt: return try LegacyOfficeTextExtractor.extract(fileURL: fileURL, kind: kind)
         case .xlsb: return try XLSBReader.extract(fileURL: fileURL)
         case .vsdx: return try VisioTextExtractor.extract(fileURL: fileURL)

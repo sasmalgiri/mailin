@@ -9,7 +9,9 @@
 //    start key        SHA-1 (ODF 1.0/1.1 default) or SHA-256 of the UTF-8 password
 //    key derivation   PBKDF2-HMAC-SHA1 over the start key, the entry's salt and
 //                     iteration count (OpenOffice.org 1,024; LibreOffice 100,000);
-//                     LibreOffice 7.x/24.x may use Argon2id instead — named, not done
+//                     or Argon2id (LibreOffice 7.x/24.x option; audit R6): RFC 9106
+//                     over the start key and salt with the manifest's argon2-
+//                     iterations / -memory / -lanes (Argon2.swift)
 //    cipher           Blowfish in 8-bit CFB (ODF 1.0/1.1, "Blowfish CFB"),
 //                     AES-128/192/256-CBC with W3C padding (ODF 1.2),
 //                     AES-256-GCM (LibreOffice 24.2+, xmlenc11)
@@ -69,6 +71,10 @@ enum ODFEncryption {
     /// True when any entry of the package is encrypted.
     static func isEncrypted(manifest: Data) -> Bool { !encryptedEntries(manifest: manifest).isEmpty }
 
+    /// Argon2id key derivation names (ODF 1.5 and LibreOffice's earlier loext name).
+    static let argon2idName = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.5#argon2id"
+    static let argon2idNameLibreOffice = "urn:org:documentfoundation:names:experimental:office:manifest:argon2id"
+
     // MARK: - Errors
 
     enum UnlockError: Error, LocalizedError, Equatable {
@@ -120,6 +126,18 @@ enum ODFEncryption {
             let rounds = UInt32(clamping: entry.iterationCount ?? 1024)
             guard rounds > 0, rounds <= 10_000_000 else { throw UnlockError.malformed("\(entry.fullPath): iteration count \(rounds)") }
             key = pbkdf2SHA1(password: startKey, salt: Array(salt), rounds: rounds, length: keySize)
+        case Self.argon2idName.lowercased(), Self.argon2idNameLibreOffice.lowercased():
+            // Audit R6: LibreOffice's Argon2id (ZipFile.cxx: argon2id_ctx over the
+            // start key and the entry's salt, version 0x13, no secret or data).
+            guard let t = entry.argon2Iterations, let m = entry.argon2Memory, let p = entry.argon2Lanes, t > 0, m > 0, p > 0 else {
+                throw UnlockError.malformed("\(entry.fullPath): Argon2id without its iterations, memory and lanes")
+            }
+            do {
+                key = try Argon2.hash(password: startKey, salt: Array(salt), iterations: UInt32(t), memoryKiB: UInt32(m), lanes: UInt32(p),
+                                      tagLength: keySize, variant: .id)
+            } catch let failure as Argon2.Failure {
+                throw UnlockError.keyDerivationUnsupported("Argon2id (\(failure.localizedDescription))")
+            }
         case let name where name.contains("argon2"):
             throw UnlockError.keyDerivationUnsupported("Argon2")
         default:
@@ -271,8 +289,16 @@ enum ODFEncryption {
         var startKeySHA256 = true
         var checksumSHA256 = true
         var iterations = 100_000
-        /// LibreOffice: PBKDF2; set to name Argon2id to build a file this build must report by name.
+        /// LibreOffice: PBKDF2; one of the Argon2id names derives with Argon2id
+        /// (`argon2`: passes, memory in KiB, lanes — LibreOffice writes 3, 65,536, 4);
+        /// any other name is written as is, for a file this build must report by name.
         var keyDerivationName = "PBKDF2"
+        var argon2: (t: Int, m: Int, p: Int) = (3, 65_536, 4)
+
+        static func == (a: Parameters, b: Parameters) -> Bool {
+            a.algorithm == b.algorithm && a.startKeySHA256 == b.startKeySHA256 && a.checksumSHA256 == b.checksumSHA256
+                && a.iterations == b.iterations && a.keyDerivationName == b.keyDerivationName && a.argon2 == b.argon2
+        }
 
         /// LibreOffice 6/7 default (ODF 1.2): AES-256-CBC, SHA-256 start key, SHA256/1K, 100,000 rounds.
         static let libreOffice = Parameters()
@@ -298,7 +324,11 @@ enum ODFEncryption {
             let deflated = try RawDeflate.deflate(member.data)
             let salt = CryptoPrimitives.randomBytes(16)
             let iv = CryptoPrimitives.randomBytes(parameters.algorithm == .aes256GCM ? 12 : (parameters.algorithm == .blowfishCFB ? 8 : 16))
-            let key = pbkdf2SHA1(password: startKey, salt: salt, rounds: UInt32(parameters.iterations), length: keySize)
+            let usesArgon2id = [argon2idName, argon2idNameLibreOffice].contains(parameters.keyDerivationName)
+            let key = usesArgon2id
+                ? try Argon2.hash(password: startKey, salt: salt, iterations: UInt32(parameters.argon2.t), memoryKiB: UInt32(parameters.argon2.m),
+                                  lanes: UInt32(parameters.argon2.p), tagLength: keySize, variant: .id)
+                : pbkdf2SHA1(password: startKey, salt: salt, rounds: UInt32(parameters.iterations), length: keySize)
             let cipherText = try parameters.algorithm.encrypt(Array(deflated), key: key, iv: iv)
             let covered = deflated.prefix(1024)
             let checksum = parameters.checksumSHA256 ? Data(SHA256.hash(data: covered)) : Data(Insecure.SHA1.hash(data: covered))
@@ -307,7 +337,7 @@ enum ODFEncryption {
             let startKeyName = parameters.startKeySHA256 ? "http://www.w3.org/2000/09/xmldsig#sha256" : "http://www.w3.org/2000/09/xmldsig#sha1"
             let keyDerivation = parameters.keyDerivationName == "PBKDF2"
                 ? "<manifest:key-derivation manifest:key-derivation-name=\"PBKDF2\" manifest:key-size=\"\(keySize)\" manifest:iteration-count=\"\(parameters.iterations)\" manifest:salt=\"\(salt.base64)\"/>"
-                : "<manifest:key-derivation manifest:key-derivation-name=\"\(parameters.keyDerivationName)\" manifest:key-size=\"\(keySize)\" manifest:salt=\"\(salt.base64)\" loext:argon2-iterations=\"3\" loext:argon2-memory=\"65536\" loext:argon2-lanes=\"4\"/>"
+                : "<manifest:key-derivation manifest:key-derivation-name=\"\(parameters.keyDerivationName)\" manifest:key-size=\"\(keySize)\" manifest:salt=\"\(salt.base64)\" loext:argon2-iterations=\"\(parameters.argon2.t)\" loext:argon2-memory=\"\(parameters.argon2.m)\" loext:argon2-lanes=\"\(parameters.argon2.p)\"/>"
             manifest += """
              <manifest:file-entry manifest:full-path="\(member.name)" manifest:media-type="text/xml" manifest:size="\(member.data.count)">
               <manifest:encryption-data manifest:checksum-type="\(checksumType)" manifest:checksum="\(checksum.base64EncodedString())">

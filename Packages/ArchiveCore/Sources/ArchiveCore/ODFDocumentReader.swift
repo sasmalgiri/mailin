@@ -48,6 +48,25 @@ enum ODFDocumentReader {
         }
         if !encrypted.isEmpty, password == nil { throw OfficeTextExtractor.ExtractError.encrypted }
 
+        // Audit R6: LibreOffice 24.2+ "wholesome" encryption — the whole document
+        // is one encrypted stream, `encrypted-package`, holding a plain inner
+        // package (ZipPackage.cxx). Decrypted, then read as the document itself.
+        if let password, let entry = encrypted["encrypted-package"], let member = byName["encrypted-package"] {
+            let limit = ExtractionLimits.effective.totalArchiveBytes
+            guard member.compressedSize <= limit else {
+                throw OfficeTextExtractor.ExtractError.notAPackage("encrypted-package is \(member.compressedSize) bytes, over the \(limit)-byte guard")
+            }
+            let raw = try DocumentTextExtractor.memberData(member, from: fileURL, scratch: scratch)
+            var inner = try ODFEncryption.decryptToDeflated(entry: entry, cipherText: raw, password: password)
+            if !inner.starts(with: [0x50, 0x4B, 0x03, 0x04]) {
+                do { inner = try RawDeflate.inflate(inner, limit: Int(limit)) } catch { throw OfficeTextExtractor.ExtractError.wrongPassword }
+            }
+            guard inner.starts(with: [0x50, 0x4B, 0x03, 0x04]) else { throw OfficeTextExtractor.ExtractError.wrongPassword }
+            let innerURL = scratch.appendingPathComponent(UUID().uuidString + "." + kind.rawValue)
+            try inner.write(to: innerURL)
+            return try extract(fileURL: innerURL, kind: kind, password: nil)
+        }
+
         var skipped: [String] = []
         var notText: [String] = []
         for m in members where !m.isDirectory {
