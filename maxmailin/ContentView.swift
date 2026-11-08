@@ -1606,6 +1606,25 @@ struct ContentView: View {
         .background(Color(.systemGroupedBackground))
     }
 
+    /// IPAD-05: Move to Trash / Restore for one row of the iPad list.
+    @ViewBuilder
+    private func iPadTrashMenu(for id: UUID) -> some View {
+        if modelVM.isDeleted(id) {
+            Button {
+                Task { @MainActor in await modelVM.restoreFromTrashNow([id]) }
+            } label: {
+                Label("Restore from Trash", systemImage: "arrow.uturn.backward")
+            }
+            .tint(.blue)
+        } else {
+            Button(role: .destructive) {
+                modelVM.deleteEmail(id)
+            } label: {
+                Label("Move to Trash", systemImage: "trash")
+            }
+        }
+    }
+
     // MARK: - iPad Layout (Regular)
     private var iPadLayout: some View {
         @Bindable var appState = appState
@@ -1723,8 +1742,24 @@ struct ContentView: View {
                                 .listRowBackground(isOpen ? EmailRowView.openRowFill : nil)
                                 .tag(email.id)
                                 .onAppear { modelVM.loadMoreIfNeeded(currentID: email.id) }
+                                // IPAD-05: Restore from the Trash on iPad (the
+                                // Trash row in the sidebar, or `in:trash`).
+                                .contextMenu { iPadTrashMenu(for: email.id) }
+                                .swipeActions(edge: .trailing) { iPadTrashMenu(for: email.id) }
                         }
                         .listStyle(.plain)
+                        .safeAreaInset(edge: .top) {
+                            if modelVM.reviewStateFilter == .trashed {
+                                Label("Trash: touch and hold an email, or swipe it, to restore it.", systemImage: "trash")
+                                    .font(Typography.caption1)
+                                    .foregroundColor(AppColors.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, Spacing.small)
+                                    .padding(.vertical, Spacing.xxSmall)
+                                    .background(.bar)
+                                    .accessibilityIdentifier("ipad.trash.banner")
+                            }
+                        }
                     } else {
                         WelcomeHubView(onOpenArchive: { openPanelFallback() }, onBrowseFiles: { showFileImporter = true })
                     }
@@ -2346,8 +2381,15 @@ struct ContentView: View {
                                     modelVM.searchText = folder
                                 } else {
                                     modelVM.searchText = ""
+                                    modelVM.selectedSourceFolder = nil
                                 }
                             }
+                        // IPAD-02 / IPAD-05: every source folder (empty and
+                        // nested ones too) and the Trash — on iPad, iPhone
+                        // (Filters sheet) and the Mac's Advanced list alike.
+                        SourceFolderSection(model: modelVM)
+                            .padding(.horizontal, Spacing.xSmall)
+                            .padding(.top, Spacing.xSmall)
                     }
                 }
                 stickyFilterButtons

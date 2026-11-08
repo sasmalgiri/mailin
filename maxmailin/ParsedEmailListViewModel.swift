@@ -450,7 +450,49 @@ class ParsedEmailListViewModel: ObservableObject {
         if quickNegativeOnly { base.sentimentBelow = -0.4 }
         if quickNewsletterOnly { base.classifications = ["newsletter", "promotional"] }
         if showPinnedOnly { base.pinnedOnly = true }
+        // IPAD-02: a source folder chosen in the folder list — the same
+        // `folderID` the Mac sidebar's folder row compiles to.
+        if let folder = selectedSourceFolder { base.folderID = folder.id }
+        // IPAD-05: the Trash view pages trashed rows from the store. The
+        // in-window filter alone could only re-show rows that were already
+        // resident, so after any reload (a duplicate removal, a relaunch)
+        // the Trash looked empty while it held mail.
+        if reviewStateFilter == .trashed {
+            base.includeTrashed = true
+            base.trashedOnly = true
+        }
         return base
+    }
+
+    /// IPAD-02: one folder of one source (FOLD-02), chosen in the folder list.
+    struct SourceFolderSelection: Equatable {
+        let id: Int64
+        let name: String
+    }
+
+    @Published var selectedSourceFolder: SourceFolderSelection? = nil {
+        didSet { if !isResettingFilters, oldValue != selectedSourceFolder { applyFilters() } }
+    }
+
+    /// IPAD-05: restore from the Trash and wait until the store has it, then
+    /// re-page and tell every count surface — the awaitable path the iPad's
+    /// Restore uses, so the list and the counts agree when it returns.
+    func restoreFromTrashNow(_ ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        review.restoreFromTrash(ids)
+        await review.waitForWrites()
+        NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
+        await refreshFromStoreNow()
+    }
+
+    /// After a Move to Trash / Restore lands in the store, the sidebars and
+    /// the list's total re-read their counts.
+    private func announceTrashChange() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.review.waitForWrites()
+            NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
+        }
     }
 
     var currentArchiveQuery: EmailQuery {
@@ -526,8 +568,8 @@ class ParsedEmailListViewModel: ObservableObject {
 
     /// §19.1: "delete" is Move to Trash — a soft, restorable flag. Permanent
     /// destruction is a separate explicit operation on ReviewStateService.
-    func deleteEmail(_ emailID: UUID) { review.moveToTrash([emailID]); applyFilters() }
-    func undeleteEmail(_ emailID: UUID) { review.restoreFromTrash([emailID]); applyFilters() }
+    func deleteEmail(_ emailID: UUID) { review.moveToTrash([emailID]); applyFilters(); announceTrashChange() }
+    func undeleteEmail(_ emailID: UUID) { review.restoreFromTrash([emailID]); applyFilters(); announceTrashChange() }
     func isDeleted(_ emailID: UUID) -> Bool { review.isTrashed(emailID) }
 
     func archiveEmail(_ emailID: UUID) { review.setFlag(.archived, ids: [emailID], value: true); applyFilters() }
@@ -898,6 +940,7 @@ class ParsedEmailListViewModel: ObservableObject {
         // Trash and Archived are filters, so clearing filters leaves them —
         // otherwise "Clear" would strand the user in the Trash view.
         reviewStateFilter = .active
+        selectedSourceFolder = nil
         isResettingFilters = false
         reloadPagesForQueryChange()
     }
@@ -1286,10 +1329,13 @@ class ParsedEmailListViewModel: ObservableObject {
             }
         }
 
+        // IPAD-05: `in:trash` asks for trashed rows too, as on the Mac (the
+        // store already pages them in); hiding them here ignored the operator.
+        let trashRequested = compiled.includeTrashed
         var result = residentEmails.filter { email in
             switch reviewStateFilter {
             case .active:
-                if review.isTrashed(email.id) { return false }
+                if review.isTrashed(email.id) && !trashRequested { return false }
                 if review.isArchived(email.id) { return false }
             case .trashed:
                 if !review.isTrashed(email.id) { return false }

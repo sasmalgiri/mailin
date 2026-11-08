@@ -177,6 +177,9 @@ struct ArchiveThreePaneView: View {
         .onReceive(NotificationCenter.default.publisher(for: .fidelityBackfillCompleted)) { _ in
             Task { await sidebar.refresh() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .archiveTrashChanged)) { _ in
+            Task { await sidebar.refresh(); await model.reload() }
+        }
         .accessibilityIdentifier("archive.threePane")
     }
 
