@@ -465,7 +465,54 @@ class ParsedEmailListViewModel: ObservableObject {
             base.text = nil
             return nlIntent?.apply(to: base) ?? base
         }
-        return state.query(base: surfaceBaseQuery)
+        // IPAD-03 / CAP-01: with the search model on, the typed words run on
+        // the model (subject, body, names, attachment text and the files
+        // inside attachments) — the same engine, coverage and evidence as the
+        // three-pane shell and Advanced Search. Otherwise the previous path.
+        return state.query(base: surfaceBaseQuery, plainTextOnModel: typedSearchRunsOnModel)
+    }
+
+    /// IPAD-03: true when the typed words are answered by the search model.
+    /// Regex and proximity have no model form and keep the previous path; so
+    /// does natural-language mode (its interpreted intent is the query).
+    var typedSearchRunsOnModel: Bool {
+        guard SearchChunkPolicy.isEnabled, !isNaturalLanguageMode else { return false }
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let parsed = parseSearchQuery(trimmed)
+        if parsed.isRegexQuery || parsed.isProximityQuery { return false }
+        let onModel = browseState.query(plainTextOnModel: true)
+        return onModel.text == nil && !(onModel.spec?.isEmpty ?? true)
+    }
+
+    /// FIND-05 on this list: with the search model answering, each row asks
+    /// the index why it is listed (the chips name the attachment, or the file
+    /// inside it); nil = the previous heuristic chips.
+    var searchEvidenceProvider: ((EmailID) async -> [MatchEvidence])? {
+        guard typedSearchRunsOnModel else { return nil }
+        let spec = currentArchiveQuery.spec
+        let archive = archive
+        return { id in (try? await archive.matchEvidence(emailID: id, spec: spec, freeText: nil)) ?? [] }
+    }
+
+    /// FIND-05: a chip that names an attachment opens it (or the file inside it).
+    @Published var evidenceOpenFailure: String?
+
+    func openEvidenceAttachment(_ id: EmailID, _ ordinal: Int, _ childPath: String?) {
+        let archive = archive
+        Task { @MainActor [weak self] in
+            self?.evidenceOpenFailure = await EvidenceAttachmentOpener.open(emailID: id, ordinal: ordinal, childPath: childPath,
+                                                                           archive: archive)?.message
+        }
+    }
+
+    /// IPAD-03: the no-match notice for a search the model answered with no
+    /// rows (set by the reload, shown through `searchNotice`).
+    private var modelSearchNotice: String?
+
+    private func refreshModelSearchNotice() async {
+        guard typedSearchRunsOnModel, pager.totalCount == 0 else { modelSearchNotice = nil; return }
+        modelSearchNotice = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: archive))
     }
     @Published var aiPinnedIDs: Set<UUID>? = nil
     @Published var emailThreads: [EmailThread] = []
@@ -677,6 +724,8 @@ class ParsedEmailListViewModel: ObservableObject {
         await pager.setQuery(compiled)
         forwardPagesLoaded = 1
         guard revision == windowRevision else { return }
+        await refreshModelSearchNotice()
+        guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
         isLoadingPage = false
         if isParsed && isProductionArchive {
@@ -703,6 +752,8 @@ class ParsedEmailListViewModel: ObservableObject {
         pagedSearchText = searchText
         await pager.setQuery(compiled)
         forwardPagesLoaded = 1
+        guard revision == windowRevision else { return }
+        await refreshModelSearchNotice()
         guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
         isLoadingPage = false
@@ -1178,7 +1229,12 @@ class ParsedEmailListViewModel: ObservableObject {
         // Proximity always routes through FTS (partial-during-import is the real
         // index, not an in-memory answer presented as authoritative). Free-text/
         // Boolean route through FTS only once the index isn't mid-build.
-        let useFTS = (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
+        // IPAD-03: with the search model answering, the pages ARE the
+        // matches — no in-window refinement by the previous FTS index, the
+        // old attachment table or a substring scan (each would drop rows the
+        // model found inside an attachment).
+        let onModel = typedSearchRunsOnModel
+        let useFTS = !onModel && (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
         if let ftsQuery, useFTS {
             // Bounded on purpose: ask FTS which WINDOW ids match
             // (`matchingSubset`) instead of materializing an archive-wide id
@@ -1244,12 +1300,14 @@ class ParsedEmailListViewModel: ObservableObject {
                 // Proximity matches within the loaded page window (NEAR has no
                 // repository paging form) — surfaced, never silent.
                 searchNotice = "Proximity search matches loaded pages — scroll or Load More to search further."
+            } else if onModel {
+                searchNotice = modelSearchNotice
             } else if searchNotice != nil {
                 searchNotice = nil
             }
         }
 
-        if parsed.searchInAttachments && !parsed.freeText.isEmpty {
+        if !onModel && parsed.searchInAttachments && !parsed.freeText.isEmpty {
             // Attachment-CONTENT search: filenames AND extracted text (PDF,
             // text families) via the persisted attachment_search FTS table.
             // Results are cached per query; a cache miss dispatches one
@@ -1311,7 +1369,7 @@ class ParsedEmailListViewModel: ObservableObject {
 
             if let matchIDs = advancedMatchIDs {
                 if !matchIDs.contains(email.id) { return false }
-            } else {
+            } else if !onModel {
                 let freeText = parsed.freeText
                 let matchesFreeText = freeText.isEmpty || email.fullText.localizedCaseInsensitiveContains(freeText)
                 if !matchesFreeText { return false }

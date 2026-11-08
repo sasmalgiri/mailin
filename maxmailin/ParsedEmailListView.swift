@@ -293,6 +293,12 @@ struct ParsedEmailListView: View {
         } message: {
             Text(listExportError ?? "An unknown error occurred.")
         }
+        .alert(String(localized: "Could not open the attachment"),
+               isPresented: Binding(get: { model.evidenceOpenFailure != nil }, set: { if !$0 { model.evidenceOpenFailure = nil } })) {
+            Button("OK", role: .cancel) { model.evidenceOpenFailure = nil }
+        } message: {
+            Text(model.evidenceOpenFailure ?? "")
+        }
     }
 
     private var iOSSearchBar: some View {
@@ -554,6 +560,12 @@ struct ParsedEmailListView: View {
             Button("OK") { listExportError = nil }
         } message: {
             Text(listExportError ?? "An unknown error occurred.")
+        }
+        .alert(String(localized: "Could not open the attachment"),
+               isPresented: Binding(get: { model.evidenceOpenFailure != nil }, set: { if !$0 { model.evidenceOpenFailure = nil } })) {
+            Button("OK", role: .cancel) { model.evidenceOpenFailure = nil }
+        } message: {
+            Text(model.evidenceOpenFailure ?? "")
         }
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
@@ -2481,7 +2493,9 @@ struct ParsedEmailListView: View {
 
     #if os(iOS)
     private func iOSEmailRow(for email: MBOXParser.RawEmail) -> some View {
-        EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+        EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal,
+                     evidenceProvider: model.searchEvidenceProvider,
+                     onOpenAttachment: { id, ordinal, child in model.openEvidenceAttachment(id, ordinal, child) })
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
@@ -2596,7 +2610,9 @@ struct ParsedEmailListView: View {
                     .help("Medium priority")
             }
 
-            EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+            EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal,
+                     evidenceProvider: model.searchEvidenceProvider,
+                     onOpenAttachment: { id, ordinal, child in model.openEvidenceAttachment(id, ordinal, child) })
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let label = predictiveEngine.predictionLabel(for: email.id) {
@@ -3362,6 +3378,13 @@ struct EmailRowView: View {
     let email: MBOXParser.RawEmail
     var searchText: String = ""
     var showRiskIndicator: Bool = false
+    /// IPAD-03 / FIND-05: with the search model answering, the strip shows the
+    /// evidence the index returned for this row (the attachment, or the file
+    /// inside it) instead of the heuristic attribution.
+    var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
+    /// FIND-05: opens the attachment (or the file inside it) a chip names.
+    var onOpenAttachment: ((EmailID, Int, String?) -> Void)? = nil
+    @State private var evidence: [MatchEvidence] = []
     @Environment(\.windowSizeClass) private var sizeClass
     /// `.increased` when the row is drawn on the open-email fill (iPad list):
     /// every line then turns white instead of keeping its usual dark colours.
@@ -3405,11 +3428,29 @@ struct EmailRowView: View {
     }
 
     var body: some View {
-        #if os(iOS)
-        iOSRow
-        #else
-        macOSRow
-        #endif
+        Group {
+            #if os(iOS)
+            iOSRow
+            #else
+            macOSRow
+            #endif
+        }
+        .task(id: "\(email.id.uuidString)#\(searchText)#\(evidenceProvider != nil)") {
+            guard let evidenceProvider else { evidence = []; return }
+            evidence = await evidenceProvider(email.id)
+        }
+    }
+
+    /// The matched-in strip: the index's evidence on the search model, the
+    /// heuristic field chips otherwise.
+    @ViewBuilder
+    private var matchStrip: some View {
+        if evidenceProvider != nil {
+            MatchEvidenceChips(evidence: evidence,
+                               onOpenAttachment: onOpenAttachment.map { open in { ordinal, childPath in open(email.id, ordinal, childPath) } })
+        } else {
+            SearchMatchFieldChips(fields: matchedFields)
+        }
     }
 
     /// The open email's row on iPad. Deeper than the system blue so white text
@@ -3438,7 +3479,7 @@ struct EmailRowView: View {
                 .foregroundColor(primaryText)
                 .lineLimit(2)
 
-            SearchMatchFieldChips(fields: matchedFields)
+            matchStrip
 
             // Row 3: Preview
             if showPreviews {
@@ -3529,7 +3570,7 @@ struct EmailRowView: View {
                     .foregroundColor(.primary)
                     .lineLimit(1)
 
-                SearchMatchFieldChips(fields: matchedFields)
+                matchStrip
 
                 if showPreviews && sizeClass != .compact {
                     let previewSource = email.isBodyCompacted ? email.bodyPreview : String(email.plainBody.prefix(100))

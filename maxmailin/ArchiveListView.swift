@@ -54,6 +54,7 @@ struct ArchiveListView: View {
                             detail: detail,
                             selectedID: $selectedID,
                             matchTerms: SearchMatchTerms(searchText: searchText),
+                            evidenceProvider: evidenceProvider,
                             isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty)
                 .navigationTitle("Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
@@ -86,6 +87,13 @@ struct ArchiveListView: View {
         .onChange(of: scope) { _, _ in scheduleQuery() }
     }
 
+    /// FIND-05: evidence from the index per row while the model answers the search.
+    private var evidenceProvider: ((EmailID) async -> [MatchEvidence])? {
+        guard let spec = model.query.spec, !spec.isEmpty else { return nil }
+        let archive = model.archive
+        return { id in (try? await archive.matchEvidence(emailID: id, spec: spec, freeText: nil)) ?? [] }
+    }
+
     /// Debounced query update. The model's queryRevision guard makes this safe
     /// even under rapid typing — debounce just avoids redundant fetches.
     private func scheduleQuery() {
@@ -97,7 +105,9 @@ struct ArchiveListView: View {
             if Task.isCancelled { return }
             // v2.1 backlog #6: the same compile step as the full list, so
             // `from:alice` or `filename:pdf` means the same thing here.
-            let query = ArchiveBrowseState(searchText: text, afterDate: after).query()
+            // IPAD-03 / CAP-01: on the search model when it is on (the policy is
+            // the `searchQueryModel` switch), as the three-pane shell and the full list.
+            let query = ArchiveBrowseState(searchText: text, afterDate: after).query(plainTextOnModel: true)
             await model.setQuery(query)
         }
     }

@@ -213,7 +213,9 @@ struct ArchiveThreePaneView: View {
     private var evidenceProvider: ((EmailID) async -> [MatchEvidence])? {
         guard modules?.isOn(.searchQueryModel) ?? false else { return nil }
         let freeText = model.query.text?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let applied = spec
+        // IPAD-03: the spec the list ran — the typed words (on the model) and
+        // the applied Advanced Search — so a plain search gets index evidence too.
+        let applied = model.query.spec ?? spec
         guard !(applied?.isEmpty ?? true) || !(freeText?.isEmpty ?? true) else { return nil }
         let archive = model.archive
         return { id in (try? await archive.matchEvidence(emailID: id, spec: applied, freeText: freeText)) ?? [] }
