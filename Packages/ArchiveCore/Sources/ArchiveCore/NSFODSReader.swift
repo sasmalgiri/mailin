@@ -40,13 +40,16 @@
 //  dropped silently. What a mail note could not give back is named per
 //  message in `RawEmail.anomalies` ("NSF ODS: …").
 //
-//  NOT read (stated in the format registry): folder membership (Notes keeps
-//  it in view/folder collections and the folder directory object, whose
-//  layouts are not documented in the sources used); compressed attachment
-//  objects (FILEOBJECT CompressionType Huffman/LZ1) and objects not stored
-//  as one contiguous record — named, bytes not returned; encrypted (sealed)
-//  items; more than one bucket descriptor page in a superblock (refused
-//  with that reason).
+//  Also read (R6, 2026-11-09): folder membership from each folder design
+//  note's $FolderIDTable object (`NotesFolders`, NSFODSFolders.swift);
+//  Huffman-compressed attachment objects (`NotesHuffman`); every bucket
+//  descriptor page the superblock declares.
+//
+//  NOT read (stated in the format registry): LZ1-compressed attachment
+//  objects (no public description, no sample) and objects longer than their
+//  one record (no public description of the continuation, none in the
+//  sample) — named on the message, bytes not returned; sealed (encrypted)
+//  items — they need the owner's Notes ID file; named on the message.
 //
 //  Sources (URLs in Tests/ArchiveCoreTests/Fixtures/NSF_ODS_SOURCES.md):
 //  Joachim Metz, "Notes Storage Facility (NSF) database file format"
@@ -148,7 +151,7 @@ enum NotesCX {
 
 struct NSFODSReader {
     /// Bump when extraction or ordering changes (resume checkpoints, B5).
-    static let parserVersion = 1
+    static let parserVersion = 2
 
     enum ReadError: LocalizedError {
         case notNSF(String)
@@ -196,6 +199,22 @@ struct NSFODSReader {
         /// Attachment objects decoded / named as not decoded.
         var attachmentObjectsDecoded = 0
         var attachmentObjectsNotDecoded = 0
+        /// Of the decoded ones, how many were Huffman-compressed.
+        var attachmentObjectsHuffman = 0
+        /// Mail notes sealed (encrypted) for their recipients: the sealed
+        /// items need the owner's Notes ID file and are named, not read.
+        var sealedMailNotes = 0
+        /// Bucket descriptor pages followed (summary / non-summary).
+        var summaryDescriptorPages = 0
+        var nonSummaryDescriptorPages = 0
+        /// Folder design notes found / whose member list was read, and the
+        /// ones that could not be read (title → reason).
+        var folders = 0
+        var foldersRead = 0
+        var foldersUnread: [String: String] = [:]
+        /// Mail notes given at least one folder / given none.
+        var mailInFolders = 0
+        var mailWithoutFolder = 0
 
         var designNotes: Int { designNotesByClass.values.reduce(0, +) }
         var otherDocuments: Int { otherDocumentsByForm.values.reduce(0, +) }
@@ -211,6 +230,64 @@ struct NSFODSReader {
     /// Note ID → raw RRV entry, ascending by ID.
     private let rrv: [(id: UInt32, a: UInt32, b: UInt32)]
     let rrvBucketCount: Int
+    /// Bucket descriptor pages the superblock declares (each followed).
+    let summaryDescriptorPages: Int
+    let nonSummaryDescriptorPages: Int
+
+    // MARK: Bucket descriptor pages
+
+    /// One summary page is 8,206 bytes with its descriptors (14 bytes each)
+    /// from offset 224; one non-summary page 8,198 bytes with descriptors
+    /// (6 bytes each) from offset 70 — the layout the format notes give and
+    /// the public sample (one summary page, 76 buckets) confirms.
+    struct DescriptorLayout {
+        let pageSize: Int
+        let tableOffset: Int
+        let entrySize: Int
+        /// Descriptors one page can hold, most likely first: what physically
+        /// fits after the table offset, then the group-based figures the
+        /// format notes suggest (21 groups / 32 groups per page).
+        let capacities: [Int]
+
+        static let summary = DescriptorLayout(
+            pageSize: 8206, tableOffset: 224, entrySize: 14,
+            capacities: [570] + (18...27).reversed().map { 21 * $0 })
+        static let nonSummary = DescriptorLayout(
+            pageSize: 8198, tableOffset: 70, entrySize: 6,
+            capacities: [1354] + (34...42).reversed().map { 32 * $0 })
+    }
+
+    /// Bucket file positions from `pages` consecutive descriptor pages.
+    /// With more than one page, how many descriptors each page holds is not
+    /// stated in any source; pages are filled in order, and a page capacity
+    /// is accepted only when every descriptor it yields points at a bucket
+    /// signature (02 42) in the file — otherwise nil (the database is refused
+    /// with that reason, never read with guessed buckets).
+    static func descriptorPositions(_ body: Data, start: Int, pages: Int, layout: DescriptorLayout, count: Int,
+                                    isBucket: (Int) -> Bool) -> [Int]? {
+        guard count > 0, pages > 0 else { return [] }
+        guard body.count >= start + pages * layout.pageSize else { return nil }
+        func read(capacity: Int) -> [Int]? {
+            guard layout.tableOffset + layout.entrySize * capacity <= layout.pageSize,
+                  capacity * pages >= count, capacity * (pages - 1) < count else { return nil }
+            var out: [Int] = []
+            out.reserveCapacity(count)
+            for i in 0..<count {
+                let page = i / capacity, slot = i % capacity
+                let pos = Int(u32(body, start + page * layout.pageSize + layout.tableOffset + layout.entrySize * slot)) << 8
+                guard isBucket(pos) else { return nil }
+                out.append(pos)
+            }
+            return out
+        }
+        if pages == 1 {
+            return layout.tableOffset + layout.entrySize * count <= layout.pageSize ? read(capacity: count) : nil
+        }
+        for capacity in layout.capacities {
+            if let positions = read(capacity: capacity) { return positions }
+        }
+        return nil
+    }
 
     // MARK: Opening
 
@@ -259,34 +336,28 @@ struct NSFODSReader {
         let rrvBucketSize = Int(Self.u32(data, sbo + 26))
         let summaryPages = Int(Self.u32(data, sbo + 70))
         let nonSummaryPages = Int(Self.u32(data, sbo + 74))
-        guard summaryPages <= 1, nonSummaryPages <= 1 else {
-            throw ReadError.unsupported("\(summaryPages) summary / \(nonSummaryPages) non-summary bucket descriptor pages; this reader reads one of each")
-        }
         guard rrvBucketSize >= 64 else { throw ReadError.damaged("RRV bucket size \(rrvBucketSize)") }
         let body = sb.body
-        var cursor = 0
-        var summary: [Int] = []
-        if summaryPages == 1 {
-            guard body.count >= 8206, 224 + 14 * summaryCount <= 8206 else { throw ReadError.damaged("summary bucket page") }
-            for i in 0..<summaryCount { summary.append(Int(Self.u32(body, 224 + 14 * i)) << 8) }
-            cursor = 8206
+        let isBucket: (Int) -> Bool = { pos in pos + 66 <= data.count && data[pos] == 0x02 && data[pos + 1] == 0x42 }
+        guard let summary = Self.descriptorPositions(
+            body, start: 0, pages: summaryPages, layout: .summary, count: summaryCount, isBucket: isBucket) else {
+            throw ReadError.damaged("\(summaryCount) summary bucket descriptors on \(summaryPages) page(s) do not all point at a bucket")
         }
-        var nonSummary: [Int] = []
-        if nonSummaryPages == 1 {
-            guard body.count >= cursor + 8198, 70 + 6 * nonSummaryCount <= 8198 else { throw ReadError.damaged("non-summary bucket page") }
-            for i in 0..<nonSummaryCount { nonSummary.append(Int(Self.u32(body, cursor + 70 + 6 * i)) << 8) }
-            cursor += 8198
+        var cursor = summaryPages * DescriptorLayout.summary.pageSize
+        guard let nonSummary = Self.descriptorPositions(
+            body, start: cursor, pages: nonSummaryPages, layout: .nonSummary, count: nonSummaryCount, isBucket: isBucket) else {
+            throw ReadError.damaged("\(nonSummaryCount) non-summary bucket descriptors on \(nonSummaryPages) page(s) do not all point at a bucket")
         }
+        cursor += nonSummaryPages * DescriptorLayout.nonSummary.pageSize
         cursor += 20 * bitmapCount
         var currentRRV: Data?
         if body.count >= cursor + rrvBucketSize, body[cursor] == 0x06, body[cursor + 1] == 0x20 {
             currentRRV = body.subdata(in: cursor..<(cursor + rrvBucketSize))
         }
-        for pos in summary where !(pos + 66 <= data.count && data[pos] == 0x02 && data[pos + 1] == 0x42) {
-            throw ReadError.damaged("summary bucket table points at \(pos), not a bucket")
-        }
         summaryBuckets = summary
         nonSummaryBuckets = nonSummary
+        summaryDescriptorPages = summaryPages
+        nonSummaryDescriptorPages = nonSummaryPages
 
         // BDB: highest write count that decodes.
         var bestBDB: (writeCount: UInt32, offset: Int, body: Data)?
@@ -411,6 +482,9 @@ struct NSFODSReader {
         let noteClass: UInt16
         let statusFlags: UInt16
         let items: [Item]
+        /// The 100-byte note header as stored (parent ID at 80, folder
+        /// reference count at 86, folder note ID at 94).
+        var header = Data()
 
         func first(_ name: String) -> Item? { items.first { $0.name == name } }
         func all(_ name: String) -> [Item] { items.filter { $0.name == name } }
@@ -430,7 +504,48 @@ struct NSFODSReader {
     struct Cursor { var index = 0 }
 
     var entryCount: Int { rrv.count }
+
+    /// Any note record (design notes too) by ID, with its items; nil for
+    /// stubs, objects and entries whose target does not carry that ID.
+    func note(id: UInt32) -> Note? {
+        var lo = 0, hi = rrv.count - 1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if rrv[mid].id == id {
+                guard case .note(let off, let size)? = target(a: rrv[mid].a, b: rrv[mid].b),
+                      size >= 100, off + 100 <= data.count, Self.u16(data, off) == 0x0004, Self.u32(data, off + 6) == id,
+                      Self.u32(data, off + 2) >= 100, let items = readItems(noteOffset: off, size: size) else { return nil }
+                return Note(id: id, noteClass: Self.u16(data, off + 40), statusFlags: Self.u16(data, off + 38), items: items,
+                            header: data.subdata(in: off..<(off + 100)))
+            }
+            if rrv[mid].id < id { lo = mid + 1 } else { hi = mid - 1 }
+        }
+        return nil
+    }
+
     var summaryBucketCount: Int { summaryBuckets.count }
+    /// Every note of one class (design notes: forms, views and folders, …)
+    /// with its items; the class is checked in the header before any item
+    /// is read.
+    func notes(ofClass want: UInt16) -> [Note] {
+        rrv.compactMap { e -> Note? in
+            guard case .note(let off, let size)? = target(a: e.a, b: e.b), size >= 100, off + 100 <= data.count,
+                  Self.u16(data, off) == 0x0004, Self.u32(data, off + 6) == e.id, Self.u32(data, off + 2) >= 100,
+                  Self.u16(data, off + 40) & 0x7FFF == want,
+                  let items = readItems(noteOffset: off, size: size) else { return nil }
+            return Note(id: e.id, noteClass: Self.u16(data, off + 40), statusFlags: Self.u16(data, off + 38), items: items,
+                        header: data.subdata(in: off..<(off + 100)))
+        }
+    }
+
+    /// An object record's bytes after its 22-byte header (LSIG 0x0007), as
+    /// far as the record's own length runs.
+    func objectPayload(rrvID: UInt32) -> Data? {
+        guard let off = object(rrvID: rrvID), Self.u16(data, off) == 0x0007 else { return nil }
+        let size = Int(Self.u32(data, off + 2))
+        guard size >= 22, off + size <= data.count else { return nil }
+        return data.subdata(in: (off + 22)..<(off + size))
+    }
 
     /// The next record that an RRV entry points at, or nil at the end.
     func next(_ cursor: inout Cursor) -> Record? {
@@ -450,7 +565,8 @@ struct NSFODSReader {
                 if noteClass & 0x7FFF != 0x0001 { return .design(id: e.id, noteClass: noteClass) }
                 if Self.u16(data, off + 50) == 0 { return .empty(id: e.id) }
                 guard let items = readItems(noteOffset: off, size: size) else { return .unplaced(id: e.id) }
-                return .note(Note(id: e.id, noteClass: noteClass, statusFlags: Self.u16(data, off + 38), items: items))
+                return .note(Note(id: e.id, noteClass: noteClass, statusFlags: Self.u16(data, off + 38), items: items,
+                                  header: data.subdata(in: off..<(off + 100))))
             }
         }
         return nil

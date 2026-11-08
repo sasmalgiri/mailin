@@ -77,6 +77,10 @@ final class NSFODSReaderTests: XCTestCase {
         XCTAssertEqual(inv.richTextMail, 0, "the sample has no Notes rich-text mail")
         XCTAssertEqual(inv.attachmentObjectsDecoded, 42)
         XCTAssertEqual(inv.attachmentObjectsNotDecoded, 0)
+        XCTAssertEqual(inv.attachmentObjectsHuffman, 0, "the sample's three Huffman objects belong to a design note, not to mail")
+        XCTAssertEqual(inv.sealedMailNotes, 0)
+        XCTAssertEqual(inv.summaryDescriptorPages, 1)
+        XCTAssertEqual(inv.nonSummaryDescriptorPages, 0)
         XCTAssertEqual(result.emails.count, 45)
 
         // Independent: bucket signatures by byte scan vs the superblock's table.
@@ -211,6 +215,77 @@ final class NSFODSReaderTests: XCTestCase {
         XCTAssertEqual(report.failed, 0)
         XCTAssertEqual(streamed.map { $0.headers["Message-ID"] ?? "" }, array.map { $0.headers["Message-ID"] ?? "" })
         XCTAssertTrue(streamed.allSatisfy { $0.headers["X-Source-Format"] == "NSF" })
+    }
+
+    /// R6: folder membership from the folders' $FolderIDTable objects,
+    /// checked against the second place Notes keeps it — the Inbox's
+    /// $FolderObject records, whose 36-byte entries end (UNID, note ID): an
+    /// entry counts only when its UNID is that mail note's own OID.
+    func testSampleNSF_folders_all45MailInInbox_crossCheckedAgainstTheFolderObjects() throws {
+        let (_, data, result) = try sample()
+        let inv = result.inventory
+        XCTAssertEqual(inv.folders, 11)
+        XCTAssertEqual(inv.foldersRead, 11)
+        XCTAssertEqual(inv.foldersUnread, [:])
+        XCTAssertEqual(inv.mailInFolders, 45)
+        XCTAssertEqual(inv.mailWithoutFolder, 0)
+        XCTAssertEqual(Set(result.emails.map { $0.folderPath ?? "" }), ["Inbox"])
+        XCTAssertTrue(result.emails.allSatisfy { $0.tags.isEmpty }, "no mail note is in a second folder")
+        XCTAssertEqual(result.declaredFolders, ["Inbox", "Junk Mail", "Trash", "Drafts", "Sent", "Parus"],
+                       "standard folders and the user folder Parus; hidden helpers (Rules, Alarms, …) only when they hold mail")
+
+        let reader = try NSFODSReader(data: data)
+        let directory = NotesFolders.read(reader)
+        let byTitle = Dictionary(uniqueKeysWithValues: directory.folders.map { ($0.title, $0) })
+        XCTAssertEqual(byTitle["($Inbox)"]?.members.count, 343, "6 runs; the count the table states")
+        XCTAssertEqual(byTitle["Parus"]?.members.count, 24)
+        XCTAssertEqual(byTitle["($EML)"]?.members.count, 8)
+        XCTAssertEqual(directory.folders.filter { $0.members.isEmpty }.count, 8)
+        XCTAssertEqual(byTitle["(Group Calendars)|Group Calendars|(GroupCalendarFolder)"]?.path, "Group Calendars")
+        XCTAssertEqual(byTitle["(Group Calendars)|Group Calendars|(GroupCalendarFolder)"]?.hidden, true)
+
+        // Independent: the Inbox's folder objects.
+        let mailIDs = Set(result.emails.compactMap { $0.headers["X-Notes-NoteID"] }.compactMap { UInt32($0.dropFirst(2), radix: 16) })
+        XCTAssertEqual(mailIDs.count, 45)
+        let inboxNote = try XCTUnwrap(reader.notes(ofClass: 0x0008).first { $0.first("$TITLE").map(NotesValue.string) == "($Inbox)" })
+        var confirmed = Set<UInt32>()
+        for name in ["$FolderObject", "$FolderObject1"] {
+            let item = try XCTUnwrap(inboxNote.first(name))
+            let payload = try XCTUnwrap(reader.objectPayload(rrvID: NSFODSReader.u32(item.value, 2)))
+            var p = 32
+            while p + 4 <= payload.count {
+                let id = NSFODSReader.u32(payload, p)
+                if mailIDs.contains(id), let note = reader.note(id: id),
+                   payload.subdata(in: (payload.startIndex + p - 16)..<(payload.startIndex + p)) == note.header.subdata(in: 10..<26) {
+                    confirmed.insert(id)
+                }
+                p += 1
+            }
+        }
+        XCTAssertEqual(confirmed, mailIDs, "every mail note the ID table puts in the Inbox is in the Inbox's folder objects with its own UNID")
+        XCTAssertEqual(Set(byTitle["($Inbox)"]!.members).intersection(mailIDs), mailIDs)
+    }
+
+    /// R6: the sample's only compressed objects — three Huffman bitmaps on a
+    /// design note — decode to their FILEOBJECT size, their BMP header says
+    /// the same size, and the stored checksum (byte sum) matches.
+    func testSampleNSF_huffmanObjects_decodeToTheBitmapsTheyDeclare() throws {
+        let (_, data, _) = try sample()
+        let reader = try NSFODSReader(data: data)
+        let note = try XCTUnwrap(reader.note(id: 0xDAA))
+        var decoded: [String: Int] = [:]
+        for item in note.all("$FILE") {
+            let v = item.value
+            XCTAssertEqual(NSFODSReader.u16(v, 10), 1, "Huffman")
+            let size = Int(NSFODSReader.u32(v, 16))
+            let name = LMBCS.decode(v.subdata(in: 36..<(36 + Int(NSFODSReader.u16(v, 6)))))
+            let (bytes, reason) = NSFODSParser.fileBytes(reader.objectPayload(rrvID: NSFODSReader.u32(v, 2)), compression: 1, size: size)
+            let bmp = try XCTUnwrap(bytes, "\(name): \(reason ?? "")")
+            XCTAssertEqual(Array(bmp.prefix(2)), [0x42, 0x4D], "BM")
+            XCTAssertEqual(Int(NSFODSReader.u32(bmp, 2)), size, "BMP file-size field")
+            decoded[name] = bmp.count
+        }
+        XCTAssertEqual(decoded, ["dolcontroldefault.bmp": 694, "dolgooffline.bmp": 694, "dolgoonline.bmp": 630])
     }
 
     private func byIDRaw(_ result: NSFODSParser.Result, _ id: String) -> String? {
