@@ -472,6 +472,8 @@ class ContentViewModel: ObservableObject {
         removedDuplicates = []
 
         ForensicManager.shared.logAction("Import Complete", detail: "Imported \(committed) emails from \(urls.count) file(s) into SQLite + FTS5.")
+        // IPAD-06: on iPad the receipt is offered where the import finishes ("View receipt").
+        if summary.receiptPersisted { ImportReceiptPresenter.shared.importFinished() }
 
         var notes: [String] = []
         if summary.damaged > 0 { notes.append("\(summary.damaged) unparseable skipped") }

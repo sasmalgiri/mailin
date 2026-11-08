@@ -41,6 +41,8 @@ struct ContentView: View {
     /// `.query(currentArchiveQuery, exclusions:)` instead of a materialized set.
     @State private var selectAllMatching = false
     @State private var showNewImportConfirmation = false
+    /// IPAD-08 (rule 4): what "Clear & Start Fresh" clears, counted before the confirmation shows.
+    @State private var clearArchiveCounts = ClearArchiveConfirmation.Counts()
     @State private var selectedFolder: String?
     @State private var selectedClusterFilter: String?
     @State private var bottomPanelHeight: CGFloat = 250
@@ -386,7 +388,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will clear your current emails and return to the welcome screen. You can re-import anytime.")
+            Text(ClearArchiveConfirmation.message(clearArchiveCounts))
         }
         // Friendly import-failure alert. The parsing pipeline sets
         // viewModel.statusMessage with a human-readable message and
@@ -444,6 +446,8 @@ struct ContentView: View {
             allowsMultipleSelection: true,
             onCompletion: handleArchiveImportResult
         )
+        // IPAD-06: the latest import receipt as a sheet, and its banner when an import ends.
+        .modifier(ImportReceiptHost())
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
         }
@@ -1085,7 +1089,7 @@ struct ContentView: View {
                     handleHubNavigation(destination)
                 },
                 onOpenArchive: { openPanelFallback() },
-                onNewImport: { showNewImportConfirmation = true },
+                onNewImport: { askToClearArchive() },
                 onSettings: { openSettingsAction() },
                 isModuleEnabled: { modules.isEnabled($0) }
             )
@@ -1339,7 +1343,7 @@ struct ContentView: View {
                                 }   // end Professional-only Advanced section
                             }
                             Section {
-                                Button { showNewImportConfirmation = true } label: {
+                                Button { askToClearArchive() } label: {
                                     Label("New Import", systemImage: "house")
                                 }
                                 Button { openPanelFallback() } label: {
@@ -1440,6 +1444,7 @@ struct ContentView: View {
                                 Button("Done") { showIOSSettings = false }
                             }
                         }
+                        .modifier(IOSSettingsSheetChrome())
                 }
             }
         }
@@ -1677,7 +1682,7 @@ struct ContentView: View {
                                 Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                             }
                             .accessibilityLabel(forensicManager.isEnabled ? String(localized: "Disable Forensic Mode") : String(localized: "Enable Forensic Mode"))
-                            Button { showNewImportConfirmation = true } label: {
+                            Button { askToClearArchive() } label: {
                                 Image(systemName: "house")
                             }
                             .accessibilityLabel("New Import")
@@ -1837,6 +1842,7 @@ struct ContentView: View {
                             Button("Done") { showIOSSettings = false }
                         }
                     }
+                    .modifier(IOSSettingsSheetChrome())
             }
         }
         .sheet(isPresented: $appState.showAuditTrail) {
@@ -2304,7 +2310,7 @@ struct ContentView: View {
                 if modelVM.isParsed {
                     HStack(spacing: Spacing.xSmall) {
                         Button {
-                            showNewImportConfirmation = true
+                            askToClearArchive()
                         } label: {
                             Label("New Import", systemImage: "house")
                                 .frame(maxWidth: .infinity)
@@ -4958,7 +4964,15 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func handleTriggerNewImport() {
         guard appState.triggerNewImport else { return }
         appState.triggerNewImport = false
-        showNewImportConfirmation = true
+        askToClearArchive()
+    }
+
+    /// IPAD-08 (rule 4): count the emails and sources first, then ask.
+    private func askToClearArchive() {
+        Task { @MainActor in
+            clearArchiveCounts = await ClearArchiveConfirmation.count()
+            showNewImportConfirmation = true
+        }
     }
 
     #if os(macOS)

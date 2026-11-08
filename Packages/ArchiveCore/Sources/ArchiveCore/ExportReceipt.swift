@@ -76,6 +76,23 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     /// The full `ExportReconciliation.ContentReport` saved beside this receipt.
     var contentReportPath: String? = nil
 
+    /// IPAD-09 (rule 5): what happened to the file AFTER it was written, where
+    /// the platform hands it on (iOS writes inside the app, then shows the Share
+    /// sheet). Nil where the person chose the destination before writing (Mac).
+    enum Delivery: String, Codable, Sendable {
+        case saved
+        case shared
+        /// The Share sheet was closed without saving or sending the file.
+        case notSaved
+        case failed
+    }
+    var delivery: Delivery? = nil
+    /// Why the hand-off failed, when it did.
+    var deliveryNote: String? = nil
+
+    /// False when the file was written but the person did not get it out of the app.
+    var isDelivered: Bool { delivery != .notSaved && delivery != .failed }
+
     var durationSeconds: Double { completedAt.timeIntervalSince(startedAt) }
 
     /// OUT-04: selected / written / checked / excluded / failed — distinct,
@@ -96,7 +113,7 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
             let failed = max(0, requested - messagesWritten - (excluded ?? 0))
             parts.append("failed \(failed)")
         }
-        if copies > 0 { parts.append("\(copies) extra copies — one file per folder occurrence, as chosen") }
+        if copies > 0 { parts.append("\(copies == 1 ? "1 extra copy" : "\(copies) extra copies") — one file per folder occurrence, as chosen") }
         if selectionFrozen == true { parts.append("selection frozen at start") }
         return parts.joined(separator: " · ")
     }
@@ -116,7 +133,17 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     var verdictLine: String {
         switch outcome {
         case .complete:
-            return "Complete — \(written) written"
+            // IPAD-09: written is not delivered — a Share sheet closed without saving is not "Complete".
+            switch delivery {
+            case .notSaved:
+                return "Written, not saved — \(written) written inside mailin; the Share sheet was closed without saving or sending the file"
+            case .failed:
+                return "Written, not delivered — \(written) written inside mailin; the Share sheet could not hand the file on\(deliveryNote.map { " (\($0))" } ?? "")"
+            case .shared:
+                return "Complete — \(written) written and handed on from the Share sheet"
+            case .saved, nil:
+                return "Complete — \(written) written"
+            }
         case .truncated:
             return "Truncated — \(written) of \(requested ?? written) written (free-tier limit)"
         case .partial:
@@ -147,6 +174,7 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         if let sha256Hex { lines.append("SHA-256: \(sha256Hex)") }
         if let signaturePath { lines.append("Signature: \(signaturePath)") }
         if let errorMessage { lines.append("Error: \(errorMessage)") }
+        if let delivery { lines.append("Delivery: \(delivery.rawValue)\(deliveryNote.map { " — \($0)" } ?? "")") }
         if let resumeRequest { lines.append("Resumable: yes — continues at message \(resumeRequest.skipFirst + 1)") }
         if let verificationLine { lines.append("Verification: \(verificationLine)") }
         if let contentLine { lines.append("Content: \(contentLine)") }

@@ -260,7 +260,43 @@ enum PlatformExport {
         top.present(sheet, animated: true)
         return .shared(url)
     }
+
+    /// IPAD-09 (rule 5): presents the Share sheet and waits for it to close, so
+    /// the caller knows shared from cancelled — `.shared` only when an activity
+    /// (Save to Files, AirDrop, …) completed, `.cancelled` when the sheet was
+    /// dismissed without one.
+    static func shareAndWait(_ url: URL) async -> ExportOutcome {
+        if let why = OrgPolicy.denial(.export) { return .failed(why) }
+        guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive })
+                ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+              var top = scene.windows.first(where: \.isKeyWindow)?.rootViewController else {
+            return .failed(String(localized: "no window to share from"))
+        }
+        while let presented = top.presentedViewController { top = presented }
+        let presenter = top
+        return await withCheckedContinuation { continuation in
+            final class Once: @unchecked Sendable { var done = false }
+            let once = Once()
+            let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            sheet.completionWithItemsHandler = { _, completed, _, error in
+                guard !once.done else { return }
+                once.done = true
+                continuation.resume(returning: shareOutcome(url: url, completed: completed, error: error))
+            }
+            sheet.popoverPresentationController?.sourceView = presenter.view
+            sheet.popoverPresentationController?.sourceRect = CGRect(
+                x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
+            presenter.present(sheet, animated: true)
+        }
+    }
     #endif
+
+    /// IPAD-09: the Share sheet's answer as an outcome — cancelled is never "shared".
+    nonisolated static func shareOutcome(url: URL, completed: Bool, error: Error?) -> ExportOutcome {
+        if let error { return .failed(error.localizedDescription) }
+        return completed ? .shared(url) : .cancelled
+    }
 
     static func save(text: String, suggestedName: String) -> ExportOutcome {
         save(data: Data(text.utf8), suggestedName: suggestedName)

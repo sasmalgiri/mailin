@@ -152,13 +152,41 @@ struct ExportPreflightSheet: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            Text(request.destinationURL.deletingLastPathComponent().path)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(request.destination)
+            if let handOff = Self.sharesAfterWriting ? Self.handOffNote(for: request.destinationURL) : nil {
+                // IPAD-09: never the app's internal temporary path as a "destination".
+                Text(handOff)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("export.preflight.handOff")
+            } else {
+                Text(request.destinationURL.deletingLastPathComponent().path)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(request.destination)
+            }
         }
+    }
+
+    /// iOS writes inside the app and then shows the Share sheet; the Mac writes where the person chose.
+    #if os(iOS)
+    nonisolated static let sharesAfterWriting = true
+    #else
+    nonisolated static let sharesAfterWriting = false
+    #endif
+
+    /// IPAD-09: when the export is written inside the app first (iOS), the
+    /// person chooses where it goes next — say that instead of the internal path.
+    /// Nil when the destination is one the person already chose.
+    nonisolated static func handOffNote(for destination: URL,
+                                        temporaryDirectory: URL = FileManager.default.temporaryDirectory) -> String? {
+        let temp = temporaryDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+        // The parent exists (the file itself does not yet), so its symlinks resolve (/var → /private/var).
+        let dest = destination.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath().path
+        guard dest == temp || dest.hasPrefix(temp.hasSuffix("/") ? temp : temp + "/") else { return nil }
+        return String(localized: "mailin writes the file first; you choose where to save or send it next, from the Share sheet (for example Save to Files).")
     }
 
     private var optionsSection: some View {
@@ -269,8 +297,13 @@ final class ExportJobRunner {
 
     /// v1-faithful RFC-822 renderer for .eml when the host provides one.
     var emlRender: (@MainActor @Sendable (MBOXParser.RawEmail) -> String)?
-    /// iOS delivery: hand the finished artifact to the host's share sheet.
+    /// The host's share closure. IPAD-09: no longer called by the runner — a
+    /// host sheet cannot say whether it was dismissed — kept for the hosts that set it.
     var share: ((URL) -> Void)?
+    #if os(iOS)
+    /// IPAD-09: iOS delivery — the Share sheet, awaited, so the receipt knows shared from cancelled.
+    var deliver: @MainActor (URL) async -> ExportOutcome = { await PlatformExport.shareAndWait($0) }
+    #endif
     /// Host error binding (menus cannot host alerts themselves).
     var onError: ((String) -> Void)?
     /// Paywall + tier, when the host has a store manager.
@@ -589,7 +622,7 @@ final class ExportJobRunner {
 
         var isFolder: ObjCBool = false
         _ = FileManager.default.fileExists(atPath: request.destination, isDirectory: &isFolder)
-        ExportRunCenter.shared.record(ExportReceipt(
+        var receipt = ExportReceipt(
             title: "\(what) export",
             destination: request.destination,
             isFolder: isFolder.boolValue,
@@ -608,9 +641,27 @@ final class ExportJobRunner {
             excluded: result.map { $0.withheld + $0.skipped },
             inventoryPath: result?.inventoryURL?.path,
             extraCopies: (result?.extraCopies ?? 0) > 0 ? result?.extraCopies : nil,
-            selectionFrozen: request.scope.isFrozen))
+            selectionFrozen: request.scope.isFrozen)
         #if os(iOS)
-        if !cancelled { share?(request.destinationURL) }
+        // IPAD-09 (rule 5): the file was written inside the app; the receipt says
+        // whether the Share sheet really handed it on, or was closed without saving.
+        if !cancelled { receipt = Self.receipt(receipt, after: await deliver(request.destinationURL)) }
         #endif
+        ExportRunCenter.shared.record(receipt)
+    }
+
+    /// IPAD-09: a written receipt plus what the hand-off did — saved / shared /
+    /// cancelled / failed — so a dismissed Share sheet never reads "Complete".
+    nonisolated static func receipt(_ written: ExportReceipt, after outcome: ExportOutcome) -> ExportReceipt {
+        var receipt = written
+        switch outcome {
+        case .saved: receipt.delivery = .saved
+        case .shared: receipt.delivery = .shared
+        case .cancelled: receipt.delivery = .notSaved
+        case .failed(let why):
+            receipt.delivery = .failed
+            receipt.deliveryNote = why
+        }
+        return receipt
     }
 }

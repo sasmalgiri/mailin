@@ -449,7 +449,7 @@ struct mailinApp: App {
             Button("Open Email Archive...") {
                 appState.triggerFileImport = true
             }
-            .keyboardShortcut("o", modifiers: .command)
+            .menuShortcut(MenuShortcutPolicy.openArchive)   // IPAD-10: iPadOS owns ⌘O
 
             // H3: the guided route from a mail client's own export.
             Button("Import from Apple Mail or Thunderbird...") {
@@ -464,6 +464,8 @@ struct mailinApp: App {
             Button("Last Import Receipt...") {
                 #if os(macOS)
                 openWindow(id: "import-receipt")
+                #else
+                ImportReceiptPresenter.shared.show()   // IPAD-06: a sheet on iPad
                 #endif
             }
 
@@ -510,13 +512,13 @@ struct mailinApp: App {
             Button("Find...") {
                 appState.triggerSearch = true
             }
-            .keyboardShortcut("f", modifiers: .command)
+            .menuShortcut(MenuShortcutPolicy.find)   // IPAD-10: iPadOS owns ⌘F
             .disabled(!appState.hasParsedEmails)
 
             Button("Select All") {
                 appState.triggerSelectAll = true
             }
-            .keyboardShortcut("a", modifiers: .command)
+            .menuShortcut(MenuShortcutPolicy.selectAll)   // IPAD-10: iPadOS owns ⌘A
             .disabled(!appState.hasParsedEmails)
         }
 
@@ -574,7 +576,7 @@ struct mailinApp: App {
             Button("Visual Analytics...") {
                 appState.showAnalytics = true
             }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
+            .menuShortcut(MenuShortcutPolicy.visualAnalytics)   // IPAD-10: iPadOS owns ⇧⌘G
             .disabled(!appState.hasParsedEmails || pageOff(.emailAnalytics))
 
             Divider()

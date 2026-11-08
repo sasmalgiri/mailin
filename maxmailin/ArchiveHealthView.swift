@@ -45,6 +45,13 @@ struct ArchiveHealthView: View {
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
+    #else
+    /// IPAD-06: the latest import receipt as a sheet (the Mac has a window).
+    @State private var showingImportReceipt = false
+    /// IPAD-06 (owner 2026-11-08): backup and restore through folders chosen in Files.
+    @State private var choosingBackupFolder = false
+    @State private var choosingRestoreFolder = false
+    @State private var verifiedBackup: ArchiveBackups.VerifiedBackup?
     #endif
 
     private static let lastIntegrityKey = "archiveHealth.lastIntegrity"
@@ -70,10 +77,17 @@ struct ArchiveHealthView: View {
             Section("Recovery") {
                 Text("What to do when something went wrong — each action keeps the archive as it is until it has finished, and nothing here deletes data.")
                     .font(.caption).foregroundStyle(.secondary)
-                #if os(macOS)
-                Button(String(localized: "Retry failed imports…")) { openWindow(id: "import-receipt") }
+                Button(String(localized: "Retry failed imports…")) {
+                    #if os(macOS)
+                    openWindow(id: "import-receipt")
+                    #else
+                    showingImportReceipt = true
+                    #endif
+                }
                     .help("Opens the latest import receipt; its “Retry failed sources” imports again only the files that failed, from their checkpoints")
                     .accessibilityIdentifier("health.retryFailedImports")
+                #if os(iOS)
+                    .sheet(isPresented: $showingImportReceipt) { ImportReceiptSheet() }
                 #endif
                 Button(String(localized: "Rebuild search index")) {
                     Task { @MainActor in
@@ -192,25 +206,39 @@ struct ArchiveHealthView: View {
                 // restorable on a clean Mac.
                 HStack {
                     Button(String(localized: "Back up archive…")) {
+                        #if os(macOS)
                         Task { @MainActor in
                             working = true; defer { working = false }
                             note = await ArchiveBackups.backUpInteractively()
                         }
+                        #else
+                        choosingBackupFolder = true
+                        #endif
                     }
                     .disabled(working)
                     .help("Writes the database, attachment-text states, message files, source copies and receipts into a new folder with an inventory of every file's SHA-256. The search index is rebuilt on restore, not copied.")
                     .accessibilityIdentifier("health.backup")
                     Button(String(localized: "Restore from backup…")) {
+                        #if os(macOS)
                         Task { @MainActor in
                             working = true; defer { working = false }
                             note = await ArchiveBackups.restoreInteractively()
                             reload()
                         }
+                        #else
+                        if let why = OrgPolicy.denial(.restoreSnapshot) { note = why } else { choosingRestoreFolder = true }
+                        #endif
                     }
                     .disabled(working)
                     .help("Verifies every file of a backup folder against its inventory, keeps the current database as a snapshot, then restores. Nothing already in the archive is deleted.")
                     .accessibilityIdentifier("health.restoreBackup")
                 }
+                #if os(iOS)
+                .modifier(BackupFolderPickers(choosingBackupFolder: $choosingBackupFolder,
+                                              choosingRestoreFolder: $choosingRestoreFolder,
+                                              verifiedBackup: $verifiedBackup,
+                                              working: $working, note: $note, reload: reload))
+                #endif
                 // §3-S1: an external location, e.g. a backup disk.
                 LabeledContent(String(localized: "Snapshot folder")) {
                     if let snapshotFolder {
@@ -257,7 +285,7 @@ struct ArchiveHealthView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(missing.filename)
-                                Text("\(missing.messages) messages are read from this file, \(missing.deferredMessages) have no other copy — \(missing.sourcePath)")
+                                Text(String(localized: "\(CountPhrase.messages(missing.messages)) read from this file, \(missing.deferredMessages) with no other copy — \(missing.sourcePath)"))
                                     .font(.caption).foregroundStyle(.orange)
                                     .lineLimit(2).truncationMode(.middle)
                             }
@@ -347,6 +375,13 @@ struct ArchiveHealthView: View {
                 LabeledContent(String(localized: "Crash reports"), value: "\(d.crashes)")
                 LabeledContent(String(localized: "Hang reports"), value: "\(d.hangs)")
                 LabeledContent(String(localized: "Disk-write reports"), value: "\(d.diskWrites)")
+                // IOS-02: the build's offline statement on every platform. This
+                // reference also keeps the attestation marker in the iOS binary
+                // for Scripts/verify-no-network.sh (the About window is Mac-only).
+                Text(Self.offlineAttestationLine)
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("health.offlineAttestation")
                 Button(String(localized: "Copy diagnostics")) {
                     PlatformClipboard.copyString(EngineTripCenter.shared.diagnosticsText()
                         + "\n\n" + DiagnosticsCenter.shared.latestReportsText())
@@ -361,6 +396,9 @@ struct ArchiveHealthView: View {
         .formStyle(.grouped)
         .task { reload(); await loadCoverage(); await loadSources() }
     }
+
+    /// IOS-02: the attestation summary, which carries `NoNetworkAttestation.buildMarker`.
+    static var offlineAttestationLine: String { NoNetworkAttestation.verdict().summary }
 
     /// LIFE-01: which originals are missing, and how much the archive's own copies hold.
     private func loadSources() async {
