@@ -25,6 +25,14 @@ struct DuplicateManagerView: View {
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
     @State private var v3Note: String?
     private var v3: Bool { modules?.isOn(.v3Duplicates) ?? false }
+    /// IPAD-05 (c): how far the similar-message search reached, for the summary.
+    @State private var nearCoverage: DuplicateSummary.NearCoverage = .notChecked
+
+    private var summary: DuplicateSummary.Text {
+        DuplicateSummary.text(verified: verifiedGroups.count, candidates: candidateGroups.count,
+                              similar: showNearDuplicates ? nearDuplicateGroups.count : 0,
+                              near: showNearDuplicates ? nearCoverage : .notChecked)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -112,19 +120,28 @@ struct DuplicateManagerView: View {
 
     private var emptyView: some View {
         VStack(spacing: Spacing.medium) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.largeTitle)
-                .foregroundColor(AppColors.success)
-                .accessibilityHidden(true)
-            Text("No duplicates found")
-                .font(Typography.headline)
-            Text("Your email archive has no duplicate messages.")
-                .font(Typography.callout)
-                .foregroundColor(AppColors.secondary)
+            // The archive-wide Message-ID check lives on this card; without it
+            // here an empty group list hid copies that check had found.
+            archiveWideDedupCard
+            VStack(spacing: Spacing.medium) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.largeTitle)
+                    .foregroundColor(AppColors.success)
+                    .accessibilityHidden(true)
+                // IPAD-05 (c): what was found AND what was checked — never "no
+                // duplicate messages" while similar ones were not looked for.
+                Text(summary.title)
+                    .font(Typography.headline)
+                Text(summary.detail)
+                    .font(Typography.callout)
+                    .foregroundColor(AppColors.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, Spacing.medium)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("duplicates.summary.empty")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("No duplicates found. Your email archive has no duplicate messages.")
     }
 
     private var resultsList: some View {
@@ -132,10 +149,22 @@ struct DuplicateManagerView: View {
             VStack(alignment: .leading, spacing: Spacing.medium) {
                 archiveWideDedupCard
 
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(summary.title)
+                        .font(Typography.callout)
+                        .fontWeight(.semibold)
+                    Text(summary.detail)
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                }
+                .padding(.horizontal, Spacing.medium)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("duplicates.summary")
+
                 bulkSelectBar
 
                 if !verifiedGroups.isEmpty {
-                    Text("Verified identical (\(verifiedGroups.count) groups)")
+                    Text("Verified identical (^[\(verifiedGroups.count) group](inflect: true))")
                         .font(Typography.headline)
                         .padding(.horizontal, Spacing.medium)
 
@@ -158,7 +187,7 @@ struct DuplicateManagerView: View {
                 }
 
                 if !candidateGroups.isEmpty {
-                    Text("Candidates (\(candidateGroups.count) groups)")
+                    Text("Candidates (^[\(candidateGroups.count) group](inflect: true))")
                         .font(Typography.headline)
                         .padding(.horizontal, Spacing.medium)
                         .padding(.top, Spacing.small)
@@ -193,7 +222,7 @@ struct DuplicateManagerView: View {
                 }
 
                 if showNearDuplicates && !nearDuplicateGroups.isEmpty {
-                    Text("Similar (\(nearDuplicateGroups.count) groups)")
+                    Text("Similar (^[\(nearDuplicateGroups.count) group](inflect: true))")
                         .font(Typography.headline)
                         .padding(.horizontal, Spacing.medium)
                         .padding(.top, Spacing.small)
@@ -250,7 +279,7 @@ struct DuplicateManagerView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(redundantCount == 0)
-            .help("Selects every extra copy in the \(verifiedGroups.count) verified groups, keeping one of each — then press Remove Selected. Candidates and near-duplicates are never selected in bulk.")
+            .help(Inflect.string("Selects every extra copy in the ^[\(verifiedGroups.count) verified group](inflect: true), keeping one of each — then press Move Selected to Trash. Candidates and near-duplicates are never selected in bulk."))
 
             if !selectedForRemoval.isEmpty {
                 Button {
@@ -262,7 +291,7 @@ struct DuplicateManagerView: View {
                 .controlSize(.small)
             }
             Spacer()
-            Text("\(redundantCount) removable in verified groups")
+            Text("^[\(redundantCount) copy](inflect: true) removable in verified groups")
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
         }
@@ -327,7 +356,7 @@ struct DuplicateManagerView: View {
                     .fontWeight(.medium)
                     .lineLimit(1)
                 Spacer()
-                Text("\(group.count) copies")
+                Text("^[\(group.count) copy](inflect: true)")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                 if kind.allowsBulkSelect {
@@ -343,7 +372,7 @@ struct DuplicateManagerView: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(kind.name) duplicate group: \(group.first?.headers["Subject"] ?? "No Subject"), \(group.count) copies")
+            .accessibilityLabel(Inflect.string("\(kind.name) duplicate group: \(group.first?.headers["Subject"] ?? String(localized: "No Subject")), ^[\(group.count) copy](inflect: true)"))
             if let note = kind.note {
                 Text(note)
                     .font(Typography.caption2)
@@ -390,10 +419,10 @@ struct DuplicateManagerView: View {
     private var actionBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(selectedForRemoval.count) selected to move to the Trash")
+                Text("^[\(selectedForRemoval.count) copy](inflect: true) selected to move to the Trash")
                     .font(Typography.callout)
                     .foregroundColor(AppColors.secondary)
-                    .accessibilityLabel("\(selectedForRemoval.count) emails selected to move to the Trash")
+                    .accessibilityLabel(Inflect.string("^[\(selectedForRemoval.count) email](inflect: true) selected to move to the Trash"))
                 if !selectedForRemoval.isEmpty, let reclaimEstimate {
                     Text("The Trash frees no space. Deleting these copies permanently later would free about \(ByteCountFormatter.string(fromByteCount: reclaimEstimate, countStyle: .file)).")
                         .font(Typography.caption2)
@@ -417,7 +446,7 @@ struct DuplicateManagerView: View {
             .buttonStyle(.borderedProminent)
             .tint(AppColors.error)
             .disabled(selectedForRemoval.isEmpty || isRemoving)
-            .accessibilityLabel("Move \(selectedForRemoval.count) selected emails to the Trash")
+            .accessibilityLabel(Inflect.string("Move ^[\(selectedForRemoval.count) selected email](inflect: true) to the Trash"))
             .accessibilityHint("Moves the selected copies to the Trash, restorable; their folders, labels, tags and notes are merged into the kept copy")
         }
         .padding(Spacing.medium)
@@ -445,7 +474,7 @@ struct DuplicateManagerView: View {
         let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedForRemoval)
         guard !allowed.isEmpty else {
             if !blocked.isEmpty {
-                legalHoldWarning = "\(blocked.count) email(s) skipped — under legal hold with evidence seal."
+                legalHoldWarning = Inflect.string("^[\(blocked.count) email](inflect: true) skipped — under legal hold with evidence seal.")
             }
             return
         }
@@ -468,10 +497,20 @@ struct DuplicateManagerView: View {
             }
             stripRemoved(Set(result.trashed))
             isRemoving = false
+            if !result.trashed.isEmpty {
+                // IPAD-05 (b): every count surface re-reads the store, and this
+                // sheet scans again — its scope line and groups were the ones
+                // from before the move ("All 51 emails processed" over 50).
+                NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
+                if !closeWhenDone {
+                    await loadArchiveWide()
+                    scanForDuplicates()
+                }
+            }
             let kept = alsoBlocked + result.heldKept.count
             if kept > 0 {
                 // Keep the window open so the user sees why some were kept.
-                legalHoldWarning = String(localized: "\(kept) copies kept — under legal hold. The rest were moved to the Trash.")
+                legalHoldWarning = Inflect.string("^[\(kept) copy](inflect: true) kept — under legal hold. The rest were moved to the Trash.")
                 return
             }
             if closeWhenDone { closeSheet() }
@@ -531,7 +570,7 @@ struct DuplicateManagerView: View {
                         .foregroundColor(.orange)
                     VStack(alignment: .leading, spacing: 2) {
                         if !archiveRemovable.isEmpty {
-                            Text("\(archiveRemovable.count) verified identical copies across the whole archive")
+                            Text("^[\(archiveRemovable.count) verified identical copy](inflect: true) across the whole archive")
                                 .font(Typography.callout)
                                 .fontWeight(.semibold)
                             Text("Same Message-ID stored more than once and compared in full — typically a migrated archive plus a fresh import of the original file. One copy of each email is kept (the full-fidelity one).")
@@ -539,7 +578,7 @@ struct DuplicateManagerView: View {
                                 .foregroundColor(AppColors.secondary)
                         }
                         if archiveCandidateGroups > 0 {
-                            Text("\(archiveCandidateGroups) groups share a Message-ID but differ in content — they are listed below as candidates and are not removed here.")
+                            Text(Inflect.string("Sharing a Message-ID but differing in content: ^[\(archiveCandidateGroups) group](inflect: true), listed below as candidates and not removed here."))
                                 .font(Typography.caption1)
                                 .foregroundColor(AppColors.secondary)
                         }
@@ -559,9 +598,9 @@ struct DuplicateManagerView: View {
                 .cornerRadius(CornerRadius.small)
                 .padding(.horizontal, Spacing.medium)
                 .adaptiveDestructiveConfirmation(
-                    "Move \(archiveRemovable.count) Duplicates to the Trash",
+                    Inflect.string("Move ^[\(archiveRemovable.count) Duplicate](inflect: true) to the Trash"),
                     isPresented: $showArchiveDedupConfirm,
-                    message: "Every email keeps exactly one copy — \(archiveRemovable.count) redundant copies move to the Trash, where they can be restored. Their folders, labels, tags and notes are merged into the kept copy first. The Trash frees no space until it is emptied.",
+                    message: Inflect.string("Every email keeps exactly one copy — ^[\(archiveRemovable.count) redundant copy](inflect: true) will move to the Trash, restorable from there. Folders, labels, tags and notes are merged into the kept copy first. The Trash frees no space until it is emptied."),
                     actionTitle: String(localized: "Move to Trash")
                 ) {
                     // Held emails are never removed — the same protection the
@@ -582,21 +621,83 @@ struct DuplicateManagerView: View {
         }
         .task {
             guard !archiveDupChecked else { return }
-            do {
-                let groups = try await SQLiteEmailStore.shared.messageIDDuplicateGroups()
-                let result = try await DuplicateVerification.verifyArchiveWide(groups: groups) { ids in
-                    try await ArchiveDataService.shared.fullEmails(ids: ids)
-                }
-                archiveRemovable = result.removable
-                archivePlans = result.plans
-                archiveCandidateGroups = result.candidateGroups
-            } catch {
-                archiveRemovable = []
-                archivePlans = []
-                archiveCandidateGroups = 0
-            }
-            archiveDupChecked = true
+            await loadArchiveWide()
         }
+    }
+
+    /// The archive-wide Message-ID groups, verified — also re-run after a move.
+    private func loadArchiveWide() async {
+        do {
+            let store = SQLiteEmailStore.shared
+            let groups = try await Self.withoutTrashed(try await store.messageIDDuplicateGroups(), store: store)
+            let result = try await DuplicateVerification.verifyArchiveWide(groups: groups) { ids in
+                try await ArchiveDataService.shared.fullEmails(ids: ids)
+            }
+            archiveRemovable = result.removable
+            archivePlans = result.plans
+            archiveCandidateGroups = result.candidateGroups
+        } catch {
+            archiveRemovable = []
+            archivePlans = []
+            archiveCandidateGroups = 0
+        }
+        archiveDupChecked = true
+    }
+
+    /// IPAD-05 (b): a copy already in the Trash is not a duplicate to offer
+    /// again. The store's Message-ID grouping reads every stored row, so
+    /// without this a re-check after "Move All to Trash" offered the same
+    /// copy a second time. Groups left with one copy are dropped.
+    static func withoutTrashed(_ groups: [[EmailID]], store: SQLiteEmailStore) async throws -> [[EmailID]] {
+        let ids = groups.flatMap { $0 }
+        var trashed = Set<EmailID>()
+        var start = 0
+        while start < ids.count {
+            let chunk = Array(ids[start..<min(start + 500, ids.count)])
+            for (id, state) in try await store.reviewStates(ids: chunk) where state.trashed { trashed.insert(id) }
+            start += chunk.count
+        }
+        guard !trashed.isEmpty else { return groups }
+        return groups.map { $0.filter { !trashed.contains($0) } }.filter { $0.count > 1 }
+    }
+
+    /// IPAD-05 (c): the whole-archive near-duplicate engine's persisted
+    /// groups, as copies to review here (they were only counted before, so
+    /// the sheet listed none of them). Paged through, nothing cut; copies in
+    /// the Trash are left out.
+    private static func persistedNearGroups() async throws -> [[MBOXParser.RawEmail]] {
+        let store = ScopeJobEnvironment.store
+        var groups: [[MBOXParser.RawEmail]] = []
+        var offset = 0
+        while true {
+            try Task.checkCancellation()
+            let keys = try await store.nearDuplicateGroupKeysPage(limit: 200, offset: offset)
+            if keys.isEmpty { break }
+            offset += keys.count
+            let rows = try await store.nearDuplicateMembers(groupKeys: keys)
+            let grouped = Dictionary(grouping: rows, by: \.groupKey)
+            let live = try await withoutTrashed(keys.compactMap { grouped[$0]?.map(\.emailID) }, store: store)
+            var byID: [UUID: MBOXParser.RawEmail] = [:]
+            let members = live.flatMap { $0 }
+            var start = 0
+            while start < members.count {
+                let chunk = Array(members[start..<min(start + 500, members.count)])
+                for email in try await ScopeJobEnvironment.archive.fullEmails(ids: chunk) { byID[email.id] = email }
+                start += chunk.count
+            }
+            groups += live.map { $0.compactMap { byID[$0] } }.filter { $0.count > 1 }
+        }
+        return groups
+    }
+
+    /// IPAD-05 (c): the previous engine's similar groups over its stated
+    /// window (the newest `window` emails; CAP-06 names it in Settings ▸
+    /// Health ▸ Limits and the note says it on screen).
+    nonisolated private static func previousEngineNearGroups(threshold: Double, window: Int) async -> [[MBOXParser.RawEmail]] {
+        var emails: [MBOXParser.RawEmail] = []
+        let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+        do { for try await b in stream { emails.append(contentsOf: b); if emails.count >= window { break } } } catch { }
+        return findNearDuplicates(in: Array(emails.prefix(window)), threshold: threshold)
     }
 
     /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
@@ -611,24 +712,36 @@ struct DuplicateManagerView: View {
                     let r = try await DuplicatesEngine.exactGroups()
                     (verifiedGroups, candidateGroups) = DuplicateVerification.classify(r.groups)
                     var note = String(localized: "Exact duplicates: whole archive — \(r.receipt.coverageLine)")
-                    nearDuplicateGroups = []
+                    var near: [[MBOXParser.RawEmail]] = []
+                    var coverage = DuplicateSummary.NearCoverage.notChecked
                     if includeNear {
-                        // Near-duplicates are the whole-archive MinHash
-                        // engine's job (no window of the newest emails here);
-                        // its groups are reviewed in Near-Duplicates.
+                        // IPAD-05 (c): the similar groups are listed HERE to
+                        // review (never bulk-removed). Before, this path only
+                        // counted them or named the switch, so a near-duplicate
+                        // was never offered and the sheet then claimed the
+                        // archive had no duplicate messages at all.
                         if modules?.isOn(.v3NearDuplicates) ?? false {
                             do {
-                                let near = try await NearDuplicatesEngine.run(threshold: threshold)
-                                note += " " + String(localized: "Near-duplicates: \(near.groups) groups across the whole archive (\(near.indexed) of \(near.total) emails indexed) — review them in Near-Duplicates.")
+                                let result = try await NearDuplicatesEngine.run(threshold: threshold)
+                                near = try await Self.persistedNearGroups()
+                                coverage = .wholeArchive
+                                note += " " + Inflect.string("Near-duplicates: ^[\(result.groups) group](inflect: true) across the whole archive (\(result.indexed) of \(result.total) emails indexed).")
                             } catch is CancellationError {
                                 throw CancellationError()
                             } catch {
                                 note += " " + String(localized: "Near-duplicates could not be found: \(error.localizedDescription)")
                             }
                         } else {
-                            note += " " + String(localized: "Near-duplicates across the whole archive need “Whole-archive near-duplicates (3.0)” in Settings ▸ Modules.")
+                            // The previous engine's window, stated on screen
+                            // (CAP-06: a named limit in Settings ▸ Health ▸ Limits).
+                            let window = AppLimits.previousEngineDuplicateWindow
+                            near = await Self.previousEngineNearGroups(threshold: threshold, window: window)
+                            coverage = .newest(window)
+                            note += " " + String(localized: "Near-duplicates: among the newest \(window.formatted()) emails only (previous engine). The whole archive needs “Whole-archive near-duplicates (3.0)” in Settings ▸ Modules.")
                         }
                     }
+                    nearDuplicateGroups = near
+                    nearCoverage = coverage
                     v3Note = note
                 } catch is CancellationError {
                     v3Note = nil
@@ -668,6 +781,7 @@ struct DuplicateManagerView: View {
                 self.verifiedGroups = classified.verified
                 self.candidateGroups = classified.candidates
                 self.nearDuplicateGroups = nearGroups
+                self.nearCoverage = includeNear ? .newest(window) : .notChecked
                 // Stage A: the window is stated on screen, after a fallback too.
                 self.v3Note = Self.previousEngineScopeNote(appendedTo: previousEngine ? self.v3Note : nil)
                 self.isScanning = false
@@ -719,7 +833,16 @@ struct DuplicateManagerView: View {
         return groups.sorted { $0.count > $1.count }
     }
 
-    nonisolated private static func findNearDuplicates(in emails: [MBOXParser.RawEmail], threshold: Double) -> [[MBOXParser.RawEmail]] {
+    /// The words two bodies are compared on: lower-cased, split on anything
+    /// that is not a letter or digit. Splitting on spaces alone kept the
+    /// punctuation on the word, so "…appears twice." and "…appears twice!"
+    /// shared only 4 of 6 "words" and a one-character edit never reached the
+    /// threshold (IPAD-05 (c), gate 1 walk).
+    nonisolated static func similarityWords(_ text: String) -> Set<String> {
+        Set(text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+    }
+
+    nonisolated static func findNearDuplicates(in emails: [MBOXParser.RawEmail], threshold: Double) -> [[MBOXParser.RawEmail]] {
         let bySender = Dictionary(grouping: emails, by: { $0.headers["From"] ?? "" })
         var groups: [[MBOXParser.RawEmail]] = []
 
@@ -731,8 +854,8 @@ struct DuplicateManagerView: View {
                 for j in (i+1)..<senderEmails.count {
                     guard !processed.contains(senderEmails[j].id) else { continue }
                     let sim = jaccardSimilarity(
-                        Set(senderEmails[i].plainBody.lowercased().split(separator: " ").map(String.init)),
-                        Set(senderEmails[j].plainBody.lowercased().split(separator: " ").map(String.init))
+                        similarityWords(senderEmails[i].plainBody),
+                        similarityWords(senderEmails[j].plainBody)
                     )
                     if sim >= threshold {
                         group.append(senderEmails[j])

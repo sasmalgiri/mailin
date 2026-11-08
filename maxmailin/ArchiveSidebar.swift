@@ -238,10 +238,13 @@ final class ArchiveSidebarModel: ObservableObject {
         attachmentCount = (try? await archive.count(query: attachments)) ?? attachmentCount
         pinnedCount = (try? await archive.count(query: pinned)) ?? pinnedCount
         trashedCount = (try? await archive.trashedCount()) ?? trashedCount
-        if let types = try? await archive.messageTypeCounts() {
-            sentCount = types["sent"] ?? 0
-            receivedCount = types["received"] ?? 0
-        }
+        // IPAD-05: Sent / Received leave the Trash out, like All Mail and the
+        // list itself — the GROUP BY over every stored row still counted a
+        // copy moved to the Trash, so "Received 51" sat next to "All Mail 50".
+        var sent = EmailQuery.all; sent.messageType = "sent"
+        var received = EmailQuery.all; received.messageType = "received"
+        sentCount = (try? await archive.count(query: sent)) ?? sentCount
+        receivedCount = (try? await archive.count(query: received)) ?? receivedCount
         sources = (try? await archive.sources()) ?? sources
         coverage = (try? await archive.sourceCoverage()) ?? coverage
         await reloadLabels()

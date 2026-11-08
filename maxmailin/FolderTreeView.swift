@@ -145,14 +145,27 @@ struct FolderTreeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .parsingFinished)) { _ in
             Task { @MainActor in await reload() }
         }
+        // IPAD-05: a Move to Trash / Restore (duplicate removal included)
+        // changes every count here; without this they stayed at the old total.
+        .onReceive(NotificationCenter.default.publisher(for: .archiveTrashChanged)) { _ in
+            Task { @MainActor in await reload() }
+        }
     }
 
     @MainActor
     private func reload() async {
-        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        let archive = ArchiveDataService.shared
+        archiveTotal = (try? await archive.count()) ?? 0
         let store = SQLiteEmailStore.shared
-        typeCounts = (try? await store.messageTypeCounts()) ?? [:]
-        attachmentTotal = (try? await store.attachmentCount()) ?? 0
+        // IPAD-05: the same trash-excluding counts as the list header — the
+        // per-type GROUP BY and the attachment count read every stored row, so
+        // a duplicate moved to the Trash left "Inbox 51" beside "50 Emails".
+        var received = EmailQuery.all; received.messageType = "received"
+        var sent = EmailQuery.all; sent.messageType = "sent"
+        var withAttachments = EmailQuery.all; withAttachments.hasAttachments = true
+        typeCounts = ["received": (try? await archive.count(query: received)) ?? 0,
+                      "sent": (try? await archive.count(query: sent)) ?? 0]
+        attachmentTotal = (try? await archive.count(query: withAttachments)) ?? 0
         // CAP-03: the total is always known; the list keeps what was expanded.
         labelTotal = (try? await store.parserTagTotal()) ?? 0
         labelBuckets = (try? await store.parserTagCounts(matching: nil, offset: 0, limit: max(Self.labelPage, labelBuckets.count))) ?? []

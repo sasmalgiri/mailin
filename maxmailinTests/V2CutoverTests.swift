@@ -8638,4 +8638,167 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(list.summaries.count, 8, "restore must bring it back")
         XCTAssertTrue(list.summaries.map(\.id).contains(victim))
     }
+
+    // MARK: - Gate 1 iPad walk — IPAD-02 (folder tree) and IPAD-05 (Trash, counts, duplicate summary)
+
+    /// Awaits a re-page and any re-page a property change already started.
+    private func settle(_ vm: ParsedEmailListViewModel) async {
+        await vm.reloadForQueryChangeNow()
+        for _ in 0..<200 where vm.isLoadingPage {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// IPAD-02: the folder list the iPad / iPhone sidebar draws comes from the
+    /// same model as the Mac sidebar and holds every source folder — nested
+    /// ones under their parent, the empty one too — with its count; choosing
+    /// one filters the list by the same `folderID` the Mac uses.
+    func testIPAD02_compactFolderListHasEveryFolder_emptyAndNested_withCounts_andFiltersTheList() async throws {
+        let env = try makeEnv()
+        let wasComplete = SQLiteEmailStore.unboundedIDLookups
+        SQLiteEmailStore.unboundedIDLookups = true
+        addTeardownBlock { SQLiteEmailStore.unboundedIDLookups = wasComplete }
+        let sid = try await registerSource(env, sha: "ipad02", name: "MailExport.zip", parser: "mbox")
+        var batch: [MBOXParser.RawEmail] = []
+        for (i, path) in ["Inbox", "Inbox", "Inbox", "Work", "Work", "Work/Clients"].enumerated() {
+            var e = makeEmail(i: 9_100 + i, total: 6, body: "ipad02 \(i)")
+            e.folderPath = path
+            batch.append(e)
+        }
+        _ = try await env.store.insertBatch(batch, sourceFileHash: "ipad02", accountID: nil, sourceID: sid,
+                                            firstOrdinal: 0, dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        try await env.store.registerFolders(sourceID: sid, paths: ["Inbox", "Work", "Work/Clients", "Archive 2019"])
+
+        let sidebar = ArchiveSidebarModel(archive: env.archive)
+        await sidebar.refresh()
+        let sources = ArchiveSidebarModel.flatFolders(sidebar.folderTrees)
+        XCTAssertEqual(sources.map(\.title), ["MailExport.zip"])
+        let rows = try XCTUnwrap(sources.first).rows
+        XCTAssertEqual(Set(rows.map(\.node.path)), ["Inbox", "Work", "Work/Clients", "Archive 2019"], "every folder, the empty one too")
+        XCTAssertEqual(sidebar.folderRowTotal, 4, "the total the header shows")
+        let byPath = Dictionary(uniqueKeysWithValues: rows.map { ($0.node.path, $0) })
+        XCTAssertEqual(byPath["Inbox"]?.node.messageCount, 3)
+        XCTAssertEqual(byPath["Work"]?.node.messageCount, 2)
+        XCTAssertEqual(byPath["Work/Clients"]?.node.messageCount, 1)
+        XCTAssertEqual(byPath["Archive 2019"]?.isEmptyFolder, true)
+        XCTAssertEqual(byPath["Work/Clients"]?.depth, (byPath["Work"]?.depth ?? -9) + 1, "nested under its parent")
+        let workIndex = try XCTUnwrap(rows.firstIndex { $0.node.path == "Work" })
+        XCTAssertEqual(rows[workIndex + 1].node.path, "Work/Clients", "a child is listed right under its parent")
+        // A page of the list keeps the order and never exceeds its reach.
+        XCTAssertEqual(SourceFolderSection.page(sources, reach: 2).flatMap(\.rows).map(\.id), Array(rows.prefix(2)).map(\.id))
+
+        // Choosing Work/Clients filters the list exactly as the Mac's folder row does.
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive, pageSize: 20, maxRetained: 50)
+        vm.isPremiumUser = true
+        await settle(vm)
+        XCTAssertEqual(vm.visibleEmails.count, 6)
+        let clients = try XCTUnwrap(byPath["Work/Clients"]).node
+        vm.selectedSourceFolder = .init(id: clients.folderID, name: clients.name)
+        await settle(vm)
+        XCTAssertEqual(vm.visibleEmails.map { $0.headers["Subject"] ?? "" }, ["Subject 9105"])
+        var macQuery = EmailQuery.all
+        macQuery.folderID = clients.folderID
+        let macCount = try await env.archive.count(query: macQuery)
+        XCTAssertEqual(vm.displayedEmailCount, macCount)
+        vm.resetFilters()
+        XCTAssertNil(vm.selectedSourceFolder, "Clear leaves the folder too")
+    }
+
+    /// IPAD-05 (a): the list's Trash view pages trashed rows from the STORE
+    /// (a copy a duplicate removal trashed was never resident, so the
+    /// in-window filter showed an empty Trash), `in:trash` shows them as on
+    /// the Mac, and Restore round-trips through the shared model.
+    func testIPAD05_trashListingInTrashOperatorAndRestoreRoundTripThroughTheSharedModel() async throws {
+        let env = try makeEnv()
+        let fixtures = try await seed(env, count: 6)
+        let saved = ReviewStateService.testStoreOverride
+        ReviewStateService.testStoreOverride = env.store
+        addTeardownBlock { @MainActor in ReviewStateService.testStoreOverride = saved }
+        let victim = fixtures[2].id
+        try await env.archive.setTrashed(ids: [victim], true)   // as a duplicate removal does
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive, pageSize: 20, maxRetained: 50)
+        vm.isPremiumUser = true
+        await settle(vm)
+        XCTAssertEqual(vm.visibleEmails.count, 5)
+        XCTAssertFalse(vm.visibleEmails.map(\.id).contains(victim))
+
+        vm.reviewStateFilter = .trashed
+        await settle(vm)
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [victim], "the Trash lists what the store holds there")
+        XCTAssertEqual(vm.displayedEmailCount, 1)
+
+        vm.reviewStateFilter = .active
+        vm.searchText = "in:trash"
+        await settle(vm)
+        XCTAssertEqual(vm.visibleEmails.count, 6, "in:trash includes the trashed copy, as on the Mac")
+        XCTAssertTrue(vm.visibleEmails.map(\.id).contains(victim))
+
+        vm.searchText = ""
+        vm.reviewStateFilter = .trashed
+        await settle(vm)
+        await vm.restoreFromTrashNow([victim])
+        await settle(vm)
+        XCTAssertTrue(vm.visibleEmails.isEmpty, "the Trash is empty after the restore")
+        let trashedAfter = try await env.archive.trashedCount()
+        XCTAssertEqual(trashedAfter, 0, "the store has it back")
+        vm.reviewStateFilter = .active
+        await settle(vm)
+        XCTAssertEqual(vm.visibleEmails.count, 6)
+        XCTAssertTrue(vm.visibleEmails.map(\.id).contains(victim))
+    }
+
+    /// IPAD-05 (b): after a duplicate removal every count is the store's —
+    /// the sidebar's Received no longer counts the trashed copy, the Trash
+    /// shows it, and the re-check does not offer the same copy again.
+    func testIPAD05_countsAfterADuplicateRemovalComeFromTheStore() async throws {
+        let env = try makeEnv()
+        let keep = mail(9_200, from: "alice@example.com", subject: "Exact duplicate message", body: "This exact message appears twice.")
+        let gone = copy(of: keep)
+        let other = mail(9_201, from: "bob@example.com", subject: "Other", body: "Something else.")
+        _ = try await env.store.insertBatch([keep, gone, other], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        let sidebar = ArchiveSidebarModel(archive: env.archive)
+        await sidebar.refresh()
+        XCTAssertEqual(sidebar.totalCount, 3)
+        XCTAssertEqual(sidebar.receivedCount, 3)
+        let before = try await DuplicateManagerView.withoutTrashed(try await env.store.messageIDDuplicateGroups(), store: env.store)
+        XCTAssertEqual(before.count, 1)
+
+        let result = try await env.store.removeDuplicateCopies([.init(survivor: keep.id, removed: [gone.id])])
+        XCTAssertEqual(result.trashed, [gone.id])
+        await sidebar.refresh()
+        XCTAssertEqual(sidebar.totalCount, 2)
+        XCTAssertEqual(sidebar.receivedCount, 2, "Received leaves the Trash out, like All Mail")
+        XCTAssertEqual(sidebar.trashedCount, 1)
+        let after = try await DuplicateManagerView.withoutTrashed(try await env.store.messageIDDuplicateGroups(), store: env.store)
+        XCTAssertTrue(after.isEmpty, "a copy already in the Trash is not offered again: \(after)")
+    }
+
+    /// IPAD-05 (c)/(d): the Duplicate Manager's summary never says "no
+    /// duplicate messages" while similar groups exist or were not looked for,
+    /// its plurals agree, and the walk's near-duplicate (one "!" apart) is found.
+    func testIPAD05_duplicateSummaryIsHonestAboutSimilarGroups_andPluralsAgree() {
+        let one = DuplicateSummary.text(verified: 0, candidates: 1, similar: 0, near: .wholeArchive)
+        XCTAssertFalse((one.title + one.detail).lowercased().contains("no duplicate"), "\(one)")
+        XCTAssertTrue(one.detail.contains("1 group "), one.detail)
+        XCTAssertFalse(one.detail.contains("1 groups"), one.detail)
+        let two = DuplicateSummary.text(verified: 0, candidates: 1, similar: 1, near: .newest(5_000))
+        XCTAssertTrue(two.detail.contains("2 groups"), two.detail)
+        let unchecked = DuplicateSummary.text(verified: 0, candidates: 0, similar: 0, near: .notChecked)
+        XCTAssertFalse((unchecked.title + unchecked.detail).lowercased().contains("no duplicate"), "\(unchecked)")
+        XCTAssertTrue(unchecked.detail.contains("not looked for"), unchecked.detail)
+        let window = DuplicateSummary.text(verified: 0, candidates: 0, similar: 0, near: .newest(5_000))
+        XCTAssertTrue(window.detail.contains("newest"), window.detail)
+        XCTAssertEqual(DuplicateSummary.text(verified: 1, candidates: 0, similar: 0, near: .notChecked).title, "1 group of identical copies")
+        XCTAssertEqual(Inflect.string("^[\(1) copy](inflect: true)"), "1 copy")
+        XCTAssertEqual(Inflect.string("^[\(2) copy](inflect: true)"), "2 copies")
+
+        var a = mail(9_300, from: "alice@example.com", subject: "Exact duplicate message", body: "This exact message appears twice.")
+        a.headers["Message-ID"] = "<dupe-exact@example.com>"
+        var b = mail(9_301, from: "alice@example.com", subject: "Exact duplicate message", body: "This exact message appears twice!")
+        b.headers["Message-ID"] = "<near-dupe@example.com>"
+        let near = DuplicateManagerView.findNearDuplicates(in: [a, b], threshold: 0.85)
+        XCTAssertEqual(near.map { Set($0.map(\.id)) }, [Set([a.id, b.id])], "one punctuation mark apart is similar")
+    }
 }
