@@ -182,7 +182,7 @@ final class ArchiveSidebarModel: ObservableObject {
     }
 
     private let archive: ArchiveDataService
-    static let labelLimit = 200
+    nonisolated static let labelLimit = 200
     /// FOLD-01: how many folders one "Show more" adds.
     static let labelPage = 200
     /// FOLD-03: folder counts are occurrences; the archive counts messages once.

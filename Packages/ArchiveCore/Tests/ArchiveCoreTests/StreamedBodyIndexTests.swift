@@ -15,6 +15,7 @@
 
 import XCTest
 import Foundation
+import SQLite3
 @preconcurrency @testable import ArchiveCore
 
 final class StreamedBodyIndexTests: XCTestCase {
@@ -324,5 +325,101 @@ final class StreamedBodyIndexTests: XCTestCase {
         XCTAssertEqual(chunks.joined(), text, "contiguous: nothing repeated, nothing dropped")
         XCTAssertTrue(chunks.allSatisfy { $0.count <= 4_000 })
         XCTAssertTrue(chunks.dropLast().allSatisfy { $0.last == " " }, "no word is cut in two")
+    }
+
+    // MARK: - R5b: attachments of a streamed message, by byte range
+
+    /// Deterministic bytes covering every value, so a decode error cannot hide.
+    private static func binaryPayload(_ count: Int) -> Data {
+        var state: UInt32 = 0x9E37_79B9
+        var out = Data(capacity: count)
+        for _ in 0..<count {
+            state = state &* 1_664_525 &+ 1_013_904_223
+            out.append(UInt8(truncatingIfNeeded: state >> 24))
+        }
+        return out
+    }
+
+    /// R5b: a message above the ceiling with a 3 MB base64 attachment, a
+    /// quoted-printable one and a 7-bit one: the stream registers each part's
+    /// byte range in the original file (and the message's attachment list);
+    /// each part streams out decoded byte for byte, with memory bounded by the
+    /// slice — never by the attachment; a body streamed by version 1 (names
+    /// only) is streamed again once so its parts are registered.
+    func testR5b_attachmentPartsAreRegisteredByByteRange_andStreamOutDecodedInBoundedMemory() async throws {
+        let env = makeEnv("parts")
+        let mbox = root.appendingPathComponent("parts.mbox")
+        let binary = Self.binaryPayload(3 * 1_048_576 + 17)
+        let qpText = "caf\u{E9} line one\nsecond line with = sign and a very long tail " + String(repeating: "x", count: 200)
+        let qpEncoded = "caf=E9 line one\r\nsecond line with =3D sign and a very long tail " + String(repeating: "x", count: 60) + "=\r\n" + String(repeating: "x", count: 140)
+        let plain = "seven bit attachment text\r\nends here"
+        let filler = String(repeating: "body filler words about nothing in particular.\r\n", count: 3_000)
+        var text = "From big@example.com Fri Mar 17 12:00:00 2017\r\nFrom: big@example.com\r\nSubject: With parts\r\n"
+            + "Message-ID: <r5b-parts@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"P\"\r\n\r\n"
+            + "--P\r\nContent-Type: text/plain\r\n\r\n" + filler
+            + "--P\r\nContent-Type: application/octet-stream; name=\"blob.bin\"\r\nContent-Disposition: attachment; filename=\"blob.bin\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n\r\n"
+        text += binary.base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed])
+        text += "\r\n--P\r\nContent-Type: text/plain; charset=iso-8859-1; name=\"note.txt\"\r\nContent-Disposition: attachment; filename=\"note.txt\"\r\n"
+            + "Content-Transfer-Encoding: quoted-printable\r\n\r\n" + qpEncoded + "\r\n"
+            + "--P\r\nContent-Type: text/csv; name=\"plain.csv\"\r\nContent-Disposition: attachment; filename=\"plain.csv\"\r\n\r\n"
+            + plain + "\r\n--P--\r\n\r\n"
+        try Data(text.utf8).write(to: mbox)
+        _ = try await importMBOX(mbox, into: env, ceiling: 64 * 1024)
+        let pass = await StreamedBodyIndexer().indexPending(store: env.store, sliceBytes: 8_192)
+        XCTAssertEqual(pass, StreamedBodyIndexer.PassOutcome(indexed: 1, failed: 0))
+        let ids = try await env.store.deferredBodyIDs(limit: 5)
+        let id = try XCTUnwrap(ids.first)
+
+        // Registered: ranges, the attachment list, on the attachment job's work list.
+        let located = try await env.store.streamedAttachmentParts(emailID: id)
+        let (sourcePath, parts) = try XCTUnwrap(located)
+        XCTAssertEqual(parts.map { $0.filename ?? "" }, ["blob.bin", "note.txt", "plain.csv"])
+        XCTAssertTrue(parts.allSatisfy(\.isAttachment), "the attachment hydrator addresses them by the same list")
+        let listed = try await env.store.attachmentMetadata(forEmailID: id)
+        XCTAssertEqual(listed.map(\.filename), ["blob.bin", "note.txt", "plain.csv"])
+        XCTAssertEqual(listed.first?.size, binary.count, "the decoded size, counted on the way past")
+        let work = try await env.store.streamedAttachmentWorkList(limit: 10)
+        XCTAssertEqual(work, [id])
+        let candidates = try await env.store.attachmentTextCandidates(limit: 10)
+        XCTAssertFalse(candidates.rawless.contains(id) || candidates.candidates.contains { $0.id == id },
+                       "never offered to the whole-message path, which would call it 'source not stored'")
+
+        // Each part streams out decoded, byte for byte, in bounded memory.
+        let out = root.appendingPathComponent("part.out")
+        let blob = try StreamedPartDecoder.decode(part: parts[0], sourcePath: sourcePath, to: out, sliceBytes: 8_192)
+        XCTAssertEqual(try Data(contentsOf: out), binary)
+        XCTAssertLessThan(blob.peakBufferedBytes, 32 * 1_024, "bounded by the slice, not by the \(binary.count)-byte attachment")
+        _ = try StreamedPartDecoder.decode(part: parts[1], sourcePath: sourcePath, to: out, sliceBytes: 4_096)
+        XCTAssertEqual(try Data(contentsOf: out), qpText.replacingOccurrences(of: "\n", with: "\r\n").data(using: .isoLatin1))
+        _ = try StreamedPartDecoder.decode(part: parts[2], sourcePath: sourcePath, to: out)
+        XCTAssertEqual(String(decoding: try Data(contentsOf: out), as: UTF8.self), plain,
+                       "the line break before the boundary belongs to the boundary")
+
+        // The same ranges at every slice size (offsets relative to the stream's start).
+        let locatorValue = try await env.store.locator(forEmailID: id)
+        let base = try XCTUnwrap(locatorValue).headerRange.offset
+        let raw = try Data(contentsOf: mbox).subdata(in: Int(base)..<text.utf8.count)
+        for slice in [7, 77, 8_192] {
+            var reader = StreamingMIMETextReader(baseOffset: base)
+            var source = MemorySource(data: raw, size: slice)
+            while let piece = try source.next() { _ = reader.feed(piece) }
+            _ = reader.finish()
+            XCTAssertEqual(reader.attachmentParts.map(\.locator.contentRange), parts.map(\.contentRange), "slice \(slice)")
+        }
+
+        // A body streamed by version 1 (names only) goes back on the stream's work list once.
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(root.appendingPathComponent("parts-store/emails.db").path, &handle), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(handle, "UPDATE search_docs SET extractor_version = 1 WHERE kind = 'body' AND email_id = '\(id.uuidString)';", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(handle)
+        let again = try await env.store.streamedBodyWorkList(limit: 10)
+        XCTAssertEqual(again, [id])
+        let notYet = try await env.store.streamedAttachmentWorkList(limit: 10)
+        XCTAssertEqual(notYet, [], "its attachments wait for the re-stream")
+        let rerun = await StreamedBodyIndexer().indexPending(store: env.store)
+        XCTAssertEqual(rerun.indexed, 1)
+        let done = try await env.store.streamedBodyWorkList(limit: 10)
+        XCTAssertEqual(done, [])
     }
 }

@@ -462,7 +462,11 @@ final class PSTSpecWriter: PSTStreamWriting {
             remaining -= bytes
             xs.append(try xblock(level: 1, part, bytes))
         }
-        precondition(xs.count <= 1021, "node data above 8.5 GB")
+        // R5b: the format's own ceiling (two XBLOCK levels, about 8.5 GB in one
+        // item) is reported as an export failure, never a crash.
+        guard xs.count <= 1021 else {
+            throw PSTWriter.WriterError.encodingFailure("one item's data is above the PST format's 8.5 GB per-item ceiling")
+        }
         return try xblock(level: 2, xs, totalBytes)
     }
 

@@ -158,7 +158,7 @@ public class MIMEParser {
         }
         return "utf-8"
     }
-    private static let maxRecursionDepth = 20
+    static let maxRecursionDepth = 20   // a damage guard, listed in Settings ▸ Health ▸ Limits (R5b)
 
     private static func buildRecursiveParts(_ body: String, boundary: String, defaultContentType: String, depth: Int) -> [MIMEPart] {
         guard depth < maxRecursionDepth else { return [] }

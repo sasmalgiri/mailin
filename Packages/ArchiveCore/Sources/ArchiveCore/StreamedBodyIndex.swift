@@ -38,6 +38,14 @@ import SQLite3
 /// A message's bytes, one slice at a time; nil at the end.
 protocol MessageSliceSource {
     mutating func next() throws -> Data?
+    /// R5b: where the first byte of the stream sits in the original file, so
+    /// the attachment ranges the reader records are absolute (0 for a stream
+    /// that is not read from a file).
+    var baseOffset: Int64 { get }
+}
+
+extension MessageSliceSource {
+    var baseOffset: Int64 { 0 }
 }
 
 /// The bytes of a located message in its original file, from its header block
@@ -67,6 +75,8 @@ final class LocatorSliceSource: MessageSliceSource {
     }
 
     deinit { try? handle?.close() }
+
+    var baseOffset: Int64 { range.offset }
 
     func next() throws -> Data? {
         guard remaining > 0, let handle else {
@@ -119,11 +129,27 @@ struct StreamingMIMETextReader {
     private var emittedAny = false
     /// Names of the attachments met on the way (not read here).
     private(set) var attachmentNames: [String] = []
+    /// R5b: every attachment part met on the way, with the absolute byte range
+    /// of its still-encoded content in the original file, so the attachment
+    /// job can stream it out and read it like any other attachment.
+    private(set) var attachmentParts: [StreamedAttachmentPart] = []
+
+    // R5b: positions, relative to the start of the stream.
+    private let baseOffset: Int64
+    private var fed: Int64 = 0
+    private var lineStart: Int64 = 0
+    private var lineEnd: Int64 = 0
+    /// The terminator of the last complete line (2 for CRLF, 1 for LF, 0 after a piece of a long line).
+    private var lastTerminator: Int64 = 0
+    private var partHeaderStart: Int64 = 0
+    private var openPart: StreamedAttachmentPart?
+    private var openPartBase64 = false
+    private var openPartBase64Characters: Int64 = 0
 
     /// Bytes held between calls — the line in progress, the header block, the decoder's carry.
     var bufferedBytes: Int { line.count + headerBytes + (decoder?.bufferedBytes ?? 0) }
 
-    init() {}
+    init(baseOffset: Int64 = 0) { self.baseOffset = baseOffset }
 
     /// The text the slice completed. Text parts are separated by a newline.
     mutating func feed(_ data: Data) -> String {
@@ -133,26 +159,42 @@ struct StreamingMIMETextReader {
             if let newline = data[cursor...].firstIndex(of: 0x0A) {
                 line.append(data[cursor..<newline])
                 cursor = data.index(after: newline)
+                lineEnd = fed + Int64(data.distance(from: data.startIndex, to: cursor))
                 process(complete: true, into: &out)
             } else {
                 line.append(data[cursor...])
                 cursor = data.endIndex
-                if line.count >= Self.lineSliceBytes { process(complete: false, into: &out) }
+                if line.count >= Self.lineSliceBytes {
+                    lineEnd = lineStart + Int64(line.count)
+                    process(complete: false, into: &out)
+                }
             }
         }
+        fed += Int64(data.count)
         return out
     }
 
     /// The text still held at the end of the message.
     mutating func finish() -> String {
         var out = ""
-        if !line.isEmpty { process(complete: true, into: &out) }
+        if !line.isEmpty {
+            lineEnd = lineStart + Int64(line.count)
+            process(complete: true, into: &out)
+        }
         endPart(into: &out)
+        closeAttachment(at: fed)
         return out
     }
 
     private mutating func process(complete: Bool, into out: inout String) {
-        defer { line.removeAll(keepingCapacity: true); continuingLongLine = !complete }
+        let hadCR = complete && line.last == 0x0D
+        let thisLineStart = lineStart
+        let previousTerminator = lastTerminator
+        defer {
+            line.removeAll(keepingCapacity: true); continuingLongLine = !complete
+            lineStart = lineEnd
+            lastTerminator = complete ? (hadCR ? 2 : 1) : 0
+        }
         var bytes = line
         if complete, bytes.last == 0x0D { bytes.removeLast() }
         // A boundary line starts a line, is short and starts with "--".
@@ -162,12 +204,16 @@ struct StreamingMIMETextReader {
             for index in frames.indices.reversed() {
                 if candidate == frames[index].marker {
                     endPart(into: &out)
+                    // The line break before a boundary belongs to the boundary (RFC 2046 §5.1.1).
+                    closeAttachment(at: thisLineStart - previousTerminator)
                     frames.removeSubrange((index + 1)...)
                     startHeaders()
+                    partHeaderStart = lineEnd
                     return
                 }
                 if candidate == frames[index].marker + "--" {
                     endPart(into: &out)
+                    closeAttachment(at: thisLineStart - previousTerminator)
                     frames.removeSubrange(index...)
                     phase = .skip     // the epilogue, up to an outer boundary
                     return
@@ -191,8 +237,22 @@ struct StreamingMIMETextReader {
         case .text:
             decoder?.line(bytes, complete: complete, into: &out)
         case .skip:
-            break
+            // R5b: the decoded size of a base64 attachment, counted on the way past.
+            if openPart != nil, openPartBase64 {
+                for byte in bytes where TextPartDecoder.isBase64Data(byte) { openPartBase64Characters += 1 }
+            }
         }
+    }
+
+    /// R5b: the attachment part in progress ends at `end` (relative to the stream).
+    private mutating func closeAttachment(at end: Int64) {
+        guard var part = openPart else { return }
+        openPart = nil
+        let start = part.locator.contentRange.offset - baseOffset
+        let length = max(0, end - start)
+        part.locator.contentRange = ByteRange(offset: baseOffset + start, length: length)
+        part.decodedBytes = openPartBase64 ? openPartBase64Characters * 3 / 4 : length
+        attachmentParts.append(part)
     }
 
     private mutating func startHeaders() {
@@ -211,6 +271,7 @@ struct StreamingMIMETextReader {
     }
 
     private mutating func beginPart(into out: inout String) {
+        closeAttachment(at: lineStart)   // never open: a part always ends at a boundary first
         var fields: [String: String] = [:]
         for header in headerLines {
             guard let colon = header.firstIndex(of: ":") else { continue }
@@ -254,6 +315,20 @@ struct StreamingMIMETextReader {
             return
         }
         if let filename, !filename.isEmpty { attachmentNames.append(filename) }
+        // R5b: the part's still-encoded content starts on the next line.
+        if !media.hasPrefix("multipart/") {
+            let ordinal = attachmentParts.count
+            let named = (filename?.isEmpty == false) ? filename! : "attachment-\(ordinal + 1)"
+            let contentID = fields["content-id"].map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "<> ")) }
+            let locator = PartLocator(messageID: UUID(), path: [ordinal], mimeType: media.isEmpty ? "application/octet-stream" : media,
+                                      filename: named, contentID: contentID, contentTransferEncoding: encoding.isEmpty ? nil : encoding,
+                                      contentRange: ByteRange(offset: baseOffset + lineEnd, length: 0),
+                                      headerRange: ByteRange(offset: baseOffset + partHeaderStart, length: max(0, lineEnd - partHeaderStart)))
+            openPart = StreamedAttachmentPart(locator: locator, decodedBytes: 0,
+                                              isInline: disposition.lowercased().hasPrefix("inline") || (contentID != nil && filename == nil))
+            openPartBase64 = encoding == "base64"
+            openPartBase64Characters = 0
+        }
         phase = .skip
     }
 
@@ -401,6 +476,12 @@ struct TextPartDecoder {
         return 0
     }
 
+    /// R5b: a base64 data character (padding excluded), for counting decoded size.
+    static func isBase64Data(_ byte: UInt8) -> Bool {
+        (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A) || (byte >= 0x30 && byte <= 0x39)
+            || byte == 0x2B || byte == 0x2F
+    }
+
     private static func isBase64(_ byte: UInt8) -> Bool {
         (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A) || (byte >= 0x30 && byte <= 0x39)
             || byte == 0x2B || byte == 0x2F || byte == 0x3D
@@ -503,7 +584,10 @@ struct StreamingChunker {
 
 struct StreamedBodyIndexer: Sendable {
     /// Stamped as the body document's `extractor_version`.
-    static let version = 1
+    /// 2 (R5b, 2026-11-09): the attachment parts met on the way are registered
+    /// by byte range so their contents are read too — version-1 bodies are
+    /// streamed again once to register them.
+    static let version = 2
 
     /// Chunks per write transaction (about 400K characters).
     var chunksPerWrite = 8
@@ -517,6 +601,8 @@ struct StreamedBodyIndexer: Sendable {
         /// awaiting their write.
         var peakBufferedBytes = 0
         var attachmentNames: [String] = []
+        /// R5b: the attachment parts, by absolute byte range in the original file.
+        var attachmentParts: [StreamedAttachmentPart] = []
         var state: SearchDocState = .partial
     }
 
@@ -525,7 +611,7 @@ struct StreamedBodyIndexer: Sendable {
     /// Streams one message's text into its body document.
     func index<Source: MessageSliceSource>(emailID: UUID, source: inout Source, store: SQLiteEmailStore) async throws -> Result {
         var result = Result()
-        var reader = StreamingMIMETextReader()
+        var reader = StreamingMIMETextReader(baseOffset: source.baseOffset)
         var chunker = StreamingChunker()
         var waiting: [String] = []
         var waitingBytes = 0
@@ -561,9 +647,15 @@ struct StreamedBodyIndexer: Sendable {
         if let last = chunker.finish() { take([last]) }
         try await flush()
         result.attachmentNames = reader.attachmentNames
+        result.attachmentParts = reader.attachmentParts.map { part in
+            var part = part
+            part.locator.messageID = emailID
+            return part
+        }
         result.state = sawText ? .complete : .noText
         try await store.finishStreamedBody(emailID: emailID, chunkCount: result.chunks, characters: result.characters,
-                                           state: result.state, attachmentNames: result.attachmentNames)
+                                           state: result.state, attachmentNames: result.attachmentNames,
+                                           attachmentParts: result.attachmentParts)
         return result
     }
 
@@ -616,11 +708,13 @@ extension SQLiteEmailStore {
         let stmt = try prepare(db, """
             SELECT l.email_id FROM message_locators l
             WHERE l.body_decoded = 0
-              AND EXISTS (SELECT 1 FROM search_docs d WHERE d.email_id = l.email_id AND d.kind = 'body' AND d.state = 'partial')
+              AND EXISTS (SELECT 1 FROM search_docs d WHERE d.email_id = l.email_id AND d.kind = 'body'
+                          AND (d.state = 'partial' OR d.extractor_version < ?))
             ORDER BY l.ordinal LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(clamping: limit))
+        sqlite3_bind_int64(stmt, 1, Int64(StreamedBodyIndexer.version))
+        sqlite3_bind_int(stmt, 2, Int32(clamping: limit))
         var out: [UUID] = []
         while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
         return out
@@ -665,7 +759,11 @@ extension SQLiteEmailStore {
     }
 
     /// Records the finished body document (and the attachment names met on the way).
-    func finishStreamedBody(emailID: UUID, chunkCount: Int, characters: Int, state: SearchDocState, attachmentNames: [String]) throws {
+    /// R5b: a finished stream (not `failed`) also registers the attachment parts
+    /// it met — byte ranges, the message's attachment list — and puts the
+    /// message on the attachment job's work list so their contents are read.
+    func finishStreamedBody(emailID: UUID, chunkCount: Int, characters: Int, state: SearchDocState, attachmentNames: [String],
+                            attachmentParts: [StreamedAttachmentPart] = []) throws {
         let db = try ensureDB()
         try exec(db, SQLiteHygiene.beginWrite)
         do {
@@ -685,6 +783,9 @@ extension SQLiteEmailStore {
             if !attachmentNames.isEmpty {
                 try indexSearchDocument(db, emailID: id, kind: .attachmentName, ordinal: 0,
                                         text: attachmentNames.joined(separator: "\n"), state: .complete)
+            }
+            if state != .failed {
+                try registerStreamedAttachments(db, emailID: emailID, parts: attachmentParts)
             }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }

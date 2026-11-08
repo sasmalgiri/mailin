@@ -258,7 +258,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// The statements behind `savePartLocators`, for callers that already
     /// hold a transaction (`insertBatch`).
-    private func writePartLocators(_ db: OpaquePointer, _ parts: [PartLocator], emailID: UUID) throws {
+    func writePartLocators(_ db: OpaquePointer, _ parts: [PartLocator], emailID: UUID) throws {
             let clear = try prepare(db, "DELETE FROM part_locators WHERE email_id = ?;")
             bindText(clear, 1, emailID.uuidString)
             let cleared = sqlite3_step(clear) == SQLITE_DONE
@@ -5087,6 +5087,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             LEFT JOIN email_bodies b ON b.id = e.id
             WHERE e.has_attach = 1
               AND NOT EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM message_locators l WHERE l.email_id = e.id AND l.body_decoded = 0)
             LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }

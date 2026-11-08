@@ -258,11 +258,13 @@ final class AttachmentCoverageStore {
     /// version first; `limit` bounds one page of the retry pass.
     /// Emails whose attachments were read by one of `extractors` below
     /// `version`, in any state (§13.3: a re-read that changes what a document IS).
-    func emailIDs(extractors: [String], below version: Int, limit: Int) throws -> [UUID] {
-        let list = extractors.map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }.joined(separator: ",")
+    /// R5b: `excludingKeptUnlocks` leaves out rows a kept Unlock stored — a
+    /// re-read without the password could not reproduce them (see `markKeptUnlocks`).
+    func emailIDs(extractors: [String], below version: Int, limit: Int, excludingKeptUnlocks: Bool = false) throws -> [UUID] {
+        let list = Self.sqlList(extractors)
         let stmt = try prepare("""
             SELECT DISTINCT email_id FROM coverage
-            WHERE extractor_version < ? AND extractor IN (\(list))
+            WHERE extractor_version < ? AND extractor IN (\(list))\(excludingKeptUnlocks ? " AND unlocked = 0" : "")
             ORDER BY extractor_version, email_id LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
@@ -275,10 +277,10 @@ final class AttachmentCoverageStore {
         return out
     }
 
-    func emailIDs(staleBelow version: Int, limit: Int) throws -> [UUID] {
+    func emailIDs(staleBelow version: Int, limit: Int, excludingKeptUnlocks: Bool = false) throws -> [UUID] {
         let stmt = try prepare("""
             SELECT DISTINCT email_id FROM coverage
-            WHERE extractor_version < ? AND state IN ('unsupported', 'failed', 'truncated', 'partial')
+            WHERE extractor_version < ? AND state IN ('unsupported', 'failed', 'truncated', 'partial')\(excludingKeptUnlocks ? " AND unlocked = 0" : "")
             ORDER BY extractor_version, email_id LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
@@ -292,12 +294,38 @@ final class AttachmentCoverageStore {
     }
 
     /// Forget emails (deleted, or about to be re-indexed).
-    func remove(emailIDs: [UUID]) throws {
+    /// R5b: `keepingUnlocked` keeps the rows a kept Unlock stored, so the re-read
+    /// that follows knows to leave their text and children as they are.
+    func remove(emailIDs: [UUID], keepingUnlocked: Bool = false) throws {
         guard !emailIDs.isEmpty else { return }
         let marks = Array(repeating: "?", count: emailIDs.count).joined(separator: ",")
-        let stmt = try prepare("DELETE FROM coverage WHERE email_id IN (\(marks));")
+        let stmt = try prepare("DELETE FROM coverage WHERE email_id IN (\(marks))\(keepingUnlocked ? " AND unlocked = 0" : "");")
         defer { sqlite3_finalize(stmt) }
         for (i, id) in emailIDs.enumerated() { sqlite3_bind_text(stmt, Int32(i + 1), id.uuidString, -1, Self.transient) }
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(db))) }
+    }
+
+    // MARK: - R5b: a reader upgrade never undoes a kept Unlock
+
+    private static func sqlList(_ values: [String]) -> String {
+        values.map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }.joined(separator: ",")
+    }
+
+    /// Rows a kept Unlock stored that a newer reader would read again — the
+    /// same tests as `emailIDs(staleBelow:)` (`extractors == nil`) or
+    /// `emailIDs(extractors:below:)` — keep their text and get `note` once,
+    /// saying the newer reader needs the password again. Returns how many were marked.
+    @discardableResult
+    func markKeptUnlocks(below version: Int, extractors: [String]? = nil, note: String) throws -> Int {
+        let test = extractors.map { "extractor IN (\(Self.sqlList($0)))" } ?? "state IN ('unsupported', 'failed', 'truncated', 'partial')"
+        let stmt = try prepare("""
+            UPDATE coverage SET note = CASE WHEN note IS NULL OR note = '' THEN ?1 ELSE note || '; ' || ?1 END
+            WHERE unlocked = 1 AND extractor_version < ?2 AND \(test) AND (note IS NULL OR instr(note, ?1) = 0);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, note, -1, Self.transient)
+        sqlite3_bind_int64(stmt, 2, Int64(version))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(db))) }
+        return Int(sqlite3_changes(db))
     }
 }

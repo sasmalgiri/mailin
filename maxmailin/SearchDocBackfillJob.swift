@@ -101,6 +101,8 @@ final class SearchDocBackfillJob {
             outcome.streamedBodies = pass.indexed
             outcome.streamedFailed = pass.failed
             if pass.failed > 0 { Self.logger.error("streamed bodies: \(pass.failed) original file(s) could not be read") }
+            // R5b: their attachments are now registered by byte range — the attachment job reads their contents.
+            if pass.indexed > 0 { AttachmentTextIndexJob.shared.kickIfNeeded() }
         }
         return outcome
     }

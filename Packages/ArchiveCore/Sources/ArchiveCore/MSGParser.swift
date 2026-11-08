@@ -27,14 +27,20 @@ struct MSGParser {
         }
     }
 
-    /// Messages embedded in messages are expanded this many levels deep
-    /// (plan v4 §13.8 step 3); what lies deeper is listed as an attachment.
-    static let maxEmbeddedDepth = 3
+    /// Messages embedded in messages are expanded at every level (plan v4
+    /// §13.8 step 3). R5b (owner 2026-11-08: "there should be no limit at
+    /// all"): the former fixed depth of 3 kept a deeper message only by name,
+    /// with none of its bytes. A storage that contains itself (a damaged or
+    /// hostile file) is the only stop: it is listed as the attachment it is.
+
+    /// A .msg file is read whole into memory; larger files are refused with
+    /// that reason. Listed in Settings ▸ Health ▸ Limits (R5b).
+    static let maxFileBytes: Int64 = 2_000_000_000
 
     private static func parseSingleMSG(fileURL: URL, senderEmail: String) throws -> MBOXParser.RawEmail {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = attrs[.size] as? Int64 ?? 0
-        if fileSize > 2_000_000_000 { throw MSGError.fileTooLarge(fileSize) }
+        if fileSize > maxFileBytes { throw MSGError.fileTooLarge(fileSize) }
 
         let data = try Data(contentsOf: fileURL)
         return try parse(data: data, senderEmail: senderEmail)
@@ -44,14 +50,15 @@ struct MSGParser {
     /// for a .msg that arrives as an attachment of another message.
     static func parse(data: Data, senderEmail: String = "") throws -> MBOXParser.RawEmail {
         let ole2 = try OLE2Reader(data: data)
-        return try email(from: ole2, storage: 0, propertiesHeader: 32, depth: 0, senderEmail: senderEmail)
+        return try email(from: ole2, storage: 0, propertiesHeader: 32, depth: 0, ancestors: [0], senderEmail: senderEmail)
     }
 
     /// The message held in one storage of the compound file: the root (header
     /// 32 bytes) or an embedded message's `__substg1.0_3701000D` storage
     /// (header 24 bytes). Each embedded message becomes an attached message in
     /// RFC 5322 form, so its own attachments are read as children downstream.
-    private static func email(from ole2: OLE2Reader, storage: Int, propertiesHeader: Int, depth: Int, senderEmail: String) throws -> MBOXParser.RawEmail {
+    private static func email(from ole2: OLE2Reader, storage: Int, propertiesHeader: Int, depth: Int, ancestors: Set<Int>,
+                              senderEmail: String) throws -> MBOXParser.RawEmail {
         let properties = try ole2.readMAPIProperties(storage: storage, propertiesHeader: propertiesHeader)
 
         let senderAddr = properties.stringProperty(.senderEmailAddress)
@@ -121,14 +128,15 @@ struct MSGParser {
         var attachments: [AttachmentMetadata] = []
         for record in try ole2.readAttachments(storage: storage) {
             if let embeddedStorage = record.embeddedMessageStorage {
-                if depth + 1 < maxEmbeddedDepth,
-                   let inner = try? email(from: ole2, storage: embeddedStorage, propertiesHeader: 24, depth: depth + 1, senderEmail: senderEmail) {
+                if !ancestors.contains(embeddedStorage),
+                   let inner = try? email(from: ole2, storage: embeddedStorage, propertiesHeader: 24, depth: depth + 1,
+                                          ancestors: ancestors.union([embeddedStorage]), senderEmail: senderEmail) {
                     let rendered = RFC822Renderer.render(inner)
                     let name = Self.attachedMessageName(subject: inner.headers["Subject"], fallback: record.metadata.filename)
                     attachments.append(AttachmentMetadata(filename: name, mimeType: "message/rfc822", size: rendered.count,
                                                           isInline: false, contentID: nil, base64: rendered.base64EncodedString(), fileURL: nil))
                 } else {
-                    // Deeper than the limit, or unreadable: kept as the attachment it is, under Outlook's own type.
+                    // A storage inside itself, or unreadable: kept as the attachment it is, under Outlook's own type.
                     let name = record.metadata.filename == "attachment" ? "embedded-message.msg" : record.metadata.filename
                     attachments.append(AttachmentMetadata(filename: name, mimeType: "application/vnd.ms-outlook", size: 0,
                                                           isInline: false, contentID: nil, base64: nil, fileURL: nil))
@@ -207,7 +215,10 @@ struct MSGParser {
         // Widen to Int before adding: `compressedSize` is UInt32, so
         // `compressedSize + 4` can overflow-trap on a hostile RTF stream.
         guard Int(compressedSize) + 4 <= data.count else { return nil }
-        guard uncompressedSize < 10_000_000 else { return nil }
+        // R5b: no fixed 10 MB ceiling. The declared size is only trusted as far
+        // as the format allows: LZFu expands at most 17 output bytes per two input
+        // bytes, so a larger claim is damage, not a large body.
+        guard Int(uncompressedSize) <= Int(compressedSize) * 9 + 4_096 else { return nil }
 
         if magic == melalMagic {
             let start = 16
@@ -370,8 +381,10 @@ struct OLE2Reader {
     private var directories: [DirectoryEntry] = []
     private var miniStreamData: Data = Data()
 
-    private static let maxChainLength = 100_000
-    private static let maxDirCount = 500_000
+    // R5b: no fixed sector-chain or directory-entry count. A chain is bounded by
+    // the FAT it walks (each sector visited once — `seen`), the directory by the
+    // sectors of its own chain; the former 100,000-sector chain cap silently cut
+    // every stream above 51 MB (512-byte sectors) and returned it as whole.
 
     struct DirectoryEntry {
         let index: Int
@@ -476,8 +489,8 @@ struct OLE2Reader {
     private func collectTree(_ nodeIndex: Int, into result: inout [DirectoryEntry], visited: inout Set<Int>) {
         // Iterative in-order traversal with an explicit stack. A recursive walk
         // could overflow the stack on a degenerate/hostile directory chain
-        // (e.g. 500k right-siblings). `visited` guards cycles; maxDirCount caps
-        // output size.
+        // (e.g. 500k right-siblings). `visited` guards cycles and bounds the
+        // output by the directory itself.
         var stack: [Int] = []
         var current = nodeIndex
         while true {
@@ -486,7 +499,6 @@ struct OLE2Reader {
                 current = directories[current].leftSiblingID
             }
             guard let node = stack.popLast() else { break }
-            guard result.count < Self.maxDirCount else { return }
             result.append(directories[node])
             current = directories[node].rightSiblingID
         }
@@ -682,7 +694,7 @@ struct OLE2Reader {
         var chain: [Int] = []
         var current = startSector
         var seen = Set<Int>()
-        while current >= 0 && current < fat.count && !seen.contains(current) && chain.count < maxChainLength {
+        while current >= 0 && current < fat.count && !seen.contains(current) {
             chain.append(current)
             seen.insert(current)
             let next = Int(fat[current])
@@ -733,7 +745,6 @@ struct OLE2Reader {
                     startSector: startSector, size: max(0, size),
                     childID: type > 0 ? childID : -1, leftSiblingID: type > 0 ? leftID : -1, rightSiblingID: type > 0 ? rightID : -1
                 ))
-                if dirs.count >= maxDirCount { return dirs }
             }
         }
         return dirs
