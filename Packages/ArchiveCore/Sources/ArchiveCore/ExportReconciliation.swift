@@ -877,18 +877,53 @@ enum ExportReconciliation {
 
     // MARK: Attachments as occurrences
 
+    /// One attachment occurrence: every field travels together, so a payload
+    /// stays tied to its own name, Content-ID, disposition (and, when asked
+    /// for, MIME type). Shared with duplicate verification (release audit
+    /// bf1a5b9 R2): two copies match only when their occurrences match as a
+    /// multiset of whole tuples — repeated identical payloads with the same
+    /// metadata still match, swapped associations never do.
+    ///
+    /// Normalisations (the only ones): the file name is trimmed of
+    /// surrounding whitespace; the Content-ID loses angle brackets and
+    /// surrounding whitespace (`identifier`); the MIME type as
+    /// `normalisedMIMEType` describes. `size` is the byte count of the decoded
+    /// payload, so it is nil when the bytes could not be produced.
     struct Occurrence: Hashable, Sendable {
         let name: String
         let sha256: String?
         let size: Int?
         let contentID: String?
         let inline: Bool
-        var withoutBytes: Occurrence { Occurrence(name: name, sha256: nil, size: nil, contentID: contentID, inline: inline) }
-        var withoutContentID: Occurrence { Occurrence(name: name, sha256: sha256, size: size, contentID: nil, inline: inline) }
-        var withoutDisposition: Occurrence { Occurrence(name: name, sha256: sha256, size: size, contentID: contentID, inline: false) }
+        /// nil when the comparison does not include the type (export
+        /// reconciliation: writers legitimately re-label types).
+        var mimeType: String? = nil
+        var withoutBytes: Occurrence { Occurrence(name: name, sha256: nil, size: nil, contentID: contentID, inline: inline, mimeType: mimeType) }
+        var withoutContentID: Occurrence { Occurrence(name: name, sha256: sha256, size: size, contentID: nil, inline: inline, mimeType: mimeType) }
+        var withoutDisposition: Occurrence { Occurrence(name: name, sha256: sha256, size: size, contentID: contentID, inline: false, mimeType: mimeType) }
     }
 
-    static func occurrences(of email: MBOXParser.RawEmail) -> (list: [Occurrence], missingBytes: Int) {
+    /// `Occurrence.mimeType` normalisation: type/subtype and parameter names
+    /// lower-cased (case-insensitive by RFC 2045 §5.1), whitespace around the
+    /// pieces trimmed, and the `name` parameter dropped — it repeats the file
+    /// name, which the occurrence compares on its own, and Outlook's .msg/PST
+    /// store the type without it. Every other parameter (charset, method, …)
+    /// is kept with its value as written.
+    static func normalisedMIMEType(_ raw: String) -> String {
+        let pieces = raw.split(separator: ";", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let type = pieces.first else { return "" }
+        var out = [type.lowercased()]
+        for parameter in pieces.dropFirst() where !parameter.isEmpty {
+            let parts = parameter.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            let name = parts[0].lowercased()
+            if name == "name" { continue }
+            out.append(parts.count == 2 ? "\(name)=\(parts[1])" : name)
+        }
+        return out.joined(separator: "; ")
+    }
+
+    static func occurrences(of email: MBOXParser.RawEmail, includeMIMEType: Bool = false) -> (list: [Occurrence], missingBytes: Int) {
         let cache = AttachmentHydrator.Cache()
         defer { cache.removeTemporaryFiles() }
         var missing = 0
@@ -899,10 +934,14 @@ enum ExportReconciliation {
                               sha256: data.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() },
                               size: data?.count,
                               contentID: a.contentID.map(identifier).flatMap { $0.isEmpty ? nil : $0 },
-                              inline: a.isInline)
+                              inline: a.isInline,
+                              mimeType: includeMIMEType ? normalisedMIMEType(a.mimeType) : nil)
         }
         return (list, missing)
     }
+
+    /// Occurrences as a multiset of whole tuples (count kept, order ignored).
+    static func occurrenceMultiset(_ items: [Occurrence]) -> [Occurrence: Int] { multiset(items) }
 
     static func compareAttachments(output: MBOXParser.RawEmail, source: MBOXParser.RawEmail, rules: FormatRules) -> [FieldResult] {
         var results: [FieldResult] = []
