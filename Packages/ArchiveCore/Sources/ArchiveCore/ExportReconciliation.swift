@@ -371,13 +371,19 @@ enum ExportReconciliation {
         let emailID: UUID?
         /// The folder path the layout recorded for this file (OUT-03), when it did.
         let originalFolder: String?
+        /// R3 (iOS hand-off): the container's manifest where the receipt kept
+        /// it, when the file was written inside the app and handed on alone.
+        /// Tried before the sidecar beside the file; nil = the sidecar only.
+        let manifestURL: URL?
 
-        init(url: URL, path: String? = nil, kind: OutputKind? = nil, emailID: UUID? = nil, originalFolder: String? = nil) {
+        init(url: URL, path: String? = nil, kind: OutputKind? = nil, emailID: UUID? = nil, originalFolder: String? = nil,
+             manifestURL: URL? = nil) {
             self.url = url
             self.path = path ?? url.lastPathComponent
             self.kind = kind ?? OutputKind.of(url: url)
             self.emailID = emailID
             self.originalFolder = originalFolder
+            self.manifestURL = manifestURL
         }
     }
 
@@ -438,10 +444,12 @@ enum ExportReconciliation {
     }
 
     /// A single output file (an mbox or PST written without a folder, or one
-    /// .eml / .msg). `promised` is what the export said it wrote.
-    static func reconcile(file: URL, emailID: UUID? = nil, promised: Int? = nil,
+    /// .eml / .msg). `promised` is what the export said it wrote. `manifest`:
+    /// where the receipt kept the container's manifest (iOS hand-off), tried
+    /// before the sidecar beside the file.
+    static func reconcile(file: URL, emailID: UUID? = nil, promised: Int? = nil, manifest: URL? = nil,
                           lookup: SourceLookup, pageSize: Int = maxPageSize) async -> ContentReport {
-        let record = OutputRecord(url: file, path: file.lastPathComponent, emailID: emailID)
+        let record = OutputRecord(url: file, path: file.lastPathComponent, emailID: emailID, manifestURL: manifest)
         let stream = AsyncStream<OutputRecord> { $0.yield(record); $0.finish() }
         return await reconcile(outputs: stream, lookup: lookup, pageSize: pageSize, promised: promised)
     }
@@ -613,7 +621,8 @@ enum ExportReconciliation {
         /// non-matching items are retained.
         mutating func reconcileContainer(_ output: OutputRecord) async throws {
             report.filesReached += 1
-            let manifestURL = ContainerManifest.url(for: output.url)
+            let kept = output.manifestURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            let manifestURL = kept ?? ContainerManifest.url(for: output.url)
             if FileManager.default.fileExists(atPath: manifestURL.path),
                let scan = try? ContainerManifest.scan(url: manifestURL), scan.header?.version == ContainerManifest.version {
                 let before = report.eligible

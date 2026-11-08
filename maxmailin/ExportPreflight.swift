@@ -389,6 +389,15 @@ final class ExportJobRunner {
         return resume
     }
 
+    /// R8 / OUT-06a: the request Recover and resume continues — a bound run
+    /// of a single-file container whose writer keeps a checkpointed manifest
+    /// (mbox, not split). Nil for every other format.
+    nonisolated static func recoverableRequest(_ request: ExportRequest) -> ExportRequest? {
+        guard request.format == .mbox, !request.options.partitionMBOX, !request.isFolder,
+              request.selectionFingerprint != nil else { return nil }
+        return request
+    }
+
     func start(_ request: ExportRequest, service explicitService: ArchiveExportService? = nil) {
         // Resolved here, on the main actor, rather than as a default argument
         // (a main-actor `shared` in a default argument is a Swift 6 error).
@@ -411,6 +420,10 @@ final class ExportJobRunner {
                 // batch, the receipt still offers the same checkpoint —
                 // never zero, never something below it.
                 if request.skipFirst > 0 { center.update(done: request.skipFirst, total: 0) }
+                // R8 (rule 9): a single-file container leaves a receipt that
+                // says "interrupted" until the run ends, so a run cut short
+                // by a quit or a crash is offered Recover and resume at launch.
+                center.markInterruptible(request)
                 try await self.execute(request, service: service)
             } catch {
                 self.onError?("\(request.title) failed: \(error.localizedDescription)")
@@ -423,9 +436,14 @@ final class ExportJobRunner {
                 if !(error is ResumeError), !(error is AuthorizationError), !(error is ArchiveExportError) {
                     resume = Self.resumeRequest(for: request, positions: center.done)
                 }
+                // R8 / OUT-06a: no resume because the partial file could not be
+                // reached or trusted (drive removed, a tail past the boundary):
+                // its manifest can still recover it once the file is back.
+                let recoverable = resume == nil && !(error is ResumeError) && !(error is AuthorizationError)
+                    ? Self.recoverableRequest(request) : nil
                 center.recordFailure(destination: request.destinationURL, isFolder: request.isFolder,
                                      requested: request.emailCountHint, message: error.localizedDescription,
-                                     resume: resume)
+                                     resume: resume, recoverable: recoverable)
             }
         }
     }
@@ -638,6 +656,9 @@ final class ExportJobRunner {
             inventoryPath: result?.inventoryURL?.path,
             extraCopies: (result?.extraCopies ?? 0) > 0 ? result?.extraCopies : nil,
             selectionFrozen: request.scope.isFrozen)
+        if resume == nil, outcome == .cancelled || outcome == .failed {
+            receipt.recoverableRequest = Self.recoverableRequest(request)
+        }
         // R1 (rule 5): on iOS the file was written inside the app. The receipt is
         // recorded NOW as "awaiting delivery" — the run ends here — and the run
         // center offers the Share sheet afterwards, as a separate step that can

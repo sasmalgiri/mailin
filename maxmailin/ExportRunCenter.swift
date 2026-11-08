@@ -185,13 +185,15 @@ final class ExportRunCenter {
         guard !isActive, lastReceipt == nil else { return }
         let store = receiptStore
         let newest: (URL, ExportReceipt)? = await Task.detached(priority: .utility) {
-            guard let url = store.list().first, let stored = try? store.load(url),
-                  let receipt = Self.relaunchReceipt(stored, fileExists: FileManager.default.fileExists(atPath: stored.destination))
+            guard let url = store.list().first, let stored = try? store.load(url) else { return nil }
+            // R8 (rule 9): an interrupted export whose partial file is there again is offered Recover and resume.
+            if Self.offersRecoveryAtLaunch(stored) { return (url, stored) }
+            guard let receipt = Self.relaunchReceipt(stored, fileExists: FileManager.default.fileExists(atPath: stored.destination))
             else { return nil }
             return (url, receipt)
         }.value
         guard let (url, found) = newest, !isActive, lastReceipt == nil else { return }
-        if found.delivery == .awaitingDelivery {
+        if found.delivery == .awaitingDelivery || found.offersRecovery {
             lastReceipt = found
             lastReceiptURL = url
             showReceipt = true
@@ -214,7 +216,7 @@ final class ExportRunCenter {
 
     /// A failure the body did not turn into a receipt itself (thrown error).
     func recordFailure(destination: URL?, isFolder: Bool, requested: Int?, message: String,
-                       resume: ExportRequest? = nil) {
+                       resume: ExportRequest? = nil, recoverable: ExportRequest? = nil) {
         pendingReceipt = ExportReceipt(
             title: title,
             destination: destination?.path ?? "—",
@@ -225,7 +227,181 @@ final class ExportRunCenter {
             errorMessage: message,
             startedAt: startedAt,
             completedAt: Date(),
-            resumeRequest: resume)
+            resumeRequest: resume,
+            recoverableRequest: resume == nil ? recoverable : nil)
+    }
+
+    // MARK: - R8 / OUT-06a: Recover and resume
+
+    /// The "interrupted" receipt saved while a recoverable run is under way;
+    /// removed when the run records its real receipt.
+    private var provisionalReceiptURL: URL?
+    /// The receipt Recover and resume is working on right now, if any.
+    private(set) var recoveringReceiptID: UUID?
+
+    /// Rule 9: a recoverable run (single-file mbox) saves a receipt that says
+    /// "interrupted" when it starts. The run's own receipt replaces it; if
+    /// mailin quits or crashes first, the next launch finds it and offers
+    /// Recover and resume.
+    func markInterruptible(_ request: ExportRequest) {
+        guard isActive, let recoverable = ExportJobRunner.recoverableRequest(request) else { return }
+        let receipt = ExportReceipt(
+            title: title, destination: request.destination, isFolder: false,
+            requested: request.emailCountHint, written: request.skipFirst, outcome: .failed,
+            errorMessage: String(localized: "mailin stopped before this export finished (it quit, crashed or the device restarted)."),
+            startedAt: startedAt, completedAt: Date(),
+            recoverableRequest: recoverable, interrupted: true)
+        if let previous = provisionalReceiptURL { try? FileManager.default.removeItem(at: previous) }
+        provisionalReceiptURL = try? receiptStore.save(receipt)
+    }
+
+    /// What Recover and resume found for a receipt.
+    enum RecoveryStep: Equatable, Sendable {
+        /// The file was cut back to a verified boundary; `request` continues it there.
+        case resume(ExportReceipt, ExportRequest)
+        /// No boundary could be verified: nothing was cut; Export again is offered.
+        case exportAgain(ExportReceipt)
+        /// The partial file is not reachable (the drive is still gone): nothing was touched.
+        case unreachable(ExportReceipt)
+        /// The file's manifest has an end mark: the export finished; Verify export checks it.
+        case finished(ExportReceipt)
+    }
+
+    /// R8: recover the receipt's partial file to its last verified boundary
+    /// (`ContainerManifest.recover`) and say what was found. The receipt's
+    /// "written" becomes the records the boundary vouches for — "X of Y" is
+    /// what the file really holds, never what the run last reported.
+    /// Nil when the receipt has nothing to recover. Runs file I/O: call off the main actor.
+    nonisolated static func recoveryStep(for receipt: ExportReceipt) -> RecoveryStep? {
+        guard let request = receipt.recoverableRequest else { return nil }
+        var updated = receipt
+        let output = request.destinationURL
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: output.path) else {
+            updated.recoveryLine = String(localized: "The partial file is not reachable. Reconnect the drive that holds it, then choose Recover and resume again.")
+            return .unreachable(updated)
+        }
+        do {
+            let recovery = try ContainerManifest.recover(output: output)
+            guard recovery.positions > 0 else { throw ContainerManifest.RecoveryError.noVerifiedBoundary("the boundary vouches for no record") }
+            updated.written = recovery.records
+            updated.bytesWritten = Int(recovery.offset)
+            updated.recoveryFailed = nil
+            updated.recoveryDetail = recovery.summary
+            updated.recoveryLine = recoveryText(recovery, requested: receipt.requested)
+            let resume = request.resumed(from: recovery)
+            updated.resumeRequest = resume
+            return .resume(updated, resume)
+        } catch ContainerManifest.RecoveryError.alreadyFinished {
+            let end = (try? ContainerManifest.scan(url: ContainerManifest.url(for: output)))?.end
+            if let records = end?.records { updated.written = records }
+            if let hash = end?.sha256 { updated.sha256Hex = hash }
+            updated.recoveryDetail = ContainerManifest.RecoveryError.alreadyFinished.localizedDescription
+            updated.recoveryLine = String(localized: "The export's file is complete (its manifest has an end mark): nothing to recover. Verify export checks it.")
+            updated.recoverableRequest = nil
+            return .finished(updated)
+        } catch {
+            updated.recoveryFailed = true
+            updated.recoveryDetail = error.localizedDescription
+            updated.recoveryLine = String(localized: "No verified boundary could be found in the partial file; nothing was cut. Export again writes a new file.")
+            return .exportAgain(updated)
+        }
+    }
+
+    /// The recovery in the person's language: what the boundary vouches for,
+    /// what lay past it, and checkpoints that did not verify.
+    nonisolated static func recoveryText(_ r: ContainerManifest.Recovery, requested: Int?) -> String {
+        var line = requested.map { String(localized: "Recovered: \(r.records) of \($0) records verified at byte \(Int(r.offset))") }
+            ?? String(localized: "Recovered: \(r.records) records verified at byte \(Int(r.offset))")
+        if r.tailBytes > 0 {
+            line += " · " + String(localized: "past it: \(r.tailCompleteRecords) complete and \(r.tailLastRecordCut ? 1 : 0) cut record(s) the receipt never counted — removed; the resume writes them again")
+        }
+        if r.checkpointsRejected > 0 {
+            line += " · " + String(localized: "\(r.checkpointsRejected) later checkpoint(s) did not verify and were not used")
+        }
+        return line
+    }
+
+    /// The receipt card's Recover and resume: recover, show what was found,
+    /// resume at the boundary, then the normal one-to-one verification of
+    /// the finished file. `run` and `lookup` are the tests' seams; the app
+    /// resumes through `ExportJobRunner` and verifies against the archive.
+    func recoverAndResume(_ receipt: ExportReceipt,
+                          run: (@MainActor (ExportRequest) -> Void)? = nil,
+                          lookup: ExportReconciliation.SourceLookup? = nil) async {
+        guard !isActive, recoveringReceiptID == nil, receipt.offersRecovery else { return }
+        recoveringReceiptID = receipt.id
+        let step = await Task.detached(priority: .userInitiated) { Self.recoveryStep(for: receipt) }.value
+        recoveringReceiptID = nil
+        guard let step else { return }
+        switch step {
+        case .resume(let recovered, let request):
+            replace(recovered)
+            let runner = run ?? { ExportJobRunner.shared.start($0) }
+            runner(request)
+            await waitUntilIdle()
+            if let finished = lastReceipt, finished.id != recovered.id, finished.outcome == .complete,
+               finished.destination == recovered.destination {
+                await verifyExport(finished, lookup: lookup)
+            }
+        case .exportAgain(let updated), .unreachable(let updated), .finished(let updated):
+            replace(updated)
+        }
+    }
+
+    /// No boundary could be verified: start the same selection again from
+    /// its first message, through the pre-flight sheet (a fresh run is bound anew).
+    func exportAgain(_ receipt: ExportReceipt) {
+        guard var request = receipt.recoverableRequest, !isActive else { return }
+        request.id = UUID()
+        request.skipFirst = 0
+        request.selectionFingerprint = nil
+        request.resumeArtifactBytes = nil
+        request.resumeArtifactSHA256 = nil
+        showReceipt = false
+        pendingPreflight = request
+    }
+
+    /// Rule 9: at launch, a receipt that can be recovered is offered again
+    /// when its partial file and its manifest are there.
+    nonisolated static func offersRecoveryAtLaunch(_ receipt: ExportReceipt) -> Bool {
+        guard receipt.offersRecovery, let request = receipt.recoverableRequest else { return false }
+        let fm = FileManager.default
+        return fm.fileExists(atPath: request.destination)
+            && fm.fileExists(atPath: ContainerManifest.url(for: request.destinationURL).path)
+    }
+
+    // MARK: - R3 (iOS): the manifest of a file handed on alone
+
+    /// A single mbox / PST written inside the app (the temporary folder, iOS)
+    /// is handed on by the Share sheet as one file. Its manifest is copied
+    /// into the receipts folder as `export-<id>.mailin-manifest`, and the
+    /// receipt points at it, so Verify export still checks one-to-one.
+    nonisolated static func keepingManifest(_ receipt: ExportReceipt, in store: ExportReceiptStore,
+                                            temporaryDirectory: URL = FileManager.default.temporaryDirectory) -> ExportReceipt {
+        guard receipt.manifestPath == nil, !receipt.isFolder, receipt.destination != "—",
+              ["mbox", "pst"].contains(receipt.destinationURL.pathExtension.lowercased()),
+              ExportPreflightSheet.handOffNote(for: receipt.destinationURL, temporaryDirectory: temporaryDirectory) != nil
+        else { return receipt }
+        let sidecar = ContainerManifest.url(for: receipt.destinationURL)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: sidecar.path) else { return receipt }
+        let kept = store.directory.appendingPathComponent("export-\(receipt.id.uuidString).mailin-manifest")
+        do {
+            try fm.createDirectory(at: store.directory, withIntermediateDirectories: true)
+            if fm.fileExists(atPath: kept.path) { try fm.removeItem(at: kept) }
+            try fm.copyItem(at: sidecar, to: kept)
+        } catch { return receipt }
+        var updated = receipt
+        updated.manifestPath = kept.path
+        return updated
+    }
+
+    /// iOS PST: the items the Share sheet hands on — the file, and its
+    /// manifest beside it when there is one, so a saved copy verifies too.
+    nonisolated static func shareItems(for output: URL) -> [URL] {
+        let sidecar = ContainerManifest.url(for: output)
+        return FileManager.default.fileExists(atPath: sidecar.path) ? [output, sidecar] : [output]
     }
 
     /// The older exports (`runStreamingExport`) say how they ended in a status line rather than a
@@ -284,7 +460,8 @@ final class ExportRunCenter {
     /// parsed back and compared with the archive's record, streamed a page at
     /// a time). The content line is always written: when nothing could be
     /// checked it says why. The full report is saved beside the receipt.
-    func verifyExport(_ receipt: ExportReceipt) async {
+    func verifyExport(_ receipt: ExportReceipt, lookup explicitLookup: ExportReconciliation.SourceLookup? = nil) async {
+        let lookup = explicitLookup ?? Self.sourceLookup()
         var updated = receipt
         let destination = receipt.destinationURL
         if receipt.isFolder {
@@ -301,8 +478,9 @@ final class ExportRunCenter {
             updated.verificationLine = await Self.fileRehashText(file: destination, recorded: receipt.sha256Hex)
         }
         let report = receipt.isFolder
-            ? await ExportReconciliation.reconcile(folder: destination, lookup: Self.sourceLookup())
-            : await ExportReconciliation.reconcile(file: destination, promised: receipt.written, lookup: Self.sourceLookup())
+            ? await ExportReconciliation.reconcile(folder: destination, lookup: lookup)
+            : await ExportReconciliation.reconcile(file: destination, promised: receipt.written,
+                                                   manifest: receipt.manifestPath.map { URL(fileURLWithPath: $0) }, lookup: lookup)
         updated.contentLine = Self.reconciliationText(report)
         updated.contentReportPath = (try? receiptStore.saveContentReport(report, for: receipt))?.path
         replace(updated)
@@ -372,6 +550,11 @@ final class ExportRunCenter {
         if r.unverifiable > 0 { line += " · " + String(localized: "not verifiable \(r.unverifiable)") }
         if r.withoutRecord > 0 { line += " · " + String(localized: "no record \(r.withoutRecord)") }
         if r.unparsed > 0 { line += " · " + String(localized: "unparsable \(r.unparsed)") }
+        // R3: the one-to-one selection check's shortfalls as counts, not only as the engine's English reason.
+        if let s = r.selection {
+            if s.missing > 0 { line += " · " + String(localized: "missing \(s.missing)") }
+            if s.extra > 0 { line += " · " + String(localized: "extra \(s.extra)") }
+        }
         if r.hydrated > 0 { line += " · " + String(localized: "\(r.hydrated) located record(s) read from their source bytes") }
         if !r.transformations.isEmpty {
             let named = r.transformations.sorted { $0.key < $1.key }
@@ -438,15 +621,22 @@ final class ExportRunCenter {
     private func finish() {
         // A run that recorded nothing still gets a receipt: silence is not an
         // outcome. It is marked failed with an explicit reason.
-        let receipt = pendingReceipt ?? ExportReceipt(
+        let recorded = pendingReceipt ?? ExportReceipt(
             title: title, destination: "—", isFolder: false, requested: total > 0 ? total : nil,
             written: done, outcome: .failed,
             errorMessage: "The export ended without reporting a result.",
             startedAt: startedAt, completedAt: Date())
+        // R3 (iOS): a container written inside the app keeps its manifest with the receipt.
+        let receipt = Self.keepingManifest(recorded, in: receiptStore)
         // R1: the receipt is on disk (awaiting delivery, where the file is still
         // to be handed on) and the run is over BEFORE any Share sheet is shown.
         lastReceipt = receipt
         lastReceiptURL = try? receiptStore.save(receipt)
+        // R8: the run ended and said how — the "interrupted" placeholder goes.
+        if let provisional = provisionalReceiptURL, provisional != lastReceiptURL {
+            try? FileManager.default.removeItem(at: provisional)
+        }
+        provisionalReceiptURL = nil
         showReceipt = true
         isActive = false
         task = nil
@@ -604,6 +794,15 @@ struct ExportProgressOverlayView: View {
                     .help(receipt.contentReportPath ?? content)
                     .accessibilityIdentifier("export.receipt.content")
             }
+            // R8: what Recover and resume found.
+            if let recovery = receipt.recoveryLine {
+                Text(recovery)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(receipt.recoveryDetail ?? recovery)
+                    .accessibilityIdentifier("export.receipt.recovery")
+            }
 
             Text(receipt.destinationURL.lastPathComponent)
                 .font(.system(size: 11, design: .monospaced))
@@ -640,6 +839,29 @@ struct ExportProgressOverlayView: View {
                     .font(.system(size: 11))
                     .help("Continue this export from message \((receipt.resumeRequest?.skipFirst ?? 0) + 1); what was written stays")
                     .accessibilityIdentifier("export.receipt.resume")
+                }
+                // R8 / OUT-06a: the partial file could not be cut back when the run
+                // stopped (drive removed, mailin quit) — recover it once it is back.
+                if receipt.offersRecovery {
+                    Button {
+                        Task { await center.recoverAndResume(receipt) }
+                    } label: {
+                        Label(String(localized: "Recover and resume"), systemImage: "arrow.uturn.forward")
+                    }
+                    .font(.system(size: 11))
+                    .disabled(center.recoveringReceiptID != nil)
+                    .help(String(localized: "Find the last verified boundary in the partial file, cut away what no checkpoint vouches for, and continue from there"))
+                    .accessibilityIdentifier("export.receipt.recover")
+                }
+                if receipt.offersExportAgain {
+                    Button {
+                        center.exportAgain(receipt)
+                    } label: {
+                        Label(String(localized: "Export again"), systemImage: "arrow.counterclockwise")
+                    }
+                    .font(.system(size: 11))
+                    .help(String(localized: "Start this export again from the first message; the partial file is replaced"))
+                    .accessibilityIdentifier("export.receipt.exportAgain")
                 }
                 // R06: the files are there, the record is not — finish it here, from the kept manifest.
                 if receipt.outcome == .unverified {

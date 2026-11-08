@@ -488,3 +488,16 @@ extension ExportWriteOptions {
                            expectedAppendOffset: recovery.offset, expectedAppendSHA256: recovery.sha256)
     }
 }
+
+extension ExportRequest {
+    /// The app's resume of a recovered partial export: the same request (its
+    /// selection fingerprint included), positioned at the verified boundary,
+    /// so its `writeOptions` are `ExportWriteOptions.resuming(from:)`.
+    func resumed(from recovery: ContainerManifest.Recovery) -> ExportRequest {
+        var resume = self
+        resume.skipFirst = recovery.positions
+        resume.resumeArtifactBytes = recovery.offset
+        resume.resumeArtifactSHA256 = recovery.sha256
+        return resume
+    }
+}
