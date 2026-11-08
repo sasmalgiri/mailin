@@ -71,22 +71,77 @@ final class OneNoteReaderTests: XCTestCase {
         XCTAssertTrue(result.text.contains("中文标题"), result.text)
     }
 
-    /// Office 365 exports use the FSSHTTPB packaging: both pages' content is
-    /// read (in storage order — the output says the page tree of that layout
-    /// is not rebuilt).
-    func testREAL_tikaOffice365_packagedLayout() throws {
+    /// Office 365 exports use the FSSHTTPB packaging. The page tree is
+    /// followed (storage manifest → data root cell → newest revision →
+    /// section's page series → each page's own cell), so the text is grouped
+    /// exactly like the revision-store path: "[Page 1]" is the section's own
+    /// object space (the cached page titles, in page order), then one
+    /// "[Page N]" per page holding that page's title and content and nothing
+    /// of another page's, then "[Earlier revisions and other objects]".
+    func testREAL_tikaOffice365_pagesGroupedWithTheirTitles() throws {
         for name in ["testOneNoteFromOffice365.one", "testOneNoteFromOffice365-2.one"] {
             let result = try extract(name)
-            XCTAssertTrue(result.text.contains("Section1Page1Content"), "\(name)\n\(result.text)")
-            XCTAssertTrue(result.text.contains("Section1Page2Content"), "\(name)\n\(result.text)")
-            XCTAssertTrue(result.text.contains("Packaged layout (FSSHTTPB)"), "\(name)\n\(result.text)")
+            let stem = (name as NSString).deletingPathExtension
+            XCTAssertTrue(result.text.hasPrefix("[OneNote section: \(stem)]\n[Page 1]\n"), "\(name)\n\(result.text)")
+            XCTAssertFalse(result.text.contains("Packaged layout (FSSHTTPB)"), "\(name): the pages were separated\n\(result.text)")
+            let b = blocks(result.text)
+            XCTAssertGreaterThanOrEqual(b.count, 4, "\(name)\n\(result.text)")
+            guard b.count >= 4 else { continue }
+            XCTAssertEqual(b.prefix(3).map(\.heading), ["Page 1", "Page 2", "Page 3"], name)
+            XCTAssertEqual(b[0].lines, ["Section1Page1", "Section1Page2"], "\(name): the section lists its page titles in order")
+            XCTAssertEqual(b[1].lines.prefix(2), ["Section1Page1Content", "Section1Page1"], "\(name): page 1's content, then its title")
+            XCTAssertFalse(b[1].lines.contains("Section1Page2Content"), name)
+            XCTAssertFalse(b[1].lines.contains("Section1Page2"), name)
+            XCTAssertEqual(b[2].lines.prefix(2), ["Section1Page2Content", "Section1Page2"], "\(name): page 2's content, then its title")
+            XCTAssertFalse(b[2].lines.contains("Section1Page1Content"), name)
+            XCTAssertFalse(b[2].lines.contains("Section1Page1"), name)
+            XCTAssertEqual(b.last?.heading, "Earlier revisions and other objects", name)
             XCTAssertEqual(result.components, ["OneNote text"], "\(name): structure followed, nothing scanned — \(result.skipped)")
+            XCTAssertTrue(result.skipped.isEmpty, "\(name): \(result.skipped)")
             assertNoJunk(result.text)
         }
+        // The second export also carries "Nick's Page": its title and note sit together on one page.
+        let second = blocks(try extract("testOneNoteFromOffice365-2.one").text)
+        func isNicksTitle(_ line: String) -> Bool { line.hasPrefix("Nick") && line.hasSuffix("s Page") }
+        let nick = second.first { $0.heading.hasPrefix("Page ") && $0.lines.contains(where: isNicksTitle) }
+        XCTAssertEqual(nick?.lines.count, 2, "\(second)")
+        XCTAssertEqual(nick?.lines.first, "There are some really fricking cool notes here. Dude.", "\(second)")
+
         let tables = try extract("testOneNoteTablesLists.one")
+        let t = blocks(tables.text)
+        XCTAssertGreaterThanOrEqual(t.count, 3, tables.text)
+        guard t.count >= 3 else { return }
+        XCTAssertEqual(t[0].heading, "Page 1")
+        XCTAssertEqual(t[0].lines, ["Page 1", "Page sdskgjhsdlf"], "the section lists its two page titles")
+        XCTAssertEqual(t[1].heading, "Page 2")
+        XCTAssertTrue(t[1].lines.contains("Page 1") && t[1].lines.contains("Bold Text"), "\(t[1])")
+        XCTAssertEqual(t[2].heading, "Page 3")
+        XCTAssertTrue(t[2].lines.contains("Page sdskgjhsdlf"), "\(t[2])")
         for expected in ["Table cell 1a", "Table cell 4b", "Bullet 2", "Indented bullet", "Number 2", "Letter a", "Numeral I", "Outdented number"] {
-            XCTAssertTrue(tables.text.contains(expected), "missing \(expected) in\n\(tables.text)")
+            XCTAssertTrue(t[2].lines.contains(expected), "missing \(expected) on the second page\n\(tables.text)")
+            XCTAssertFalse(t[1].lines.contains(expected), "\(expected) leaked onto the first page")
         }
+        XCTAssertTrue(tables.skipped.isEmpty, "\(tables.skipped)")
+    }
+
+    /// When the page tree cannot be followed (here the storage manifest's data
+    /// root GUID is damaged) the text still comes, in storage order, under a
+    /// label that says the pages were not separated.
+    func testREAL_tikaOffice365_damagedPageTree_fallsBackToStorageOrder() throws {
+        var bytes = [UInt8](try Data(contentsOf: Self.tika("testOneNoteFromOffice365.one")))
+        let dataRoot: [UInt8] = [0xB9, 0xFA, 0xDE, 0x84, 0xA3, 0xAA, 0x0D, 0x4A, 0xA3, 0xA8, 0x52, 0x0C, 0x77, 0xAC, 0x70, 0x73]
+        var hits = 0
+        var i = 0
+        while i + dataRoot.count <= bytes.count {
+            if Array(bytes[i..<(i + dataRoot.count)]) == dataRoot { bytes[i + 15] ^= 0xFF; hits += 1; i += dataRoot.count } else { i += 1 }
+        }
+        XCTAssertGreaterThan(hits, 0, "the storage manifest names the data root cell")
+        let result = try OneNoteTextExtractor.extract(data: Data(bytes), name: "damaged.one")
+        XCTAssertTrue(result.text.contains("[Packaged layout (FSSHTTPB) — text in storage order, pages not separated]"), result.text)
+        XCTAssertFalse(result.text.contains("[Page 1]"), result.text)
+        XCTAssertTrue(result.text.contains("Section1Page1Content"), result.text)
+        XCTAssertTrue(result.text.contains("Section1Page2Content"), result.text)
+        XCTAssertEqual(result.components, ["OneNote text"])
     }
 
     /// Tika's testOneNote2007OrEarlier: a 2007-era file carries the packaging
@@ -212,6 +267,19 @@ final class OneNoteReaderTests: XCTestCase {
             }
             XCTAssertEqual(outcomes.results + outcomes.errors, 200, url.lastPathComponent)
         }
+    }
+
+    /// The "[heading]" blocks of a section's text, in order.
+    private func blocks(_ text: String) -> [(heading: String, lines: [String])] {
+        var out: [(heading: String, lines: [String])] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init) {
+            if line.hasPrefix("[") && line.hasSuffix("]") && !line.hasPrefix("[OneNote section:") {
+                out.append((String(line.dropFirst().dropLast()), []))
+            } else if !out.isEmpty {
+                out[out.count - 1].lines.append(line)
+            }
+        }
+        return out
     }
 
     private func assertNoJunk(_ text: String, file: StaticString = #filePath, line: UInt = #line) {
