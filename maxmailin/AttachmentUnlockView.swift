@@ -56,6 +56,8 @@ struct AttachmentUnlockView: View {
             }
         }
         .task(id: "\(emailID.uuidString)#\(position)") { await refresh() }
+        // R5: a Resume that met files needing the password again shows this row (Unlock…) at once.
+        .onReceive(NotificationCenter.default.publisher(for: .attachmentIndexUpdated)) { _ in Task { @MainActor in await refresh() } }
     }
 
     @MainActor

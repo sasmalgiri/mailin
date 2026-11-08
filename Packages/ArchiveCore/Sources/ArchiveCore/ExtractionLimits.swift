@@ -25,19 +25,26 @@ struct ExtractionLimits: Sendable, Equatable {
     var totalArchiveBytes: Int64
     /// Archive inside archive inside archive: this many levels are opened.
     var archiveDepth: Int
+    /// R5 (audit bf1a5b9): message inside message (an attached .eml, .msg,
+    /// winmail.dat, S/MIME envelope): this many levels are opened. Its own
+    /// ceiling, escalated by Resume like the others — before R5 it was a fixed
+    /// constant that `archiveDepth` did not reach.
+    var messageDepth: Int = 3
 
     /// Round 0 — what every ordinary indexing pass uses.
-    static let base = ExtractionLimits(partBytes: 64 * 1_048_576, totalArchiveBytes: 1_073_741_824, archiveDepth: 3)
+    static let base = ExtractionLimits(partBytes: 64 * 1_048_576, totalArchiveBytes: 1_073_741_824, archiveDepth: 3, messageDepth: 3)
 
     /// Tests lower the base to make a stop happen on small fixtures.
     nonisolated(unsafe) static var baseOverride: ExtractionLimits?
 
-    /// The limits of resume round `round` (0 = base): doubled per round, one more level per round.
+    /// The limits of resume round `round` (0 = base): doubled per round, one
+    /// more archive level and one more message level per round.
     static func round(_ round: Int) -> ExtractionLimits {
         let start = baseOverride ?? base
         let factor = Int64(1) << Int64(max(0, min(round, 20)))
         return ExtractionLimits(partBytes: start.partBytes * factor, totalArchiveBytes: start.totalArchiveBytes * factor,
-                                archiveDepth: start.archiveDepth + max(0, round))
+                                archiveDepth: start.archiveDepth + max(0, round),
+                                messageDepth: start.messageDepth + max(0, round))
     }
 
     @TaskLocal static var current: ExtractionLimits?
@@ -45,9 +52,9 @@ struct ExtractionLimits: Sendable, Equatable {
     /// What the running extraction works under.
     static var effective: ExtractionLimits { current ?? baseOverride ?? base }
 
-    /// "64 MiB per part, 1 GiB per attachment's archives, 3 levels".
+    /// "64 MiB per part, 1 GiB per attachment's archives, 3 levels, 3 message levels".
     var summary: String {
-        "\(Self.bytes(partBytes)) per part, \(Self.bytes(totalArchiveBytes)) per attachment's archives, \(archiveDepth) levels"
+        "\(Self.bytes(partBytes)) per part, \(Self.bytes(totalArchiveBytes)) per attachment's archives, \(archiveDepth) levels, \(messageDepth) message levels"
     }
 
     static func bytes(_ n: Int64) -> String {

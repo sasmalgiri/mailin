@@ -1128,6 +1128,9 @@ struct ChildDocument: Sendable, Equatable {
     var note: String?
     /// Sections read inside the child ("Sheet: Q3", "Slide 2"), for evidence.
     var components: [String] = []
+    /// R5: read whole in an earlier Resume round and not extracted again —
+    /// the store keeps its recorded row and text (`ExtractionContinuation`).
+    var carried: Bool = false
 }
 
 /// Audit 2026-11-06 A04. Every child of an archive attachment is accounted
@@ -1328,6 +1331,14 @@ enum ContainerTextExtractor {
             let name = prefix + member.name
             let ext = (member.name as NSString).pathExtension.lowercased()
             listing.append(name)
+            // R5: read whole in an earlier round — listed, not extracted again, no budget spent.
+            if ExtractionContinuation.completedPaths.contains(name) {
+                var kept = ChildDocument(path: name, filename: (member.name as NSString).lastPathComponent, kind: ext,
+                                         sha256: "", bytes: Int(member.size ?? 0), text: nil, state: .extracted, note: nil)
+                kept.carried = true
+                documents.append(kept)
+                continue
+            }
             if let note = member.note {
                 // Known without reading a byte: named, never silent.
                 skipped.append("\(name) (\(note))"); record(name, member, .unsupported, note: note, bytes: Int(member.size ?? 0)); continue

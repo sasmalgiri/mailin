@@ -908,7 +908,9 @@ final class AttachmentTextIndexJob {
     /// charsets) and its own attachments are read as children, labelled
     /// "EML: name", through the same reader. Nested messages stop at
     /// `maxMessageDepth`, stated.
-    nonisolated static let maxMessageDepth = 3
+    /// R5 (audit bf1a5b9): the ceiling is `ExtractionLimits.messageDepth` of the
+    /// run — 3 in an ordinary pass, one more per Resume round — not a fixed constant.
+    nonisolated static var maxMessageDepth: Int { ExtractionLimits.effective.messageDepth }
 
     nonisolated private static func readEmbeddedMessage(_ data: Data, ocr: Bool, depth: Int, extractor: String = "eml")
         -> Reading {
@@ -958,9 +960,15 @@ final class AttachmentTextIndexJob {
     /// it like any other attachment (the message's attachments are re-read
     /// and re-recorded together, so the archive stays consistent). The
     /// password is used for this call and not kept.
+    /// R5: a kept Unlock reads under the attachment's current Resume round and
+    /// CONTINUES it — files inside that an earlier round read whole are carried
+    /// over, so unlocking the rest after a Resume never re-reads or replaces them.
     func unlock(emailID: UUID, position: Int, password: String, retain: Bool) async -> UnlockOutcome {
         guard let page = try? await store.rawCandidates(ids: [emailID]), let candidate = page.candidates.first else {
             return .unreadable(String(localized: "message source not stored"))
+        }
+        if retain {
+            return await unlockKept(emailID: emailID, position: position, raw: candidate.raw, password: password)
         }
         let ocr = AttachmentOCR.isEnabled
         let raw = candidate.raw
@@ -979,23 +987,58 @@ final class AttachmentTextIndexJob {
         case .failed, .unsupported: return .unreadable(target.note ?? target.state.rawValue)
         case .extracted, .partial, .noText, .truncated: break
         }
-        if retain {
-            // Only THIS attachment's record changes: an earlier unlock of a
-            // sibling is not undone by re-reading the message without its password.
-            do {
-                if SearchChunkPolicy.isEnabled {
-                    try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: [target.searchDocument])
-                    try await recordChildren(emailID: emailID, extraction: target)
-                }
-                let coverage = try AttachmentCoverageStore(url: await store.attachmentCoverageURL)
-                try coverage.record(row: target.coverageRow(emailID: emailID))
-            } catch {
-                Self.logger.error("unlock not recorded for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                return .unreadable(String(localized: "the text was read but could not be stored: \(error.localizedDescription)"))
-            }
-            NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
+        return .unlocked(text: SectionBoundary.hidden(target.fullText ?? ""), children: target.children, stored: false)   // FIND-08: shown, so no boundaries
+    }
+
+    /// The kept Unlock: only THIS attachment's record changes (an earlier unlock
+    /// of a sibling is not undone by re-reading the message without its
+    /// password), under the attachment's current round, continuing it.
+    private func unlockKept(emailID: UUID, position: Int, raw: String, password: String) async -> UnlockOutcome {
+        let coverage: AttachmentCoverageStore
+        let previous: AttachmentCoverageRow?
+        do {
+            coverage = try await openCoverage()
+            previous = try coverage.rows(for: emailID).first { $0.ordinal == position }
+        } catch {
+            return .unreadable(String(localized: "the text was read but could not be stored: \(error.localizedDescription)"))
         }
-        return .unlocked(text: SectionBoundary.hidden(target.fullText ?? ""), children: target.children, stored: retain)   // FIND-08: shown, so no boundaries
+        let round = previous?.resumeRound ?? 0
+        let read: ContinuedRead
+        do {
+            read = try await readContinuing(emailID: emailID, position: position, raw: raw, limits: ExtractionLimits.round(round), password: password)
+        } catch {
+            return .unreadable(String(localized: "message could not be parsed"))
+        }
+        let target = read.extraction
+        if target.extractor == "openpgp", target.state == .locked {
+            return .unreadable(String(localized: "OpenPGP-encrypted: mailin keeps public keys only and never decrypts, so a password cannot open it"))
+        }
+        switch target.state {
+        case .locked: return .wrongPassword(target.note ?? String(localized: "the password did not open the file"))
+        case .failed, .unsupported: return .unreadable(target.note ?? target.state.rawValue)
+        case .extracted, .partial, .noText, .truncated: break
+        }
+        // Files read this time that the password did not open, and none that it did: a wrong password
+        // (the files carried from an earlier round do not make it right).
+        let fresh = read.children.filter { !$0.carried }
+        if !fresh.isEmpty, fresh.allSatisfy({ $0.state == .locked }), fresh.contains(where: { $0.note == "the password did not open it" }) {
+            return .wrongPassword(String(localized: "the password did not open the file"))
+        }
+        do {
+            if SearchChunkPolicy.isEnabled {
+                try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: [target.searchDocument])
+                try await recordChildrenContinuing(emailID: emailID, position: position, children: read.children, carriedFrom: read.carriedFrom)
+            }
+            var row = target.coverageRow(emailID: emailID)
+            row.resumeRound = round
+            row.unlockedWithPassword = true
+            try coverage.record(row: row)
+        } catch {
+            Self.logger.error("unlock not recorded for \(emailID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return .unreadable(String(localized: "the text was read but could not be stored: \(error.localizedDescription)"))
+        }
+        NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
+        return .unlocked(text: SectionBoundary.hidden(target.fullText ?? ""), children: read.children, stored: true)   // FIND-08: shown, so no boundaries
     }
 
     // MARK: - A10 / §13.3 (10): Resume an attachment that stopped at a per-run ceiling
@@ -1004,44 +1047,191 @@ final class AttachmentTextIndexJob {
         case unreadable(String)
         /// Read again under round `round`'s limits; the new state and note are recorded for this attachment alone.
         case resumed(round: Int, state: AttachmentCoverageState, note: String?, limits: String)
+        /// R5: the attachment had been opened with a kept Unlock. Everything read so far is kept;
+        /// `remaining` files inside need the password again — the lock row offers Unlock….
+        case needsPassword(round: Int, remaining: Int, limits: String)
+        /// R5: the round could not be recorded, so it is not claimed.
+        case notRecorded(String)
     }
 
+    /// Test seam (R5): how the coverage store is opened — a test makes it fail.
+    static var testCoverageStoreFactory: ((URL) throws -> AttachmentCoverageStore)?
+
+    private func openCoverage() async throws -> AttachmentCoverageStore {
+        let url = await store.attachmentCoverageURL
+        if let factory = Self.testCoverageStoreFactory { return try factory(url) }
+        return try AttachmentCoverageStore(url: url)
+    }
+
+    /// The note a file inside gets when an earlier Unlock opened its attachment
+    /// and a round run without the password could not read it.
+    nonisolated static var needsPasswordAgainNote: String { String(localized: "needs the password again — use Unlock…") }
+
     /// Reads one attachment again under the next Resume round (ceilings doubled,
-    /// one more archive level) and records that attachment's row, documents and
-    /// children — the other attachments of the message are left as they were.
-    func resume(emailID: UUID, position: Int) async -> ResumeOutcome {
+    /// one more archive level, one more message level) and records that
+    /// attachment's row, documents and children — the other attachments of the
+    /// message are left as they were.
+    ///
+    /// R5: the round CONTINUES. Files inside the attachment that an earlier
+    /// round read whole (its `attachment_children` rows) are carried over —
+    /// listed, not read again, their text kept — so only what stopped is read.
+    /// The cursor is in the archive, so it survives a restart. An attachment
+    /// opened with a kept Unlock that is resumed without `password` keeps
+    /// everything already searchable; only the files still to be read are
+    /// marked as needing the password again. A coverage store that cannot be
+    /// opened or written fails the round — never a silent "resumed".
+    func resume(emailID: UUID, position: Int, password: String? = nil) async -> ResumeOutcome {
         guard let page = try? await store.rawCandidates(ids: [emailID]), let candidate = page.candidates.first else {
             return .unreadable(String(localized: "message source not stored"))
         }
-        let coverage = try? AttachmentCoverageStore(url: await store.attachmentCoverageURL)
-        let previousRound = (try? coverage?.rows(for: emailID).first { $0.ordinal == position }?.resumeRound) ?? 0
-        let round = previousRound + 1
+        let coverage: AttachmentCoverageStore
+        let previous: AttachmentCoverageRow?
+        do {
+            coverage = try await openCoverage()
+            previous = try coverage.rows(for: emailID).first { $0.ordinal == position }
+        } catch {
+            return .notRecorded(String(localized: "could not record the round: \(error.localizedDescription)"))
+        }
+        let round = (previous?.resumeRound ?? 0) + 1
         let limits = ExtractionLimits.round(round)
-        let ocr = AttachmentOCR.isEnabled
-        let raw = candidate.raw
-        let extractions: [Extraction]? = await Task.detached(priority: .userInitiated) {
-            ExtractionLimits.$current.withValue(limits) { Self.extractCoverage(fromRaw: raw, ocr: ocr) }
-        }.value
-        guard let extractions, position < extractions.count else {
+        let read: ContinuedRead
+        do {
+            read = try await readContinuing(emailID: emailID, position: position, raw: candidate.raw, limits: limits, password: password)
+        } catch {
             return .unreadable(String(localized: "message could not be parsed"))
         }
-        var target = extractions[position]
+        var target = read.extraction
+        var children = read.children
+        let wasUnlocked = previous?.unlockedWithPassword ?? false
         let roundNote = String(localized: "read in Resume round \(round) (\(limits.summary))")
-        target = Extraction(ordinal: target.ordinal, filename: target.filename, mimeType: target.mimeType, text: target.text, fullText: target.fullText,
-                            state: target.state, extractor: target.extractor, note: target.note.map { $0 + "; " + roundNote } ?? roundNote, children: target.children)
-        do {
-            if SearchChunkPolicy.isEnabled {
-                try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: [target.searchDocument])
-                try await recordChildren(emailID: emailID, extraction: target)
+
+        if wasUnlocked, password == nil {
+            if target.state == .locked, let previous, previous.state.isSearchable {
+                // The whole attachment reads as locked without its password: nothing stored is replaced.
+                let row = AttachmentCoverageRow(emailID: emailID, ordinal: position, filename: previous.filename, mimeType: previous.mimeType,
+                                                state: previous.state, extractor: previous.extractor, extractorVersion: previous.extractorVersion,
+                                                characters: previous.characters,
+                                                note: [previous.note, Self.needsPasswordAgainNote].compactMap { $0 }.joined(separator: "; "),
+                                                resumeRound: round, unlockedWithPassword: true)
+                do { try coverage.record(row: row) } catch {
+                    return .notRecorded(String(localized: "could not record the round: \(error.localizedDescription)"))
+                }
+                NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
+                return .needsPassword(round: round, remaining: 1, limits: limits.summary)
             }
-            var row = target.coverageRow(emailID: emailID)
-            row.resumeRound = round
-            try coverage?.record(row: row)
+            var remaining = 0
+            for index in children.indices where !children[index].carried && children[index].state == .locked {
+                children[index].note = Self.needsPasswordAgainNote
+                remaining += 1
+            }
+            if remaining > 0 {
+                let note = String(localized: "\(remaining) files inside need the password again — use Unlock…")
+                target = Extraction(ordinal: target.ordinal, filename: target.filename, mimeType: target.mimeType, text: target.text,
+                                    fullText: target.fullText, state: target.state == .extracted ? .partial : target.state,
+                                    extractor: target.extractor, note: [target.note, note].compactMap { $0 }.joined(separator: "; "), children: children)
+                do {
+                    try await writeRound(emailID: emailID, position: position, target: target, children: children, carriedFrom: read.carriedFrom,
+                                         round: round, roundNote: roundNote, unlocked: true, coverage: coverage)
+                } catch {
+                    return .notRecorded(String(localized: "could not record the round: \(error.localizedDescription)"))
+                }
+                NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
+                return .needsPassword(round: round, remaining: remaining, limits: limits.summary)
+            }
+        }
+        let note: String
+        do {
+            note = try await writeRound(emailID: emailID, position: position, target: target, children: children, carriedFrom: read.carriedFrom,
+                                        round: round, roundNote: roundNote, unlocked: wasUnlocked || password != nil, coverage: coverage)
         } catch {
-            return .unreadable(String(localized: "the text was read but could not be stored: \(error.localizedDescription)"))
+            return .notRecorded(String(localized: "could not record the round: \(error.localizedDescription)"))
         }
         NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
-        return .resumed(round: round, state: target.state, note: target.note, limits: limits.summary)
+        return .resumed(round: round, state: target.state, note: note, limits: limits.summary)
+    }
+
+    /// One attachment read as a continuation: what the round read, and which
+    /// of its children were carried over from the previous record.
+    struct ContinuedRead: Sendable {
+        let extraction: Extraction
+        /// The children in their new order; carried ones hold their previous row's facts.
+        let children: [ChildDocument]
+        /// New child index → previous child index, for the carried ones.
+        let carriedFrom: [Int: Int]
+    }
+
+    private enum ContinuationError: Error { case unparsable }
+
+    /// Reads attachment `position` under `limits`, carrying over the files
+    /// inside it that its recorded children say were read whole.
+    private func readContinuing(emailID: UUID, position: Int, raw: String, limits: ExtractionLimits, password: String?) async throws -> ContinuedRead {
+        let previousChildren = SearchChunkPolicy.isEnabled
+            ? try await store.attachmentChildren(forEmailID: emailID).filter { $0.position == position } : []
+        let completed = ExtractionContinuation.carriablePaths(previousChildren)
+        let ocr = AttachmentOCR.isEnabled
+        let passwords = password.map { [position: $0] } ?? [:]
+        let extractions: [Extraction]? = await Task.detached(priority: .userInitiated) {
+            ExtractionLimits.$current.withValue(limits) {
+                ExtractionContinuation.$completedPaths.withValue(completed) {
+                    Self.extractCoverage(fromRaw: raw, ocr: ocr, passwords: passwords)
+                }
+            }
+        }.value
+        guard let extractions, position < extractions.count else { throw ContinuationError.unparsable }
+        let extraction = extractions[position]
+        let previousByPath = Dictionary(previousChildren.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        var children = extraction.children
+        var carriedFrom: [Int: Int] = [:]
+        for index in children.indices where children[index].carried {
+            guard let old = previousByPath[children[index].path] else { continue }
+            carriedFrom[index] = old.childIndex
+            var kept = ChildDocument(path: old.path, filename: old.filename, kind: old.kind, sha256: old.sha256, bytes: old.bytes,
+                                     text: nil, state: ChildDocument.State(rawValue: old.state) ?? .extracted, note: old.note)
+            kept.carried = true
+            children[index] = kept
+        }
+        return ContinuedRead(extraction: extraction, children: children, carriedFrom: carriedFrom)
+    }
+
+    /// Records one round of one attachment: its document, its children (carried
+    /// ones kept as they were) and its coverage row. Returns the note recorded.
+    @discardableResult
+    private func writeRound(emailID: UUID, position: Int, target: Extraction, children: [ChildDocument], carriedFrom: [Int: Int],
+                            round: Int, roundNote: String, unlocked: Bool, coverage: AttachmentCoverageStore) async throws -> String {
+        let note = target.note.map { $0 + "; " + roundNote } ?? roundNote
+        let recorded = Extraction(ordinal: target.ordinal, filename: target.filename, mimeType: target.mimeType, text: target.text,
+                                  fullText: target.fullText, state: target.state, extractor: target.extractor, note: note, children: children)
+        if SearchChunkPolicy.isEnabled {
+            try await store.indexAttachmentSearchDocuments(emailID: emailID, documents: [recorded.searchDocument])
+            try await recordChildrenContinuing(emailID: emailID, position: position, children: children, carriedFrom: carriedFrom)
+        }
+        var row = recorded.coverageRow(emailID: emailID)
+        row.resumeRound = round
+        row.unlockedWithPassword = unlocked
+        try coverage.record(row: row)
+        return note
+    }
+
+    /// The files inside one attachment, carried ones keeping their recorded text.
+    private func recordChildrenContinuing(emailID: UUID, position: Int, children: [ChildDocument], carriedFrom: [Int: Int]) async throws {
+        let rows = children.enumerated().map { index, child in
+            AttachmentChildRow(emailID: emailID, position: position, childIndex: index, path: child.path, filename: child.filename,
+                               kind: child.kind, sha256: child.sha256, bytes: child.bytes, state: child.state.rawValue, note: child.note)
+        }
+        var texts: [Int: String?] = [:], states: [Int: SearchDocState] = [:]
+        for (index, child) in children.enumerated() where carriedFrom[index] == nil {
+            texts[index] = child.state.isSearchable ? child.text : nil
+            switch child.state {
+            case .extracted: states[index] = .complete
+            case .noText: states[index] = .noText
+            case .partial: states[index] = .partial
+            case .unsupported: states[index] = .unsupported
+            case .locked: states[index] = .locked
+            case .failed: states[index] = .failed
+            }
+        }
+        try await store.recordAttachmentChildrenContinuing(emailID: emailID, position: position, children: rows, carriedFrom: carriedFrom,
+                                                           texts: texts, states: states, extractorVersion: Self.extractorVersion)
     }
 
     /// The recorded state of one attachment, for the detail view's lock row.

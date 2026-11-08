@@ -126,7 +126,7 @@ enum ChildHashRepair {
     /// The last extractor version whose attached-message children were double-hashed.
     static let lastAffectedExtractorVersion = 7
     /// Messages nest this deep in the index (AttachmentTextIndexJob.maxMessageDepth).
-    static let maxMessageDepth = 3
+    static var maxMessageDepth: Int { ExtractionLimits.base.messageDepth }
     static let recordKey = "attachmentIndex.childHashRepair"
     static let unverifiableMarker = "hash unverifiable"
     static let pageSize = 200
