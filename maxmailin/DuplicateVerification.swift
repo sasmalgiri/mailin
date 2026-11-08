@@ -121,17 +121,18 @@ enum DuplicateVerification {
             "plain:\(!email.plainBody.isEmpty) html:\(!email.htmlBody.isEmpty) parts:\(email.attachments.count) inline:\(email.attachments.filter(\.isInline).count)"
         }
 
-        var bytesCompared = true
-        let attachmentKeys = members.map { email -> String in
-            let cache = AttachmentHydrator.Cache()
-            let identities = email.attachments.enumerated().map { index, attachment -> String in
-                let identity = attachmentIdentity(attachment, index: index, email: email, cache: cache)
-                if !identity.bytes { bytesCompared = false }
-                return identity.key
-            }
-            return identities.sorted().joined(separator: "\n")
+        // Release audit bf1a5b9 R2: attachments are compared as OCCURRENCES —
+        // payload SHA-256, byte count, file name, Content-ID, disposition and
+        // MIME type kept together per attachment (the export checker's model,
+        // `ExportReconciliation.Occurrence`) — as a multiset of whole tuples.
+        // A set of sorted payload hashes let two inline images swap their
+        // Content-IDs, or a file be renamed, and still pass as equivalent.
+        let occurrences = members.map { ExportReconciliation.occurrences(of: $0, includeMIMEType: true) }
+        let bytesCompared = occurrences.allSatisfy { $0.missingBytes == 0 }
+        let keys = occurrences.map { set in
+            ExportReconciliation.occurrenceMultiset(bytesCompared ? set.list : set.list.map(\.withoutBytes))
         }
-        if Set(attachmentKeys).count > 1 { differences.append(.attachments) }
+        if keys.contains(where: { $0 != keys[0] }) { differences.append(.attachments) }
         // Audit A01: bytes that could not be produced for comparison leave the
         // copies unproven — a candidate the person compares, never a bulk removal.
         if bytesCompared == false, !differences.contains(.attachments) { differences.append(.attachmentBytes) }
@@ -246,10 +247,6 @@ enum DuplicateVerification {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func sha256(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
     /// CRLF and LF sources of the same message are the same message.
     private static func normalisedLineEndings(_ text: String) -> String {
         text.replacingOccurrences(of: "\r\n", with: "\n")
@@ -289,17 +286,5 @@ enum DuplicateVerification {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return sha256(key)
-    }
-
-    /// The attachment's bytes through the same hydrator the detail view uses
-    /// (temp file, inline payload, the part's byte range, or a re-extraction
-    /// from the stored raw message); when none of those can produce them,
-    /// the identity is only the name, type and size and `bytes` is false.
-    private static func attachmentIdentity(_ attachment: AttachmentMetadata, index: Int, email: MBOXParser.RawEmail,
-                                           cache: AttachmentHydrator.Cache) -> (key: String, bytes: Bool) {
-        if let data = AttachmentHydrator.data(for: attachment, index: index, email: email, cache: cache) {
-            return ("bytes:" + sha256(data), true)
-        }
-        return ("meta:\(attachment.filename)|\(attachment.mimeType)|\(attachment.size)", false)
     }
 }

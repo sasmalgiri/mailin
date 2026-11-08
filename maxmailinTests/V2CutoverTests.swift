@@ -8801,4 +8801,140 @@ final class V2CutoverTests: XCTestCase {
         let near = DuplicateManagerView.findNearDuplicates(in: [a, b], threshold: 0.85)
         XCTAssertEqual(near.map { Set($0.map(\.id)) }, [Set([a.id, b.id])], "one punctuation mark apart is similar")
     }
+
+    // MARK: - Release audit bf1a5b9 R2 — attachments compared as occurrences
+
+    /// One attachment whose bytes the hydrator can produce (inline payload).
+    private func r2Attachment(_ name: String, _ payload: Data, mime: String = "image/png",
+                              inline: Bool = true, cid: String? = nil) -> AttachmentMetadata {
+        AttachmentMetadata(filename: name, mimeType: mime, size: payload.count, isInline: inline,
+                           contentID: cid, base64: payload.base64EncodedString())
+    }
+
+    /// The audit's counterexample: the same headers and body, two inline
+    /// images; the first copy has hero→A and secondary→B, the second has the
+    /// associations reversed. Names, sizes, counts and inline counts agree and
+    /// the sorted payload hashes match — but the message renders differently.
+    func testR2_swappedContentIDAssociation_isACandidate_notContentEquivalent() {
+        let payloadA = Data("PNG payload number A".utf8), payloadB = Data("PNG payload number B".utf8)
+        XCTAssertEqual(payloadA.count, payloadB.count, "the same sizes, so only the association differs")
+        let a = copy(of: makeEmail(i: 9_400, total: 2, body: "see the images")) {
+            $0.attachments = [self.r2Attachment("hero.png", payloadA, cid: "hero@x"),
+                              self.r2Attachment("secondary.png", payloadB, cid: "secondary@x")]
+        }
+        let swapped = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment("hero.png", payloadB, cid: "hero@x"),
+                              self.r2Attachment("secondary.png", payloadA, cid: "secondary@x")]
+        }
+        let verdict = DuplicateVerification.verify([a, swapped])
+        XCTAssertEqual(verdict, .candidate(differences: [.attachments]))
+        XCTAssertFalse(verdict.isVerified)
+        let (verified, candidates) = DuplicateVerification.classify([[a, swapped]])
+        XCTAssertTrue(verified.isEmpty)
+        XCTAssertEqual(candidates.map(\.id), [a.id])
+        XCTAssertTrue(DuplicateVerification.bulkRemovable(verified + candidates).isEmpty, "never bulk-removable")
+        // Only the association matters, not the order the parts are listed in:
+        // the same occurrences in another order are still the same message.
+        let reordered = copy(of: a) { $0.rawSource = "raw other"; $0.attachments.reverse() }
+        XCTAssertEqual(DuplicateVerification.verify([a, reordered]), .contentEquivalent(attachmentBytesCompared: true))
+    }
+
+    /// Occurrences are a multiset of whole tuples: the same payload attached
+    /// twice with the same name and Content-ID still matches, and a copy that
+    /// carries it once is not the same message.
+    func testR2_repeatedIdenticalPayloads_withTheSameNamesAndContentIDs_stillMatch() {
+        let logo = Data("the same logo bytes".utf8)
+        let a = copy(of: makeEmail(i: 9_401, total: 2, body: "logo twice")) {
+            $0.attachments = [self.r2Attachment("logo.png", logo, cid: "logo@x"),
+                              self.r2Attachment("logo.png", logo, cid: "logo@x")]
+        }
+        let b = copy(of: a) { $0.rawSource = "raw other" }
+        XCTAssertEqual(DuplicateVerification.verify([a, b]), .contentEquivalent(attachmentBytesCompared: true))
+        XCTAssertEqual(DuplicateVerification.bulkRemovable(DuplicateVerification.classify([[a, b]]).verified), [b.id])
+        let once = copy(of: a) { $0.rawSource = "raw other"; $0.attachments = [self.r2Attachment("logo.png", logo, cid: "logo@x")] }
+        XCTAssertFalse(DuplicateVerification.verify([a, once]).isVerified, "two occurrences are not one")
+        // Two occurrences of one payload under different Content-IDs are not
+        // two occurrences under the same Content-ID.
+        let split = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment("logo.png", logo, cid: "logo@x"), self.r2Attachment("logo.png", logo, cid: "logo2@x")]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, split]), .candidate(differences: [.attachments]))
+    }
+
+    func testR2_renamedAttachmentWithIdenticalPayload_isACandidate() {
+        let pdf = Data("%PDF-1.4 the same bytes".utf8)
+        let a = copy(of: makeEmail(i: 9_402, total: 2, body: "contract attached")) {
+            $0.attachments = [self.r2Attachment("contract-v1.pdf", pdf, mime: "application/pdf", inline: false)]
+        }
+        let renamed = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment("contract-FINAL.pdf", pdf, mime: "application/pdf", inline: false)]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, renamed]), .candidate(differences: [.attachments]))
+        XCTAssertFalse(DuplicateVerification.verify([a, renamed]).isVerified)
+        // Documented normalisation: surrounding whitespace in a file name is not a different name.
+        let padded = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment(" contract-v1.pdf ", pdf, mime: "application/pdf", inline: false)]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, padded]), .contentEquivalent(attachmentBytesCompared: true))
+        // The disposition travels with the occurrence too: inline is not attached.
+        let inline = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment("contract-v1.pdf", pdf, mime: "application/pdf", inline: true)]
+        }
+        XCTAssertFalse(DuplicateVerification.verify([a, inline]).isVerified)
+    }
+
+    func testR2_changedMIMEType_isACandidate_onlyCaseAndTheNameParameterAreNormalised() {
+        let bytes = Data("plain bytes, two labels".utf8)
+        let a = copy(of: makeEmail(i: 9_403, total: 2, body: "data attached")) {
+            $0.attachments = [self.r2Attachment("data.bin", bytes, mime: "text/plain; charset=utf-8", inline: false)]
+        }
+        let retyped = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment("data.bin", bytes, mime: "application/octet-stream", inline: false)]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, retyped]), .candidate(differences: [.attachments]))
+        // A different charset renders the same bytes differently: still a candidate.
+        let charset = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment("data.bin", bytes, mime: "text/plain; charset=iso-8859-1", inline: false)]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, charset]), .candidate(differences: [.attachments]))
+        // RFC 2045 §5.1: type, subtype and parameter names are case-insensitive;
+        // `name=` repeats the file name, which is compared on its own.
+        let spelled = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [self.r2Attachment("data.bin", bytes, mime: "Text/Plain;  Charset=utf-8; name=\"data.bin\"", inline: false)]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, spelled]), .contentEquivalent(attachmentBytesCompared: true))
+        XCTAssertEqual(ExportReconciliation.normalisedMIMEType("IMAGE/PNG; name=\"x.png\"; Format=flowed"), "image/png; format=flowed")
+    }
+
+    func testR2_unavailableBytes_areNeverContentEquivalent_andTheReasonIsNamed() {
+        // No payload, no file, no raw message to re-extract from: the bytes cannot be produced.
+        let missing = AttachmentMetadata(filename: "hero.png", mimeType: "image/png", size: 20, isInline: true, contentID: "hero@x")
+        let a = copy(of: makeEmail(i: 9_404, total: 2, body: "images")) { $0.attachments = [missing] }
+        let b = copy(of: a) { $0.rawSource = "raw other" }
+        let verdict = DuplicateVerification.verify([a, b])
+        XCTAssertEqual(verdict, .candidate(differences: [.attachmentBytes]))
+        XCTAssertFalse(verdict.isVerified)
+        XCTAssertTrue(DuplicateVerification.differenceLine(verdict)?.contains("attachment bytes") == true)
+        // Bytes for one copy only is still unproven.
+        let withBytes = copy(of: a) {
+            $0.rawSource = "raw third"
+            $0.attachments = [self.r2Attachment("hero.png", Data("PNG payload number A".utf8), cid: "hero@x")]
+        }
+        XCTAssertFalse(DuplicateVerification.verify([withBytes, a]).isVerified)
+        // Without bytes the metadata is still compared: a different Content-ID is a named attachment difference.
+        let otherCID = copy(of: a) {
+            $0.rawSource = "raw other"
+            $0.attachments = [AttachmentMetadata(filename: "hero.png", mimeType: "image/png", size: 20, isInline: true, contentID: "other@x")]
+        }
+        XCTAssertEqual(DuplicateVerification.verify([a, otherCID]), .candidate(differences: [.attachments]))
+        XCTAssertTrue(DuplicateVerification.bulkRemovable(DuplicateVerification.classify([[a, b], [a, otherCID]]).verified).isEmpty)
+    }
 }
