@@ -1,6 +1,11 @@
 # Fixture acquisition — directive 2026-11-07 §3 (public samples)
 
 The owner's second fixture pack ("Online mail fixtures and S/MIME") had not arrived on 2026-11-07.
+**2026-11-09 (R9):** the pack was supplied as a ChatGPT library file (`libfile_d408d1057be08191aeabaa4482bc175d`)
+and has never been saved on this Mac — not under the fixture root, ~/Downloads (the 2026-11-07 zip there is the
+public OFT/archive/Word pack), ~/Documents, ~/Desktop, /tmp or Spotlight. The COMP-14 S/MIME run used a
+disposable identity and `<root>/smime/enveloped.p7m` / `signed.p7m`, removed after the run. Install location
+when it arrives: `<root>/owner-pack/` with `owner-pack/SHA256SUMS`; both rows stay `pending` until then.
 The files the directive table names are public, so they were fetched from their upstream repositories
 with the attempts below recorded in order. Nothing here was fabricated: a row says "obtained" only
 when the bytes are on disk with the SHA-256 shown.

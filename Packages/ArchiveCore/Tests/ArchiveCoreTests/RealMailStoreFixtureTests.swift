@@ -570,6 +570,6 @@ final class RealMailStoreFixtureTests: XCTestCase {
 
     func testOwnerPack_nativeOLMAppleMailMBOXAndDerivedEMLOfTheSameMessage_pending() throws {
         let pending = ExternalFixtures.required.compactMap { if case .pending(let what) = $0 { return what } else { return nil } }
-        throw XCTSkip("owner-bound (pack 1 not received on 2026-11-07): \(pending.joined(separator: "; ")). The public samples are not that set and are not presented as it.")
+        throw XCTSkip("owner-bound (pack 'Online mail fixtures and S/MIME' exists only as a ChatGPT library file; not on this Mac on 2026-11-09): \(pending.joined(separator: "; ")). The public samples are not that set and are not presented as it.")
     }
 }

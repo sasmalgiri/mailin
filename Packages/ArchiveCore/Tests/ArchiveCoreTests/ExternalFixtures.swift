@@ -81,10 +81,15 @@ struct ExternalFixtures {
         // Earlier public pack: Microsoft's OFT and its import-ready wrapper — outside Git.
         .file("public-pack/01_outlook/Set_Up_Mobile_Thru_Admin.oft"),
         .file("public-pack/04_import_ready_eml/01_Set_Up_Mobile_Thru_Admin.eml"),
-        // Owner's first pack ("Online mail fixtures and S/MIME") has not arrived (2026-11-07):
-        // the same-message set and the S/MIME material cannot be named or hashed yet.
-        .pending("native Outlook for Mac OLM + Apple Mail MBOX + derived EML of the same message (directive §3 row 6)"),
-        .pending("S/MIME fixtures (signed / enveloped messages and their test identity)"),
+        // Owner's pack "Online mail fixtures and S/MIME" (directive 2026-11-07 §3) was supplied as a
+        // ChatGPT library file (libfile_d408d1057be08191aeabaa4482bc175d) and has never been saved on
+        // this Mac — searched 2026-11-09: fixture root, ~/Downloads (incl. the public-pack zip, which is
+        // the OTHER pack), ~/Documents, ~/Desktop, /tmp, Spotlight. The COMP-14 run's disposable
+        // `<root>/smime/enveloped.p7m` + `signed.p7m` were removed with their identity after the run.
+        // These rows become `.file` entries with acceptance tests only when the files are installed
+        // under `<root>/owner-pack/` with an `owner-pack/SHA256SUMS`; until then the preflight fails.
+        .pending("native Outlook for Mac OLM + Apple Mail MBOX + derived EML of the same message (directive §3 row 6) — install under <root>/owner-pack/ with owner-pack/SHA256SUMS"),
+        .pending("S/MIME fixtures (signed / enveloped messages and their test identity) — install under <root>/owner-pack/ with owner-pack/SHA256SUMS"),
     ]
 
     // MARK: - Status of one fixture
