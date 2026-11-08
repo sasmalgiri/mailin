@@ -18,6 +18,12 @@
 //                 kept; percentages and currencies name their format; hidden
 //                 rows and columns labelled and still read; hidden and very
 //                 hidden sheets say so
+//    [Comments: N] the sheet's comments part (comments1.bin, by the sheet's
+//                 relationships): "C8: text (author Name)" per comment
+//
+//  Table parts (xl/tables/*.bin) give structured references their table and
+//  column names; an externalLink part gives an external workbook's sheet
+//  names and defined names; BrtPlaceholderName gives add-in function names.
 //
 //  Shared strings come from xl/sharedStrings.bin; sheet names, order and
 //  visibility from xl/workbook.bin and its relationships; number formats
@@ -142,9 +148,34 @@ enum XLSBReader {
                     var pos = 0
                     let relID = nullableWideString(p, &pos) ?? ""
                     var target: String? = nil
-                    if let link = workbookRels[relID]?.target { target = try externalTarget(of: link) ?? link }
-                    context.supBooks.append(.external(target: target, tabs: []))
-                case 0x0164: context.supBooks.append(.addIn)      // BrtSupAddin
+                    var tabs: [String] = []
+                    if let link = workbookRels[relID]?.target {
+                        target = try externalTarget(of: link) ?? link
+                        // The link part names the other workbook's sheets (BrtSupTabs) and the defined
+                        // names formulas reach through PtgNameX (BrtSupNameStart, in order).
+                        if let linkData = try bytes(link) {
+                            var linkNames: [String] = []
+                            for linkRecord in records(in: linkData) {
+                                var at = 0
+                                switch linkRecord.type {
+                                case 0x0167:   // BrtSupTabs: cTab, then the sheet names
+                                    guard linkRecord.payload.count >= 4 else { continue }
+                                    at = 4
+                                    tabs = []
+                                    for _ in 0..<Int(u32(linkRecord.payload, 0)) { guard let tab = wideString(linkRecord.payload, &at) else { break }; tabs.append(tab) }
+                                case 0x0241:   // BrtSupNameStart: the external defined name
+                                    linkNames.append(wideString(linkRecord.payload, &at) ?? "")
+                                default: break
+                                }
+                            }
+                            if !linkNames.isEmpty { context.supNames[context.supBooks.count] = linkNames }
+                        }
+                    }
+                    context.supBooks.append(.external(target: target, tabs: tabs))
+                case 0x029B: context.supBooks.append(.addIn)      // BrtSupAddin ([MS-XLSB] record 667)
+                case 0x0169:   // BrtPlaceholderName: an add-in function (after BrtSupAddin) or a name (after BrtSupSame)
+                    var pos = 0
+                    if let last = context.supBooks.indices.last, let name = wideString(p, &pos) { context.supNames[last, default: []].append(name) }
                 case 0x0165: context.supBooks.append(.selfBook)   // BrtSupSelf
                 case 0x0166: context.supBooks.append(.sameSheet)  // BrtSupSame
                 case 0x0167:   // BrtSupTabs: the sheet names of the external workbook just declared
@@ -170,6 +201,11 @@ enum XLSBReader {
         }
         context.sheetNames = sheets.map(\.name)
         context.definedNames = pendingNames.map(\.name)
+        // Tables (xl/tables/*.bin): PtgList names a table by its workbook-wide idList.
+        for part in parts.keys.filter({ $0.hasPrefix("xl/tables/") && $0.hasSuffix(".bin") && !$0.contains("/_rels/") }).sorted() {
+            guard let data = try bytes(part) else { continue }
+            for table in tables(in: data) { context.tables[table.id] = table }
+        }
         for pending in pendingNames {
             let text = XLSBFormulaDecoder.decode(rgce: pending.rgce, rgcb: pending.rgcb, base: nil, context: context)
             names.append((pending.name, pending.hidden, text))
@@ -206,6 +242,17 @@ enum XLSBReader {
             if let state = entry?.state { if state == 2 { label += " (very hidden)" } else if state != 0 { label += " (hidden)" } }
             components.append(label)
             text += "[\(label)]\n" + sheetText(data, shared: shared, formats: formats, date1904: date1904, context: context) + "\n"
+            // Cell comments attached to this sheet by its relationships — the same section the XLSX reader writes.
+            let sheetName = entry?.name ?? "Sheet \(OfficeTextExtractor.sheetNumber(file))"
+            for rel in try relationships(of: file).values.sorted(by: { $0.target < $1.target })
+            where !rel.external && rel.target.hasSuffix(".bin") && (rel.target as NSString).lastPathComponent.hasPrefix("comments") {
+                guard let data = try bytes(rel.target) else { continue }
+                let body = commentsText(data)
+                if !body.isEmpty {
+                    components.append("Comments: " + sheetName)
+                    text += "[Comments: \(sheetName)]\n" + body + "\n"
+                }
+            }
         }
         return OfficeTextExtractor.Result(text: text, components: components, skipped: skipped, notText: notText.sorted())
     }
@@ -335,15 +382,94 @@ enum XLSBReader {
     /// The A1 text of a cell's formula; a PtgExp cell is rendered from the shared or array formula covering it.
     static func formulaText(_ rgce: Data, _ rgcb: Data, row: Int, column: Int, rangeFormulas: [RangeFormula], context: XLSBFormulaContext) -> String {
         let base = XLSBFormulaDecoder.Base(row: row, column: column)
-        if let master = XLSBFormulaDecoder.sharedFormulaMaster(rgce: rgce) {
-            if let range = rangeFormulas.first(where: { $0.contains(row: row, column: column) })
-                ?? rangeFormulas.first(where: { $0.rowFirst == master.row && $0.columnFirst == master.column }) {
+        if let master = XLSBFormulaDecoder.sharedFormulaMaster(rgce: rgce, rgcb: rgcb) {
+            // The formula whose first cell is the master PtgExp names wins: a cell inside a shared
+            // formula's range can also be the top-left cell of an array formula (bug66682.xlsb, C9).
+            if let range = rangeFormulas.first(where: { $0.rowFirst == master.row && $0.columnFirst == master.column })
+                ?? rangeFormulas.first(where: { $0.contains(row: row, column: column) }) {
                 let text = XLSBFormulaDecoder.decode(rgce: range.rgce, rgcb: range.rgcb, base: base, context: context)
                 return range.array ? text + " (array formula)" : text
             }
             return "(shared formula of \(OfficeTextExtractor.columnName(master.column))\(master.row + 1) not found in this sheet)"
         }
         return XLSBFormulaDecoder.decode(rgce: rgce, rgcb: rgcb, base: base, context: context)
+    }
+
+    /// A comments part ([MS-XLSB] 2.1.7.8): BrtCommentAuthor (632) records list the authors;
+    /// each BrtBeginComment (635: iauthor, UncheckedRfX, guid) + BrtCommentText (637: RichStr)
+    /// + BrtEndComment (636) is one cell's comment. One line per comment, in file order:
+    /// "A1: text (author Name)" — the XLSX reader's "A1: text" with the author the binary
+    /// format stores beside the text. Excel often also starts the text with "Name:".
+    static func commentsText(_ data: Data) -> String {
+        var authors: [String] = []
+        var author = -1
+        var reference = ""
+        var body: String? = nil
+        var text = ""
+        for record in records(in: data) {
+            let p = record.payload
+            switch record.type {
+            case 0x0278:   // BrtCommentAuthor: XLWideString
+                var pos = 0
+                authors.append(wideString(p, &pos) ?? "")
+            case 0x027B:   // BrtBeginComment
+                guard p.count >= 20 else { continue }
+                author = Int(Int32(bitPattern: u32(p, 0)))
+                reference = OfficeTextExtractor.columnName(Int(u32(p, 12))) + String(Int(u32(p, 4)) + 1)
+                body = nil
+            case 0x027D:   // BrtCommentText: RichStr — flags (fRichStr, fExtStr), then XLWideString; runs and phonetics follow
+                var pos = 1
+                body = wideString(p, &pos)
+            case 0x027C:   // BrtEndComment
+                let trimmed = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = author >= 0 && author < authors.count ? authors[author] : ""
+                if !trimmed.isEmpty || !name.isEmpty {
+                    text += (reference.isEmpty ? "" : reference + ": ") + trimmed + (name.isEmpty ? "" : " (author \(name))") + "\n"
+                }
+                author = -1; reference = ""; body = nil
+            default: break
+            }
+        }
+        return text
+    }
+
+    /// A table part ([MS-XLSB] 2.1.7.51): BrtBeginList (343) — rfxList (16), lt, idList, crwHeader,
+    /// crwTotals, flags, six DXF ids, dwConnID (4 each), then stName and stDisplayName
+    /// (XLNullableWideString) — and its BrtBeginListCol (347) records — idField, ilta, three DXF
+    /// ids, idqsif (4 each), then stName and stCaption; the caption is the name formulas show.
+    static func tables(in data: Data) -> [XLSBFormulaContext.Table] {
+        var out: [XLSBFormulaContext.Table] = []
+        var current: (id: Int, name: String, rfx: [Int])? = nil
+        var columns: [String] = []
+        func finish() {
+            if let table = current {
+                out.append(.init(id: table.id, name: table.name, columns: columns,
+                                 rowFirst: table.rfx[0], rowLast: table.rfx[1], columnFirst: table.rfx[2], columnLast: table.rfx[3]))
+            }
+            current = nil; columns = []
+        }
+        for record in records(in: data) {
+            let p = record.payload
+            switch record.type {
+            case 0x0157:   // BrtBeginList
+                finish()
+                guard p.count >= 64 else { continue }
+                var pos = 64
+                let programmatic = nullableWideString(p, &pos)
+                let display = nullableWideString(p, &pos)
+                current = (Int(u32(p, 20)), display ?? programmatic ?? "Table\(u32(p, 20))", (0..<4).map { Int(u32(p, $0 * 4)) })
+            case 0x015B:   // BrtBeginListCol
+                guard current != nil, p.count >= 24 else { continue }
+                var pos = 24
+                let name = nullableWideString(p, &pos)
+                let caption = nullableWideString(p, &pos)
+                columns.append(caption ?? name ?? "Column\(columns.count + 1)")
+            case 0x0158: finish()   // BrtEndList
+            default: break
+            }
+        }
+        finish()
+        return out
     }
 
     /// CellParsedFormula / NameParsedFormula: cce, rgce, cb, rgcb.
