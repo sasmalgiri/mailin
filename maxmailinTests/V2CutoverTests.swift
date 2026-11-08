@@ -7145,7 +7145,7 @@ final class V2CutoverTests: XCTestCase {
                                     startedAt: Date(), completedAt: Date())
         receipt.checked = 3; receipt.excluded = 0; receipt.extraCopies = 1; receipt.selectionFrozen = true
         XCTAssertEqual(receipt.reconciliationLine,
-                       "selected 2 · written 2 messages in 3 files · hashes recorded while writing 3 of 3 · excluded 0 · failed 0 · 1 extra copies — one file per folder occurrence, as chosen · selection frozen at start")
+                       "selected 2 · written 2 messages in 3 files · hashes recorded while writing 3 of 3 · excluded 0 · failed 0 · 1 extra copy — one file per folder occurrence, as chosen · selection frozen at start")
         // The request only turns occurrences on under the source-folder layout.
         var request = ExportRequest(format: .emlFiles, title: "t", scope: .explicit([both.id]), destination: eachFolder.path, isFolder: true, cap: nil)
         request.options.folderOccurrences = true

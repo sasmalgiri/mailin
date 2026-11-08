@@ -52,13 +52,16 @@ if [ -z "$APP" ] || [ ! -d "$APP" ]; then
 fi
 
 BINARY="$APP/Contents/MacOS/$(basename "$APP" .app)"
+PLATFORM="macOS"
 if [ ! -f "$BINARY" ]; then
     # iOS layout has the executable at the bundle root.
     BINARY="$APP/$(basename "$APP" .app)"
+    PLATFORM="iOS"
 fi
 
 echo "Verifying: $APP"
 dim "Binary:    $BINARY"
+dim "Platform:  $PLATFORM bundle layout"
 echo
 
 # ------------------------------------------------- 1. entitlements: the proof
@@ -68,7 +71,12 @@ echo "1. Signed entitlements (the sandbox, not the source, is what binds)"
 ENTITLEMENTS=$(codesign -d --entitlements - --xml "$APP" 2>/dev/null \
                  | plutil -convert xml1 -o - - 2>/dev/null)
 
-if [ -z "$ENTITLEMENTS" ]; then
+if [ -z "$ENTITLEMENTS" ] && [ "$PLATFORM" = "iOS" ]; then
+    # An unsigned simulator build carries no entitlements at all; on iOS there
+    # is nothing in them that could withhold the network anyway (see below).
+    dim "  NOTE  iOS bundle without readable entitlements (unsigned simulator build?);"
+    dim "        iOS has no network entitlement to withhold — check 2 is the protection."
+elif [ -z "$ENTITLEMENTS" ]; then
     fail "could not read entitlements — is the app signed?"
 else
     # The VALUE of each key, not its presence (audit F17): an entitlements
@@ -80,7 +88,14 @@ else
             | sed -n "s|.*<key>$1</key><\([a-z]*\)/>.*|\1|p" | head -1
     }
 
-    if [ "$(entitlement_value 'com.apple.security.app-sandbox')" = "true" ]; then
+    if [ "$PLATFORM" = "iOS" ]; then
+        # IOS-02: iOS has no app-sandbox entitlement — the system sandboxes every
+        # app — and no network entitlement to withhold, so on iOS the build flag
+        # (check 2) is the protection. Not a failure; stated, not hidden.
+        dim "  NOTE  iOS bundle: every iOS app is sandboxed by the system and no"
+        dim "        network entitlement exists to withhold, so the sandbox check"
+        dim "        does not apply; check 2 (NO_NETWORK_BUILD) is the protection."
+    elif [ "$(entitlement_value 'com.apple.security.app-sandbox')" = "true" ]; then
         pass "app sandbox is enabled (entitlements are enforced)"
     else
         fail "app sandbox is NOT enabled (value: '$(entitlement_value 'com.apple.security.app-sandbox')') — entitlements do not constrain this build"
@@ -107,7 +122,11 @@ echo "2. NO_NETWORK_BUILD compiled in"
 # `NoNetworkAttestation` is compiled only when NO_NETWORK_BUILD is defined and
 # carries this marker string, so finding it proves the flag was set for the
 # configuration that produced THIS binary.
-if strings "$BINARY" 2>/dev/null | grep -q 'mailin.offline.attested'; then
+MARKER_FILES="$BINARY"
+# A Debug build keeps the app's code in <name>.debug.dylib beside the stub executable.
+[ -f "$BINARY.debug.dylib" ] && MARKER_FILES="$BINARY $BINARY.debug.dylib"
+# shellcheck disable=SC2086
+if strings $MARKER_FILES 2>/dev/null | grep -q 'mailin.offline.attested'; then
     pass "offline attestation marker present (NO_NETWORK_BUILD was defined)"
 else
     fail "offline attestation marker MISSING — this binary was built without NO_NETWORK_BUILD"

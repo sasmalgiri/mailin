@@ -6,6 +6,7 @@ import CoreText
 import ImageIO
 import UniformTypeIdentifiers
 import PDFKit
+import Speech
 
 /// Regression net for the two highest-blast-radius v2 behavioral changes:
 /// R1 (v1→v2 migration) and R2 (search routed through FTS5).
@@ -5165,5 +5166,148 @@ final class AboutCopyrightTests: XCTestCase {
             XCTAssertTrue(value.contains("Shrabani Sasmal"), "\(lang): \(value)")
             XCTAssertFalse(value.contains("EcoSanskriti"), lang)
         }
+    }
+}
+
+/// Gate 1 iPad walk (2026-11-08): IPAD-06…10 and IOS-02. Each test fails on
+/// the behaviour the walk found.
+@MainActor
+final class IPadGate1FixTests: XCTestCase {
+
+    // IPAD-09 (rule 5): a Share sheet closed without saving is not "Complete".
+    func testIPAD09_dismissedShareSheetIsNotComplete() {
+        let url = URL(fileURLWithPath: "/tmp/mailin_emails.mbox")
+        XCTAssertEqual(PlatformExport.shareOutcome(url: url, completed: false, error: nil), .cancelled)
+        XCTAssertEqual(PlatformExport.shareOutcome(url: url, completed: true, error: nil), .shared(url))
+        struct Boom: LocalizedError { var errorDescription: String? { "boom" } }
+        XCTAssertEqual(PlatformExport.shareOutcome(url: url, completed: false, error: Boom()), .failed("boom"))
+
+        let written = ExportReceipt(title: "mbox export", destination: url.path, isFolder: false, requested: 51, written: 51,
+                                    outcome: .complete, startedAt: Date(), completedAt: Date())
+        let dismissed = ExportJobRunner.receipt(written, after: .cancelled)
+        XCTAssertEqual(dismissed.delivery, .notSaved)
+        XCTAssertFalse(dismissed.isDelivered)
+        XCTAssertFalse(dismissed.verdictLine.hasPrefix("Complete"), dismissed.verdictLine)
+        XCTAssertTrue(dismissed.verdictLine.contains("not saved"), dismissed.verdictLine)
+        XCTAssertTrue(dismissed.plainText().contains("Delivery: notSaved"))
+
+        let shared = ExportJobRunner.receipt(written, after: .shared(url))
+        XCTAssertEqual(shared.delivery, .shared)
+        XCTAssertTrue(shared.isDelivered)
+        XCTAssertTrue(shared.verdictLine.hasPrefix("Complete"), shared.verdictLine)
+
+        let failed = ExportJobRunner.receipt(written, after: .failed("no window to share from"))
+        XCTAssertEqual(failed.delivery, .failed)
+        XCTAssertFalse(failed.verdictLine.hasPrefix("Complete"))
+        XCTAssertTrue(failed.verdictLine.contains("no window to share from"))
+
+        // A Mac receipt (destination chosen before writing) keeps its verdict.
+        XCTAssertEqual(written.verdictLine, "Complete — 51 written")
+        XCTAssertTrue(written.isDelivered)
+    }
+
+    // IPAD-09: the pre-flight never shows the app's temporary path as the destination.
+    func testIPAD09_preflightSaysYouChooseWhereNotTempPath() throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("ipad09_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp.appendingPathComponent("eml_export", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let note = try XCTUnwrap(ExportPreflightSheet.handOffNote(for: temp.appendingPathComponent("mailin_emails.mbox"), temporaryDirectory: temp))
+        XCTAssertFalse(note.contains(temp.path))
+        XCTAssertFalse(note.contains("/tmp"))
+        XCTAssertTrue(note.contains("you choose where"), note)
+        // A folder export inside the temporary directory too.
+        XCTAssertNotNil(ExportPreflightSheet.handOffNote(for: temp.appendingPathComponent("eml_export", isDirectory: true), temporaryDirectory: temp))
+        // A destination the person chose is shown as it is.
+        XCTAssertNil(ExportPreflightSheet.handOffNote(for: URL(fileURLWithPath: "/Users/someone/Desktop/a.mbox"), temporaryDirectory: temp))
+    }
+
+    // IPAD-08 (rule 4): "Clear & Start Fresh" names what it clears.
+    func testIPAD08_clearConfirmationContainsTheCount() {
+        let message = ClearArchiveConfirmation.message(.init(emails: 51, sources: 1))
+        XCTAssertTrue(message.contains("51 emails"), message)
+        XCTAssertTrue(message.contains("1 imported source"), message)
+        XCTAssertFalse(message.contains("1 imported sources"), message)
+        let one = ClearArchiveConfirmation.message(.init(emails: 1, sources: 3))
+        XCTAssertTrue(one.contains("1 email "), one)
+        XCTAssertTrue(one.contains("3 imported sources"), one)
+        XCTAssertTrue(ClearArchiveConfirmation.message(.init(emails: 7, sources: nil)).contains("7 emails"))
+        XCTAssertTrue(ClearArchiveConfirmation.message(.init(emails: nil, sources: nil)).contains("could not count"))
+    }
+
+    // IPAD-07: no speech permission prompt at launch or while the switch is off.
+    func testIPAD07_speechAuthorizationNotRequestedWhileSwitchOff() {
+        XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .launchWiring, switchOn: true, status: .notDetermined))
+        XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .personTurnedSwitchOn, switchOn: false, status: .notDetermined))
+        XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: false, status: .notDetermined))
+        XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .authorized))
+        XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .personTurnedSwitchOn, switchOn: true, status: .denied))
+        XCTAssertTrue(AttachmentSpeech.shouldRequestAuthorization(trigger: .personTurnedSwitchOn, switchOn: true, status: .notDetermined))
+        XCTAssertTrue(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .notDetermined))
+
+        // With the switch off, neither entry point reaches the system call; launch wiring never does.
+        let savedHook = AttachmentSpeech.requestHook
+        let savedEnabled = AttachmentSpeech.isEnabled
+        defer { AttachmentSpeech.requestHook = savedHook; AttachmentSpeech.isEnabled = savedEnabled }
+        final class Counter: @unchecked Sendable { var calls = 0 }
+        let counter = Counter()
+        AttachmentSpeech.requestHook = { completion in counter.calls += 1; completion(.denied) }
+        AttachmentSpeech.isEnabled = false
+        AttachmentSpeech.requestAuthorizationIfAppropriate(trigger: .personTurnedSwitchOn)
+        AttachmentSpeech.requestAuthorizationIfAppropriate(trigger: .launchWiring)
+        _ = AttachmentSpeech.requestAuthorizationBeforeRecognising()
+        XCTAssertEqual(counter.calls, 0)
+        AttachmentSpeech.isEnabled = true
+        AttachmentSpeech.requestAuthorizationIfAppropriate(trigger: .launchWiring)
+        XCTAssertEqual(counter.calls, 0, "launch wiring never asks, even with the switch on")
+    }
+
+    // IPAD-06 (b): the backup goes into the folder the person chose, never the temporary folder.
+    func testIPAD06_backupDestinationIsTheChosenFolder() {
+        let chosen = URL(fileURLWithPath: "/private/var/mobile/Library/Mobile Documents/com~apple~CloudDocs/Backups", isDirectory: true)
+        let date = Date(timeIntervalSince1970: 1_762_570_317)
+        let destination = ArchiveBackups.backupDestination(parent: chosen, date: date)
+        XCTAssertEqual(destination.deletingLastPathComponent().standardizedFileURL, chosen.standardizedFileURL)
+        XCTAssertTrue(destination.lastPathComponent.hasPrefix("mailin-backup-"), destination.lastPathComponent)
+        XCTAssertFalse(destination.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+
+        // Rule 4: the restore confirmation names the counts, with agreeing nouns.
+        let confirm = ArchiveBackups.restoreConfirmation(emails: 51, files: 1, createdAt: date)
+        XCTAssertTrue(confirm.contains("51 emails"), confirm)
+        XCTAssertTrue(confirm.contains("1 file,"), confirm)
+        XCTAssertFalse(confirm.contains("1 files"), confirm)
+    }
+
+    // IPAD-06 (a): the receipt is offered where the import finishes, and opens on request.
+    func testIPAD06_importReceiptIsReachable() {
+        let presenter = ImportReceiptPresenter()
+        XCTAssertNil(presenter.importFinishedAt)
+        presenter.importFinished()
+        XCTAssertNotNil(presenter.importFinishedAt, "the finished import offers its receipt")
+        presenter.show()
+        XCTAssertTrue(presenter.isPresented)
+        XCTAssertNil(presenter.importFinishedAt, "opening the receipt clears the banner")
+    }
+
+    // IOS-02: the attestation marker is referenced from a screen that exists on iOS (Health).
+    func testIOS02_attestationMarkerReferencedFromHealth() {
+        XCTAssertTrue(ArchiveHealthView.offlineAttestationLine.contains(NoNetworkAttestation.buildMarker),
+                      ArchiveHealthView.offlineAttestationLine)
+    }
+
+    // IPAD-10: no duplicate iPadOS key commands; the Mac keeps every documented shortcut; plurals agree.
+    func testIPAD10_shortcutsAndPlurals() {
+        for binding in [MenuShortcutPolicy.openArchive, MenuShortcutPolicy.find, MenuShortcutPolicy.selectAll, MenuShortcutPolicy.visualAnalytics] {
+            XCTAssertFalse(MenuShortcutPolicy.registers(binding, onIPad: true))
+            XCTAssertTrue(MenuShortcutPolicy.registers(binding, onIPad: false))
+        }
+        XCTAssertTrue(MenuShortcutPolicy.registers(.init(key: "n", shift: false), onIPad: true))
+        XCTAssertEqual(CountPhrase.emails(1), "1 email")
+        XCTAssertEqual(CountPhrase.files(1), "1 file")
+        XCTAssertEqual(CountPhrase.messages(2), "2 messages")
+        var receipt = ExportReceipt(title: "t", destination: "/x", isFolder: true, requested: 2, written: 3, outcome: .complete,
+                                    startedAt: Date(), completedAt: Date())
+        receipt.checked = 3; receipt.excluded = 0; receipt.extraCopies = 1
+        XCTAssertTrue(receipt.reconciliationLine?.contains("1 extra copy —") ?? false)
+        XCTAssertFalse(receipt.reconciliationLine?.contains("1 extra copies") ?? true)
     }
 }

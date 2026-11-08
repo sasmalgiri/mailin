@@ -328,6 +328,18 @@ final class ExportRunCenter {
         return line
     }
 
+    #if os(iOS)
+    /// IPAD-09: show the Share sheet again for a written file and record what it did.
+    func deliverAgain(_ receipt: ExportReceipt) async {
+        let outcome = await ExportJobRunner.shared.deliver(receipt.destinationURL)
+        var updated = ExportJobRunner.receipt(receipt, after: outcome)
+        if case .cancelled = outcome, receipt.delivery == .shared || receipt.delivery == .saved {
+            updated.delivery = receipt.delivery   // an earlier hand-off still stands
+        }
+        replace(updated)
+    }
+    #endif
+
     private func replace(_ receipt: ExportReceipt) {
         lastReceipt = receipt
         lastReceiptURL = try? ExportReceiptStore.production.save(receipt)
@@ -428,8 +440,8 @@ struct ExportProgressOverlayView: View {
     private func receiptCard(_ receipt: ExportReceipt) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: icon(for: receipt.outcome))
-                    .foregroundColor(color(for: receipt.outcome))
+                Image(systemName: icon(for: receipt))
+                    .foregroundColor(color(for: receipt))
                 Text(receipt.title)
                     .font(.system(.caption, design: .rounded))
                     .fontWeight(.semibold)
@@ -448,7 +460,7 @@ struct ExportProgressOverlayView: View {
 
             Text(receipt.verdictLine)
                 .font(.system(size: 11))
-                .foregroundColor(color(for: receipt.outcome))
+                .foregroundColor(color(for: receipt))
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("export.receipt.verdict")
             // OUT-04/07: what was selected, written, checked, excluded, failed — and where the inventory is.
@@ -547,6 +559,18 @@ struct ExportProgressOverlayView: View {
                     .help(String(localized: "Re-read what was written: the bytes against the recorded hashes, then every message parsed back and compared with the archive"))
                     .accessibilityIdentifier("export.receipt.verify")
                 }
+                #if os(iOS)
+                // IPAD-09: the written file is still inside mailin — offer the Share sheet again.
+                if receipt.destination != "—", !receipt.isDelivered {
+                    Button {
+                        Task { await center.deliverAgain(receipt) }
+                    } label: {
+                        Label(String(localized: "Save or share…"), systemImage: "square.and.arrow.up")
+                    }
+                    .font(.system(size: 11))
+                    .accessibilityIdentifier("export.receipt.shareAgain")
+                }
+                #endif
                 #if os(macOS)
                 if receipt.destination != "—" {
                     Button("Reveal") {
@@ -572,6 +596,15 @@ struct ExportProgressOverlayView: View {
         .padding(.bottom, 32)
         .transition(.opacity)
         .accessibilityIdentifier("export.receipt")
+    }
+
+    /// IPAD-09: a file written but not handed on is not shown as a green "Complete".
+    private func icon(for receipt: ExportReceipt) -> String {
+        receipt.isDelivered ? icon(for: receipt.outcome) : "tray.and.arrow.up"
+    }
+
+    private func color(for receipt: ExportReceipt) -> Color {
+        receipt.isDelivered ? color(for: receipt.outcome) : .orange
     }
 
     private func icon(for outcome: ExportReceipt.Outcome) -> String {

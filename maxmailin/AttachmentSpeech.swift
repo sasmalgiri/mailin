@@ -49,7 +49,8 @@ enum AttachmentSpeech {
     /// calling thread, which must not be the main thread.
     static func transcribe(fileURL: URL) -> Transcript {
         precondition(!Thread.isMainThread, "speech recognition waits synchronously; call it off the main thread")
-        switch authorizationStatus() {
+        // IPAD-07: the one place a recording is about to be recognised — ask here, not at launch.
+        switch requestAuthorizationBeforeRecognising() {
         case .authorized: break
         case .denied, .restricted:
             return Transcript(text: nil, locale: nil, failure: String(localized: "speech recognition is not allowed for mailin — allow it in System Settings ▸ Privacy & Security ▸ Speech Recognition"), notAuthorized: true)
@@ -103,11 +104,52 @@ enum AttachmentSpeech {
     /// Current status without prompting.
     static func authorizationStatus() -> SFSpeechRecognizerAuthorizationStatus { SFSpeechRecognizer.authorizationStatus() }
 
+    /// IPAD-07: when the permission prompt may appear. Never at launch (the
+    /// capability's state is pushed then, before the person has done anything);
+    /// only when the person turns the switch on, or when a recording is about
+    /// to be recognised with the switch on — and only while undetermined.
+    enum AuthorizationTrigger: Sendable { case launchWiring, personTurnedSwitchOn, recordingAboutToBeRecognised }
+
+    static func shouldRequestAuthorization(trigger: AuthorizationTrigger, switchOn: Bool,
+                                           status: SFSpeechRecognizerAuthorizationStatus) -> Bool {
+        guard switchOn, status == .notDetermined else { return false }
+        switch trigger {
+        case .launchWiring: return false
+        case .personTurnedSwitchOn, .recordingAboutToBeRecognised: return true
+        }
+    }
+
+    /// The system call, replaceable in tests so no prompt is shown there.
+    nonisolated(unsafe) static var requestHook: (@Sendable (@escaping @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void) -> Void) = { completion in
+        SFSpeechRecognizer.requestAuthorization { completion($0) }
+    }
+
+    /// Asks once when `shouldRequestAuthorization` allows it (the system shows the prompt).
+    @MainActor
+    static func requestAuthorizationIfAppropriate(trigger: AuthorizationTrigger) {
+        guard shouldRequestAuthorization(trigger: trigger, switchOn: isEnabled, status: authorizationStatus()) else { return }
+        requestHook { _ in }
+    }
+
     /// Asks once (the system shows the prompt when the status is undetermined).
     @MainActor
     static func requestAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+            requestHook { continuation.resume(returning: $0) }
         }
+    }
+
+    /// Off the main thread, just before a recording is recognised with the
+    /// switch on: asks once and waits for the answer (bounded, so an unanswered
+    /// prompt cannot hold the indexing pass forever).
+    static func requestAuthorizationBeforeRecognising() -> SFSpeechRecognizerAuthorizationStatus {
+        let status = authorizationStatus()
+        guard shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: isEnabled, status: status) else { return status }
+        let answered = DispatchSemaphore(value: 0)
+        final class Box: @unchecked Sendable { var status: SFSpeechRecognizerAuthorizationStatus = .notDetermined }
+        let box = Box()
+        requestHook { box.status = $0; answered.signal() }
+        _ = answered.wait(timeout: .now() + 120)
+        return box.status
     }
 }

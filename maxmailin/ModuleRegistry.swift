@@ -502,6 +502,10 @@ final class ModuleRegistry {
         state.set(capability, enabled: isOn)
         store.save(state)
         applyWiring(from: capability)
+        // IPAD-07: the person turned speech recognition on — the one switch-driven moment to ask.
+        if capability == .attachmentSpeech, isOn, self.isOn(capability) {
+            AttachmentSpeech.requestAuthorizationIfAppropriate(trigger: .personTurnedSwitchOn)
+        }
         moduleLog.info("""
             capability \(capability.rawValue, privacy: .public) \
             \(isOn ? "on" : "off", privacy: .public)
