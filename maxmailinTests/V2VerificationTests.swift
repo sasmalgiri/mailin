@@ -5912,3 +5912,202 @@ final class ExportRecoverResumeTests: XCTestCase {
         XCTAssertFalse(clean.contains(String(localized: "extra \(0)")), clean)
     }
 }
+
+// MARK: - R6: S/MIME on iPhone and iPad — the portable CMS reader in the app
+
+import Security
+
+/// R6 (audit, protected mail): S/MIME decryption and signature verification
+/// through the package's portable CMS reader, the only S/MIME path on iPhone
+/// and iPad and the Mac's fallback. Throwaway identities are made in memory
+/// (Security framework keys, CMSBuilder certificates); nothing is written to
+/// a keychain. The key operation is the one the app hands the reader for
+/// keychain identities (`CMSSecKeyOperation` via `SMIMEKeychainIdentities`).
+final class SMIMEPortableTests: XCTestCase {
+
+    private var smimeWas = false
+
+    override func setUp() {
+        super.setUp()
+        smimeWas = ProtectedContentPolicy.decryptSMIME
+    }
+
+    override func tearDown() {
+        ProtectedContentPolicy.decryptSMIME = smimeWas
+        SMIMEKeychainIdentities.testKeys = nil
+        super.tearDown()
+    }
+
+    private func rsaIdentity(_ cn: String) throws -> (key: SecKey, certificate: X509Certificate) {
+        var error: Unmanaged<CFError>?
+        let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeySizeInBits: 2048]
+        let key = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, &error), "\(String(describing: error))")
+        let der = try CMSBuilder.selfSignedCertificate(commonName: cn, email: "r6.rsa@example.invalid",
+                                                       subjectPublicKeyInfo: try CMSBuilder.subjectPublicKeyInfo(try XCTUnwrap(SecKeyCopyPublicKey(key))),
+                                                       serial: CMSBuilder.random(8), subjectKeyIdentifier: CMSBuilder.random(20), ec: false) {
+            [UInt8](SecKeyCreateSignature(key, .rsaSignatureMessagePKCS1v15SHA256, Data($0) as CFData, nil)! as Data)
+        }
+        return (key, try X509Certificate(der: der))
+    }
+
+    private func ecIdentity(_ cn: String) throws -> (key: SecKey, certificate: X509Certificate) {
+        let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeySizeInBits: 256]
+        let key = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
+        let point = [UInt8](try XCTUnwrap(SecKeyCopyExternalRepresentation(try XCTUnwrap(SecKeyCopyPublicKey(key)), nil)) as Data)
+        let der = try CMSBuilder.selfSignedCertificate(commonName: cn, email: "r6.ec@example.invalid",
+                                                       subjectPublicKeyInfo: try CMSBuilder.ecSubjectPublicKeyInfo(point: point),
+                                                       serial: CMSBuilder.random(8), subjectKeyIdentifier: CMSBuilder.random(20), ec: true) {
+            [UInt8](SecKeyCreateSignature(key, .ecdsaSignatureMessageX962SHA256, Data($0) as CFData, nil)! as Data)
+        }
+        return (key, try X509Certificate(der: der))
+    }
+
+    private func publicKey(_ key: SecKey) throws -> SecKey { try XCTUnwrap(SecKeyCopyPublicKey(key)) }
+
+    /// The MIME entity inside the envelope: a body and a text attachment.
+    private let inner = Data(("Content-Type: multipart/mixed; boundary=\"IN\"\r\n\r\n--IN\r\nContent-Type: text/plain\r\n\r\n" +
+                              "The periwinkle ledger is sealed.\r\n--IN\r\nContent-Type: text/plain; name=\"note.txt\"\r\n" +
+                              "Content-Disposition: attachment; filename=\"note.txt\"\r\n\r\nA quorum was reached.\r\n--IN--\r\n").utf8)
+
+    private func message(with p7m: Data) -> String {
+        """
+        From: sender@example.com
+        To: recipient@example.invalid
+        Subject: Sealed envelope
+        Message-ID: <r6-portable@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        the envelope follows
+        --B
+        Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name="smime.p7m"
+        Content-Disposition: attachment; filename="smime.p7m"
+        Content-Transfer-Encoding: base64
+
+        \(p7m.base64EncodedString(options: [.lineLength76Characters, .endLineWithLineFeed]))
+        --B--
+        """
+    }
+
+    private func smimeRow(_ raw: String) throws -> AttachmentTextIndexJob.Extraction {
+        let rows = try XCTUnwrap(AttachmentTextIndexJob.extractCoverage(fromRaw: raw))
+        return try XCTUnwrap(rows.first { $0.extractor == "smime" }, "\(rows.map { ($0.filename, $0.extractor, $0.state) })")
+    }
+
+    private static func failure(_ r: Result<Data, CMSError>) -> CMSError? {
+        if case .failure(let e) = r { return e }
+        return nil
+    }
+
+    /// Module on: RSA (v1.5 and OAEP) and ECDH envelopes, CBC, 3DES and GCM —
+    /// GCM being what the Mac's CMSDecoder cannot open — are decrypted with
+    /// the keychain-style key and the message inside is read, its attachment
+    /// a child. Module off: locked, naming the switch.
+    func testR6_envelopeOpensThroughTheIndexPath_withAKeychainStyleKey_onlyWhenTheModuleIsOn() throws {
+        let rsa = try rsaIdentity("R6 Recipient"), ec = try ecIdentity("R6 EC Recipient")
+        SMIMEKeychainIdentities.testKeys = [(rsa.key, rsa.certificate), (ec.key, ec.certificate)]
+        let ecPoint = try XCTUnwrap(SecKeyCopyExternalRepresentation(try publicKey(ec.key), nil)) as Data
+        let ski = try XCTUnwrap(rsa.certificate.subjectKeyIdentifier)
+        let envelopes: [(String, Data)] = [
+            ("rsa-gcm", try CMSBuilder.envelope(inner, to: [.rsa(rsa.certificate.issuerAndSerial, publicKey: try publicKey(rsa.key), oaep: nil)], cipher: .aesGCM(bits: 256))),
+            ("rsa-oaep-cbc", try CMSBuilder.envelope(inner, to: [.rsa(.subjectKeyIdentifier(ski), publicKey: try publicKey(rsa.key), oaep: .sha256)], cipher: .aesCBC(bits: 128))),
+            ("ecdh-cbc", try CMSBuilder.envelope(inner, to: [.ecdh(ec.certificate.issuerAndSerial, publicKey: ecPoint, kdf: .sha256)], cipher: .aesCBC(bits: 256))),
+            ("ecdh-3des", try CMSBuilder.envelope(inner, to: [.ecdh(ec.certificate.issuerAndSerial, publicKey: ecPoint, kdf: .sha1)], cipher: .des3CBC)),
+        ]
+        for (name, env) in envelopes {
+            ProtectedContentPolicy.decryptSMIME = false
+            let off = try smimeRow(message(with: env))
+            XCTAssertEqual(off.state, .locked, name)
+            XCTAssertTrue(off.note?.contains("Read S/MIME with your keychain key") == true, off.note ?? "")
+
+            ProtectedContentPolicy.decryptSMIME = true
+            let on = try smimeRow(message(with: env))
+            XCTAssertEqual(on.state, .extracted, "\(name): \(on.note ?? "")")
+            XCTAssertTrue(on.fullText?.contains("periwinkle") == true, "\(name): \(on.fullText ?? "nil")")
+            XCTAssertEqual(on.children.map(\.filename), ["note.txt"], name)
+            XCTAssertTrue(on.children.first?.text?.contains("quorum") == true, name)
+        }
+    }
+
+    /// No key for the recipient → locked, naming the recipient and where to
+    /// import the identity; a key that is not the recipient's → locked with
+    /// the key operation's failure; an altered GCM part → locked.
+    func testR6_wrongOrMissingKey_andAlteredPart_areLockedWithTheReason() throws {
+        ProtectedContentPolicy.decryptSMIME = true
+        let rsa = try rsaIdentity("R6 Recipient"), stranger = try rsaIdentity("R6 Stranger")
+        let env = try CMSBuilder.envelope(inner, to: [.rsa(rsa.certificate.issuerAndSerial, publicKey: try publicKey(rsa.key), oaep: nil)], cipher: .aesGCM(bits: 256))
+
+        SMIMEKeychainIdentities.testKeys = [(stranger.key, stranger.certificate)]
+        let missing = try smimeRow(message(with: env))
+        XCTAssertEqual(missing.state, .locked)
+        XCTAssertTrue(missing.note?.contains("R6 Recipient") == true && missing.note?.contains(".p12") == true, missing.note ?? "")
+
+        // A key that claims the recipient's certificate but is not its key.
+        SMIMEKeychainIdentities.testKeys = [(stranger.key, rsa.certificate)]
+        let wrong = try smimeRow(message(with: env))
+        XCTAssertEqual(wrong.state, .locked)
+        let failure = try XCTUnwrap(Self.failure(SMIMEHandler.decodePortable(env)))
+        guard case .decryptionFailed = failure else { return XCTFail("\(failure)") }
+        XCTAssertEqual(wrong.note, SMIMEHandler.lockedReason(failure))
+
+        // One flipped byte in the authenticated cipher text: never opened.
+        SMIMEKeychainIdentities.testKeys = [(rsa.key, rsa.certificate)]
+        var bytes = [UInt8](env)
+        bytes[bytes.count - 30] ^= 0x01
+        XCTAssertNotNil(Self.failure(SMIMEHandler.decodePortable(Data(bytes))), "an altered part must not open")
+        XCTAssertNotNil(Self.failure(SMIMEHandler.decodePortable(Data("not cms".utf8))))
+        guard case .success(let plain) = SMIMEHandler.decodePortable(env) else { return XCTFail("the right key opens it") }
+        XCTAssertEqual(plain, inner)
+    }
+
+    /// Signatures through the portable verifier, mapped through the same
+    /// verdict function as the Mac's CMSDecoder path: the OpenSSL-made gold
+    /// cases (opaque and detached) are valid-but-untrusted (self-signed), as
+    /// CMSDecoder says; a fresh ECDSA signature too; altered content is invalid.
+    func testR6_signaturesVerifyPortably_sameVerdictsAsCMSDecoder() throws {
+        let opaque = try XCTUnwrap(Data(base64Encoded: SMIMEGoldCaseTests.signedCMSBase64))
+        let gold = SMIMEHandler.verifyPortable(signedData: opaque, detachedContent: nil)
+        XCTAssertEqual(gold.status, .validUntrustedCert)
+        XCTAssertEqual(gold.signerEmail, "signer@example.com")
+        XCTAssertEqual(gold.certificateInfo?.isSelfSigned, true)
+
+        let detachedMail = try MBOXParser.processRawMessage(SMIMEDetachedGoldCaseTests.signedMessageLF, senderEmail: "")
+        let detached = SMIMEHandler.verifySignaturePortable(of: detachedMail)
+        XCTAssertEqual(detached.status, .validUntrustedCert)
+        XCTAssertEqual(detached.signerEmail, "detached@example.com")
+        let tamperedMail = try MBOXParser.processRawMessage(
+            SMIMEDetachedGoldCaseTests.signedMessageLF.replacingOccurrences(of: "Second line", with: "Second lime"), senderEmail: "")
+        XCTAssertEqual(SMIMEHandler.verifySignaturePortable(of: tamperedMail).status, .invalid)
+        #if os(macOS)
+        XCTAssertEqual(SMIMEHandler.verifySignature(of: detachedMail).status, detached.status, "the portable verdict agrees with CMSDecoder")
+        #else
+        ProtectedContentPolicy.decryptSMIME = true
+        XCTAssertEqual(SMIMEHandler.verifySignature(of: detachedMail).status, .validUntrustedCert, "iPhone/iPad verify with the module on")
+        ProtectedContentPolicy.decryptSMIME = false
+        XCTAssertEqual(SMIMEHandler.verifySignature(of: detachedMail).status, .unverifiable, "off: unverifiable, never invalid")
+        #endif
+
+        let ec = try ecIdentity("R6 EC Signer")
+        let content = Data("Content-Type: text/plain\r\n\r\nsigned on the device\r\n".utf8)
+        let sig = try CMSBuilder.signed(content, detached: false, certificate: ec.certificate, signatureAlgorithmOID: CMSOID.ecdsaSHA256) {
+            [UInt8](SecKeyCreateSignature(ec.key, .ecdsaSignatureMessageX962SHA256, Data($0) as CFData, nil)! as Data)
+        }
+        XCTAssertEqual(SMIMEHandler.verifyPortable(signedData: sig, detachedContent: nil).status, .validUntrustedCert)
+        XCTAssertEqual(SMIMEHandler.verifyPortable(signedData: Data([0x30, 0x03, 0x02, 0x01, 0x00]), detachedContent: nil).status, .unverifiable)
+    }
+
+    /// The .p12 import refuses what is not an identity file without touching
+    /// the keychain, and says why.
+    func testR6_p12ImportRefusesGarbage_andStatesWhy() {
+        XCTAssertThrowsError(try SMIMEKeychainIdentities.importPKCS12(Data("not a p12".utf8), password: "pw")) { error in
+            XCTAssertNotNil(error as? SMIMEKeychainIdentities.ImportError, "\(error)")
+            XCTAssertNotEqual(error as? SMIMEKeychainIdentities.ImportError, .wrongPassword, "garbage is not a wrong password")
+            XCTAssertFalse(SMIMEKeychainIdentities.describe(error).isEmpty)
+        }
+        XCTAssertEqual(SMIMEKeychainIdentities.describe(SMIMEKeychainIdentities.ImportError.wrongPassword), String(localized: "The password did not open the file."))
+        XCTAssertTrue(SMIMEIdentitiesSection.importNote(name: "R6", reread: 3).contains("3"))
+    }
+}

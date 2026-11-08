@@ -218,9 +218,12 @@ struct SMIMEHandler {
 
         return VerificationResult(status: resultStatus, signerName: signerName, signerEmail: signerEmail, certificateInfo: certInfo)
         #else
-        // No CMSDecoder off macOS — verification is not supported, which is
-        // an "unverifiable" conclusion, not an invalid signature.
-        return VerificationResult(status: .unverifiable, signerName: nil, signerEmail: nil, certificateInfo: nil)
+        // No CMSDecoder off macOS. R6: with the S/MIME module on, the portable
+        // CMS reader verifies; off, "unverifiable" — never an invalid signature.
+        guard ProtectedContentPolicy.decryptSMIME else {
+            return VerificationResult(status: .unverifiable, signerName: nil, signerEmail: nil, certificateInfo: nil)
+        }
+        return verifySignaturePortable(of: email)
         #endif
     }
 
@@ -400,7 +403,7 @@ struct SMIMEHandler {
         return value.isEmpty ? nil : value
     }
 
-    private static func findSignedData(in email: MBOXParser.RawEmail) -> Data? {
+    static func findSignedData(in email: MBOXParser.RawEmail) -> Data? {
         for attachment in email.attachments {
             let mime = attachment.mimeType.lowercased()
             if mime.contains("pkcs7") || mime.contains("signature") {
