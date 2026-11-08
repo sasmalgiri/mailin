@@ -531,7 +531,7 @@ final class OfficeRevisionsAndCellsTests: XCTestCase {
         XCTAssertTrue(various.text.contains("A10: date\tB10: 2017-03-09 (serial 42803)\n"), various.text)
         XCTAssertTrue(various.text.contains("A5: percent\tB5: 0.2 (format 0%)\n"), various.text)
         XCTAssertTrue(various.text.contains("A4: currency\tB4: 3.03 (format _(\"$\"* #,##0.00_)"), various.text)
-        XCTAssertEqual(various.components, ["Workbook", "Sheet: mySheet1"])
+        XCTAssertEqual(various.components, ["Workbook", "Sheet: mySheet1", "Comments: mySheet1"], "its ten cell comments are read (XLSBDepthTests)")
         XCTAssertFalse(various.text.contains("not decoded"), various.text)
         let plain = try DocumentTextExtractor.extract(fileURL: tika.appendingPathComponent("testEXCEL.xlsb"), kind: .xlsb)
         XCTAssertEqual(plain.components, ["Sheet: Sheet1", "Sheet: Sheet2", "Sheet: Sheet3"])
