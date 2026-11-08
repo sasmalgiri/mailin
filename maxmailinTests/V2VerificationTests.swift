@@ -5714,7 +5714,9 @@ final class ExportRecoverResumeTests: XCTestCase {
         let recovered = try loadReceipt(receipt.id, from: receipts)
         XCTAssertEqual(recovered.written, 200, "400 reported, 200 verified")
         XCTAssertEqual(recovered.requested, total)
-        XCTAssertEqual(recovered.recoveryLine?.hasPrefix("Recovered: 200 of 450 records verified at byte \(boundary.line.bytes ?? 0)"), true, recovered.recoveryLine ?? "nil")
+        // The line is localized, so the byte offset carries digit grouping ("53,800"); compare without it.
+        let plainLine = (recovered.recoveryLine ?? "").filter { $0 != "," && $0 != "\u{00A0}" && $0 != "\u{202F}" && $0 != "." }
+        XCTAssertTrue(plainLine.hasPrefix("Recovered: 200 of 450 records verified at byte \(boundary.line.bytes ?? 0)"), recovered.recoveryLine ?? "nil")
         XCTAssertEqual(recovered.recoveryLine?.contains("past it: 50 complete and 1 cut record(s)"), true, recovered.recoveryLine ?? "nil")
         XCTAssertEqual(recovered.recoveryDetail?.contains("50 complete record(s) and 1 cut record the receipt never counted"), true, recovered.recoveryDetail ?? "nil")
         XCTAssertFalse(recovered.offersRecovery)
