@@ -66,6 +66,12 @@ struct AttachmentResumeView: View {
                 ? String(localized: "Round \(round) (\(limits)) read \(filename) whole.")
                 : String(localized: "Round \(round) (\(limits)) read more of \(filename); what is still not read is listed in its record.")
             row = await AttachmentTextIndexJob.shared.coverageRow(emailID: emailID, position: position)
+        case .needsPassword(let round, let remaining, _):
+            // R5: what an earlier Unlock made searchable stays; the lock row above offers Unlock… for the rest.
+            message = String(localized: "Round \(round) kept everything already read of \(filename); \(remaining) files inside need the password again. Use Unlock… to read them.")
+            row = await AttachmentTextIndexJob.shared.coverageRow(emailID: emailID, position: position)
+        case .notRecorded(let why):
+            message = String(localized: "\(filename) was not resumed: \(why)")
         }
     }
 }

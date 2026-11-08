@@ -10,6 +10,13 @@
 //  original file. Kicked when the switch turns on and at launch; stops at
 //  cancellation and picks up where it was on the next run.
 //
+//  R5 (audit bf1a5b9; owner 2026-11-08 "there should be no limit at all"):
+//  then a message kept by its byte range — above the full-parse ceiling, so
+//  its body is in the original file — has its text STREAMED from that file
+//  into its body document (`StreamedBodyIndexer`), in bounded memory, with no
+//  size limit. Kicked after every import too, so a large message becomes
+//  searchable without a relaunch.
+//
 
 import Foundation
 import os.log
@@ -33,6 +40,17 @@ final class SearchDocBackfillJob {
     struct Outcome: Sendable, Equatable {
         var indexed = 0
         var remaining = 0
+        /// R5: messages kept by byte range whose text was streamed from the original file.
+        var streamedBodies = 0
+        /// R5: such messages whose original file could not be read (their body is reported not searchable).
+        var streamedFailed = 0
+    }
+
+    init() {
+        // R5: a new import can bring messages whose text is streamed from their original file.
+        NotificationCenter.default.addObserver(forName: .parsingFinished, object: nil, queue: .main) { _ in
+            Task { @MainActor in SearchDocBackfillJob.shared.kickIfNeeded() }
+        }
     }
 
     func kickIfNeeded(registry: JobRegistry? = nil) {
@@ -75,6 +93,19 @@ final class SearchDocBackfillJob {
         } catch {
             Self.logger.error("search backfill stopped: \(error.localizedDescription, privacy: .public)")
         }
+        // R5: the text of every message kept by its byte range, streamed from its original file.
+        if !Task.isCancelled {
+            let pass = await StreamedBodyIndexer().indexPending(store: store) { [weak self] progress in
+                await self?.reportStreamed(progress)
+            }
+            outcome.streamedBodies = pass.indexed
+            outcome.streamedFailed = pass.failed
+            if pass.failed > 0 { Self.logger.error("streamed bodies: \(pass.failed) original file(s) could not be read") }
+        }
         return outcome
+    }
+
+    private func reportStreamed(_ progress: StreamedBodyIndexer.PassOutcome) {
+        registry?.update(id: Self.jobID, detail: String(localized: "\(progress.indexed.formatted()) large messages read from their original files for search"))
     }
 }

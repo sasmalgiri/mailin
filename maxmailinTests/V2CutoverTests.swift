@@ -4249,7 +4249,7 @@ final class V2CutoverTests: XCTestCase {
         // Round 1: 800-byte parts, 2,000 bytes, 2 levels → the big member and the nested file are read.
         let outcome = await AttachmentTextIndexJob.shared.resume(emailID: email.id, position: 0)
         guard case .resumed(let round, let state, _, let limits) = outcome else { return XCTFail("\(outcome)") }
-        XCTAssertEqual(round, 1); XCTAssertEqual(state, .extracted); XCTAssertEqual(limits, "800 bytes per part, 2000 bytes per attachment's archives, 2 levels")
+        XCTAssertEqual(round, 1); XCTAssertEqual(state, .extracted); XCTAssertEqual(limits, "800 bytes per part, 2000 bytes per attachment's archives, 2 levels, 4 message levels")
         row = try XCTUnwrap(try coverage.rows(for: email.id).first)
         XCTAssertEqual(row.resumeRound, 1)
         XCTAssertTrue(row.note?.contains("read in Resume round 1") == true, row.note ?? "")
@@ -8800,5 +8800,359 @@ final class V2CutoverTests: XCTestCase {
         b.headers["Message-ID"] = "<near-dupe@example.com>"
         let near = DuplicateManagerView.findNearDuplicates(in: [a, b], threshold: 0.85)
         XCTAssertEqual(near.map { Set($0.map(\.id)) }, [Set([a.id, b.id])], "one punctuation mark apart is similar")
+    }
+
+    // MARK: - Release audit bf1a5b9 R5 — no message-size ceiling; message depth, continuation, stored unlock, honest failure
+
+    /// R5 item 1 (owner 2026-11-08: "there should be no limit at all"): a
+    /// message kept by its byte range (here above a 64 KiB stand-in ceiling;
+    /// the 101 MiB row is `StreamedBodyIndexTests` in the package) is NOT
+    /// "no text": its body may match until the backfill job streams it from
+    /// the original file, after which a word in its last chunk is found. The
+    /// Limits screen lists no single-message ceiling.
+    func testR5_largeMessageTextIsStreamedIntoSearch_andNoSingleMessageCeilingIsListed() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        let url = env.root.appendingPathComponent("r5-large.mbox")
+        let filler = String(repeating: "ordinary words about the quarterly ledger and the board.\n", count: 6_000)   // ~350 KB
+        try """
+        From big@example.com Fri Mar 17 12:00:00 2017
+        From: big@example.com
+        To: me@example.com
+        Subject: R5 large
+        Date: Fri, 17 Mar 2017 12:00:00 +0000
+        Message-ID: <r5-large@example.com>
+        Content-Type: text/plain; charset=utf-8
+
+        \(filler)the very last word is xylophonist
+
+        """.write(to: url, atomically: true, encoding: .utf8)
+        let summary = try await importForLife01(env, url)
+        XCTAssertEqual(summary.bodiesNotDecoded, 1, "kept by its byte range")
+        let spec = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "xylophonist")])])
+        try await expectIDs(env, spec, [], "not streamed yet")
+        let excluding = SearchSpec(groups: [SearchGroup(.exclude, [SearchCondition(.body, .allWords, "xylophonist")])])
+        var q = EmailQuery.all; q.spec = excluding
+        try await expectUnresolved(env, q, 1, "until streamed its body may match — it is never counted as 'no text'")
+
+        SearchDocBackfillJob.testStoreOverride = env.store
+        defer { SearchDocBackfillJob.testStoreOverride = nil }
+        let outcome = await SearchDocBackfillJob.shared.run()
+        XCTAssertEqual(outcome.streamedBodies, 1)
+        XCTAssertEqual(outcome.streamedFailed, 0)
+        try await expectIDs(env, spec, ["R5 large"], "found by its last word, streamed from the original file")
+        try await expectUnresolved(env, q, 0)
+
+        // The Limits screen: no single-message ceiling; message depth listed with its kind.
+        let limits = AppLimits.all
+        let single = try XCTUnwrap(limits.first { $0.what == "Single message size" })
+        XCTAssertEqual(single.kind, .none)
+        XCTAssertEqual(single.value, "no limit")
+        XCTAssertFalse(limits.contains { $0.kind == .safety && $0.what.hasPrefix("Single message") }, "the 100 MiB text exclusion is gone")
+        XCTAssertEqual(limits.first { $0.what == "Messages inside messages, per run" }?.kind, .safety)
+    }
+
+    /// One level of an attached-message chain: `depth` 1 is the outermost
+    /// attachment; the innermost (level `levels`) carries `word`.
+    private func emlChain(level: Int, levels: Int, word: String) -> Data {
+        if level == levels {
+            return Data("""
+            From: inner@example.com
+            Subject: level \(level)
+            Content-Type: text/plain
+
+            the innermost message says \(word)
+
+            """.utf8)
+        }
+        let inner = emlChain(level: level + 1, levels: levels, word: word)
+        return Data("""
+        From: level\(level)@example.com
+        Subject: level \(level)
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="L\(level)"
+
+        --L\(level)
+        Content-Type: text/plain
+
+        this is level \(level)
+        --L\(level)
+        Content-Type: message/rfc822; name="level\(level + 1).eml"
+        Content-Disposition: attachment; filename="level\(level + 1).eml"
+        Content-Transfer-Encoding: base64
+
+        \(inner.base64EncodedString(options: [.lineLength76Characters]))
+        --L\(level)--
+
+        """.utf8)
+    }
+
+    /// R5 item 2: message depth is its own ceiling (`ExtractionLimits.messageDepth`)
+    /// and Resume opens one more level per round. A five-deep attached .eml
+    /// chain stops at round 0 with the ceiling named; round 2 reaches the
+    /// innermost message's text.
+    func testR5_messageDepthFollowsResumeRounds_fiveDeepChainReachesTheInnermostText() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        ExtractionLimits.baseOverride = nil
+        XCTAssertEqual(ExtractionLimits.base.messageDepth, 3)
+        XCTAssertEqual(ExtractionLimits.round(2).messageDepth, 5, "one more message level per round")
+        XCTAssertEqual(AttachmentTextIndexJob.maxMessageDepth, 3, "an ordinary pass works under the base")
+        XCTAssertEqual(ExtractionLimits.$current.withValue(ExtractionLimits.round(1)) { AttachmentTextIndexJob.maxMessageDepth }, 4,
+                       "the ceiling is the run's, not a fixed constant")
+
+        // The chain: the attachment is level 1; level 5 holds the word.
+        let chain = emlChain(level: 1, levels: 5, word: "abecedarian")
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Deep chain
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <r5-deep@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see the forwarded chain
+        \(mimeAttachment("level1.eml", "message/rfc822", chain))
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        var row = try XCTUnwrap(try coverage.rows(for: email.id).first)
+        XCTAssertEqual(row.state, .partial)
+        XCTAssertTrue(row.note?.contains("a message nested deeper than 3 levels") == true, row.note ?? "")
+        XCTAssertTrue(AttachmentResumeView.canResume(row), "the ceiling is named, so Resume is offered")
+        func found() async throws -> Int {
+            var q = EmailQuery.all
+            q.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "level1", contentMatch: .allWords, content: "abecedarian")])])
+            return try await env.archive.count(query: q)
+        }
+        let round0 = try await found()
+        XCTAssertEqual(round0, 0)
+
+        let first = await AttachmentTextIndexJob.shared.resume(emailID: email.id, position: 0)
+        guard case .resumed(1, _, let note1, let limits1) = first else { return XCTFail("\(first)") }
+        XCTAssertTrue(limits1.hasSuffix("4 message levels"), limits1)
+        XCTAssertTrue(note1?.contains("deeper than 4 levels") == true, note1 ?? "")
+        let round1 = try await found()
+        XCTAssertEqual(round1, 0, "level 5 is one level further still")
+
+        let second = await AttachmentTextIndexJob.shared.resume(emailID: email.id, position: 0)
+        guard case .resumed(2, let state2, _, _) = second else { return XCTFail("\(second)") }
+        XCTAssertEqual(state2, .extracted)
+        row = try XCTUnwrap(try coverage.rows(for: email.id).first)
+        XCTAssertFalse(AttachmentResumeView.canResume(row), "read whole")
+        let round2 = try await found()
+        XCTAssertEqual(round2, 1, "round 2 reaches the innermost message")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    /// Three ~900-byte text members; each word only in its own member.
+    private static func r5Members() -> [(name: String, data: Data)] {
+        [("a.txt", Data((String(repeating: "alpha filler ", count: 68) + "aardvarkword").utf8)),
+         ("b.txt", Data((String(repeating: "bravo filler ", count: 68) + "bisonword").utf8)),
+         ("c.txt", Data((String(repeating: "charlie fill ", count: 68) + "caracalword").utf8))]
+    }
+
+    private func r5Message(_ zip: Data, id: String) throws -> MBOXParser.RawEmail {
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Continue \(id)
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <r5-\(id)@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        three files
+        \(mimeAttachment("three.zip", "application/zip", zip))
+        --B--
+        """
+        return try MBOXParser.processRawMessage(raw, senderEmail: "")
+    }
+
+    private func r5Found(_ env: Env, _ word: String) async throws -> Int {
+        var q = EmailQuery.all
+        q.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "three", contentMatch: .allWords, content: word)])])
+        return try await env.archive.count(query: q)
+    }
+
+    /// R5 item 3: Resume CONTINUES. Round 0 reads a.txt and stops at the
+    /// 1,000-byte budget; round 1 (2,000 bytes) carries a.txt over without
+    /// reading it again, so b.txt AND c.txt fit — re-reading from the start
+    /// would spend 900 bytes on a.txt again and stop before c.txt. The cursor
+    /// is the archive's child rows, so it survives a restart (a fresh store).
+    func testR5_resumeContinuesFromTheRecordedChildren_notFromTheStart_andSurvivesARestart() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        ExtractionLimits.baseOverride = ExtractionLimits(partBytes: 1_000, totalArchiveBytes: 1_000, archiveDepth: 3)
+        defer { ExtractionLimits.baseOverride = nil }
+
+        let email = try r5Message(Self.zipPackage(Self.r5Members()), id: "continue")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let before = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(before.map { "\($0.path)|\($0.state)" }, ["a.txt|extracted", "b.txt|unsupported", "c.txt|unsupported"])
+        let aBefore = try XCTUnwrap(before.first)
+        let aFound = try await r5Found(env, "aardvarkword")
+        XCTAssertEqual(aFound, 1)
+
+        // Restart: a new store instance on the same archive; nothing in memory carries over.
+        let reopened = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
+        AttachmentTextIndexJob.testStoreOverride = reopened
+        let outcome = await AttachmentTextIndexJob.shared.resume(emailID: email.id, position: 0)
+        guard case .resumed(1, let state, _, _) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertEqual(state, .extracted, "continuing: the budget went to b.txt and c.txt only")
+        let after = try await reopened.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(after.map { "\($0.path)|\($0.state)" }, ["a.txt|extracted", "b.txt|extracted", "c.txt|extracted"])
+        XCTAssertEqual(after.first?.sha256, aBefore.sha256, "a.txt is carried over as recorded, not read again")
+        for word in ["aardvarkword", "bisonword", "caracalword"] {
+            let n = try await r5Found(env, word)
+            XCTAssertEqual(n, 1, word)
+        }
+        XCTAssertEqual(ExtractionContinuation.carriablePaths(after), ["a.txt", "b.txt", "c.txt"])
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    /// R5 item 4: Resume uses the Unlock session strategy. An encrypted ZIP
+    /// unlocked with "keep searchable" stops at the budget; Resume WITHOUT the
+    /// password keeps the stored text and children and marks only the rest
+    /// "needs the password again"; a kept Unlock then completes the rest.
+    func testR5_storedUnlockSurvivesResumeWithoutPassword_andUnlockCompletesTheRest() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        ExtractionLimits.baseOverride = ExtractionLimits(partBytes: 1_000, totalArchiveBytes: 1_000, archiveDepth: 3)
+        defer { ExtractionLimits.baseOverride = nil }
+
+        let entries = Self.r5Members().map { member -> (name: String, payload: Data, flags: UInt16, method: UInt16, crc: UInt32, size: UInt32, extra: Data) in
+            var cipher = ZipCryptoCipher(password: "open-sesame")
+            let crc = Self.crc32(member.data)
+            return (member.name, cipher.encrypt(ZipCryptoCipher.header(crc32: crc) + member.data), 0x0001, 0, crc, UInt32(member.data.count), Data())
+        }
+        let email = try r5Message(Self.zipRaw(entries), id: "sealed")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let coverage = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        XCTAssertEqual(try coverage.rows(for: email.id).first?.state, .locked)
+
+        // Unlock, kept: a.txt read; b.txt and c.txt stop at the budget.
+        let kept = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "open-sesame", retain: true)
+        guard case .unlocked(_, _, true) = kept else { return XCTFail("\(kept)") }
+        var row = try XCTUnwrap(try coverage.rows(for: email.id).first)
+        XCTAssertEqual(row.state, .partial)
+        XCTAssertTrue(row.unlockedWithPassword)
+        XCTAssertTrue(AttachmentResumeView.canResume(row), row.note ?? "")
+        let a0 = try await r5Found(env, "aardvarkword")
+        XCTAssertEqual(a0, 1)
+        let unlockedChildren = try await env.store.attachmentChildren(forEmailID: email.id)
+        let aRow = try XCTUnwrap(unlockedChildren.first)
+
+        // Resume without the password: nothing stored is replaced; the rest needs the password again.
+        let resumed = await AttachmentTextIndexJob.shared.resume(emailID: email.id, position: 0)
+        guard case .needsPassword(1, 2, _) = resumed else { return XCTFail("\(resumed)") }
+        let a1 = try await r5Found(env, "aardvarkword")
+        XCTAssertEqual(a1, 1, "the text the kept Unlock stored is still searchable")
+        let children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map { "\($0.path)|\($0.state)" }, ["a.txt|extracted", "b.txt|locked", "c.txt|locked"])
+        XCTAssertEqual(children.first?.sha256, aRow.sha256, "a.txt is the recorded one, not a re-read")
+        XCTAssertEqual(children.dropFirst().compactMap(\.note), [AttachmentTextIndexJob.needsPasswordAgainNote, AttachmentTextIndexJob.needsPasswordAgainNote])
+        row = try XCTUnwrap(try coverage.rows(for: email.id).first)
+        XCTAssertEqual(row.state, .partial, "never re-read as locked")
+        XCTAssertEqual(row.resumeRound, 1)
+        XCTAssertTrue(row.unlockedWithPassword)
+
+        // A wrong password changes nothing.
+        let wrong = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "nope", retain: true)
+        guard case .wrongPassword = wrong else { return XCTFail("\(wrong)") }
+        let stillA = try await r5Found(env, "aardvarkword")
+        XCTAssertEqual(stillA, 1)
+
+        // With the password (the Unlock path): the rest is read under round 1, a.txt carried.
+        let completed = await AttachmentTextIndexJob.shared.unlock(emailID: email.id, position: 0, password: "open-sesame", retain: true)
+        guard case .unlocked(_, _, true) = completed else { return XCTFail("\(completed)") }
+        let done = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(done.map { "\($0.path)|\($0.state)" }, ["a.txt|extracted", "b.txt|extracted", "c.txt|extracted"])
+        for word in ["aardvarkword", "bisonword", "caracalword"] {
+            let n = try await r5Found(env, word)
+            XCTAssertEqual(n, 1, word)
+        }
+        row = try XCTUnwrap(try coverage.rows(for: email.id).first)
+        XCTAssertEqual(row.state, .extracted)
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    private struct R5CoverageUnavailable: LocalizedError {
+        var errorDescription: String? { "the coverage file is unavailable" }
+    }
+
+    /// R5 item 5: a coverage store that cannot be opened is a failure of the
+    /// round, surfaced as such — never "resumed" with nothing recorded.
+    func testR5_resumeFailsExplicitlyWhenTheRoundCannotBeRecorded() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        let env = try chunkedEnv()
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = env.store
+        defer { AttachmentTextIndexJob.testStoreOverride = nil; AttachmentTextIndexJob.testSuppressKicks = false; AttachmentTextIndexJob.testCoverageStoreFactory = nil }
+        let ocrWas = AttachmentOCR.isEnabled
+        AttachmentOCR.isEnabled = false
+        defer { AttachmentOCR.isEnabled = ocrWas }
+        AttachmentTextIndexJob.installChildReader()
+        ExtractionLimits.baseOverride = ExtractionLimits(partBytes: 1_000, totalArchiveBytes: 1_000, archiveDepth: 3)
+        defer { ExtractionLimits.baseOverride = nil }
+        let email = try r5Message(Self.zipPackage(Self.r5Members()), id: "unrecorded")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = await AttachmentTextIndexJob.shared.run()
+
+        AttachmentTextIndexJob.testCoverageStoreFactory = { _ in throw R5CoverageUnavailable() }
+        let outcome = await AttachmentTextIndexJob.shared.resume(emailID: email.id, position: 0)
+        guard case .notRecorded(let why) = outcome else { return XCTFail("must not claim resumed: \(outcome)") }
+        XCTAssertTrue(why.hasPrefix("could not record the round:") && why.contains("unavailable"), why)
+        AttachmentTextIndexJob.testCoverageStoreFactory = nil
+        let coverageURL = await env.store.attachmentCoverageURL
+        let row = try XCTUnwrap(try AttachmentCoverageStore(url: coverageURL).rows(for: email.id).first)
+        XCTAssertEqual(row.resumeRound, 0, "no round was recorded")
+        let children = try await env.store.attachmentChildren(forEmailID: email.id)
+        XCTAssertEqual(children.map(\.state), ["extracted", "unsupported", "unsupported"], "nothing was rewritten")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 }

@@ -83,8 +83,11 @@ enum AppLimits {
                      why: String(localized: "Deeper archives are listed, not opened; Resume opens one more level per round.")),
             AppLimit(kind: .safety, what: String(localized: "OCR image size"), value: String(localized: "\(Int(AttachmentOCR.maxPixels)) px on the long side"),
                      why: String(localized: "Larger images are scaled down before recognition; every image is still read.")),
-            AppLimit(kind: .safety, what: String(localized: "Single message above"), value: bytes(Int64(MBOXParser.maxMessageBytes)),
-                     why: String(localized: "A message larger than this is kept by byte range and exported byte for byte, but its text is not searchable; the import receipt counts such messages.")),
+            AppLimit(kind: .safety, what: String(localized: "Messages inside messages, per run"), value: String(localized: "\(ExtractionLimits.base.messageDepth) levels"),
+                     why: String(localized: "Deeper attached messages are listed, not opened; Resume opens one more level per round.")),
+            // R5 (owner 2026-11-08: "there should be no limit at all"): no single-message ceiling.
+            AppLimit(kind: .none, what: String(localized: "Single message size"), value: String(localized: "no limit"),
+                     why: String(localized: "A message of any size is kept and exported byte for byte. One larger than \(bytes(OffsetImportEngine().fullParseCeilingBytes)) is read from its original file in slices after import and its text indexed whole for search; its attachments are found by name, their contents are not yet read.")),
             // Previous engines.
             AppLimit(kind: .previousEngine, what: String(localized: "Previous duplicate engine"), value: String(localized: "newest \(previousEngineDuplicateWindow) emails"),
                      why: String(localized: "Runs only when the whole-archive engine is switched off or has stopped; the screen states the window.")),

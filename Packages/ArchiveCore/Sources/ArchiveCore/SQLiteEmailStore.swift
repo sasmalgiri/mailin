@@ -2697,7 +2697,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         }
                         // FIND-07: the message's searchable documents, whole, in chunks.
                         if SearchChunkPolicy.isEnabled {
-                            try indexEmailSearchDocuments(db, email: email)
+                            try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false)
                         }
                         for domain in email.domains where !domain.isEmpty {
                             sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)

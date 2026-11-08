@@ -339,7 +339,10 @@ extension SQLiteEmailStore {
 
     /// The message's own documents: subject, sender, recipients (To, Cc and
     /// Bcc), body (plain text, or the HTML's text). Whole text, no budget.
-    func indexEmailSearchDocuments(_ db: OpaquePointer, email: MBOXParser.RawEmail) throws {
+    /// R5: a message stored from its headers only (`deferredBody`) has its body
+    /// in the original file — its body document is `partial` ("may match", not
+    /// "no text") until `StreamedBodyIndexer` streams it in.
+    func indexEmailSearchDocuments(_ db: OpaquePointer, email: MBOXParser.RawEmail, deferredBody: Bool = false) throws {
         let id = email.id.uuidString
         try indexSearchDocument(db, emailID: id, kind: .subject, ordinal: 0, text: email.headers["Subject"], state: .complete)
         try indexSearchDocument(db, emailID: id, kind: .sender, ordinal: 0, text: email.headers["From"], state: .complete)
@@ -347,8 +350,12 @@ extension SQLiteEmailStore {
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
         try indexSearchDocument(db, emailID: id, kind: .recipients, ordinal: 0, text: recipients, state: .complete)
         let body = email.plainBody.isEmpty ? FTSSearchIndex.stripHTMLText(email.htmlBody) : email.plainBody
-        try indexSearchDocument(db, emailID: id, kind: .body, ordinal: 0, text: body,
-                                state: body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .noText : .complete)
+        if deferredBody, body.isEmpty {
+            try indexSearchDocument(db, emailID: id, kind: .body, ordinal: 0, text: nil, state: .partial)
+        } else {
+            try indexSearchDocument(db, emailID: id, kind: .body, ordinal: 0, text: body,
+                                    state: body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .noText : .complete)
+        }
         if !email.attachments.isEmpty {
             let names = email.attachments.map(\.filename).joined(separator: "\n")
             try indexSearchDocument(db, emailID: id, kind: .attachmentName, ordinal: 0, text: names, state: .complete)
@@ -519,7 +526,9 @@ extension SQLiteEmailStore {
         let db = try ensureDB()
         try exec(db, SQLiteHygiene.beginWrite)
         do {
-            for email in emails { try indexEmailSearchDocuments(db, email: email) }
+            for email in emails {
+                try indexEmailSearchDocuments(db, email: email, deferredBody: try isDeferredBody(db, emailID: email.id.uuidString))
+            }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }
     }

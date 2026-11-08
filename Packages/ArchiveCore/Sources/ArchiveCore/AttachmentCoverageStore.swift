@@ -58,6 +58,9 @@ struct AttachmentCoverageRow: Sendable, Equatable {
     let note: String?
     /// §13.3 (10) / A10: how many Resume rounds this attachment has had (0 = the ordinary pass).
     var resumeRound: Int = 0
+    /// R5: the stored text came from an Unlock with "keep searchable" — a later
+    /// round without the password must keep it, never re-read it as locked.
+    var unlockedWithPassword: Bool = false
 }
 
 struct AttachmentCoverageSummary: Sendable, Equatable {
@@ -112,6 +115,12 @@ final class AttachmentCoverageStore {
         while sqlite3_step(columns) == SQLITE_ROW { if text(columns, 1) == "resume_round" { hasRound = true } }
         sqlite3_finalize(columns)
         if !hasRound { try exec("ALTER TABLE coverage ADD COLUMN resume_round INTEGER NOT NULL DEFAULT 0;") }
+        // R5: whether the stored text came from a kept Unlock — added 2026-11-08, same additive pattern.
+        let columns2 = try prepare("PRAGMA table_info(coverage);")
+        var hasUnlocked = false
+        while sqlite3_step(columns2) == SQLITE_ROW { if text(columns2, 1) == "unlocked" { hasUnlocked = true } }
+        sqlite3_finalize(columns2)
+        if !hasUnlocked { try exec("ALTER TABLE coverage ADD COLUMN unlocked INTEGER NOT NULL DEFAULT 0;") }
     }
 
     deinit { sqlite3_close(db) }
@@ -148,8 +157,8 @@ final class AttachmentCoverageStore {
             guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(db))) }
 
             let insert = try prepare("""
-                INSERT INTO coverage(email_id, ordinal, filename, mime_type, state, extractor, extractor_version, characters, note, updated_at, resume_round)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?);
+                INSERT INTO coverage(email_id, ordinal, filename, mime_type, state, extractor, extractor_version, characters, note, updated_at, resume_round, unlocked)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?);
             """)
             defer { sqlite3_finalize(insert) }
             let now = Int64(Date().timeIntervalSince1970)
@@ -166,6 +175,7 @@ final class AttachmentCoverageStore {
                 if let note = row.note { sqlite3_bind_text(insert, 9, note, -1, Self.transient) } else { sqlite3_bind_null(insert, 9) }
                 sqlite3_bind_int64(insert, 10, now)
                 sqlite3_bind_int64(insert, 11, Int64(row.resumeRound))
+                sqlite3_bind_int(insert, 12, row.unlockedWithPassword ? 1 : 0)
                 guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(db))) }
             }
             try exec("COMMIT;")
@@ -176,8 +186,8 @@ final class AttachmentCoverageStore {
     /// the other attachments of the message left exactly as they were.
     func record(row: AttachmentCoverageRow) throws {
         let upsert = try prepare("""
-            INSERT OR REPLACE INTO coverage(email_id, ordinal, filename, mime_type, state, extractor, extractor_version, characters, note, updated_at, resume_round)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?);
+            INSERT OR REPLACE INTO coverage(email_id, ordinal, filename, mime_type, state, extractor, extractor_version, characters, note, updated_at, resume_round, unlocked)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?);
         """)
         defer { sqlite3_finalize(upsert) }
         sqlite3_bind_text(upsert, 1, row.emailID.uuidString, -1, Self.transient)
@@ -191,13 +201,14 @@ final class AttachmentCoverageStore {
         if let note = row.note { sqlite3_bind_text(upsert, 9, note, -1, Self.transient) } else { sqlite3_bind_null(upsert, 9) }
         sqlite3_bind_int64(upsert, 10, Int64(Date().timeIntervalSince1970))
         sqlite3_bind_int64(upsert, 11, Int64(row.resumeRound))
+        sqlite3_bind_int(upsert, 12, row.unlockedWithPassword ? 1 : 0)
         guard sqlite3_step(upsert) == SQLITE_DONE else { throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(db))) }
     }
 
     /// Every attachment's state for one email, in attachment order.
     func rows(for emailID: UUID) throws -> [AttachmentCoverageRow] {
         let stmt = try prepare("""
-            SELECT ordinal, filename, mime_type, state, extractor, extractor_version, characters, note, resume_round
+            SELECT ordinal, filename, mime_type, state, extractor, extractor_version, characters, note, resume_round, unlocked
             FROM coverage WHERE email_id = ? ORDER BY ordinal;
         """)
         defer { sqlite3_finalize(stmt) }
@@ -209,7 +220,8 @@ final class AttachmentCoverageStore {
                 emailID: emailID, ordinal: Int(sqlite3_column_int64(stmt, 0)),
                 filename: text(stmt, 1) ?? "", mimeType: text(stmt, 2) ?? "", state: state,
                 extractor: text(stmt, 4) ?? "", extractorVersion: Int(sqlite3_column_int64(stmt, 5)),
-                characters: Int(sqlite3_column_int64(stmt, 6)), note: text(stmt, 7), resumeRound: Int(sqlite3_column_int64(stmt, 8))))
+                characters: Int(sqlite3_column_int64(stmt, 6)), note: text(stmt, 7), resumeRound: Int(sqlite3_column_int64(stmt, 8)),
+                unlockedWithPassword: sqlite3_column_int(stmt, 9) != 0))
         }
         return out
     }
