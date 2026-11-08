@@ -20,7 +20,7 @@ let package = Package(
         // lzma, iconv, OpenSSL or libxml2 (libarchive/config.h).
         .target(name: "CLibArchiveRAR",
                 path: "Sources/CLibArchiveRAR",
-                exclude: ["COPYING", "VENDORED.md", "VENDORED-SHA256SUMS"],
+                exclude: ["COPYING", "VENDORED.md", "VENDORED-SHA256SUMS", "patches"],
                 sources: ["mailin_rar.c", "libarchive"],
                 publicHeadersPath: "include",
                 // Upstream code kept verbatim: its 64→32-bit shortening

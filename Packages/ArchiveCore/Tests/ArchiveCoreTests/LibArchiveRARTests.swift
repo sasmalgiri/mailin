@@ -337,7 +337,7 @@ final class LibArchiveRARTests: XCTestCase {
         XCTAssertNil(member(.rar4, method: 0, version: 20).compressionRefusal, "stored is always read")
         XCTAssertEqual(member(.rar4, version: 20).compressionRefusal, "RAR 2.0 compression not opened (the RAR 1.5 and 2.0 algorithms are not in the vendored decoder)")
         XCTAssertEqual(member(.rar4, version: 15).compressionRefusal, "RAR 1.5 compression not opened (the RAR 1.5 and 2.0 algorithms are not in the vendored decoder)")
-        XCTAssertEqual(member(.rar4, version: 29, solid: true).compressionRefusal, "RAR 4 solid compression not opened (the vendored decoder reads only the first member of a RAR 4 solid archive)")
+        XCTAssertNil(member(.rar4, version: 29, solid: true).compressionRefusal, "R6: RAR 4 solid members after the first are decoded")
         XCTAssertNil(member(.rar5, version: 0, solid: true, dictionary: 32 << 20).compressionRefusal, "RAR 5 solid is read")
         XCTAssertEqual(member(.rar5, version: 1).compressionRefusal, "RAR 7.0 compression not opened (the vendored decoder reads the RAR 5.0 algorithm)")
         XCTAssertEqual(member(.rar5, version: 0, dictionary: 128 << 20).compressionRefusal,
@@ -385,6 +385,286 @@ final class LibArchiveRARTests: XCTestCase {
         try FileManager.default.removeItem(at: folder.appendingPathComponent("mail.part3.rar"))
         let gapPreflight = SourceFormatClassifier.preflight(url: folder.appendingPathComponent("mail.part1.rar"))
         XCTAssertTrue(gapPreflight.detail.contains("continue in another volume that is not in the folder"), gapPreflight.detail)
+    }
+
+    // MARK: - R6: RAR 4 solid, passwords, attached volume sets
+
+    /// libarchive test_read_format_rar_encryption.c: four files a…d.txt, each
+    /// "This is from <name>" (18 bytes); solid archives and archives with
+    /// encrypted file names use the password "password" for every file; the
+    /// non-solid ones leave a.txt and c.txt plain, b.txt under "password",
+    /// d.txt under "password2". WinRAR's CRC-32s (the RAR 4 headers):
+    static let encryptionFixtureCRCs: [String: UInt32] = ["a.txt": 0xEE5A_6E55, "b.txt": 0xA9FA_1485, "c.txt": 0x949A_3D35, "d.txt": 0x26BA_E125]
+    static func encryptionFixtureText(_ name: String) -> Data { Data("This is from \(name)".utf8) }
+
+    private func assertFourFiles(_ result: OfficeTextExtractor.Result, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        let byPath = children(result)
+        XCTAssertEqual(Set(byPath.keys), ["a.txt", "b.txt", "c.txt", "d.txt"], label, file: file, line: line)
+        for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            let child = byPath[name]
+            XCTAssertEqual(child?.state, .extracted, "\(label) \(name): \(child?.note ?? "")", file: file, line: line)
+            XCTAssertEqual(child?.text, "This is from \(name)", "\(label) \(name)", file: file, line: line)
+            XCTAssertEqual(child?.sha256, Self.sha256(Self.encryptionFixtureText(name)), "\(label) \(name)", file: file, line: line)
+        }
+    }
+
+    /// RAR 4 solid: every member after the first decoded (was "RAR 4 solid
+    /// compression not opened"), in order and out of order. The only RAR 4
+    /// solid files in libarchive's suite are encrypted, so the plain solid
+    /// archive is the decrypted view of one (headers and data exactly as
+    /// WinRAR's compressor wrote them), read from disk by the file path.
+    func testR6_rar4SolidMembersAfterTheFirstRead() throws {
+        let fixtureURL = fixture("test_read_format_rar4_solid_encrypted.rar")
+        let encrypted = try RARReader.read(url: fixtureURL)
+        XCTAssertTrue(encrypted.isSolid)
+        XCTAssertEqual(encrypted.members.map(\.isSolid), [false, true, true, true])
+        XCTAssertTrue(encrypted.members.allSatisfy { $0.method == 3 && $0.algorithmVersion == 29 })
+
+        let keyring = RARKeyring(password: "password")
+        let source = try FileRandomAccessSource(url: fixtureURL)
+        let stream = try RARReader.decryptedStream(format: .rar4, isSolid: true, members: encrypted.members, keyring: keyring, source: { _ in source })
+        var plainBytes = Data()
+        while true {
+            let n = stream.next()
+            XCTAssertGreaterThanOrEqual(n, 0)
+            if n <= 0 { break }
+            plainBytes.append(stream.bufferPointer.assumingMemoryBound(to: UInt8.self), count: n)
+        }
+        let plainURL = scratch.appendingPathComponent("solid4.rar")
+        try plainBytes.write(to: plainURL)
+
+        let plain = try RARReader.Extractor(url: plainURL)
+        XCTAssertTrue(plain.archive.isSolid)
+        XCTAssertEqual(plain.archive.members.map(\.name), ["a.txt", "b.txt", "c.txt", "d.txt"])
+        XCTAssertTrue(plain.archive.members.allSatisfy { !$0.isEncrypted && plain.refusal(for: $0) == nil })
+        // Out of order: the last member first (the pass decodes a, b, c on the way), then an earlier one (a second pass).
+        for name in ["d.txt", "b.txt", "a.txt", "c.txt", "d.txt"] {
+            let bytes = try extractWhole(plain, name)
+            XCTAssertEqual(bytes, Self.encryptionFixtureText(name), name)
+            XCTAssertEqual(Self.crc32(bytes), Self.encryptionFixtureCRCs[name], name)
+        }
+        // Through the attachment reader and the mail-source steps.
+        assertFourFiles(try DocumentTextExtractor.extract(fileURL: plainURL, kind: .rar, logicalName: "solid4.rar"), "plain solid")
+        let steps = try ParserFactory.containerSteps(plainURL, format: .rar)
+        let out = scratch.appendingPathComponent("c.txt")
+        try XCTUnwrap(steps.first { $0.name == "c.txt" }).extract(out)
+        XCTAssertEqual(try Data(contentsOf: out), Self.encryptionFixtureText("c.txt"))
+        XCTAssertEqual(SourceFormatClassifier.preflight(url: plainURL).condition, .ready)
+
+        // A damaged member of the solid stream: it and the members after it are named, never wrong bytes.
+        var damaged = [UInt8](plainBytes)
+        let b = try XCTUnwrap(plain.archive.members.first { $0.name == "b.txt" })
+        damaged[Int(b.dataOffset)] ^= 0xFF
+        let damagedURL = scratch.appendingPathComponent("damaged-solid4.rar")
+        try Data(damaged).write(to: damagedURL)
+        let byPath = children(try DocumentTextExtractor.extract(fileURL: damagedURL, kind: .rar, logicalName: "d.rar"))
+        XCTAssertEqual(byPath["a.txt"]?.state, .extracted)
+        for name in ["b.txt", "c.txt", "d.txt"] {
+            XCTAssertNotEqual(byPath[name]?.state, .extracted, "\(name): \(byPath[name]?.note ?? "")")
+            XCTAssertNotNil(byPath[name]?.note, name)
+        }
+    }
+
+    /// Encrypted members with the password given through Unlock…: RAR 3/4
+    /// (AES-128, SHA-1 key derivation) and RAR 5.0 (AES-256, PBKDF2, check
+    /// value, checksums keyed to the password), solid and not.
+    func testR6_encryptedMembersOpenWithPassword_wrongPasswordNamed() throws {
+        for name in ["test_read_format_rar4_encrypted.rar", "test_read_format_rar5_encrypted.rar"] {
+            // b.txt is under "password", d.txt under "password2".
+            let first = children(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name, password: "password"))
+            for plain in ["a.txt", "b.txt", "c.txt"] {
+                XCTAssertEqual(first[plain]?.state, .extracted, "\(name) \(plain): \(first[plain]?.note ?? "")")
+                XCTAssertEqual(first[plain]?.text, "This is from \(plain)", name)
+            }
+            XCTAssertEqual(first["d.txt"]?.state, .locked, name)
+            XCTAssertEqual(first["d.txt"]?.note, "the password did not open it", name)
+
+            let second = children(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name, password: "password2"))
+            XCTAssertEqual(second["d.txt"]?.state, .extracted, "\(name): \(second["d.txt"]?.note ?? "")")
+            XCTAssertEqual(second["d.txt"]?.text, "This is from d.txt")
+            XCTAssertEqual(second["b.txt"]?.note, "the password did not open it", name)
+            XCTAssertEqual(second["a.txt"]?.state, .extracted, "plain members do not need the password")
+
+            // Without a password: locked as before.
+            let none = children(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name))
+            XCTAssertEqual(none["b.txt"]?.note, "password-protected")
+        }
+
+        // Solid + encrypted, RAR 4 and RAR 5.0: every member, in order and out of order.
+        for name in ["test_read_format_rar4_solid_encrypted.rar", "test_read_format_rar5_solid_encrypted.rar"] {
+            assertFourFiles(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name, password: "password"), name)
+            let extractor = try RARReader.Extractor(url: fixture(name), password: "password")
+            for member in ["c.txt", "a.txt", "d.txt"] { XCTAssertEqual(try extractWhole(extractor, member), Self.encryptionFixtureText(member), "\(name) \(member)") }
+            let wrong = try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name, password: "not it")
+            XCTAssertEqual(wrong.children.count, 4)
+            XCTAssertTrue(wrong.children.allSatisfy { $0.state == .locked && $0.note == "the password did not open it" },
+                          "\(name): \(wrong.children.map { "\($0.path) \($0.state) \($0.note ?? "")" })")
+            let locked = try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name)
+            XCTAssertTrue(locked.children.allSatisfy { $0.state == .locked && $0.note == "password-protected" }, name)
+        }
+
+        // RAR 5.0 keys its checksums to the password: the stored CRC-32 is the MAC of WinRAR's plain one.
+        let rar5 = try RARReader.read(url: fixture("test_read_format_rar5_encrypted.rar"))
+        let b = try XCTUnwrap(rar5.members.first { $0.name == "b.txt" })
+        let encryption = try XCTUnwrap(b.encryption)
+        XCTAssertEqual(encryption.scheme, .rar5)
+        XCTAssertTrue(encryption.useMAC)
+        XCTAssertEqual(encryption.log2Count, 15)
+        let keys = RARCrypto.rar5Keys(password: "password", salt: try XCTUnwrap(encryption.salt), log2Count: encryption.log2Count)
+        XCTAssertEqual(keys.passwordCheck, encryption.passwordCheck, "the check value recognises the right password")
+        XCTAssertNotEqual(RARCrypto.rar5Keys(password: "password2", salt: encryption.salt!, log2Count: 15).passwordCheck, encryption.passwordCheck)
+        XCTAssertEqual(RARCrypto.mac(crc: Self.encryptionFixtureCRCs["b.txt"]!, hashKey: keys.hashKey), b.crc32)
+
+        // A wrong RAR 5.0 password is known from the check value alone; RAR 4 from the decode.
+        let rar5Extractor = try RARReader.Extractor(url: fixture("test_read_format_rar5_encrypted.rar"), password: "nope")
+        XCTAssertThrowsError(try extractWhole(rar5Extractor, "b.txt")) { error in
+            XCTAssertEqual(error as? RARReader.ReadError, .wrongPassword(member: "b.txt"))
+            XCTAssertEqual(ContainerTextExtractor.classify(error).note, "the password did not open it")
+            XCTAssertEqual(ContainerTextExtractor.classify(error).state, .locked)
+        }
+        let rar4Extractor = try RARReader.Extractor(url: fixture("test_read_format_rar4_encrypted.rar"), password: "nope")
+        XCTAssertThrowsError(try extractWhole(rar4Extractor, "b.txt")) { error in
+            XCTAssertEqual(error as? RARReader.ReadError, .wrongPassword(member: "b.txt"))
+        }
+    }
+
+    /// Encrypted headers (RAR 4 MHD_PASSWORD, RAR 5.0 archive encryption
+    /// header): the member list is known only with the password.
+    func testR6_encryptedHeadersOpenWithPassword() throws {
+        for name in ["test_read_format_rar4_encrypted_filenames.rar", "test_read_format_rar4_solid_encrypted_filenames.rar",
+                     "test_read_format_rar5_encrypted_filenames.rar", "test_read_format_rar5_solid_encrypted_filenames.rar"] {
+            XCTAssertThrowsError(try RARReader.read(url: fixture(name)), name) { error in
+                XCTAssertEqual(error as? RARReader.ReadError, .encryptedHeaders, name)
+            }
+            XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name), name) { error in
+                XCTAssertEqual(error as? OfficeTextExtractor.ExtractError, .encrypted, name)
+            }
+            XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name, password: "password2"), name) { error in
+                XCTAssertEqual(error as? OfficeTextExtractor.ExtractError, .wrongPassword, name)
+            }
+            let archive = try RARReader.read(url: fixture(name), password: "password")
+            XCTAssertTrue(archive.headersEncrypted, name)
+            XCTAssertNil(archive.damage, name)
+            XCTAssertEqual(archive.members.map(\.name), ["a.txt", "b.txt", "c.txt", "d.txt"], name)
+            for member in archive.members { XCTAssertEqual(member.unpackedSize, 18, name) }
+            assertFourFiles(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name, password: "password"), name)
+        }
+        // libarchive's other encrypted RAR 4 files (WinRAR, password "12345678"): foo.txt / bar.txt,
+        // "data of <name>\n", 16 bytes each, checked against WinRAR's CRC-32 (0xA6AD865C / 0xCD90E2BE).
+        func data(_ name: String) -> Data { Data("data of \(name)\n".utf8) }
+        for name in ["test_read_format_rar_encryption_header.rar", "test_read_format_rar_encryption_data.rar",
+                     "test_read_format_rar_encryption_partially.rar"] {
+            let extractor = try RARReader.Extractor(url: fixture(name), password: "12345678")
+            XCTAssertEqual(extractor.archive.members.map(\.name), ["foo.txt", "bar.txt"], name)
+            for member in ["foo.txt", "bar.txt"] {
+                let bytes = try extractWhole(extractor, member)
+                XCTAssertEqual(bytes, data(member), "\(name) \(member)")
+                XCTAssertEqual(Self.crc32(bytes), member == "foo.txt" ? 0xA6AD_865C : 0xCD90_E2BE, "\(name) \(member)")
+            }
+            let byPath = children(try DocumentTextExtractor.extract(fileURL: fixture(name), kind: .rar, logicalName: name, password: "12345678"))
+            XCTAssertEqual(byPath["foo.txt"]?.text, "data of foo.txt\n", name)
+            XCTAssertEqual(byPath["bar.txt"]?.state, .extracted, name)
+        }
+        XCTAssertThrowsError(try DocumentTextExtractor.extract(fileURL: fixture("test_read_format_rar_encryption_header.rar"), kind: .rar,
+                                                               logicalName: "h.rar", password: "password")) { error in
+            XCTAssertEqual(error as? OfficeTextExtractor.ExtractError, .wrongPassword)
+        }
+        // Partially encrypted: the plain member needs no password, the encrypted one is named.
+        let partial = children(try DocumentTextExtractor.extract(fileURL: fixture("test_read_format_rar_encryption_partially.rar"), kind: .rar,
+                                                                 logicalName: "p.rar", password: "wrong"))
+        XCTAssertEqual(partial["bar.txt"]?.text, "data of bar.txt\n")
+        XCTAssertEqual(partial["foo.txt"]?.note, "the password did not open it")
+    }
+
+    /// The SHA-1 under RAR 3's key derivation: identical to SHA-1 when the
+    /// write-back cannot happen (CryptoKit as the oracle, every length to
+    /// three blocks); the write-back changes the next round's input only
+    /// for a block hashed straight from the caller's buffer.
+    func testR6_rar29SHA1MatchesSHA1_andKeyDerivationPathsAgree() throws {
+        for length in [0, 1, 55, 56, 63, 64, 65, 127, 128, 191, 200] {
+            var data = (0..<length).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 3) }
+            var sha = RARCrypto.RAR29SHA1()
+            sha.update(&data, writeBack: false)
+            XCTAssertEqual(sha.finalize(), Array(Insecure.SHA1.hash(data: data)), "length \(length)")
+        }
+        var block = [UInt8](repeating: 0x61, count: 130)
+        let before = block
+        var quirk = RARCrypto.RAR29SHA1()
+        quirk.update(&block, writeBack: true)
+        XCTAssertEqual(quirk.finalize(), Array(Insecure.SHA1.hash(data: before)), "the digest itself is SHA-1")
+        // 130 bytes into an empty context: bytes 0…63 go through the context's own buffer, 64…127 are hashed in place.
+        XCTAssertEqual(Array(block[0..<64]), Array(before[0..<64]), "a block copied into the context is not written back")
+        XCTAssertNotEqual(Array(block[64..<128]), Array(before[64..<128]), "the block hashed from the caller's buffer was overwritten")
+        XCTAssertEqual(Array(block[128...]), Array(before[128...]), "the tail is untouched")
+        // Below 65 bytes of password + salt both derivations agree (the CryptoKit path is the one the fixtures verify).
+        let salt: [UInt8] = [1, 2, 3, 4, 5, 6, 7, 8]
+        XCTAssertEqual(RARCrypto.rar3KeyCryptoKitForTesting(password: "password", salt: salt), RARCrypto.rar3KeyQuirkForTesting(password: "password", salt: salt))
+    }
+
+    /// A two-volume RAR set attached to one message: the extractor reads it
+    /// with the other volume handed over as a sibling (the app's
+    /// `volumeSiblings`), whatever the attachment files are called on disk.
+    func testR6_twoVolumeSetAttachedAsSiblingsRead() throws {
+        let payload = Data((0..<3000).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
+        let second = Data("the second file, whole in volume 2\n".utf8)
+        let volumes = Self.twoVolumeStoredRAR4(splitting: payload, named: "report.bin", then: second, named: "notes.txt", at: 1200)
+        let v1 = scratch.appendingPathComponent(UUID().uuidString)
+        let v2 = scratch.appendingPathComponent(UUID().uuidString)
+        try volumes.0.write(to: v1)
+        try volumes.1.write(to: v2)
+
+        let extractor = try RARReader.Extractor(url: v1, logicalName: "mail.part1.rar", siblings: [.init(name: "mail.part2.rar", url: v2)])
+        XCTAssertTrue(extractor.isVolumeSet)
+        XCTAssertEqual(extractor.volumes.count, 2)
+        XCTAssertEqual(extractor.archive.members.map(\.name), ["report.bin", "notes.txt"])
+        XCTAssertEqual(extractor.archive.members[0].lastVolume, 1, "merged across the two volumes")
+        XCTAssertEqual(try extractWhole(extractor, "report.bin"), payload)
+        XCTAssertEqual(try extractWhole(extractor, "notes.txt"), second)
+
+        let result = try DocumentTextExtractor.extract(fileURL: v1, kind: .rar, logicalName: "mail.part1.rar",
+                                                       siblings: [.init(name: "mail.part2.rar", url: v2)])
+        let byPath = children(result)
+        assertDecoded(try XCTUnwrap(byPath["report.bin"]), equals: payload)
+        XCTAssertEqual(byPath["notes.txt"]?.text, "the second file, whole in volume 2\n")
+        // Opened from the second attachment, the first handed over.
+        let fromSecond = children(try DocumentTextExtractor.extract(fileURL: v2, kind: .rar, logicalName: "mail.part2.rar",
+                                                                    siblings: [.init(name: "mail.part1.rar", url: v1)]))
+        XCTAssertEqual(fromSecond["report.bin"]?.sha256, Self.sha256(payload))
+        // Without the sibling: the split member names the missing volume, the rest is read.
+        let alone = children(try DocumentTextExtractor.extract(fileURL: v1, kind: .rar, logicalName: "mail.part1.rar", siblings: []))
+        XCTAssertEqual(alone["report.bin"]?.note, "not opened: volume 2 (mail.part2.rar) missing")
+    }
+
+    /// A RAR 4 two-volume set written from the format description: stored
+    /// `first` split at `split` over the two volumes, `second` whole in volume 2.
+    static func twoVolumeStoredRAR4(splitting first: Data, named firstName: String, then second: Data, named secondName: String,
+                                    at split: Int) -> (Data, Data) {
+        func block(_ type: UInt8, _ flags: UInt16, _ body: [UInt8]) -> [UInt8] {
+            let size = UInt16(7 + body.count)
+            var b: [UInt8] = [0, 0, type, UInt8(flags & 0xFF), UInt8(flags >> 8), UInt8(size & 0xFF), UInt8(size >> 8)] + body
+            let crc = UInt16(truncatingIfNeeded: ZIPArchiveReader.CRC32.checksum(Data(b[2...])))
+            b[0] = UInt8(crc & 0xFF); b[1] = UInt8(crc >> 8)
+            return b
+        }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8(v >> 24)] }
+        func file(_ name: String, flags: UInt16, part: Data, total: Int, crc: UInt32) -> [UInt8] {
+            let n = [UInt8](name.utf8)
+            // PACK_SIZE, UNP_SIZE, HOST_OS (Windows), FILE_CRC, FTIME, UNP_VER 29, METHOD store, NAME_SIZE, ATTR (archive)
+            let body = le32(UInt32(part.count)) + le32(UInt32(total)) + [2] + le32(crc) + le32(0x5B21_0000) + [29, 0x30]
+                + [UInt8(n.count & 0xFF), UInt8(n.count >> 8)] + le32(0x20) + n
+            return block(0x74, 0x8000 | flags, body) + [UInt8](part)
+        }
+        let marker: [UInt8] = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00]
+        let partA = first.prefix(split), partB = first.suffix(from: split)
+        let crc = ZIPArchiveReader.CRC32.checksum
+        var v1 = marker + block(0x73, 0x0001 | 0x0100, [0, 0, 0, 0, 0, 0])
+        v1 += file(firstName, flags: 0x0002, part: Data(partA), total: first.count, crc: crc(Data(partA)))
+        v1 += block(0x7B, 0x4001, [])
+        var v2 = marker + block(0x73, 0x0001, [0, 0, 0, 0, 0, 0])
+        v2 += file(firstName, flags: 0x0001, part: Data(partB), total: first.count, crc: crc(first))
+        v2 += file(secondName, flags: 0, part: second, total: second.count, crc: crc(second))
+        v2 += block(0x7B, 0x4000, [])
+        return (Data(v1), Data(v2))
     }
 
     // MARK: - Robustness and attribution

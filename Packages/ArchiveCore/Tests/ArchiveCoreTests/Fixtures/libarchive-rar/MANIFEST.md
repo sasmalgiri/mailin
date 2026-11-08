@@ -8,6 +8,15 @@ Licence: BSD-2-Clause, as libarchive (see Packages/ArchiveCore/Sources/CLibArchi
 The expected contents and CRC-32 values the mailin tests assert are the ones libarchive's
 test_read_format_rar.c / test_read_format_rar5.c assert for the same files.
 
+Encrypted files (audit R6): libarchive's test_read_format_rar_encryption.c states the passwords and
+contents of the `rar4_*` / `rar5_*` encrypted files — four files a.txt … d.txt, "This is from <name>"
+(18 bytes); "password" for every file of the solid and encrypted-file-name archives; in the other two
+a.txt and c.txt plain, b.txt under "password", d.txt under "password2". The three
+`test_read_format_rar_encryption_{header,data,partially}.rar` files (foo.txt, bar.txt) carry no
+published password in libarchive's tests; "12345678" (libarchive's 7z/ZIP encryption test password)
+opens them and yields "data of foo.txt\n" / "data of bar.txt\n", which match the CRC-32 WinRAR
+wrote into their headers (0xA6AD865C, 0xCD90E2BE).
+
 | file | source | bytes | SHA-256 |
 |---|---|---|---|
 | test_read_format_rar.rar | libarchive/test/test_read_format_rar.rar.uu | 336 | d421b86f6290aefad61b2a36737253b2b30fe27c156bd95abfc230f24fe0307e |
@@ -38,3 +47,10 @@ test_read_format_rar.c / test_read_format_rar5.c assert for the same files.
 | test_read_format_rar5_multiarchive_solid.part02.rar | libarchive/test/test_read_format_rar5_multiarchive_solid.part02.rar.uu | 13312 | eb119ed53511905ca6f1844c164b6246d8fcdca0d1f38a8e3fb13da9c0932fbd |
 | test_read_format_rar5_multiarchive_solid.part03.rar | libarchive/test/test_read_format_rar5_multiarchive_solid.part03.rar.uu | 13312 | e814c3dbdaf3f613fd25c840065d25543f31e6b6c95505e7e25f47867a4812bd |
 | test_read_format_rar5_multiarchive_solid.part04.rar | libarchive/test/test_read_format_rar5_multiarchive_solid.part04.rar.uu | 3280 | 9ff5a4e633b0e82a2ce6e022f3d389654dbb77a0906a34f107676d6673989c9f |
+| test_read_format_rar4_encrypted_filenames.rar | libarchive/test/test_read_format_rar4_encrypted_filenames.rar.uu | 460 | 0201a8cd86c15c117c7541d841c36c0dbabb4824396f19889db5f7d5364e7ef9 |
+| test_read_format_rar4_solid_encrypted_filenames.rar | libarchive/test/test_read_format_rar4_solid_encrypted_filenames.rar.uu | 428 | 867341376d5b9a922ec3283c8111821b0435e4cbc493efde8b5083ae3b5ed340 |
+| test_read_format_rar5_encrypted_filenames.rar | libarchive/test/test_read_format_rar5_encrypted_filenames.rar.uu | 718 | b2b98004c9cbf4f2a4000380ad47a16dea99f2d50835b1602c40d724eb82c300 |
+| test_read_format_rar5_solid_encrypted.rar | libarchive/test/test_read_format_rar5_solid_encrypted.rar.uu | 475 | 307de6b76f6b7cc3a221975e14b8a6d7a6b87a30fd1ee7a0e08e4333724e5657 |
+| test_read_format_rar5_solid_encrypted_filenames.rar | libarchive/test/test_read_format_rar5_solid_encrypted_filenames.rar.uu | 654 | 61bcc1272cc827fe607f0388d19f8d48c54af9b2cdb7bc0e32ebd2e369c0847e |
+| test_read_format_rar_encryption_data.rar | libarchive/test/test_read_format_rar_encryption_data.rar.uu | 185 | 84ba9afcf0673aab0d1421d931e76a19294b12117483879c4b58598d3d71e83e |
+| test_read_format_rar_encryption_partially.rar | libarchive/test/test_read_format_rar_encryption_partially.rar.uu | 173 | 144ab2270d4f28a61a857d5ae6248e90ab3be5ed46dc2fc59f9c0a98c7f49407 |

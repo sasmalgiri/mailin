@@ -325,6 +325,11 @@ struct rar
   int64_t offset;
   int64_t offset_outgoing;
   int64_t offset_seek;
+  /* mailin patch (VENDORED.md, rar4-solid): window position where the
+   * current member of a RAR 4 solid stream starts (0 outside solid), and
+   * whether an earlier member of the solid stream failed to decode. */
+  int64_t solid_base;
+  char solid_broken;
   char valid;
   unsigned int unp_offset;
   unsigned int unp_buffer_size;
@@ -1115,7 +1120,7 @@ archive_read_format_rar_read_data(struct archive_read *a, const void **buff,
   *buff = NULL;
   if (rar->entry_eof || rar->offset_seek >= rar->unp_size) {
     *size = 0;
-    *offset = rar->offset;
+    *offset = rar->offset - rar->solid_base; /* mailin patch (rar4-solid) */
     return (ARCHIVE_EOF);
   }
 
@@ -1130,11 +1135,23 @@ archive_read_format_rar_read_data(struct archive_read *a, const void **buff,
   case COMPRESS_METHOD_NORMAL:
   case COMPRESS_METHOD_GOOD:
   case COMPRESS_METHOD_BEST:
+    /* mailin patch (rar4-solid): a member after a failed one in the same
+     * solid stream cannot be decoded. */
+    if (rar->solid_broken && (rar->file_flags & FHD_SOLID)) {
+      archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+                        "an earlier member of the RAR solid stream could not be decoded");
+      return (ARCHIVE_FAILED);
+    }
     ret = read_data_compressed(a, buff, size, offset, 0);
-    if (ret != ARCHIVE_OK && ret != ARCHIVE_WARN) {
+    /* mailin patch (rar4-solid): the end of a member is not the end of a
+     * solid stream — its tables and PPMd model carry over. */
+    if (ret != ARCHIVE_OK && ret != ARCHIVE_WARN &&
+        !(ret == ARCHIVE_EOF && (rar->main_flags & MHD_SOLID))) {
       __archive_ppmd7_functions.Ppmd7_Free(&rar->ppmd7_context);
       rar->start_new_table = 1;
       rar->ppmd_valid = 0;
+      if (ret != ARCHIVE_EOF && (rar->main_flags & MHD_SOLID))
+        rar->solid_broken = 1;
     }
     break;
 
@@ -1153,6 +1170,24 @@ archive_read_format_rar_read_data_skip(struct archive_read *a)
   struct rar *rar = a->format->data;
   int64_t bytes_skipped;
   int ret;
+
+  /* mailin patch (rar4-solid): in a solid archive a compressed member is
+   * decoded (output discarded) rather than skipped — the members after it
+   * continue its window. A failure marks the stream broken; the bytes are
+   * then skipped as before. */
+  if ((rar->main_flags & MHD_SOLID) && !rar->entry_eof && !rar->solid_broken &&
+      rar->compression_method != COMPRESS_METHOD_STORE)
+  {
+    const void *discard;
+    size_t discard_size;
+    int64_t discard_offset;
+    do {
+      ret = archive_read_format_rar_read_data(a, &discard, &discard_size,
+                                              &discard_offset);
+    } while (ret == ARCHIVE_OK || ret == ARCHIVE_WARN);
+    if (ret != ARCHIVE_EOF)
+      rar->solid_broken = 1;
+  }
 
   if (rar->bytes_unconsumed > 0) {
       /* Consume as much as the decompressor actually used. */
@@ -1409,7 +1444,8 @@ read_header(struct archive_read *a, struct archive_entry *entry,
   crc32_computed = __archive_crc32(0, (const unsigned char *)p + 2, 7 - 2);
   __archive_read_consume(a, 7);
 
-  if (!(rar->file_flags & FHD_SOLID))
+  /* mailin patch (rar4-solid): a solid member's header is read like any
+   * other; its decoder state is carried over below instead of refused. */
   {
     rar->compression_method = 0;
     rar->packed_size = 0;
@@ -1428,12 +1464,6 @@ read_header(struct archive_read *a, struct archive_entry *entry,
     rar->mnsec = 0;
     rar->arctime = 0;
     rar->arcnsec = 0;
-  }
-  else
-  {
-    archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
-                      "RAR solid archive support unavailable");
-    return (ARCHIVE_FATAL);
   }
 
   if ((h = __archive_read_ahead(a, (size_t)header_size - 7, NULL)) == NULL)
@@ -1807,6 +1837,44 @@ read_header(struct archive_read *a, struct archive_entry *entry,
     return (ARCHIVE_FATAL);
   }
 
+  if ((rar->main_flags & MHD_SOLID) && (rar->file_flags & FHD_SOLID) &&
+      head_type == FILE_HEAD)
+  {
+    /* mailin patch (rar4-solid): the member continues the solid stream
+     * (unrar Unpack29(Solid=true)). The window, its position, the Huffman
+     * tables, the PPMd model, the repeat distances and the filter programs
+     * stay; a new bit stream starts at this member's packed data; output
+     * is counted from this member's start. Pending filter blocks belong to
+     * the previous member and are dropped (unrar InitFilters30). */
+    rar->bytes_uncopied = rar->bytes_unconsumed = 0;
+    if (rar->compression_method == COMPRESS_METHOD_STORE)
+      rar->offset = 0;
+    else
+      rar->offset = lzss_position(&rar->lzss);
+    rar->solid_base = rar->offset;
+    rar->offset_seek = 0;
+    rar->offset_outgoing = 0;
+    rar->br.cache_avail = 0;
+    rar->br.avail_in = 0;
+    rar->br.next_in = NULL;
+    rar->crc_calculated = 0;
+    rar->entry_eof = 0;
+    rar->valid = 1;
+    free(rar->unp_buffer);
+    rar->unp_buffer = NULL;
+    rar->unp_offset = 0;
+    rar->unp_buffer_size = UNP_BUFFER_SIZE;
+    rar->ppmd_eod = 0;
+    delete_filter(rar->filters.stack);
+    rar->filters.stack = NULL;
+    rar->filters.filterstart = INT64_MAX;
+    rar->filters.lastend = 0;
+    rar->filters.bytes_ready = 0;
+  }
+  else
+  {
+  rar->solid_base = 0;
+  rar->solid_broken = 0;
   rar->bytes_uncopied = rar->bytes_unconsumed = 0;
   rar->lzss.position = rar->offset = 0;
   rar->offset_seek = 0;
@@ -1828,6 +1896,7 @@ read_header(struct archive_read *a, struct archive_entry *entry,
   __archive_ppmd7_functions.Ppmd7_Free(&rar->ppmd7_context);
   rar->ppmd_valid = rar->ppmd_eod = 0;
   rar->filters.filterstart = INT64_MAX;
+  }
 
   archive_entry_set_mtime(entry, rar->mtime, rar->mnsec);
   archive_entry_set_ctime(entry, rar->ctime, rar->cnsec);
@@ -2090,7 +2159,7 @@ read_data_compressed(struct archive_read *a, const void **buff, size_t *size,
     }
 
     if (rar->ppmd_eod ||
-       (rar->dictionary_size && rar->offset >= rar->unp_size))
+       (rar->dictionary_size && rar->offset - rar->solid_base >= rar->unp_size))
     {
       if (rar->unp_offset > 0) {
         /*
@@ -2108,7 +2177,7 @@ read_data_compressed(struct archive_read *a, const void **buff, size_t *size,
       }
       *buff = NULL;
       *size = 0;
-      *offset = rar->offset;
+      *offset = rar->offset - rar->solid_base; /* mailin patch (rar4-solid) */
       if (rar->file_crc != rar->crc_calculated) {
 #ifndef DONT_FAIL_ON_CRC_ERROR
         archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
@@ -2547,8 +2616,18 @@ parse_codes(struct archive_read *a)
       return (r);
   }
 
-  if (!rar->dictionary_size || !rar->lzss.window ||
-      (unsigned int)(rar->lzss.mask + 1) < rar->dictionary_size)
+  /* mailin patch (rar4-solid): a solid archive's window is the largest RAR 3
+   * dictionary from its first table on and is never reallocated or cleared —
+   * later members refer back into it. */
+  if ((rar->main_flags & MHD_SOLID) && rar->lzss.window &&
+      (unsigned int)(rar->lzss.mask + 1) == DICTIONARY_MAX_SIZE)
+  {
+    rar->dictionary_size = DICTIONARY_MAX_SIZE;
+  }
+  else if (!rar->dictionary_size || !rar->lzss.window ||
+      (unsigned int)(rar->lzss.mask + 1) < rar->dictionary_size ||
+      ((rar->main_flags & MHD_SOLID) &&
+       (unsigned int)(rar->lzss.mask + 1) != DICTIONARY_MAX_SIZE))
   {
     /* Seems as though dictionary sizes are not used. Even so, minimize
      * memory usage as much as possible.
@@ -2556,7 +2635,7 @@ parse_codes(struct archive_read *a)
     void *new_window;
     unsigned int new_size;
 
-    if (rar->unp_size >= DICTIONARY_MAX_SIZE)
+    if (rar->unp_size >= DICTIONARY_MAX_SIZE || (rar->main_flags & MHD_SOLID))
       new_size = DICTIONARY_MAX_SIZE;
     else
       new_size = rar_fls((unsigned int)rar->unp_size) << 1;
@@ -3503,7 +3582,7 @@ run_filters(struct archive_read *a)
   ret = copy_from_lzss_window(a, filters->vm->memory, start, filter->blocklength);
   if (ret != ARCHIVE_OK)
     return 0;
-  if (!execute_filter(a, filter, filters->vm, (size_t)rar->offset))
+  if (!execute_filter(a, filter, filters->vm, (size_t)(rar->offset - rar->solid_base)))
     return 0;
 
   lastfilteraddress = filter->filteredblockaddress;
@@ -3515,7 +3594,7 @@ run_filters(struct archive_read *a)
   while ((filter = filters->stack) != NULL && (int64_t)filter->blockstartpos == filters->filterstart && filter->blocklength == lastfilterlength)
   {
     memmove(&filters->vm->memory[0], &filters->vm->memory[lastfilteraddress], lastfilterlength);
-    if (!execute_filter(a, filter, filters->vm, (size_t)rar->offset))
+    if (!execute_filter(a, filter, filters->vm, (size_t)(rar->offset - rar->solid_base)))
       return 0;
 
     lastfilteraddress = filter->filteredblockaddress;

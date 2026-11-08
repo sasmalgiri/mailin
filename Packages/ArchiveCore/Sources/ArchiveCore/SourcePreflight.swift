@@ -169,7 +169,7 @@ extension SourceFormatClassifier {
         let extractor: RARReader.Extractor
         do { extractor = try RARReader.Extractor(url: url, logicalName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url)) }
         catch RARReader.ReadError.encryptedHeaders {
-            return SourcePreflight(condition: .encrypted, detail: "the archive's headers are encrypted; its members are unknown until it is unlocked (RAR decryption is not implemented)")
+            return SourcePreflight(condition: .encrypted, detail: "the archive's headers are encrypted; its members are unknown until it is unlocked (no password is asked for on import)")
         } catch {
             return SourcePreflight(condition: .damaged, detail: "the RAR headers could not be read: \(error)")
         }
@@ -184,7 +184,7 @@ extension SourceFormatClassifier {
         let notOpened = refusals.count - onMissingVolume
         let readable = files.count - encrypted - refusals.count
         if !files.isEmpty, encrypted == files.count {
-            return SourcePreflight(condition: .encrypted, detail: "every one of its \(files.count) files is encrypted; RAR decryption is not implemented", encryptedMembers: encrypted)
+            return SourcePreflight(condition: .encrypted, detail: "every one of its \(files.count) files is encrypted (no password is asked for on import)", encryptedMembers: encrypted)
         }
         if !files.isEmpty, readable == 0 {
             return SourcePreflight(condition: .unsupported,
