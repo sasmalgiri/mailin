@@ -4664,9 +4664,14 @@ final class V2CutoverTests: XCTestCase {
         // Two rows share the Message-ID and the content → ambiguous.
         guard case .ambiguous(let twin) = matcher.match(parsed("<c@x>", subject: "Gamma"), ordinal: 2) else { return XCTFail("two rows") }
         XCTAssertTrue(twin.reason.contains("2 rows"), twin.reason)
-        // A file whose hash differs is trusted on Message-ID + content only.
+        // A file whose hash differs is trusted only when the row's own content
+        // (stored body or attachment hashes) confirms it — audit R4. This row
+        // keeps neither, so Message-ID + metadata is not enough: ambiguous.
         let unverified = RawSourceRecovery.Matcher(candidates: [a, b], verifiedFile: false)
-        XCTAssertEqual(unverified.match(parsed("<a@x>", subject: "Alpha"), ordinal: 0), .match(a, strong: true))
+        guard case .ambiguous(let changed) = unverified.match(parsed("<a@x>", subject: "Alpha"), ordinal: 0) else {
+            return XCTFail("a changed file is not trusted on Message-ID and metadata alone")
+        }
+        XCTAssertTrue(changed.reason.contains("no body or attachment fingerprint"), changed.reason)
         XCTAssertEqual(unverified.match(parsed(nil, subject: "Beta"), ordinal: 1), .none, "no ordinal fallback in an unverified file")
         // The provenance label round-trips.
         let stamped = RawSourceProvenance.stamp(rawSource: "X-Mailin-Rendered: Outlook\r\nSubject: s\r\n\r\nbody", sourceFilename: "two.pst", date: Date(timeIntervalSince1970: 1_762_500_000), verified: false)
@@ -6292,8 +6297,9 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: m4a.path) && FileManager.default.fileExists(atPath: aiff.path), "real recordings made with the system voice")
 
         // The person must have allowed speech recognition for the test host once; without that the test says so and skips.
-        var status = AttachmentSpeech.authorizationStatus()
-        if status == .notDetermined { status = await AttachmentSpeech.requestAuthorization() }
+        // Never ask from a test: an unanswered system prompt (e.g. on a simulator) waited
+        // 8 hours on 2026-11-08. Not yet decided → skip with the reason.
+        let status = AttachmentSpeech.authorizationStatus()
         try XCTSkipUnless(status == .authorized, "speech recognition is not authorised for the test host (status \(status.rawValue)) — allow it once in System Settings ▸ Privacy & Security ▸ Speech Recognition")
         try XCTSkipUnless(AttachmentSpeech.onDeviceRecognizer() != nil, "no on-device speech model is installed on this Mac")
 
@@ -8950,6 +8956,7 @@ final class V2CutoverTests: XCTestCase {
         let wasOn = SearchChunkPolicy.isEnabled
         defer { SearchChunkPolicy.isEnabled = wasOn }
         let env = try chunkedEnv()
+        try FileManager.default.createDirectory(at: env.root, withIntermediateDirectories: true)
         let url = env.root.appendingPathComponent("r5-large.mbox")
         let filler = String(repeating: "ordinary words about the quarterly ledger and the board.\n", count: 6_000)   // ~350 KB
         try """
