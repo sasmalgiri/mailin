@@ -51,7 +51,25 @@ final class ExportRunCenter {
     /// overlay presents it as a sheet; Start hands it to `ExportJobRunner`.
     var pendingPreflight: ExportRequest?
 
-    private init() {}
+    /// Where receipts are kept (tests use a temporary folder).
+    let receiptStore: ExportReceiptStore
+
+    init(receiptStore: ExportReceiptStore = .production) {
+        self.receiptStore = receiptStore
+        #if os(iOS)
+        deliverHandler = { await PlatformExport.shareAndWait($0) }
+        #endif
+    }
+
+    // MARK: R1 — delivery, tracked apart from the run
+
+    /// How a written file is handed on once the run has ended (iOS: the Share
+    /// sheet). Nil where the destination was chosen before writing (Mac).
+    var deliverHandler: (@MainActor (URL) async -> ExportOutcome)?
+    /// The receipt whose file is being handed on right now, if any.
+    private(set) var deliveringReceiptID: UUID?
+    private var deliveryTask: Task<Void, Never>?
+    private var restoredAfterLaunch = false
 
     /// Every export enters here: show the pre-flight sheet for `request`.
     /// Refused while a run is active, like `run`.
@@ -101,8 +119,91 @@ final class ExportRunCenter {
         produced = count
     }
 
+    /// The run card's Cancel: stops the run, and a hand-off waiting on screen.
     func cancel() {
         task?.cancel()
+        cancelDelivery()
+    }
+
+    /// R1: stop waiting for the Share sheet / Save to Files. The hand-off
+    /// settles as cancelled and the receipt says "not saved"; the file stays offered.
+    func cancelDelivery() {
+        deliveryTask?.cancel()
+    }
+
+    /// R1: hand a written file on — the Share sheet (default) or `handler`
+    /// (Save to Files). The receipt was saved as awaiting delivery before this
+    /// runs; it is saved again with what the hand-off really did. A hand-off
+    /// already on its way is cancelled first, so only one ever waits.
+    func deliver(_ receipt: ExportReceipt, using handler: (@MainActor (URL) async -> ExportOutcome)? = nil) {
+        guard let handler = handler ?? deliverHandler else { return }
+        let previous = deliveryTask
+        previous?.cancel()
+        deliveringReceiptID = receipt.id
+        deliveryTask = Task { @MainActor [weak self] in
+            await previous?.value
+            let outcome = await handler(receipt.destinationURL)
+            guard let self else { return }
+            if let shown = self.lastReceipt, shown.id == receipt.id {
+                self.replace(Self.receipt(shown, afterDelivery: outcome))
+            } else {
+                // A newer export's receipt is on screen: record this one on disk only.
+                _ = try? self.receiptStore.save(Self.receipt(receipt, afterDelivery: outcome))
+            }
+            if self.deliveringReceiptID == receipt.id { self.deliveringReceiptID = nil }
+        }
+    }
+
+    /// What a hand-off did, on the receipt. A later Share sheet closed without
+    /// saving does not undo an earlier hand-off that really happened.
+    nonisolated static func receipt(_ receipt: ExportReceipt, afterDelivery outcome: ExportOutcome) -> ExportReceipt {
+        var updated = ExportJobRunner.receipt(receipt, after: outcome)
+        if case .cancelled = outcome, receipt.delivery == .shared || receipt.delivery == .saved {
+            updated.delivery = receipt.delivery
+            updated.deliveryNote = receipt.deliveryNote
+        }
+        return updated
+    }
+
+    /// R1: after a relaunch, the newest receipt that was still waiting to be
+    /// handed on is shown again, waiting, with its file offered — never a run
+    /// in progress. If the system removed the written file meanwhile, the
+    /// receipt says so instead of offering a file that is gone.
+    nonisolated static func relaunchReceipt(_ receipt: ExportReceipt, fileExists: Bool) -> ExportReceipt? {
+        guard receipt.delivery == .awaitingDelivery else { return nil }
+        if fileExists { return receipt }
+        var gone = receipt
+        gone.delivery = .failed
+        gone.deliveryNote = String(localized: "the written file was removed from mailin's temporary folder before it was saved or shared; export again")
+        return gone
+    }
+
+    /// Called once when the export overlay first appears.
+    func restoreAfterLaunch() async {
+        guard !restoredAfterLaunch else { return }
+        restoredAfterLaunch = true
+        guard !isActive, lastReceipt == nil else { return }
+        let store = receiptStore
+        let newest: (URL, ExportReceipt)? = await Task.detached(priority: .utility) {
+            guard let url = store.list().first, let stored = try? store.load(url),
+                  let receipt = Self.relaunchReceipt(stored, fileExists: FileManager.default.fileExists(atPath: stored.destination))
+            else { return nil }
+            return (url, receipt)
+        }.value
+        guard let (url, found) = newest, !isActive, lastReceipt == nil else { return }
+        if found.delivery == .awaitingDelivery {
+            lastReceipt = found
+            lastReceiptURL = url
+            showReceipt = true
+        } else {
+            replace(found)
+        }
+    }
+
+    /// Tests: wait for the run and any hand-off it started to end.
+    func waitUntilIdle() async {
+        await task?.value
+        await deliveryTask?.value
     }
 
     /// The export body records what it did. Called at most once per run; a
@@ -203,7 +304,7 @@ final class ExportRunCenter {
             ? await ExportReconciliation.reconcile(folder: destination, lookup: Self.sourceLookup())
             : await ExportReconciliation.reconcile(file: destination, promised: receipt.written, lookup: Self.sourceLookup())
         updated.contentLine = Self.reconciliationText(report)
-        updated.contentReportPath = (try? ExportReceiptStore.production.saveContentReport(report, for: receipt))?.path
+        updated.contentReportPath = (try? receiptStore.saveContentReport(report, for: receipt))?.path
         replace(updated)
     }
 
@@ -328,21 +429,9 @@ final class ExportRunCenter {
         return line
     }
 
-    #if os(iOS)
-    /// IPAD-09: show the Share sheet again for a written file and record what it did.
-    func deliverAgain(_ receipt: ExportReceipt) async {
-        let outcome = await ExportJobRunner.shared.deliver(receipt.destinationURL)
-        var updated = ExportJobRunner.receipt(receipt, after: outcome)
-        if case .cancelled = outcome, receipt.delivery == .shared || receipt.delivery == .saved {
-            updated.delivery = receipt.delivery   // an earlier hand-off still stands
-        }
-        replace(updated)
-    }
-    #endif
-
     private func replace(_ receipt: ExportReceipt) {
         lastReceipt = receipt
-        lastReceiptURL = try? ExportReceiptStore.production.save(receipt)
+        lastReceiptURL = try? receiptStore.save(receipt)
         showReceipt = true
     }
 
@@ -354,14 +443,17 @@ final class ExportRunCenter {
             written: done, outcome: .failed,
             errorMessage: "The export ended without reporting a result.",
             startedAt: startedAt, completedAt: Date())
+        // R1: the receipt is on disk (awaiting delivery, where the file is still
+        // to be handed on) and the run is over BEFORE any Share sheet is shown.
         lastReceipt = receipt
-        lastReceiptURL = try? ExportReceiptStore.production.save(receipt)
+        lastReceiptURL = try? receiptStore.save(receipt)
         showReceipt = true
         isActive = false
         task = nil
         done = 0
         total = 0
         pendingReceipt = nil
+        if receipt.delivery == .awaitingDelivery { deliver(receipt) }
     }
 }
 
@@ -390,6 +482,8 @@ struct ExportProgressOverlayView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: center.isActive)
         .animation(.easeInOut(duration: 0.2), value: center.showReceipt)
+        // R1: a receipt still waiting to be handed on when mailin last closed is offered again.
+        .task { await center.restoreAfterLaunch() }
         // A8: every export passes through the pre-flight sheet.
         .sheet(item: Binding(get: { center.pendingPreflight },
                              set: { center.pendingPreflight = $0 })) { request in
@@ -479,6 +573,15 @@ struct ExportProgressOverlayView: View {
                     .accessibilityIdentifier("export.receipt.inventory")
             }
 
+            // R1: where the file stands after the write — waiting, or what the hand-off did.
+            if let delivery = Self.deliveryLine(receipt) {
+                Text(delivery)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("export.receipt.delivery")
+            }
+
             if let error = receipt.errorMessage {
                 Text(error)
                     .font(.system(size: 11))
@@ -560,15 +663,28 @@ struct ExportProgressOverlayView: View {
                     .accessibilityIdentifier("export.receipt.verify")
                 }
                 #if os(iOS)
-                // IPAD-09: the written file is still inside mailin — offer the Share sheet again.
-                if receipt.destination != "—", !receipt.isDelivered {
+                // IPAD-09 / R1: the written file is still inside mailin — offer it again,
+                // or stop waiting for a hand-off that is on its way.
+                if center.deliveringReceiptID == receipt.id {
+                    ProgressView().controlSize(.small)
+                    Button(String(localized: "Cancel")) { center.cancelDelivery() }
+                        .font(.system(size: 11))
+                        .accessibilityIdentifier("export.receipt.cancelDelivery")
+                } else if receipt.destination != "—", !receipt.isDelivered {
                     Button {
-                        Task { await center.deliverAgain(receipt) }
+                        center.deliver(receipt)
                     } label: {
                         Label(String(localized: "Save or share…"), systemImage: "square.and.arrow.up")
                     }
                     .font(.system(size: 11))
                     .accessibilityIdentifier("export.receipt.shareAgain")
+                    Button {
+                        center.deliver(receipt, using: { await PlatformExport.saveToFilesAndWait($0) })
+                    } label: {
+                        Label(String(localized: "Save to Files…"), systemImage: "folder")
+                    }
+                    .font(.system(size: 11))
+                    .accessibilityIdentifier("export.receipt.saveToFiles")
                 }
                 #endif
                 #if os(macOS)
@@ -596,6 +712,20 @@ struct ExportProgressOverlayView: View {
         .padding(.bottom, 32)
         .transition(.opacity)
         .accessibilityIdentifier("export.receipt")
+    }
+
+    /// R1: the receipt's delivery state in the person's language. Nil where
+    /// nothing is handed on after writing (Mac).
+    static func deliveryLine(_ receipt: ExportReceipt) -> String? {
+        guard let delivery = receipt.delivery else { return nil }
+        switch delivery {
+        case .awaitingDelivery:
+            return String(localized: "Written — waiting for you to save or share it")
+        case .failed where receipt.outcome == .complete:
+            return nil   // the verdict line already carries the reason
+        case .saved, .shared, .notSaved, .failed:
+            return receipt.deliveryNote
+        }
     }
 
     /// IPAD-09: a file written but not handed on is not shown as a green "Complete".

@@ -5311,3 +5311,253 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertFalse(receipt.reconciliationLine?.contains("1 extra copies") ?? true)
     }
 }
+
+/// R1 (release audit bf1a5b9): the iOS export hand-off never waits forever.
+/// The written file and its receipt are recorded (awaiting delivery) before the
+/// hand-off; the hand-off resumes exactly once on every path; the run ends when
+/// the write ends. The presenter is injected, so these run without UIKit.
+@MainActor
+final class ExportHandoffR1Tests: XCTestCase {
+
+    final class FakePresenter: ExportHandoffPresenting {
+        enum Script { case answer([ExportOutcome]), failToPresent(String), never }
+        let script: Script
+        var presentCalls = 0
+        var dismissCalls = 0
+        var onPresent: (() -> Void)?
+        init(_ script: Script) { self.script = script }
+        func present(_ url: URL, completion: @escaping @MainActor (ExportOutcome) -> Void) async -> String? {
+            presentCalls += 1
+            onPresent?()
+            switch script {
+            case .answer(let outcomes):
+                for outcome in outcomes { completion(outcome) }
+                return nil
+            case .failToPresent(let why):
+                return why
+            case .never:
+                return nil
+            }
+        }
+        func dismiss() { dismissCalls += 1 }
+    }
+
+    private let url = URL(fileURLWithPath: "/tmp/mailin_emails.mbox")
+
+    private func waitFor(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<500 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(condition(), "timed out", file: file, line: line)
+    }
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("r1_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return dir
+    }
+
+    private func writtenReceipt(_ file: URL) -> ExportReceipt {
+        ExportReceipt(title: "mbox export", destination: file.path, isFolder: false, requested: 51, written: 51,
+                      outcome: .complete, startedAt: Date(), completedAt: Date())
+    }
+
+    func testR1_handoffResumesOnceOnSuccessAndCancel() async {
+        let shared = ExportHandoff(presenter: FakePresenter(.answer([.shared(url)])))
+        let sharedOutcome = await shared.run(url)
+        XCTAssertEqual(sharedOutcome, .shared(url))
+        XCTAssertEqual(shared.resumeCount, 1)
+
+        let closed = ExportHandoff(presenter: FakePresenter(.answer([.cancelled])))
+        let closedOutcome = await closed.run(url)
+        XCTAssertEqual(closedOutcome, .cancelled)
+        XCTAssertEqual(closed.resumeCount, 1)
+    }
+
+    func testR1_handoffResumesOnceWhenPresentationFails() async {
+        let handoff = ExportHandoff(presenter: FakePresenter(.failToPresent("another sheet was still closing")))
+        let outcome = await handoff.run(url)
+        XCTAssertEqual(outcome, .failed("another sheet was still closing"))
+        XCTAssertEqual(handoff.resumeCount, 1)
+    }
+
+    func testR1_doubleCallbackIsIgnored() async {
+        let handoff = ExportHandoff(presenter: FakePresenter(.answer([.shared(url), .cancelled, .failed("late")])))
+        let outcome = await handoff.run(url)
+        XCTAssertEqual(outcome, .shared(url))
+        XCTAssertEqual(handoff.resumeCount, 1)
+        XCTAssertEqual(handoff.ignoredCallbacks, 2)
+    }
+
+    func testR1_taskCancellationReleasesASheetThatNeverAnswers() async throws {
+        let presenter = FakePresenter(.never)
+        let handoff = ExportHandoff(presenter: presenter)
+        let task = Task { @MainActor in await handoff.run(url) }
+        try await waitFor { presenter.presentCalls == 1 }
+        task.cancel()
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertEqual(handoff.resumeCount, 1)
+        XCTAssertGreaterThanOrEqual(presenter.dismissCalls, 1, "the sheet is taken away")
+
+        // cancel() directly (the run card's Cancel) does the same; a second cancel changes nothing.
+        let other = FakePresenter(.never)
+        let direct = ExportHandoff(presenter: other)
+        let running = Task { @MainActor in await direct.run(url) }
+        try await waitFor { other.presentCalls == 1 }
+        direct.cancel()
+        direct.cancel()
+        let directOutcome = await running.value
+        XCTAssertEqual(directOutcome, .cancelled)
+        XCTAssertEqual(direct.resumeCount, 1)
+
+        // A task cancelled before the hand-off starts never shows a sheet.
+        let unused = FakePresenter(.answer([.shared(url)]))
+        let early = ExportHandoff(presenter: unused)
+        let cancelledFirst = Task { @MainActor () -> ExportOutcome in
+            try? await Task.sleep(for: .seconds(30))
+            return await early.run(url)
+        }
+        cancelledFirst.cancel()
+        let earlyOutcome = await cancelledFirst.value
+        XCTAssertEqual(earlyOutcome, .cancelled)
+        XCTAssertEqual(unused.presentCalls, 0)
+    }
+
+    func testR1_receiptIsAwaitingDeliveryBeforePresenterAndRunIsFinished() async throws {
+        let dir = try tempDir()
+        let store = ExportReceiptStore(directory: dir.appendingPathComponent("receipts", isDirectory: true))
+        let file = dir.appendingPathComponent("mailin_emails.mbox")
+        try Data("From a\n".utf8).write(to: file)
+        let center = ExportRunCenter(receiptStore: store)
+        let presenter = FakePresenter(.answer([.shared(file)]))
+        final class Seen { var delivery: ExportReceipt.Delivery?; var active: Bool?; var verdict: String? }
+        let seen = Seen()
+        presenter.onPresent = {
+            seen.active = center.isActive
+            if let newest = store.list().first, let onDisk = try? store.load(newest) {
+                seen.delivery = onDisk.delivery
+                seen.verdict = onDisk.verdictLine
+            }
+        }
+        center.deliverHandler = { await ExportHandoff(presenter: presenter).run($0) }
+        let awaiting = ExportJobRunner.receiptBeforeHandoff(writtenReceipt(file), cancelled: false, handsOff: true, fileExists: true)
+        center.run(title: "Exporting mbox") {
+            center.update(done: 51, total: 51)
+            center.record(awaiting)
+        }
+        await center.waitUntilIdle()
+
+        XCTAssertEqual(presenter.presentCalls, 1)
+        XCTAssertEqual(seen.delivery, .awaitingDelivery, "the receipt is on disk, awaiting delivery, before the sheet")
+        XCTAssertEqual(seen.active, false, "the run ended when the write ended")
+        XCTAssertTrue(seen.verdict?.hasPrefix("Written — waiting for you to save or share it") ?? false, seen.verdict ?? "")
+        XCTAssertFalse(center.isActive)
+        XCTAssertNil(center.deliveringReceiptID)
+        XCTAssertEqual(center.lastReceipt?.delivery, .shared)
+        XCTAssertEqual(center.lastReceipt?.deliveryNote, "shared, destination not verifiable")
+        let onDisk = try store.load(try XCTUnwrap(store.list().first))
+        XCTAssertEqual(onDisk.delivery, .shared)
+        XCTAssertEqual(store.list().count, 1, "one receipt, updated in place")
+    }
+
+    func testR1_runCardCancelReleasesAWaitingHandoff() async throws {
+        let dir = try tempDir()
+        let store = ExportReceiptStore(directory: dir.appendingPathComponent("receipts", isDirectory: true))
+        let file = dir.appendingPathComponent("mailin_emails.mbox")
+        try Data("From a\n".utf8).write(to: file)
+        let center = ExportRunCenter(receiptStore: store)
+        let presenter = FakePresenter(.never)
+        center.deliverHandler = { await ExportHandoff(presenter: presenter).run($0) }
+        let awaiting = ExportJobRunner.receiptBeforeHandoff(writtenReceipt(file), cancelled: false, handsOff: true, fileExists: true)
+        center.run(title: "Exporting mbox") { center.record(awaiting) }
+        try await waitFor { presenter.presentCalls == 1 }
+        XCTAssertFalse(center.isActive, "never 'Exporting mbox — 51 of 51' while the sheet is awaited")
+        XCTAssertEqual(center.deliveringReceiptID, awaiting.id)
+        XCTAssertEqual(center.lastReceipt?.delivery, .awaitingDelivery)
+
+        center.cancel()
+        await center.waitUntilIdle()
+        XCTAssertNil(center.deliveringReceiptID)
+        XCTAssertEqual(center.lastReceipt?.delivery, .notSaved)
+        XCTAssertFalse(center.lastReceipt?.isDelivered ?? true, "the file stays offered")
+
+        // A sheet that could not be shown: failed, with the reason, still offered.
+        center.deliver(try XCTUnwrap(center.lastReceipt),
+                       using: { await ExportHandoff(presenter: FakePresenter(.failToPresent("no window to share from"))).run($0) })
+        await center.waitUntilIdle()
+        XCTAssertEqual(center.lastReceipt?.delivery, .failed)
+        XCTAssertEqual(center.lastReceipt?.deliveryNote, "no window to share from")
+        XCTAssertFalse(center.lastReceipt?.isDelivered ?? true)
+    }
+
+    func testR1_relaunchKeepsAwaitingDeliveryOffered() async throws {
+        let dir = try tempDir()
+        let store = ExportReceiptStore(directory: dir.appendingPathComponent("receipts", isDirectory: true))
+        let file = dir.appendingPathComponent("mailin_emails.mbox")
+        try Data("From a\n".utf8).write(to: file)
+        let written = writtenReceipt(file)
+        let awaiting = ExportJobRunner.receiptBeforeHandoff(written, cancelled: false, handsOff: true, fileExists: true)
+        XCTAssertEqual(awaiting.delivery, .awaitingDelivery)
+        XCTAssertFalse(awaiting.isDelivered)
+
+        // Mapping: awaiting stays awaiting while the file is there; a removed file says so; others are not re-shown.
+        XCTAssertEqual(ExportRunCenter.relaunchReceipt(awaiting, fileExists: true), awaiting)
+        let gone = try XCTUnwrap(ExportRunCenter.relaunchReceipt(awaiting, fileExists: false))
+        XCTAssertEqual(gone.delivery, .failed)
+        XCTAssertFalse(gone.verdictLine.hasPrefix("Complete"))
+        XCTAssertNil(ExportRunCenter.relaunchReceipt(ExportJobRunner.receipt(written, after: .shared(file)), fileExists: true))
+
+        // A "relaunch": a new center over the same receipts shows the waiting receipt, not a run.
+        _ = try store.save(awaiting)
+        let relaunched = ExportRunCenter(receiptStore: store)
+        relaunched.deliverHandler = { _ in XCTFail("not re-presented on its own"); return .cancelled }
+        await relaunched.restoreAfterLaunch()
+        XCTAssertFalse(relaunched.isActive)
+        XCTAssertTrue(relaunched.showReceipt)
+        XCTAssertEqual(relaunched.lastReceipt?.delivery, .awaitingDelivery)
+        XCTAssertNil(relaunched.deliveringReceiptID)
+        XCTAssertEqual(ExportProgressOverlayView.deliveryLine(try XCTUnwrap(relaunched.lastReceipt)),
+                       "Written — waiting for you to save or share it")
+    }
+
+    func testR1_macAndCancelledRunsAreNotAwaitingDelivery() {
+        let written = writtenReceipt(url)
+        XCTAssertNil(ExportJobRunner.receiptBeforeHandoff(written, cancelled: false, handsOff: false, fileExists: true).delivery)
+        XCTAssertNil(ExportJobRunner.receiptBeforeHandoff(written, cancelled: true, handsOff: true, fileExists: true).delivery)
+        XCTAssertNil(ExportJobRunner.receiptBeforeHandoff(written, cancelled: false, handsOff: true, fileExists: false).delivery)
+        XCTAssertEqual(written.verdictLine, "Complete — 51 written")
+    }
+
+    func testR1_saveToFilesVerifiesTheDestinationBytes() throws {
+        let dir = try tempDir()
+        let source = dir.appendingPathComponent("a.mbox"), copy = dir.appendingPathComponent("copy.mbox")
+        try Data("From a\nbody\n".utf8).write(to: source)
+        try Data("From a\nbody\n".utf8).write(to: copy)
+        XCTAssertEqual(ExportDestinationCheck.outcome(source: source, destination: copy), .saved(copy))
+        let saved = ExportJobRunner.receipt(writtenReceipt(source), after: .saved(copy))
+        XCTAssertEqual(saved.delivery, .saved)
+        XCTAssertTrue(saved.verdictLine.contains("read back identical"), saved.verdictLine)
+
+        try Data("From a\nBODY\n".utf8).write(to: copy)
+        guard case .failed = ExportDestinationCheck.outcome(source: source, destination: copy) else {
+            return XCTFail("a changed copy is not 'saved'")
+        }
+        guard case .failed = ExportDestinationCheck.outcome(source: source, destination: dir.appendingPathComponent("missing.mbox")) else {
+            return XCTFail("a missing copy is not 'saved'")
+        }
+
+        // A folder export: every file, by relative path.
+        let folder = dir.appendingPathComponent("eml", isDirectory: true)
+        let saveFolder = dir.appendingPathComponent("saved", isDirectory: true)
+        for base in [folder, saveFolder] {
+            try FileManager.default.createDirectory(at: base.appendingPathComponent("Inbox", isDirectory: true), withIntermediateDirectories: true)
+            try Data("one".utf8).write(to: base.appendingPathComponent("Inbox/1.eml"))
+            try Data("two".utf8).write(to: base.appendingPathComponent("2.eml"))
+        }
+        XCTAssertNil(ExportDestinationCheck.mismatch(source: folder, destination: saveFolder))
+        try Data("ONE".utf8).write(to: saveFolder.appendingPathComponent("Inbox/1.eml"))
+        XCTAssertNotNil(ExportDestinationCheck.mismatch(source: folder, destination: saveFolder))
+        try FileManager.default.removeItem(at: saveFolder.appendingPathComponent("Inbox/1.eml"))
+        XCTAssertNotNil(ExportDestinationCheck.mismatch(source: folder, destination: saveFolder))
+    }
+}
