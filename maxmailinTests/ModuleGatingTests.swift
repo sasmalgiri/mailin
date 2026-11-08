@@ -921,6 +921,7 @@ struct PurchasePresentationTests {
     @Test("Debug launch override simulates a tier on the live manager; Release has no such code")
     func debugLaunchOverride() {
         let store = StoreManager(testTier: .professional)
+        #if DEBUG
         store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "free"])
         #expect(store.effectiveTier == .free)
         #expect(!store.isPremium)
@@ -929,6 +930,14 @@ struct PurchasePresentationTests {
         #expect(store.isLifetimePurchase)
         store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "bogus"])
         #expect(store.effectiveTier == .personal, "an unknown value changes nothing")
+        #else
+        // Release (R10): the override does not exist; the tier is exactly the
+        // one StoreKit (here the fixture) proved, with no unlock.
+        #expect(store.effectiveTier == .professional)
+        let free = StoreManager(testTier: .free)
+        #expect(free.effectiveTier == .free)
+        #expect(!free.isPremium)
+        #endif
     }
 }
 
@@ -1229,7 +1238,9 @@ struct StoreKitPurchaseFlowTests {
     /// StoreKit entitlements, no Debug unlock.
     private func liveStore() async -> StoreManager {
         let store = StoreManager()
-        store.debugUnlocksAllTiers = false
+        #if DEBUG
+        store.debugUnlocksAllTiers = false   // Release has no unlock to turn off
+        #endif
         await store.loadProducts()
         await store.checkEntitlements()
         return store
@@ -1390,7 +1401,9 @@ struct StoreKitPurchaseFlowTests {
 
         // A second manager stands in for the same Apple Account on a fresh install.
         let reinstall = StoreManager()
+        #if DEBUG
         reinstall.debugUnlocksAllTiers = false
+        #endif
         let restored = await reinstall.restorePurchases()
         #expect(restored == .restored(.professional), "restore outcome: \(restored)")
         #expect(reinstall.lastRestoreOutcome == restored)
@@ -1398,7 +1411,9 @@ struct StoreKitPurchaseFlowTests {
         session.clearTransactions()
         await settleStoreKit { all, current in all.isEmpty && current.isEmpty }
         let nobody = StoreManager()
+        #if DEBUG
         nobody.debugUnlocksAllTiers = false
+        #endif
         let none = await nobody.restorePurchases()
         #expect(none == .nothingFound, "restore with no purchases: \(none)")
     }
@@ -1468,7 +1483,9 @@ struct StoreKitPurchaseFlowTests {
         // Restore Purchases on a clean install (no remembered tier) finds the live plan.
         UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
         let reinstall = StoreManager()
+        #if DEBUG
         reinstall.debugUnlocksAllTiers = false
+        #endif
         let restored = await reinstall.restorePurchases()
         #expect(restored == .restored(.professional), "restore outcome: \(restored)")
         #expect(reinstall.entitlementState == .active(.professional), "state after restore: \(reinstall.entitlementState)")

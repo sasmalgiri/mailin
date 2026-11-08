@@ -260,9 +260,7 @@ final class ReviewStateService: ObservableObject {
         }
     }
 
-    #if DEBUG
     static func resetMigrationForTesting(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: migrationKey)
     }
-    #endif
 }

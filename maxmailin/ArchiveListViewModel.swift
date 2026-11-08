@@ -107,10 +107,8 @@ final class ArchiveListViewModel: ObservableObject {
         return (batch, next)
     }
 
-    #if DEBUG
     /// Test hook: every freshly-fetched page's summaries are reported here.
     var _debugOnAppend: (([EmailSummary]) -> Void)?
-    #endif
 
     /// `maxRetained` is expressed in summaries for continuity with earlier
     /// tests; it is converted to a whole number of resident pages.
@@ -162,9 +160,7 @@ final class ArchiveListViewModel: ObservableObject {
             hasPrevious = false
             isLoading = false
             LaunchTiming.firstPageShown(archiveCount: count)
-            #if DEBUG
             _debugOnAppend?(batch)
-            #endif
         } catch {
             guard revision == queryRevision else { return }
             self.error = error
@@ -192,9 +188,7 @@ final class ArchiveListViewModel: ObservableObject {
             if residentPages.count > windowPages { residentPages.removeFirst() }
             rebuildPublished()
             isLoading = false
-            #if DEBUG
             _debugOnAppend?(batch)
-            #endif
         } catch {
             guard revision == queryRevision else { return }
             self.error = error
@@ -220,9 +214,7 @@ final class ArchiveListViewModel: ObservableObject {
             if residentPages.count > windowPages { residentPages.removeLast() }
             rebuildPublished()
             isLoading = false
-            #if DEBUG
             _debugOnAppend?(batch)
-            #endif
         } catch {
             guard revision == queryRevision else { return }
             self.error = error

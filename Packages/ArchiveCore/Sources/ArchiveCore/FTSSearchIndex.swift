@@ -239,7 +239,6 @@ actor FTSSearchIndex {
     private var idleSweep: Task<Void, Never>?
     private var didMigrateLegacy: Bool = false
 
-    #if DEBUG
     /// Test-only: redirect FTS shards to a temp dir so tests are isolated from
     /// the real (sandbox-container) index.
     nonisolated(unsafe) static var testShardsDirectoryOverride: URL?
@@ -254,7 +253,6 @@ actor FTSSearchIndex {
         shardLastTouch.removeAll()
         didMigrateLegacy = false
     }
-    #endif
 
     /// When non-nil, this instance stores its shards under an explicit
     /// directory instead of the shared Application Support location. Set only
@@ -398,13 +396,11 @@ actor FTSSearchIndex {
         }
     }
 
-    #if DEBUG
     /// Test-only: counts calls to `search` so a wiring test can assert the live
     /// search path actually reached FTS5 (vs. the in-RAM fallback). Reset
     /// immediately before the dispatch under observation, then assert `== 1`.
     private(set) var debugSearchCallCount = 0
     func resetDebugSearchCallCount() { debugSearchCallCount = 0 }
-    #endif
 
     /// Plain user text → built FTS5 query (leaf terms escaped, prefix on the
     /// last term, AND/OR/NOT preserved) → `searchRaw`.
@@ -419,9 +415,7 @@ actor FTSSearchIndex {
     /// (Boolean / prefix / `NEAR(...)`) is owned by the caller / FTSQueryBuilder;
     /// this does NOT escape. Returns matched UUIDs in bm25 order, capped.
     func searchRaw(_ ftsQuery: String, limit: Int = 50) throws -> [UUID] {
-        #if DEBUG
         debugSearchCallCount += 1
-        #endif
         try migrateLegacyIfNeeded()
         let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
@@ -536,9 +530,7 @@ actor FTSSearchIndex {
         limit: Int,
         cursor: RankedCursor? = nil
     ) throws -> (hits: [RankedHit], next: RankedCursor?) {
-        #if DEBUG
         debugSearchCallCount += 1
-        #endif
         try migrateLegacyIfNeeded()
         let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, limit > 0 else { return ([], nil) }
@@ -640,9 +632,7 @@ actor FTSSearchIndex {
     /// archive-wide result list. Work and memory are bounded by `ids.count`
     /// (chunked `MATCH … AND email_id IN (…)` per shard).
     func matchingSubset(of ids: [UUID], ftsQuery: String) throws -> Set<UUID> {
-        #if DEBUG
         debugSearchCallCount += 1
-        #endif
         try migrateLegacyIfNeeded()
         let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !ids.isEmpty else { return [] }
@@ -1342,12 +1332,10 @@ actor FTSSearchIndex {
             try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
             return override
         }
-        #if DEBUG
         if let override = FTSSearchIndex.testShardsDirectoryOverride {
             try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
             return override
         }
-        #endif
         // B5: the shards follow the store — one root for both, resolved by
         // `ArchiveLayout` (chosen location, verified relocation, fallback).
         return ArchiveLayout.ftsDirectory(under: ArchiveLayout.productionRoot)

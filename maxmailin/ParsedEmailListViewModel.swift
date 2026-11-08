@@ -55,7 +55,6 @@ class ParsedEmailListViewModel: ObservableObject {
         regexMatchIDs = nil
     }
 
-    #if DEBUG
     /// Test-only: retains the most recent FTS search Task so a wiring test can
     /// await it deterministically (`await lastFTSSearchTask?.value`) instead of
     /// polling a timeout.
@@ -71,7 +70,6 @@ class ParsedEmailListViewModel: ObservableObject {
             emailCount = newValue.count
         }
     }
-    #endif
 
     // MARK: - UI State
     @Published var isParsed = false
@@ -1300,9 +1298,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     self.ftsMatchKey = cacheKey
                     self.applyFilters()
                 }
-                #if DEBUG
                 lastFTSSearchTask = searchTask
-                #endif
             }
             if ftsMatchKey == cacheKey, let ids = ftsMatchIDs {
                 advancedMatchIDs = ids
@@ -1331,9 +1327,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     self.regexMatchKey = cacheKey
                     self.applyFilters()
                 }
-                #if DEBUG
                 lastFTSSearchTask = searchTask
-                #endif
             }
             advancedMatchIDs = (regexMatchKey == cacheKey ? regexMatchIDs : nil) ?? []
         } else {
