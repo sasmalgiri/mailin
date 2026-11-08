@@ -4718,7 +4718,14 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let count = try await service.exportPST(
                 scope: scope, to: tmpURL,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            if count > 0 { self.iOSShareFile(at: tmpURL) }
+            if count > 0 {
+                // R3: the receipt names the file (so Verify export can check it, its
+                // manifest kept with the receipt) and the Share sheet hands on the
+                // manifest beside it, so a saved copy verifies one-to-one too.
+                ExportRunCenter.shared.recordOutcome(.complete, destination: tmpURL)
+                shareItems = ExportRunCenter.shareItems(for: tmpURL)
+                showShareSheet = true
+            }
             return "Exported \(count) emails to PST."
         }
         #endif

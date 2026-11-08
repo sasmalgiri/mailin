@@ -94,6 +94,34 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     /// Why the hand-off failed, when it did.
     var deliveryNote: String? = nil
 
+    // R8 / OUT-06a: Recover and resume. All optional, so older receipts decode unchanged.
+    /// The run's request, for a single-file container (mbox) whose partial
+    /// file could not be cut back or hashed when it stopped (drive removed,
+    /// process ended): Recover and resume finds the last verified boundary
+    /// in the file's manifest and continues from there.
+    var recoverableRequest: ExportRequest? = nil
+    /// Saved when such a run STARTS and replaced when it ends: found at
+    /// launch, it means mailin stopped mid-run.
+    var interrupted: Bool? = nil
+    /// What recovery found, in the person's language (the app writes it).
+    var recoveryLine: String? = nil
+    /// The engine's own statement of the recovery (`Recovery.summary`, or why none was possible).
+    var recoveryDetail: String? = nil
+    /// True when no boundary could be verified: Export again is offered instead.
+    var recoveryFailed: Bool? = nil
+    /// R3 (iOS): the container's manifest kept with the receipt, for a file
+    /// written inside the app and handed on alone by the Share sheet.
+    var manifestPath: String? = nil
+
+    /// True when the card offers Recover and resume.
+    var offersRecovery: Bool {
+        recoverableRequest != nil && resumeRequest == nil && recoveryFailed != true
+            && (outcome == .failed || outcome == .cancelled)
+    }
+
+    /// True when recovery found no verified boundary and the card offers Export again.
+    var offersExportAgain: Bool { recoverableRequest != nil && recoveryFailed == true }
+
     /// False when the file was written but the person did not get it out of the app.
     var isDelivered: Bool { delivery != .notSaved && delivery != .failed && delivery != .awaitingDelivery }
 
@@ -163,6 +191,9 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
                 ? "Cancelled — \(written) written before the stop; partial output kept, Resume continues from there"
                 : "Cancelled — \(written) written before the stop; partial output removed where the writer could"
         case .failed:
+            if interrupted == true, resumeRequest == nil {
+                return "Interrupted — mailin stopped before this export finished; Recover and resume continues it from the last verified boundary in the file"
+            }
             return resumeRequest != nil
                 ? "Failed — \(written) written before the error; partial output kept, Resume continues from there"
                 : "Failed — \(written) written before the error"
@@ -184,6 +215,8 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         if let errorMessage { lines.append("Error: \(errorMessage)") }
         if let delivery { lines.append("Delivery: \(delivery.rawValue)\(deliveryNote.map { " — \($0)" } ?? "")") }
         if let resumeRequest { lines.append("Resumable: yes — continues at message \(resumeRequest.skipFirst + 1)") }
+        if let recoveryDetail { lines.append("Recovery: \(recoveryDetail)") }
+        if let manifestPath { lines.append("Manifest: \(manifestPath)") }
         if let verificationLine { lines.append("Verification: \(verificationLine)") }
         if let contentLine { lines.append("Content: \(contentLine)") }
         if let contentReportPath { lines.append("Content report: \(contentReportPath)") }

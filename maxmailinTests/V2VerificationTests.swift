@@ -5561,3 +5561,352 @@ final class ExportHandoffR1Tests: XCTestCase {
         XCTAssertNotNil(ExportDestinationCheck.mismatch(source: folder, destination: saveFolder))
     }
 }
+
+// MARK: - R8 / OUT-06a + R3: Recover and resume through the app layer
+
+/// R8 / OUT-06a: an mbox export whose partial file could not be cut back when
+/// it stopped (drive removed, mailin quit) is recovered from the receipt card —
+/// cut back to its last verified boundary, the receipt's "X of Y" set to what
+/// that boundary vouches for, resumed there, and verified one-to-one. R3 (iOS):
+/// a container written inside the app keeps its manifest with the receipt.
+@MainActor
+final class ExportRecoverResumeTests: XCTestCase {
+    private var root: URL!
+    private var store: SQLiteEmailStore!
+    private var fts: FTSSearchIndex!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("rr-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+        super.tearDown()
+    }
+
+    private static func mail(_ i: Int) throws -> MBOXParser.RawEmail {
+        let raw = "From: sender\(i)@example.com\r\nTo: rr@example.com\r\nSubject: Mail \(i)\r\n"
+            + String(format: "Date: Wed, 15 Jan 2025 10:%02d:%02d +0000\r\n", (i / 60) % 60, i % 60)
+            + "Message-ID: <rr-\(i)@t>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+            + "Body of message \(i).\r\n"
+        return try MBOXParser.processRawMessage(raw, senderEmail: "")
+    }
+
+    private func insert(_ count: Int) async throws {
+        let emails = try (0..<count).map(Self.mail)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .preserveAll, batchSize: 100, progress: nil)
+    }
+
+    private func service() -> ArchiveExportService {
+        ArchiveExportService(archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)))
+    }
+
+    private func lookup() -> ExportReconciliation.SourceLookup {
+        let store = self.store!
+        return ExportReconciliation.SourceLookup(
+            records: { ids in
+                var out: [UUID: MBOXParser.RawEmail] = [:]
+                for id in ids { if let e = try await store.fullEmail(id: id) { out[id] = e } }
+                return out
+            },
+            recordsByMessageID: { mids in
+                var out: [String: MBOXParser.RawEmail] = [:]
+                for (key, id) in try await store.emailIDs(forMessageIDs: mids) { if let e = try await store.fullEmail(id: id) { out[key] = e } }
+                return out
+            })
+    }
+
+    private let scope: ArchiveSelectionScope = .query(.all, exclusions: [])
+
+    private func request(_ mbox: URL, total: Int) -> ExportRequest {
+        ExportRequest(format: .mbox, title: "mbox export", scope: scope, destination: mbox.path, isFolder: false, cap: nil,
+                      selectionFingerprint: "fp-r8", emailCountHint: total)
+    }
+
+    /// What a run that stopped on a removed drive left on the receipt card.
+    private func stoppedReceipt(_ mbox: URL, total: Int, reported: Int) -> ExportReceipt {
+        ExportReceipt(title: "mbox export", destination: mbox.path, isFolder: false, requested: total, written: reported,
+                      outcome: .failed, errorMessage: "The operation couldn’t be completed. (Device not configured)",
+                      startedAt: Date(), completedAt: Date(), resumeRequest: nil,
+                      recoverableRequest: request(mbox, total: total))
+    }
+
+    /// The test's runner: the resume `ExportJobRunner` would start, against the test archive.
+    final class Runs { var requests: [ExportRequest] = []; var finished = false }
+
+    private func runner(_ center: ExportRunCenter, total: Int, runs: Runs) -> @MainActor (ExportRequest) -> Void {
+        let service = self.service()
+        return { request in
+            runs.requests.append(request)
+            center.run(title: "mbox export") {
+                do {
+                    let r = try await service.exportMBOXArchive(scope: request.scope, to: request.destinationURL, write: request.writeOptions)
+                    center.record(ExportReceipt(title: "mbox export", destination: request.destination, isFolder: false,
+                                                requested: total, written: r.recordsWritten, bytesWritten: r.bytesWritten,
+                                                outcome: r.completed ? .complete : .failed, sha256Hex: r.sha256Hex,
+                                                startedAt: Date(), completedAt: Date()))
+                } catch {
+                    center.recordFailure(destination: request.destinationURL, isFolder: false, requested: total,
+                                         message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Runs `body` with a deadline: a hung flow fails the test instead of holding the run.
+    private func within(_ seconds: Double, _ body: @escaping @MainActor () async -> Void) async throws {
+        let state = Runs()
+        let task = Task { @MainActor in await body(); state.finished = true }
+        let deadline = Date().addingTimeInterval(seconds)
+        while !state.finished, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        if !state.finished { task.cancel() }
+        XCTAssertTrue(state.finished, "the flow did not finish within \(seconds) s")
+    }
+
+    private func loadReceipt(_ id: UUID, from store: ExportReceiptStore) throws -> ExportReceipt {
+        try store.load(store.directory.appendingPathComponent("export-\(id.uuidString).json"))
+    }
+
+    func testR8_recoverAndResume_tamperedPartial_verifiedCompleteWithExactCounts() async throws {
+        let total = 450
+        try await insert(total)
+        let mbox = root.appendingPathComponent("drive/cut.mbox")
+        try FileManager.default.createDirectory(at: mbox.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let full = try await service().exportMBOXArchive(scope: scope, to: mbox)
+        XCTAssertEqual(full.recordsWritten, total)
+        let manifestURL = ContainerManifest.url(for: mbox)
+        let scan = try ContainerManifest.scan(url: manifestURL)
+        XCTAssertEqual(scan.checkpoints.map { $0.line.positions }, [200, 400, 450])
+        var records: [(offset: UInt64, length: UInt64)] = []
+        _ = try ContainerManifest.forEachLine(url: manifestURL) { line, _ in
+            if line.kind == .record, let o = line.offset, let n = line.length { records.append((o, n)) }
+            return true
+        }
+        XCTAssertEqual(records.count, total)
+
+        // A pulled drive: the manifest durable to its first checkpoint (200),
+        // the file 50 complete records past it and the 51st cut in half; the
+        // receipt said the run had reached 400.
+        let boundary = try XCTUnwrap(scan.checkpoints.first)
+        let m = try FileHandle(forWritingTo: manifestURL)
+        try m.truncate(atOffset: boundary.manifestEnd); try m.close()
+        let cutAt = records[250].offset + records[250].length / 2
+        let f = try FileHandle(forWritingTo: mbox)
+        try f.truncate(atOffset: cutAt); try f.close()
+
+        let receipts = ExportReceiptStore(directory: root.appendingPathComponent("receipts", isDirectory: true))
+        let center = ExportRunCenter(receiptStore: receipts)
+        let receipt = stoppedReceipt(mbox, total: total, reported: 400)
+        XCTAssertTrue(receipt.offersRecovery, "no resume (the file was unreachable), but a manifest to recover from")
+        XCTAssertFalse(receipt.isResumable)
+        XCTAssertTrue(ExportRunCenter.offersRecoveryAtLaunch(receipt), "rule 9: offered at launch when the file is back")
+
+        let runs = Runs()
+        let run = runner(center, total: total, runs: runs)
+        let lookup = self.lookup()
+        try await within(120) { await center.recoverAndResume(receipt, run: run, lookup: lookup) }
+
+        // The recovered receipt: "X of Y" is what the verified boundary vouches for.
+        let recovered = try loadReceipt(receipt.id, from: receipts)
+        XCTAssertEqual(recovered.written, 200, "400 reported, 200 verified")
+        XCTAssertEqual(recovered.requested, total)
+        XCTAssertEqual(recovered.recoveryLine?.hasPrefix("Recovered: 200 of 450 records verified at byte \(boundary.line.bytes ?? 0)"), true, recovered.recoveryLine ?? "nil")
+        XCTAssertEqual(recovered.recoveryLine?.contains("past it: 50 complete and 1 cut record(s)"), true, recovered.recoveryLine ?? "nil")
+        XCTAssertEqual(recovered.recoveryDetail?.contains("50 complete record(s) and 1 cut record the receipt never counted"), true, recovered.recoveryDetail ?? "nil")
+        XCTAssertFalse(recovered.offersRecovery)
+
+        // The resume ran once, at the boundary, with the recovery's write options.
+        XCTAssertEqual(runs.requests.count, 1)
+        let resume = try XCTUnwrap(runs.requests.first)
+        XCTAssertEqual(resume.selectionFingerprint, "fp-r8", "a resume keeps the run's fingerprint")
+        let options = resume.writeOptions
+        let expected = ExportWriteOptions.resuming(from: ContainerManifest.Recovery(
+            positions: 200, records: 200, offset: boundary.line.bytes ?? 0, sha256: boundary.line.sha256 ?? "",
+            bytesFound: cutAt, tailBytes: cutAt - (boundary.line.bytes ?? 0), tailRecords: 51, tailLastRecordCut: true,
+            checkpointsRejected: 0))
+        XCTAssertEqual(options.skipFirst, expected.skipFirst)
+        XCTAssertEqual(options.append, expected.append)
+        XCTAssertEqual(options.keepPartialOnCancel, expected.keepPartialOnCancel)
+        XCTAssertEqual(options.expectedAppendOffset, expected.expectedAppendOffset)
+        XCTAssertEqual(options.expectedAppendSHA256, expected.expectedAppendSHA256)
+
+        // The finished file: complete, exact, byte for byte an uninterrupted run, verified one-to-one.
+        let done = try XCTUnwrap(center.lastReceipt)
+        XCTAssertNotEqual(done.id, receipt.id)
+        XCTAssertEqual(done.outcome, .complete)
+        XCTAssertEqual(done.written, total)
+        XCTAssertEqual(done.requested, total)
+        XCTAssertEqual(done.sha256Hex, full.sha256Hex)
+        XCTAssertEqual(done.verificationLine, String(localized: "rehash checked: the file matches the receipt's SHA-256"))
+        XCTAssertEqual(done.contentLine?.hasPrefix("content checked: 450 of 450 messages say what the archive says"), true, done.contentLine ?? "nil")
+        let reportPath = try XCTUnwrap(done.contentReportPath)
+        let report = try JSONDecoder().decode(ExportReconciliation.ContentReport.self, from: Data(contentsOf: URL(fileURLWithPath: reportPath)))
+        XCTAssertEqual(report.outcome, .complete)
+        XCTAssertEqual(report.selection?.paired, total)
+        XCTAssertEqual(report.selection?.missing, 0)
+        XCTAssertEqual(report.selection?.extra, 0)
+        XCTAssertEqual(report.selection?.manifests, 1)
+    }
+
+    func testR8_noVerifiedBoundary_offersExportAgain_andCutsNothing() async throws {
+        try await insert(250)
+        let mbox = root.appendingPathComponent("v.mbox")
+        _ = try await service().exportMBOXArchive(scope: scope, to: mbox)
+        let manifestURL = ContainerManifest.url(for: mbox)
+        let boundary = try XCTUnwrap(try ContainerManifest.scan(url: manifestURL).checkpoints.first)
+        let m = try FileHandle(forWritingTo: manifestURL)
+        try m.truncate(atOffset: boundary.manifestEnd); try m.close()
+        var data = try Data(contentsOf: mbox)
+        data[100] = data[100] == 0x41 ? 0x42 : 0x41
+        try data.write(to: mbox)
+
+        let receipts = ExportReceiptStore(directory: root.appendingPathComponent("receipts", isDirectory: true))
+        let center = ExportRunCenter(receiptStore: receipts)
+        let receipt = stoppedReceipt(mbox, total: 250, reported: 200)
+        let runs = Runs()
+        let run = runner(center, total: 250, runs: runs)
+        try await within(60) { await center.recoverAndResume(receipt, run: run) }
+
+        XCTAssertTrue(runs.requests.isEmpty, "nothing to resume from")
+        XCTAssertEqual(try Data(contentsOf: mbox), data, "nothing is cut when nothing verifies")
+        let shown = try XCTUnwrap(center.lastReceipt)
+        XCTAssertEqual(shown.id, receipt.id)
+        XCTAssertTrue(shown.offersExportAgain)
+        XCTAssertFalse(shown.offersRecovery)
+        XCTAssertNil(shown.resumeRequest)
+        XCTAssertEqual(shown.written, 200, "the receipt's count is not changed by a recovery that found nothing")
+        XCTAssertEqual(shown.recoveryLine, String(localized: "No verified boundary could be found in the partial file; nothing was cut. Export again writes a new file."))
+        XCTAssertEqual(shown.recoveryDetail, ContainerManifest.RecoveryError.noVerifiedBoundary("no checkpoint's prefix hash matches the file").localizedDescription)
+
+        // Export again: the same selection from its first message, through the pre-flight sheet, bound anew.
+        center.exportAgain(shown)
+        let again = try XCTUnwrap(center.pendingPreflight)
+        XCTAssertEqual(again.skipFirst, 0)
+        XCTAssertNil(again.selectionFingerprint)
+        XCTAssertNil(again.resumeArtifactBytes)
+        XCTAssertNil(again.resumeArtifactSHA256)
+        XCTAssertEqual(again.destination, mbox.path)
+        XCTAssertEqual(again.format, .mbox)
+    }
+
+    func testR8_unreachableFile_touchesNothing_andIsNotOfferedAtLaunch() async throws {
+        let gone = root.appendingPathComponent("unmounted/Volume/cut.mbox")
+        let receipt = stoppedReceipt(gone, total: 10, reported: 4)
+        XCTAssertFalse(ExportRunCenter.offersRecoveryAtLaunch(receipt))
+        guard case .unreachable(let updated)? = ExportRunCenter.recoveryStep(for: receipt) else { return XCTFail("expected unreachable") }
+        XCTAssertTrue(updated.offersRecovery, "still offered once the drive is back")
+        XCTAssertEqual(updated.written, 4)
+        XCTAssertNotNil(updated.recoveryLine)
+        // A format without a checkpointed manifest is never recoverable.
+        var csv = request(gone, total: 10); csv.format = .csv
+        XCTAssertNil(ExportJobRunner.recoverableRequest(csv))
+        var split = request(gone, total: 10); split.options.partitionMBOX = true
+        XCTAssertNil(ExportJobRunner.recoverableRequest(split))
+        var unbound = request(gone, total: 10); unbound.selectionFingerprint = nil
+        XCTAssertNil(ExportJobRunner.recoverableRequest(unbound))
+    }
+
+    func testR8_interruptedRunAtLaunch_offersRecoverAndResume() async throws {
+        try await insert(250)
+        let mbox = root.appendingPathComponent("killed.mbox")
+        _ = try await service().exportMBOXArchive(scope: scope, to: mbox)
+        let manifestURL = ContainerManifest.url(for: mbox)
+        let boundary = try XCTUnwrap(try ContainerManifest.scan(url: manifestURL).checkpoints.first)
+        let m = try FileHandle(forWritingTo: manifestURL)
+        try m.truncate(atOffset: boundary.manifestEnd); try m.close()
+
+        // A run that ends normally replaces its "interrupted" placeholder with its own receipt.
+        let receipts = ExportReceiptStore(directory: root.appendingPathComponent("receipts", isDirectory: true))
+        let first = ExportRunCenter(receiptStore: receipts)
+        let bound = request(mbox, total: 250)
+        first.run(title: "mbox export") {
+            first.markInterruptible(bound)
+            first.recordOutcome(.complete, destination: mbox)
+        }
+        await first.waitUntilIdle()
+        XCTAssertEqual(receipts.list().count, 1, "the placeholder is replaced by the run's own receipt")
+        XCTAssertNotEqual(try receipts.load(XCTUnwrap(receipts.list().first)).interrupted, true)
+        for url in receipts.list() { try FileManager.default.removeItem(at: url) }
+
+        // mailin was killed mid-run: the placeholder is what the next launch finds.
+        let placeholder = ExportReceipt(title: "mbox export", destination: mbox.path, isFolder: false, requested: 250, written: 0,
+                                        outcome: .failed, startedAt: Date(), completedAt: Date(),
+                                        recoverableRequest: bound, interrupted: true)
+        _ = try receipts.save(placeholder)
+        XCTAssertTrue(placeholder.verdictLine.hasPrefix("Interrupted"), placeholder.verdictLine)
+        let relaunched = ExportRunCenter(receiptStore: receipts)
+        try await within(30) { await relaunched.restoreAfterLaunch() }
+        XCTAssertEqual(relaunched.lastReceipt?.id, placeholder.id)
+        XCTAssertTrue(relaunched.showReceipt)
+        XCTAssertEqual(relaunched.lastReceipt?.offersRecovery, true)
+
+        // With the file gone (the drive is not back), nothing is offered.
+        try FileManager.default.removeItem(at: mbox)
+        let again = ExportRunCenter(receiptStore: receipts)
+        try await within(30) { await again.restoreAfterLaunch() }
+        XCTAssertNil(again.lastReceipt)
+    }
+
+    /// R3 (iOS): the Share sheet hands on the file alone; the receipt keeps the
+    /// manifest, and verification uses it.
+    func testR3_containerWrittenInsideTheApp_keepsItsManifestForVerification() async throws {
+        try await insert(7)
+        let mbox = root.appendingPathComponent("mailin_emails.mbox")   // inside the temporary folder, as on iOS
+        let r = try await service().exportMBOXArchive(scope: scope, to: mbox)
+        let receipts = ExportReceiptStore(directory: root.appendingPathComponent("receipts", isDirectory: true))
+        let center = ExportRunCenter(receiptStore: receipts)
+        center.run(title: "mbox export") {
+            center.record(ExportReceipt(title: "mbox export", destination: mbox.path, isFolder: false, requested: 7,
+                                        written: r.recordsWritten, outcome: .complete, sha256Hex: r.sha256Hex,
+                                        startedAt: Date(), completedAt: Date()))
+        }
+        await center.waitUntilIdle()
+        let written = try XCTUnwrap(center.lastReceipt)
+        let kept = try XCTUnwrap(written.manifestPath, "the manifest is kept with the receipt")
+        XCTAssertTrue(kept.hasPrefix(receipts.directory.path))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: kept)), try Data(contentsOf: ContainerManifest.url(for: mbox)))
+        XCTAssertEqual(ExportRunCenter.shareItems(for: mbox), [mbox, ContainerManifest.url(for: mbox)],
+                       "the PST share hands on the manifest beside the file")
+
+        // The sidecar in the temporary folder is gone (only the file was handed on, or the folder was cleared).
+        try FileManager.default.removeItem(at: ContainerManifest.url(for: mbox))
+        XCTAssertEqual(ExportRunCenter.shareItems(for: mbox), [mbox])
+        let lookup = self.lookup()
+        try await within(60) { await center.verifyExport(written, lookup: lookup) }
+        let verified = try XCTUnwrap(center.lastReceipt)
+        let reportURL = URL(fileURLWithPath: try XCTUnwrap(verified.contentReportPath))
+        let report = try JSONDecoder().decode(ExportReconciliation.ContentReport.self, from: Data(contentsOf: reportURL))
+        XCTAssertEqual(report.selection?.manifests, 1, "checked one-to-one against the kept manifest")
+        XCTAssertEqual(report.selection?.withoutManifest, 0, "never 'no manifest'")
+        XCTAssertEqual(report.selection?.paired, 7)
+        XCTAssertEqual(report.outcome, .complete)
+
+        // A destination the person chose (not the temporary folder) keeps no copy.
+        let chosen = ExportReceipt(title: "mbox export", destination: "/Volumes/Backup/x.mbox", isFolder: false, requested: 1,
+                                   written: 1, outcome: .complete, startedAt: Date(), completedAt: Date())
+        XCTAssertNil(ExportRunCenter.keepingManifest(chosen, in: receipts).manifestPath)
+    }
+
+    /// R3: missing and extra occurrences appear on the receipt as localized counts.
+    func testR3_reconciliationLine_showsMissingAndExtraCounts() {
+        var report = ExportReconciliation.ContentReport()
+        report.outcome = .failed
+        report.eligible = 3
+        report.matching = 2
+        var selection = ExportReconciliation.SelectionCheck()
+        selection.missing = 1
+        selection.extra = 2
+        report.selection = selection
+        let line = ExportRunCenter.reconciliationText(report)
+        XCTAssertTrue(line.contains(" · " + String(localized: "missing \(1)")), line)
+        XCTAssertTrue(line.contains(" · " + String(localized: "extra \(2)")), line)
+        report.selection = ExportReconciliation.SelectionCheck()
+        let clean = ExportRunCenter.reconciliationText(report)
+        XCTAssertFalse(clean.contains(String(localized: "missing \(0)")), clean)
+        XCTAssertFalse(clean.contains(String(localized: "extra \(0)")), clean)
+    }
+}

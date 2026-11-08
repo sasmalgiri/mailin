@@ -311,6 +311,27 @@ final class ContainerManifestTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: ContainerManifest.url(for: pst).path))
     }
 
+    /// R3 (iOS): a container handed on alone keeps its manifest with the
+    /// receipt; verification uses that copy when none is beside the file.
+    func testR3_manifestKeptElsewhere_isUsedByVerification() async throws {
+        let mails = try (0..<5).map { try Self.mail($0, messageID: "<kept-\($0)@t>") }
+        try await insert(mails)
+        let mbox = try await exportMBOX(mails.map(\.id), name: "kept.mbox")
+        let kept = root.appendingPathComponent("receipts/export-x.mailin-manifest")
+        try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: ContainerManifest.url(for: mbox), to: kept)
+
+        let without = await ExportReconciliation.reconcile(file: mbox, promised: 5, lookup: lookup())
+        XCTAssertEqual(without.selection?.withoutManifest, 1, "no sidecar and no kept manifest: Message-ID only")
+        XCTAssertEqual(without.selection?.manifests, 0)
+
+        let with = await ExportReconciliation.reconcile(file: mbox, promised: 5, manifest: kept, lookup: lookup())
+        XCTAssertEqual(with.selection?.manifests, 1)
+        XCTAssertEqual(with.selection?.withoutManifest, 0)
+        XCTAssertEqual(with.selection?.paired, 5)
+        XCTAssertEqual(with.outcome, .complete, "\(with.summary)")
+    }
+
     // MARK: - R8: recover an interrupted export to a verified boundary, then resume exactly
 
     func testR8_interruptedExport_recoversToVerifiedBoundary_andResumesExactly() async throws {
