@@ -270,7 +270,7 @@ final class AttachmentTextIndexJob {
                 let requeued = try await Self.requeueStale(store: store, coverage: coverage)
                 if requeued > 0 { Self.logger.info("attachment index: \(requeued) email(s) re-queued for extractor v\(Self.extractorVersion)") }
                 // §13.3 (11): the upgrade's re-read is a visible record, not only a log line.
-                Self.recordRebuild(requeued: requeued)
+                Self.recordRebuild(requeued: requeued, in: Self.rebuildDirectory(store: store))
             }
             // Directive §2 "Repair persisted child hashes": the versioned pass over completed
             // version-7 rows whose attached-message children were double-hashed. Runs once per
@@ -335,6 +335,8 @@ final class AttachmentTextIndexJob {
             if let ocrState, !Task.isCancelled {
                 try await ocrSecondPass(state: ocrState, coverage: coverage, batchSize: batchSize, outcome: &outcome)
             }
+            // R7: the re-read is recorded once the pass has finished, never when it was queued.
+            if !Task.isCancelled { await Self.completeRebuild(store: store) }
             if outcome.indexedEmails > 0 || outcome.ocrEmails > 0 {
                 Self.logger.info("attachment text indexed: \(outcome.indexedEmails) email(s), \(outcome.extractedTexts) text(s)")
                 NotificationCenter.default.post(name: .attachmentIndexUpdated, object: nil)
@@ -727,61 +729,127 @@ final class AttachmentTextIndexJob {
     }
 
     /// The archive's attachment coverage, for notices. Nil when nothing has been recorded yet.
-    nonisolated static func coverageSummary(store: SQLiteEmailStore) async -> AttachmentCoverageSummary? {
+    /// R7: with a `scope` (the search's filters), the files-inside-attachments
+    /// counts are those of the messages in it; without one they are labelled
+    /// archive-wide. A failed read leaves them unknown (nil), never zero.
+    nonisolated static func coverageSummary(store: SQLiteEmailStore, scope: EmailQuery? = nil) async -> AttachmentCoverageSummary? {
+        await coverageSummary(store: store, scope: scope) { scope in
+            if let scope { return try await store.attachmentChildStateCounts(scope: scope) }
+            return try await store.attachmentChildStateCounts()
+        }
+    }
+
+    /// Test seam: `readChildCounts` stands in for the store's child-state query.
+    nonisolated static func coverageSummary(store: SQLiteEmailStore, scope: EmailQuery?,
+                                            readChildCounts: (EmailQuery?) async throws -> [String: Int]) async -> AttachmentCoverageSummary? {
         let url = await store.attachmentCoverageURL
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         guard var summary = try? AttachmentCoverageStore(url: url).summary(currentExtractorVersion: extractorVersion) else { return nil }
         // §13.3 (8): the files inside attachments are part of the honest negative.
-        summary.childCounts = (try? await store.attachmentChildStateCounts()) ?? [:]
+        do {
+            summary.childCounts = try await readChildCounts(scope)
+        } catch {
+            summary.childCounts = nil
+        }
+        summary.childScope = scope == nil ? .archive : .search
         return summary
     }
 
     /// §13.3 (8): what the files inside attachments add to a notice — only the
     /// states that stop text from being searched; nothing when all were read.
-    nonisolated static func childrenNotice(_ counts: [String: Int]) -> String? {
+    /// R7: nil counts (the read failed) say "not known"; the line says whether
+    /// the counts are the whole archive's or the search scope's.
+    nonisolated static func childrenNotice(_ counts: [String: Int]?, scope: AttachmentCoverageSummary.ChildCountScope = .archive) -> String? {
+        guard let counts else {
+            return String(localized: "Files inside attachments: their states could not be read, so whether any were left unsearched is not known.")
+        }
         var parts: [String] = []
         if let n = counts[ChildDocument.State.locked.rawValue], n > 0 { parts.append(String(localized: "\(n) locked")) }
         if let n = counts[ChildDocument.State.unsupported.rawValue], n > 0 { parts.append(String(localized: "\(n) not read")) }
         if let n = counts[ChildDocument.State.failed.rawValue], n > 0 { parts.append(String(localized: "\(n) failed")) }
         if let n = counts[ChildDocument.State.partial.rawValue], n > 0 { parts.append(String(localized: "\(n) partly read")) }
         guard !parts.isEmpty else { return nil }
-        return String(localized: "Files inside attachments: \(parts.joined(separator: ", ")).")
+        switch scope {
+        case .archive: return String(localized: "Files inside attachments, across the whole archive: \(parts.joined(separator: ", ")).")
+        case .search: return String(localized: "Files inside attachments, in this search's scope: \(parts.joined(separator: ", ")).")
+        }
     }
 
-    // MARK: - §13.3 (11): what an extractor upgrade re-read
+    // MARK: - §13.3 (11) / R7: what an extractor upgrade re-read
 
+    /// The record Health ▸ Formats shows: written in the archive's own store
+    /// directory when the pass that re-read the messages has FINISHED.
     struct RebuildRecord: Codable, Sendable, Equatable {
         var extractorVersion: Int
         var messagesRequeued: Int
+        /// Of those: read by the finished pass / still unread when it ended.
+        var completed: Int
+        var failed: Int
+        /// When the pass finished.
         var date: Date
     }
 
-    nonisolated static let rebuildRecordKey = "attachmentIndex.lastRebuild"
-
-    /// Remembers how many messages the pass put back on the work list for
-    /// the current extractor version (accumulating within one version).
-    nonisolated static func recordRebuild(requeued: Int, defaults: UserDefaults = .standard) {
-        guard requeued > 0 else { return }
-        var record = RebuildRecord(extractorVersion: extractorVersion, messagesRequeued: 0, date: Date())
-        if let data = defaults.data(forKey: rebuildRecordKey), let previous = try? JSONDecoder().decode(RebuildRecord.self, from: data),
-           previous.extractorVersion == extractorVersion {
-            record.messagesRequeued = previous.messagesRequeued
-        }
-        record.messagesRequeued += requeued
-        record.date = Date()
-        if let data = try? JSONEncoder().encode(record) { defaults.set(data, forKey: rebuildRecordKey) }
+    /// Re-queued messages whose pass has not finished yet — durable, so an
+    /// interrupted pass is still counted when a later one finishes.
+    struct PendingRebuild: Codable, Sendable, Equatable {
+        var extractorVersion: Int
+        var messagesRequeued: Int
     }
 
-    nonisolated static func rebuildRecord(defaults: UserDefaults = .standard) -> RebuildRecord? {
-        guard let data = defaults.data(forKey: rebuildRecordKey) else { return nil }
+    nonisolated static let rebuildRecordFile = "attachment-rebuild.json"
+    nonisolated static let pendingRebuildFile = "attachment-rebuild-pending.json"
+
+    /// The archive's store directory (beside its attachment coverage file).
+    nonisolated static func rebuildDirectory(store: SQLiteEmailStore) -> URL { store.storeDirectory }
+
+    /// Counts the messages a pass put back on the work list for the current
+    /// extractor version. Nothing is reported until `completeRebuild`.
+    nonisolated static func recordRebuild(requeued: Int, in directory: URL) {
+        guard requeued > 0 else { return }
+        let url = directory.appendingPathComponent(pendingRebuildFile)
+        var pending = PendingRebuild(extractorVersion: extractorVersion, messagesRequeued: 0)
+        if let data = try? Data(contentsOf: url), let previous = try? JSONDecoder().decode(PendingRebuild.self, from: data),
+           previous.extractorVersion == extractorVersion {
+            pending.messagesRequeued = previous.messagesRequeued
+        }
+        pending.messagesRequeued += requeued
+        guard let data = try? JSONEncoder().encode(pending) else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// The pass ended without being cancelled: the pending re-read becomes the
+    /// record. `stillUnread` is how many messages the work list still holds —
+    /// the pass tried them and could not read them; they are counted against
+    /// the re-read (this can overstate failures, never hide one).
+    nonisolated static func completeRebuild(in directory: URL, stillUnread: Int, now: Date = Date()) {
+        let pendingURL = directory.appendingPathComponent(pendingRebuildFile)
+        guard let data = try? Data(contentsOf: pendingURL),
+              let pending = try? JSONDecoder().decode(PendingRebuild.self, from: data), pending.messagesRequeued > 0 else { return }
+        let failed = min(pending.messagesRequeued, max(0, stillUnread))
+        let record = RebuildRecord(extractorVersion: pending.extractorVersion, messagesRequeued: pending.messagesRequeued,
+                                   completed: pending.messagesRequeued - failed, failed: failed, date: now)
+        guard let encoded = try? JSONEncoder().encode(record),
+              (try? encoded.write(to: directory.appendingPathComponent(rebuildRecordFile), options: .atomic)) != nil else { return }
+        try? FileManager.default.removeItem(at: pendingURL)
+    }
+
+    /// The finished pass's re-read, for `store`'s archive.
+    nonisolated static func completeRebuild(store: SQLiteEmailStore) async {
+        guard let progress = try? await store.attachmentTextProgress() else { return }
+        completeRebuild(in: rebuildDirectory(store: store), stillUnread: progress.pending)
+    }
+
+    nonisolated static func rebuildRecord(in directory: URL) -> RebuildRecord? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(rebuildRecordFile)) else { return nil }
         return try? JSONDecoder().decode(RebuildRecord.self, from: data)
     }
 
-    /// "Reader version 7 re-read 1,204 messages, last on 7 Nov 2026." — nil when nothing was re-read.
+    /// "Reader version 10 re-read 1,204 messages …: 1,200 read, 4 still unread, finished on 7 Nov 2026." — nil when nothing was re-read.
     nonisolated static func rebuildReportText(_ record: RebuildRecord?) -> String? {
         guard let record, record.messagesRequeued > 0 else { return nil }
         let when = record.date.formatted(date: .abbreviated, time: .omitted)
-        return String(localized: "Reader version \(record.extractorVersion) re-read \(record.messagesRequeued.formatted()) messages whose attachments an earlier version could not read whole, last on \(when).")
+        return String(localized: "Reader version \(record.extractorVersion) re-read \(record.messagesRequeued.formatted()) messages whose attachments an earlier version could not read whole: \(record.completed.formatted()) read, \(record.failed.formatted()) still unread, finished on \(when).")
     }
 
     /// "No attachments matched" that says what was not searchable.
@@ -798,7 +866,7 @@ final class AttachmentTextIndexJob {
         if let n = summary.counts[.truncated], n > 0 { parts.append(String(localized: "\(n) cut short")) }
         if let n = summary.counts[.partial], n > 0 { parts.append(String(localized: "\(n) partly read")) }
         if let n = summary.counts[.noText], n > 0 { parts.append(String(localized: "\(n) with no text")) }
-        let children = childrenNotice(summary.childCounts).map { " " + $0 } ?? ""
+        let children = childrenNotice(summary.childCounts, scope: summary.childScope).map { " " + $0 } ?? ""
         if parts.isEmpty {
             return String(localized: "No attachments matched. Searchable text covers all \(summary.total) attachments.") + children
         }

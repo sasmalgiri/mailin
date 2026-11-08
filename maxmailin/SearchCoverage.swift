@@ -113,7 +113,9 @@ final class SearchCoverageModel: ObservableObject {
         self.fts = fts
     }
 
-    func refresh() async {
+    /// R7: `scope` (the list's query) scopes the files-inside-attachments counts;
+    /// without one they are reported archive-wide.
+    func refresh(scope: EmailQuery? = nil) async {
         var errors: [String] = []
         func read<T>(_ what: String, _ body: () async throws -> T) async -> T? {
             do { return try await body() } catch { errors.append("\(what): \(error.localizedDescription)"); return nil }
@@ -126,7 +128,7 @@ final class SearchCoverageModel: ObservableObject {
         if SearchChunkPolicy.isEnabled {
             chunks = await read("chunks") { try await archive.searchDocCoverage() }
             if let store = archive.sqliteStore {
-                attachments = await AttachmentTextIndexJob.coverageSummary(store: store)
+                attachments = await AttachmentTextIndexJob.coverageSummary(store: store, scope: scope)
             }
         }
         snapshot = SearchCoverageSnapshot(storedMessages: stored, indexedMessages: indexed, partiallyIndexedMessages: partial,

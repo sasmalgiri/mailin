@@ -21,12 +21,13 @@ enum ModelSearchNotice {
     /// document) and the per-attachment states. Nil when the counters could
     /// not be read — said as "not known", never as zero.
     @MainActor
-    static func snapshot(archive: ArchiveDataService) async -> SearchCoverageSnapshot? {
+    /// R7: `scope` (the search's query) scopes the files-inside-attachments counts.
+    static func snapshot(archive: ArchiveDataService, scope: EmailQuery? = nil) async -> SearchCoverageSnapshot? {
         guard let stored = try? await archive.storedTotalCount(),
               let chunks = try? await archive.searchDocCoverage() else { return nil }
         var attachments: AttachmentCoverageSummary? = nil
         if let store = archive.sqliteStore {
-            attachments = await AttachmentTextIndexJob.coverageSummary(store: store)
+            attachments = await AttachmentTextIndexJob.coverageSummary(store: store, scope: scope)
         }
         // The model reads the chunk index, so its reach is measured there
         // (`chunks`), not against the previous FTS shards.

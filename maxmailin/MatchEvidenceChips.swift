@@ -14,11 +14,35 @@ import SwiftUI
 
 struct MatchEvidenceChips: View {
     let evidence: [MatchEvidence]
+    /// R7: the row's message; with it, a chip whose match the index located
+    /// offers Show text opened at that match.
+    var emailID: UUID? = nil
     /// FIND-05: when set, a chip that names an attachment is a button that
     /// opens that attachment (by its ordinal in the message) or — §13.3 (9) —
     /// the file inside it named by the child path.
     var onOpenAttachment: ((Int, String?) -> Void)? = nil
     @Environment(\.backgroundProminence) private var prominence
+    @State private var textTarget: EvidenceText?
+
+    /// What Show text opens for one chip: the document and the matched span.
+    struct EvidenceText: Identifiable, Equatable {
+        let id = UUID()
+        /// The document's ordinal in the chunk index (a child's is its child ordinal).
+        let ordinal: Int
+        /// The top-level attachment's position (Open original).
+        let position: Int
+        let filename: String
+        let childPath: String?
+        let target: ExtractedTextTarget
+    }
+
+    /// R7: the Show text target for a chip — nil unless the chip names an
+    /// attachment (or a file inside one) and the index located the match.
+    static func evidenceText(_ item: MatchEvidence) -> EvidenceText? {
+        guard let anchor = item.anchor, let position = attachmentOrdinal(item.location) else { return nil }
+        return EvidenceText(ordinal: anchor.ordinal, position: position, filename: attachmentFilename(item.location) ?? "",
+                            childPath: childPath(item.location), target: ExtractedTextTarget(anchor))
+    }
 
     var body: some View {
         if !evidence.isEmpty {
@@ -34,6 +58,13 @@ struct MatchEvidenceChips: View {
                         } else {
                             chip(item).help(item.condition)
                         }
+                        if emailID != nil, let text = Self.evidenceText(item) {
+                            Button { textTarget = text } label: { Image(systemName: "text.magnifyingglass").font(.caption2) }
+                                .buttonStyle(.plain)
+                                .help(String(localized: "Show the text at this match"))
+                                .accessibilityLabel(String(localized: "Show the text at this match"))
+                                .accessibilityIdentifier("search.matchEvidence.showText.\(text.ordinal)")
+                        }
                     }
                 }
                 if let excerpt = evidence.compactMap(\.excerpt).first {
@@ -46,6 +77,12 @@ struct MatchEvidenceChips: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("search.matchEvidence")
+            .sheet(item: $textTarget) { text in
+                if let emailID {
+                    ExtractedTextSheet(emailID: emailID, ordinal: text.ordinal, filename: text.filename, childPath: text.childPath,
+                                       attachmentPosition: text.position, target: text.target)
+                }
+            }
         }
     }
 

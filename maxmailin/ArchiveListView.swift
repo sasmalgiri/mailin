@@ -145,8 +145,8 @@ struct ArchiveListPane: View {
                 if isSearching || !model.query.isEmpty {
                     // A6: a search with no hits never reads as a bare zero — it
                     // says what the index covered when it answered.
-                    ArchiveNoResultsState(coverage: coverage.snapshot, onRetry: { Task { await coverage.refresh() } })
-                        .task { await coverage.refresh() }
+                    ArchiveNoResultsState(coverage: coverage.snapshot, onRetry: { Task { await coverage.refresh(scope: model.query) } })
+                        .task { await coverage.refresh(scope: model.query) }
                 } else {
                     ArchiveEmptyState()
                 }
@@ -159,7 +159,7 @@ struct ArchiveListPane: View {
     private var list: some View {
         List(selection: $selectedID) {
             if isSearching, let snapshot = coverage.snapshot, snapshot.needsNotice {
-                SearchCoverageLine(coverage: snapshot, onRetry: { Task { await coverage.refresh() } })
+                SearchCoverageLine(coverage: snapshot, onRetry: { Task { await coverage.refresh(scope: model.query) } })
                     .listRowSeparator(.hidden)
             }
             if model.hasPrevious {
@@ -246,7 +246,7 @@ struct ArchiveListPane: View {
             }
         }
         .task(id: isSearching) {
-            if isSearching { await coverage.refresh() }
+            if isSearching { await coverage.refresh(scope: model.query) }
         }
     }
 
@@ -311,7 +311,7 @@ struct ArchiveSummaryRow: View {
             Text(summary.subject.isEmpty ? "(No Subject)" : summary.subject)
                 .font(.subheadline).lineLimit(1)
             if evidenceProvider != nil {
-                MatchEvidenceChips(evidence: evidence,
+                MatchEvidenceChips(evidence: evidence, emailID: summary.id,
                                    onOpenAttachment: onOpenAttachment.map { open in { ordinal, childPath in open(summary.id, ordinal, childPath) } })
             } else {
                 SearchMatchFieldChips(fields: matchedFields)

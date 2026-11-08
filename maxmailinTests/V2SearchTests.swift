@@ -531,7 +531,7 @@ extension V2SearchTests {
         XCTAssertEqual(none, [])
         let notice = try XCTUnwrap(vm.searchNotice, "a search with no hits says so — never a blank pane")
         XCTAssertTrue(notice.contains("No match"), notice)
-        let expected = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: env.archive))
+        let expected = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: env.archive, scope: vm.currentArchiveQuery))
         XCTAssertEqual(notice, expected)
 
         // The model switched off: the previous path stays (rule 14), no model evidence.
@@ -621,5 +621,305 @@ extension V2SearchTests {
         let detail = try String(contentsOf: repo.appendingPathComponent("maxmailin/EmailDetailView.swift"), encoding: .utf8)
         XCTAssertFalse(detail.contains(".disabled(att.fileURL == nil)"), "a stored message has no temp file; the bytes come from the message")
         XCTAssertTrue(detail.contains(".disabled(!downloadDecision.isEnabled)"))
+    }
+}
+
+// MARK: - R7 — Show text at the match, paged, with the search's phrase rule; honest coverage; rebuild record
+
+extension V2SearchTests {
+
+    private static let r7Filler = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor "
+
+    /// Filler of about `characters` characters (whole words).
+    private static func r7Filler(_ characters: Int) -> String {
+        String(repeating: r7Filler, count: max(1, characters / r7Filler.count))
+    }
+
+    /// One message with one text attachment whose extracted text spans about
+    /// six chunks: no match in the first two, the first (wrapped) occurrence of
+    /// "quarterly results" in the third, a second in the fourth, a third near the end.
+    private func r7Archive() async throws -> (env: Env, email: MBOXParser.RawEmail, text: String) {
+        let env = try makeEnv()
+        var email = makeEmail(tag: "r7", i: 1, year: 2025, body: "See the report.")
+        email.attachments = [AttachmentMetadata(filename: "report.txt", mimeType: "text/plain", size: 10)]
+        try await seed(env, [email])
+        let chunk = SearchChunker.chunkCharacters
+        let text = Self.r7Filler(chunk * 2 + chunk / 2) + "the quarterly\n   results were good "
+            + Self.r7Filler(chunk) + "and the Quarterly Results again "
+            + Self.r7Filler(chunk + chunk / 3) + "final quarterly results here " + Self.r7Filler(2_000)
+        try await env.store.indexAttachmentSearchDocuments(emailID: email.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "report.txt", text: text, state: .complete, extractorVersion: 10, ocr: false)
+        ])
+        return (env, email, text)
+    }
+
+    /// The chunk and raw offset of every phrase-rule occurrence, read the slow way (the reference).
+    private func r7Reference(_ env: Env, _ id: UUID) async throws -> [(chunk: Int, offset: Int)] {
+        let chunks = try await env.store.searchChunks(emailID: id, kind: .attachmentText, ordinal: 0)
+        var out: [(Int, Int)] = []
+        for (index, chunk) in chunks.enumerated() {
+            for r in SectionBoundary.phraseRanges(of: "quarterly results", in: chunk) { out.append((index, r.location)) }
+        }
+        return out
+    }
+
+    /// R7 (1): the chip's evidence carries the matched span; Show text opens
+    /// there with the query in the field, every occurrence marked and the one
+    /// at the span current — not at the start of the text.
+    func testR7_showTextOpensAtTheMatchedSpanWithTheQuery() async throws {
+        let (env, email, _) = try await r7Archive()
+        let reference = try await r7Reference(env, email.id)
+        XCTAssertEqual(reference.count, 3, "the fixture holds three occurrences: \(reference)")
+        XCTAssertGreaterThanOrEqual(reference[0].chunk, 2, "the first occurrence is well inside the text")
+
+        var group = AttachmentConditionGroup()
+        group.content = "quarterly results"
+        group.contentMatch = .phrase
+        let spec = SearchSpec(groups: [SearchGroup(.all, attachments: [group])])
+        let evidence = try await env.store.matchEvidence(emailID: email.id, spec: spec, freeText: nil)
+        let item = try XCTUnwrap(evidence.first { MatchEvidenceChips.attachmentOrdinal($0.location) == 0 }, "\(evidence)")
+        let anchor = try XCTUnwrap(item.anchor, "the evidence says where the match is")
+        XCTAssertEqual(anchor.chunk, reference[0].chunk)
+        XCTAssertEqual(anchor.offset, reference[0].offset)
+        XCTAssertEqual(anchor.query, "quarterly results")
+
+        let text = try XCTUnwrap(MatchEvidenceChips.evidenceText(item), "an attachment chip with a located match offers Show text")
+        XCTAssertEqual(text.ordinal, 0); XCTAssertEqual(text.position, 0); XCTAssertEqual(text.filename, "report.txt")
+        let viewer = ExtractedTextViewerModel(source: StoredExtractedTextSource(store: env.store, emailID: email.id, ordinal: 0),
+                                              target: text.target)
+        await viewer.open()
+        XCTAssertEqual(viewer.query, "quarterly results", "the find field holds the search's query, not an empty string")
+        XCTAssertEqual(viewer.total, 3)
+        XCTAssertEqual(viewer.current, 0)
+        let window = try XCTUnwrap(viewer.window)
+        XCTAssertTrue(window.contains(anchor.chunk))
+        XCTAssertEqual(viewer.marks(inChunk: anchor.chunk).current?.location, anchor.offset, "the match in view is the search's span")
+        let scrolled = try XCTUnwrap(viewer.scrollTarget)
+        XCTAssertEqual(viewer.segments.first { $0.id == scrolled }?.chunk, anchor.chunk, "the sheet scrolls to the span's block")
+        XCTAssertFalse(viewer.marks(inChunk: anchor.chunk).all.isEmpty, "every occurrence is marked")
+
+        // A target at a later occurrence opens on that one.
+        let later = ExtractedTextTarget(query: "quarterly results", chunk: reference[1].chunk, offset: reference[1].offset, length: 17)
+        let second = ExtractedTextViewerModel(source: StoredExtractedTextSource(store: env.store, emailID: email.id, ordinal: 0), target: later)
+        await second.open()
+        XCTAssertEqual(second.current, 1)
+    }
+
+    /// R7 (1): Next / Previous step through every occurrence of the document, in order, wrapping.
+    func testR7_nextAndPreviousMoveBetweenAllMatches() async throws {
+        let (env, email, _) = try await r7Archive()
+        let reference = try await r7Reference(env, email.id)
+        let viewer = ExtractedTextViewerModel(source: StoredExtractedTextSource(store: env.store, emailID: email.id, ordinal: 0),
+                                              target: ExtractedTextTarget(query: "quarterly results", chunk: reference[0].chunk,
+                                                                          offset: reference[0].offset, length: 17))
+        await viewer.open()
+        func focused() -> (Int, Int)? {
+            for chunk in viewer.window ?? 0...0 { if let r = viewer.marks(inChunk: chunk).current { return (chunk, r.location) } }
+            return nil
+        }
+        XCTAssertEqual(viewer.current, 0)
+        await viewer.next()
+        XCTAssertEqual(viewer.current, 1)
+        XCTAssertTrue(focused().map { $0 == (reference[1].chunk, reference[1].offset) } ?? false, "\(String(describing: focused()))")
+        await viewer.next()
+        XCTAssertEqual(viewer.current, 2)
+        XCTAssertTrue(focused().map { $0 == (reference[2].chunk, reference[2].offset) } ?? false)
+        await viewer.next()
+        XCTAssertEqual(viewer.current, 0, "Next after the last wraps to the first")
+        await viewer.previous()
+        XCTAssertEqual(viewer.current, 2, "Previous before the first wraps to the last")
+        await viewer.previous()
+        XCTAssertEqual(viewer.current, 1)
+
+        // Typing another query counts again over the whole text.
+        viewer.query = "QUARTERLY RESULTS"
+        await viewer.recount(fromTarget: false)
+        XCTAssertEqual(viewer.total, 3, "ASCII case folds, as in search")
+        viewer.query = "nowhere phrase"
+        await viewer.recount(fromTarget: false)
+        XCTAssertEqual(viewer.total, 0)
+    }
+
+    /// R7 (2): the viewer reads only the chunks around the one in view — never
+    /// the whole text — and holds at most three; the counts come per chunk.
+    func testR7_pagedLoaderReadsOnlyNearbyChunks() async throws {
+        let (env, email, _) = try await r7Archive()
+        let outlineRead = try await env.store.attachmentDocumentOutline(emailID: email.id, ordinal: 0)
+        let outline = try XCTUnwrap(outlineRead)
+        XCTAssertGreaterThanOrEqual(outline.chunkCount, 5)
+        let reference = try await r7Reference(env, email.id)
+        let countsRead = try await env.store.attachmentDocumentMatchCounts(emailID: email.id, ordinal: 0, kind: .attachmentText,
+                                                                           literal: "quarterly results")
+        let counts = try XCTUnwrap(countsRead)
+        XCTAssertEqual(counts.count, outline.chunkCount, "one count per chunk")
+        for (chunk, n) in counts.enumerated() {
+            XCTAssertEqual(n, reference.filter { $0.chunk == chunk }.count, "chunk \(chunk)")
+        }
+
+        let anchorChunk = reference[0].chunk
+        let viewer = ExtractedTextViewerModel(source: StoredExtractedTextSource(store: env.store, emailID: email.id, ordinal: 0),
+                                              target: ExtractedTextTarget(query: "quarterly results", chunk: anchorChunk,
+                                                                          offset: reference[0].offset, length: 17))
+        await viewer.open()
+        XCTAssertFalse(viewer.requestedRanges.isEmpty)
+        for range in viewer.requestedRanges {
+            XCTAssertGreaterThanOrEqual(range.lowerBound, anchorChunk - ExtractedTextViewerModel.windowRadius, "\(viewer.requestedRanges)")
+            XCTAssertLessThanOrEqual(range.upperBound, anchorChunk + ExtractedTextViewerModel.windowRadius, "\(viewer.requestedRanges)")
+        }
+        XCTAssertFalse(viewer.requestedRanges.contains { $0.contains(0) }, "the start of the text is not read to open in the middle")
+        XCTAssertLessThanOrEqual(viewer.loadedChunks.count, 3)
+        XCTAssertTrue(viewer.canShowEarlier)
+        await viewer.showEarlier()
+        XCTAssertLessThanOrEqual(viewer.loadedChunks.count, 3, "paging drops the far chunks")
+        XCTAssertEqual(viewer.window?.upperBound, anchorChunk - 1, "the window moved one page earlier and kept its first chunk")
+
+        // The display hides the boundary character but the marks keep their place.
+        let display = ExtractedTextViewerModel.displayText("a\u{1E}bc\u{1E}de")
+        XCTAssertEqual(display.text, "abcde")
+        XCTAssertEqual(display.map(NSRange(location: 5, length: 2)), NSRange(location: 3, length: 2))
+    }
+
+    /// R7 (2): whether Show text exists is one EXISTS on the document row; the
+    /// button no longer joins the whole text to decide.
+    func testR7_existenceQueryDoesNotLoadText() async throws {
+        let (env, email, text) = try await r7Archive()
+        let has = try await env.store.attachmentDocumentHasText(emailID: email.id, ordinal: 0)
+        XCTAssertTrue(has)
+        let none = try await env.store.attachmentDocumentHasText(emailID: email.id, ordinal: 1)
+        XCTAssertFalse(none)
+        let outlineRead = try await env.store.attachmentDocumentOutline(emailID: email.id, ordinal: 0)
+        let outline = try XCTUnwrap(outlineRead)
+        XCTAssertEqual(outline.kind, .attachmentText)
+        XCTAssertEqual(outline.characters, text.count, "the size comes from the document row")
+        let archiveHas = await env.archive.attachmentDocumentHasText(emailID: email.id, ordinal: 0)
+        XCTAssertTrue(archiveHas)
+
+        // Source guard: neither the button nor the sheet reads the joined text.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let sheet = try String(contentsOf: repo.appendingPathComponent("maxmailin/ExtractedTextSheet.swift"), encoding: .utf8)
+        XCTAssertFalse(sheet.contains("attachmentDocumentText("), "Show text never loads the whole text")
+        XCTAssertTrue(sheet.contains("attachmentDocumentHasText("))
+    }
+
+    /// R7 (3): the sheet's find is the search's phrase rule — a phrase wrapped
+    /// over a line or a double space is found, one across a section boundary
+    /// is not, ASCII letters fold case and nothing else does — and agrees with
+    /// `mailin_phrase` on every case.
+    func testR7_findUsesThePhraseRule() {
+        let wrapped = "The quarterly\n   results were good."
+        XCTAssertEqual(ExtractedTextSheet.ranges(of: "quarterly results", in: wrapped).count, 1, "a wrapped phrase is found")
+        XCTAssertEqual(ExtractedTextSheet.ranges(of: "quarterly results", in: "quarterly\t\u{1E}results").count, 0,
+                       "never across a section boundary")
+        XCTAssertEqual(ExtractedTextSheet.ranges(of: "QUARTERLY Results", in: wrapped).count, 1)
+        let cases: [(String, String)] = [
+            (wrapped, "quarterly results"), ("quarterly\u{1E}results", "quarterly results"), ("a  b  a b", "a b"),
+            ("Éclair", "éclair"), ("éclair", "éclair"), ("x\u{00A0}y", "x y"), ("cost: $5", "$5"), ("foo.bar", "foo bar"),
+            ("[Sheet: Q3]\n\u{1E}total\t\u{1E}42", "total 42"), ("nothing", "  "),
+        ]
+        for (text, literal) in cases where !literal.trimmingCharacters(in: .whitespaces).isEmpty {
+            XCTAssertEqual(!ExtractedTextSheet.ranges(of: literal, in: text).isEmpty, SectionBoundary.contains(text, literal: literal),
+                           "“\(literal)” in “\(text)” — the viewer and the search agree")
+        }
+        XCTAssertTrue(ExtractedTextSheet.ranges(of: "  ", in: "anything").isEmpty)
+        // A phrase across a chunk join is found once and belongs to the chunk it starts in.
+        let regex = try! XCTUnwrap(SectionBoundary.phraseRegex("quarterly results"))
+        let first = PhraseChunks.matches(in: "the quarterly ", previous: nil, next: "results here", regex: regex)
+        let second = PhraseChunks.matches(in: "results here", previous: "the quarterly ", next: nil, regex: regex)
+        XCTAssertEqual(first.starting.count + second.starting.count, 1)
+        XCTAssertEqual(first.starting.count, 1)
+        XCTAssertEqual(second.marks.first?.location, 0, "its end is still marked in the next chunk")
+    }
+
+    /// R7 (4): a failed child-state read is "not known", never "none".
+    func testR7_coverageUnknownWhenTheChildQueryFails() async throws {
+        let env = try makeEnv()
+        _ = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+        struct Broken: Error {}
+        let broken = await AttachmentTextIndexJob.coverageSummary(store: env.store, scope: nil) { _ in throw Broken() }
+        let summary = try XCTUnwrap(broken)
+        XCTAssertNil(summary.childCounts, "unknown, not an empty dictionary")
+        let notice = AttachmentTextIndexJob.noMatchNotice(summary)
+        XCTAssertTrue(notice.contains("could not be read") && notice.contains("not known"), notice)
+        let fineRead = await AttachmentTextIndexJob.coverageSummary(store: env.store)
+        let fine = try XCTUnwrap(fineRead)
+        XCTAssertEqual(fine.childCounts, [:])
+        XCTAssertFalse(AttachmentTextIndexJob.noMatchNotice(fine).contains("not known"))
+    }
+
+    /// R7 (4): with the search's scope the files-inside counts are that
+    /// scope's; without one they are labelled archive-wide.
+    func testR7_childCountsAreScopedToTheSearch() async throws {
+        let env = try makeEnv()
+        var old = makeEmail(tag: "r7s", i: 1, year: 2023, body: "old")
+        old.attachments = [AttachmentMetadata(filename: "old.zip", mimeType: "application/zip", size: 10)]
+        var new = makeEmail(tag: "r7s", i: 2, year: 2025, body: "new")
+        new.attachments = [AttachmentMetadata(filename: "new.zip", mimeType: "application/zip", size: 10)]
+        try await seed(env, [old, new])
+        func child(_ email: MBOXParser.RawEmail, _ index: Int, _ state: String) -> AttachmentChildRow {
+            AttachmentChildRow(emailID: email.id, position: 0, childIndex: index, path: "f\(index)", filename: "f\(index).bin",
+                               kind: "bin", sha256: "", bytes: 1, state: state, note: nil)
+        }
+        try await env.store.recordAttachmentChildren(emailID: old.id, position: 0, children: [child(old, 0, "locked")],
+                                                     texts: [:], states: [0: .locked], extractorVersion: 10)
+        try await env.store.recordAttachmentChildren(emailID: new.id, position: 0,
+                                                     children: [child(new, 0, "locked"), child(new, 1, "unsupported")],
+                                                     texts: [:], states: [0: .locked, 1: .unsupported], extractorVersion: 10)
+        _ = try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL)
+
+        var scope = EmailQuery()
+        scope.afterDate = utcDate(2025, 1, 1)
+        let scoped = try await env.store.attachmentChildStateCounts(scope: scope)
+        XCTAssertEqual(scoped, ["locked": 1, "unsupported": 1])
+        let wide = try await env.store.attachmentChildStateCounts()
+        XCTAssertEqual(wide, ["locked": 2, "unsupported": 1])
+
+        let inScopeRead = await AttachmentTextIndexJob.coverageSummary(store: env.store, scope: scope)
+        let inScope = try XCTUnwrap(inScopeRead)
+        XCTAssertEqual(inScope.childScope, .search)
+        let scopedNotice = AttachmentTextIndexJob.noMatchNotice(inScope)
+        XCTAssertTrue(scopedNotice.contains("in this search's scope: 1 locked, 1 not read"), scopedNotice)
+        let archiveRead = await AttachmentTextIndexJob.coverageSummary(store: env.store)
+        let archive = try XCTUnwrap(archiveRead)
+        XCTAssertEqual(archive.childScope, .archive)
+        let wideNotice = AttachmentTextIndexJob.noMatchNotice(archive)
+        XCTAssertTrue(wideNotice.contains("across the whole archive: 2 locked, 1 not read"), wideNotice)
+    }
+
+    /// R7 (5): the reader upgrade's re-read is a record of THIS archive, in its
+    /// store directory, written when the pass finished, with read / unread counts.
+    func testR7_rebuildRecordWrittenOnlyOnCompletionAndPerArchive() async throws {
+        let a = try makeEnv(), b = try makeEnv()
+        let dirA = AttachmentTextIndexJob.rebuildDirectory(store: a.store), dirB = AttachmentTextIndexJob.rebuildDirectory(store: b.store)
+        XCTAssertNotEqual(dirA, dirB)
+        AttachmentTextIndexJob.recordRebuild(requeued: 5, in: dirA)
+        XCTAssertNil(AttachmentTextIndexJob.rebuildRecord(in: dirA), "queued is not re-read: nothing is reported before the pass finishes")
+        AttachmentTextIndexJob.completeRebuild(in: dirA, stillUnread: 2)
+        let record = try XCTUnwrap(AttachmentTextIndexJob.rebuildRecord(in: dirA))
+        XCTAssertEqual(record.messagesRequeued, 5); XCTAssertEqual(record.completed, 3); XCTAssertEqual(record.failed, 2)
+        XCTAssertNil(AttachmentTextIndexJob.rebuildRecord(in: dirB), "another archive has its own record")
+        let report = try XCTUnwrap(AttachmentTextIndexJob.rebuildReportText(record))
+        XCTAssertTrue(report.contains("5 messages") && report.contains("3 read") && report.contains("2 still unread"), report)
+        // Completing again without new work changes nothing.
+        AttachmentTextIndexJob.completeRebuild(in: dirA, stillUnread: 0)
+        XCTAssertEqual(AttachmentTextIndexJob.rebuildRecord(in: dirA), record)
+
+        // Through the job: the pass that finishes on archive B writes B's record.
+        let ocrWas = AttachmentOCR.isEnabled
+        defer {
+            AttachmentOCR.isEnabled = ocrWas
+            AttachmentTextIndexJob.testStoreOverride = nil
+            AttachmentTextIndexJob.testSuppressKicks = false
+        }
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = b.store
+        AttachmentOCR.isEnabled = false
+        try await seed(b, [makeEmail(tag: "r7b", i: 1, year: 2025, body: "x")])
+        AttachmentTextIndexJob.recordRebuild(requeued: 4, in: dirB)
+        _ = await AttachmentTextIndexJob.shared.run()
+        let fromJob = try XCTUnwrap(AttachmentTextIndexJob.rebuildRecord(in: dirB), "the finished pass writes the record")
+        XCTAssertEqual(fromJob.messagesRequeued, 4); XCTAssertEqual(fromJob.failed, 0)
+        XCTAssertEqual(AttachmentTextIndexJob.rebuildRecord(in: dirA), record, "archive A's record is untouched")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 }

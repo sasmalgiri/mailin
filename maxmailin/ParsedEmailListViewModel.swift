@@ -554,7 +554,7 @@ class ParsedEmailListViewModel: ObservableObject {
 
     private func refreshModelSearchNotice() async {
         guard typedSearchRunsOnModel, pager.totalCount == 0 else { modelSearchNotice = nil; return }
-        modelSearchNotice = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: archive))
+        modelSearchNotice = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: archive, scope: currentArchiveQuery))
     }
     @Published var aiPinnedIDs: Set<UUID>? = nil
     @Published var emailThreads: [EmailThread] = []
