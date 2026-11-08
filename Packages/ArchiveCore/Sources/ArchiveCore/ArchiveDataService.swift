@@ -226,6 +226,12 @@ final class ArchiveDataService {
         return try? await sqlite.attachmentDocumentText(emailID: emailID, ordinal: ordinal)
     }
 
+    /// R7: whether that text exists — one EXISTS on the document row, no text read.
+    func attachmentDocumentHasText(emailID: EmailID, ordinal: Int) async -> Bool {
+        guard let sqlite = sqliteStore else { return false }
+        return (try? await sqlite.attachmentDocumentHasText(emailID: emailID, ordinal: ordinal)) ?? false
+    }
+
     /// LIFE-06 (audit A08): the paid tier recorded inside the archive (raw
     /// value; 0 = none) and the write that records one.
     func paidTierRecord() async -> Int {

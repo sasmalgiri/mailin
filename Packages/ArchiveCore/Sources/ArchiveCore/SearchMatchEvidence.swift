@@ -43,11 +43,27 @@ struct MatchEvidence: Sendable, Equatable {
         let marks: [Range<Int>]
     }
 
+    /// R7: exactly where in the stored text the match is — the document,
+    /// the chunk, and the UTF-16 span in that chunk's stored text (section
+    /// boundaries included) — with the text the viewer should find, so Show
+    /// text opens at this match.
+    struct Anchor: Sendable, Equatable {
+        let kind: SearchDocKind
+        /// The document's ordinal (a child's is `SearchDocKind.childOrdinal`).
+        let ordinal: Int
+        let chunk: Int
+        let offset: Int
+        let length: Int
+        /// The search's literal, or the matched word.
+        let query: String
+    }
+
     let location: Location
     /// The condition this evidence answers, in the compiler's own terms
     /// (field + mode + value), for the chip's tooltip.
     let condition: String
     let excerpt: Excerpt?
+    var anchor: Anchor? = nil
 }
 
 extension SQLiteEmailStore {
@@ -75,7 +91,7 @@ extension SQLiteEmailStore {
                 if hits.isEmpty {
                     out.append(MatchEvidence(location: .unavailable, condition: freeText, excerpt: nil))
                 } else {
-                    out.append(contentsOf: hits.map { MatchEvidence(location: $0.location, condition: freeText, excerpt: $0.excerpt) })
+                    out.append(contentsOf: hits.map { MatchEvidence(location: $0.location, condition: freeText, excerpt: $0.excerpt, anchor: $0.anchor) })
                 }
             }
         }
@@ -111,7 +127,7 @@ extension SQLiteEmailStore {
                                     prefix: c.match == .contains, limit: 2)
             }
             if hits.isEmpty { return [MatchEvidence(location: .unavailable, condition: label, excerpt: nil)] }
-            return hits.map { MatchEvidence(location: $0.location, condition: label, excerpt: $0.excerpt) }
+            return hits.map { MatchEvidence(location: $0.location, condition: label, excerpt: $0.excerpt, anchor: $0.anchor) }
         case .sender:
             return [MatchEvidence(location: .sender, condition: label, excerpt: nil)]
         case .recipient, .recipientTo, .recipientCc, .recipientBcc:
@@ -152,12 +168,12 @@ extension SQLiteEmailStore {
             return true
         }
         if qualifying.isEmpty { return [MatchEvidence(location: .unavailable, condition: label, excerpt: nil)] }
-        return qualifying.map { MatchEvidence(location: $0.location, condition: label, excerpt: $0.excerpt) }
+        return qualifying.map { MatchEvidence(location: $0.location, condition: label, excerpt: $0.excerpt, anchor: $0.anchor) }
     }
 
     // MARK: Chunk lookup
 
-    private struct Hit { let location: MatchEvidence.Location; let excerpt: MatchEvidence.Excerpt }
+    private struct Hit { let location: MatchEvidence.Location; let excerpt: MatchEvidence.Excerpt; var anchor: MatchEvidence.Anchor? = nil }
 
     /// Chunks of this email, in `kinds`, holding the words (FTS) and — for
     /// literal modes — the exact text; one hit per document, with an
@@ -166,7 +182,7 @@ extension SQLiteEmailStore {
                           prefix: Bool, anyWord: Bool = false, limit: Int) throws -> [Hit] {
         let db = try ensureDB()
         var sql = """
-            SELECT sc.kind, sc.ordinal, sc.text FROM search_chunks sc
+            SELECT sc.kind, sc.ordinal, sc.text, sc.chunk FROM search_chunks sc
             WHERE sc.email_id = ? AND sc.kind IN (\(kinds.map { "'\($0.rawValue)'" }.joined(separator: ",")))
             """
         var binds: [QueryBind] = [.text(emailID.uuidString)]
@@ -216,9 +232,30 @@ extension SQLiteEmailStore {
                                       path: row?.path ?? "",
                                       context: Self.nearestLabel(in: text, before: excerpt.marks.first?.lowerBound))
             }
-            hits.append(Hit(location: location, excerpt: excerpt))
+            let span = Self.firstMatch(in: text, words: words, literal: literal)
+            let anchor = span.map { MatchEvidence.Anchor(kind: kind, ordinal: ordinal, chunk: Int(sqlite3_column_int64(stmt, 3)),
+                                                         offset: $0.range.location, length: $0.range.length, query: $0.query) }
+            hits.append(Hit(location: location, excerpt: excerpt, anchor: anchor))
         }
         return hits
+    }
+
+    /// R7: the first match in a chunk's stored text — the literal when there
+    /// is one (as the excerpt finds it), else the earliest of the words — and
+    /// the text the viewer should look for there.
+    static func firstMatch(in text: String, words: [String], literal: String?) -> (range: NSRange, query: String)? {
+        let ns = text as NSString
+        if let literal, !literal.isEmpty {
+            let r = ns.range(of: literal, options: [.caseInsensitive, .diacriticInsensitive])
+            if r.location != NSNotFound { return (r, literal) }
+            if let wrapped = SectionBoundary.range(of: literal, in: text) { return (wrapped, literal) }
+        }
+        var best: (range: NSRange, query: String)? = nil
+        for word in words {
+            let r = ns.range(of: word, options: [.caseInsensitive, .diacriticInsensitive])
+            if r.location != NSNotFound, r.location < (best?.range.location ?? Int.max) { best = (r, word) }
+        }
+        return best
     }
 
     /// ~160 characters around the first match, with the matched words

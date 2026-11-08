@@ -70,7 +70,12 @@ struct AttachmentCoverageSummary: Sendable, Equatable {
     /// Rows a newer extractor would retry.
     var staleRows = 0
     /// §13.3 (8): files INSIDE attachments by state ("locked", "unsupported", …), filled by the job from the archive.
-    var childCounts: [String: Int] = [:]
+    /// R7: nil = the states could not be read (unknown — never "none").
+    var childCounts: [String: Int]? = [:]
+    /// R7: what `childCounts` covers — the whole archive, or the search's scope.
+    var childScope: ChildCountScope = .archive
+
+    enum ChildCountScope: Sendable, Equatable { case archive, search }
 
     var total: Int { counts.values.reduce(0, +) }
     var searchable: Int { (counts[.extracted] ?? 0) + (counts[.truncated] ?? 0) }

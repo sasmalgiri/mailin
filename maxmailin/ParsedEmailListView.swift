@@ -3446,7 +3446,7 @@ struct EmailRowView: View {
     @ViewBuilder
     private var matchStrip: some View {
         if evidenceProvider != nil {
-            MatchEvidenceChips(evidence: evidence,
+            MatchEvidenceChips(evidence: evidence, emailID: email.id,
                                onOpenAttachment: onOpenAttachment.map { open in { ordinal, childPath in open(email.id, ordinal, childPath) } })
         } else {
             SearchMatchFieldChips(fields: matchedFields)

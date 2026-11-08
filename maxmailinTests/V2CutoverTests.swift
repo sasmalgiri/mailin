@@ -3464,7 +3464,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(rows[3].note?.contains("Read S/MIME with your keychain key") == true, "the record says what would open it: \(rows[3].note ?? "")")
         let summaryValue = await AttachmentTextIndexJob.coverageSummary(store: env.store)
         let summary = try XCTUnwrap(summaryValue)
-        XCTAssertEqual(AttachmentTextIndexJob.noMatchNotice(summary), "No attachments matched. Searchable text covers 0 of 4 attachments — 4 locked. Files inside attachments: 1 locked.",
+        XCTAssertEqual(AttachmentTextIndexJob.noMatchNotice(summary), "No attachments matched. Searchable text covers 0 of 4 attachments — 4 locked. Files inside attachments, across the whole archive: 1 locked.",
                        "§13.3 (8): the sealed member inside the ZIP is counted too")
         func sealed(_ type: String, _ content: String) -> SearchSpec {
             SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: type, contentMatch: .allWords, content: content)])])
@@ -4024,9 +4024,9 @@ final class V2CutoverTests: XCTestCase {
     func testSTEP6_childrenInTheNotice_extractedTextView_rebuildRecord_ocrLanguages() async throws {
         XCTAssertNil(AttachmentTextIndexJob.childrenNotice([:]))
         XCTAssertNil(AttachmentTextIndexJob.childrenNotice(["extracted": 9]))
-        XCTAssertEqual(AttachmentTextIndexJob.childrenNotice(["locked": 2, "unsupported": 1, "extracted": 9]), "Files inside attachments: 2 locked, 1 not read.")
+        XCTAssertEqual(AttachmentTextIndexJob.childrenNotice(["locked": 2, "unsupported": 1, "extracted": 9]), "Files inside attachments, across the whole archive: 2 locked, 1 not read.")
         var summary = AttachmentCoverageSummary(); summary.counts = [.extracted: 3]; summary.childCounts = ["locked": 1]
-        XCTAssertEqual(AttachmentTextIndexJob.noMatchNotice(summary), "No attachments matched. Searchable text covers all 3 attachments. Files inside attachments: 1 locked.")
+        XCTAssertEqual(AttachmentTextIndexJob.noMatchNotice(summary), "No attachments matched. Searchable text covers all 3 attachments. Files inside attachments, across the whole archive: 1 locked.")
 
         let wasOn = SearchChunkPolicy.isEnabled
         defer { SearchChunkPolicy.isEnabled = wasOn }
@@ -4072,7 +4072,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(counts["locked"], 1); XCTAssertEqual(counts["extracted"], 1)
         let fullSummary = await AttachmentTextIndexJob.coverageSummary(store: env.store)
         let notice = AttachmentTextIndexJob.noMatchNotice(try XCTUnwrap(fullSummary))
-        XCTAssertTrue(notice.hasSuffix("Files inside attachments: 1 locked."), notice)
+        XCTAssertTrue(notice.hasSuffix("Files inside attachments, across the whole archive: 1 locked."), notice)
 
         // D9: the exact indexed text of the attachment, and of the file inside the archive.
         let documentText = try await env.store.attachmentDocumentText(emailID: email.id, ordinal: 0)
@@ -4091,12 +4091,16 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(String(marked.characters), unwrappedChild, "marking changes nothing in the text")
 
         // D11: the reader upgrade's re-read is recorded and worded.
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "rebuild-\(UUID().uuidString)"))
-        AttachmentTextIndexJob.recordRebuild(requeued: 0, defaults: defaults)
-        XCTAssertNil(AttachmentTextIndexJob.rebuildRecord(defaults: defaults))
-        AttachmentTextIndexJob.recordRebuild(requeued: 5, defaults: defaults)
-        AttachmentTextIndexJob.recordRebuild(requeued: 7, defaults: defaults)
-        let record = try XCTUnwrap(AttachmentTextIndexJob.rebuildRecord(defaults: defaults))
+        // R7: per archive, in its store directory, and only once the pass finished.
+        let rebuildDir = FileManager.default.temporaryDirectory.appendingPathComponent("rebuild-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: rebuildDir) }
+        AttachmentTextIndexJob.recordRebuild(requeued: 0, in: rebuildDir)
+        AttachmentTextIndexJob.completeRebuild(in: rebuildDir, stillUnread: 0)
+        XCTAssertNil(AttachmentTextIndexJob.rebuildRecord(in: rebuildDir))
+        AttachmentTextIndexJob.recordRebuild(requeued: 5, in: rebuildDir)
+        AttachmentTextIndexJob.recordRebuild(requeued: 7, in: rebuildDir)
+        AttachmentTextIndexJob.completeRebuild(in: rebuildDir, stillUnread: 0)
+        let record = try XCTUnwrap(AttachmentTextIndexJob.rebuildRecord(in: rebuildDir))
         XCTAssertEqual(record.messagesRequeued, 12); XCTAssertEqual(record.extractorVersion, AttachmentTextIndexJob.extractorVersion)
         let report = try XCTUnwrap(AttachmentTextIndexJob.rebuildReportText(record))
         XCTAssertTrue(report.contains("version \(AttachmentTextIndexJob.extractorVersion)") && report.contains("12 messages"), report)

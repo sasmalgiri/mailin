@@ -3987,6 +3987,24 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
+    /// R7 / §13.3 (8): files inside attachments by state, for the messages in
+    /// `scope` (its filters only — the search's own conditions and free text
+    /// are left out, so the counts describe where the search looked).
+    func attachmentChildStateCounts(scope: EmailQuery) throws -> [String: Int] {
+        var scoped = scope
+        scoped.spec = nil
+        scoped.text = nil
+        let (scopeSQL, scopeBinds) = Self.filterClauses(scoped)
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT c.state, COUNT(*) FROM attachment_children c JOIN emails e ON e.id = c.email_id"
+                               + (scopeSQL.isEmpty ? "" : " WHERE " + scopeSQL.joined(separator: " AND ")) + " GROUP BY c.state;")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, scopeBinds, startingAt: 1)
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
     /// ORDER BY + keyset predicate for each §16 sort. `sortKey` is the cursor
     /// boundary value (subject string / decimal size / decimal priority).
     private static func sortSQL(_ sort: EmailSortOrder) -> (orderBy: String, keyset: String, joins: String) {

@@ -30,6 +30,8 @@ struct ArchiveHealthView: View {
     @State private var snapshots: [ArchiveSnapshot] = []
     @State private var coverage: (analyzed: Int, total: Int) = (0, 0)
     @State private var freeBytes: Int64?
+    /// R7: what the last reader upgrade re-read in this archive.
+    @State private var rebuildText: String?
     @State private var note: String?
     @State private var working = false
     @State private var showingRawSourceRecovery = false
@@ -132,7 +134,8 @@ struct ArchiveHealthView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("health.formats.ocrLanguages")
                 // §13.3 (11): what the last reader upgrade re-read.
-                if let rebuild = AttachmentTextIndexJob.rebuildReportText(AttachmentTextIndexJob.rebuildRecord()) {
+                // R7: this archive's record, written when the re-reading pass finished.
+                if let rebuild = rebuildText {
                     Text(rebuild).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("health.formats.rebuild")
                 }
@@ -394,7 +397,12 @@ struct ArchiveHealthView: View {
             }
         }
         .formStyle(.grouped)
-        .task { reload(); await loadCoverage(); await loadSources() }
+        .task {
+            reload()
+            rebuildText = AttachmentTextIndexJob.rebuildReportText(
+                AttachmentTextIndexJob.rebuildRecord(in: AttachmentTextIndexJob.rebuildDirectory(store: SQLiteEmailStore.shared)))
+            await loadCoverage(); await loadSources()
+        }
     }
 
     /// IOS-02: the attestation summary, which carries `NoNetworkAttestation.buildMarker`.
