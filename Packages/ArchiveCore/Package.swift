@@ -9,7 +9,9 @@ import PackageDescription
 let package = Package(
     name: "ArchiveCore",
     platforms: [.macOS(.v14), .iOS(.v17)],
-    products: [.library(name: "ArchiveCore", targets: ["ArchiveCore"])],
+    // V4-02/V4-03: MailConnectivity ships in the SAME library product, so the
+    // app can `import MailConnectivity` without a project-file change.
+    products: [.library(name: "ArchiveCore", targets: ["ArchiveCore", "MailConnectivity"])],
     targets: [
         // §3-P1: Swift 6 language mode — full data-race checking is an error,
         // not a warning, for the archive engine.
@@ -31,6 +33,18 @@ let package = Package(
                 dependencies: ["CLibArchiveRAR"],
                 path: "Sources/ArchiveCore",
                 swiftSettings: [.unsafeFlags(["-enable-testing"]), .swiftLanguageMode(.v6)]),
+        // V4-02/V4-03 (plan v4 §5.1): connected-mail accounts, account-scoped
+        // credentials and OAuth. The ONLY place provider networking may live
+        // (none yet); it reaches the archive through ArchiveCore's public
+        // ingestion boundary (`ConnectedArchiveSink`), never its internals.
+        .target(name: "MailConnectivity",
+                dependencies: ["ArchiveCore"],
+                path: "Sources/MailConnectivity",
+                swiftSettings: [.unsafeFlags(["-enable-testing"]), .swiftLanguageMode(.v6)]),
+        .testTarget(name: "MailConnectivityTests",
+                    dependencies: ["MailConnectivity", "ArchiveCore"],
+                    path: "Tests/MailConnectivityTests",
+                    swiftSettings: [.swiftLanguageMode(.v5)]),
         // Runs UNSANDBOXED under `swift test` (no host app), which is what the
         // fault-injection rows need: the sandboxed app cannot write to a
         // mounted disk image at all.
