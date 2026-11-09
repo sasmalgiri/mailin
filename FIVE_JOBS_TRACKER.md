@@ -301,10 +301,10 @@ Review findings (plan §1.3) map to rows: CUR-01 → REC-02, CUR-02 → REC-04, 
 
 | ID | Item | State | Commit | Test / evidence |
 |---|---|---|---|---|
-| CLOSE-01 | MSG > 2 GB and EMLX > 500 MB read by checked random access / streamed MIME, not whole-file (CUR: AppLimits rows) | not started | | |
-| CLOSE-02 | Durable recursive mailbox intake inside containers (ZIP→ZIP→MBOX, nested EML folders), resumable, no omission or duplicate | not started | | |
-| CLOSE-03 | Remaining format variants; iWork 2013+ unlock with bounded aggregate memory (CUR-05) and trailer integrity disclosed (CUR-06); RAR bounds kept honest (CUR-07) | not started | | |
-| CLOSE-04 | Native OLM preflight from the supplied pack (native-outlook.olm + oracle, ZIP SHA-256 3b4f0413…7b71e), kept apart from owner-pack/smime; pending-count assertion moved to an isolated test (CUR-04); strict mode needs zero unresolved | not started | | |
+| CLOSE-01 | MSG > 2 GB and EMLX > 500 MB read by checked random access / streamed MIME, not whole-file (CUR: AppLimits rows) | implemented | edcc45d | `LargeSingleMessageTests`: sparse .msg 1.996 GB / 2.016 GB and .emlx 499 MB / 500.1 MB, attachment hashes exact, peak memory ≤ 12 MiB; malformed chains refused. Bug fixed: FileRandomAccessSource kept every slice alive. Open: .emlx inside a library folder and .msg/.emlx inside archives still load whole messages (no refusal, may exhaust memory). App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
+| CLOSE-02 | Durable recursive mailbox intake inside containers (ZIP→ZIP→MBOX, nested EML folders), resumable, no omission or duplicate | implemented | 8926d1c | `ContainerRecursiveIntakeTests` + `ContainerKillResumeTests`: ZIP→ZIP→ZIP→MBOX, ZIP→TGZ→Maildir, 7z→RAR→gzip→MBOX, nested EML; refusals counted with reasons; 4 SIGKILLs over 6,000 messages → exact Message-ID set. Guard: 32 levels / self-containing archive. App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
+| CLOSE-03 | Remaining format variants; iWork 2013+ unlock with bounded aggregate memory (CUR-05) and trailer integrity disclosed (CUR-06); RAR bounds kept honest (CUR-07) | implemented | 904cd5a, fd45b97 | `IWork13StreamingUnlockTests`: 400 members peak < 32 MiB (old 305 MiB / 800), cancellation, disk full; trailer integrity disclosed as unverified; corruption cases named. RAR rows reviewed, honest. Bugs fixed: inline images decoded twice (`InlineAttachmentDecodingTests`), encoded-word filenames left encoded. |
+| CLOSE-04 | Native OLM preflight from the supplied pack (native-outlook.olm + oracle, ZIP SHA-256 3b4f0413…7b71e), kept apart from owner-pack/smime; pending-count assertion moved to an isolated test (CUR-04); strict mode needs zero unresolved | implemented | fd45b97 | Supplied pack found (~/Downloads/Mailin_Online_Mail_Fixtures_and_SMIME_2026-11-07.zip, SHA-256 3b4f0413…), staged in ~/Downloads/Mail/Fixtures/native-pack-20261003/ apart from owner-pack; `NativeOLMPairFixtureTests` 5/5 against the oracle (MBOX lacks Date/Message-ID, not compared); pending-count assertion replaced by an isolated fake-requirement test. MAILIN_RELEASE_PREFLIGHT=1: 0 unresolved, passes. |
 | CLOSE-05 | Tracker / registry / Limits / help reconciled with actual evidence; extractor-version migration kept | not started | | |
 | CLOSE-06 | Release-config tests via `xcodebuild test -scheme "maxmailin Release Tests" -configuration Release ENABLE_TESTABILITY=YES`; focused five-journey Mac Release UI test (not the general crawl); sandbox / lifecycle / pilot gates | not started | | |
 
@@ -312,10 +312,10 @@ Review findings (plan §1.3) map to rows: CUR-01 → REC-02, CUR-02 → REC-04, 
 
 | ID | Item | State | Commit | Test / evidence |
 |---|---|---|---|---|
-| REC-01 | Typed RecipeRunContext (scope, SearchSpec, frozen selection, output, permissions); saved runs migrated | not started | | |
-| REC-02 | Recipe steps drive real import/search/dedupe/backup/restore/export jobs and keep job + receipt IDs; opening a tool never completes a step (CUR-01) | not started | | |
-| REC-03 | Durable recipe state machine (draft…completed); restart reconnects; explicit attestation only for genuinely manual tasks | not started | | |
-| REC-04 | Save failures surfaced, dirty values kept, no false "Saved" (CUR-02) | not started | | |
+| REC-01 | Typed RecipeRunContext (scope, SearchSpec, frozen selection, output, permissions); saved runs migrated | implemented | d351d5b | `RecipeRunTruthTests` RQ04, migration test. Frozen RecipeRunContext stored with the run; archive list applies it. Open: export and duplicate tools do not read the frozen scope yet (REC-05). App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
+| REC-02 | Recipe steps drive real import/search/dedupe/backup/restore/export jobs and keep job + receipt IDs; opening a tool never completes a step (CUR-01) | implemented | d351d5b | `RecipeRunTruthTests` RQ01, RQ02: job steps complete only from the saved receipt; first report wins. Note: a finished job attaches to the newest waiting step of its kind within 24 h. App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
+| REC-03 | Durable recipe state machine (draft…completed); restart reconnects; explicit attestation only for genuinely manual tasks | implemented | d351d5b | `RecipeRunTruthTests` RQ05: nine states, restart reconnects by job ID; manual tool steps need an explicit "Attest done", shown as the user's statement. App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
+| REC-04 | Save failures surfaced, dirty values kept, no false "Saved" (CUR-02) | implemented | d351d5b | `RecipeRunTruthTests` RQ03: injected save failure → error, fields kept, no Saved / completed; posted document reused on retry. App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
 | REC-05 | Counts, paths, hashes, skipped reasons and verification filled from receipts; choose → review → result (CUR-03) | not started | | |
 | REC-06 | Five practical recipes beside Archive/Search (find & export, find & save attachments, archive & clean up, back up & restore, collect & hand over); specialist library secondary | not started | | |
 | REC-07 | Online capture recipes: selective capture, archive-before-server-cleanup, deterministic capture/index rules | not started | | |
@@ -325,9 +325,9 @@ Review findings (plan §1.3) map to rows: CUR-01 → REC-02, CUR-02 → REC-04, 
 
 | ID | Item | State | Commit | Test / evidence |
 |---|---|---|---|---|
-| SEARCH-01 | Advanced Search identical across Free / Personal / Pro / LIFE-06 on the same permitted data, AI off | not started | | |
-| SEARCH-02 | One serialised SearchSpec through toolbar, saved searches, recipes and captured online mail; frozen selection distinct from live search | not started | | |
-| SEARCH-03 | Active scope, filters, exact match location and incomplete coverage shown everywhere, nested files included | not started | | |
+| SEARCH-01 | Advanced Search identical across Free / Personal / Pro / LIFE-06 on the same permitted data, AI off | implemented | 1e0209f | No plan lock existed on the builder; fixed the "may still match" count ignoring the Free scope and added Advanced Search to the iPhone list. `testSEARCH01_sameSpecSameDataGivesIdenticalAnswersOnEveryTier`. App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
+| SEARCH-02 | One serialised SearchSpec through toolbar, saved searches, recipes and captured online mail; frozen selection distinct from live search | implemented | 1e0209f | `SearchSpecTransport` (versioned), saved searches keep the spec, `FrozenSearchSelection`; bug fixed: a Free frozen selection shrank when newer mail arrived. `testSEARCH02_*`. App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
+| SEARCH-03 | Active scope, filters, exact match location and incomplete coverage shown everywhere, nested files included | implemented | 1e0209f | Coverage names locked / unread / failed / partial files inside attachments; "No matches in the text that could be read"; Free window stated. `testSEARCH03_*`. App tests 2026-11-09 on the Mac after merge: 98 + 205 passed (2 owner-bound skips), 0 failed; package strict preflight run 69 passed. |
 | SEARCH-04 | Result / attachment browser and saved-query templates for the recipes | not started | | |
 
 ### AI scaffolding (disabled)
@@ -344,7 +344,7 @@ Review findings (plan §1.3) map to rows: CUR-01 → REC-02, CUR-02 → REC-04, 
 
 | ID | Item | State | Commit | Test / evidence |
 |---|---|---|---|---|
-| V4-00 | Baseline: current head, Release build result, inherited archive gates; port live-mail branch concepts only | not started | | |
+| V4-00 | Baseline: current head, Release build result, inherited archive gates; port live-mail branch concepts only | implemented | 1e0209f | Baseline 16e545b: command-line Release build of the Mac app succeeded (1 existing warning, ContentViewModel.swift:313). live-mail branch (28e09f4, 518 commits behind): concepts to port — UUID-keyed Keychain accounts, LiveMailNetworkGate, IMAP XOAUTH2 with masked token, network.client only in connected configurations. |
 | V4-01 | Separate mail and cloud-AI build/runtime policy; connected + offline Release configurations; network entitlement in the right file; OAuth URL schemes; info.plist path case | not started | | |
 | V4-02 | MailAccount + account-scoped Keychain credential store; native OAuth with PKCE + state; single-flight refresh | not started | | |
 | V4-03 | Provider adapter + archive sink contracts; migrations; account-qualified identities, occurrences, capture receipts; FIELD_CONTRACT.md | not started | | |
