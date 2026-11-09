@@ -5736,6 +5736,9 @@ final class V2CutoverTests: XCTestCase {
                       && listed(bytes(RARReader.maxDecoderDictionaryBytes)) && listed("\(BoundedRegexSearch.literalCandidateCap) candidates")
                       && listed(bytes(Int64(PSTStreamWriter.maxFileBytes))) && listed(bytes(Int64(MBOXParser.maxMessageBytes)))
                       && listed("\(ArchiveSidebarModel.labelLimit) busiest folders"), "\(limits.map { plain($0.value) })")
+        // CLOSE-02: mailboxes inside archives are read at every level; the self-containing guard is named.
+        XCTAssertTrue(listed("\(ContainerMailboxWalk.selfContainingGuardDepth) archives deep"), "\(limits.map { plain($0.value) })")
+        XCTAssertFalse(listed("one archive level"), "nested archives are no longer skipped")
         for job in ["Opening archives", "Folders", "Search", "Duplicates", "Exports"] {
             XCTAssertEqual(limits.first { $0.what == job }?.kind, AppLimit.Kind.none, "\(job) is listed as uncapped")
         }
