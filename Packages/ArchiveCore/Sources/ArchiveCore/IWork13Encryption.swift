@@ -26,9 +26,13 @@
 //               ordinary snappy-framed IWA file.
 //
 //  The 20 trailing bytes are the same for the same plain text across saves;
-//  how they are keyed is not in the public description, so they are not
-//  checked. The plain text is checked by the verifier, the padding and the
-//  IWA framing that the reader parses next. ".iwph" holds the password hint
+//  how they are keyed is not in the public description (SHA-1 / HMAC-SHA1
+//  of the plain or cipher text with the key, salt or member header were
+//  tried on the Pages fixture; none matched), so they are not checked.
+//  CUR-06: three separate facts — the PASSWORD is checked by the verifier;
+//  the content PARSES (padding, then the IWA framing the reader decodes
+//  next); its INTEGRITY is not cryptographically verified, and every reading
+//  says so (`integrityNote` in `OfficeTextExtractor.Result.notes`). ".iwph" holds the password hint
 //  (not read); Metadata/ stays plain.
 //
 
@@ -92,11 +96,51 @@ enum IWork13Encryption {
         return Data(plain)
     }
 
+    /// What every reading opened this way says beside its text (CUR-06): the
+    /// password check, the parse and the payload's integrity are separate
+    /// facts, and only the first two are checked.
+    static let integrityNote = "password verified; content read, but its integrity is not cryptographically verified (the 20-byte member trailer is not checked), so damage inside the encrypted data may go undetected"
+
+    /// CUR-05: a full disk or another write failure while making the plain
+    /// copy — named; nothing half-written is left in scratch.
+    enum UnlockError: Error, LocalizedError, Equatable {
+        case diskFull(member: String)
+        case writeFailed(member: String, detail: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .diskFull(let member):
+                return "the unlocked copy of \(member) could not be written: the disk is full (nothing was kept)"
+            case .writeFailed(let member, let detail):
+                return "the unlocked copy of \(member) could not be written: \(detail) (nothing was kept)"
+            }
+        }
+
+        static func from(_ error: Error, member: String) -> Error {
+            if error is UnlockError || error is CancellationError { return error }
+            let ns = error as NSError
+            func isENOSPC(_ e: NSError) -> Bool { e.domain == NSPOSIXErrorDomain && e.code == Int(ENOSPC) }
+            let full = isENOSPC(ns) || (ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteOutOfSpaceError)
+                || ((ns.userInfo[NSUnderlyingErrorKey] as? NSError).map(isENOSPC) ?? false)
+            return full ? UnlockError.diskFull(member: member) : UnlockError.writeFailed(member: member, detail: ns.localizedDescription)
+        }
+    }
+
     /// A plain ZIP of the document's Index/*.iwa members (decrypted; those of
     /// a bundle's inner Index.zip included) in `scratch`, plus the members
     /// over the part guard, named for the caller's "skipped" list.
+    ///
+    /// CUR-05: streamed. Each member is extracted to a scratch file, decrypted
+    /// in 1 MiB blocks into a second scratch file, copied into a file-backed
+    /// ZIP (`StreamingZIPWriter`, central directory spooled to disk), and both
+    /// scratch files are removed — live memory is a few MiB whatever the
+    /// member count or the sum of their sizes. `isCancelled` is asked before
+    /// every member and every block (`CancellationError`); a failed write is
+    /// `UnlockError` (a full disk named). On any error the partial ZIP and the
+    /// scratch files are removed before it is thrown.
     static func unlock(fileURL: URL, members: [ZIPArchiveReader.Member], password: String, scratch: URL,
-                       limit: Int64) throws -> (url: URL, skipped: [String]) {
+                       limit: Int64, isCancelled: () -> Bool = { Task.isCancelled },
+                       makeSink: StreamingZIPWriter.SinkFactory = { try FileZIPSink(url: $0) }) throws -> (url: URL, skipped: [String]) {
         guard let verifierMember = members.filter({ isVerifier($0.name) && !$0.isDirectory })
             .min(by: { $0.name.count < $1.name.count }) else {
             throw OfficeTextExtractor.ExtractError.notAPackage("protected iWork document without its password verifier")
@@ -110,40 +154,132 @@ enum IWork13Encryption {
         }
         let key = try key(password: password, verifier: verifier)
 
-        var entries: [MiniZIPWriter.Entry] = []
+        let url = scratch.appendingPathComponent(UUID().uuidString + ".zip")
+        let writer: StreamingZIPWriter
+        do { writer = try StreamingZIPWriter(destination: url, makeSink: makeSink) } catch {
+            throw UnlockError.from(error, member: "the document")
+        }
         var skipped: [String] = []
         func add(_ member: ZIPArchiveReader.Member, from archive: URL) throws {
+            if isCancelled() { throw CancellationError() }
             guard member.uncompressedSize <= limit + Int64(headerBytes + trailerBytes) else {
                 skipped.append("\(member.name) (\(member.uncompressedSize) bytes, over the \(limit)-byte guard)")
                 return
             }
-            let stored = try DocumentTextExtractor.memberData(member, from: archive, scratch: scratch)
-            entries.append(.init(name: member.name, data: try decrypt(stored, key: key, name: member.name), deflate: false))
-        }
-        for member in members where !member.isDirectory {
-            let name = member.name
-            if (name as NSString).lastPathComponent == "Index.zip" {
-                guard member.uncompressedSize <= ExtractionLimits.effective.totalArchiveBytes else {
-                    skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(ExtractionLimits.effective.totalArchiveBytes)-byte guard)")
-                    continue
+            let stored = scratch.appendingPathComponent(UUID().uuidString)
+            let plain = scratch.appendingPathComponent(UUID().uuidString)
+            defer {
+                try? FileManager.default.removeItem(at: stored)
+                try? FileManager.default.removeItem(at: plain)
+            }
+            // One pool per member: FileHandle reads hand back autoreleased
+            // buffers, which would otherwise live until the whole unlock ends.
+            try autoreleasepool {
+                try ZIPArchiveReader.extract(member, from: archive, to: stored)
+                let (size, crc) = try decryptFile(stored, to: plain, key: key, name: member.name, isCancelled: isCancelled, makeSink: makeSink)
+                do { try writer.addStored(name: member.name, contentsOf: plain, size: size, crc: crc) } catch {
+                    throw UnlockError.from(error, member: member.name)
                 }
-                let innerURL = scratch.appendingPathComponent(UUID().uuidString + ".zip")
-                try ZIPArchiveReader.extract(member, from: fileURL, to: innerURL)
-                let inner: [ZIPArchiveReader.Member]
-                do { inner = try ZIPArchiveReader.members(of: innerURL) } catch {
-                    throw OfficeTextExtractor.ExtractError.notAPackage("\(name): \(error)")
-                }
-                for innerMember in inner where !innerMember.isDirectory && isIWA(innerMember.name) {
-                    try add(innerMember, from: innerURL)
-                }
-                try? FileManager.default.removeItem(at: innerURL)
-            } else if isIWA(name) {
-                try add(member, from: fileURL)
             }
         }
-        let url = scratch.appendingPathComponent(UUID().uuidString + ".zip")
-        try MiniZIPWriter.archive(entries).write(to: url)
+        do {
+            for member in members where !member.isDirectory {
+                let name = member.name
+                if (name as NSString).lastPathComponent == "Index.zip" {
+                    guard member.uncompressedSize <= ExtractionLimits.effective.totalArchiveBytes else {
+                        skipped.append("\(name) (\(member.uncompressedSize) bytes, over the \(ExtractionLimits.effective.totalArchiveBytes)-byte guard)")
+                        continue
+                    }
+                    let innerURL = scratch.appendingPathComponent(UUID().uuidString + ".zip")
+                    defer { try? FileManager.default.removeItem(at: innerURL) }
+                    try ZIPArchiveReader.extract(member, from: fileURL, to: innerURL)
+                    let inner: [ZIPArchiveReader.Member]
+                    do { inner = try ZIPArchiveReader.members(of: innerURL) } catch {
+                        throw OfficeTextExtractor.ExtractError.notAPackage("\(name): \(error)")
+                    }
+                    for innerMember in inner where !innerMember.isDirectory && isIWA(innerMember.name) {
+                        try add(innerMember, from: innerURL)
+                    }
+                } else if isIWA(name) {
+                    try add(member, from: fileURL)
+                }
+            }
+            if isCancelled() { throw CancellationError() }
+            do { try writer.finish() } catch { throw UnlockError.from(error, member: "the document") }
+        } catch {
+            writer.abandon()
+            throw error
+        }
         return (url, skipped)
+    }
+
+    /// Decrypts one stored member file (16 bytes, IV, cipher text, 20-byte
+    /// trailer) into `destination` in 1 MiB blocks; returns the plain size and
+    /// CRC-32. The last block's padding is checked; the trailer is not (see
+    /// `integrityNote`). On any error `destination` is removed.
+    static func decryptFile(_ source: URL, to destination: URL, key: [UInt8], name: String,
+                            isCancelled: () -> Bool = { Task.isCancelled },
+                            makeSink: StreamingZIPWriter.SinkFactory = { try FileZIPSink(url: $0) }) throws -> (size: UInt64, crc: UInt32) {
+        let total = (try FileManager.default.attributesOfItem(atPath: source.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let cipherCount = total - Int64(headerBytes + trailerBytes)
+        guard cipherCount >= 16, cipherCount % 16 == 0 else {
+            throw OfficeTextExtractor.ExtractError.notAPackage("protected iWork member \(name) of \(total) bytes is not whole AES blocks")
+        }
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        let header = try input.read(upToCount: headerBytes) ?? Data()
+        guard header.count == headerBytes else {
+            throw OfficeTextExtractor.ExtractError.notAPackage("protected iWork member \(name): truncated header")
+        }
+        let decryptor: RARCrypto.CBCDecryptor
+        do { decryptor = try RARCrypto.CBCDecryptor(key: key, iv: Array(header[16..<32])) } catch {
+            throw OfficeTextExtractor.ExtractError.notAPackage("protected iWork member \(name): the AES decryptor could not be started")
+        }
+        let sink: ZIPByteSink
+        do { sink = try makeSink(destination) } catch { throw UnlockError.from(error, member: name) }
+        var done = false
+        defer { if !done { try? sink.close(); try? FileManager.default.removeItem(at: destination) } }
+        var crc = ZIPArchiveReader.CRC32()
+        var size: UInt64 = 0
+        var held: [UInt8] = []          // the last plain block, written once the next one (or the end) arrives
+        var remaining = cipherCount
+        while remaining > 0 {
+            if isCancelled() { throw CancellationError() }
+            try autoreleasepool {
+                let want = Int(min(Int64(StreamingZIPWriter.chunkBytes), remaining))
+                let chunk = try input.read(upToCount: want) ?? Data()
+                guard chunk.count == want else {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("protected iWork member \(name): truncated cipher text")
+                }
+                remaining -= Int64(want)
+                let plain: [UInt8]
+                do { plain = try decryptor.update([UInt8](chunk)) } catch {
+                    throw OfficeTextExtractor.ExtractError.notAPackage("protected iWork member \(name): AES decryption failed")
+                }
+                let out = Data(held + plain.dropLast(16))
+                held = Array(plain.suffix(16))
+                if !out.isEmpty {
+                    do { try sink.write(out) } catch { throw UnlockError.from(error, member: name) }
+                    crc.update(out); size += UInt64(out.count)
+                }
+            }
+        }
+        guard let pad = held.last, pad >= 1, pad <= 16, held.suffix(Int(pad)).allSatisfy({ $0 == pad }) else {
+            throw OfficeTextExtractor.ExtractError.notAPackage("protected iWork member \(name): bad padding after decryption (damaged, or not this scheme)")
+        }
+        let last = Data(held.dropLast(Int(pad)))
+        do {
+            if !last.isEmpty { try sink.write(last) }
+            done = true
+            try sink.close()
+        } catch {
+            done = true
+            try? sink.close()
+            try? FileManager.default.removeItem(at: destination)
+            throw UnlockError.from(error, member: name)
+        }
+        crc.update(last); size += UInt64(last.count)
+        return (size, crc.value)
     }
 
     /// "Index/…/*.iwa", with or without a bundle prefix.

@@ -70,8 +70,11 @@ enum IWorkDocumentReader {
                                                         limit: ExtractionLimits.effective.partBytes)
             let plainMembers = try ZIPArchiveReader.members(of: unlocked.url)
             let result = try extract(members: plainMembers, archive: unlocked.url, kind: kind, scratch: scratch, nested: true)
-            return OfficeTextExtractor.Result(text: result.text, components: result.components, skipped: result.skipped + unlocked.skipped,
-                                              notText: Array(Set(result.notText + notTextNames(members))).sorted())
+            var opened = OfficeTextExtractor.Result(text: result.text, components: result.components, skipped: result.skipped + unlocked.skipped,
+                                                    notText: Array(Set(result.notText + notTextNames(members))).sorted())
+            // CUR-06: password checked and content parsed — integrity not verified, and said so.
+            opened.notes = result.notes + [IWork13Encryption.integrityNote]
+            return opened
         }
         return try extract(members: members, archive: fileURL, kind: kind, scratch: scratch, nested: false)
     }

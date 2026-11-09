@@ -1396,7 +1396,7 @@ enum ContainerTextExtractor {
                     let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: member.name, password: password)
                     skipped.append(contentsOf: inner.skipped.map { "\(name): \($0)" })
                     record(name, member, inner.partial ? .partial : .extracted, text: inner.text,
-                           note: inner.skipped.isEmpty ? nil : "not read: " + inner.skipped.joined(separator: "; "),
+                           note: inner.childNote,
                            components: inner.components, sha256: sha, bytes: size, detected: innerKind.rawValue)
                     documents.append(contentsOf: inner.children.map { child in
                         var nested = child; nested.path = name + " › " + child.path; return nested

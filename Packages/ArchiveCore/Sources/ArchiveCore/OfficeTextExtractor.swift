@@ -104,7 +104,17 @@ enum OfficeTextExtractor {
         var children: [ChildDocument] = []
         /// Word tracked changes, located (empty for the other kinds).
         var revisions: [Revision] = []
+        /// CUR-06: statements about how far the reading can be trusted that
+        /// are not parts left unread — e.g. an iWork 2013+ document opened
+        /// with its password whose payload integrity is not verified.
+        var notes: [String] = []
         var partial: Bool { !skipped.isEmpty }
+
+        /// The child row's note: the parts not read, then the reading's notes.
+        var childNote: String? {
+            let parts = (skipped.isEmpty ? [] : ["not read: " + skipped.joined(separator: "; ")]) + notes
+            return parts.isEmpty ? nil : parts.joined(separator: "; ")
+        }
     }
 
     enum ExtractError: Error, LocalizedError, Equatable {
@@ -356,7 +366,7 @@ enum OfficeTextExtractor {
                 let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: filename)
                 children.append(ChildDocument(path: member.name, filename: filename, kind: innerKind.rawValue, sha256: sha, bytes: size, text: inner.text,
                                               state: inner.partial ? .partial : .extracted,
-                                              note: inner.skipped.isEmpty ? nil : "not read: " + inner.skipped.joined(separator: "; "), components: inner.components))
+                                              note: inner.childNote, components: inner.components))
                 children.append(contentsOf: inner.children.map { child in var nested = child; nested.path = member.name + " › " + child.path; return nested })
             } catch ExtractError.encrypted {
                 children.append(ChildDocument(path: member.name, filename: filename, kind: innerKind.rawValue, sha256: sha, bytes: size, text: nil, state: .locked, note: "password-protected"))
