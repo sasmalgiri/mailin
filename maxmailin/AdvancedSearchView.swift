@@ -30,13 +30,19 @@ struct AdvancedSearchView: View {
         self.scopeDescription = scopeDescription
         self.onApply = onApply
         self.onCancel = onCancel
-        // Always show the three groups in a fixed order, so the structure is visible.
+        _spec = State(initialValue: Self.normalized(applied))
+    }
+
+    /// The builder's form of a spec: always the three groups in a fixed order,
+    /// so the structure is visible. Adds only empty groups (no effect), so the
+    /// spec that runs is the one that was applied (SEARCH-02 round-trip).
+    static func normalized(_ applied: SearchSpec?) -> SearchSpec {
         var start = applied ?? SearchSpec()
         for kind in SearchGroup.Kind.allCases where !start.groups.contains(where: { $0.kind == kind }) {
             start.groups.append(SearchGroup(kind))
         }
         start.groups.sort { SearchGroup.Kind.allCases.firstIndex(of: $0.kind)! < SearchGroup.Kind.allCases.firstIndex(of: $1.kind)! }
-        _spec = State(initialValue: start)
+        return start
     }
 
     private var problems: [SearchSpec.Problem] { spec.problems() }

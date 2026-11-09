@@ -3743,10 +3743,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
         // pages, counts, FTS verification, streams — so the Free tier is
         // bounded once, not per screen (owner, 2026-10-08).
         if let newest = q.newestLimit {
+            // SEARCH-02: a frozen selection freezes the tier's window too —
+            // the newest N of the archive AS IT WAS at the bound. Without it
+            // newer mail imported afterwards pushed older matches out of the
+            // window and the frozen selection shrank.
+            let frozen = q.snapshotMaxRowID != nil ? " AND n.rowid <= ?" : ""
             sql.append("""
-                e.id IN (SELECT n.id FROM emails n WHERE \(notTrashedPredicate.replacingOccurrences(of: "e.id", with: "n.id"))
+                e.id IN (SELECT n.id FROM emails n WHERE \(notTrashedPredicate.replacingOccurrences(of: "e.id", with: "n.id"))\(frozen)
                          ORDER BY n.date DESC, n.id DESC LIMIT ?)
                 """)
+            if let bound = q.snapshotMaxRowID { binds.append(.int(bound)) }
             binds.append(.int(Int64(max(0, newest))))
         }
         // OUT-02: a frozen selection sees only rows that existed at its start.

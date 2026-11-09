@@ -68,6 +68,7 @@ struct ArchiveThreePaneView: View {
                                savedSearches: savedSearches,
                                selection: $selection,
                                currentSearchText: searchText,
+                               currentSpec: spec,
                                onImport: onImport)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
         } content: {
@@ -162,8 +163,15 @@ struct ArchiveThreePaneView: View {
             model.accessLimit = accessLimit
             Task { await model.reload() }
         }
-        .onChange(of: selection) { _, _ in
+        .onChange(of: selection) { _, newSelection in
             selectedID = nil
+            // SEARCH-02: a saved search brings back the Advanced Search it was
+            // saved with, as chips that edit and re-save like any other.
+            if case .saved(let id) = newSelection,
+               let saved = savedSearches.searches.first(where: { $0.id == id }),
+               let savedSpec = saved.spec, !savedSpec.isEmpty {
+                spec = savedSpec
+            }
             Task { await applyQuery() }
         }
         .onChange(of: scope) { _, _ in Task { await applyQuery() } }
@@ -236,8 +244,15 @@ struct ArchiveThreePaneView: View {
 
     /// What the sidebar and date scope limit the list to, in words.
     private var scopeDescription: String {
-        var parts = [(selection ?? .allMail).title]
-        if scope != .all { parts.append(scope.rawValue) }
+        Self.describeScope(title: (selection ?? .allMail).title, dateScope: scope, accessLimit: accessLimit)
+    }
+
+    /// SEARCH-03: the searched scope in words — the sidebar row, the date
+    /// range and, on Free, the newest-N window the plan reaches.
+    static func describeScope(title: String, dateScope: ArchiveDateScope, accessLimit: Int?) -> String {
+        var parts = [title]
+        if dateScope != .all { parts.append(dateScope.rawValue) }
+        if let accessLimit { parts.append(String(localized: "newest \(accessLimit) emails (Free plan)")) }
         return parts.joined(separator: " · ")
     }
 }

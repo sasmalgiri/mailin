@@ -60,6 +60,8 @@ final class DigestScheduler {
         var lines: [DigestLine] = []
         for search in searches.prefix(20) {   // bounded: 20 searches per digest
             var query = ArchiveQueryCompiler.compile(search.query)
+            // SEARCH-02: the saved Advanced Search counts too, not only the words.
+            if let spec = search.spec, !spec.isEmpty { query.spec = spec }
             query.afterDate = max(query.afterDate ?? .distantPast, since)
             let count = (try? await ArchiveDataService.shared.count(query: query)) ?? 0
             if count > 0 { lines.append(DigestLine(searchName: search.name, newMatches: count)) }

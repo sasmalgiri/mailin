@@ -84,6 +84,30 @@ struct ArchiveSavedSearch: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     var name: String
     var query: String
+    /// SEARCH-02: the Advanced Search applied when it was saved — the same
+    /// serialised, versioned `SearchSpec` the toolbar edits. Optional so
+    /// searches saved before it still decode.
+    var spec: SearchSpec? = nil
+
+    /// Everything the saved search asks for: its words compiled as the search
+    /// box compiles them, with its Advanced Search on top.
+    var runnableQuery: EmailQuery {
+        var q = ArchiveQueryCompiler.compile(query)
+        if let spec, !spec.isEmpty { q.spec = spec }
+        return q
+    }
+
+    /// What the search is, in words: the typed text and the conditions.
+    var summary: String {
+        ArchiveSavedSearch.describe(query: query, spec: spec)
+    }
+
+    static func describe(query: String, spec: SearchSpec?) -> String {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let spec, !spec.isEmpty else { return text }
+        let conditions = SearchSpecDescriber.summary(spec)
+        return text.isEmpty ? conditions : text + " · " + conditions
+    }
 }
 
 @MainActor
@@ -108,11 +132,14 @@ final class ArchiveSavedSearchStore: ObservableObject {
         searches = decoded
     }
 
-    func add(name: String, query: String) {
+    /// SEARCH-02: keeps the typed words AND the applied Advanced Search.
+    func add(name: String, query: String, spec: SearchSpec? = nil) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let label = name.trimmingCharacters(in: .whitespaces).isEmpty ? trimmed : name
-        searches.append(ArchiveSavedSearch(id: UUID(), name: label, query: trimmed))
+        let liveSpec = (spec?.isEmpty ?? true) ? nil : spec
+        guard !trimmed.isEmpty || liveSpec != nil else { return }
+        let fallback = ArchiveSavedSearch.describe(query: trimmed, spec: liveSpec)
+        let label = name.trimmingCharacters(in: .whitespaces).isEmpty ? fallback : name
+        searches.append(ArchiveSavedSearch(id: UUID(), name: label, query: trimmed, spec: liveSpec))
         persist()
     }
 
@@ -263,6 +290,15 @@ struct ArchiveSidebarView: View {
     @Binding var selection: ArchiveSidebarSelection?
     /// The current search text, so "Save search" knows what to keep.
     var currentSearchText: String = ""
+    /// SEARCH-02: the applied Advanced Search, saved with the text.
+    var currentSpec: SearchSpec? = nil
+
+    private var hasSomethingToSave: Bool {
+        !currentSearchText.trimmingCharacters(in: .whitespaces).isEmpty || !(currentSpec?.isEmpty ?? true)
+    }
+    private var currentSearchSummary: String {
+        ArchiveSavedSearch.describe(query: currentSearchText, spec: currentSpec)
+    }
     var onImport: (() -> Void)? = nil
 
     @State private var showSaveSearch = false
@@ -391,7 +427,7 @@ struct ArchiveSidebarView: View {
                 ForEach(savedSearches.searches) { saved in
                     Label(saved.name, systemImage: "magnifyingglass.circle")
                         .tag(ArchiveSidebarSelection.saved(saved.id))
-                        .help(saved.query)
+                        .help(saved.summary)
                         .contextMenu {
                             Button(role: .destructive) {
                                 savedSearches.remove(id: saved.id)
@@ -400,7 +436,7 @@ struct ArchiveSidebarView: View {
                         }
                         .accessibilityIdentifier("archive.sidebar.saved")
                 }
-                if !currentSearchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                if hasSomethingToSave {
                     Button {
                         saveSearchName = ""
                         showSaveSearch = true
@@ -408,7 +444,7 @@ struct ArchiveSidebarView: View {
                         Label("Save Current Search…", systemImage: "plus.circle")
                     }
                     .buttonStyle(.plain)
-                    .help("Keep “\(currentSearchText)” in this list")
+                    .help("Keep “\(currentSearchSummary)” in this list")
                     .accessibilityIdentifier("archive.sidebar.saveSearch")
                 }
             } header: {
@@ -431,11 +467,11 @@ struct ArchiveSidebarView: View {
         .alert("Save Search", isPresented: $showSaveSearch) {
             TextField("Name", text: $saveSearchName)
             Button("Save") {
-                savedSearches.add(name: saveSearchName, query: currentSearchText)
+                savedSearches.add(name: saveSearchName, query: currentSearchText, spec: currentSpec)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Saves “\(currentSearchText)” so it can be run again from the sidebar.")
+            Text("Saves “\(currentSearchSummary)” so it can be run again from the sidebar.")
         }
     }
 

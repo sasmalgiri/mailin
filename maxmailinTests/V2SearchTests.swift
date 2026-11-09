@@ -429,13 +429,14 @@ extension V2SearchTests {
     }
 
     private static func ipadMessage(_ id: String, subject: String, body: String,
-                                    attachment: (name: String, mime: String, data: Data)?) throws -> MBOXParser.RawEmail {
+                                    attachment: (name: String, mime: String, data: Data)?,
+                                    date: String = "Mon, 28 Oct 2024 10:00:00 +0000") throws -> MBOXParser.RawEmail {
         var raw = """
         From sender@example.com Mon Oct 28 10:00:00 2024
         From: Alice Example <alice@example.com>
         To: bob@example.org
         Subject: \(subject)
-        Date: Mon, 28 Oct 2024 10:00:00 +0000
+        Date: \(date)
         Message-ID: <\(id)@gate1>
         MIME-Version: 1.0
         Content-Type: multipart/mixed; boundary="B"
@@ -463,7 +464,7 @@ extension V2SearchTests {
 
     /// The gate 1 archive in small: a DOCX, a ZIP holding `inner/Contract.docx`,
     /// and ordinary bodies — indexed by the attachment job on an isolated store.
-    private func ipadArchive() async throws -> (env: Env, docx: MBOXParser.RawEmail, zip: MBOXParser.RawEmail) {
+    private func ipadArchive(extra: [MBOXParser.RawEmail] = []) async throws -> (env: Env, docx: MBOXParser.RawEmail, zip: MBOXParser.RawEmail) {
         SearchChunkPolicy.isEnabled = true
         let env = try makeEnv()
         AttachmentTextIndexJob.testSuppressKicks = true
@@ -482,6 +483,7 @@ extension V2SearchTests {
         for i in 0..<6 {
             all.append(try Self.ipadMessage("plain-\(i)", subject: "Routine \(i)", body: "Routine update \(i).", attachment: nil))
         }
+        all += extra
         try await seed(env, all)
         _ = await AttachmentTextIndexJob.shared.run()
         return (env, docx, zip)
@@ -921,5 +923,343 @@ extension V2SearchTests {
         XCTAssertEqual(fromJob.messagesRequeued, 4); XCTAssertEqual(fromJob.failed, 0)
         XCTAssertEqual(AttachmentTextIndexJob.rebuildRecord(in: dirA), record, "archive A's record is untouched")
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+}
+
+// MARK: - v4.0 SEARCH-01…03 — Advanced Search across tiers, one serialised spec, honest scope and coverage
+
+extension V2SearchTests {
+
+    /// Two messages either side of midnight in India on 10/11 March 2024:
+    /// 17:00 UTC is 22:30 IST on the 10th, 19:00 UTC is 00:30 IST on the 11th.
+    private static func searchDayPair() throws -> (late10: MBOXParser.RawEmail, early11: MBOXParser.RawEmail) {
+        (try ipadMessage("ist-10", subject: "Evening ledger", body: "Ledger close.", attachment: nil,
+                         date: "Sun, 10 Mar 2024 17:00:00 +0000"),
+         try ipadMessage("ist-11", subject: "Midnight ledger", body: "Ledger open.", attachment: nil,
+                         date: "Sun, 10 Mar 2024 19:00:00 +0000"))
+    }
+
+    /// Every ID a query reaches, page by page (no cap).
+    private func searchAllIDs(_ archive: ArchiveDataService, _ query: EmailQuery) async throws -> [UUID] {
+        var ids: [UUID] = []
+        var cursor: EmailPageCursor? = nil
+        repeat {
+            let page = try await archive.page(query: query, cursor: cursor, limit: 3)
+            ids += page.summaries.map(\.id)
+            cursor = page.nextCursor
+        } while cursor != nil
+        return ids
+    }
+
+    private static func searchBattery() -> [(name: String, spec: SearchSpec)] {
+        [
+            ("all-anywhere", SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .allWords, "lighthouse")])])),
+            ("any", SearchSpec(groups: [SearchGroup(.any, [SearchCondition(.anyText, .phrase, "zebracrossing"),
+                                                           SearchCondition(.subject, .phrase, "Routine 1")])])),
+            ("exclude", SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.hasAttachments, .equals, "yes")]),
+                                            SearchGroup(.exclude, [SearchCondition(.anyText, .allWords, "lighthouse")])])),
+            ("same-attachment", SearchSpec(groups: [SearchGroup(.all, attachments: [
+                AttachmentConditionGroup(nameContains: "Notes", contentMatch: .phrase, content: "lighthouse renovations")])])),
+            ("same-attachment-mismatch", SearchSpec(groups: [SearchGroup(.all, attachments: [
+                AttachmentConditionGroup(nameContains: "Notes", contentMatch: .phrase, content: "zebracrossing")])])),
+            ("whole-day-IST", SearchSpec(groups: [SearchGroup(.all, [
+                SearchCondition(.dateOnOrAfter, .equals, "2024-03-11", timeZone: "Asia/Kolkata"),
+                SearchCondition(.dateOnOrBefore, .equals, "2024-03-11", timeZone: "Asia/Kolkata")])])),
+            ("sql-text", SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .contains, "'; DROP TABLE emails; --")])])),
+            ("sql-name", SearchSpec(groups: [SearchGroup(.any, [SearchCondition(.attachmentName, .contains, "\" OR 1=1 --"),
+                                                                SearchCondition(.sender, .contains, "x') OR ('1'='1")])])),
+        ]
+    }
+
+    private struct TierAnswer: Equatable {
+        var ids: [UUID]
+        var unresolved: Int
+        var evidence: [UUID: [MatchEvidence]]
+        var coverage: SearchCoverageSnapshot?
+        var childCounts: [String: Int]?
+    }
+
+    /// SEARCH-01 (plan §8.3, RQ06/RQ08): the same SearchSpec on the same
+    /// permitted data gives identical IDs, evidence and coverage under Free,
+    /// Personal, Pro, lifetime and lapsed (LIFE-06) — no tier unlocks a search
+    /// capability; the AI is off and nothing leaves the device.
+    func testSEARCH01_sameSpecSameDataGivesIdenticalAnswersOnEveryTier() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        let ocrWas = AttachmentOCR.isEnabled
+        defer {
+            SearchChunkPolicy.isEnabled = wasOn
+            AttachmentOCR.isEnabled = ocrWas
+            AttachmentTextIndexJob.testStoreOverride = nil
+            AttachmentTextIndexJob.testSuppressKicks = false
+        }
+        let pair = try Self.searchDayPair()
+        let (env, docx, zip) = try await ipadArchive(extra: [pair.late10, pair.early11])
+        let stored = try await env.archive.unscopedCount()
+        XCTAssertLessThanOrEqual(stored, StoreManager.freeEmailLimit, "the dataset is one Free may access in full")
+
+        let tiers: [EntitlementState] = [.free, .active(.personal), .active(.professional),
+                                         .lifetime(.personal), .lapsed(previous: .professional), .lapsed(previous: .personal)]
+        var reference: [String: TierAnswer] = [:]
+        for state in tiers {
+            env.archive.accessLimit = AccessPolicy(state: state).archiveReadLimit
+            for (name, spec) in Self.searchBattery() {
+                XCTAssertTrue(spec.isValid, name)
+                var query = EmailQuery()
+                query.spec = spec
+                let ids = try await searchAllIDs(env.archive, query)
+                var evidence: [UUID: [MatchEvidence]] = [:]
+                for id in ids { evidence[id] = try await env.archive.matchEvidence(emailID: id, spec: spec, freeText: nil) }
+                var coverage = await ModelSearchNotice.snapshot(archive: env.archive, scope: query)
+                coverage?.takenAt = .distantPast
+                let unresolved = try await env.archive.unresolvedCount(query: query)
+                let answer = TierAnswer(ids: ids, unresolved: unresolved, evidence: evidence,
+                                        coverage: coverage, childCounts: coverage?.attachments?.childCounts)
+                if let first = reference[name] {
+                    XCTAssertEqual(answer, first, "\(name) under \(state) differs from the first tier")
+                } else {
+                    reference[name] = answer
+                }
+            }
+        }
+        env.archive.accessLimit = nil
+        // The battery is not vacuous: each case found what it should.
+        XCTAssertEqual(reference["all-anywhere"]?.ids, [docx.id])
+        XCTAssertTrue(reference["any"]?.ids.contains(zip.id) ?? false)
+        XCTAssertEqual(reference["any"]?.ids.count, 2, "the phrase OR the subject")
+        XCTAssertEqual(reference["exclude"]?.ids, [zip.id])
+        XCTAssertEqual(reference["same-attachment"]?.ids, [docx.id])
+        XCTAssertEqual(reference["same-attachment-mismatch"]?.ids, [], "the words are in another message's file")
+        XCTAssertEqual(reference["whole-day-IST"]?.ids, [pair.early11.id], "the day in the zone it was chosen in")
+        XCTAssertEqual(reference["sql-text"]?.ids, [])
+        XCTAssertEqual(reference["sql-name"]?.ids, [])
+        XCTAssertTrue(reference["all-anywhere"]?.evidence[docx.id]?.contains {
+            if case .attachmentText(_, let filename, _, _) = $0.location { return filename == "Notes.docx" }
+            return false
+        } ?? false, "evidence names the file")
+        let after = try await env.archive.unscopedCount()
+        XCTAssertEqual(after, stored, "SQL-looking text is data: nothing was dropped")
+
+        // No tier lock on any entry point of the builder; no AI, no network in the search path.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func source(_ path: String) throws -> String { try String(contentsOf: repo.appendingPathComponent(path), encoding: .utf8) }
+        // (The list views keep the Free data-scope banner — a data rule, not a search lock.)
+        for path in ["maxmailin/AdvancedSearchView.swift", "maxmailin/SearchSpecDescriber.swift",
+                     "Packages/ArchiveCore/Sources/ArchiveCore/SearchSpec.swift",
+                     "Packages/ArchiveCore/Sources/ArchiveCore/SearchSpecCompiler.swift",
+                     "Packages/ArchiveCore/Sources/ArchiveCore/SearchMatchEvidence.swift",
+                     "Packages/ArchiveCore/Sources/ArchiveCore/SearchSpecTransport.swift"] {
+            let text = try source(path)
+            for banned in ["isPremium", "allowsPaidWork", "requestPurchase(", "PaywallView", "isEnabled(.professional)",
+                           "isEnabled(.aiInsights)", "URLSession", "FoundationModels", "LanguageModelSession"] {
+                XCTAssertFalse(text.contains(banned), "\(path) must not contain \(banned)")
+            }
+        }
+        let shell = try source("maxmailin/ArchiveThreePaneView.swift")
+        XCTAssertTrue(shell.contains("if modules?.isOn(.searchQueryModel) ?? false {\n                        ToolbarItem {\n                            Button { showAdvancedSearch = true }"),
+                      "the toolbar button follows the search switch only")
+        XCTAssertFalse(shell.contains("requestPurchase("), "the shell never sells search")
+        XCTAssertEqual(Capability.searchQueryModel.owner, .archive, "Advanced Search belongs to the Archive page, which is never optional")
+        XCTAssertFalse(AppModule.archive.isOptional)
+        XCTAssertEqual(EngineSpec.of(.searchQueryModel)?.maturity, .stable)
+        XCTAssertTrue(try source("maxmailin/ArchiveListView.swift").contains("AdvancedSearchView("),
+                      "the iPhone list offers the same builder")
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    /// SEARCH-02: one serialised spec through the toolbar's builder, a saved
+    /// search, the full list's copy of the saved searches and a recipe field;
+    /// a newer spec is refused, never run as something else; the whole day in
+    /// its zone survives and runs the same rows.
+    func testSEARCH02_oneSerialisedSpecRoundTripsThroughToolbarSavedSearchesAndRecipes() async throws {
+        let spec = SearchSpec(groups: [
+            SearchGroup(.all, [SearchCondition(.sender, .contains, "alice"),
+                               SearchCondition(.dateOnOrAfter, .equals, "2024-03-11", timeZone: "Asia/Kolkata"),
+                               SearchCondition(.dateOnOrBefore, .equals, "2024-03-11", timeZone: "Asia/Kolkata")]),
+            SearchGroup(.any, [SearchCondition(.anyText, .phrase, "purchase order", branch: 1),
+                               SearchCondition(.anyText, .allWords, "urgent", branch: 1),
+                               SearchCondition(.anyText, .anyWords, "receipt", negated: true)],
+                        attachments: [AttachmentConditionGroup(nameContains: "PO", type: "PDF", contentMatch: .allWords, content: "total due")]),
+            SearchGroup(.exclude, [SearchCondition(.tag, .equals, "Spam")]),
+        ])
+        // Text form.
+        let text = SearchSpecTransport.encode(spec)
+        XCTAssertTrue(text.hasPrefix(SearchSpecTransport.prefix))
+        XCTAssertEqual(try SearchSpecTransport.decode(text), spec)
+        XCTAssertEqual(SearchSpecTransport.encode(try SearchSpecTransport.decode(text)), text, "stable text")
+        let decodedDay = try SearchSpecTransport.decode(text).groups[0].conditions[1]
+        XCTAssertEqual(decodedDay.timeZone, "Asia/Kolkata")
+        XCTAssertEqual(SearchSpec.parseDay(decodedDay.value, timeZone: decodedDay.timeZone)?.start,
+                       SearchSpec.parseDay("2024-03-11", timeZone: "Asia/Kolkata")?.start)
+
+        // The toolbar: the builder's normal form (three groups, fixed order) and a chip removal round-trip.
+        let built = AdvancedSearchView.normalized(spec)
+        XCTAssertEqual(built.groups.map(\.kind), [.all, .any, .exclude])
+        XCTAssertEqual(built.liveGroups, spec.liveGroups, "the builder shows exactly the applied spec")
+        XCTAssertEqual(try SearchSpecTransport.decode(SearchSpecTransport.encode(built)), built)
+        let chipRemoved = built.removingCondition(group: 0, condition: 0)
+        XCTAssertEqual(try SearchSpecTransport.decode(SearchSpecTransport.encode(chipRemoved)), chipRemoved)
+        let fromSparse = AdvancedSearchView.normalized(SearchSpec(groups: [SearchGroup(.exclude, [SearchCondition(.tag, .equals, "x")])]))
+        XCTAssertEqual(fromSparse.groups.map(\.kind), [.all, .any, .exclude])
+
+        // Saved searches: kept with the spec, read back by a fresh store, kept by the full list's copy.
+        let suite = "search02-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ArchiveSavedSearchStore(defaults: defaults)
+        store.add(name: "POs", query: "", spec: spec)
+        store.add(name: "", query: "  ", spec: nil)   // nothing to save
+        XCTAssertEqual(store.searches.count, 1)
+        let reread = ArchiveSavedSearchStore(defaults: defaults)
+        let saved = try XCTUnwrap(reread.searches.first)
+        XCTAssertEqual(saved.spec, spec)
+        XCTAssertEqual(saved.name, "POs")
+        XCTAssertEqual(saved.runnableQuery.spec, spec, "the saved search runs the spec it was saved with")
+        let data = try XCTUnwrap(defaults.data(forKey: ArchiveSavedSearchStore.defaultsKey))
+        let legacy = try JSONDecoder().decode([ParsedEmailListViewModel.SavedSearch].self, from: data)
+        XCTAssertEqual(legacy.first?.spec, spec, "the full list's copy of the same key keeps the spec")
+        let legacyAgain = try JSONDecoder().decode([ArchiveSavedSearch].self, from: JSONEncoder().encode(legacy))
+        XCTAssertEqual(legacyAgain.first?.spec, spec, "re-saving from the full list does not strip it")
+        let old = Data(#"[{"id":"\#(UUID().uuidString)","name":"old","query":"from:bob"}]"#.utf8)
+        let oldDecoded = try JSONDecoder().decode([ArchiveSavedSearch].self, from: old)
+        XCTAssertNil(oldDecoded.first?.spec, "searches saved before the spec still decode")
+        XCTAssertEqual(oldDecoded.first?.runnableQuery, ArchiveQueryCompiler.compile("from:bob"))
+
+        // Recipes: an encoded spec and typed words reach the same model.
+        XCTAssertEqual(SearchSpecTransport.recipeQuery(value: text)?.spec, spec)
+        var base = EmailQuery(); base.folderID = 7
+        let scoped = try XCTUnwrap(SearchSpecTransport.recipeQuery(value: text, base: base))
+        XCTAssertEqual(scoped.folderID, 7, "the recipe's scope stays outside the spec")
+        XCTAssertEqual(SearchSpecTransport.spec(fromRecipeValue: "lighthouse"), PlainSearchTranslator.spec(from: "lighthouse"))
+        XCTAssertNil(SearchSpecTransport.spec(fromRecipeValue: "   "))
+
+        // A newer spec, or a damaged one, is refused — never a different query.
+        let newer = SearchSpecTransport.prefix + #"{"groups":[],"version":99}"#
+        XCTAssertThrowsError(try SearchSpecTransport.decode(newer)) { XCTAssertEqual($0 as? SearchSpecTransport.DecodeError, .newerVersion(99)) }
+        XCTAssertNil(SearchSpecTransport.spec(fromRecipeValue: newer))
+        XCTAssertThrowsError(try SearchSpecTransport.decode(SearchSpecTransport.prefix + "{not json")) {
+            XCTAssertEqual($0 as? SearchSpecTransport.DecodeError, .malformed)
+        }
+        XCTAssertNil(SearchSpecTransport.spec(fromRecipeValue: SearchSpecTransport.prefix + "{not json"))
+
+        // Executed: the decoded day spec selects the same rows as the original.
+        let pair = try Self.searchDayPair()
+        let env = try makeEnv()
+        try await seed(env, [pair.late10, pair.early11])
+        let day = SearchSpec(groups: [SearchGroup(.all, [spec.groups[0].conditions[1], spec.groups[0].conditions[2]])])
+        var direct = EmailQuery(); direct.spec = day
+        let viaRecipe = try XCTUnwrap(SearchSpecTransport.recipeQuery(value: SearchSpecTransport.encode(day)))
+        let original = try await searchAllIDs(env.archive, direct)
+        XCTAssertEqual(original, [pair.early11.id], "00:30 IST on the 11th is in the day; 22:30 IST on the 10th is not")
+        let viaRecipeIDs = try await searchAllIDs(env.archive, viaRecipe)
+        XCTAssertEqual(viaRecipeIDs, original)
+    }
+
+    /// SEARCH-02: a frozen execution selection is the rows matched at one
+    /// revision; importing new matching mail changes the live search, not the
+    /// frozen one — including the Free plan's newest-N window.
+    func testSEARCH02_frozenSelectionDoesNotDriftWhenNewMailIsImported() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        SearchChunkPolicy.isEnabled = true
+        let env = try makeEnv()
+        let first = (0..<4).map { makeEmail(tag: "frz", i: $0, year: 2020, body: "quarterly invoice \($0)") }
+        try await seed(env, first + [makeEmail(tag: "frz-other", i: 9, year: 2019, body: "unrelated")])
+        var live = EmailQuery()
+        live.spec = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .allWords, "quarterly invoice")])])
+
+        let maybeFrozen = try await FrozenSearchSelection.freeze(live, archive: env.archive)
+        let frozen = try XCTUnwrap(maybeFrozen)
+        XCTAssertNil(frozen.liveQuery.snapshotMaxRowID, "the live query stays live")
+        XCTAssertNotNil(frozen.query.snapshotMaxRowID)
+        let before = try await searchAllIDs(env.archive, frozen.query)
+        XCTAssertEqual(Set(before), Set(first.map(\.id)))
+
+        // New matching mail arrives (newer dates) after the selection was frozen.
+        let later = (0..<2).map { makeEmail(tag: "frz-new", i: $0, year: 2026, body: "quarterly invoice late \($0)") }
+        try await seed(env, later)
+        let frozenAfter = try await searchAllIDs(env.archive, frozen.query)
+        XCTAssertEqual(frozenAfter, before, "the frozen selection does not drift")
+        let frozenCount = try await env.archive.count(query: frozen.query)
+        XCTAssertEqual(frozenCount, 4)
+        let liveAfter = try await searchAllIDs(env.archive, frozen.liveQuery)
+        XCTAssertEqual(liveAfter.count, 6, "the live search sees the new mail")
+
+        // It travels (recipes, export resume) and comes back the same.
+        let decoded = try JSONDecoder().decode(FrozenSearchSelection.self, from: JSONEncoder().encode(frozen))
+        XCTAssertEqual(decoded, frozen)
+        let decodedIDs = try await searchAllIDs(env.archive, decoded.query)
+        XCTAssertEqual(decodedIDs, before)
+
+        // Under a tier window (Free's newest N; here N = 3) the window is frozen too.
+        env.archive.accessLimit = 3
+        defer { env.archive.accessLimit = nil }
+        let maybeWindowed = try await FrozenSearchSelection.freeze(live, archive: env.archive)
+        let windowed = try XCTUnwrap(maybeWindowed)
+        let windowBefore = try await searchAllIDs(env.archive, windowed.query)
+        XCTAssertEqual(windowBefore.count, 3)
+        let newest = (0..<2).map { makeEmail(tag: "frz-newest", i: $0, year: 2027, body: "quarterly invoice newest \($0)") }
+        try await seed(env, newest)
+        let windowAfter = try await searchAllIDs(env.archive, windowed.query)
+        XCTAssertEqual(windowAfter, windowBefore, "newer mail does not push frozen rows out of the Free window")
+    }
+
+    /// SEARCH-03: files inside attachments that could not be read (locked,
+    /// unsupported, failed, partly read) make every partial and no-match case
+    /// say so; the list's coverage line and both lists' no-match texts agree.
+    func testSEARCH03_lockedAndUnreadFilesInsideAttachmentsAreNeverHidden() {
+        let complete = SQLiteEmailStore.SearchDocCoverage(bodiesEvaluable: 8, emails: 8, attachmentsEvaluable: 2, attachments: 2, bodyChunks: 8)
+        var summary = AttachmentCoverageSummary()
+        summary.counts = [.extracted: 2]
+        summary.childCounts = ["locked": 2, "unsupported": 1, "extracted": 4]
+        summary.childScope = .search
+        let snapshot = SearchCoverageSnapshot(storedMessages: 8, indexedMessages: 8, partiallyIndexedMessages: 0,
+                                              chunks: complete, attachments: summary)
+        XCTAssertTrue(snapshot.needsNotice, "a result list says files inside attachments were not searched")
+        XCTAssertTrue(snapshot.summaryLine.contains("Files inside attachments, in this search's scope: 2 locked, 1 not read"), snapshot.summaryLine)
+        let noMatch = ModelSearchNotice.noMatch(coverage: snapshot)
+        XCTAssertFalse(noMatch.contains("Nothing in the fully indexed scope matches"), "not a complete-looking zero: \(noMatch)")
+        XCTAssertTrue(noMatch.hasPrefix(String(localized: "No matches in the text that could be read")), noMatch)
+        XCTAssertTrue(noMatch.contains("2 locked"), noMatch)
+        XCTAssertEqual(ModelSearchNotice.headline(snapshot), String(localized: "No matches in the text that could be read"))
+
+        // Unknown child states are unknown, never "none".
+        summary.childCounts = nil
+        let unknown = SearchCoverageSnapshot(storedMessages: 8, indexedMessages: 8, partiallyIndexedMessages: 0, chunks: complete, attachments: summary)
+        XCTAssertTrue(unknown.needsNotice)
+        XCTAssertTrue(ModelSearchNotice.noMatch(coverage: unknown).contains("not known"))
+
+        // Attachments themselves partly read are named in the line.
+        var partly = AttachmentCoverageSummary()
+        partly.counts = [.extracted: 1, .partial: 1]
+        partly.childCounts = [:]
+        let partial = SearchCoverageSnapshot(storedMessages: 8, indexedMessages: 8, partiallyIndexedMessages: 0,
+                                             chunks: SQLiteEmailStore.SearchDocCoverage(bodiesEvaluable: 8, emails: 8, attachmentsEvaluable: 1,
+                                                                                        attachments: 2, bodyChunks: 8),
+                                             attachments: partly)
+        XCTAssertTrue(partial.summaryLine.contains("1 partly read"), partial.summaryLine)
+
+        // Everything read: the complete wording, and nothing extra on a result list.
+        var all = AttachmentCoverageSummary()
+        all.counts = [.extracted: 2]
+        all.childCounts = ["extracted": 3]
+        let clean = SearchCoverageSnapshot(storedMessages: 8, indexedMessages: 8, partiallyIndexedMessages: 0, chunks: complete, attachments: all)
+        XCTAssertFalse(clean.needsNotice)
+        XCTAssertTrue(ModelSearchNotice.noMatch(coverage: clean).contains("Nothing in the fully indexed scope matches this search."))
+        XCTAssertEqual(ModelSearchNotice.headline(nil), String(localized: "No matches — coverage could not be checked"))
+    }
+
+    /// SEARCH-03: the searched scope is stated — the sidebar row, the date
+    /// range and, on Free, the newest-N window — and a Free search whose
+    /// matches all lie outside the window never reads as "no matching emails".
+    func testSEARCH03_activeScopeAndFreeWindowAreStatedForEveryNoMatch() {
+        XCTAssertNil(ArchiveNoResultsState.scopeNote(accessLimit: nil, totalCount: 9, accessibleCount: 9), "paid and lapsed: the whole archive")
+        XCTAssertEqual(ArchiveNoResultsState.scopeNote(accessLimit: 500, totalCount: 3, accessibleCount: 0),
+                       String(localized: "\(3) matching emails are outside the newest \(500) emails the Free plan works with."))
+        XCTAssertEqual(ArchiveNoResultsState.scopeNote(accessLimit: 500, totalCount: 0, accessibleCount: 0),
+                       String(localized: "Searched the newest \(500) emails of your archive (Free plan)."))
+
+        XCTAssertEqual(ArchiveThreePaneView.describeScope(title: "All Mail", dateScope: .all, accessLimit: nil), "All Mail")
+        XCTAssertEqual(ArchiveThreePaneView.describeScope(title: "Inbox", dateScope: .days30, accessLimit: 500),
+                       "Inbox · " + ArchiveDateScope.days30.rawValue + " · " + String(localized: "newest \(500) emails (Free plan)"))
     }
 }

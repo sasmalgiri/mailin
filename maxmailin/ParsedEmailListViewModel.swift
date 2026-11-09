@@ -263,6 +263,9 @@ class ParsedEmailListViewModel: ObservableObject {
         let id: UUID
         let name: String
         let query: String
+        /// SEARCH-02: the Advanced Search saved with it in the archive shell
+        /// (same defaults key). Kept so re-saving from this list never strips it.
+        var spec: SearchSpec? = nil
     }
 
     func saveCurrentSearch(name: String) {

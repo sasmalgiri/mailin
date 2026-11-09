@@ -42,6 +42,12 @@ struct ArchiveListView: View {
     @State private var searchText = ""
     @State private var scope: ArchiveDateScope = .all
     @State private var searchTask: Task<Void, Never>?
+    // SEARCH-01: the same Advanced Search builder as the three-pane shell —
+    // every plan, on the data the plan may access.
+    @State private var spec: SearchSpec?
+    @State private var unresolved = 0
+    @State private var showAdvancedSearch = false
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     init(archive: ArchiveDataService = .shared) {
         _model = StateObject(wrappedValue: ArchiveListViewModel(archive: archive, pageSize: 100, maxRetained: 500))
@@ -50,15 +56,37 @@ struct ArchiveListView: View {
 
     var body: some View {
         NavigationSplitView {
-            ArchiveListPane(model: model,
-                            detail: detail,
-                            selectedID: $selectedID,
-                            matchTerms: SearchMatchTerms(searchText: searchText),
-                            evidenceProvider: evidenceProvider,
-                            isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty)
+            VStack(spacing: 0) {
+                if let spec, !spec.isEmpty {
+                    ActiveFiltersBar(spec: spec, scopeDescription: scopeDescription, unresolved: unresolved,
+                                     onChange: { newSpec in self.spec = newSpec; scheduleQuery(immediately: true) },
+                                     onEdit: { showAdvancedSearch = true })
+                    Divider()
+                }
+                ArchiveListPane(model: model,
+                                detail: detail,
+                                selectedID: $selectedID,
+                                matchTerms: SearchMatchTerms(searchText: searchText),
+                                evidenceProvider: evidenceProvider,
+                                isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !(spec?.isEmpty ?? true))
+            }
                 .navigationTitle("Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
+                .sheet(isPresented: $showAdvancedSearch) {
+                    AdvancedSearchView(applied: spec, scopeDescription: scopeDescription,
+                                       onApply: { newSpec in spec = newSpec; showAdvancedSearch = false; scheduleQuery(immediately: true) },
+                                       onCancel: { showAdvancedSearch = false })
+                }
                 .toolbar {
+                    if modules?.isOn(.searchQueryModel) ?? true {
+                        ToolbarItem {
+                            Button { showAdvancedSearch = true } label: {
+                                Label("Advanced Search", systemImage: "line.3.horizontal.decrease.circle")
+                            }
+                            .help("Build a search from conditions: all / any / exclude, dates, attachments")
+                            .accessibilityIdentifier("archive.list.advancedSearch")
+                        }
+                    }
                     ToolbarItem {
                         Menu {
                             Picker("Date", selection: $scope) {
@@ -78,6 +106,9 @@ struct ArchiveListView: View {
             )
         }
         .task {
+            // The plan's data scope (Free: the newest N) is the data service's;
+            // the list states it ("X of Y in the Free plan") from the same number.
+            model.accessLimit = model.archive.accessLimit
             if model.summaries.isEmpty && model.error == nil { await model.loadInitial() }
         }
         .onChange(of: selectedID) { _, id in
@@ -96,20 +127,31 @@ struct ArchiveListView: View {
 
     /// Debounced query update. The model's queryRevision guard makes this safe
     /// even under rapid typing — debounce just avoids redundant fetches.
-    private func scheduleQuery() {
+    private func scheduleQuery(immediately: Bool = false) {
         searchTask?.cancel()
         let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let after = scope.after
+        let applied = spec
         searchTask = Task {
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            if !immediately { try? await Task.sleep(nanoseconds: 250_000_000) }
             if Task.isCancelled { return }
             // v2.1 backlog #6: the same compile step as the full list, so
             // `from:alice` or `filename:pdf` means the same thing here.
             // IPAD-03 / CAP-01: on the search model when it is on (the policy is
             // the `searchQueryModel` switch), as the three-pane shell and the full list.
-            let query = ArchiveBrowseState(searchText: text, afterDate: after).query(plainTextOnModel: true)
+            let query = ArchiveBrowseState(searchText: text, afterDate: after, spec: applied).query(plainTextOnModel: true)
             await model.setQuery(query)
+            if let s = query.spec, !s.isEmpty {
+                unresolved = (try? await model.archive.unresolvedCount(query: query)) ?? 0
+            } else {
+                unresolved = 0
+            }
         }
+    }
+
+    /// SEARCH-03: what the list searches, in words (date range, Free window).
+    private var scopeDescription: String {
+        ArchiveThreePaneView.describeScope(title: String(localized: "All Mail"), dateScope: scope, accessLimit: model.accessLimit)
     }
 }
 
@@ -145,7 +187,10 @@ struct ArchiveListPane: View {
                 if isSearching || !model.query.isEmpty {
                     // A6: a search with no hits never reads as a bare zero — it
                     // says what the index covered when it answered.
-                    ArchiveNoResultsState(coverage: coverage.snapshot, onRetry: { Task { await coverage.refresh(scope: model.query) } })
+                    ArchiveNoResultsState(coverage: coverage.snapshot, onRetry: { Task { await coverage.refresh(scope: model.query) } },
+                                          scopeNote: ArchiveNoResultsState.scopeNote(accessLimit: model.accessLimit,
+                                                                                     totalCount: model.totalCount,
+                                                                                     accessibleCount: model.accessibleCount))
                         .task { await coverage.refresh(scope: model.query) }
                 } else {
                     ArchiveEmptyState()
@@ -375,28 +420,42 @@ struct ArchiveEmptyState: View {
 struct ArchiveNoResultsState: View {
     var coverage: SearchCoverageSnapshot?
     var onRetry: (() -> Void)? = nil
+    /// SEARCH-03: what the plan's data scope left out (Free: the newest N), nil = whole archive.
+    var scopeNote: String? = nil
+
+    /// SEARCH-03: a Free search says it searched the newest N emails, and how
+    /// many matches lie outside them — "no matching emails" would be false
+    /// when the archive holds matches the plan does not reach.
+    static func scopeNote(accessLimit: Int?, totalCount: Int, accessibleCount: Int) -> String? {
+        guard let accessLimit else { return nil }
+        let outside = max(0, totalCount - accessibleCount)
+        if outside > 0 {
+            return String(localized: "\(outside) matching emails are outside the newest \(accessLimit) emails the Free plan works with.")
+        }
+        return String(localized: "Searched the newest \(accessLimit) emails of your archive (Free plan).")
+    }
+
+    private var symbol: String {
+        switch ModelSearchNotice.noMatchCase(coverage) {
+        case .unknown: return "exclamationmark.triangle"
+        case .indexing, .textPending: return "hourglass"
+        case .unreadableFiles: return "lock.doc"
+        case .complete: return "magnifyingglass"
+        }
+    }
 
     var body: some View {
         ContentUnavailableView {
-            // FIND-03: four different empty states, never one bare zero.
-            if let coverage, coverage.isUnavailable {
-                Label("No matches — coverage could not be checked", systemImage: "exclamationmark.triangle")
-            } else if let coverage, coverage.isPartial || coverage.chunkPendingBodies > 0 || coverage.attachmentsNotEvaluable > 0 {
-                Label("No matches found yet — indexing is incomplete", systemImage: "hourglass")
-            } else {
-                Label("No matching emails", systemImage: "magnifyingglass")
-            }
+            // FIND-03 / SEARCH-03: five different empty states, never one bare
+            // zero — the same words as the full list's notice.
+            Label(ModelSearchNotice.headline(coverage), systemImage: symbol)
         } description: {
-            if let coverage, coverage.isUnavailable {
-                Text("The index counters could not be read, so whether every message was searched is not known.")
-            } else if let coverage, coverage.isPartial {
-                Text("Searched the \((coverage.indexedMessages ?? 0).formatted()) of \((coverage.storedMessages ?? 0).formatted()) messages indexed so far — \(coverage.pendingMessages.formatted()) still indexing. Results may change as indexing finishes.")
-            } else if let coverage, coverage.chunkPendingBodies > 0 || coverage.attachmentsNotEvaluable > 0 {
-                Text(coverage.summaryLine)
-            } else if let coverage, let partial = coverage.partiallyIndexedMessages, partial > 0 {
-                Text("Searched every message. \(partial.formatted()) very large messages are indexed only in their first \(coverage.budgetLabel).")
-            } else {
-                Text("Nothing in the fully indexed scope matches this search.")
+            VStack(spacing: 6) {
+                Text(ModelSearchNotice.detail(coverage))
+                if let scopeNote {
+                    Text(scopeNote)
+                        .accessibilityIdentifier("archive.list.noResults.scope")
+                }
             }
         } actions: {
             if let coverage, coverage.isUnavailable, let onRetry {
