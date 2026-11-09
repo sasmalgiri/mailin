@@ -3,7 +3,8 @@
 //  ArchiveCore
 //
 //  GAP-RAR (owner decision 2026-11-07): compressed RAR members are decoded
-//  by libarchive 3.8.11's RAR 1.5–4.x and RAR 5.0 readers, vendored as the
+//  by libarchive 3.8.11's RAR 2.9–4.x and RAR 5.0 readers (the RAR 5.0
+//  reader patched for RAR 7.0, patches/rar7.patch), vendored as the
 //  C target `CLibArchiveRAR` (BSD-2-Clause, see its VENDORED.md). The header
 //  walk in RARReader.swift stays the authority on what an archive holds and
 //  what is refused before a byte is decoded (encryption, unsafe paths, links,
@@ -27,8 +28,8 @@ extension RARReader {
     /// "libarchive 3.8.11" — recorded in the capability registry evidence.
     static var decoderVersion: String { String(cString: mailin_rar_libarchive_version()) }
 
-    /// The largest RAR 5.0 dictionary the vendored decoder accepts (libarchive refuses a larger one).
-    static let maxDecoderDictionaryBytes: Int64 = 64 * 1_048_576
+    // The decoding-window limit (`maxDecoderWindowBytes`, formerly a 64 MiB
+    // dictionary ceiling) lives in RARReader.swift beside the rule that sizes the window.
 
     /// One sequential libarchive pass over a RAR file or a complete run of
     /// volumes — or (R6) over the decrypted view of an encrypted archive.

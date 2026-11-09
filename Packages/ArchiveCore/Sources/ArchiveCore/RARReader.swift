@@ -11,10 +11,13 @@
 //  CRC-verified here. GAP-RAR (owner 2026-11-07): compressed members are
 //  decoded by the vendored libarchive reader (RARDecompressor.swift) — the
 //  RAR 2.9–4.x algorithm (LZSS, PPMd, the standard filters) and the RAR 5.0
-//  algorithm (solid archives included, x86/ARM/delta filters). What it does
-//  not open is refused per member with the reason (`compressionRefusal`):
-//  the RAR 1.5 and 2.0 algorithms,
-//  the RAR 7.0 algorithm, and RAR 5.0 dictionaries over 64 MiB. Audit R6:
+//  algorithm (solid archives included, x86/ARM/delta filters), and — rar7
+//  patch, 2026-11-09 — the RAR 7.0 algorithm and dictionaries of any size
+//  (the window is sized to the data, see `decoderWindowBytes`). The RAR 1.5
+//  and RAR 2.0 algorithms are mailin's own (RARLegacyDecoder.swift). What
+//  is not opened is refused per member with the reason (`compressionRefusal`):
+//  a decoding window over the device limit, RAR 1.5/2.0 solid members after
+//  the first, unknown algorithm versions. Audit R6:
 //  RAR 4 solid archives are decoded member after member (the vendored
 //  reader carries one window through them — patch in VENDORED.md), and
 //  encrypted members and headers (RAR5 type-4 header, RAR4 MHD_PASSWORD)
@@ -33,7 +36,8 @@ struct RARReader {
     /// Bound into import identities; bump when extraction behaviour changes.
     /// 2: compressed members decoded (vendored libarchive); volume sets read as one.
     /// 3: RAR 4 solid members after the first decoded; encrypted members opened with a password.
-    static let version = 3
+    /// 4: RAR 7.0 compression and RAR 5.0/7.0 dictionaries over 64 MiB decoded; RAR 1.5 and 2.0 compression decoded.
+    static let version = 4
     static let diskMarginBytes: Int64 = ZIPArchiveReader.diskMarginBytes
     private static let windowSize = 64 * 1024
     /// RAR 5.0 caps a header at 2 MiB; a larger declared size is damage.
@@ -63,8 +67,15 @@ struct RARReader {
         let hostOS: String
         let dataOffset: Int64
         let format: Format
-        /// RAR 5.0: the dictionary the member declares (nil for RAR 1.5–4.x, directories, RAR 7.0).
+        /// RAR 5.0/7.0: the dictionary the member declares (nil for RAR 1.5–4.x and directories).
         var dictionaryBytes: Int64? = nil
+        /// RAR 7.0 header whose data is in the RAR 5.0 algorithm (technote bit 0x100000).
+        var rar5CompatibleAlgorithm = false
+        /// RAR 5.0/7.0: the window the vendored decoder allocates for this
+        /// member — the smallest power of two (at least 8 MiB) holding the
+        /// stream up to the member's end, at most the declared dictionary
+        /// rounded up to a power of two (`assignDecoderWindows`).
+        var decoderWindowBytes: Int64? = nil
         /// False when a RAR 5.0 header says the unpacked size is unknown.
         var sizeIsKnown = true
         /// Index among the archive's file headers (one per member of a merged volume set) — the decoder's entry number.
@@ -85,7 +96,7 @@ struct RARReader {
             if method == 0 { return "store" }
             switch format {
             case .rar4: return "RAR\(algorithmVersion / 10).\(algorithmVersion % 10) method \(method)"
-            case .rar5: return "RAR\(algorithmVersion == 0 ? "5.0" : "7.0") method \(method)"
+            case .rar5: return "RAR\(algorithmVersion == 0 ? "5.0" : (algorithmVersion == 1 ? "7.0" : "algorithm \(algorithmVersion)")) method \(method)"
             }
         }
         var isJunk: Bool {
@@ -100,14 +111,25 @@ struct RARReader {
             guard method != 0, !isDirectory else { return nil }
             switch format {
             case .rar4:
-                // unrar: 15 = RAR 1.5, 20/26 = RAR 2.x, 29/36 = RAR 2.9–4.x; libarchive implements only the last.
+                // 15 = RAR 1.5, 20/26 = RAR 2.0 (mailin's decoder); 29/36 = RAR 2.9–4.x (libarchive).
+                if RARReader.legacyAlgorithmVersions.contains(algorithmVersion) {
+                    if isSolid {
+                        return "RAR \(algorithmVersion / 10).\(algorithmVersion % 10) solid member after the first not opened (no real solid RAR 1.5/2.0 archive was available to verify the decoder on)"
+                    }
+                    if firstVolume != lastVolume {
+                        return "a RAR \(algorithmVersion / 10).\(algorithmVersion % 10) member split across volumes is not opened"
+                    }
+                    return nil
+                }
                 guard algorithmVersion == 29 || algorithmVersion == 36 else {
-                    return "RAR \(algorithmVersion / 10).\(algorithmVersion % 10) compression not opened (the RAR 1.5 and 2.0 algorithms are not in the vendored decoder)"
+                    return "RAR \(algorithmVersion / 10).\(algorithmVersion % 10) compression not opened (RAR 1.5, 2.0 and 2.9–4.x are read)"
                 }
             case .rar5:
-                guard algorithmVersion == 0 else { return "RAR 7.0 compression not opened (the vendored decoder reads the RAR 5.0 algorithm)" }
-                if let dictionaryBytes, dictionaryBytes > RARReader.maxDecoderDictionaryBytes {
-                    return "needs a \(dictionaryBytes)-byte RAR dictionary, over the \(RARReader.maxDecoderDictionaryBytes)-byte limit of the vendored decoder"
+                guard algorithmVersion <= 1 else { return "RAR compression algorithm version \(algorithmVersion) not opened (RAR 5.0 and 7.0 are read)" }
+                guard sizeIsKnown else { return "the unpacked size is not recorded in the header (the vendored decoder needs it)" }
+                if let window = decoderWindowBytes, window > RARReader.maxDecoderWindowBytes {
+                    let declared = dictionaryBytes.map { " for its \($0)-byte dictionary" } ?? ""
+                    return "needs a \(window)-byte RAR decoding window\(declared), over this device's \(RARReader.maxDecoderWindowBytes)-byte limit"
                 }
             }
             return nil
@@ -389,8 +411,14 @@ struct RARReader {
                 let version = Int(compression & 0x3F)
                 let unixMode = hostOS == 1 ? attributes : 0
                 if (unixMode & 0xF000) == 0xA000 { isSymlink = true }
-                // Bits 10–14: dictionary = 128 KiB << N (RAR 5.0 algorithm; RAR 7.0 adds a fraction).
-                let dictionary: Int64? = isDirectory || version != 0 ? nil : Int64(0x20000) << Int64((compression >> 10) & 0x0F)
+                // Technote: dictionary = 128 KiB << N, N in bits 10–14 (4 bits used by
+                // version 0, 5 by version 1); version 1 adds N/32 steps (bits 15–19).
+                var dictionary: Int64?
+                if !isDirectory, version <= 1 {
+                    var d = Int64(0x20000) << Int64((compression >> 10) & (version == 0 ? 0x0F : 0x1F))
+                    if version == 1 { d += d / 32 * Int64((compression >> 15) & 0x1F) }
+                    dictionary = d
+                }
                 var member = Member(name: name, unpackedSize: unpacked, packedSize: dataSize, crc32: crc, method: method,
                                     algorithmVersion: version, isDirectory: isDirectory, isEncrypted: isEncrypted,
                                     isSolid: compression & 0x40 != 0, isSplitBefore: flags & 0x0008 != 0, isSplitAfter: flags & 0x0010 != 0,
@@ -400,6 +428,7 @@ struct RARReader {
                 member.encryption = encryption
                 member.rawHeader = rawHeader
                 member.blake2 = blake2
+                member.rar5CompatibleAlgorithm = version == 1 && compression & 0x100000 != 0
                 archive.members.append(member)
             case 4:   // archive encryption header: everything after it is encrypted
                 guard let keyring else { throw ReadError.encryptedHeaders }
@@ -421,6 +450,7 @@ struct RARReader {
             case 5:   // end of archive
                 let endFlags = try r.vint()
                 archive.isLastVolume = endFlags & 0x0001 == 0
+                assignDecoderWindows(&archive)
                 return archive
             default:
                 break   // unknown header types are skipped by their declared size
@@ -429,7 +459,41 @@ struct RARReader {
             guard !overflow, next <= length else { archive.damage = "\(archive.members.last?.name ?? "a member")'s data runs past the end of the file"; break }
             position = next
         }
+        assignDecoderWindows(&archive)
         return archive
+    }
+
+    /// The largest decoding window mailin lets the vendored RAR 5.0/7.0
+    /// decoder allocate: a quarter of this device's memory, at most 4 GiB.
+    static let maxDecoderWindowBytes: Int64 = min(Int64(4) << 30, Int64(ProcessInfo.processInfo.physicalMemory / 4))
+    /// Kept for callers of the former 64 MiB dictionary ceiling: the limit is now the decoding window.
+    static var maxDecoderDictionaryBytes: Int64 { maxDecoderWindowBytes }
+
+    /// RAR 5.0/7.0: the window the patched libarchive reader allocates for
+    /// each compressed member (rar7.patch, same rule): enough for every byte
+    /// of the stream up to the member's end — in a solid archive the members
+    /// before it count too — as a power of two of at least 8 MiB, never more
+    /// than the declared dictionary rounded up to a power of two, and never
+    /// shrinking inside a solid archive. Over-counts (stored members, parts
+    /// of one member) only make the estimate safer.
+    static func assignDecoderWindows(_ archive: inout Archive) {
+        guard archive.format == .rar5 else { return }
+        var streamBytes: Int64 = 0
+        var solidWindow: Int64 = 0
+        for i in archive.members.indices {
+            let m = archive.members[i]
+            guard !m.isDirectory, let declared = m.dictionaryBytes else { continue }
+            let (sum, overflow) = (archive.isSolid ? streamBytes : 0).addingReportingOverflow(max(0, m.unpackedSize))
+            let need = overflow ? Int64.max : sum
+            if archive.isSolid { streamBytes = need }
+            var declaredPow2: Int64 = 0x20000
+            while declaredPow2 < declared && declaredPow2 < (Int64(1) << 61) { declaredPow2 <<= 1 }
+            var window: Int64 = 8 * 1_048_576
+            while window < need && window < declaredPow2 { window <<= 1 }
+            window = min(window, declaredPow2)
+            if archive.isSolid { window = max(window, solidWindow); solidWindow = window }
+            if m.method != 0 { archive.members[i].decoderWindowBytes = window }
+        }
     }
 
     /// The fields of a RAR 5.0 file encryption record (after its type).
@@ -495,7 +559,18 @@ struct RARReader {
             let type = header[2]
             let flags = UInt16(header[3]) | UInt16(header[4]) << 8
             // Header CRC: low 16 bits of CRC-32 over the header after the CRC field.
-            let crc = ZIPArchiveReader.CRC32.checksum(Data(header[2...]))
+            var crc = ZIPArchiveReader.CRC32.checksum(Data(header[2...]))
+            if UInt16(truncatingIfNeeded: crc) != declaredCRC, type == 0x74, flags & 0x0008 != 0, headerSize >= 32 {
+                // RAR 1.5–2.x file comment inside the header (LHD_COMMENT): the CRC
+                // covers the fields before it — through the name (and salt) only.
+                let nameSize = Int(UInt16(header[26]) | UInt16(header[27]) << 8)
+                let end = 32 + (flags & 0x0100 != 0 ? 8 : 0) + nameSize + (flags & 0x0400 != 0 ? 8 : 0)
+                if end <= headerSize { crc = ZIPArchiveReader.CRC32.checksum(Data(header[2..<end])) }
+            }
+            if UInt16(truncatingIfNeeded: crc) != declaredCRC, type == 0x73, flags & 0x0002 != 0, headerSize >= 13 {
+                // Likewise the RAR 1.5–2.x archive comment inside the main header (MHD_COMMENT).
+                crc = ZIPArchiveReader.CRC32.checksum(Data(header[2..<13]))
+            }
             guard UInt16(truncatingIfNeeded: crc) == declaredCRC else {
                 if encryptedHeaders, firstEncryptedHeader { throw ReadError.wrongPassword(member: nil) }
                 archive.damage = "block at \(position) fails its CRC check"; break

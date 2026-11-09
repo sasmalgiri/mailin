@@ -335,13 +335,18 @@ final class LibArchiveRARTests: XCTestCase {
         XCTAssertNil(member(.rar4, version: 29).compressionRefusal)
         XCTAssertNil(member(.rar4, version: 36).compressionRefusal)
         XCTAssertNil(member(.rar4, method: 0, version: 20).compressionRefusal, "stored is always read")
-        XCTAssertEqual(member(.rar4, version: 20).compressionRefusal, "RAR 2.0 compression not opened (the RAR 1.5 and 2.0 algorithms are not in the vendored decoder)")
-        XCTAssertEqual(member(.rar4, version: 15).compressionRefusal, "RAR 1.5 compression not opened (the RAR 1.5 and 2.0 algorithms are not in the vendored decoder)")
+        // 2026-11-09: RAR 1.5 / 2.0 are decoded by mailin's own decoder, RAR 7.0 and large dictionaries by the patched reader
+        // (RAR7AndLegacyRARTests); what is still refused is named.
+        XCTAssertNil(member(.rar4, version: 20).compressionRefusal)
+        XCTAssertNil(member(.rar4, version: 26).compressionRefusal)
+        XCTAssertNil(member(.rar4, version: 15).compressionRefusal)
+        XCTAssertEqual(member(.rar4, version: 20, solid: true).compressionRefusal,
+                       "RAR 2.0 solid member after the first not opened (no real solid RAR 1.5/2.0 archive was available to verify the decoder on)")
+        XCTAssertEqual(member(.rar4, version: 13).compressionRefusal, "RAR 1.3 compression not opened (RAR 1.5, 2.0 and 2.9–4.x are read)")
         XCTAssertNil(member(.rar4, version: 29, solid: true).compressionRefusal, "R6: RAR 4 solid members after the first are decoded")
         XCTAssertNil(member(.rar5, version: 0, solid: true, dictionary: 32 << 20).compressionRefusal, "RAR 5 solid is read")
-        XCTAssertEqual(member(.rar5, version: 1).compressionRefusal, "RAR 7.0 compression not opened (the vendored decoder reads the RAR 5.0 algorithm)")
-        XCTAssertEqual(member(.rar5, version: 0, dictionary: 128 << 20).compressionRefusal,
-                       "needs a 134217728-byte RAR dictionary, over the 67108864-byte limit of the vendored decoder")
+        XCTAssertNil(member(.rar5, version: 1, dictionary: 5 << 30).compressionRefusal, "RAR 7.0 is read")
+        XCTAssertNil(member(.rar5, version: 0, dictionary: 128 << 20).compressionRefusal, "dictionaries over 64 MiB are read")
         XCTAssertEqual(ContainerTextExtractor.classify(RARReader.ReadError.compressionNotOpened(member: "m", reason: "R")).state, .unsupported)
 
         // The dictionary is read from the RAR5 header (WinRAR's choice for these files).

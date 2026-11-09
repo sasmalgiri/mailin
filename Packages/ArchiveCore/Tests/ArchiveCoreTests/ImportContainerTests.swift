@@ -166,12 +166,12 @@ final class ImportContainerTests: XCTestCase {
 
     func testRARSource_allCompressedIsUnsupported_encryptedHeadersIsEncrypted() throws {
         // GAP-RAR: only compressions the vendored decoder does not open make
-        // an archive "nothing to import" — here RAR 2.0 (UNP_VER 20).
+        // an archive "nothing to import" — here RAR 1.3 (UNP_VER 13; RAR 1.5/2.0 are decoded since 2026-11-09).
         let compressed = dir.appendingPathComponent("c.rar")
-        try RARFixtureWriter.writeRAR4([.init(name: "a.mbox", data: Data([1]), method: 5, unpackedSize: 10, rar4UnpackVersion: 20)], to: compressed)
+        try RARFixtureWriter.writeRAR4([.init(name: "a.mbox", data: Data([1]), method: 5, unpackedSize: 10, rar4UnpackVersion: 13)], to: compressed)
         let p = SourceFormatClassifier.preflight(url: compressed)
         XCTAssertEqual(p.condition, .unsupported)
-        XCTAssertTrue(p.detail.contains("RAR 2.0 compression not opened"), p.detail)
+        XCTAssertTrue(p.detail.contains("RAR 1.3 compression not opened"), p.detail)
         let locked = dir.appendingPathComponent("l.rar")
         try RARFixtureWriter.writeRAR5EncryptedHeaders(to: locked)
         XCTAssertEqual(SourceFormatClassifier.preflight(url: locked).condition, .encrypted)

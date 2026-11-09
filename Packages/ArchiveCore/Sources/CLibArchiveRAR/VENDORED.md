@@ -17,9 +17,9 @@ package. Nothing is downloaded or linked at run time; the code is compiled into 
 ## Files
 
 Copied byte for byte from `libarchive-3.8.11/libarchive/` into `libarchive/` — except
-`archive_read_support_format_rar.c`, which carries the one mailin patch below — per-file SHA-256 in
-`VENDORED-SHA256SUMS` (compare with `shasum -a 256 -c` inside `libarchive/`; the line for the patched file
-is the patched file's hash):
+`archive_read_support_format_rar.c` and `archive_read_support_format_rar5.c`, which carry the two mailin
+patches below — per-file SHA-256 in `VENDORED-SHA256SUMS` (compare with `shasum -a 256 -c` inside
+`libarchive/`; the lines for the patched files are the patched files' hashes):
 
 - format readers: `archive_read_support_format_rar.c` (RAR 1.5–4.x, incl. its PPMd7 model use and the
   RAR 3 VM filters), `archive_read_support_format_rar5.c` (RAR 5.0, incl. the x86/ARM/delta filters)
@@ -81,12 +81,49 @@ mailin's decryption, and its decrypted form read straight from disk): every memb
 CRC-32, in order and out of order. When updating libarchive, re-apply the patch (or drop it if upstream
 has gained RAR 4 solid support) and re-run `LibArchiveRARTests`.
 
+## Patch (owner decision 2026-11-09): `patches/rar7.patch`
+
+libarchive 3.8.11 ignores the RAR 5.0 header's compression version and refuses every dictionary over
+64 MiB. RAR 7.0 (rarlab.com/technote.htm, "Compression information") is the RAR 5.0 format with
+version 1: a 5-bit dictionary exponent plus a 1/32 fraction (dictionaries up to 1 TB, not only powers
+of two), bit 0x100000 meaning "version 1 header, version 0 algorithm", and — in the algorithm — 80
+distance codes instead of 64, so distances can pass 4 GiB. `patches/rar7.patch` (apply with
+`patch -p1` inside this folder to the pristine `archive_read_support_format_rar5.c`, SHA-256
+`0a21cc37ef7ae0f83bbffdac1b08414380787ddf1cddae7b8539985e4b28e3ab`; result
+`b42b517b1ec34707819b239642ca178f271c8df622434fc5769702e5a282d7b2`):
+
+- reads the version 1 dictionary field (exponent and fraction) and the compatibility bit; refuses
+  compression versions above 1 by name;
+- reads 80 distance codes for version 1 data (the Huffman table and the distance slots 64–79, whose
+  33/34 extra bits are read in two steps) and keeps distances and the repeat-distance cache 64-bit;
+- sizes the window to the data instead of the declared dictionary: the smallest power of two of at
+  least 8 MiB that holds every byte the stream can have produced by the end of the member (in a solid
+  archive the members before it count), at most the declared dictionary rounded up to a power of two.
+  A distance never reaches further back than the data produced, so nothing is lost; a 5 GiB
+  dictionary on a 174 KB member allocates 8 MiB. mailin applies the same rule before decoding
+  (`RARReader.assignDecoderWindows`) and refuses, by name, a member whose window would exceed
+  `RARReader.maxDecoderWindowBytes` (a quarter of the device's memory, at most 4 GiB);
+- a solid stream's window grows member by member (never shrinks) — the old "same window size"
+  check is replaced by moving the window's bytes to where the larger mask expects them;
+- the filters' window positions are 64-bit (windows over 4 GiB);
+- the window-sized `filtered_buf` allocated at the start of every file is dropped (`run_filter`
+  allocates the block's own size before each use), halving the memory.
+
+Verified on archives written by rar 7.23 (Fixtures/rar7/MANIFEST.md): version 1 with 5 GiB and
+4.5 GiB dictionaries, a version 1 member followed by version 0 members in one solid stream, a solid
+three-volume version 1 set, encrypted data and encrypted headers — every member's CRC-32 and the
+SHA-256 of the generated text; with the 80-code table switched off the version 1 members fail. No
+fixture holds a match over 4 GiB back (it would need more than 4 GiB of data), so the 33/34-bit
+distance path is exercised by no file.
+
 ## What the vendored reader does not do (stated in FormatCapabilityRegistry, rows `rar` and `7z-rar-source`)
 
 - RAR 1.5 and RAR 2.0 compression (unpack versions 15, 20, 26) — libarchive implements only the
-  RAR 2.9–4.x algorithm; `RARReader.Member.compressionRefusal` names these members instead of letting
-  the decoder produce wrong bytes.
-- RAR 7.0 compression (algorithm version 1) and RAR 5.0 dictionaries over 64 MiB — named per member.
+  RAR 2.9–4.x algorithm; these members are decoded by mailin's own Swift decoder
+  (`ArchiveCore/RARLegacyDecoder.swift`, not part of this target), never by libarchive.
+- RAR 5.0/7.0 members whose unpacked size the header does not record (written from a pipe into
+  volumes) — libarchive refuses them; named per member.
+- A decoding window over `RARReader.maxDecoderWindowBytes` — named per member.
 - Decryption — done by mailin (`RARCrypto.swift`, `RARDecryptedArchive.swift`) with the password given
   through Unlock…; libarchive reads the decrypted view. RAR 1.5/2.0 encryption is not implemented and
   is named per member.
@@ -94,10 +131,10 @@ has gained RAR 4 solid support) and re-run `LibArchiveRARTests`.
 ## Updating
 
 1. Download the new release tarball, check its SHA-256 against the release's published digest.
-2. Copy the same file list over `libarchive/`, re-apply `patches/rar4-solid.patch`, regenerate
+2. Copy the same file list over `libarchive/`, re-apply `patches/rar4-solid.patch` and `patches/rar7.patch`, regenerate
    `VENDORED-SHA256SUMS`, keep `config.h`
    (re-run `./configure` with the flags above and compare the macros the files test).
-3. Run `xcrun swift test --filter LibArchiveRARTests` and the RAR rows of `ContainerReaderTests`.
+3. Run `xcrun swift test --filter LibArchiveRARTests`, `--filter RAR7AndLegacyRARTests` and the RAR rows of `ContainerReaderTests`.
 4. Bump `RARReader.version` if decoding output changes.
 
 ## Attribution

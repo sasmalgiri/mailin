@@ -134,6 +134,8 @@ enum RARVolumeSet {
         }
         merged.isLastVolume = parsed.last?.archive.isLastVolume ?? true
         merged.damage = damage
+        // The decoding windows count the whole set's stream (a solid set continues across volumes).
+        RARReader.assignDecoderWindows(&merged)
         return merged
     }
 }
