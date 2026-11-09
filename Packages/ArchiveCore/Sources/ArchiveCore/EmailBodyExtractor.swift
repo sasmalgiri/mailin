@@ -209,9 +209,16 @@ public class EmailBodyExtractor {
             let suggestedName = forceFilename ?? part.filename ?? dispName ?? typeName ?? "attachment"
             let contentID = part.headers["Content-ID"]?.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t\r\n"))
 
-            // --- NEW LOGIC ---
+            // CLOSE-04 (native OLM pair, 2026-11-09): the TRANSFER-ENCODED body.
+            // MIMEParser keeps `body` encoded only for parts it calls
+            // attachments; an inline part with a filename (`Content-Disposition:
+            // inline; filename="pixel.png"`, the usual CID image) had its body
+            // already base64-decoded into a String, and decoding it a second
+            // time here kept only the base64-alphabet characters of the binary
+            // — the 68-byte PNG became 13 wrong bytes. `rawBody` is always the
+            // part as written; `saveAttachment` does the one transfer decode.
             return try AttachmentSaver.saveAttachment(
-                body: part.body,
+                body: part.rawBody.isEmpty ? part.body : part.rawBody,
                 encoding: part.transferEncoding,
                 mimeType: part.mimeType,
                 suggestedFilename: suggestedName,

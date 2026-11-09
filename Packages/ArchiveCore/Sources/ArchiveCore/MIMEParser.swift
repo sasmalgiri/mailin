@@ -135,7 +135,7 @@ public class MIMEParser {
         for (regex, percent) in [(nameStarRegex, true), (nameQuotedRegex, false), (nameBareRegex, false)] {
             guard let regex, let match = regex.firstMatch(in: header, range: range),
                   let r = Range(match.range(at: 1), in: header) else { continue }
-            let value = (percent ? header[r].removingPercentEncoding : String(header[r]))?
+            let value = (percent ? header[r].removingPercentEncoding : decodedEncodedWords(String(header[r])))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let value, !value.isEmpty { return value }
         }
@@ -303,16 +303,26 @@ public class MIMEParser {
         if let regex = filenameQuotedRegex,
            let match = regex.firstMatch(in: header, range: headerRange),
            let range = Range(match.range(at: 1), in: header) {
-            return String(header[range])
+            return decodedEncodedWords(String(header[range]))
         }
 
         if let regex = filenameBareRegex,
            let match = regex.firstMatch(in: header, range: headerRange),
            let range = Range(match.range(at: 1), in: header) {
-            return String(header[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return decodedEncodedWords(String(header[range]).trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         return nil
+    }
+
+    /// CLOSE-04 (native OLM pair, 2026-11-09): a filename written as an RFC 2047
+    /// encoded word inside the quoted parameter — what Outlook, Gmail and
+    /// mailin's own OLM/PST rebuilds write for non-ASCII names
+    /// (`filename="=?UTF-8?B?emHFvMOzxYLEhy50eHQ=?="`) — was kept encoded, so
+    /// `zażółć.txt` was stored and searched as `=?UTF-8?B?…?=`. Decoded here;
+    /// a name without an encoded word is returned unchanged.
+    private static func decodedEncodedWords(_ name: String) -> String {
+        name.contains("=?") ? MBOXParser.decodeMIMEHeader(name) : name
     }
 }
 

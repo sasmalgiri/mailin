@@ -5,9 +5,12 @@
 //  Directive 2026-11-07 §3: "the release preflight must not pass with required
 //  fixtures absent". In development the preflight SKIPS, naming every required
 //  fixture that is missing, unverified or still pending from the owner; with
-//  `MAILIN_RELEASE_PREFLIGHT=1` the same list is a FAILURE. The helper itself
-//  is tested against a temporary root so a wrong digest or an unlisted file
-//  can never be handed to a test as "verified".
+//  `MAILIN_RELEASE_PREFLIGHT=1` the same list is a FAILURE — strict mode
+//  needs ZERO unresolved entries. The helper itself is tested against a
+//  temporary root so a wrong digest or an unlisted file can never be handed
+//  to a test as "verified". CUR-04 (2026-11-09): how a pending row is
+//  reported is tested on a FAKE requirement list; nothing asserts how many
+//  rows of the real list are pending.
 //
 
 import XCTest
@@ -16,32 +19,92 @@ import Foundation
 final class ReleasePreflightFixtureTests: XCTestCase {
 
     /// The preflight: every entry of `ExternalFixtures.required` verified.
+    /// Release mode (`MAILIN_RELEASE_PREFLIGHT=1`) requires ZERO unresolved
+    /// entries; development reports them as a skip, never as a pass.
     func testReleasePreflight_everyRequiredFixturePresentAndVerified() throws {
-        let fixtures = ExternalFixtures.shared
-        let unresolved = fixtures.unresolvedRequirements()
-        let report = unresolved.map { "  - \($0.0.label): \($0.1)" }.joined(separator: "\n")
-        let releaseMode = ProcessInfo.processInfo.environment[ExternalFixtures.releasePreflightKey] == "1"
-        guard !unresolved.isEmpty else { return }
-        let message = "\(unresolved.count) of \(ExternalFixtures.required.count) required fixtures unresolved under \(fixtures.root.path):\n\(report)"
-        if releaseMode {
-            XCTFail("RELEASE PREFLIGHT FAILED — " + message)
-        } else {
+        switch ExternalFixtures.shared.preflight(releaseMode: ExternalFixtures.releaseModeFromEnvironment) {
+        case .passed:
+            return
+        case .failed(let message):
+            XCTFail(message)
+        case .reported(let message):
             throw XCTSkip("development: " + message + "\n(set \(ExternalFixtures.releasePreflightKey)=1 to make this a failure)")
         }
     }
 
-    /// The owner-pending rows are listed, never silently dropped.
-    func testReleasePreflight_pendingOwnerPackRowsAreCountedAsUnresolved() {
-        let pending = ExternalFixtures.required.filter { if case .pending = $0 { return true }; return false }
-        // 2026-11-09 (R9): S/MIME and the Apple Mail MBOX + EML parts are files now (owner-pack/);
-        // the native Outlook for Mac OLM of the same messages is the one row still pending.
-        XCTAssertEqual(pending.count, 1, "\(pending.map(\.label))")
-        XCTAssertTrue(pending.allSatisfy { $0.label.contains("OLM") }, "\(pending.map(\.label))")
-        XCTAssertFalse(pending.contains { $0.label.contains("S/MIME") }, "the S/MIME row is no longer pending")
-        let unresolved = ExternalFixtures.shared.unresolvedRequirements()
-        for row in pending {
-            XCTAssertTrue(unresolved.contains { $0.0 == row }, "pending row reported: \(row.label)")
+    // MARK: - CUR-04: the preflight's semantics on a fake requirement list (temporary root)
+
+    /// One verified file in a temporary pack, for the fake lists below.
+    private func verifiedPack(extra sums: String = "") throws -> ExternalFixtures {
+        let good = Data("good fixture".utf8)
+        try write("pack/good.bin", good)
+        try write("pack/SHA256SUMS", Data("\(ExternalFixtures.sha256Hex(of: good))  good.bin\n\(sums)".utf8))
+        return ExternalFixtures(root: tempRoot)
+    }
+
+    func testPreflight_pendingRowIsReportedNeverPassed_andFailsInReleaseMode() throws {
+        let fixtures = try verifiedPack()
+        let list: [ExternalFixtures.Requirement] = [.file("pack/good.bin"), .pending("a fake owner-bound item")]
+        let unresolved = fixtures.unresolvedRequirements(list)
+        XCTAssertEqual(unresolved.map(\.0), [.pending("a fake owner-bound item")], "the pending row is listed, the verified one is not")
+        guard case .reported(let message) = fixtures.preflight(list, releaseMode: false) else {
+            return XCTFail("development: a pending row is reported (a skip), not a pass")
         }
+        XCTAssertTrue(message.contains("1 of 2 required fixtures unresolved"), message)
+        XCTAssertTrue(message.contains("pending owner pack: a fake owner-bound item"), message)
+        guard case .failed(let strict) = fixtures.preflight(list, releaseMode: true) else {
+            return XCTFail("release mode: a pending row fails the preflight")
+        }
+        XCTAssertTrue(strict.hasPrefix("RELEASE PREFLIGHT FAILED"), strict)
+    }
+
+    func testPreflight_strictMode_passesOnlyWithZeroUnresolved() throws {
+        let fixtures = try verifiedPack()
+        XCTAssertEqual(fixtures.preflight([.file("pack/good.bin")], releaseMode: true), .passed)
+        XCTAssertEqual(fixtures.preflight([.file("pack/good.bin")], releaseMode: false), .passed)
+    }
+
+    func testPreflight_strictMode_failsOnAMissingFixture() throws {
+        let fixtures = try verifiedPack()
+        let list: [ExternalFixtures.Requirement] = [.file("pack/good.bin"), .file("pack/absent.olm")]
+        guard case .failed(let message) = fixtures.preflight(list, releaseMode: true) else {
+            return XCTFail("a missing required fixture fails in release mode")
+        }
+        XCTAssertTrue(message.contains("fixture missing") && message.contains("absent.olm"), message)
+        // A missing pack (no SHA256SUMS) and a missing root fail the same way.
+        guard case .failed = fixtures.preflight([.file("nopack/x.olm")], releaseMode: true) else { return XCTFail("missing pack") }
+        let none = ExternalFixtures(root: tempRoot.appendingPathComponent("does-not-exist"))
+        guard case .failed = none.preflight([.file("pack/good.bin")], releaseMode: true) else { return XCTFail("missing root") }
+    }
+
+    func testPreflight_strictMode_failsOnACorruptOrUnlistedFixture() throws {
+        try write("pack/corrupt.olm", Data("bytes changed after listing".utf8))
+        try write("pack/unlisted.olm", Data("never listed".utf8))
+        let fixtures = try verifiedPack(extra: "\(ExternalFixtures.sha256Hex(of: Data("original bytes".utf8)))  corrupt.olm\n")
+        guard case .failed(let corrupt) = fixtures.preflight([.file("pack/good.bin"), .file("pack/corrupt.olm")], releaseMode: true) else {
+            return XCTFail("a corrupt required fixture fails in release mode")
+        }
+        XCTAssertTrue(corrupt.contains("does not match"), corrupt)
+        guard case .failed(let unlisted) = fixtures.preflight([.file("pack/unlisted.olm")], releaseMode: true) else {
+            return XCTFail("an unlisted required fixture fails in release mode")
+        }
+        XCTAssertTrue(unlisted.contains("not listed"), unlisted)
+        // In development the same rows are reported, still not passed.
+        guard case .reported = fixtures.preflight([.file("pack/corrupt.olm")], releaseMode: false) else { return XCTFail("reported") }
+    }
+
+    /// The real list's native-pack rows are files with pinned digests, and the
+    /// pack's own SHA256SUMS (copied from the supplied zip) lists the same.
+    func testNativePackRows_pinnedDigestsAreTheListedOnes() throws {
+        for (path, digest) in ExternalFixtures.nativePackDigests {
+            XCTAssertTrue(ExternalFixtures.required.contains(.file(path)), path)
+            let sums = ExternalFixtures.shared.root.appendingPathComponent("native-pack-20261003/SHA256SUMS")
+            guard FileManager.default.fileExists(atPath: sums.path) else { throw XCTSkip("native pack not installed: no \(sums.path)") }
+            let inPack = String(path.dropFirst("native-pack-20261003/".count))
+            XCTAssertEqual(ExternalFixtures.listedDigests(sums)[inPack], digest, path)
+        }
+        XCTAssertFalse(ExternalFixtures.required.contains { $0.label.contains("owner-pack/smime") && $0.label.contains("olm") },
+                       "the native OLM is not filed under owner-pack/smime")
     }
 
     // MARK: - The helper against a temporary root

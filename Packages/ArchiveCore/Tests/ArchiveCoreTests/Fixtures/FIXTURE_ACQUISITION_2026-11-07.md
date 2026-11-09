@@ -14,6 +14,18 @@ exported back with Mailbox ▸ Export Mailbox… = an Apple-Mail-written mbox, p
 message as .eml). Each directory has a README (how made, synthetic, passwords); 27 files are pinned in
 `ExternalFixtures.ownerPackDigests` and tested by `OwnerPackFixtureTests`. The S/MIME row is no longer
 pending. The native Outlook for Mac OLM of the same messages is still `pending`: Outlook is not installed.
+**2026-11-09 (CLOSE-04), correction:** the owner's supplied pack WAS on this Mac —
+`~/Downloads/Mailin_Online_Mail_Fixtures_and_SMIME_2026-11-07.zip` (ZIP SHA-256
+`3b4f0413529114fa28876c664ada80ac90432aea6690b101503ec2b5e6a7b71e`, 51 entries; the earlier search took the
+other 2026-11-07 zip in ~/Downloads, `Mailin_Public_Test_Fixtures_2026-11-07.zip`, for the only one). Its
+native cross-format pair is staged at `<root>/native-pack-20261003/` (own `SHA256SUMS`, lines copied unchanged
+from the zip's; `PROVENANCE.md`; the producer `manifest.json` and `native_source_manifest.json` /
+`native_sources.json` both kept), apart from `owner-pack/`: `native-apple-20261003/outlook/native-outlook.olm`
+(Outlook for Mac 16.112.4, Legacy mode), the Apple Mail 16.0 export `native-apple-20261003/mail/Root/…`,
+`paired-mail/native-mail.eml` (derived from the MBOX) and `oracles/native_cross_format.json`. It covers ONE
+mail — subject, From, To, HTML, two attachments by bytes/SHA-256 and the inline CID; the MBOX has no Date or
+Message-ID — not the six owner-pack/native/ messages, and no native PST/OST/NSF of it exists. Seven files are
+pinned in `ExternalFixtures.nativePackDigests`; acceptance: `NativeOLMPairFixtureTests`. No row is pending.
 The files the directive table names are public, so they were fetched from their upstream repositories
 with the attempts below recorded in order. Nothing here was fabricated: a row says "obtained" only
 when the bytes are on disk with the SHA-256 shown.

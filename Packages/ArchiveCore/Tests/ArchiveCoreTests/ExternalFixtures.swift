@@ -19,7 +19,10 @@
 //     its digest, or is not listed, is a failure, never a skip.
 //   • Release: `ReleasePreflightFixtureTests` lists every required fixture
 //     that is missing or unresolved; it skips with that list in development
-//     and FAILS with it when `MAILIN_RELEASE_PREFLIGHT=1`.
+//     and FAILS with it when `MAILIN_RELEASE_PREFLIGHT=1` — strict mode needs
+//     ZERO unresolved entries (`preflight(_:releaseMode:)`; CUR-04: how a
+//     pending row is reported is tested on a fake list, not by expecting a
+//     number of pending rows in the real one).
 //
 
 import Foundation
@@ -88,10 +91,26 @@ struct ExternalFixtures {
         //   smime/   synthetic S/MIME set (OpenSSL 3.5.1, Scripts/r9_make_smime_fixtures.sh)
         //   native/  Apple-Mail-16-written mbox + the .eml of the same six synthetic messages
         // Pinned digests below; `owner-pack/SHA256SUMS` must list the same.
-    ] + ownerPackDigests.keys.sorted().map { Requirement.file($0) } + [
-        // Outlook for Mac is not installed on this Mac, so the native OLM of the same messages cannot be
-        // made here; the MBOX + EML parts are `native/` above. Stays pending until an Outlook export exists.
-        .pending("native Outlook for Mac OLM of the same messages as owner-pack/native/ (directive §3 row 6) — needs Outlook for Mac; install under <root>/owner-pack/native/ and list it in owner-pack/SHA256SUMS"),
+    ] + ownerPackDigests.keys.sorted().map { Requirement.file($0) }
+      // CLOSE-04 (2026-11-09): directive §3 row 6, the native OLM. The owner's supplied pack WAS on this
+      // Mac after all (~/Downloads/Mailin_Online_Mail_Fixtures_and_SMIME_2026-11-07.zip, ZIP SHA-256
+      // 3b4f0413…7b71e); its native cross-format pair is staged as its own pack, apart from owner-pack/.
+      // What it covers (oracles/native_cross_format.json): ONE mail exported natively by Outlook for Mac
+      // 16.112.4 (OLM) and by Apple Mail 16.0 (MBOX; EML derived from it) — same subject, From, To, HTML,
+      // two attachments and an inline CID; the MBOX has no Date or Message-ID. It is NOT an OLM of the six
+      // owner-pack/native/ messages, and no native PST/OST/NSF of the same mail exists.
+      // Acceptance: NativeOLMPairFixtureTests.
+      + nativePackDigests.keys.sorted().map { Requirement.file($0) }
+
+    /// The supplied native OLM / Apple Mail pair (pack SHA256SUMS lines copied unchanged from the zip's).
+    static let nativePackDigests: [String: String] = [
+        "native-pack-20261003/native-apple-20261003/outlook/native-outlook.olm": "a179b91e5b1aa823c4d40560855085d1514d3fb8e9e358df66ccf0d269bde602",
+        "native-pack-20261003/native-apple-20261003/mail/Root/mbox.mbox/mbox": "fb5eeb47f7eca7a319a6e36bcce9cd448317e0dda5263f37a026ec82e17a67fb",
+        "native-pack-20261003/native-apple-20261003/mail/Root/Child/mbox.mbox/mbox": "fed3a41ddc73f9b8e5c67b90347bf94fa4584bf5362b1c6a72f4457e293e7371",
+        "native-pack-20261003/native-apple-20261003/manifest.json": "bf67c6d90ec677eee893580e701d8b9017d43a545cf8be7fe4374e871bf274f7",
+        "native-pack-20261003/paired-mail/native-mail.eml": "6b320915b9a5f75e365d1a17f3dc7861ca16f97a7147426c10c9eb50fe7af069",
+        "native-pack-20261003/oracles/native_cross_format.json": "8b45adcea316fd75e1f67d81a65f1f1d15045fc105e9188582fca4c4b8ff9bb2",
+        "native-pack-20261003/native_source_manifest.json": "c5e3788d9171a853601ff512e2a7edd98174841aeeef4ae031b95ac5f27038e1",
     ]
 
     /// R9 owner pack (made 2026-11-09 with the owner's permission): path → SHA-256.
@@ -197,9 +216,30 @@ struct ExternalFixtures {
         var errorDescription: String? { description }
     }
 
+    /// The release preflight's answer for a requirement list (CUR-04: no
+    /// expected count of unresolved rows anywhere — strict mode needs zero).
+    enum PreflightVerdict: Equatable {
+        /// Every requirement verified.
+        case passed
+        /// Development: unresolved rows reported, the run is a skip — never a pass.
+        case reported(String)
+        /// `MAILIN_RELEASE_PREFLIGHT=1`: any unresolved row (pending, missing, unlisted, corrupt) fails.
+        case failed(String)
+    }
+
+    func preflight(_ requirements: [Requirement] = ExternalFixtures.required, releaseMode: Bool) -> PreflightVerdict {
+        let unresolved = unresolvedRequirements(requirements)
+        guard !unresolved.isEmpty else { return .passed }
+        let report = unresolved.map { "  - \($0.0.label): \($0.1)" }.joined(separator: "\n")
+        let message = "\(unresolved.count) of \(requirements.count) required fixtures unresolved under \(root.path):\n\(report)"
+        return releaseMode ? .failed("RELEASE PREFLIGHT FAILED — " + message) : .reported(message)
+    }
+
+    static var releaseModeFromEnvironment: Bool { ProcessInfo.processInfo.environment[releasePreflightKey] == "1" }
+
     /// Every required entry that is not verified, with the reason.
-    func unresolvedRequirements() -> [(Requirement, String)] {
-        Self.required.compactMap { requirement in
+    func unresolvedRequirements(_ requirements: [Requirement] = ExternalFixtures.required) -> [(Requirement, String)] {
+        requirements.compactMap { requirement in
             switch requirement {
             case .pending(let what):
                 return (requirement, "not yet supplied: \(what)")

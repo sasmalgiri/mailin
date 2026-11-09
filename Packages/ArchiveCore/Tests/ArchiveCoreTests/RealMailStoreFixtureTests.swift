@@ -568,8 +568,7 @@ final class RealMailStoreFixtureTests: XCTestCase {
         XCTAssertFalse(b.first?.htmlBody.isEmpty ?? true)
     }
 
-    func testOwnerPack_nativeOLMAppleMailMBOXAndDerivedEMLOfTheSameMessage_pending() throws {
-        let pending = ExternalFixtures.required.compactMap { if case .pending(let what) = $0 { return what } else { return nil } }
-        throw XCTSkip("owner-bound (pack 'Online mail fixtures and S/MIME' exists only as a ChatGPT library file; not on this Mac on 2026-11-09): \(pending.joined(separator: "; ")). The public samples are not that set and are not presented as it.")
-    }
+    // The native OLM + Apple Mail MBOX + derived EML of the same message (owner's supplied pack,
+    // found on this Mac 2026-11-09 and staged as <root>/native-pack-20261003/) is accepted in
+    // NativeOLMPairFixtureTests against the pack's own oracle — no longer a pending skip here.
 }
