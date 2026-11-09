@@ -134,3 +134,54 @@ recovered, already intact, ambiguous, missing source, failed — and is saved un
 `receipts/recovery/` (`RawSourceRecoveryReceiptStore`).
 
 Tests: `V2CutoverTests.testRECOVER_*`.
+
+## Connected mail — accounts, provider identities, occurrences, capture receipts (schema v26, plan v4 V4-03)
+
+Online mail enters the archive only through `ConnectedArchiveSink` (ArchiveCore), never through the
+unscoped file-import path. Schema v26 is **additive**: seven new tables, no existing column or row
+changes; the archive is snapshotted (`before-upgrade-v25-to-v26`) before the step runs, and that
+snapshot is the v25 database a rollback build opens.
+
+| Table | Holds | Never holds |
+|---|---|---|
+| `mail_accounts` | account UUID (the key), provider (`gmail` / `graph` / `imap`), OAuth issuer and tenant, or IMAP host / port / login name, display identity, granted scopes, enabled modes, stored connection state, the account's archive `source_id` | any token, password or secret — credentials live in the Keychain under the account UUID (`MailConnectivity.KeychainCredentialStore`, service `com.ecosanskriti.mailin.connected-account`, item `<UUID>/<kind>`, device-only, not synchronised) |
+| `remote_folders` | (account, server folder / label id) → display path, kind (folder / label), special use, IMAP UIDVALIDITY | — |
+| `remote_messages` | (account, **provider identity**) → archive `email_id`, the captured bytes' SHA-256 and size (`blob_digest`, `blob_length`), representation (`gmail-raw`, `graph-mime`, `imap-literal`), provider internal date, revision (historyId / changeKey / MODSEQ), provider flags, remote presence, first-captured / last-seen times | — |
+| `remote_memberships` | every folder / label the provider showed the message in (one row each) | — |
+| `sync_checkpoints` | (account, scope) → cursor, bootstrap state, the run that committed it | — |
+| `capture_runs` / `capture_items` | the run (selection, start, end, `running` / `completed` / `partial` / `interrupted`) and one durable outcome per listed item: `pending`, `stored`, `alreadyPreserved`, `locallyDeleted`, `failed`, `unavailable` (+ hash, size, error) | — |
+
+**Provider identity is the occurrence key** — Gmail: message id; Graph: mailbox + immutable id;
+IMAP: mailbox + UIDVALIDITY + UID (never a sequence number, never a UID alone) — always qualified by
+the account UUID. **Message-ID never decides**: connected captures are stored with `preserveAll`; the
+same Message-ID with different bytes, or in another account, is another record, and the duplicate
+engine classifies them by content as for files. A repeated provider event for the same identity adds
+only new memberships. A locally deleted connected message is not resurrected: its `remote_messages`
+row stays and a re-capture reports `locallyDeleted` (Message-ID tombstones are not consulted, so a
+deletion in one account never suppresses another account's message).
+
+**Bytes.** The captured bytes are staged owner-only (`<store>/connected-staging/`, 0600), hashed
+while written, published to the content-addressed blob tier (temp → fsync → rename; digest checked
+against the staged hash), and only then is the record committed — the record, its `remote_messages`
+row, its memberships and its `capture_items` outcome in **one** transaction. Every connected record
+keeps its raw source in the blob tier (`email_bodies.raw` empty, `raw_blob_digest` set) regardless of
+size, so the bytes are never re-encoded through a String. Provider metadata stays in these rows and
+is never written into the preserved MIME. Graph MIME is recorded as `graph-mime`: a provider-produced
+representation, not proof of the original SMTP / MAPI bytes. A checkpoint advances only when every
+item of its run is terminal. At launch `reconcileAfterRestart()` removes staged files of uncommitted
+captures, marks `running` runs `interrupted`, and checks that every connected record's bytes exist.
+
+**Folders.** Each account is one archive source (`sources.source_kind = 'connected'`, `sha256` =
+SHA-256 of `mailin-connected-account:<UUID>` — an identity key, not a file hash); memberships become
+`email_folders` / `email_tags` (FOLD-02 dual write) under that source; flags never become folders.
+
+**Backup / restore / export.** The v26 tables travel inside `emails.db` and the bytes inside
+`blobs/`, so a backup restores accounts, identities, memberships and receipts — and no credential.
+A restored account with no Keychain secret is shown as *needs sign-in again*. An export folder of
+connected messages can carry `mailin-connected-provenance.json` (account provider / issuer / tenant
+/ host / display identity, provider identity, memberships, captured SHA-256, and whether each
+exported file is byte-identical to the capture); the inventory verifier treats it as a description,
+not output.
+
+Tests: `ConnectedArchiveSinkTests` (v26 upgrade + snapshot, T19 kill at each boundary, T12, identity
+keys, staged-bytes integrity, export provenance) and `MailAccountCredentialTests` (T04–T07, T45, T46).

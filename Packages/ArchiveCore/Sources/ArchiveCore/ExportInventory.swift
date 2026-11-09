@@ -168,7 +168,8 @@ struct ExportInventory: Codable, Sendable, Equatable {
             for case let url as URL in walker {
                 guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
                 let path = String(url.standardizedFileURL.path.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                if path == filename { continue }
+                // V4-03: the connected-mail provenance sidecar describes listed files; it is not output.
+                if path == filename || path == ConnectedProvenanceSidecar.filename { continue }
                 if !listed.contains(path) { unlisted.append(path) }
             }
         }
