@@ -83,13 +83,46 @@ struct ExternalFixtures {
         .file("public-pack/04_import_ready_eml/01_Set_Up_Mobile_Thru_Admin.eml"),
         // Owner's pack "Online mail fixtures and S/MIME" (directive 2026-11-07 §3) was supplied as a
         // ChatGPT library file (libfile_d408d1057be08191aeabaa4482bc175d) and has never been saved on
-        // this Mac — searched 2026-11-09: fixture root, ~/Downloads (incl. the public-pack zip, which is
-        // the OTHER pack), ~/Documents, ~/Desktop, /tmp, Spotlight. The COMP-14 run's disposable
-        // `<root>/smime/enveloped.p7m` + `signed.p7m` were removed with their identity after the run.
-        // These rows become `.file` entries with acceptance tests only when the files are installed
-        // under `<root>/owner-pack/` with an `owner-pack/SHA256SUMS`; until then the preflight fails.
-        .pending("native Outlook for Mac OLM + Apple Mail MBOX + derived EML of the same message (directive §3 row 6) — install under <root>/owner-pack/ with owner-pack/SHA256SUMS"),
-        .pending("S/MIME fixtures (signed / enveloped messages and their test identity) — install under <root>/owner-pack/ with owner-pack/SHA256SUMS"),
+        // this Mac. With the owner's permission of 2026-11-09 it is replaced by `owner-pack/` made here
+        // (README.md in each directory says how; acceptance tests: `OwnerPackFixtureTests`):
+        //   smime/   synthetic S/MIME set (OpenSSL 3.5.1, Scripts/r9_make_smime_fixtures.sh)
+        //   native/  Apple-Mail-16-written mbox + the .eml of the same six synthetic messages
+        // Pinned digests below; `owner-pack/SHA256SUMS` must list the same.
+    ] + ownerPackDigests.keys.sorted().map { Requirement.file($0) } + [
+        // Outlook for Mac is not installed on this Mac, so the native OLM of the same messages cannot be
+        // made here; the MBOX + EML parts are `native/` above. Stays pending until an Outlook export exists.
+        .pending("native Outlook for Mac OLM of the same messages as owner-pack/native/ (directive §3 row 6) — needs Outlook for Mac; install under <root>/owner-pack/native/ and list it in owner-pack/SHA256SUMS"),
+    ]
+
+    /// R9 owner pack (made 2026-11-09 with the owner's permission): path → SHA-256.
+    static let ownerPackDigests: [String: String] = [
+        "owner-pack/smime/ca.pem": "93c5f5ecde2f00af7f22e4aa8f1e88ee84f6fc4c21e6ea0a97d456a8b1cd4cb7",
+        "owner-pack/smime/alice.pem": "57be7d26dc7cd5e372005ba964bf90044d6fe97c76ffbd2ebcff62ea063205c8",
+        "owner-pack/smime/alice.p12": "89a705b95ea16dad64b3988c670d23f235a30e7eae0c582c05a96d6e11a68758",
+        "owner-pack/smime/bob.pem": "32a3faee8b02353ad78a4b8b2dae8273090ff59de550e06bcc64937a9769de36",
+        "owner-pack/smime/bob.p12": "969596471340ec64736f36782ab4655ae14a8249c49a708ac12078807e2ae1a5",
+        "owner-pack/smime/entity.mime": "769b97c8b1bcf3552ffa31b5e20e5dd10d7d501979e70cc23416cddde6bb8ec3",
+        "owner-pack/smime/ledger.txt": "f8cd9d43518c0886262a57bde6d64e3e9c15a00a8ceb42b33a3cd7de16489c3c",
+        "owner-pack/smime/signed-opaque-rsa.eml": "4eb3e8b80f5dbaab0219165fccc6a0d5a61f0cf86acc1905f77f01e4c19a028c",
+        "owner-pack/smime/signed-opaque-rsa.p7m": "068acf09721018f4f213bf8b585e592a31ecf578610981ef9fa0a332ff98d31b",
+        "owner-pack/smime/signed-detached-rsa.eml": "4650b36f7c65468fc1f128c9a63f909f50809d275cb11456e97fed41782c2190",
+        "owner-pack/smime/signed-detached-tampered.eml": "8cecf9a1d95ed7b3273d3e6576671bfeea3b3f9f91311a4fa90d7f29ad54f6fc",
+        "owner-pack/smime/signed-opaque-ec.eml": "16ebe811b5a9e1889aa8a27a156236e61a0eb9e3e4712b92367fb039bbc256b2",
+        "owner-pack/smime/enveloped-rsa.eml": "2ff5221d8b5d187244f91f27f6838e1ff444439f83919c079e7244a565f5fd2b",
+        "owner-pack/smime/enveloped-rsa.p7m": "59308b84123b11e1358531ae6d4e47a0f4a6badb61e5c3e522f957292966ccce",
+        "owner-pack/smime/enveloped-ec.eml": "43f57c0ece764712a8a44f3161cc0c5b22186f56d3781513bc790d416de6b47e",
+        "owner-pack/smime/enveloped-ec-gcm.p7m": "dc44f18556bd7e6e00ff53573afe8f9d2b4c9ca18f376fdc4e9fdcdb5d7132d7",
+        "owner-pack/smime/signed-then-enveloped.eml": "cf07e1e88724901e4026e1afe18896e467a0c2d0324de95b7a77e3abd207e45e",
+        "owner-pack/native/apple-mail-export/R9-native.mbox/mbox": "f314bc9eb8a762659f1da445a082f6c6ecd4ee245aed0f5c244d07193b059332",
+        "owner-pack/native/apple-mail-export/R9-native.mbox/table_of_contents": "4c28eca9f19a2281bee74fbe5a1a910a35346a21b26b70895763877c6c602df3",
+        "owner-pack/native/eml/r9-native-01.eml": "b000ae44569cc7cf28b7153eeae026808db6638e56b1efe52caaa3db2cf24e9a",
+        "owner-pack/native/eml/r9-native-02.eml": "8e19dd311d9dad591d193de3da56e12c1c1854a528673b4032cb9a1bb2569113",
+        "owner-pack/native/eml/r9-native-03.eml": "4d66d9c254cd40c557f55456302814d2839cabf6ec3aeff99e3bbb31788ec583",
+        "owner-pack/native/eml/r9-native-04.eml": "988a5ebc652047aa791cdc63e3b53ae2c552ac9e387c36874db0041582675d78",
+        "owner-pack/native/eml/r9-native-05.eml": "acd7b9fdcf4ba78c465070a1547c16e6f97d0aae3e7caf26005dfe7d6b3a9102",
+        "owner-pack/native/eml/r9-native-06.eml": "b6b9ead95a962b6c2c732a980fa1c8523c4ab7152f812ca1ac742a0cf5f44ad8",
+        "owner-pack/native/source/R9-native.mbox": "496860db369a00ca5881f97276a8adeeb43141fdc5fb7f07a89874f0f8f6a31b",
+        "owner-pack/native/source/source-inventory.json": "11e1d2f504aa87e5af2e310cf493d0664c455152fe4cc12f1ccec8d1b6b24499",
     ]
 
     // MARK: - Status of one fixture

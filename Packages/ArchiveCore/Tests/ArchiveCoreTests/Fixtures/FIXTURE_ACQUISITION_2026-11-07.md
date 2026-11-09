@@ -6,6 +6,14 @@ and has never been saved on this Mac — not under the fixture root, ~/Downloads
 public OFT/archive/Word pack), ~/Documents, ~/Desktop, /tmp or Spotlight. The COMP-14 S/MIME run used a
 disposable identity and `<root>/smime/enveloped.p7m` / `signed.p7m`, removed after the run. Install location
 when it arrives: `<root>/owner-pack/` with `owner-pack/SHA256SUMS`; both rows stay `pending` until then.
+**2026-11-09 (R9, owner permission of the same day):** `<root>/owner-pack/` was made on this Mac instead —
+`smime/` (synthetic S/MIME set: throwaway CA, Alice RSA + Bob EC P-256 `.p12` with password
+`mailin-fixture-2026`, signed / enveloped / signed-then-enveloped / tampered messages; OpenSSL 3.5.1,
+`Scripts/r9_make_smime_fixtures.sh`) and `native/` (six synthetic messages imported into Apple Mail 16.0 and
+exported back with Mailbox ▸ Export Mailbox… = an Apple-Mail-written mbox, plus Mail's source of each
+message as .eml). Each directory has a README (how made, synthetic, passwords); 27 files are pinned in
+`ExternalFixtures.ownerPackDigests` and tested by `OwnerPackFixtureTests`. The S/MIME row is no longer
+pending. The native Outlook for Mac OLM of the same messages is still `pending`: Outlook is not installed.
 The files the directive table names are public, so they were fetched from their upstream repositories
 with the attempts below recorded in order. Nothing here was fabricated: a row says "obtained" only
 when the bytes are on disk with the SHA-256 shown.
@@ -66,7 +74,7 @@ fixture root only. Microsoft's OFT (`public-pack/`) is never copied into Git.
 |---|---|
 | Native Outlook for Mac OLM with "one mail record with two exact attachments/CID; upstream also records a contact and appointment" | This describes the owner's own export in pack 1, which has not arrived. The public native export `outlook_example.olm` (Outlook 16) was obtained instead and carries 7 mail records / 9 attachments and 5 contacts, 2 groups, 8 appointments, 5 tasks, 1 note — mail and non-mail are accounted separately in `RealMailStoreFixtureTests`. |
 | Native OLM + Apple Mail MBOX + derived EML of the same message | Owner-bound: the three representations of one message exist only in the owner's pack. Apple Mail `.emlx` and generic MBOX samples from Tika were obtained, but they are not the same message and are not presented as that set. Listed as `pending` in `ExternalFixtures.required`, so the release preflight fails until it is supplied. |
-| S/MIME fixtures | Owner-bound (pack 1). `pending` in `ExternalFixtures.required`. |
+| S/MIME fixtures | Owner-bound (pack 1) until 2026-11-09; now the synthetic `owner-pack/smime/` set above (owner permission 2026-11-09), files + assertions in place, no longer `pending`. |
 
 ## Independent inventories used by the tests
 

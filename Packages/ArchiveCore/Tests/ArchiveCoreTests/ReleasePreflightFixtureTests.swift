@@ -33,7 +33,11 @@ final class ReleasePreflightFixtureTests: XCTestCase {
     /// The owner-pending rows are listed, never silently dropped.
     func testReleasePreflight_pendingOwnerPackRowsAreCountedAsUnresolved() {
         let pending = ExternalFixtures.required.filter { if case .pending = $0 { return true }; return false }
-        XCTAssertFalse(pending.isEmpty, "the same-message set and S/MIME material are still owner-bound on 2026-11-07")
+        // 2026-11-09 (R9): S/MIME and the Apple Mail MBOX + EML parts are files now (owner-pack/);
+        // the native Outlook for Mac OLM of the same messages is the one row still pending.
+        XCTAssertEqual(pending.count, 1, "\(pending.map(\.label))")
+        XCTAssertTrue(pending.allSatisfy { $0.label.contains("OLM") }, "\(pending.map(\.label))")
+        XCTAssertFalse(pending.contains { $0.label.contains("S/MIME") }, "the S/MIME row is no longer pending")
         let unresolved = ExternalFixtures.shared.unresolvedRequirements()
         for row in pending {
             XCTAssertTrue(unresolved.contains { $0.0 == row }, "pending row reported: \(row.label)")
