@@ -113,6 +113,16 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     /// written inside the app and handed on alone by the Share sheet.
     var manifestPath: String? = nil
 
+    // v4.0 REC-05 / RQ07: what a practical recipe exported, so its result is
+    // read from this receipt rather than typed. All optional (older receipts decode).
+    /// What was selected: the scope and the search, in words.
+    var sourceLine: String? = nil
+    /// The search's coverage when the selection was frozen — locked, unread or
+    /// partly read files inside attachments are named, never a silent zero.
+    var coverageLine: String? = nil
+    /// Every item asked for but not written, each with its reason.
+    var skippedReasons: [String]? = nil
+
     /// True when the card offers Recover and resume.
     var offersRecovery: Bool {
         recoverableRequest != nil && resumeRequest == nil && recoveryFailed != true
@@ -217,6 +227,9 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         if let resumeRequest { lines.append("Resumable: yes — continues at message \(resumeRequest.skipFirst + 1)") }
         if let recoveryDetail { lines.append("Recovery: \(recoveryDetail)") }
         if let manifestPath { lines.append("Manifest: \(manifestPath)") }
+        if let sourceLine { lines.append("Selection: \(sourceLine)") }
+        if let coverageLine { lines.append("Search coverage: \(coverageLine)") }
+        for reason in skippedReasons ?? [] { lines.append("Not written: \(reason)") }
         if let verificationLine { lines.append("Verification: \(verificationLine)") }
         if let contentLine { lines.append("Content: \(contentLine)") }
         if let contentReportPath { lines.append("Content report: \(contentReportPath)") }

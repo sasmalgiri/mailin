@@ -232,7 +232,8 @@ struct UnifiedExportSections: View {
         ExportRunCenter.shared.requestPreflight(ExportRequest(
             format: format,
             title: title,
-            scope: scope(),
+            // REC-05: opened from a recipe step, the export works on the run's frozen selection.
+            scope: RecipeFrozenScope.exportScope(scope(), ticket: RecipeJobBroker.shared.waitingTicket(for: .export)),
             destination: destination.path,
             isFolder: isFolder,
             cap: cap,

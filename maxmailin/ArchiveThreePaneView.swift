@@ -33,6 +33,8 @@ struct ArchiveThreePaneView: View {
     @State private var spec: SearchSpec?
     @State private var unresolved = 0
     @State private var showAdvancedSearch = false
+    /// REC-06: the five practical recipes, beside Search.
+    @State private var showRecipes = false
     /// FIND-05: why an attachment named by a chip could not be opened.
     @State private var attachmentOpenFailure: EvidenceAttachmentOpener.Failure?
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
@@ -98,6 +100,11 @@ struct ArchiveThreePaneView: View {
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
                 // v4.0 REC-02: pressing Return is the explicit "this is my search".
                 .onSubmit(of: .search) { Task { await applyQuery(); await reportSearchToRecipe() } }
+                .sheet(isPresented: $showRecipes) {
+                    PracticalRecipesHome(scopeName: scopeDescription, currentSpec: spec,
+                                         onOpenSpecialist: onHome.map { home in { showRecipes = false; home() } },
+                                         onClose: { showRecipes = false })
+                }
                 .sheet(isPresented: $showAdvancedSearch) {
                     AdvancedSearchView(applied: spec, scopeDescription: scopeDescription,
                                        onApply: { newSpec in spec = newSpec; showAdvancedSearch = false; Task { await applyQuery(); await reportSearchToRecipe() } },
@@ -112,6 +119,13 @@ struct ArchiveThreePaneView: View {
                             .help("Build a search from conditions: all / any / exclude, dates, attachments")
                             .accessibilityIdentifier("archive.list.advancedSearch")
                         }
+                    }
+                    ToolbarItem {
+                        Button { showRecipes = true } label: {
+                            Label("Recipes", systemImage: "checklist")
+                        }
+                        .help("Five practical recipes: find and export, save attachments, clean up duplicates, back up and restore, collect and hand over")
+                        .accessibilityIdentifier("archive.list.recipes")
                     }
                     ToolbarItem {
                         Menu {
@@ -248,9 +262,12 @@ struct ArchiveThreePaneView: View {
         if !text.isEmpty { line += " · words \"\(text)\"" }
         if let spec, !spec.isEmpty { line += " · \(SearchSpecDescriber.summary(spec))" }
         if unresolved > 0 { line += " · \(unresolved) not yet confirmed (unindexed content)" }
+        // REC-05: the row bound the count was measured at, so the run's later
+        // export / clean-up works on these rows and not on mail imported since.
+        let bound = try? await model.archive.selectionSnapshotBound()
         RecipeJobBroker.shared.report(.search, outcome: .succeeded,
                                       receipt: .init(kind: .measurement, id: "\(count) matches"),
-                                      summary: line, count: count, spec: spec)
+                                      summary: line, count: count, spec: spec, storeRevision: bound)
     }
 
     /// FIND-05: with the search model on and a search active, each row asks

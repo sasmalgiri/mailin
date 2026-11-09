@@ -636,7 +636,11 @@ struct DuplicateManagerView: View {
     private func loadArchiveWide() async {
         do {
             let store = SQLiteEmailStore.shared
-            let groups = try await Self.withoutTrashed(try await store.messageIDDuplicateGroups(), store: store)
+            var groups = try await Self.withoutTrashed(try await store.messageIDDuplicateGroups(), store: store)
+            // REC-05: opened from a recipe step, only copies inside the run's frozen selection are offered.
+            if let frozen = RecipeFrozenScope.query(RecipeJobBroker.shared.waitingTicket(for: .dedupe)?.context.selection) {
+                groups = try await RecipeFrozenScope.restrict(groups: groups, to: frozen, archive: .shared)
+            }
             let result = try await DuplicateVerification.verifyArchiveWide(groups: groups) { ids in
                 try await ArchiveDataService.shared.fullEmails(ids: ids)
             }

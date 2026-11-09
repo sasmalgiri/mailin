@@ -6741,3 +6741,477 @@ final class MailPolicyTests: XCTestCase {
         XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
 }
+
+// MARK: - v4.0 REC-05 / REC-06 / SEARCH-04: the five practical recipes
+
+/// Each recipe runs end to end on a small synthetic archive through its real
+/// engine; its result is read back from the job's persisted receipt (counts,
+/// paths, hashes, skipped reasons, verification). A cancelled job never
+/// completes a recipe; locked nested files reach the final receipt (RQ07);
+/// the export and duplicate tools honour a run's frozen selection; the
+/// saved-query templates are valid SearchSpecs.
+@MainActor
+final class PracticalRecipeTests: XCTestCase {
+    private struct Env {
+        let root: URL
+        let store: SQLiteEmailStore
+        let fts: FTSSearchIndex
+        let archive: ArchiveDataService
+        let saved: ArchiveSavedSearchStore
+        let defaults: UserDefaults
+        var engine: PracticalRecipeEngine
+        var e1: MBOXParser.RawEmail
+        var e2: MBOXParser.RawEmail
+        let docx: Data
+    }
+
+    private var posted: [String] = []
+
+    private static func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = (crc >> 1) ^ (0xEDB88320 & (0 &- (crc & 1))) }
+        }
+        return crc ^ 0xFFFFFFFF
+    }
+
+    /// A stored (uncompressed) ZIP with correct CRCs.
+    private static func storedZip(_ members: [(name: String, data: Data)]) -> Data {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        var local = Data(), central = Data()
+        for m in members {
+            let name = Array(m.name.utf8)
+            let crc = crc32(m.data)
+            let size = UInt32(m.data.count)
+            let offset = UInt32(local.count)
+            local.append(contentsOf: le32(0x04034b50) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                         + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + name)
+            local.append(m.data)
+            central.append(contentsOf: le32(0x02014b50) + le16(20) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(offset) + name)
+        }
+        var file = local
+        file.append(central)
+        file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(members.count) + le16(members.count)
+                    + le32(UInt32(central.count)) + le32(UInt32(local.count)) + le16(0))
+        return file
+    }
+
+    private static func mime(_ n: Int, from: String, subject: String, date: String,
+                             files: [(name: String, type: String, data: Data)]) throws -> MBOXParser.RawEmail {
+        var lines = ["From: \(from)", "To: me@example.com", "Subject: \(subject)", "Date: \(date)",
+                     "Message-ID: <recipe-\(n)@test>", "MIME-Version: 1.0", "Content-Type: multipart/mixed; boundary=\"B\"", "",
+                     "--B", "Content-Type: text/plain", "", "body \(n)"]
+        for f in files {
+            lines += ["--B", "Content-Type: \(f.type); name=\"\(f.name)\"", "Content-Disposition: attachment; filename=\"\(f.name)\"",
+                      "Content-Transfer-Encoding: base64", "", f.data.base64EncodedString(options: .lineLength76Characters)]
+        }
+        lines.append("--B--")
+        return try MBOXParser.processRawMessage(lines.joined(separator: "\n"), senderEmail: "")
+    }
+
+    private static func plain(_ n: Int, from: String, subject: String, day: String) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(headers: ["Message-ID": "<plain-\(n)@test>", "Subject": subject, "From": from, "To": "me@example.com",
+                                      "Date": "Mon, \(day) Mar 2025 12:00:00 +0000"],
+                            rawSource: "Message-ID: <plain-\(n)@test>\nSubject: \(subject)\n\nbody \(n)", messageType: "email",
+                            attachments: [], timestamp: "2025-03-\(day)T12:00:00Z", domains: [], plainBody: "body \(n)", htmlBody: "")
+    }
+
+    private func insert(_ env: Env, _ emails: [MBOXParser.RawEmail]) async throws {
+        _ = try await env.store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .preserveAll, batchSize: 50, progress: nil)
+        try await env.fts.indexBatch(emails)
+    }
+
+    private func environment(root: URL, store: SQLiteEmailStore, archive: ArchiveDataService, saved: ArchiveSavedSearchStore,
+                             defaults: UserDefaults, policy: AccessPolicy?) -> PracticalRecipeEngine.Environment {
+        var environment = PracticalRecipeEngine.Environment(
+            archive: archive, store: store,
+            exportReceipts: ExportReceiptStore(directory: root.appendingPathComponent("receipts")),
+            results: PracticalRecipeResultStore(directory: root.appendingPathComponent("results")),
+            savedSearches: saved, policy: policy, defaults: defaults)
+        environment.postDocument = { [weak self] _, summary in
+            guard let self else { return nil }
+            self.posted.append(summary)
+            return "CLN-TEST-\(self.posted.count)"
+        }
+        environment.documentExists = { [weak self] number in
+            guard let self else { return false }
+            return self.posted.indices.contains { "CLN-TEST-\($0 + 1)" == number }
+        }
+        environment.scratch = root.appendingPathComponent("scratch", isDirectory: true)
+        return environment
+    }
+
+    private func makeEnv(policy: AccessPolicy? = AccessPolicy(state: .active(.professional))) async throws -> Env {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PracticalRecipes-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let suite = "PracticalRecipes-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let saved = ArchiveSavedSearchStore(defaults: defaults)
+        let environment = environment(root: root, store: store, archive: archive, saved: saved, defaults: defaults, policy: policy)
+        try FileManager.default.createDirectory(at: environment.scratch, withIntermediateDirectories: true)
+
+        let docx = Data("minutes of the project meeting".utf8)
+        let zip = Self.storedZip([("minutes.docx", docx), ("secret.xlsx", Data("sealed".utf8))])
+        let e1 = try Self.mime(1, from: "alice@acme.com", subject: "Invoice March", date: "Wed, 05 Mar 2025 12:00:00 +0000",
+                               files: [("invoice-1.pdf", "application/pdf", Data("%PDF-1.4 invoice one".utf8))])
+        let e2 = try Self.mime(2, from: "alice@acme.com", subject: "Invoice April", date: "Sat, 05 Apr 2025 12:00:00 +0000",
+                               files: [("invoice-2.pdf", "application/pdf", Data("%PDF-1.4 invoice two".utf8)),
+                                       ("bundle.zip", "application/zip", zip)])
+        let env = Env(root: root, store: store, fts: fts, archive: archive, saved: saved, defaults: defaults,
+                      engine: PracticalRecipeEngine(env: environment), e1: e1, e2: e2, docx: docx)
+        // Two verified-identical pairs (bob's and carol's), stored as preserved copies.
+        try await insert(env, [e1, e2,
+                               Self.plain(3, from: "bob@other.com", subject: "Lunch", day: "10"),
+                               Self.plain(3, from: "bob@other.com", subject: "Lunch", day: "10"),
+                               Self.plain(4, from: "carol@else.com", subject: "Report", day: "12"),
+                               Self.plain(4, from: "carol@else.com", subject: "Report", day: "12")])
+        // The files inside bundle.zip as the indexing job records them: one read, one locked.
+        try await store.recordAttachmentChildren(
+            emailID: e2.id, position: 1,
+            children: [AttachmentChildRow(emailID: e2.id, position: 1, childIndex: 0, path: "minutes.docx", filename: "minutes.docx",
+                                          kind: "docx", sha256: "", bytes: docx.count, state: "extracted", note: nil),
+                       AttachmentChildRow(emailID: e2.id, position: 1, childIndex: 1, path: "secret.xlsx", filename: "secret.xlsx",
+                                          kind: "xlsx", sha256: "", bytes: 6, state: "locked", note: "encrypted")],
+            texts: [0: "minutes of the project meeting", 1: nil], states: [0: .complete, 1: .locked], extractorVersion: 1)
+        return env
+    }
+
+    private var aliceSpec: SearchSpec { SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "alice")])]) }
+    private var alicePDFSpec: SearchSpec {
+        SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "alice")], attachments: [AttachmentConditionGroup(type: "PDF")])])
+    }
+
+    /// Recipe 1: search with coverage, freeze, export, verify; the result's counts, path, inventory
+    /// and verification come from the saved receipt, and the result reads the same after a restart.
+    func testRecipe1_findAndExport_endToEnd_resultReadFromReceipt() async throws {
+        let env = try await makeEnv()
+        let preview = try await env.engine.preview(spec: alicePDFSpec, scopeName: "All mail")
+        XCTAssertEqual(preview.matches, 2)
+        // Mail arriving after the review is outside the frozen selection.
+        try await insert(env, [try Self.mime(9, from: "alice@acme.com", subject: "Invoice late", date: "Tue, 06 May 2025 12:00:00 +0000",
+                                             files: [("late.pdf", "application/pdf", Data("%PDF late".utf8))])])
+        let out = env.root.appendingPathComponent("out-eml", isDirectory: true)
+        let result = await env.engine.findAndExport(preview, format: .emlFolder, destination: out)
+        XCTAssertEqual(result.state, .completed, "\(result.facts.map(\.summary)) \(result.facts.map(\.skipped)) \(result.facts.map(\.verification))")
+        XCTAssertEqual(result.facts.count, 2)
+        XCTAssertEqual(result.facts[0].receiptKind, .measurement)
+        XCTAssertEqual(result.facts[0].completed, 2, "matches found — measured")
+        let export = result.facts[1]
+        XCTAssertEqual(export.receiptKind, .exportReceipt)
+        XCTAssertEqual(export.requested, 2, "the frozen selection — the later message is not in it")
+        XCTAssertEqual(export.completed, 2, "files exported — from the receipt")
+        XCTAssertEqual(export.destination, out.path)
+        XCTAssertEqual(export.hashesRecorded, 2)
+        XCTAssertEqual(export.verificationPassed, true)
+        XCTAssertTrue(export.verification?.contains("2") ?? false, export.verification ?? "")
+        let inventory = try ExportInventory.load(folder: out)
+        XCTAssertEqual(inventory.files.count, 2)
+        XCTAssertEqual(export.inventoryPath, out.appendingPathComponent(ExportInventory.filename).path)
+        // The facts are the receipt's: reload it from disk and compare.
+        let receiptPath = try XCTUnwrap(export.receiptPath)
+        let stored = try ExportReceiptStore(directory: env.root.appendingPathComponent("receipts")).load(URL(fileURLWithPath: receiptPath))
+        XCTAssertEqual(stored.written, 2)
+        XCTAssertEqual(stored.selectionFrozen, true)
+        XCTAssertEqual(stored.sourceLine, preview.sourceLine)
+        XCTAssertEqual(RecipeResultFacts(export: stored, receiptPath: receiptPath, outcome: .succeeded).completed, export.completed)
+        // After a restart the result reads the same.
+        let reloaded = try PracticalRecipeResultStore(directory: env.root.appendingPathComponent("results")).load(result.id)
+        XCTAssertEqual(reloaded, result)
+        // The MBOX form: the artifact hash on the receipt is the file's hash.
+        let mbox = env.root.appendingPathComponent("out.mbox")
+        let mboxResult = await env.engine.findAndExport(preview, format: .mboxFile, destination: mbox)
+        XCTAssertEqual(mboxResult.state, .completed, "\(mboxResult.facts.map(\.summary)) \(mboxResult.facts.map(\.verification))")
+        XCTAssertEqual(mboxResult.facts[1].hashes, [try ExportInventory.sha256(of: mbox)])
+        XCTAssertEqual(mboxResult.facts[1].completed, 2)
+    }
+
+    /// Recipe 2 + RQ07: an attachment and a file inside a ZIP are saved only when chosen, with safe
+    /// names and a byte inventory; the locked file inside the ZIP is named in the final receipt and the
+    /// recipe is partial, not complete; the search's coverage names the locked file too.
+    func testRecipe2_saveAttachments_nestedChosenExplicitly_lockedNamedInReceipt() async throws {
+        let env = try await makeEnv()
+        let preview = try await env.engine.preview(spec: aliceSpec, scopeName: "All mail")
+        XCTAssertTrue(preview.coverage?.contains("1") ?? false, "RQ07: the locked file is stated before running: \(preview.coverage ?? "nil")")
+        let candidates = try await env.engine.fileCandidates(preview)
+        XCTAssertEqual(Set(candidates.map(\.filename)), ["invoice-1.pdf", "invoice-2.pdf", "bundle.zip", "minutes.docx", "secret.xlsx"])
+        let minutes = try XCTUnwrap(candidates.first { $0.filename == "minutes.docx" })
+        XCTAssertTrue(minutes.isNested)
+        XCTAssertEqual(minutes.childPath, "minutes.docx")
+        let secret = try XCTUnwrap(candidates.first { $0.filename == "secret.xlsx" })
+        XCTAssertTrue(secret.isLocked)
+        let pdf = try XCTUnwrap(candidates.first { $0.filename == "invoice-1.pdf" })
+        // The PDF type condition flags only the PDFs.
+        let pdfOnly = RecipeFileBrowser.candidates(email: env.e2, children: [], spec: alicePDFSpec)
+        XCTAssertEqual(pdfOnly.filter(\.matchesConditions).map(\.filename), ["invoice-2.pdf"])
+
+        let folder = env.root.appendingPathComponent("saved", isDirectory: true)
+        let result = await env.engine.saveFiles([pdf, minutes, secret], preview: preview, to: folder)
+        XCTAssertEqual(result.state, .partial, "a locked file not saved is never complete")
+        let facts = result.facts[1]
+        XCTAssertEqual(facts.requested, 3)
+        XCTAssertEqual(facts.completed, 2)
+        XCTAssertEqual(facts.verificationPassed, true, facts.verification ?? "")
+        XCTAssertTrue(facts.skipped.contains { $0.contains("secret.xlsx") && $0.contains("locked") }, "\(facts.skipped)")
+        XCTAssertTrue(facts.coverage?.contains("locked") ?? false, "RQ07: the final receipt carries the coverage")
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("minutes.docx")), env.docx, "the nested file's own bytes")
+        let inventory = try ExportInventory.load(folder: folder)
+        XCTAssertEqual(Set(inventory.files.map(\.path)), ["invoice-1.pdf", "minutes.docx"])
+        for file in inventory.files {
+            XCTAssertEqual(file.sha256, try ExportInventory.sha256(of: folder.appendingPathComponent(file.path)))
+        }
+        let receiptURL = URL(fileURLWithPath: try XCTUnwrap(facts.receiptPath))
+        let receipt = try ExportReceiptStore(directory: env.root.appendingPathComponent("receipts")).load(receiptURL)
+        XCTAssertTrue(receipt.plainText().contains("Not written: secret.xlsx"), receipt.plainText())
+        // Safe, unique names.
+        var used: Set<String> = ["report.pdf"]
+        XCTAssertEqual(RecipeFileBrowser.uniqueSafeName("report.pdf", used: &used), "report (2).pdf")
+        XCTAssertFalse(RecipeFileBrowser.uniqueSafeName("../../etc/passwd", used: &used).contains("/"))
+    }
+
+    /// Recipe 3: only verified-identical extra copies inside the frozen selection move to the Trash,
+    /// after the count; the registry document is read back; a cancelled clean-up moves nothing.
+    func testRecipe3_cleanUp_movesOnlyVerifiedCopiesInsideTheFrozenSelection() async throws {
+        let env = try await makeEnv()
+        let whole = try await env.engine.cleanupPlan(nil)
+        XCTAssertEqual(whole.removable, 2, "bob's and carol's extra copies")
+        let bobSpec = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "bob")])])
+        let bob = try await env.engine.preview(spec: bobSpec, scopeName: "All mail")
+        let plan = try await env.engine.cleanupPlan(bob)
+        XCTAssertEqual(plan.removable, 1, "the frozen selection limits the clean-up")
+        // Cancelled before it ran: nothing moves, never completed.
+        let engine = env.engine
+        let cancelled = Task { @MainActor in await engine.cleanUp(plan, preview: bob) }
+        cancelled.cancel()
+        let stopped = await cancelled.value
+        XCTAssertEqual(stopped.state, .cancelled)
+        XCTAssertFalse(stopped.isCompleted)
+        let stillThere = try await env.store.reviewStates(ids: plan.plans.flatMap(\.removed))
+        XCTAssertTrue(stillThere.values.allSatisfy { !$0.trashed })
+
+        let result = await env.engine.cleanUp(plan, preview: bob)
+        XCTAssertEqual(result.state, .completed, "\(result.facts.map(\.summary)) \(result.facts.map(\.verification))")
+        let facts = try XCTUnwrap(result.facts.last)
+        XCTAssertEqual(facts.receiptKind, .registryDocument)
+        XCTAssertEqual(facts.receiptID, "CLN-TEST-1")
+        XCTAssertEqual(facts.completed, 1)
+        XCTAssertEqual(facts.requested, 1)
+        XCTAssertEqual(facts.verificationPassed, true)
+        let after = try await env.engine.cleanupPlan(nil)
+        XCTAssertEqual(after.removable, 1, "carol's copy, outside the selection, was not touched")
+    }
+
+    /// Recipe 4: a backup is written and verified, restored into an isolated empty profile and its
+    /// counts reconciled with the inventory; a damaged backup is never a completed check.
+    func testRecipe4_backUpAndRestoreCheck_countsReconciledInAnIsolatedProfile() async throws {
+        let env = try await makeEnv()
+        let parent = env.root.appendingPathComponent("backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let result = await env.engine.backUpAndCheck(parent: parent)
+        XCTAssertEqual(result.state, .completed, "\(result.facts.map(\.summary)) \(result.facts.map(\.verification)) \(result.facts.map(\.skipped))")
+        let backup = result.facts[0]
+        let restore = result.facts[1]
+        XCTAssertEqual(backup.receiptKind, .backupInventory)
+        XCTAssertEqual(backup.completed, 6, "emails in the inventory")
+        XCTAssertEqual(backup.verificationPassed, true)
+        XCTAssertGreaterThan(backup.hashesRecorded ?? 0, 0)
+        XCTAssertEqual(restore.receiptKind, .restoreInventory)
+        XCTAssertEqual(restore.completed, 6)
+        XCTAssertEqual(restore.requested, 6)
+        XCTAssertTrue(restore.skipped.isEmpty, "\(restore.skipped)")
+        let scratch = try FileManager.default.contentsOfDirectory(atPath: env.root.appendingPathComponent("scratch").path)
+        XCTAssertTrue(scratch.isEmpty, "the isolated profile is removed after the check")
+        // Damage the backup: the check names it and does not complete.
+        let folder = URL(fileURLWithPath: try XCTUnwrap(backup.destination))
+        try Data("tampered".utf8).write(to: folder.appendingPathComponent(ArchiveBackup.databaseName))
+        let damaged = await env.engine.checkBackup(folder)
+        XCTAssertNotEqual(damaged.state, .completed)
+        XCTAssertTrue(damaged.facts[0].skipped.contains { $0.contains(ArchiveBackup.databaseName) }, "\(damaged.facts[0].skipped)")
+        var expected = ArchiveBackupInventory.Counts()
+        expected.emails = 3
+        var restored = ArchiveBackupInventory.Counts()
+        restored.emails = 2
+        XCTAssertEqual(PracticalRecipeEngine.differences(expected: expected, restored: restored), ["emails: inventory 3, restored 2"])
+    }
+
+    /// Recipe 5: the conditions become a saved deterministic search under the collection's name;
+    /// the preview counts the matches; the handover export is verified.
+    func testRecipe5_collectAndHandOver_savedSearchPreviewAndVerifiedExport() async throws {
+        let env = try await makeEnv()
+        let conditions = CollectionConditions(sender: "alice", fromDay: "2025-03-01", toDay: "2025-03-31", words: "", folderID: nil)
+        let spec = conditions.spec()
+        XCTAssertTrue(spec.isValid)
+        let preview = try await env.engine.preview(spec: spec, scopeName: "Acme March")
+        XCTAssertEqual(preview.matches, 1)
+        let out = env.root.appendingPathComponent("handover", isDirectory: true)
+        let result = await env.engine.collectAndHandOver(conditions, name: "Acme March", format: .emlFolder, destination: out)
+        XCTAssertEqual(result.state, .completed, "\(result.facts.map(\.summary)) \(result.facts.map(\.verification))")
+        XCTAssertEqual(result.recipe, .collectAndHandOver)
+        XCTAssertEqual(result.facts[1].completed, 1)
+        XCTAssertEqual(result.facts[1].verificationPassed, true)
+        let saved = try XCTUnwrap(env.saved.searches.first { $0.name == "Acme March" })
+        XCTAssertEqual(saved.spec, spec, "the saved search is the deterministic spec")
+        XCTAssertFalse(result.notes.isEmpty)
+    }
+
+    /// A recipe never completes from a cancelled (or unverified) job.
+    func testRecipeNeverCompletesFromACancelledJob() async throws {
+        let env = try await makeEnv()
+        let preview = try await env.engine.preview(spec: aliceSpec, scopeName: "All mail")
+        let out = env.root.appendingPathComponent("cancelled", isDirectory: true)
+        let engine = env.engine
+        let task = Task { @MainActor in await engine.findAndExport(preview, format: .emlFolder, destination: out) }
+        task.cancel()
+        let result = await task.value
+        XCTAssertEqual(result.state, .cancelled)
+        XCTAssertFalse(result.isCompleted)
+        XCTAssertEqual(result.facts.last?.outcome, .cancelled)
+        let root = env.root
+        let backup = Task { @MainActor in await engine.backUpAndCheck(parent: root) }
+        backup.cancel()
+        let backupResult = await backup.value
+        XCTAssertEqual(backupResult.state, .cancelled)
+        // The state rule: success with a failed or missing verification is not "Completed".
+        var ok = RecipeResultFacts(report: .init(kind: .export, outcome: .succeeded, receipt: .init(kind: .exportReceipt, id: "x"),
+                                                 summary: "", reportedAt: Date()), outcome: .succeeded)
+        XCTAssertEqual(PracticalRecipeResult.state(of: [ok]), .partial, "no verification ran")
+        ok.verificationPassed = false
+        XCTAssertEqual(PracticalRecipeResult.state(of: [ok]), .needsAttention)
+        ok.verificationPassed = true
+        XCTAssertEqual(PracticalRecipeResult.state(of: [ok]), .completed)
+        ok.outcome = .unverifiable
+        XCTAssertNotEqual(PracticalRecipeResult.state(of: [ok]), .completed)
+        // No plan to check: nothing runs (fail closed).
+        let noPlan = PracticalRecipeEngine(env: environment(root: env.root.appendingPathComponent("noplan"), store: env.store, archive: env.archive,
+                                                            saved: env.saved, defaults: env.defaults, policy: nil))
+        let refused = await noPlan.findAndExport(preview, format: .emlFolder, destination: env.root.appendingPathComponent("x"))
+        XCTAssertEqual(refused.state, .failed)
+    }
+
+    /// REC-05: the export and duplicate tools opened from a recipe step work on the run's frozen
+    /// selection (spec + store revision), not on the list on screen.
+    func testFrozenScopeIsHonouredByTheExportAndDuplicateTools() async throws {
+        let env = try await makeEnv()
+        let bound = try await env.archive.selectionSnapshotBound()
+        let selection = RecipeRunContext.Selection(revision: 1, spec: aliceSpec, matchCount: 2, frozenAt: Date(), storeRevision: bound)
+        var context = RecipeRunContext.capture(archiveDirectory: env.root, operations: [], origin: .startedWithRun)
+        context.selection = selection
+        let ticket = RecipeJobTicket(jobID: UUID(), wf: "WF-P-1", seq: 3, kind: .export, context: context, issuedAt: Date())
+        let toolScope = ArchiveSelectionScope.query(.all, exclusions: [])
+        let scope = RecipeFrozenScope.exportScope(toolScope, ticket: ticket)
+        XCTAssertNotEqual(scope, toolScope)
+        try await insert(env, [Self.plain(20, from: "alice@acme.com", subject: "After", day: "20")])
+        let frozenCount = try await env.archive.count(scope: scope)
+        XCTAssertEqual(frozenCount, 2, "mail imported after the search is outside the frozen selection")
+        XCTAssertEqual(RecipeFrozenScope.exportScope(toolScope, ticket: nil), toolScope, "no recipe → the tool's own scope")
+        var dedupeTicket = ticket
+        dedupeTicket.kind = .dedupe
+        XCTAssertEqual(RecipeFrozenScope.exportScope(toolScope, ticket: dedupeTicket), toolScope)
+        // Duplicate groups restricted to the selection.
+        let groups = try await env.store.messageIDDuplicateGroups()
+        XCTAssertEqual(groups.count, 2)
+        let bobSelection = RecipeRunContext.Selection(revision: 1, spec: SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "bob")])]),
+                                                      matchCount: nil, frozenAt: Date(), storeRevision: bound)
+        let bobQuery = try XCTUnwrap(RecipeFrozenScope.query(bobSelection))
+        let restricted = try await RecipeFrozenScope.restrict(groups: groups, to: bobQuery, archive: env.archive)
+        XCTAssertEqual(restricted.count, 1)
+        XCTAssertNil(RecipeFrozenScope.query(nil))
+        // The search's store revision travels with its report into the run's selection.
+        let report = RecipeJobReport(kind: .search, outcome: .succeeded, receipt: .init(kind: .measurement, id: "2"), summary: "2",
+                                     count: 2, spec: aliceSpec, reportedAt: Date(), storeRevision: bound)
+        let decoded = try JSONDecoder().decode(RecipeJobReport.self, from: JSONEncoder().encode(report))
+        XCTAssertEqual(decoded.storeRevision, bound)
+    }
+
+    /// REC-05 in the guided runner: a step's job result is read back into facts on reconcile, and the
+    /// step's own fields ("Matches found", "Saved to", "Verified readable") are filled from them.
+    func testREC05_workflowStepFactsAndFieldsComeFromTheReceipt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("REC05-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let exportStore = ExportReceiptStore(directory: root.appendingPathComponent("exports"))
+        let ledger = RecipeJobLedger(directory: root.appendingPathComponent("jobs"))
+        let fields = [WorkflowField(key: "found", label: "Matches found", kind: .number, help: "", required: true),
+                      WorkflowField(key: "destination", label: "Saved to", kind: .text, help: ""),
+                      WorkflowField(key: "verified", label: "Verified readable", kind: .bool, help: "")]
+        let ops = [WorkflowOperation(seq: 1, key: "export", title: "Export", hint: "", postsDocType: .export, launches: .emailInbox, fields: fields)]
+        let verifier = PersistedReceiptVerifier(exportStore: exportStore,
+                                                importStore: ImportReceiptStore(directory: root.appendingPathComponent("imports")),
+                                                documentExists: { _ in false })
+        let run = try RecipeRunCoordinator(
+            wf: "WF-R5-1", defID: "t", operations: ops, store: RecipeRunFileStore(directory: root.appendingPathComponent("runs")),
+            ledger: ledger, verifier: verifier, isNewRun: true, legacyConfirmed: [],
+            captureContext: { RecipeRunContext.capture(archiveDirectory: root, operations: ops, origin: $0) })
+        _ = try run.beginJob(seq: 1)
+        var receipt = ExportReceipt(title: "EML export", destination: "/out/case", isFolder: true, requested: 50, written: 48,
+                                    outcome: .complete, startedAt: Date(), completedAt: Date(), checked: 48, excluded: 2)
+        receipt.verificationLine = "rehash checked: 48 of 48 files match"
+        receipt.skippedReasons = ["2 withheld: content not decoded at import"]
+        let url = try exportStore.save(receipt)
+        RecipeJobBroker(ledger: ledger).reportExport(receipt, receiptURL: url)
+        _ = try await run.reconcile()
+        let facts = try XCTUnwrap(run.record.step(1)?.facts, "the step keeps the receipt's facts")
+        XCTAssertEqual(facts.completed, 48)
+        XCTAssertEqual(facts.requested, 50)
+        XCTAssertEqual(facts.destination, "/out/case")
+        XCTAssertEqual(facts.verification, "rehash checked: 48 of 48 files match")
+        XCTAssertEqual(facts.skipped, ["2 withheld: content not decoded at import"])
+        XCTAssertEqual(facts.receiptPath, url.path)
+        // Survives a restart (the run record is re-read from disk).
+        let reread = try RecipeRunFileStore(directory: root.appendingPathComponent("runs")).load(wf: "WF-R5-1")
+        XCTAssertEqual(reread?.step(1)?.facts, facts)
+        var values = facts.fieldValues(for: fields)
+        XCTAssertEqual(values["found"], "48")
+        XCTAssertEqual(values["destination"], "/out/case")
+        XCTAssertNil(values["verified"], "no pass/fail was measured, so nothing is ticked")
+        var passed = facts
+        passed.verificationPassed = true
+        values = passed.fieldValues(for: fields)
+        XCTAssertEqual(values["verified"], "Yes")
+        XCTAssertTrue(facts.documentFields.contains { $0.value == "rehash checked: 48 of 48 files match" })
+    }
+
+    /// SEARCH-04: every template produces a valid, non-empty SearchSpec that survives the
+    /// transport and runs against the archive; REC-06: at most three decisions; Free entitlement.
+    func testTemplatesAreValidSpecs_recipesNeedAtMostThreeDecisions_freeEntitlement() async throws {
+        let env = try await makeEnv()
+        let values: [SearchQueryTemplate.Parameter: String] = [.keyword: "invoice", .sender: "alice", .fromDay: "2025-03-01",
+                                                               .toDay: "2025-04-30", .phrase: "project meeting", .fileType: "PDF"]
+        XCTAssertGreaterThanOrEqual(SearchQueryTemplates.all.count, 3)
+        for template in SearchQueryTemplates.all {
+            let spec = template.spec(values, timeZone: "UTC")
+            XCTAssertFalse(spec.isEmpty, template.id)
+            XCTAssertTrue(spec.isValid, "\(template.id): \(spec.problems())")
+            XCTAssertEqual(try SearchSpecTransport.decode(SearchSpecTransport.encode(spec)), spec, template.id)
+            var q = EmailQuery.all
+            q.spec = spec
+            _ = try await env.archive.count(query: q)
+        }
+        var q = EmailQuery.all
+        q.spec = SearchQueryTemplates.senderInDateRange.spec(values, timeZone: "UTC")
+        let aliceInRange = try await env.archive.count(query: q)
+        XCTAssertEqual(aliceInRange, 2)
+        XCTAssertTrue(SearchQueryTemplates.invoicesWithPDF.spec([:]).groups[0].attachmentGroups.contains { $0.type == "PDF" })
+        // Empty parameters fall back to defaults, never to an empty condition.
+        XCTAssertFalse(SearchQueryTemplates.filesOfType.spec([:]).isEmpty)
+
+        for kind in PracticalRecipeKind.allCases {
+            XCTAssertLessThanOrEqual(kind.decisions.count, 3, kind.rawValue)
+            XCTAssertFalse(kind.jobs.isEmpty)
+        }
+        let free = AccessPolicy(state: .free)
+        XCTAssertEqual(PracticalRecipeKind.allCases.filter { $0.isEntitled(free) },
+                       [.findAndExport, .saveAttachments, .backUpAndRestore, .collectAndHandOver])
+        XCTAssertNotNil(PracticalRecipeKind.findAndExport.limitNote(free), "Free's export limit is stated")
+        let pro = AccessPolicy(state: .active(.professional))
+        XCTAssertTrue(PracticalRecipeKind.allCases.allSatisfy { $0.isEntitled(pro) })
+        XCTAssertNil(PracticalRecipeKind.findAndExport.limitNote(pro))
+    }
+}

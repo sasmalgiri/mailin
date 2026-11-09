@@ -564,6 +564,7 @@ struct WorkflowRunnerView: View {
                 Label(String(localized: "Measured: \(summary)"), systemImage: "checkmark.seal")
                     .font(Typography.caption1).foregroundColor(.green)
                     .fixedSize(horizontal: false, vertical: true)
+                if let facts = step?.facts { RecipeResultFactsView(facts: facts) }
             case .partial?:
                 Label(String(localized: "The job finished partly: \(summary). Run it again from Open tool, or review its receipt."),
                       systemImage: "exclamationmark.circle")
@@ -1327,7 +1328,10 @@ struct WorkflowRunnerView: View {
         }
         completing.insert(op.seq)
         defer { completing.remove(op.seq) }
-        let vals = savedValues[op.seq] ?? [:]
+        var vals = savedValues[op.seq] ?? [:]
+        // REC-05: the receipt's values, never typed proof.
+        for (k, v) in receiptValues(op) { vals[k] = v }
+        savedValues[op.seq] = vals
         let note = (notes[op.seq] ?? "").trimmingCharacters(in: .whitespaces)
         var extra: [CapturedDocument.Field] = []
         for r in refs(op.seq) {
@@ -1342,6 +1346,7 @@ struct WorkflowRunnerView: View {
             extra.append(.init(key: "Measured result", value: summary))
             if let id = step?.advancedJobID { extra.append(.init(key: "Job", value: id.uuidString)) }
             if let ref = step?.receipt, !ref.id.isEmpty { extra.append(.init(key: "Receipt", value: ref.id)) }
+            if let facts = step?.facts { extra.append(contentsOf: facts.documentFields) }
         case .attested?:
             let a = step?.attestation
             result = "User attestation\(signedOff ? " (signed off)" : ""): \(a?.statement ?? "done")"
@@ -1383,6 +1388,13 @@ struct WorkflowRunnerView: View {
         }
     }
 
+    /// REC-05: the step's fields as the job's persisted receipt states them
+    /// (empty unless the step's job succeeded and its receipt was read).
+    private func receiptValues(_ op: WorkflowOperation) -> [String: String] {
+        guard let step = run?.record.step(op.seq), step.evidence == .measured, let facts = step.facts else { return [:] }
+        return facts.fieldValues(for: op.fields)
+    }
+
     /// Expand exactly one step, prefill it, and scroll it into view.
     private func expandStep(_ op: WorkflowOperation) {
         prefillDerived(op)
@@ -1399,6 +1411,9 @@ struct WorkflowRunnerView: View {
         var filled: Set<String> = []
         for (k, v) in FieldDerivation.derive(defID: definition.defID, opKey: op.key, ctx: derivation)
         where (d[k] ?? "").isEmpty { d[k] = v; filled.insert(k) }
+        // REC-05: a measured step's counts, destination and verification come
+        // from the job's receipt — they replace anything typed.
+        for (k, v) in receiptValues(op) where d[k] != v { d[k] = v; filled.insert(k) }
         // Seed date/date-range fields so the calendar opens on a real date.
         let today = Self.dayFmt.string(from: Date())
         for f in op.fields where (d[f.key] ?? "").isEmpty {
