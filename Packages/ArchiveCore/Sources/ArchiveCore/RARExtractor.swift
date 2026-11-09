@@ -162,6 +162,10 @@ extension RARReader {
                                       maxOutputBytes: maxOutputBytes, availableDiskBytes: availableDiskBytes)
                 return
             }
+            if member.format == .rar4, RARReader.legacyAlgorithmVersions.contains(member.algorithmVersion) {
+                try extractLegacy(member, to: destination, maxOutputBytes: maxOutputBytes, availableDiskBytes: availableDiskBytes)
+                return
+            }
             try decode(member, with: decoder, to: destination, maxOutputBytes: maxOutputBytes, availableDiskBytes: availableDiskBytes)
             // A merged member's own header CRC is the whole file's only in its last part; libarchive checked it.
         }
@@ -190,6 +194,45 @@ extension RARReader {
             }
             succeeded = true
             return crc
+        }
+
+        /// A RAR 1.5 / 2.0 compressed member, decoded by mailin's own decoder
+        /// (RARLegacyDecoder.swift) straight from its volume; size and CRC-32 checked.
+        private func extractLegacy(_ member: Member, to destination: URL, maxOutputBytes: Int64?, availableDiskBytes: Int64?) throws {
+            let available = availableDiskBytes ?? ZIPArchiveReader.freeSpace(at: destination.deletingLastPathComponent())
+            if let available, available < member.unpackedSize + diskMarginBytes {
+                throw ReadError.insufficientDisk(member: member.name, needed: member.unpackedSize + diskMarginBytes, available: available)
+            }
+            let volume = try source(forVolume: member.firstVolume)
+            guard member.dataOffset >= 0, member.packedSize >= 0, member.dataOffset <= volume.length - member.packedSize else {
+                throw ReadError.truncated("\(member.name): data")
+            }
+            FileManager.default.createFile(atPath: destination.path, contents: nil)
+            let out = try FileHandle(forWritingTo: destination)
+            var succeeded = false
+            defer {
+                try? out.close()
+                if !succeeded { try? FileManager.default.removeItem(at: destination) }
+            }
+            var crc = ZIPArchiveReader.CRC32()
+            var written: Int64 = 0
+            do {
+                try RARReader.decodeLegacy(version: member.algorithmVersion, source: volume, offset: member.dataOffset,
+                                           packedSize: member.packedSize, unpackedSize: member.unpackedSize) { chunk in
+                    written += Int64(chunk.count)
+                    if let maxOutputBytes, written > maxOutputBytes { throw ReadError.budgetExceeded(member: member.name, limit: maxOutputBytes) }
+                    let data = Data(chunk)
+                    crc.update(data)
+                    try out.write(contentsOf: data)
+                }
+            } catch let error as LegacyDecodeError {
+                throw ReadError.decodeFailed(member: member.name, detail: error.description)
+            }
+            if written != member.unpackedSize {
+                throw ReadError.sizeMismatch(member: member.name, declared: member.unpackedSize, actual: written)
+            }
+            if let expected = member.crc32, crc.value != expected { throw ReadError.crcMismatch(member: member.name) }
+            succeeded = true
         }
 
         /// R6: an encrypted member (or one after an encrypted member of its

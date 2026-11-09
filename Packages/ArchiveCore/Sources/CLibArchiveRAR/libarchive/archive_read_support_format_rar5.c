@@ -236,6 +236,10 @@ struct comp_state {
 	int flags;                   /* Uncompression flags. */
 	int method;                  /* Uncompression algorithm method. */
 	int version;                 /* Uncompression algorithm version. */
+	/* mailin (rar7.patch): RAR 7.0 algorithm — 80 distance codes,
+	 * distances over 4 GiB (technote: compression version 1 without
+	 * the RAR 5.0-compatible bit 0x100000). */
+	int extra_dist;
 	ssize_t window_size;         /* Size of window_buf. */
 	uint8_t* window_buf;         /* Circular buffer used during
 	                                decompression. */
@@ -264,12 +268,13 @@ struct comp_state {
 #define HUFF_NC 306
 	struct decode_table ld;      /* literals */
 #define HUFF_DC 64
+#define HUFF_DCX 80                  /* mailin: RAR 7.0 distance codes */
 	struct decode_table dd;      /* distances */
 #define HUFF_LDC 16
 	struct decode_table ldd;     /* lower bits of distances */
 #define HUFF_RC 44
 	struct decode_table rd;      /* repeating distances */
-#define HUFF_TABLE_SIZE (HUFF_NC + HUFF_DC + HUFF_RC + HUFF_LDC)
+#define HUFF_TABLE_SIZE (HUFF_NC + HUFF_DCX + HUFF_RC + HUFF_LDC)
 
 	/* Circular deque for storing filters. */
 	struct cdeque filters;
@@ -277,7 +282,7 @@ struct comp_state {
 	ssize_t last_block_length;   /* Used for sanity checking. */
 
 	/* Distance cache used during lzss uncompression. */
-	int dist_cache[4];
+	int64_t dist_cache[4];       /* mailin: 64-bit for RAR 7.0 */
 
 	/* Data buffer stack. */
 	struct data_ready dready[2];
@@ -543,7 +548,8 @@ static void circular_memcpy(uint8_t* dst, uint8_t* window, const ssize_t mask,
 	}
 }
 
-static uint32_t read_filter_data(struct rar5 *rar5, uint32_t offset) {
+static uint32_t read_filter_data(struct rar5 *rar5, uint64_t offset) {
+	/* mailin (rar7.patch): 64-bit window position (windows over 4 GiB). */
 	uint8_t linear_buf[4];
 	circular_memcpy(linear_buf, rar5->cstate.window_buf,
 	    rar5->cstate.window_mask, offset, offset + 4);
@@ -623,7 +629,7 @@ static int run_e8e9_filter(struct rar5 *rar5, struct filter_info* flt,
 			uint32_t offset = (i + flt->block_start) % file_size;
 
 			addr = read_filter_data(rar5,
-			    (uint32_t)(rar5->cstate.solid_offset +
+			    (uint64_t)(rar5->cstate.solid_offset +
 			    flt->block_start + i) & rar5->cstate.window_mask);
 
 			if(addr & 0x80000000) {
@@ -664,7 +670,7 @@ static int run_arm_filter(struct rar5 *rar5, struct filter_info* flt) {
 			/* 0xEB = ARM's BL (branch + link) instruction. */
 			offset = read_filter_data(rar5,
 			    (rar5->cstate.solid_offset + flt->block_start + i) &
-			     (uint32_t)rar5->cstate.window_mask) & 0x00ffffff;
+			     (uint64_t)rar5->cstate.window_mask) & 0x00ffffff;
 
 			offset -= (uint32_t) ((i + flt->block_start) / 4);
 			offset = (offset & 0x00ffffff) | 0xeb000000;
@@ -837,8 +843,8 @@ static int apply_filters(struct archive_read* a) {
 	return ARCHIVE_OK;
 }
 
-static void dist_cache_push(struct rar5 *rar5, int value) {
-	int* q = rar5->cstate.dist_cache;
+static void dist_cache_push(struct rar5 *rar5, int64_t value) {
+	int64_t* q = rar5->cstate.dist_cache;
 
 	q[3] = q[2];
 	q[2] = q[1];
@@ -846,9 +852,10 @@ static void dist_cache_push(struct rar5 *rar5, int value) {
 	q[0] = value;
 }
 
-static int dist_cache_touch(struct rar5 *rar5, int idx) {
-	int* q = rar5->cstate.dist_cache;
-	int i, dist = q[idx];
+static int64_t dist_cache_touch(struct rar5 *rar5, int idx) {
+	int64_t* q = rar5->cstate.dist_cache;
+	int i;
+	int64_t dist = q[idx];
 
 	for(i = idx; i > 0; i--)
 		q[i] = q[i - 1];
@@ -1952,12 +1959,61 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 	c_method = (int) (compression_info >> 7) & 0x7;
 	c_version = (int) (compression_info & 0x3f);
 
-	/* RAR5 seems to limit the dictionary size to 64MB. */
-	window_size = (rar5->file.dir > 0) ?
-		0 :
-		g_unpack_window_size << ((compression_info >> 10) & 15);
+	/* mailin (rar7.patch): the technote's compression information.
+	 * Version 0 = RAR 5.0, 1 = RAR 7.0 (5-bit dictionary exponent, a
+	 * fraction in 1/32 steps, bit 0x100000 = RAR 5.0 algorithm under a
+	 * version 1 header); anything else is refused. The window is not the
+	 * declared dictionary but the smallest power of two that holds every
+	 * byte this stream can have produced by the end of this member (the
+	 * whole stream so far in a solid archive), at least 8 MiB (twice the
+	 * largest filter block) and at most the declared dictionary rounded up
+	 * to a power of two: a distance can never reach further back than
+	 * that, so nothing is wrapped and nothing is lost, while a 4 GiB
+	 * dictionary on a 200 KiB member needs 8 MiB, not 4 GiB. */
+	if(c_version > 1 && rar5->file.dir == 0) {
+		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+		    "RAR compression algorithm version %d is not supported",
+		    c_version);
+		return ARCHIVE_FATAL;
+	}
+	if(rar5->file.dir > 0) {
+		window_size = 0;
+	} else {
+		uint64_t declared, declared_pow2, need, w;
+		unsigned exponent = (unsigned) ((compression_info >> 10) &
+		    (c_version == 0 ? 0x0f : 0x1f));
+		if(exponent > 23) {
+			archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+			    "Declared dictionary size is not supported");
+			return ARCHIVE_FATAL;
+		}
+		declared = (uint64_t) g_unpack_window_size << exponent;
+		if(c_version == 1)
+			declared += declared / 32 *
+			    ((compression_info >> 15) & 0x1f);
+		declared_pow2 = g_unpack_window_size;
+		while(declared_pow2 < declared)
+			declared_pow2 <<= 1;
+		need = unpacked_size;
+		if(rar5->main.solid) {
+			/* Positions in a solid archive count from the stream's
+			 * start (solid_offset already holds the members before). */
+			need += (uint64_t) rar5->cstate.solid_offset;
+		}
+		w = 8 * 1024 * 1024;
+		while(w < need && w < declared_pow2)
+			w <<= 1;
+		if(w > declared_pow2)
+			w = declared_pow2;
+		if(rar5->main.solid &&
+		    (uint64_t) rar5->cstate.window_size > w)
+			w = (uint64_t) rar5->cstate.window_size;
+		window_size = w;
+	}
 	rar5->cstate.method = c_method;
 	rar5->cstate.version = c_version + 50;
+	rar5->cstate.extra_dist = c_version == 1 &&
+	    (compression_info & 0x100000) == 0;
 	rar5->file.solid = (compression_info & SOLID) > 0;
 
 	/* Archives which declare solid files without initializing the window
@@ -1973,8 +2029,10 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 	}
 
 	/* Check if window_size is a sane value. Also, if the file is not
-	 * declared as a directory, disallow window_size == 0. */
-	if(window_size > (64 * 1024 * 1024) ||
+	 * declared as a directory, disallow window_size == 0.
+	 * mailin (rar7.patch): the 64 MiB ceiling is gone — the window is
+	 * sized above; it must fit ssize_t. */
+	if(window_size > (uint64_t) SSIZE_MAX ||
 	    (rar5->file.dir == 0 && window_size == 0))
 	{
 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
@@ -1982,19 +2040,10 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 		return ARCHIVE_FATAL;
 	}
 
-	if(rar5->file.solid > 0) {
-		/* Re-check if current window size is the same as previous
-		 * window size (for solid files only). */
-		if(rar5->file.solid_window_size > 0 &&
-		    rar5->file.solid_window_size != (ssize_t) window_size)
-		{
-			archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
-			    "Window size for this solid file doesn't match "
-			    "the window size used in previous solid file");
-			return ARCHIVE_FATAL;
-		}
-	}
-	else
+	/* mailin (rar7.patch): a solid stream's window grows with the stream
+	 * (never shrinks), so the "same window size" check is replaced by the
+	 * relocation below. */
+	if(rar5->file.solid == 0)
 		rar5->cstate.data_encrypted = 0; /* Reset for new buffer */
 
 	if(rar5->cstate.window_size < (ssize_t) window_size &&
@@ -2007,11 +2056,31 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 		 * realloc. */
 		clear_data_ready_stack(rar5);
 
-		/* If window_buf has been allocated before, reallocate it, so
-		 * that its size will match new window_size. */
+		const uint64_t old_size = (uint64_t) rar5->cstate.window_size;
+		const uint64_t end = (uint64_t) rar5->cstate.solid_offset +
+		    (uint64_t) rar5->cstate.write_ptr;
+		uint8_t* new_window_buf;
 
-		uint8_t* new_window_buf =
-			realloc(rar5->cstate.window_buf, (size_t) window_size);
+		/* calloc: the pages beyond what is copied stay untouched. */
+		new_window_buf = calloc(1, (size_t) window_size);
+		if(new_window_buf) {
+			if(!rar5->main.solid || end <= old_size) {
+				/* Nothing has wrapped: every byte keeps its
+				 * index. */
+				memcpy(new_window_buf, rar5->cstate.window_buf,
+				    (size_t) old_size);
+			} else {
+				/* The old window wrapped: put its last
+				 * old_size bytes where the larger mask
+				 * expects them. */
+				uint64_t pos;
+				for(pos = end - old_size; pos < end; pos++)
+					new_window_buf[pos & (window_size - 1)] =
+					    rar5->cstate.window_buf[
+					    pos & (old_size - 1)];
+			}
+			free(rar5->cstate.window_buf);
+		}
 
 		if(!new_window_buf) {
 			archive_set_error(&a->archive, ARCHIVE_ERRNO_PROGRAMMER,
@@ -2023,8 +2092,7 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 		rar5->cstate.window_buf = new_window_buf;
 	}
 
-	/* Values up to 64M should fit into ssize_t on every
-	 * architecture. */
+	/* mailin: up to SSIZE_MAX (checked above). */
 	rar5->cstate.window_size = (ssize_t) window_size;
 
 	if(rar5->file.solid > 0 && rar5->file.solid_window_size == 0) {
@@ -2736,10 +2804,9 @@ static int init_unpack(struct rar5 *rar5) {
 		rar5->cstate.window_buf = calloc(1, rar5->cstate.window_size);
 		if(rar5->cstate.window_buf == NULL)
 			return ARCHIVE_FATAL;
-		rar5->cstate.filtered_buf = calloc(1,
-		    rar5->cstate.window_size);
-		if(rar5->cstate.filtered_buf == NULL)
-			return ARCHIVE_FATAL;
+		/* mailin (rar7.patch): no window-sized filtered_buf — run_filter
+		 * frees it and allocates the filter block's own size before
+		 * every use, so this copy only doubled the memory. */
 	}
 
 	clear_data_ready_stack(rar5);
@@ -2975,7 +3042,11 @@ static int parse_tables(struct archive_read* a, struct rar5 *rar5,
 		return ARCHIVE_FAILED;
 	}
 
-	for(i = 0; i < HUFF_TABLE_SIZE;) {
+	/* mailin (rar7.patch): RAR 7.0 has 80 distance codes, RAR 5.0 64. */
+	const int dist_codes = rar5->cstate.extra_dist ? HUFF_DCX : HUFF_DC;
+	const int table_size = HUFF_NC + dist_codes + HUFF_RC + HUFF_LDC;
+
+	for(i = 0; i < table_size;) {
 		uint16_t num;
 
 		ret = decode_number(a, &rar5->cstate.bd, p, &num);
@@ -3008,7 +3079,7 @@ static int parse_tables(struct archive_read* a, struct rar5 *rar5,
 			}
 
 			if(i > 0) {
-				while(n-- > 0 && i < HUFF_TABLE_SIZE) {
+				while(n-- > 0 && i < table_size) {
 					table[i] = table[i - 1];
 					i++;
 				}
@@ -3036,7 +3107,7 @@ static int parse_tables(struct archive_read* a, struct rar5 *rar5,
 				skip_bits(rar5, 7);
 			}
 
-			while(n-- > 0 && i < HUFF_TABLE_SIZE)
+			while(n-- > 0 && i < table_size)
 				table[i++] = 0;
 		}
 	}
@@ -3050,14 +3121,14 @@ static int parse_tables(struct archive_read* a, struct rar5 *rar5,
 
 	idx += HUFF_NC;
 
-	ret = create_decode_tables(&table[idx], &rar5->cstate.dd, HUFF_DC);
+	ret = create_decode_tables(&table[idx], &rar5->cstate.dd, dist_codes);
 	if(ret != ARCHIVE_OK) {
 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
 		    "Failed to create distance table");
 		return ARCHIVE_FAILED;
 	}
 
-	idx += HUFF_DC;
+	idx += dist_codes;
 
 	ret = create_decode_tables(&table[idx], &rar5->cstate.ldd, HUFF_LDC);
 	if(ret != ARCHIVE_OK) {
@@ -3283,7 +3354,7 @@ static int decode_code_length(struct archive_read* a, struct rar5 *rar5,
 	return length;
 }
 
-static int copy_string(struct archive_read* a, int len, int dist) {
+static int copy_string(struct archive_read* a, int len, int64_t dist) {
 	struct rar5 *rar5 = a->format->data;
 	const ssize_t cmask = rar5->cstate.window_mask;
 	const uint64_t write_ptr = rar5->cstate.write_ptr +
@@ -3387,8 +3458,9 @@ static int do_uncompress_block(struct archive_read* a, const uint8_t* p) {
 		} else if(num >= 262) {
 			uint16_t dist_slot;
 			int len = decode_code_length(a, rar5, p, num - 262),
-				dbits,
-				dist = 1;
+				dbits;
+			/* mailin (rar7.patch): 64-bit distances (RAR 7.0). */
+			int64_t dist = 1;
 
 			if(len == -1) {
 				archive_set_error(&a->archive,
@@ -3414,12 +3486,9 @@ static int do_uncompress_block(struct archive_read* a, const uint8_t* p) {
 			} else {
 				dbits = dist_slot / 2 - 1;
 
-				/* Cast to uint32_t will make sure the shift
-				 * left operation won't produce undefined
-				 * result. Then, the uint32_t type will
-				 * be implicitly casted to int. */
-				dist += (uint32_t) (2 |
-				    (dist_slot & 1)) << dbits;
+				/* mailin: slots 64-79 (RAR 7.0) reach dbits 31-38. */
+				dist += (int64_t) ((uint64_t) (2 |
+				    (dist_slot & 1)) << dbits);
 			}
 
 			if(dbits > 0) {
@@ -3427,7 +3496,25 @@ static int do_uncompress_block(struct archive_read* a, const uint8_t* p) {
 					uint32_t add = 0;
 					uint16_t low_dist;
 
-					if(dbits > 4) {
+					if(dbits > 36) {
+						/* mailin (rar7.patch): 33 or
+						 * 34 bits — 32, then the rest. */
+						uint16_t rest;
+						uint64_t wide;
+						if(ARCHIVE_OK != (ret = read_bits_32(
+						    a, rar5, p, &add)))
+							return ret;
+						skip_bits(rar5, 32);
+						if(ARCHIVE_OK != (ret = read_bits_16(
+						    a, rar5, p, &rest)))
+							return ret;
+						skip_bits(rar5, dbits - 36);
+						wide = ((uint64_t) add <<
+						    (dbits - 36)) |
+						    (uint64_t) (rest >>
+						    (16 - (dbits - 36)));
+						dist += (int64_t) (wide << 4);
+					} else if(dbits > 4) {
 						if(ARCHIVE_OK != (ret = read_bits_32(
 						    a, rar5, p, &add))) {
 							/* Return EOF if we
@@ -3453,7 +3540,7 @@ static int do_uncompress_block(struct archive_read* a, const uint8_t* p) {
 						return rar5->main.solid ? ARCHIVE_FATAL : ARCHIVE_FAILED;
 					}
 
-					if(dist >= INT_MAX - low_dist - 1) {
+					if(dist >= ((int64_t) 1 << 41) - low_dist - 1) {
 						/* This only happens in
 						 * invalid archives. */
 						archive_set_error(&a->archive,
@@ -3519,7 +3606,7 @@ static int do_uncompress_block(struct archive_read* a, const uint8_t* p) {
 		} else {
 			/* num < 262 */
 			const int idx = num - 258;
-			const int dist = dist_cache_touch(rar5, idx);
+			const int64_t dist = dist_cache_touch(rar5, idx);
 
 			uint16_t len_slot;
 			int len;
