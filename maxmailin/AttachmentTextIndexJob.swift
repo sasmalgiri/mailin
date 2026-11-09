@@ -98,7 +98,10 @@ final class AttachmentTextIndexJob {
     /// formula token, Excel number formats rendered as Excel shows them, IWA table
     /// cells with numbers and dates, RAR4 solid members, encrypted RAR / iWork '09 /
     /// ODF Argon2id unlockable — completed rows of those readers are re-read.
-    nonisolated static let extractorVersion = 11
+    /// 12 (2026-11-09): password-protected iWork 2013+ documents are locked and
+    /// open with Unlock (they were read as empty); RAR 7.0 and RAR 1.5/2.0
+    /// members decode — iwork and archive rows read before are re-read.
+    nonisolated static let extractorVersion = 12
 
     /// FIND-08: the readers whose output gains section boundaries at version 10.
     nonisolated static let boundaryExtractors = ["office", "odf", "iwork", "ole", "visio", "project", "archive", "zip",
@@ -725,8 +728,21 @@ final class AttachmentTextIndexJob {
             try coverage.remove(emailIDs: ids, keepingUnlocked: true)
             total += ids.count
         }
+        // Version 12: iWork rows (protected 2013+ files were read as empty) and
+        // archive rows (RAR 7.0, RAR 1.5/2.0 members were "not opened") are re-read.
+        try coverage.markKeptUnlocks(below: 12, extractors: Self.version12Extractors, note: note)
+        while !Task.isCancelled {
+            let ids = try coverage.emailIDs(extractors: Self.version12Extractors, below: 12, limit: 500, excludingKeptUnlocks: true)
+            if ids.isEmpty { break }
+            try await store.attachmentTextStateReset(emailIDs: ids)
+            try coverage.remove(emailIDs: ids, keepingUnlocked: true)
+            total += ids.count
+        }
         return total
     }
+
+    /// The readers whose output changed in extractor version 12.
+    nonisolated static let version12Extractors = ["iwork", "archive", "zip"]
 
     /// The readers whose output changed in extractor version 11 (release audit R6).
     nonisolated static let version11Extractors = ["office", "ole", "visio", "project", "onenote", "iwork", "odf", "archive", "zip"]
