@@ -788,7 +788,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
     ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
-    static let currentSchemaVersion = 25   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks; v24: contiguous chunks (R02); v25: attachment children
+    static let currentSchemaVersion = 26   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks; v24: contiguous chunks (R02); v25: attachment children; v26: connected mail (V4-03)
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1275,6 +1275,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 25;")
             }
             v = 25
+        }
+        if v == 25 {
+            // v26 (plan v4 V4-03): additive only — connected-mail accounts,
+            // remote folders, account-qualified provider identities, their
+            // memberships, sync checkpoints and capture receipts. No existing
+            // table or row changes. Snapshot first as for every upgrade (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV26(handle)
+                try exec(handle, "PRAGMA user_version = 26;")
+            }
+            v = 26
         }
     }
 
@@ -2529,7 +2540,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
         batchSize: Int,
         progress: (@Sendable (Int, Int) -> Void)?,
         progressCheckpoint: ImportProgressCheckpoint? = nil,
-        locators: [UUID: LocatorRecord] = [:]
+        locators: [UUID: LocatorRecord] = [:],
+        rawBlobs: [UUID: BlobReference] = [:],
+        beforeCommit: (OpaquePointer, BatchInsertResult) throws -> Void = { _, _ in }
     ) throws -> BatchInsertResult {
         let db = try ensureDB()
         let total = emails.count
@@ -2612,7 +2625,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                     sqlite3_bind_int64(insertEmail, 8, dateInt)
                     bindText(insertEmail, 9, String(email.plainBody.prefix(400)))
                     sqlite3_bind_int(insertEmail, 10, email.attachments.isEmpty ? 0 : 1)
-                    sqlite3_bind_int64(insertEmail, 11, Int64(email.rawSource.utf8.count))
+                    sqlite3_bind_int64(insertEmail, 11, rawBlobs[email.id]?.length ?? Int64(email.rawSource.utf8.count))
                     bindTextOrNull(insertEmail, 12, email.headers["In-Reply-To"])
                     bindTextOrNull(insertEmail, 13, email.headers["References"])
                     bindTextOrNull(insertEmail, 14, accountID)
@@ -2632,7 +2645,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         // `rawTier` has already written and fsynced the blob by
                         // the time this row is bound, so the reference can
                         // never outlive its bytes.
-                        let tier = try rawTier(for: email.rawSource)
+                        // V4-03: a connected capture has already published its
+                        // exact bytes to the blob tier (`ConnectedArchiveSink`);
+                        // the row references them instead of re-encoding a String.
+                        let tier = try rawBlobs[email.id].map { RawTier(inline: nil, digest: $0.digest, length: $0.length) }
+                            ?? rawTier(for: email.rawSource)
                         sqlite3_reset(insertBody); sqlite3_clear_bindings(insertBody)
                         bindText(insertBody, 1, idStr)
                         bindBlob(insertBody, 2, email.plainBody.data(using: .utf8))
@@ -2746,6 +2763,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 if let cp = progressCheckpoint {
                     try writeImportProgress(db, cp, messagesIngested: cp.firstOrdinal + processed + chunk.count)
                 }
+                // V4-03: the caller's own rows (connected-capture occurrence and
+                // item outcome) commit in the SAME transaction as the record.
+                try beforeCommit(db, result)
                 try exec(db, "COMMIT;")
             } catch {
                 try? exec(db, "ROLLBACK;")
