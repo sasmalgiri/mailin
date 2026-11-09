@@ -775,7 +775,10 @@ struct ParsedEmailListView: View {
 
                 if !model.savedSearches.isEmpty {
                     Menu {
-                        ForEach(model.savedSearches) { search in
+                        // SEARCH-02: a search saved with Advanced Search
+                        // conditions runs from the archive sidebar, where the
+                        // conditions apply; this box would run only its words.
+                        ForEach(model.savedSearches.filter { $0.spec?.isEmpty ?? true }) { search in
                             Button {
                                 model.searchText = search.query
                             } label: {

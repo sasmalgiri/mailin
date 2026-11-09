@@ -264,7 +264,10 @@ final class ArchiveDataService {
     func unresolvedCount(query: EmailQuery) async throws -> Int {
         guard let repo = repository as? EmailStoreRepository,
               let sqlite = repo.store as? SQLiteEmailStore else { return 0 }
-        return try await sqlite.specUnresolvedCount(query)
+        // SEARCH-01: in the tier's scope, like the rows it sits next to — a
+        // Free list of the newest 500 must not count "may still match" rows
+        // from outside them.
+        return try await sqlite.specUnresolvedCount(scoped(query))
     }
 
     /// FOLD-02: every folder of every source with its direct message count.

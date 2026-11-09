@@ -61,8 +61,18 @@ struct SearchCoverageSnapshot: Equatable, Sendable {
         guard let chunks else { return 0 }
         return max(0, chunks.attachments - chunks.attachmentsEvaluable)
     }
+    /// SEARCH-03: files INSIDE attachments whose text was not searched
+    /// (locked, not read, failed, partly read), or "not known" when their
+    /// states could not be read. Nil when every one was read (or none recorded).
+    var childNotice: String? {
+        guard let attachments else { return nil }
+        return AttachmentTextIndexJob.childrenNotice(attachments.childCounts, scope: attachments.childScope)
+    }
     /// Anything the line should say while a search is on screen.
-    var needsNotice: Bool { isUnavailable || isPartial || (partiallyIndexedMessages ?? 0) > 0 || chunkPendingBodies > 0 || attachmentsNotEvaluable > 0 }
+    var needsNotice: Bool {
+        isUnavailable || isPartial || (partiallyIndexedMessages ?? 0) > 0 || chunkPendingBodies > 0 || attachmentsNotEvaluable > 0
+            || childNotice != nil
+    }
 
     var budgetLabel: String {
         ByteCountFormatter.string(fromByteCount: Int64(FTSSearchIndex.indexedTextBudgetBytes), countStyle: .file)
@@ -87,6 +97,7 @@ struct SearchCoverageSnapshot: Equatable, Sendable {
                     if let n = attachments.counts[.unsupported], n > 0 { reasons.append(String(localized: "\(n) unsupported")) }
                     if let n = attachments.counts[.locked], n > 0 { reasons.append(String(localized: "\(n) locked")) }
                     if let n = attachments.counts[.failed], n > 0 { reasons.append(String(localized: "\(n) failed")) }
+                    if let n = attachments.counts[.partial], n > 0 { reasons.append(String(localized: "\(n) partly read")) }
                     if !reasons.isEmpty { detail += " (" + reasons.joined(separator: ", ") + ")" }
                 }
                 parts.append(detail)
@@ -94,6 +105,8 @@ struct SearchCoverageSnapshot: Equatable, Sendable {
         } else if let partiallyIndexedMessages, partiallyIndexedMessages > 0, !isPartial {
             parts.append(String(localized: "Every message indexed; \(partiallyIndexedMessages.formatted()) very large messages only in their first \(budgetLabel)"))
         }
+        // SEARCH-03: the files inside attachments are part of what was searched.
+        if let childNotice { parts.append(childNotice) }
         if parts.isEmpty { return String(localized: "Index covers every message") }
         return parts.joined(separator: " · ")
     }
