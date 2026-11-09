@@ -51,9 +51,10 @@ final class RecipeJobBroker {
     @discardableResult
     func report(_ kind: RecipeJobKind, outcome: RecipeJobOutcome, receipt: RecipeReceiptRef,
                 summary: String, count: Int? = nil, spec: SearchSpec? = nil,
-                destination: String? = nil, now: Date = Date()) -> UUID? {
+                destination: String? = nil, storeRevision: Int64? = nil, now: Date = Date()) -> UUID? {
         let report = RecipeJobReport(kind: kind, outcome: outcome, receipt: receipt, summary: summary,
-                                     count: count, spec: spec, destination: destination, reportedAt: now)
+                                     count: count, spec: spec, destination: destination, reportedAt: now,
+                                     storeRevision: storeRevision)
         // Open runners reconcile on every report: one that did not bind (the
         // job was already reported) may still have changed its receipt on
         // disk — an export's later delivery — which they re-read.
@@ -158,6 +159,35 @@ struct PersistedReceiptVerifier: RecipeReceiptVerifying {
         case .partial: return .partial
         case .failed: return .failed
         }
+    }
+
+    /// REC-05: the receipt read back into facts (export / import receipt
+    /// file, backup inventory, registry document); a measurement keeps the
+    /// app's own count.
+    func facts(_ report: RecipeJobReport, outcome: RecipeJobOutcome) async -> RecipeResultFacts {
+        let ref = report.receipt
+        switch ref.kind {
+        case .exportReceipt:
+            if let path = ref.path, let r = try? exportStore.load(URL(fileURLWithPath: path)), r.id.uuidString == ref.id {
+                return RecipeResultFacts(export: r, receiptPath: path, outcome: outcome)
+            }
+        case .importReceipt:
+            if let path = ref.path, let r = try? importStore.load(URL(fileURLWithPath: path)) {
+                return RecipeResultFacts(importReceipt: r, receiptPath: path, outcome: outcome)
+            }
+        case .backupInventory, .restoreInventory:
+            if let path = ref.path {
+                return RecipeResultFacts(backupFolder: URL(fileURLWithPath: path), restore: ref.kind == .restoreInventory, outcome: outcome)
+            }
+        case .registryDocument:
+            var facts = RecipeResultFacts(report: report, outcome: outcome)
+            facts.verification = await documentExists(ref.id)
+                ? "registry document \(ref.id) found" : "registry document \(ref.id) not found"
+            return facts
+        case .measurement, .none:
+            break
+        }
+        return RecipeResultFacts(report: report, outcome: outcome)
     }
 
     func verify(_ report: RecipeJobReport) async -> RecipeJobOutcome {

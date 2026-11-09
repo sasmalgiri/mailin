@@ -127,6 +127,11 @@ struct RecipeRunContext: Codable, Equatable, Sendable {
         var spec: SearchSpec?
         var matchCount: Int?
         var frozenAt: Date
+        /// REC-05: the archive's row bound when the search was measured, so
+        /// the export and duplicate tools work on the rows the search saw —
+        /// mail imported later is outside the selection. Nil for runs saved
+        /// before it (the spec alone is then the selection).
+        var storeRevision: Int64? = nil
     }
 
     struct Output: Codable, Equatable, Sendable {
@@ -188,6 +193,8 @@ struct RecipeJobReport: Codable, Equatable, Sendable {
     var spec: SearchSpec? = nil
     var destination: String? = nil
     var reportedAt: Date
+    /// REC-05: a search's row bound at the moment it was measured.
+    var storeRevision: Int64? = nil
 }
 
 struct RecipeJobTicket: Codable, Equatable, Sendable, Identifiable {
@@ -316,6 +323,10 @@ struct RecipeStepRecord: Codable, Equatable, Sendable {
     var docNumber: String? = nil
     /// Earlier jobs of this step (cancelled / failed runs that were retried).
     var previousJobIDs: [UUID] = []
+    /// REC-05: what the job's persisted receipt says — counts, source,
+    /// destination, hashes, skipped reasons, verification — read back from
+    /// the receipt, never typed. Optional so records saved before it decode.
+    var facts: RecipeResultFacts? = nil
 
     /// The step may be finalized: measured success, or an explicit attestation.
     var isEvidenced: Bool {
@@ -404,6 +415,14 @@ final class RecipeRunFileStore: RecipeRunStoring {
 /// alone: the receipt must exist and say so.
 protocol RecipeReceiptVerifying {
     func verify(_ report: RecipeJobReport) async -> RecipeJobOutcome
+    /// REC-05: the facts the persisted receipt holds (read back, not the callback).
+    func facts(_ report: RecipeJobReport, outcome: RecipeJobOutcome) async -> RecipeResultFacts
+}
+
+extension RecipeReceiptVerifying {
+    func facts(_ report: RecipeJobReport, outcome: RecipeJobOutcome) async -> RecipeResultFacts {
+        RecipeResultFacts(report: report, outcome: outcome)
+    }
 }
 
 // MARK: - State machine (REC-03)
@@ -558,22 +577,24 @@ final class RecipeRunCoordinator {
     @discardableResult
     func reconcile(now: Date = Date()) async throws -> [Int] {
         try reload()
-        var results: [Int: (RecipeJobReport, RecipeJobOutcome)] = [:]
+        var results: [Int: (RecipeJobReport, RecipeJobOutcome, RecipeResultFacts)] = [:]
         for s in record.steps {
             guard let id = s.jobID, let report = ledger.ticket(id)?.report else { continue }
             if s.advancedJobID == id { continue }
-            results[s.seq] = (report, await verifier.verify(report))
+            let outcome = await verifier.verify(report)
+            results[s.seq] = (report, outcome, await verifier.facts(report, outcome: outcome))
         }
         guard !results.isEmpty else { return [] }
         var advanced: [Int] = []
         try update({ r in
             for (seq, pair) in results {
-                let (report, outcome) = pair
+                let (report, outcome, facts) = pair
                 r.updateStep(seq) { s in
                     guard let id = s.jobID, s.advancedJobID != id else { return }
                     s.jobOutcome = outcome
                     s.receipt = report.receipt
                     s.measuredSummary = report.summary
+                    s.facts = facts
                     if outcome == .succeeded {
                         s.advancedJobID = id
                         s.evidence = .measured
@@ -585,7 +606,8 @@ final class RecipeRunCoordinator {
                 // only fills an empty slot.
                 if outcome == .succeeded, var ctx = r.context {
                     if report.kind == .search, ctx.selection == nil {
-                        ctx.selection = .init(revision: 1, spec: report.spec, matchCount: report.count, frozenAt: report.reportedAt)
+                        ctx.selection = .init(revision: 1, spec: report.spec, matchCount: report.count, frozenAt: report.reportedAt,
+                                             storeRevision: report.storeRevision)
                     }
                     if report.kind == .export || report.kind == .backup, ctx.output == nil, let d = report.destination {
                         ctx.output = .init(destination: d, format: nil)
