@@ -44,6 +44,10 @@ struct WorkflowRunnerView: View {
     /// user DO the job from the workflow, not just record it.
     var onOpenDestination: ((HubDestination) -> Void)? = nil
     var onClose: (() -> Void)? = nil
+    /// v4.0 REC-04: the step saves (injectable — a failing store is tested).
+    var persistence: WorkflowRunPersistence = SQLiteWorkflowRunPersistence()
+    /// v4.0 REC-01…03: where the run's context, job bindings and evidence live.
+    var runStore: RecipeRunStoring = RecipeRunFileStore.production
 
     @Environment(\.dismiss) private var dismiss
     @State private var wfNumber: String = ""
@@ -65,8 +69,16 @@ struct WorkflowRunnerView: View {
     @State private var expanded: Set<Int> = []
     @State private var openedSteps: Set<Int> = []
     @State private var touchedSeqs: Set<Int> = []
-    @State private var dirtySeqs: Set<Int> = []
-    @State private var savedFlashSeq: Int? = nil
+    /// REC-04: dirty steps, the Saved flash and save errors — one state, so a
+    /// failed save can never clear dirty or flash Saved.
+    @State private var edit = RecipeStepEditState()
+    /// REC-01…03: the run's durable record (context, jobs, evidence).
+    @State private var run: RecipeRunCoordinator? = nil
+    @State private var runState: RecipeRunState = .draft
+    @State private var runRecordError: String? = nil
+    /// Steps whose completion is in flight — a second call (a duplicate
+    /// callback) while one runs is ignored.
+    @State private var completing: Set<Int> = []
     @State private var saveTasks: [Int: Task<Void, Never>] = [:]
     @State private var scrollTarget: Int? = nil
     // First-run guidance — shown once per workflow, and once per step's Open.
@@ -119,6 +131,9 @@ struct WorkflowRunnerView: View {
         }
         .toolWindowFrame()
         .task { await bootstrap() }
+        .onReceive(NotificationCenter.default.publisher(for: .recipeJobReported)) { _ in
+            Task { await reconcileJobs() }
+        }
         .sheet(isPresented: $showSummary) { summarySheet }
         .alert("Save as Variant", isPresented: $showSaveVariant) {
             TextField("Variant name", text: $variantName)
@@ -134,7 +149,11 @@ struct WorkflowRunnerView: View {
             Button("Open now") { performOpen(op) }
             Button("Cancel", role: .cancel) { openPromptOp = nil }
         } message: { op in
-            Text("\(op.hint)\n\nA separate window opens for this. Do the work there, then come back and fill this step's fields — it saves automatically\(autoComplete ? " and marks itself done" : "; then press \(doneLabel)").")
+            if RecipeJobKind.forStep(op) != nil {
+                Text("\(op.hint)\n\nA separate window opens for this. Run the job there; this step completes when the job's saved receipt says it succeeded — opening the tool or filling the fields does not complete it.")
+            } else {
+                Text("\(op.hint)\n\nA separate window opens for this. Do the work there, then come back and fill this step's fields — it saves automatically\(autoComplete ? " and marks itself done" : "; then press \(doneLabel)").")
+            }
         }
         .fileImporter(isPresented: $showFileImporter,
                       allowedContentTypes: [.item],
@@ -201,6 +220,24 @@ struct WorkflowRunnerView: View {
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background((status == "confirmed" ? Color.green : status == "released" ? Color.blue : Color.gray).opacity(0.15))
                         .clipShape(Capsule())
+                    if run != nil {
+                        Text(runState.label)
+                            .font(Typography.caption2).fontWeight(.semibold)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(runStateColor.opacity(0.15))
+                            .clipShape(Capsule())
+                            .accessibilityIdentifier("workflow.runState")
+                    }
+                }
+                if let err = runRecordError {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(Typography.caption2).foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if run?.record.migratedFromLegacy == true {
+                    Text("This run was started before steps were measured from job receipts. Steps confirmed then are kept as they were.")
+                        .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: Spacing.xxSmall) {
                     Text("Client / matter").font(Typography.caption2).foregroundColor(AppColors.secondary)
@@ -287,6 +324,12 @@ struct WorkflowRunnerView: View {
         Menu {
             Toggle(isOn: $autoSave) { Label("Auto-save as I go", systemImage: "square.and.arrow.down") }
             Toggle(isOn: $autoComplete) { Label("Auto-complete steps when filled", systemImage: "checkmark.circle") }
+            if run != nil {
+                Toggle(isOn: Binding(get: { run?.record.paused ?? false },
+                                     set: { on in setPaused(on) })) {
+                    Label("Pause this run", systemImage: "pause.circle")
+                }
+            }
             Divider()
             Text("Off = save and \(doneLabel.lowercased()) each step yourself.")
         } label: {
@@ -349,8 +392,13 @@ struct WorkflowRunnerView: View {
     /// Plain-language "what to do here" for a step.
     private func stepGuidance(_ op: WorkflowOperation) -> String {
         var s = op.hint
-        if op.launches != nil {
+        if RecipeJobKind.forStep(op) != nil {
+            s += " " + String(localized: "Press “Open tool” and run the job there. This step completes only when the job's saved receipt says it succeeded.")
+            return s
+        } else if op.launches != nil {
             s += " Press “Open tool” to do this in the app, then come back and fill the fields below."
+            s += " " + String(localized: "When you have done it, press Attest done — it is recorded as your statement, not as a measured result.")
+            return s
         } else {
             s += " Fill the fields below."
         }
@@ -401,7 +449,143 @@ struct WorkflowRunnerView: View {
         markStepOpenSeen(op)
         openedSteps.insert(op.seq)
         openPromptOp = nil
+        // REC-02: a job step records (or reconnects to) its job ID first; the
+        // tool opens with the run's frozen scope on the ticket.
+        if RecipeJobKind.forStep(op) != nil, let run {
+            do {
+                if let ticket = try run.beginJob(seq: op.seq) { RecipeJobBroker.shared.toolRequested(ticket) }
+                runRecordError = nil
+            } catch {
+                runRecordError = String(localized: "This run's record could not be saved: \(error.localizedDescription)")
+            }
+            refreshRunState()
+        }
         if let dest = op.launches { onOpenDestination?(dest) }
+    }
+
+    // MARK: - Run record (REC-01…REC-03)
+
+    private var runStateColor: Color {
+        switch runState {
+        case .completed: return .green
+        case .running: return .blue
+        case .failed, .needsAttention: return .red
+        case .partial, .cancelled, .paused: return .orange
+        case .draft, .ready: return .gray
+        }
+    }
+
+    private func refreshRunState() {
+        guard let run else { return }
+        runState = run.state(confirmed: Set(confirmations.keys))
+    }
+
+    private func setPaused(_ on: Bool) {
+        do { try run?.setPaused(on); runRecordError = nil } catch {
+            runRecordError = String(localized: "This run's record could not be saved: \(error.localizedDescription)")
+        }
+        refreshRunState()
+    }
+
+    /// Re-read every waiting job's persisted result; complete each step whose
+    /// job really succeeded (once — the record marks the job as applied).
+    @MainActor
+    private func reconcileJobs() async {
+        guard let run else { return }
+        do {
+            try await run.reconcile()
+            runRecordError = nil
+        } catch {
+            runRecordError = String(localized: "This run's record could not be saved: \(error.localizedDescription)")
+        }
+        if autoComplete && !run.record.paused {
+            for seq in run.pendingCompletions(confirmed: Set(confirmations.keys)) {
+                if let op = definition.operations.first(where: { $0.seq == seq }) {
+                    await complete(op, signedOff: false)
+                }
+            }
+        }
+        refreshRunState()
+    }
+
+    private func finalizeLabel(_ op: WorkflowOperation) -> String {
+        if needsSignoff { return doneLabel }
+        if RecipeJobKind.forStep(op) == nil && op.launches != nil { return String(localized: "Attest done") }
+        return doneLabel
+    }
+
+    /// A job step's finalize button waits for the job's measured success.
+    private func finalizeEnabled(_ op: WorkflowOperation) -> Bool {
+        guard RecipeJobKind.forStep(op) != nil else { return true }
+        return RecipeRunMachine.mayComplete(op, step: run?.record.step(op.seq))
+    }
+
+    /// How a step's completion is evidenced, in words.
+    private func evidenceLine(_ seq: Int) -> String? {
+        guard let step = run?.record.step(seq) else { return nil }
+        switch step.evidence {
+        case .measured:
+            return step.measuredSummary.map { String(localized: "Measured: \($0)") }
+        case .attested:
+            return String(localized: "Your attestation — not a measured result")
+        case .legacyConfirmed:
+            return String(localized: "Confirmed before job receipts were recorded")
+        case .entered, .none:
+            return nil
+        }
+    }
+
+    @ViewBuilder
+    private func jobStatus(_ op: WorkflowOperation) -> some View {
+        if RecipeJobKind.forStep(op) != nil {
+            let step = run?.record.step(op.seq)
+            let summary = step?.measuredSummary ?? ""
+            switch step?.jobID == nil ? nil : step?.jobOutcome {
+            case nil:
+                Label(String(localized: "This step completes only when its job finishes and the job's receipt is saved. Opening the tool or filling the fields does not complete it."),
+                      systemImage: "doc.badge.clock")
+                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .running?:
+                HStack(spacing: Spacing.xSmall) {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for the job to finish — the step follows its saved receipt.")
+                        .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(String(localized: "Stop waiting")) {
+                        do { try run?.stopWaiting(seq: op.seq) } catch {
+                            runRecordError = String(localized: "This run's record could not be saved: \(error.localizedDescription)")
+                        }
+                        refreshRunState()
+                    }
+                    .controlSize(.small)
+                }
+            case .succeeded?:
+                Label(String(localized: "Measured: \(summary)"), systemImage: "checkmark.seal")
+                    .font(Typography.caption1).foregroundColor(.green)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .partial?:
+                Label(String(localized: "The job finished partly: \(summary). Run it again from Open tool, or review its receipt."),
+                      systemImage: "exclamationmark.circle")
+                    .font(Typography.caption1).foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .cancelled?:
+                Label(String(localized: "The job was cancelled — nothing was completed. Run it again from Open tool."),
+                      systemImage: "xmark.circle")
+                    .font(Typography.caption1).foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .failed?:
+                Label(String(localized: "The job failed: \(summary). Run it again from Open tool."),
+                      systemImage: "xmark.octagon")
+                    .font(Typography.caption1).foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .unverifiable?:
+                Label(String(localized: "The job's receipt could not be found or read, so this step stays open. Run it again from Open tool."),
+                      systemImage: "questionmark.diamond")
+                    .font(Typography.caption1).foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private var roadmap: some View {
@@ -575,13 +759,19 @@ struct WorkflowRunnerView: View {
                                 }
                             }
                             .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                            if let line = evidenceLine(op.seq) {
+                                Text(line).font(Typography.caption2).foregroundColor(AppColors.secondary)
+                            }
                         } else if let lock = locks.first {
                             Label(lock, systemImage: "lock.fill")
                                 .font(Typography.caption2).foregroundColor(.orange)
                         }
                     }
                     Spacer()
-                    if savedFlashSeq == op.seq {
+                    if edit.saveErrors[op.seq] != nil {
+                        Label("Not saved", systemImage: "exclamationmark.triangle.fill")
+                            .font(Typography.caption2).foregroundColor(.red)
+                    } else if edit.savedFlash == op.seq {
                         Label("Saved", systemImage: "checkmark.circle")
                             .font(Typography.caption2).foregroundColor(.green).transition(.opacity)
                     }
@@ -641,6 +831,19 @@ struct WorkflowRunnerView: View {
                     .textFieldStyle(.roundedBorder).lineLimit(1...3)
             }
 
+            if conf == nil { jobStatus(op) }
+
+            if let err = edit.saveErrors[op.seq] {
+                HStack(spacing: Spacing.xSmall) {
+                    Label(String(localized: "Couldn't save this step: \(err). Your entries are kept on screen — nothing was marked done."),
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(Typography.caption1).foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(String(localized: "Try again")) { Task { await saveNow(op) } }
+                        .controlSize(.small)
+                }
+            }
+
             if let err = validationBySeq[op.seq] {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(Typography.caption1).foregroundColor(.red)
@@ -667,14 +870,14 @@ struct WorkflowRunnerView: View {
                 if !autoSave {
                     Button { Task { await saveNow(op) } } label: { Label("Save", systemImage: "square.and.arrow.down") }
                         .controlSize(.small)
-                        .disabled(!dirtySeqs.contains(op.seq))
+                        .disabled(!edit.dirty.contains(op.seq))
                         .help("Store your entries for this step")
                 }
                 Spacer()
                 if conf == nil {
-                    Button(doneLabel) { manualDone(op) }
+                    Button(finalizeLabel(op)) { manualDone(op) }
                         .buttonStyle(.borderedProminent).controlSize(.small)
-                        .disabled(!locks.isEmpty || wfNumber.isEmpty)
+                        .disabled(!locks.isEmpty || wfNumber.isEmpty || !finalizeEnabled(op) || completing.contains(op.seq))
                         .help(needsSignoff
                               ? "Finalize this step and record who did it and when — the forensic attestation"
                               : "Finalize this step now")
@@ -981,6 +1184,25 @@ struct WorkflowRunnerView: View {
             }
         }
         await refreshConfirmations()
+        // REC-01 / REC-03: the run's durable record — created for a new run,
+        // migrated for a run saved before v4.0 (its confirmed steps stay
+        // confirmed), then reconnected to its jobs by ID.
+        if !wfNumber.isEmpty {
+            let ops = definition.operations
+            do {
+                run = try RecipeRunCoordinator(
+                    wf: wfNumber, defID: definition.defID, operations: ops,
+                    store: runStore, ledger: RecipeJobBroker.shared.ledger, verifier: PersistedReceiptVerifier(),
+                    isNewRun: resumeWF == nil, legacyConfirmed: Set(confirmations.keys),
+                    captureContext: { origin in
+                        RecipeRunContext.capture(archiveDirectory: SQLiteEmailStore.shared.storeDirectory,
+                                                 operations: ops, origin: origin)
+                    })
+            } catch {
+                runRecordError = String(localized: "This run's record could not be saved: \(error.localizedDescription)")
+            }
+            await reconcileJobs()
+        }
         showIntro = !introSeen()
         // Open the step the user should be on now.
         if let cur = currentOp {
@@ -1013,90 +1235,143 @@ struct WorkflowRunnerView: View {
             saveTasks[seq] = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 if Task.isCancelled { return }
-                await saveNow(op)
-                guard autoComplete else { return }
+                // REC-04: nothing completes on top of a save that failed.
+                guard await saveNow(op), autoComplete else { return }
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 if Task.isCancelled { return }
                 if canAutoComplete(op) { await complete(op, signedOff: false) }
             }
         } else {
-            dirtySeqs.insert(seq)
+            edit.edited(seq)
         }
     }
 
+    /// REC-04: a failed save keeps the values dirty and on screen, shows the
+    /// error with Try again, and never flashes Saved.
     @MainActor
-    private func saveNow(_ op: WorkflowOperation) async {
-        guard !wfNumber.isEmpty else { return }
-        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: savedValues[op.seq] ?? [:])
-        dirtySeqs.remove(op.seq)
+    @discardableResult
+    private func saveNow(_ op: WorkflowOperation) async -> Bool {
+        guard !wfNumber.isEmpty else { return false }
+        let result = await RecipeStepCommitter(persistence: persistence)
+            .save(wf: wfNumber, seq: op.seq, values: savedValues[op.seq] ?? [:])
+        edit.record(result, seq: op.seq)
+        guard result == .saved else { return false }
         await refreshSearchText()
-        savedFlashSeq = op.seq
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            if savedFlashSeq == op.seq { savedFlashSeq = nil }
+            if edit.savedFlash == op.seq { edit.savedFlash = nil }
         }
+        return true
     }
 
     /// Eligible for hands-off completion: not done, unlocked, every required
     /// field filled, and — for a tool step — the tool has been opened.
+    /// REC-02 (CUR-01): only a record-only step completes from its typed
+    /// fields; a tool step never completes because its tool was opened.
     private func canAutoComplete(_ op: WorkflowOperation) -> Bool {
-        guard confirmations[op.seq] == nil, lockedReasons(op).isEmpty else { return false }
-        guard op.fields.contains(where: { $0.required }) else { return false }
-        guard WorkflowFieldValidation.missingRequired(op.fields, values: savedValues[op.seq] ?? [:]).isEmpty else { return false }
-        // Require genuine engagement so seeded/derived defaults never auto-fire:
-        // a tool step needs its tool opened; any step needs a field touched.
-        if op.launches != nil { return openedSteps.contains(op.seq) }
-        return touchedSeqs.contains(op.seq)
+        RecipeRunMachine.mayAutoCompleteFromFields(
+            op, confirmed: confirmations[op.seq] != nil, locked: !lockedReasons(op).isEmpty,
+            paused: run?.record.paused ?? false, values: savedValues[op.seq] ?? [:],
+            touched: touchedSeqs.contains(op.seq))
     }
 
     /// User pressed the explicit finalize button.
     private func manualDone(_ op: WorkflowOperation) {
+        // REC-02: a job step is finalized from its job's receipt, not by hand.
+        if RecipeJobKind.forStep(op) != nil {
+            guard finalizeEnabled(op) else {
+                validationBySeq[op.seq] = String(localized: "This step completes when its job's saved receipt says it succeeded. Run the job from Open tool.")
+                return
+            }
+            Task { await complete(op, signedOff: needsSignoff) }
+            return
+        }
         let missing = WorkflowFieldValidation.missingRequired(op.fields, values: savedValues[op.seq] ?? [:])
         if !missing.isEmpty {
             validationBySeq[op.seq] = "Please fill: \(missing.joined(separator: ", "))"
             expanded.insert(op.seq); scrollTarget = op.seq
             return
         }
+        // REC-03: a manual tool step (or a sign-off) is the user's explicit
+        // attestation, recorded as such.
+        if op.launches != nil || needsSignoff {
+            guard let run else {
+                validationBySeq[op.seq] = runRecordError ?? String(localized: "This run's record is not available, so the attestation cannot be recorded.")
+                return
+            }
+            do {
+                let statement = (notes[op.seq] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                _ = try run.attest(seq: op.seq, by: ForensicManager.shared.examinerName,
+                                   statement: statement.isEmpty ? "done" : statement)
+            } catch {
+                edit.record(.failed(error.localizedDescription), seq: op.seq)
+                return
+            }
+        }
         Task { await complete(op, signedOff: needsSignoff) }
     }
 
-    /// Finalize a step: persist entries, post its document, record the
-    /// confirmation (who/when), advance to the next step.
+    /// Finalize a step: persist entries, post its document (once), record the
+    /// confirmation (who/when), advance to the next step. REC-04: if any of
+    /// those writes fails, nothing is confirmed, the values stay dirty and
+    /// the error is shown; a retry reuses a document already posted.
     @MainActor
     private func complete(_ op: WorkflowOperation, signedOff: Bool) async {
-        guard !wfNumber.isEmpty, confirmations[op.seq] == nil, lockedReasons(op).isEmpty else { return }
-        let vals = savedValues[op.seq] ?? [:]
-        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: vals)
-        let note = (notes[op.seq] ?? "").trimmingCharacters(in: .whitespaces)
-        var docNumber: String? = nil
-        if let docType = op.postsDocType {
-            var fields: [CapturedDocument.Field] = [
-                .init(key: "Workflow", value: definition.name),
-                .init(key: "Step", value: op.title),
-                .init(key: "Run", value: wfNumber),
-            ]
-            for f in op.fields where !(vals[f.key] ?? "").isEmpty {
-                fields.append(.init(key: f.label, value: vals[f.key] ?? ""))
-            }
-            for r in refs(op.seq) {
-                fields.append(.init(key: r.kind == .file ? "File" : "Email",
-                                    value: r.detail.isEmpty ? r.title : "\(r.title) — \(r.detail)"))
-            }
-            if !note.isEmpty { fields.append(.init(key: "Note", value: note)) }
-            docNumber = await DocumentRegistry.captureStructured(
-                docType, summary: "\(definition.name): \(op.title)",
-                document: CapturedDocument(title: "\(definition.name) — \(op.title)",
-                                           sections: [.init(name: op.title, fields: fields)]),
-                refs: wfNumber)
+        guard !wfNumber.isEmpty, confirmations[op.seq] == nil, lockedReasons(op).isEmpty,
+              !completing.contains(op.seq) else { return }
+        let step = run?.record.step(op.seq)
+        // REC-02 / REC-03: the evidence must allow completion — a measured
+        // job success, an attestation, or (record-only) the user's entries.
+        if run != nil || RecipeJobKind.forStep(op) != nil || op.launches != nil {
+            guard RecipeRunMachine.mayComplete(op, step: step) else { return }
         }
-        let auto = op.fields.compactMap { vals[$0.key]?.isEmpty == false ? vals[$0.key] : nil }.first
-        await WorkflowService.confirm(
-            wf: wfNumber, seq: op.seq, totalOps: definition.operations.count,
-            result: auto ?? (signedOff ? "signed off" : "done"), note: note, docNumber: docNumber)
-        dirtySeqs.remove(op.seq)
+        completing.insert(op.seq)
+        defer { completing.remove(op.seq) }
+        let vals = savedValues[op.seq] ?? [:]
+        let note = (notes[op.seq] ?? "").trimmingCharacters(in: .whitespaces)
+        var extra: [CapturedDocument.Field] = []
+        for r in refs(op.seq) {
+            extra.append(.init(key: r.kind == .file ? "File" : "Email",
+                               value: r.detail.isEmpty ? r.title : "\(r.title) — \(r.detail)"))
+        }
+        let result: String
+        switch step?.evidence {
+        case .measured?:
+            let summary = step?.measuredSummary ?? ""
+            result = "Measured: \(summary)"
+            extra.append(.init(key: "Measured result", value: summary))
+            if let id = step?.advancedJobID { extra.append(.init(key: "Job", value: id.uuidString)) }
+            if let ref = step?.receipt, !ref.id.isEmpty { extra.append(.init(key: "Receipt", value: ref.id)) }
+        case .attested?:
+            let a = step?.attestation
+            result = "User attestation\(signedOff ? " (signed off)" : ""): \(a?.statement ?? "done")"
+            extra.append(.init(key: "User attestation",
+                               value: "\(a?.by ?? "") — stated by the user, not a measured result"))
+        default:
+            let auto = op.fields.compactMap { vals[$0.key]?.isEmpty == false ? vals[$0.key] : nil }.first
+            result = "Entered by user: \(auto ?? (signedOff ? "signed off" : "done"))"
+        }
+        let outcome = await RecipeStepCommitter(persistence: persistence).complete(.init(
+            wf: wfNumber, op: op, workflowName: definition.name, totalOps: definition.operations.count,
+            values: vals, extraFields: extra, note: note, result: result,
+            existingDocNumber: step?.docNumber))
+        switch outcome {
+        case .failed(let message, let doc):
+            if let doc { try? run?.recordDocument(seq: op.seq, number: doc) }
+            edit.record(.failed(message), seq: op.seq)
+            expanded.insert(op.seq)
+            refreshRunState()
+            return
+        case .completed(let doc):
+            if let doc { try? run?.recordDocument(seq: op.seq, number: doc) }
+            if step == nil || step?.evidence == RecipeStepRecord.Evidence.none { try? run?.markEntered(seq: op.seq) }
+            edit.dirty.remove(op.seq)
+            edit.saveErrors[op.seq] = nil
+        }
         validationBySeq[op.seq] = nil
         await refreshConfirmations()
         await refreshSearchText()
+        refreshRunState()
         if status == "confirmed" { completedNumber = wfNumber }
         // Auto-advance to the next available step.
         if let next = definition.operations.first(where: {
@@ -1142,11 +1417,13 @@ struct WorkflowRunnerView: View {
         // Persist quietly (no touch, no auto-complete).
         if autoSave {
             Task { @MainActor in
-                try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: savedValues[op.seq] ?? [:])
-                await refreshSearchText()
+                // REC-04: a quiet save that fails still says so and stays dirty.
+                let result = await RecipeStepCommitter(persistence: persistence)
+                    .save(wf: wfNumber, seq: op.seq, values: savedValues[op.seq] ?? [:])
+                if result == .saved { await refreshSearchText() } else { edit.record(result, seq: op.seq) }
             }
         } else {
-            dirtySeqs.insert(op.seq)
+            edit.edited(op.seq)
         }
     }
 

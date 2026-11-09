@@ -6111,3 +6111,312 @@ final class SMIMEPortableTests: XCTestCase {
         XCTAssertTrue(SMIMEIdentitiesSection.importNote(name: "R6", reread: 3).contains("3"))
     }
 }
+
+// MARK: - v4.0 REC-01…REC-04 (RQ01–RQ05): recipe runs follow real jobs
+
+/// A save layer that fails on demand (disk full) and counts what reached it.
+@MainActor
+final class RecipeTruthSpyPersistence: WorkflowRunPersistence {
+    var failSave = false
+    var failConfirm = false
+    var saves = 0, posts = 0, confirms = 0
+    nonisolated static let diskFull = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC),
+                                  userInfo: [NSLocalizedDescriptionKey: "No space left on device"])
+
+    func saveFieldValues(wf: String, seq: Int, values: [String: String]) async throws {
+        if failSave { throw Self.diskFull }
+        saves += 1
+    }
+    func postStepDocument(_ type: DocumentType, summary: String, document: CapturedDocument, refs: String) async throws -> String {
+        posts += 1
+        return "EXP-TEST-\(posts)"
+    }
+    func confirmStep(wf: String, seq: Int, totalOps: Int, result: String, note: String, docNumber: String?) async throws {
+        if failConfirm { throw Self.diskFull }
+        confirms += 1
+    }
+}
+
+/// A run store whose disk is full.
+final class RecipeTruthFullDiskStore: RecipeRunStoring {
+    func load(wf: String) throws -> RecipeRunRecord? { nil }
+    func save(_ record: RecipeRunRecord) throws { throw RecipeTruthSpyPersistence.diskFull }
+}
+
+@MainActor
+final class RecipeRunTruthTests: XCTestCase {
+    private var root: URL!
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("RecipeRunTruth-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func field(_ key: String) -> WorkflowField {
+        WorkflowField(key: key, label: key.capitalized, kind: .text, help: "", required: true)
+    }
+
+    /// Find (search job) → Review (manual tool step) → Export (export job) → Notes (record-only).
+    private var ops: [WorkflowOperation] {
+        [WorkflowOperation(seq: 1, key: "search", title: "Find Emails", hint: "", postsDocType: nil, launches: .emailInbox, fields: [field("query")]),
+         WorkflowOperation(seq: 2, key: "review", title: "Review", hint: "", postsDocType: nil, launches: .emailInbox, fields: [field("decision")]),
+         WorkflowOperation(seq: 3, key: "export", title: "Export", hint: "", postsDocType: .export, launches: .emailInbox, fields: [field("count")]),
+         WorkflowOperation(seq: 4, key: "notes", title: "Notes", hint: "", postsDocType: nil, launches: nil, fields: [field("summary")])]
+    }
+
+    private var store: RecipeRunFileStore { RecipeRunFileStore(directory: root.appendingPathComponent("runs")) }
+    private var ledger: RecipeJobLedger { RecipeJobLedger(directory: root.appendingPathComponent("jobs")) }
+    private var exportStore: ExportReceiptStore { ExportReceiptStore(directory: root.appendingPathComponent("exports")) }
+    private var verifier: PersistedReceiptVerifier {
+        PersistedReceiptVerifier(exportStore: exportStore,
+                                 importStore: ImportReceiptStore(directory: root.appendingPathComponent("imports")),
+                                 documentExists: { _ in false })
+    }
+
+    private func coordinator(wf: String = "WF-T-0001", archive: String = "/archives/A", isNew: Bool = true,
+                             legacy: Set<Int> = [], store: RecipeRunStoring? = nil) throws -> RecipeRunCoordinator {
+        let ops = self.ops
+        return try RecipeRunCoordinator(
+            wf: wf, defID: "test.recipe", operations: ops, store: store ?? self.store, ledger: ledger, verifier: verifier,
+            isNewRun: isNew, legacyConfirmed: legacy,
+            captureContext: { RecipeRunContext.capture(archiveDirectory: URL(fileURLWithPath: archive), operations: ops, origin: $0) })
+    }
+
+    private func exportReceipt(_ outcome: ExportReceipt.Outcome, written: Int = 50) throws -> (ExportReceipt, URL) {
+        let r = ExportReceipt(title: "Export", destination: "/out/case.mbox", isFolder: false, requested: 50,
+                              written: written, outcome: outcome, startedAt: Date(), completedAt: Date())
+        return (r, try exportStore.save(r))
+    }
+
+    private var filledValues: [String: String] { ["query": "x", "decision": "y", "count": "999", "summary": "z"] }
+
+    /// The job steps of the shipped recipes are recognised (the classifier is what keeps
+    /// "Open tool + fill fields" from completing them).
+    func testRecipeStepsThatRunJobsAreClassified() {
+        XCTAssertEqual(RecipeJobKind.forStep(ops[0]), .search)
+        XCTAssertNil(RecipeJobKind.forStep(ops[1]))
+        XCTAssertEqual(RecipeJobKind.forStep(ops[2]), .export)
+        XCTAssertNil(RecipeJobKind.forStep(ops[3]))
+        let all = WorkflowCatalog.all.flatMap(\.operations)
+        for op in all where op.launches == .duplicateManager { XCTAssertEqual(RecipeJobKind.forStep(op), .dedupe, op.title) }
+        for op in all where op.postsDocType == .importRun && op.launches != nil { XCTAssertEqual(RecipeJobKind.forStep(op), .importArchive, op.title) }
+        for op in all where op.key == "export" && op.launches != nil { XCTAssertEqual(RecipeJobKind.forStep(op), .export, op.title) }
+    }
+
+    /// RQ01: open the export tool, cancel the export, fill every field — the step is not completed.
+    func testRQ01OpenToolCancelAndFillEveryFieldDoesNotComplete() async throws {
+        let run = try coordinator()
+        let ticket = try XCTUnwrap(try run.beginJob(seq: 3))            // "Open tool"
+        let broker = RecipeJobBroker(ledger: ledger)
+        let (cancelled, url) = try exportReceipt(.cancelled, written: 7)
+        broker.reportExport(cancelled, receiptURL: url)
+        XCTAssertNotNil(ledger.ticket(ticket.jobID)?.report)
+        let advanced = try await run.reconcile()
+        XCTAssertEqual(advanced, [], "a cancelled export never advances the step")
+        let step = try XCTUnwrap(run.record.step(3))
+        XCTAssertEqual(step.jobOutcome, .cancelled)
+        // Every field filled and the step touched: still not completable.
+        XCTAssertFalse(RecipeRunMachine.mayAutoCompleteFromFields(ops[2], confirmed: false, locked: false, paused: false,
+                                                                  values: filledValues, touched: true))
+        XCTAssertFalse(RecipeRunMachine.mayComplete(ops[2], step: step))
+        XCTAssertEqual(run.pendingCompletions(confirmed: []), [])
+        XCTAssertEqual(run.state(confirmed: []), .cancelled)
+        // Opened but no job at all (tool closed): waiting, not complete.
+        _ = try run.beginJob(seq: 1)
+        XCTAssertFalse(RecipeRunMachine.mayComplete(ops[0], step: run.record.step(1)))
+        XCTAssertEqual(run.state(confirmed: []), .running)
+        // A manual tool step with every field filled needs an explicit attestation.
+        XCTAssertFalse(RecipeRunMachine.mayAutoCompleteFromFields(ops[1], confirmed: false, locked: false, paused: false,
+                                                                  values: filledValues, touched: true))
+        XCTAssertFalse(RecipeRunMachine.mayComplete(ops[1], step: run.record.step(2)))
+        XCTAssertTrue(try run.attest(seq: 2, by: "Examiner", statement: "reviewed 50"))
+        XCTAssertTrue(RecipeRunMachine.mayComplete(ops[1], step: run.record.step(2)))
+        XCTAssertEqual(run.record.step(2)?.evidence, .attested)
+        XCTAssertFalse(try run.attest(seq: 3, by: "Examiner", statement: "exported"), "a job step cannot be attested")
+        // A record-only step still completes from its own entries.
+        XCTAssertTrue(RecipeRunMachine.mayAutoCompleteFromFields(ops[3], confirmed: false, locked: false, paused: false,
+                                                                 values: filledValues, touched: true))
+    }
+
+    /// RQ02: the job succeeds once and its saved receipt advances the step once,
+    /// even when the completion callback arrives twice.
+    func testRQ02SucceededJobAdvancesOnceDespiteDuplicateCallback() async throws {
+        let run = try coordinator()
+        let ticket = try XCTUnwrap(try run.beginJob(seq: 3))
+        let broker = RecipeJobBroker(ledger: ledger)
+        let (done, url) = try exportReceipt(.complete)
+        let first = broker.report(.export, outcome: .succeeded, receipt: .init(kind: .exportReceipt, id: done.id.uuidString, path: url.path),
+                                  summary: "written 50 of 50", destination: done.destination)
+        XCTAssertEqual(first, ticket.jobID)
+        let (other, otherURL) = try exportReceipt(.complete, written: 1)
+        let duplicate = broker.report(.export, outcome: .succeeded, receipt: .init(kind: .exportReceipt, id: other.id.uuidString, path: otherURL.path),
+                                      summary: "written 1 of 50")
+        XCTAssertNil(duplicate, "the second callback binds to nothing")
+        XCTAssertEqual(ledger.ticket(ticket.jobID)?.report?.receipt.id, done.id.uuidString, "first report wins")
+        let a1 = try await run.reconcile()
+        let a2 = try await run.reconcile()
+        XCTAssertEqual(a1, [3]); XCTAssertEqual(a2, [], "advanced once")
+        XCTAssertEqual(run.record.step(3)?.evidence, .measured)
+        XCTAssertEqual(run.record.step(3)?.measuredSummary, "written 50 of 50")
+        XCTAssertEqual(run.context?.output?.destination, "/out/case.mbox")
+        XCTAssertEqual(run.pendingCompletions(confirmed: []), [3])
+        XCTAssertEqual(run.pendingCompletions(confirmed: [3]), [])
+        // The completion posts its document once; a repeat reuses it.
+        let spy = RecipeTruthSpyPersistence()
+        let committer = RecipeStepCommitter(persistence: spy)
+        let c = RecipeStepCommitter.Completion(wf: run.wf, op: ops[2], workflowName: "Test", totalOps: 4,
+                                               values: [:], note: "", result: "Measured: written 50 of 50")
+        let r1 = await committer.complete(c)
+        XCTAssertEqual(r1, .completed(docNumber: "EXP-TEST-1"))
+        try run.recordDocument(seq: 3, number: "EXP-TEST-1")
+        var again = c; again.existingDocNumber = run.record.step(3)?.docNumber
+        _ = await committer.complete(again)
+        XCTAssertEqual(spy.posts, 1, "no second document for the same job")
+        // Opening the tool again reconnects to the finished job; nothing is re-run.
+        XCTAssertEqual(try run.beginJob(seq: 3)?.jobID, ticket.jobID)
+        // A receipt that is missing on disk is never a success.
+        let run2 = try coordinator(wf: "WF-T-0002")
+        _ = try run2.beginJob(seq: 3)
+        broker.report(.export, outcome: .succeeded,
+                      receipt: .init(kind: .exportReceipt, id: UUID().uuidString, path: root.appendingPathComponent("gone.json").path),
+                      summary: "claimed")
+        let a3 = try await run2.reconcile()
+        XCTAssertEqual(a3, [])
+        XCTAssertEqual(run2.record.step(3)?.jobOutcome, .unverifiable)
+    }
+
+    /// RQ03: the field save fails (disk full): the error is shown, the typed values stay
+    /// dirty, nothing says Saved, and the step is not completed.
+    func testRQ03SaveFailureKeepsFieldsAndRefusesSavedOrCompleted() async throws {
+        let spy = RecipeTruthSpyPersistence()
+        spy.failSave = true
+        let committer = RecipeStepCommitter(persistence: spy)
+        var edit = RecipeStepEditState()
+        edit.edited(4)
+        edit.savedFlash = 4
+        let result = await committer.save(wf: "WF-T-0003", seq: 4, values: ["summary": "typed"])
+        guard case .failed(let message) = result else { return XCTFail("a failed save must not report saved") }
+        XCTAssertTrue(message.contains("No space left"), message)
+        edit.record(result, seq: 4)
+        XCTAssertTrue(edit.dirty.contains(4), "typed values stay dirty")
+        XCTAssertNotNil(edit.saveErrors[4], "the error is on screen")
+        XCTAssertNil(edit.savedFlash, "no Saved flash")
+        let completion = await committer.complete(.init(wf: "WF-T-0003", op: ops[3], workflowName: "Test", totalOps: 4,
+                                                        values: ["summary": "typed"], note: "", result: "Entered by user: typed"))
+        XCTAssertEqual(completion, .failed(message, docNumber: nil))
+        XCTAssertEqual(spy.confirms, 0, "nothing is confirmed"); XCTAssertEqual(spy.posts, 0)
+        // Retry after space is freed: saves, then a confirmation that fails keeps the
+        // posted document for the next retry (no duplicate document).
+        spy.failSave = false
+        let saved = await committer.save(wf: "WF-T-0003", seq: 4, values: ["summary": "typed"])
+        edit.record(saved, seq: 4)
+        XCTAssertFalse(edit.dirty.contains(4)); XCTAssertNil(edit.saveErrors[4]); XCTAssertEqual(edit.savedFlash, 4)
+        spy.failConfirm = true
+        let exportStep = RecipeStepCommitter.Completion(wf: "WF-T-0003", op: ops[2], workflowName: "Test", totalOps: 4,
+                                                        values: [:], note: "", result: "Measured")
+        let failedConfirm = await committer.complete(exportStep)
+        guard case .failed(_, let doc) = failedConfirm else { return XCTFail() }
+        XCTAssertEqual(doc, "EXP-TEST-1"); XCTAssertEqual(spy.confirms, 0)
+        spy.failConfirm = false
+        var retry = exportStep; retry.existingDocNumber = doc
+        let retried = await committer.complete(retry)
+        XCTAssertEqual(retried, .completed(docNumber: "EXP-TEST-1"))
+        XCTAssertEqual(spy.posts, 1); XCTAssertEqual(spy.confirms, 1)
+        // The run record on a full disk: the error surfaces, nothing pretends to be stored.
+        XCTAssertThrowsError(try coordinator(wf: "WF-T-0004", store: RecipeTruthFullDiskStore()))
+    }
+
+    /// RQ04: the active archive changes (another window) while the run is open: the run's
+    /// frozen scope, selection and output stay as they were.
+    func testRQ04ContextFrozenWhileAnotherScopeChanges() async throws {
+        let runA = try coordinator(archive: "/archives/A")
+        XCTAssertEqual(runA.context?.scope.archiveID, "/archives/A")
+        XCTAssertEqual(runA.context?.origin, .startedWithRun)
+        XCTAssertEqual(Set(runA.context?.permissions ?? []), [.readArchive, .writeFiles])
+        // Another window opens the same run while archive B is active.
+        let windowB = try coordinator(archive: "/archives/B", isNew: false)
+        XCTAssertEqual(windowB.context?.scope.archiveID, "/archives/A", "the stored context wins")
+        let other = RecipeRunContext.capture(archiveDirectory: URL(fileURLWithPath: "/archives/B"), operations: ops, origin: .startedWithRun)
+        XCTAssertEqual(try windowB.freeze(other).scope.archiveID, "/archives/A", "write-once")
+        // The search step's measured result becomes the frozen selection.
+        let broker = RecipeJobBroker(ledger: ledger)
+        let ticket = try XCTUnwrap(try runA.beginJob(seq: 1))
+        XCTAssertEqual(ticket.context.scope.archiveID, "/archives/A", "the tool opens with the exact scope")
+        let s1 = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.subject, .contains, "invoice")])])
+        broker.report(.search, outcome: .succeeded, receipt: .init(kind: .measurement, id: "12 matches"),
+                      summary: "12 matching messages", count: 12, spec: s1)
+        _ = try await runA.reconcile()
+        XCTAssertEqual(runA.context?.selection?.spec, s1)
+        XCTAssertEqual(runA.context?.selection?.matchCount, 12)
+        XCTAssertEqual(runA.context?.selection?.revision, 1)
+        // A later search in another window does not move the run's selection.
+        let s2 = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.subject, .contains, "other")])])
+        XCTAssertNil(broker.report(.search, outcome: .succeeded, receipt: .init(kind: .measurement, id: "3 matches"),
+                                   summary: "3", count: 3, spec: s2))
+        try windowB.reload()
+        _ = try await windowB.reconcile()
+        XCTAssertEqual(windowB.context?.selection?.spec, s1)
+        XCTAssertEqual(windowB.context?.scope.archiveID, "/archives/A")
+        // The export ticket issued later still carries archive A and the frozen selection.
+        let exportTicket = try XCTUnwrap(try windowB.beginJob(seq: 3))
+        XCTAssertEqual(exportTicket.context.scope.archiveID, "/archives/A")
+        XCTAssertEqual(exportTicket.context.selection?.spec, s1)
+    }
+
+    /// RQ05: restart while an export is running, and again after it finished: the run
+    /// reconnects to the same job by ID and never issues it again.
+    func testRQ05RestartReconnectsWithoutRepeatingTheJob() async throws {
+        var run: RecipeRunCoordinator? = try coordinator()
+        let jobID = try XCTUnwrap(try run?.beginJob(seq: 3)?.jobID)
+        run = nil                                                       // the app quits mid-export
+        let afterRestart = try coordinator(isNew: false)
+        XCTAssertEqual(afterRestart.record.step(3)?.jobID, jobID)
+        XCTAssertEqual(afterRestart.state(confirmed: []), .running)
+        XCTAssertEqual(try afterRestart.beginJob(seq: 3)?.jobID, jobID, "reopening the tool reconnects, no second job")
+        let advancedWhileRunning = try await afterRestart.reconcile()
+        XCTAssertEqual(advancedWhileRunning, [])
+        // The resumed export finishes and saves its receipt.
+        let (done, url) = try exportReceipt(.complete)
+        RecipeJobBroker(ledger: ledger).reportExport(done, receiptURL: url)
+        let secondRestart = try coordinator(isNew: false)
+        let advanced = try await secondRestart.reconcile()
+        XCTAssertEqual(advanced, [3])
+        XCTAssertEqual(try secondRestart.beginJob(seq: 3)?.jobID, jobID)
+        let tickets = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("jobs"), includingPropertiesForKeys: nil)
+        XCTAssertEqual(tickets.count, 1, "the job was issued exactly once")
+        // A delivery still pending on iOS is running, not success.
+        let pending = ExportReceipt(title: "E", destination: "/x", isFolder: false, requested: 1, written: 1, outcome: .complete,
+                                    startedAt: Date(), completedAt: Date(), delivery: .awaitingDelivery)
+        XCTAssertEqual(PersistedReceiptVerifier.outcome(of: pending), .running)
+        // A cancelled job is retried with a NEW job ID (the old one is kept in history).
+        let run3 = try coordinator(wf: "WF-T-0005")
+        let first = try XCTUnwrap(try run3.beginJob(seq: 3)?.jobID)
+        try run3.stopWaiting(seq: 3)
+        let retry = try XCTUnwrap(try run3.beginJob(seq: 3)?.jobID)
+        XCTAssertNotEqual(retry, first)
+        XCTAssertEqual(run3.record.step(3)?.previousJobIDs, [first])
+    }
+
+    /// Migration: a run saved before v4.0 (no run record) stays usable; its confirmed
+    /// steps stay confirmed and are labelled as such, the record round-trips from disk.
+    func testOldSavedRunIsMigratedAndStaysUsable() async throws {
+        let run = try coordinator(wf: "WF-2026-0042", isNew: false, legacy: [1, 2])
+        XCTAssertTrue(run.record.migratedFromLegacy)
+        XCTAssertEqual(run.context?.origin, .migrated)
+        XCTAssertEqual(run.record.step(1)?.evidence, .legacyConfirmed)
+        XCTAssertEqual(run.record.step(2)?.evidence, .legacyConfirmed)
+        XCTAssertEqual(run.record.step(3)?.jobKind, .export)
+        XCTAssertNotEqual(run.state(confirmed: [1, 2]), .completed)
+        XCTAssertTrue(RecipeRunMachine.mayComplete(ops[3], step: run.record.step(4)), "a record-only step still completes")
+        XCTAssertNotNil(try run.beginJob(seq: 3), "the remaining job step can run")
+        let reloaded = try XCTUnwrap(try store.load(wf: "WF-2026-0042"))
+        XCTAssertEqual(reloaded, run.record)
+        XCTAssertEqual(RecipeRunMachine.state(of: reloaded, operations: ops, confirmed: [1, 2, 3, 4]), .completed)
+        // An old run with nothing done is a draft.
+        let draft = try coordinator(wf: "WF-2026-0043", isNew: false)
+        XCTAssertEqual(draft.state(confirmed: []), .draft)
+    }
+}

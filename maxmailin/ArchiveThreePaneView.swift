@@ -95,9 +95,11 @@ struct ArchiveThreePaneView: View {
                 }
                 .navigationTitle(selection?.title ?? "Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
+                // v4.0 REC-02: pressing Return is the explicit "this is my search".
+                .onSubmit(of: .search) { Task { await applyQuery(); await reportSearchToRecipe() } }
                 .sheet(isPresented: $showAdvancedSearch) {
                     AdvancedSearchView(applied: spec, scopeDescription: scopeDescription,
-                                       onApply: { newSpec in spec = newSpec; showAdvancedSearch = false; Task { await applyQuery() } },
+                                       onApply: { newSpec in spec = newSpec; showAdvancedSearch = false; Task { await applyQuery(); await reportSearchToRecipe() } },
                                        onCancel: { showAdvancedSearch = false })
                 }
                 .toolbar {
@@ -154,7 +156,17 @@ struct ArchiveThreePaneView: View {
             // first load so the first page is already clamped.
             model.accessLimit = accessLimit
             await sidebar.refresh()
+            // v4.0 REC-01: opened from a recipe step — work on the run's frozen search.
+            if let frozen = RecipeJobBroker.shared.requested?.context.selection?.spec, spec == nil {
+                spec = frozen
+                await applyQuery()
+            }
             if model.summaries.isEmpty && model.error == nil { await applyQuery() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .recipeToolRequested)) { note in
+            guard let frozen = (note.object as? RecipeJobTicket)?.context.selection?.spec else { return }
+            spec = frozen
+            Task { await applyQuery() }
         }
         .onChange(of: storeManager.isPremium) { _, _ in
             // A purchase (or an expiry) while the page is open changes what
@@ -209,6 +221,28 @@ struct ArchiveThreePaneView: View {
         } else {
             unresolved = 0
         }
+    }
+
+    /// v4.0 REC-02: a recipe search step waiting on this search gets the
+    /// measured result — the spec, the typed words and the count the archive
+    /// returned — never a number the person typed.
+    private func reportSearchToRecipe() async {
+        guard RecipeJobBroker.shared.ledger.hasOpenTicket(for: .search) else { return }
+        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !(spec?.isEmpty ?? true) || !text.isEmpty else { return }
+        let query = model.query
+        guard let count = try? await model.archive.count(query: query) else {
+            RecipeJobBroker.shared.report(.search, outcome: .failed, receipt: .init(kind: .none, id: ""),
+                                          summary: "The search could not be counted")
+            return
+        }
+        var line = "Search in \(scopeDescription): \(count) matching messages"
+        if !text.isEmpty { line += " · words \"\(text)\"" }
+        if let spec, !spec.isEmpty { line += " · \(SearchSpecDescriber.summary(spec))" }
+        if unresolved > 0 { line += " · \(unresolved) not yet confirmed (unindexed content)" }
+        RecipeJobBroker.shared.report(.search, outcome: .succeeded,
+                                      receipt: .init(kind: .measurement, id: "\(count) matches"),
+                                      summary: line, count: count, spec: spec)
     }
 
     /// FIND-05: with the search model on and a search active, each row asks
