@@ -235,7 +235,7 @@ struct OffsetImportEngine: Sendable {
 
     // MARK: - One message
 
-    private func build(locator: MessageLocator,
+    func build(locator: MessageLocator,
                        headers: [String: String],
                        senderEmail: String,
                        retainAttachmentBytes: Bool,

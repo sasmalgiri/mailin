@@ -24,26 +24,7 @@ enum RFC822Renderer {
     /// - Parameter provenance: when given, `X-Mailin-Rendered: <provenance>`
     ///   says this text was built by mailin from the named source format.
     static func render(_ email: MBOXParser.RawEmail, provenance: String? = nil) -> Data {
-        var out = ""
-        func header(_ name: String, _ value: String) {
-            let flat = value.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
-            out += "\(name): \(flat)\r\n"
-        }
-        if let provenance { header(provenanceHeader, provenance) }
-        let first = ["From", "To", "Cc", "Bcc", "Subject", "Date", "Message-ID", "In-Reply-To", "References", "Reply-To", "Thread-Topic"]
-        var written = Set<String>()
-        for name in first {
-            if let value = email.headers[name], !value.isEmpty { header(name, value); written.insert(name.lowercased()) }
-        }
-        if !written.contains("date"), let date = ISO8601DateFormatter().date(from: email.timestamp) {
-            header("Date", rfc2822(date)); written.insert("date")
-        }
-        for (name, value) in email.headers.sorted(by: { $0.key < $1.key }) {
-            let lower = name.lowercased()
-            guard !written.contains(lower), !value.isEmpty, !lower.hasPrefix("content-"), lower != "mime-version" else { continue }
-            header(name, value); written.insert(lower)
-        }
-        header("MIME-Version", "1.0")
+        var out = headerBlock(headers: email.headers, timestamp: email.timestamp, provenance: provenance)
 
         let plain = email.plainBody
         let html = email.htmlBody
@@ -73,6 +54,38 @@ enum RFC822Renderer {
             out += "--\(boundary)--\r\n"
         }
         return Data(out.utf8)
+    }
+
+    /// The header block of a rendered message, `MIME-Version` last (CRLF line
+    /// ends, no terminating blank line) — shared with the streamed renderer
+    /// (CLOSE-01), so a large message's rendering has the same headers.
+    static func headerBlock(headers: [String: String], timestamp: String, provenance: String?) -> String {
+        var out = ""
+        func header(_ name: String, _ value: String) {
+            let flat = value.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
+            out += "\(name): \(flat)\r\n"
+        }
+        if let provenance { header(provenanceHeader, provenance) }
+        let first = ["From", "To", "Cc", "Bcc", "Subject", "Date", "Message-ID", "In-Reply-To", "References", "Reply-To", "Thread-Topic"]
+        var written = Set<String>()
+        for name in first {
+            if let value = headers[name], !value.isEmpty { header(name, value); written.insert(name.lowercased()) }
+        }
+        if !written.contains("date"), let date = ISO8601DateFormatter().date(from: timestamp) {
+            header("Date", rfc2822(date)); written.insert("date")
+        }
+        for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
+            let lower = name.lowercased()
+            guard !written.contains(lower), !value.isEmpty, !lower.hasPrefix("content-"), lower != "mime-version" else { continue }
+            header(name, value); written.insert(lower)
+        }
+        header("MIME-Version", "1.0")
+        return out
+    }
+
+    /// `name` made safe for a quoted MIME parameter (as `attachmentPart` does).
+    static func quotedParameter(_ name: String) -> String {
+        name.replacingOccurrences(of: "\"", with: "'").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
     }
 
     private static func textPart(_ type: String, _ text: String) -> String {

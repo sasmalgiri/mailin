@@ -74,7 +74,11 @@ final class FileRandomAccessSource: RandomAccessSource {
     func read(at offset: Int64, count: Int) throws -> Data {
         guard offset >= 0, offset < length, count > 0 else { return Data() }
         try handle.seek(toOffset: UInt64(offset))
-        return try handle.read(upToCount: count) ?? Data()
+        // CLOSE-01: the read buffer is autoreleased; without a pool per read a
+        // reader that streams a multi-gigabyte member in slices keeps every
+        // slice resident until its caller returns (measured: footprint grew
+        // with the 2 GB stream read through it).
+        return try autoreleasepool { try handle.read(upToCount: count) } ?? Data()
     }
     func diskBase(_ disk: Int) -> Int64? { disk == 0 ? 0 : nil }
     func isDiskMissing(_ disk: Int) -> Bool { false }

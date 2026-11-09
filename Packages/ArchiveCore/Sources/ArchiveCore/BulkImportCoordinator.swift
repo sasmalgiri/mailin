@@ -925,7 +925,43 @@ final class BulkImportCoordinator {
                         && ParserFactory.streamableExtensions.contains(classification.format.parserToken)
                         && !SourceFormatClassifier.isDirectoryForm(classification.format)
 
-                    if offsetEligible {
+                    // CLOSE-01: one .emlx or .msg file above the full-parse
+                    // ceiling is imported by range (a .msg through a rendering
+                    // kept inside the archive), never read whole.
+                    var largeEngine = OffsetImportEngine()
+                    if let ceiling = options.fullParseCeilingBytes { largeEngine.fullParseCeilingBytes = ceiling }
+                    let largeKind = options.useOffsetEngine
+                        ? largeEngine.largeSingleMessageKind(fileURL: importURL, format: classification.format) : nil
+
+                    if let largeKind {
+                        let progressSink = MainActorSink<Double> { [weak self] prog in
+                            self?.live.fileFraction = prog
+                            callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                        }
+                        let batchSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
+                            batchLocators.removeAll(keepingCapacity: true)
+                            if options.recordLocators {
+                                for item in imported {
+                                    batchLocators[item.email.id] =
+                                        (item.locator, item.bodyWasDecoded, item.parts)
+                                }
+                            }
+                            try await persistBatch(imported.map(\.email))
+                        }
+                        let renderDirectory = SourceCopies.directory(in: store.storeDirectory)
+                            .appendingPathComponent(hash, isDirectory: true)
+                        fileReport = try await largeEngine.importLargeSingleMessage(
+                            fileURL: importURL,
+                            kind: largeKind,
+                            renderDirectory: renderDirectory,
+                            senderEmail: options.senderEmail,
+                            materializeAttachments: false,   // bulk import: no temp copy per attachment
+                            sourceDigest: hash,
+                            onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } }
+                        ) { @Sendable imported in
+                            try await batchSink.send(imported)
+                        }
+                    } else if offsetEligible {
                         var engine = OffsetImportEngine()
                         if let ceiling = options.fullParseCeilingBytes { engine.fullParseCeilingBytes = ceiling }
                         // §3-P1: the engine parses off the main actor and hands
