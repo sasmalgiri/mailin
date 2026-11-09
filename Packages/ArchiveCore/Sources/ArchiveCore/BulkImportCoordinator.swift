@@ -229,6 +229,9 @@ final class BulkImportCoordinator {
         /// False when the receipt could not be written to disk (surfaced,
         /// never `try?`-swallowed).
         var receiptPersisted = false
+        /// v4.0 REC-02: where the receipt was written (nil when it was not),
+        /// so a recipe step can verify the import from the persisted file.
+        var receiptURL: URL? = nil
         /// A4: files the user stopped mid-way (checkpoint kept).
         var stoppedByUser: [StoppedSource] = []
     }
@@ -1132,7 +1135,7 @@ final class BulkImportCoordinator {
         }
         summary.receipt = receipt
         do {
-            _ = try ImportReceiptStore.production.save(receipt)
+            summary.receiptURL = try ImportReceiptStore.production.save(receipt)
             summary.receiptPersisted = true
         } catch {
             // Surface, never swallow: the durable audit trail is missing.

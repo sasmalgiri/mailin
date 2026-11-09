@@ -151,6 +151,11 @@ final class ExportRunCenter {
                 _ = try? self.receiptStore.save(Self.receipt(receipt, afterDelivery: outcome))
             }
             if self.deliveringReceiptID == receipt.id { self.deliveringReceiptID = nil }
+            // v4.0 REC-02: the hand-off changed the receipt on disk; a waiting
+            // recipe step re-reads it (the job stays bound to its first report).
+            if self.receiptStore.directory == ExportReceiptStore.production.directory {
+                RecipeJobBroker.shared.reportExport(Self.receipt(receipt, afterDelivery: outcome), receiptURL: self.receiptStore.directory.appendingPathComponent("export-\(receipt.id.uuidString).json"))
+            }
         }
     }
 
@@ -632,6 +637,11 @@ final class ExportRunCenter {
         // to be handed on) and the run is over BEFORE any Share sheet is shown.
         lastReceipt = receipt
         lastReceiptURL = try? receiptStore.save(receipt)
+        // v4.0 REC-02: a recipe step waiting on an export re-reads this receipt
+        // (and its later delivery) from disk; nothing is taken on trust.
+        if receiptStore.directory == ExportReceiptStore.production.directory {
+            RecipeJobBroker.shared.reportExport(receipt, receiptURL: lastReceiptURL)
+        }
         // R8: the run ended and said how — the "interrupted" placeholder goes.
         if let provisional = provisionalReceiptURL, provisional != lastReceiptURL {
             try? FileManager.default.removeItem(at: provisional)

@@ -47,7 +47,10 @@ enum ArchiveBackups {
         panel.canCreateDirectories = true
         panel.message = String(localized: "Choose where to save the backup. A new folder named mailin-backup-<date> is created there.")
         panel.prompt = String(localized: "Back Up Here")
-        guard panel.runModal() == .OK, let parent = panel.url else { return String(localized: "Backup cancelled.") }
+        guard panel.runModal() == .OK, let parent = panel.url else {
+            RecipeJobBroker.shared.report(.backup, outcome: .cancelled, receipt: .init(kind: .none, id: ""), summary: "Backup cancelled")
+            return String(localized: "Backup cancelled.")
+        }
         return await backUp(intoChosenFolder: parent)
         #else
         return String(localized: "Choose a folder in Files for the backup.")
@@ -66,6 +69,8 @@ enum ArchiveBackups {
                                                            receiptDirectories: receiptDirectories)
             ForensicManager.shared.logAction("Archive backed up",
                                              detail: "\(destination.lastPathComponent): \(inventory.files.count) files, \(inventory.counts.emails) emails")
+            // v4.0 REC-02: verified now, while the chosen folder is still reachable.
+            RecipeJobBroker.shared.reportInventory(.backup, folder: destination)
             let size = ByteCountFormatter.string(fromByteCount: inventory.totalBytes, countStyle: .file)
             var line = String(localized: "Backed up \(CountPhrase.emails(inventory.counts.emails)), \(CountPhrase.files(inventory.files.count)) (\(size)) to \(destination.lastPathComponent). Every file is listed with its SHA-256 in the inventory.")
             #if os(iOS)
@@ -76,6 +81,8 @@ enum ArchiveBackups {
             }
             return line
         } catch {
+            RecipeJobBroker.shared.report(.backup, outcome: .failed, receipt: .init(kind: .none, id: ""),
+                                          summary: "Backup failed: \(error.localizedDescription)")
             return String(localized: "Backup failed: \(error.localizedDescription)")
         }
     }
@@ -92,7 +99,10 @@ enum ArchiveBackups {
         panel.canChooseFiles = false
         panel.message = String(localized: "Choose a mailin backup folder (it contains mailin-backup-inventory.json).")
         panel.prompt = String(localized: "Verify and Restore")
-        guard panel.runModal() == .OK, let backup = panel.url else { return String(localized: "Restore cancelled.") }
+        guard panel.runModal() == .OK, let backup = panel.url else {
+            RecipeJobBroker.shared.report(.restore, outcome: .cancelled, receipt: .init(kind: .none, id: ""), summary: "Restore cancelled")
+            return String(localized: "Restore cancelled.")
+        }
         return await restore(from: backup)
         #else
         return String(localized: "Choose a mailin backup folder in Files.")
@@ -157,7 +167,10 @@ enum ArchiveBackups {
         alert.informativeText = restoreExplanation
         alert.addButton(withTitle: String(localized: "Restore"))
         alert.addButton(withTitle: String(localized: "Cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return String(localized: "Restore cancelled.") }
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            RecipeJobBroker.shared.report(.restore, outcome: .cancelled, receipt: .init(kind: .none, id: ""), summary: "Restore cancelled")
+            return String(localized: "Restore cancelled.")
+        }
         #endif
         return await performRestore(from: verified.folder)
     }
@@ -176,10 +189,13 @@ enum ArchiveBackups {
             // R07 (LIFE-06): the restored archive carries its own paid-tier record; read it now so a
             // clean installation keeps the imported mail open without waiting for the next launch.
             await StoreManager.live?.refreshArchiveAccessRecord()
+            RecipeJobBroker.shared.reportInventory(.restore, folder: backup)
             ForensicManager.shared.logAction("Archive restored from backup",
                                              detail: "\(backup.lastPathComponent); the previous database was kept as a before-restore snapshot; \(relocated) locator paths moved to the restored copies")
             return String(localized: "Restored \(CountPhrase.emails(inventory.counts.emails)) from \(backup.lastPathComponent). Rebuild the search index next.")
         } catch {
+            RecipeJobBroker.shared.report(.restore, outcome: .failed, receipt: .init(kind: .none, id: ""),
+                                          summary: "Restore failed: \(error.localizedDescription)")
             return error.localizedDescription
         }
     }

@@ -493,7 +493,12 @@ struct DuplicateManagerView: View {
             await model.refreshFromStoreNow()
             if !result.trashed.isEmpty {
                 // The receipt is written only after the change really happened.
-                _ = await DocumentRegistry.post(.cleanup, summary: Self.receiptSummary(result))
+                let number = await DocumentRegistry.post(.cleanup, summary: Self.receiptSummary(result))
+                // v4.0 REC-02: a recipe step verifies the removal from this document.
+                RecipeJobBroker.shared.report(.dedupe, outcome: number == nil ? .unverifiable : .succeeded,
+                                              receipt: .init(kind: number == nil ? .none : .registryDocument, id: number ?? ""),
+                                              summary: "\(number ?? "no receipt"): \(Self.receiptSummary(result))",
+                                              count: result.trashed.count)
             }
             stripRemoved(Set(result.trashed))
             isRemoving = false
@@ -516,6 +521,8 @@ struct DuplicateManagerView: View {
             if closeWhenDone { closeSheet() }
         } catch {
             isRemoving = false
+            RecipeJobBroker.shared.report(.dedupe, outcome: .failed, receipt: .init(kind: .none, id: ""),
+                                          summary: "Duplicate removal failed — nothing was changed: \(error.localizedDescription)")
             legalHoldWarning = String(localized: "The duplicates could not be moved to the Trash — nothing was changed. \(error.localizedDescription)")
         }
     }
@@ -636,6 +643,13 @@ struct DuplicateManagerView: View {
             archiveRemovable = result.removable
             archivePlans = result.plans
             archiveCandidateGroups = result.candidateGroups
+            // v4.0 REC-02: a measured "nothing to remove" is a dedupe result;
+            // groups whose content differed still need the person.
+            if result.removable.isEmpty && result.candidateGroups == 0 {
+                RecipeJobBroker.shared.report(.dedupe, outcome: .succeeded,
+                                              receipt: .init(kind: .measurement, id: "0 verified duplicate copies archive-wide"),
+                                              summary: "Checked archive-wide: 0 verified duplicate copies to remove", count: 0)
+            }
         } catch {
             archiveRemovable = []
             archivePlans = []

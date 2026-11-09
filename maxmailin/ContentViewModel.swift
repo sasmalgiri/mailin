@@ -329,7 +329,10 @@ class ContentViewModel: ObservableObject {
                     urls: urls, options: options, callbacks: callbacks
                 )
                 self.finishImport(urls: urls, summary: summary, fileHashes: fileHashes)
+                // v4.0 REC-02: a recipe step waiting on an import verifies it from this receipt.
+                RecipeJobBroker.shared.reportImport(receipt: summary.receipt, receiptURL: summary.receiptURL)
             } catch is CancellationError {
+                RecipeJobBroker.shared.reportImport(receipt: nil, receiptURL: nil, cancelled: true)
                 self.isParsing = false
                 self.stopMemoryMonitoring()
                 self.statusMessage = "Import cancelled."
@@ -338,6 +341,7 @@ class ContentViewModel: ObservableObject {
                 self.loadingText = ""
                 ImportProgressNotifier.shared.cancelProgress()
             } catch {
+                RecipeJobBroker.shared.reportImport(receipt: nil, receiptURL: nil, error: error.localizedDescription)
                 self.isParsing = false
                 self.stopMemoryMonitoring()
                 self.parseErrors = [error.localizedDescription]
