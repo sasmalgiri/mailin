@@ -291,6 +291,76 @@ Owner 2026-11-08: implement every item of `Mailin_Fresh_Push_Release_Audit_bf1a5
 | R9 | Release preflight: wire the supplied native OLM/MBOX/EML and S/MIME pack into named paths, hashes and assertions; MAILIN_RELEASE_PREFLIGHT=1 green | implemented (OLM owner-bound) | dd33704, 3270618 | Owner 2026-11-09 allowed synthetic fixtures: S/MIME set made with OpenSSL 3.5.1 (RSA/EC/GCM envelopes, opaque/detached signatures, tampered copy, .p12 identities) and an Apple-Mail-written MBOX + EML set of the same 6 messages, in ~/Downloads/Mail/Fixtures/owner-pack/ with SHA256SUMS; 27 files pinned in ExternalFixtures; `OwnerPackFixtureTests` 7/7. MAILIN_RELEASE_PREFLIGHT=1 fails on exactly 1 of 35: the native Outlook for Mac .olm (Outlook not installed). |
 | R10 | Release-config test build; tracker reconciled against final code and evidence | implemented (owner step) | d29d300 | The test target compiles against Release (DEBUG-only hooks made inert-by-default, paywall bypass still Debug-only); shared scheme "maxmailin Release Tests" (Test action = Release). Owner step: Release has no ENABLE_TESTABILITY and a scheme cannot add it — either duplicate Release as "ReleaseTesting" with ENABLE_TESTABILITY=YES (project edit, rule 12: owner) or run `xcodebuild test -scheme "maxmailin Release Tests" ENABLE_TESTABILITY=YES` from Terminal. Tracker reconciled 2026-11-09. |
 
+## v4.0 — connected mail, result-driven recipes, Advanced Search, AI scaffolding (owner 2026-11-09)
+
+Owner 2026-11-09: "update the tracker with this and implement all" — `Mailin_V4_Online_Mail_Audit_and_Implementation_Plan_2026-11-09-3.md` (review of 18ea7c9). It **supersedes the 2026-11-05 "no live mail" scope** for v4.0 within its §0: the five jobs stay the product; Advanced Search in Free on the data Free may access; Pro = all shipped features; AI is disabled scaffolding only (customer's own key later, no developer key); **no new purchase product, no price change**; OpenPGP stays verify-only, Attach stays declined, no rights-managed retrieval; the archive iPad waiver is not evidence for online features. Order of work: plan §17. Each row records implemented → automatically verified → provider/device verified → candidate Release/UI verified.
+
+Review findings (plan §1.3) map to rows: CUR-01 → REC-02, CUR-02 → REC-04, CUR-03 → REC-05, CUR-04 → CLOSE-04, CUR-05/06/07 → CLOSE-03, CUR-08 → CLOSE-06. Code findings A01–A17 (plan §3) are covered by V4-01…V4-11.
+
+### Archive closeout
+
+| ID | Item | State | Commit | Test / evidence |
+|---|---|---|---|---|
+| CLOSE-01 | MSG > 2 GB and EMLX > 500 MB read by checked random access / streamed MIME, not whole-file (CUR: AppLimits rows) | not started | | |
+| CLOSE-02 | Durable recursive mailbox intake inside containers (ZIP→ZIP→MBOX, nested EML folders), resumable, no omission or duplicate | not started | | |
+| CLOSE-03 | Remaining format variants; iWork 2013+ unlock with bounded aggregate memory (CUR-05) and trailer integrity disclosed (CUR-06); RAR bounds kept honest (CUR-07) | not started | | |
+| CLOSE-04 | Native OLM preflight from the supplied pack (native-outlook.olm + oracle, ZIP SHA-256 3b4f0413…7b71e), kept apart from owner-pack/smime; pending-count assertion moved to an isolated test (CUR-04); strict mode needs zero unresolved | not started | | |
+| CLOSE-05 | Tracker / registry / Limits / help reconciled with actual evidence; extractor-version migration kept | not started | | |
+| CLOSE-06 | Release-config tests via `xcodebuild test -scheme "maxmailin Release Tests" -configuration Release ENABLE_TESTABILITY=YES`; focused five-journey Mac Release UI test (not the general crawl); sandbox / lifecycle / pilot gates | not started | | |
+
+### Result-driven recipes
+
+| ID | Item | State | Commit | Test / evidence |
+|---|---|---|---|---|
+| REC-01 | Typed RecipeRunContext (scope, SearchSpec, frozen selection, output, permissions); saved runs migrated | not started | | |
+| REC-02 | Recipe steps drive real import/search/dedupe/backup/restore/export jobs and keep job + receipt IDs; opening a tool never completes a step (CUR-01) | not started | | |
+| REC-03 | Durable recipe state machine (draft…completed); restart reconnects; explicit attestation only for genuinely manual tasks | not started | | |
+| REC-04 | Save failures surfaced, dirty values kept, no false "Saved" (CUR-02) | not started | | |
+| REC-05 | Counts, paths, hashes, skipped reasons and verification filled from receipts; choose → review → result (CUR-03) | not started | | |
+| REC-06 | Five practical recipes beside Archive/Search (find & export, find & save attachments, archive & clean up, back up & restore, collect & hand over); specialist library secondary | not started | | |
+| REC-07 | Online capture recipes: selective capture, archive-before-server-cleanup, deterministic capture/index rules | not started | | |
+| REC-08 | Recipe pilot: 9 of 10 first-time users per journey, partial output recognised (owner: participants) | not started | | |
+
+### Advanced Search across tiers
+
+| ID | Item | State | Commit | Test / evidence |
+|---|---|---|---|---|
+| SEARCH-01 | Advanced Search identical across Free / Personal / Pro / LIFE-06 on the same permitted data, AI off | not started | | |
+| SEARCH-02 | One serialised SearchSpec through toolbar, saved searches, recipes and captured online mail; frozen selection distinct from live search | not started | | |
+| SEARCH-03 | Active scope, filters, exact match location and incomplete coverage shown everywhere, nested files included | not started | | |
+| SEARCH-04 | Result / attachment browser and saved-query templates for the recipes | not started | | |
+
+### AI scaffolding (disabled)
+
+| ID | Item | State | Commit | Test / evidence |
+|---|---|---|---|---|
+| SCAF-01 | AI provider/profile/request protocols behind an unavailable production transport; mocks; mail and AI policies independent | not started | | |
+| SCAF-02 | Customer key profiles in Keychain (add/replace/remove, errors surfaced); no developer key; hidden until a runtime is enabled | not started | | |
+| SCAF-03 | Consent / request snapshot, eligibility, cancellation, budget interfaces and usage-ledger contract, tested with fakes | not started | | |
+| SCAF-04 | Existing Pro entitlement only — no new SKU, no price change; a key never unlocks Pro or starts inference | not started | | |
+| SCAF-05 | Activation checklist for a future live AI route (plan §13/15/16) | not started | | |
+
+### Connected mail
+
+| ID | Item | State | Commit | Test / evidence |
+|---|---|---|---|---|
+| V4-00 | Baseline: current head, Release build result, inherited archive gates; port live-mail branch concepts only | not started | | |
+| V4-01 | Separate mail and cloud-AI build/runtime policy; connected + offline Release configurations; network entitlement in the right file; OAuth URL schemes; info.plist path case | not started | | |
+| V4-02 | MailAccount + account-scoped Keychain credential store; native OAuth with PKCE + state; single-flight refresh | not started | | |
+| V4-03 | Provider adapter + archive sink contracts; migrations; account-qualified identities, occurrences, capture receipts; FIELD_CONTRACT.md | not started | | |
+| V4-04 | Persistent sync scheduler: staging, atomic commits, pagination/checkpoints, backoff, reconciliation, fair concurrency | not started | | |
+| V4-05 | Gmail: RAW MIME capture, labels as memberships, history sync, expired-history recovery, Spam/Trash choice | not started | | |
+| V4-06 | Outlook / M365: Graph MIME capture, full folder tree, per-folder delta, immutable IDs, real Inbox, shared mailboxes | not started | | |
+| V4-07 | IMAP: byte-correct UID engine, UIDVALIDITY, EXAMINE + BODY.PEEK[], capabilities, reconnect | not started | | |
+| V4-08 | Live mail through all five jobs; unscoped ingestEmails replaced | not started | | |
+| V4-09 | Durable multi-draft editor with attachment storage, correct recipients / Reply-To / aliases / threads | not started | | |
+| V4-10 | Sending: Gmail / Graph APIs and hardened SMTP (same-connection STARTTLS, dot transparency); durable outbox; uncertain outcomes; Sent reconciliation | not started | | |
+| V4-11 | Journalled server actions (flags, read, move/labels, Trash/restore); targeted UID EXPUNGE only; separate verified cleanup | not started | | |
+| V4-12 | External drives, backup/restore without credentials, account removal isolation, upgrade migration, storage pressure, LIFE-06 + outbox lifecycle | not started | | |
+| V4-13 | Mail workspace UI, onboarding, status/recovery, accessibility, keyboard, 10 languages; no placeholder controls | not started | | |
+| V4-14 | Google / Entra registrations, verification, privacy text and manifests, licences, store metadata (owner: accounts) | not started | | |
+| V4-15 | Deterministic, real-provider, fault, scale, regression and pilot gates on one candidate (T01–T48, RQ01–RQ12, B01–B06) | not started | | |
+
 ## Owner decisions needed
 - OLM reader and TAR/TGZ wrapper: adopted under the 2026-11-06 directive ("support all types") and built (TYPE-06). Still needed from the owner: one real `.olm` export from Outlook for Mac to run against.
 - OUT-05 Apple Mail / Thunderbird interactive import runs.

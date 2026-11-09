@@ -1,5 +1,13 @@
 # mailin — instructions for every coding session
 
+## v4.0 scope (owner decision 2026-11-09) — read first
+
+The owner extended the release to **v4.0** with `Mailin_V4_Online_Mail_Audit_and_Implementation_Plan_2026-11-09-3.md`
+(tracked in `FIVE_JOBS_TRACKER.md` § "v4.0"): connected mail (Gmail, Outlook/M365, IMAP capture; drafts, outbox,
+separately authorised server actions) feeding the same five jobs, result-driven recipes, Advanced Search in Free,
+and **disabled** BYOK AI scaffolding. No new purchase product, no price change. Where the section below says
+"no live mail", the v4.0 decision overrides it; every other rule stays.
+
 ## Current goal (owner decision 2026-11-05)
 
 The next release makes the **five archive jobs** fully functional end to end: **open large archives,
