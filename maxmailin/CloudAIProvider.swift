@@ -1,5 +1,5 @@
 @testable import ArchiveCore
-#if !NO_NETWORK_BUILD
+#if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
 import Foundation
 import os
 

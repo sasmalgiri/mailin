@@ -170,6 +170,11 @@ enum CapabilityWiring {
                 AttachmentHydrator.partProvider = nil
             }
 
+        case .connectedMail:
+            // V4-01: every mail transport asks MailNetworkPolicy before any network
+            // step; off (page or switch) cancels registered mail work.
+            MailNetworkPolicy.shared.setMailEnabled(isOn)
+
         case .aiAssistant:
             // Language detection's low-confidence path consults the on-device
             // model. It is reached from ARCHIVE analytics, so without this

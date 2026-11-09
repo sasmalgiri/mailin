@@ -332,12 +332,18 @@ final class CapabilityMatrixTests: XCTestCase {
         }
     }
 
-    /// Live Mail ships nothing in this build — its features are
-    /// `.notInThisBuild` — so offering switches for them would be offering
-    /// switches that cannot work.
-    func testEveryCapabilityHasAnOwnerAndLiveMailOwnsNone() {
-        XCTAssertTrue(Capability.all(for: .liveMail).isEmpty,
-                      "Live Mail ships nothing in this build, so it must own no switches")
+    /// Live Mail owns exactly one switch, the V4-01 network policy
+    /// (`connectedMail`, preview, off). Its features are otherwise
+    /// `.notInThisBuild`, and a build without the mail transports excludes the
+    /// page, so the switch can never be on there.
+    func testEveryCapabilityHasAnOwnerAndLiveMailOwnsOnlyThePolicy() {
+        XCTAssertEqual(Capability.all(for: .liveMail), [.connectedMail],
+                       "Live Mail owns only the connected-mail policy switch")
+        XCTAssertFalse(Capability.connectedMail.defaultsOn)
+        if !ConnectedBuildFeatures.mailTransportsCompiled {
+            XCTAssertTrue(ModuleRegistry.buildExclusions.contains(.liveMail),
+                          "a build without mail transports must exclude the Live Mail page")
+        }
         for module in [AppModule.archive, .aiInsights, .professional] {
             XCTAssertFalse(Capability.all(for: module).isEmpty,
                            "\(module.rawValue) should own at least one capability")

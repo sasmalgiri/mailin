@@ -1,5 +1,5 @@
 @testable import ArchiveCore
-#if !NO_NETWORK_BUILD
+#if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
 import SwiftUI
 #if canImport(AppKit)
 import AppKit

@@ -136,7 +136,7 @@ struct SettingsView: View {
     @State private var showDeleteAllConfirmation = false
     @State private var allDataDeleted = false
     @ObservedObject private var compliance = LegalComplianceManager.shared
-    #if !NO_NETWORK_BUILD
+    #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
     @ObservedObject private var cloudAI = CloudAIManager.shared
     #endif
     @State private var openAIKeyInput = ""
@@ -985,7 +985,7 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
 
-            #if !NO_NETWORK_BUILD
+            #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
             Section {
                 Toggle("Enable Cloud AI", isOn: Binding(
                     get: { cloudAI.isEnabled },
@@ -1148,7 +1148,7 @@ struct SettingsView: View {
         .padding()
     }
 
-    #if !NO_NETWORK_BUILD
+    #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
     private func testAPIKey() {
         isTestingAPIKey = true
         apiKeyTestResult = ""
@@ -1604,7 +1604,7 @@ struct SettingsView: View {
         autoAdvanceAfterTag = true
         hasConsentedToCloudAI = false
         KeychainHelper.delete(key: "apiKey")
-        #if !NO_NETWORK_BUILD
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         cloudAI.clearAPIKey(for: .openAI)
         cloudAI.clearAPIKey(for: .anthropic)
         cloudAI.isEnabled = false
