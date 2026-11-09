@@ -41,35 +41,24 @@ struct ParserFactory {
             return all
         }
 
-        // Containers (ZIP / gzip): one member at a time to a scratch file,
-        // classified on its own bytes, parsed, deleted. Members that are not
-        // mail, are encrypted, or are themselves containers are skipped; the
-        // array path has no report to count them in, so they are logged.
+        // Containers (ZIP, gzip, tar, 7z, RAR) — CLOSE-02: every level, one
+        // member at a time to a scratch file, classified on its own bytes,
+        // parsed or descended into, deleted (`ContainerMailboxWalk`). The array
+        // path has no report to count refusals in, so they are logged.
         if classification.format.isContainer {
-            let listing = try containerListing(fileURL, format: classification.format)
-            let steps = listing.steps
-            let wrapper = listing.wrapper   // IPAD-01: member names carry the folders
-            let scratch = try containerScratchDirectory()
-            defer { try? FileManager.default.removeItem(at: scratch) }
+            let walk = try ContainerMailboxWalk(root: fileURL, format: classification.format)
+            defer { walk.close() }
             var all: [MBOXParser.RawEmail] = []
-            var sawMail = false
-            for (index, step) in steps.enumerated() {
-                let dest = scratch.appendingPathComponent("\(index)-\(Self.safeMemberFileName(step.name))")
-                defer { try? FileManager.default.removeItem(at: dest) }
-                switch try containerMemberDisposition(step, extractingTo: dest, nestedContainerAllowed: nestedContainerAllowed) {
-                case .refused, .notMail, .nestedContainer:
-                    continue
-                case .mail:
-                    sawMail = true
-                    all += stamp(try parse(fileURL: dest, senderEmail: senderEmail, onProgress: { fraction in
-                        onProgress?((Double(index) + fraction) / Double(steps.count))
-                    }, nestedContainerAllowed: false),
-                    folder: SourceFormatClassifier.containerFolderPath(memberName: step.name, wrapper: wrapper))
-                }
+            while let event = try walk.next() {
+                guard case .mailbox(let url, let folder, _, _) = event else { continue }
+                let base = walk.topLevelFraction
+                all += stamp(try parse(fileURL: url, senderEmail: senderEmail, onProgress: { fraction in
+                    onProgress?(base + fraction / Double(max(1, walk.topLevelCount)))
+                }, nestedContainerAllowed: false), folder: folder)
             }
-            guard sawMail else {
+            guard walk.sawMail else {
                 throw ExtractionError.unsupportedFormat(
-                    reason: "\(classification.summary). No mailbox files were found inside it (\(steps.count) member\(steps.count == 1 ? "" : "s") examined).")
+                    reason: "\(classification.summary). No mailbox files were found inside it (\(walk.topLevelCount) member\(walk.topLevelCount == 1 ? "" : "s") examined).")
             }
             return all
         }
@@ -167,7 +156,7 @@ struct ParserFactory {
             let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
             let all = try ZIPArchiveReader.members(source: source)
             return ContainerListing(steps: all
-                .filter { !$0.isDirectory && !$0.isJunk }
+                .filter { !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         if let set, set.isDiskMissing(member.diskNumberStart) || set.diskBase(member.diskNumberStart) == nil {
@@ -185,7 +174,7 @@ struct ParserFactory {
             let reader = try SevenZipReader(source: source)
             let all = reader.members
             return ContainerListing(steps: all
-                .filter { !$0.isDirectory && !$0.isJunk && !$0.isAnti }
+                .filter { !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) && !$0.isAnti }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         if member.isSymlink { throw SevenZipReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
@@ -203,7 +192,7 @@ struct ParserFactory {
                                                     siblings: SplitVolumeSet.directorySiblings(of: url))
             let all = extractor.archive.members
             return ContainerListing(steps: all
-                .filter { !$0.isDirectory && !$0.isJunk }
+                .filter { !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         if member.isSymlink { throw RARReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
@@ -216,7 +205,7 @@ struct ParserFactory {
             // carry no mail and are not extracted.
             let all = try TARReader.members(of: url)
             return ContainerListing(steps: all
-                .filter { $0.isRegularFile && !$0.isDirectory && !$0.isJunk }
+                .filter { $0.isRegularFile && !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) }
                 .map { member in
                     ContainerStep(name: member.name) { dest in
                         try TARReader.extract(member, from: url, to: dest)
@@ -235,6 +224,14 @@ struct ParserFactory {
         return dir
     }
 
+    /// CLOSE-02: an absolute, drive-letter or `..` name. Such a member is kept
+    /// in the listing even when its name also looks like OS junk (`../x`
+    /// starts with a dot), so the walk refuses and counts it rather than
+    /// dropping it unseen.
+    static func isUnsafeMemberName(_ name: String) -> Bool {
+        SevenZipReader.unsafePathReason(name) != nil
+    }
+
     /// A member name flattened to one path component, so a crafted archive
     /// path can never escape the scratch directory (zip-slip).
     static func safeMemberFileName(_ name: String) -> String {
@@ -246,42 +243,22 @@ struct ParserFactory {
     /// Extracts one member and decides what it is. A refusal (encrypted,
     /// damaged, would not fit on disk) is logged and does not stop the other
     /// members; the scratch file is removed on anything but `.mail`.
-    ///
-    /// TYPE-06: one level of nesting is followed (a `.tgz` is gzip → tar →
-    /// members; a Takeout ZIP may hold `.mbox.gz` files). A container inside
-    /// that inner container is skipped and counted, so the walk is bounded.
+    /// `nestedContainerAllowed` reports an archive as `.mail` (to be opened by
+    /// the caller); otherwise it is `.nestedContainer`. The import walk itself
+    /// is `ContainerMailboxWalk` (CLOSE-02, every level).
     static func containerMemberDisposition(_ step: ContainerStep, extractingTo dest: URL,
                                            nestedContainerAllowed: Bool = false) throws -> ContainerMemberDisposition {
-        do {
-            try step.extract(dest)
-        } catch let error as ZIPArchiveReader.ReadError {
-            containerLog.error("container member refused: \(error.description, privacy: .private)")
+        switch try extractAndClassify(step, to: dest) {
+        case .refused(_, let detail):
+            containerLog.error("container member refused: \(detail, privacy: .private)")
             return .refused
-        } catch let error as TARReader.ReadError {
-            containerLog.error("container member refused: \(error.description, privacy: .private)")
-            return .refused
-        } catch let error as SevenZipReader.ReadError {
-            containerLog.error("container member refused: \(error.description, privacy: .private)")
-            return .refused
-        } catch let error as RARReader.ReadError {
-            containerLog.error("container member refused: \(error.description, privacy: .private)")
-            return .refused
-        } catch let error as SplitVolumeError {
-            containerLog.error("container member refused: \(error.description, privacy: .private)")
-            return .refused
-        }
-        let inner = SourceFormatClassifier.classify(url: dest)
-        if inner.format.isContainer {
+        case .notMail: return .notMail
+        case .mail: return .mail
+        case .container:
             if nestedContainerAllowed { return .mail }
-            containerLog.notice("nested container skipped: \(step.name, privacy: .private)")
             try? FileManager.default.removeItem(at: dest)
             return .nestedContainer
         }
-        guard inner.isSupported else {
-            try? FileManager.default.removeItem(at: dest)
-            return .notMail
-        }
-        return .mail
     }
 
     /// Stable parser identity (type + version) for a file extension. Used to
@@ -388,6 +365,8 @@ struct ParserFactory {
         materializeAttachments: Bool = true,
         onProgress: ((Double) -> Void)? = nil,
         nestedContainerAllowed: Bool = true,
+        containerResume: ContainerWalkCursor? = nil,
+        onContainerMemberFinished: ((ContainerWalkCursor) async throws -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> MBOXParser.ParseRecoveryReport {
         // Content decides which parser runs. Routing on the extension alone
@@ -401,64 +380,75 @@ struct ParserFactory {
                     .compactMap { $0 }.joined(separator: " "))
         }
 
-        // Containers stream member-by-member too: one member is extracted to
-        // scratch, drained through `onBatch`, and deleted before the next is
-        // touched, so peak memory AND scratch disk stay bounded by one member.
-        // Refused / non-mail / nested members are counted in the report's
-        // categories (not as failed messages — they are not messages).
+        // Containers stream member-by-member too, at every level (CLOSE-02,
+        // `ContainerMailboxWalk`): one member is extracted to its level's
+        // scratch, drained through `onBatch` or descended into, and deleted
+        // before the next is touched, so peak memory AND scratch disk stay
+        // bounded by one member per open level. Refused / non-mail / skipped
+        // members are counted in the report's categories (not as failed
+        // messages — they are not messages). A `containerResume` cursor starts
+        // the walk after the last finished member; the walk reports each
+        // finished member through `onContainerMemberFinished`.
         if classification.format.isContainer {
-            let listing = try containerListing(fileURL, format: classification.format)
-            let steps = listing.steps
-            // IPAD-01: each member is extracted to a flat scratch file, so its
-            // folder comes from its name in the archive; mailbox packages the
-            // names list are declared even when empty (same as the unzipped tree).
-            let wrapper = listing.wrapper
-            let scratch = try containerScratchDirectory()
-            defer { try? FileManager.default.removeItem(at: scratch) }
-            var total = 0, parsed = 0, failed = 0
-            var categories: [String: Int] = [:]
-            var declaredFolders = Set(listing.declaredFolders(wrapper: wrapper))
-            var sawMail = false
-            for (index, step) in steps.enumerated() {
+            let walk = try ContainerMailboxWalk(root: fileURL, format: classification.format, resume: containerResume)
+            defer { walk.close() }
+            var emitted = containerResume?.messagesEmitted ?? 0
+            var total = containerResume?.totalMessages ?? 0
+            var parsed = containerResume?.parsed ?? 0
+            var failed = containerResume?.failed ?? 0
+            var quietSinceReport = 0
+            func cursor(_ path: [Int], _ names: [String]) -> ContainerWalkCursor {
+                ContainerWalkCursor(memberPath: path, memberNames: names, messagesEmitted: emitted,
+                                    totalMessages: total, parsed: parsed, failed: failed,
+                                    categories: walk.categories, declaredFolders: walk.declaredFolders.sorted(),
+                                    sawMail: walk.sawMail)
+            }
+            while let event = try walk.next() {
                 try Task.checkCancellation()
-                let dest = scratch.appendingPathComponent("\(index)-\(Self.safeMemberFileName(step.name))")
-                defer { try? FileManager.default.removeItem(at: dest) }
-                switch try containerMemberDisposition(step, extractingTo: dest, nestedContainerAllowed: nestedContainerAllowed) {
-                case .refused: categories["container_member_refused", default: 0] += 1
-                case .notMail: categories["container_member_not_mail", default: 0] += 1
-                case .nestedContainer: categories["container_nested_skipped", default: 0] += 1
-                case .mail:
-                    sawMail = true
-                    let folder = SourceFormatClassifier.containerFolderPath(memberName: step.name, wrapper: wrapper)
-                    if let folder { declaredFolders.insert(folder) }
+                switch event {
+                case .finished(let path, let names, let nestedArchive):
+                    // A cursor behind the truth is always safe (the ordinal
+                    // checkpoint skips what is committed), so members without
+                    // messages are reported in groups; archives always.
+                    quietSinceReport += 1
+                    if nestedArchive || quietSinceReport >= 256 {
+                        quietSinceReport = 0
+                        try await onContainerMemberFinished?(cursor(path, names))
+                    }
+                case .mailbox(let url, let folder, let path, let names):
+                    let base = walk.topLevelFraction
+                    let count = Double(max(1, walk.topLevelCount))
                     let report = try await parseStreamingCallback(
-                        fileURL: dest,
+                        fileURL: url,
                         senderEmail: senderEmail,
                         batchSize: batchSize,
                         envelopeProvider: envelopeProvider,
                         retainAttachmentBytes: retainAttachmentBytes,
                         materializeAttachments: materializeAttachments,
-                        onProgress: { fraction in
-                            onProgress?((Double(index) + fraction) / Double(steps.count))
-                        },
+                        onProgress: { fraction in onProgress?(base + fraction / count) },
                         nestedContainerAllowed: false,
-                        onBatch: { batch in try await onBatch(Self.stamp(batch, folder: folder)) }
+                        onBatch: { batch in
+                            emitted += batch.count
+                            try await onBatch(Self.stamp(batch, folder: folder))
+                        }
                     )
                     total += report.totalMessages
                     parsed += report.successfullyParsed
                     failed += report.failed
-                    for (key, count) in report.errorCategories { categories[key, default: 0] += count }
-                    declaredFolders.formUnion(report.declaredFolders)
+                    for (key, count) in report.errorCategories { walk.categories[key, default: 0] += count }
+                    walk.declaredFolders.formUnion(report.declaredFolders)
+                    quietSinceReport = 0
+                    try await onContainerMemberFinished?(cursor(path, names))
                 }
             }
-            guard sawMail else {
+            guard walk.sawMail else {
                 throw ExtractionError.unsupportedFormat(
-                    reason: "\(classification.summary). No mailbox files were found inside it (\(steps.count) member\(steps.count == 1 ? "" : "s") examined).")
+                    reason: "\(classification.summary). No mailbox files were found inside it (\(walk.topLevelCount) member\(walk.topLevelCount == 1 ? "" : "s") examined).")
             }
             var report = MBOXParser.ParseRecoveryReport(
                 totalMessages: total, successfullyParsed: parsed,
-                failed: failed, errorCategories: categories)
-            report.declaredFolders = declaredFolders.sorted()
+                failed: failed, errorCategories: walk.categories)
+            report.declaredFolders = walk.declaredFolders.sorted()
             return report
         }
 

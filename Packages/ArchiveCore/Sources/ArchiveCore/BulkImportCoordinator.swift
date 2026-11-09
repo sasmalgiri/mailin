@@ -998,15 +998,46 @@ final class BulkImportCoordinator {
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
                         let batchSink = MainActorSink<[MBOXParser.RawEmail]> { batch in try await persistBatch(batch) }
-                        fileReport = try await ParserFactory.parseStreamingCallback(
-                            fileURL: importURL,
-                            senderEmail: options.senderEmail,
-                            batchSize: batchSize,
-                            envelopeProvider: envelopeProvider,
-                            materializeAttachments: false,   // bulk import: no temp copy per attachment
-                            onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } },
-                            onBatch: { @Sendable batch in try await batchSink.send(batch) }
-                        )
+                        // CLOSE-02: a container source resumes after the last
+                        // member whose messages are all committed, with its
+                        // ordinals continuing from the cursor — never ahead of
+                        // the ordinal checkpoint (a cursor that is, e.g. after
+                        // a store restore, is ignored and the walk starts over).
+                        var containerResume: ContainerWalkCursor? = nil
+                        if classification.format.isContainer {
+                            if let cursor = await checkpoints.containerCursor(for: identity), cursor.messagesEmitted <= resumeFrom {
+                                containerResume = cursor
+                                parsedInFile = cursor.messagesEmitted
+                                if resumeFrom > 0 {
+                                    summary.resumedDetail = "Resumed \(sourceName) at message \(resumeFrom) (identity-verified checkpoint), after archive member \(cursor.memberNames.joined(separator: " › "))."
+                                }
+                            } else {
+                                await checkpoints.clearContainerCursor(sha256: hash)
+                            }
+                        }
+                        let cursorStore = checkpoints
+                        let cursorSink = MainActorSink<ContainerWalkCursor> { cursor in
+                            await cursorStore.recordContainerCursor(cursor, identity: identity)
+                        }
+                        do {
+                            fileReport = try await ParserFactory.parseStreamingCallback(
+                                fileURL: importURL,
+                                senderEmail: options.senderEmail,
+                                batchSize: batchSize,
+                                envelopeProvider: envelopeProvider,
+                                materializeAttachments: false,   // bulk import: no temp copy per attachment
+                                onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } },
+                                containerResume: containerResume,
+                                onContainerMemberFinished: { @Sendable cursor in try await cursorSink.send(cursor) },
+                                onBatch: { @Sendable batch in try await batchSink.send(batch) }
+                            )
+                        } catch let error as ContainerWalkError {
+                            // The saved place no longer matches: drop it, so the
+                            // next import walks from the first member (the
+                            // ordinal checkpoint still skips what is committed).
+                            await checkpoints.clearContainerCursor(sha256: hash)
+                            throw error
+                        }
                     }
                 } catch {
                     fileError = error
@@ -1024,6 +1055,10 @@ final class BulkImportCoordinator {
                     // were not mail, encrypted or nested are "unresolved", as are
                     // Maildir tmp/ files the layout says are not messages.
                     let unresolved = report.errorCategories.filter { $0.key.hasPrefix("container_") || $0.key.hasPrefix("maildir_") }.values.reduce(0, +)
+                    // CLOSE-02: archive members not imported, each with its reason.
+                    if let line = Self.containerRefusalLine(sourceName: sourceName, categories: report.errorCategories) {
+                        summary.warnings.append(line)
+                    }
                     noteSource {
                         $0.discovered = report.totalMessages
                         $0.parsed = parsedInFile
@@ -1304,6 +1339,27 @@ final class BulkImportCoordinator {
         return ((try? regularFiles(under: url)) ?? []).reduce(0) {
             $0 + ((try? $1.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
         }
+    }
+}
+
+extension BulkImportCoordinator {
+    /// CLOSE-02: "<source>: 3 archive members not imported — 1 encrypted, 1
+    /// volume missing, 1 unsafe path", plus archives skipped by the
+    /// self-containing guard; nil when every member was read.
+    nonisolated static func containerRefusalLine(sourceName: String, categories: [String: Int]) -> String? {
+        var parts = categories
+            .filter { $0.key.hasPrefix("reason:") && $0.value > 0 }
+            .sorted { $0.key < $1.key }
+            .map { "\($0.value) \($0.key.dropFirst("reason:".count))" }
+        if let n = categories["container_cycle_skipped"], n > 0 { parts.append("\(n) archive\(n == 1 ? "" : "s") that contain\(n == 1 ? "s" : "") itself") }
+        if let n = categories["container_nesting_guard_skipped"], n > 0 {
+            parts.append("\(n) archive\(n == 1 ? "" : "s") more than \(ContainerMailboxWalk.selfContainingGuardDepth) archives deep (treated as self-containing)")
+        }
+        guard !parts.isEmpty else { return nil }
+        let refused = categories["container_member_refused"] ?? 0
+        let skipped = (categories["container_cycle_skipped"] ?? 0) + (categories["container_nesting_guard_skipped"] ?? 0)
+        let n = refused + skipped
+        return "\(sourceName): \(n) archive member\(n == 1 ? "" : "s") not imported — \(parts.joined(separator: ", "))."
     }
 }
 

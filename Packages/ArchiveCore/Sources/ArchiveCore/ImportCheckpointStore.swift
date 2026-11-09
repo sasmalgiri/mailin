@@ -150,6 +150,7 @@ actor ImportCheckpointStore {
     /// Record that a file has been fully ingested. Idempotent; clears any
     /// in-progress checkpoint for this file. Throws when it cannot persist.
     func record(sha256: String, sourceName: String, emailCount: Int) async throws {
+        defer { clearContainerCursor(sha256: sha256) }
         switch backend {
         case .store(let store):
             do { try await store.importCheckpointRecord(sha256: sha256, sourceName: sourceName, emailCount: emailCount) }
@@ -220,8 +221,74 @@ actor ImportCheckpointStore {
         }
     }
 
+    // MARK: - CLOSE-02: where a container walk stands
+
+    /// The container-walk cursor beside a progress checkpoint, bound to the
+    /// same identity. Advisory by design: the ordinal checkpoint above is the
+    /// truth about committed rows; the cursor only lets a resumed walk start
+    /// after members already finished instead of extracting them again, and
+    /// carries the report so far. It is written after a member's batches have
+    /// committed, so it can be behind the ordinal (safe: those messages are
+    /// skipped by ordinal) but never ahead; one that is ahead (a restored
+    /// store) is ignored by the caller.
+    private struct ContainerCursorFile: Codable {
+        var sha256: String
+        var sizeBytes: Int
+        var parser: String
+        var parserVersion: Int
+        var schemaVersion: Int
+        var cursor: ContainerWalkCursor
+    }
+
+    private func containerCursorDirectory() -> URL? {
+        switch backend {
+        case .store(let store):
+            return store.storeDirectory.appendingPathComponent("import-container-cursors", isDirectory: true)
+        case .json:
+            return (try? storeURL())?.deletingLastPathComponent().appendingPathComponent("import-container-cursors", isDirectory: true)
+        }
+    }
+
+    private func containerCursorURL(sha256: String) -> URL? {
+        containerCursorDirectory()?.appendingPathComponent("\(sha256).json")
+    }
+
+    /// The saved walk position for this exact source and parser, or nil.
+    func containerCursor(for identity: ResumeIdentity) -> ContainerWalkCursor? {
+        guard let url = containerCursorURL(sha256: identity.sha256),
+              let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(ContainerCursorFile.self, from: data),
+              file.sha256 == identity.sha256, file.sizeBytes == identity.sizeBytes,
+              file.parser == identity.parser, file.parserVersion == identity.parserVersion,
+              file.schemaVersion == Self.checkpointSchemaVersion,
+              file.cursor.walkVersion == ContainerWalkCursor.walkVersion else { return nil }
+        return file.cursor
+    }
+
+    /// Saves the walk position (atomic replace). A failed write leaves the
+    /// older cursor, which is behind and therefore still safe; it is logged.
+    func recordContainerCursor(_ cursor: ContainerWalkCursor, identity: ResumeIdentity) {
+        guard let dir = containerCursorDirectory(), let url = containerCursorURL(sha256: identity.sha256) else { return }
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let file = ContainerCursorFile(sha256: identity.sha256, sizeBytes: identity.sizeBytes, parser: identity.parser,
+                                           parserVersion: identity.parserVersion, schemaVersion: Self.checkpointSchemaVersion,
+                                           cursor: cursor)
+            try JSONEncoder().encode(file).write(to: url, options: .atomic)
+            ArtifactProtection.applyBackgroundReadable(to: url)
+        } catch {
+            Self.logger.error("container walk cursor not saved (the walk resumes from an earlier member): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func clearContainerCursor(sha256: String) {
+        guard let url = containerCursorURL(sha256: sha256) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
     /// Forget every checkpoint (used by "clear all data" flows).
     func reset() async throws {
+        if let dir = containerCursorDirectory() { try? FileManager.default.removeItem(at: dir) }
         switch backend {
         case .store(let store):
             do { try await store.importCheckpointReset() }

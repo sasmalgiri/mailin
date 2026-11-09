@@ -643,7 +643,7 @@ struct ContainerImportTests {
 
     /// TYPE-06 (ee97c52) made one level of nesting part of the import (a
     /// ZIP inside the ZIP is opened; a second level is skipped and counted —
-    /// `tgzIsFollowedOneLevel_deeperIsCounted`). An encrypted member is still
+    /// `tgzIsFollowedAtEveryLevel` — since CLOSE-02 every level is opened). An encrypted member is still
     /// refused and counted, never imported.
     @Test("An encrypted member is refused and counted; a nested archive one level down is followed")
     func encryptedAndNestedAreSkipped() async throws {
@@ -665,7 +665,7 @@ struct ContainerImportTests {
         #expect(result.array == 4)
         #expect(result.subjects == ["First", "Second", "Third", "Fourth"])
         #expect(result.report.errorCategories["container_member_refused"] == 1, "the encrypted member")
-        #expect(result.report.errorCategories["container_nested_skipped"] == nil, "one level of nesting is followed; only a second level is skipped")
+        #expect(result.report.errorCategories["container_nested_skipped"] == nil, "nesting is followed at every level (CLOSE-02)")
     }
 
     @Test("A member that would not fit on the scratch volume is refused before a byte is written")
@@ -1036,8 +1036,8 @@ extension ContainerImportTests {
         #expect(result.report.errorCategories["container_member_not_mail"] == 1, "readme.txt; .DS_Store is never extracted")
     }
 
-    @Test("A .tgz is gzip → tar → members: one level of nesting is followed, a second level is skipped and counted")
-    func tgzIsFollowedOneLevel_deeperIsCounted() async throws {
+    @Test("A .tgz is gzip → tar → members, and a tar inside that tar is opened too (CLOSE-02: every level)")
+    func tgzIsFollowedAtEveryLevel() async throws {
         let innerTar = Self.type06File("inner.tar")
         defer { try? FileManager.default.removeItem(at: innerTar) }
         try TARFixtureWriter.write([.file(name: "deep.mbox", payload: Data(mboxText.utf8))], to: innerTar)
@@ -1055,9 +1055,9 @@ extension ContainerImportTests {
         #expect(classification.nameContentMismatch == false, ".tgz is a gzip name")
 
         let result = try await Self.importAll(tgz)
-        #expect(result.array.count == 6)
-        #expect(result.streamed.count == 6)
-        #expect(result.report.errorCategories["container_nested_skipped"] == 1, "inner.tar inside the tar inside the gzip")
+        #expect(result.array.count == 8, "the tar's six and inner.tar's two")
+        #expect(result.streamed.count == 8)
+        #expect(result.report.errorCategories["container_nested_skipped"] == nil, "inner.tar inside the tar inside the gzip is opened")
     }
 
     @Test("A tar whose last member runs past the end is named as damaged before import; the members before it still import")

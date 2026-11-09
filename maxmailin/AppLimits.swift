@@ -95,8 +95,10 @@ enum AppLimits {
                      why: String(localized: "A file with a longer unbroken line is not a mailbox; it is refused with that reason, never partly read.")),
             AppLimit(kind: .safety, what: String(localized: "Header block of one message"), value: bytes(Int64(OffsetMBOXScanner().maxHeaderBytes)),
                      why: String(localized: "Header fields beyond it are not read; the message, its body and its bytes are kept whole.")),
-            AppLimit(kind: .safety, what: String(localized: "Mailboxes inside archives"), value: String(localized: "one archive level"),
-                     why: String(localized: "A mailbox inside a ZIP, TAR or 7z is imported; one inside an archive inside an archive is counted as skipped in the import report.")),
+            // CLOSE-02: every level is opened; the one guard is against archives built to loop.
+            AppLimit(kind: .safety, what: String(localized: "Mailboxes inside archives"),
+                     value: String(localized: "every level, up to \(ContainerMailboxWalk.selfContainingGuardDepth) archives deep"),
+                     why: String(localized: "A mailbox inside a ZIP, gzip, TAR, 7z or RAR is imported however many archives it sits in, with the folders of every level, using scratch space for one file per level. An archive that contains itself, or one deeper than this, is treated as made to loop: it is skipped and counted in the import report. An interrupted import resumes after the last file it finished.")),
             // CLOSE-01: the .msg (2 GB) and .emlx (500 MB) whole-file refusals are gone — both are read by
             // range through a file handle; one above the full-parse ceiling is imported like any large
             // message (the "Single message size" row above), so there is no row of their own.

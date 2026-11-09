@@ -79,7 +79,7 @@ final class ImportContainerTests: XCTestCase {
 
     // MARK: - 7z source
 
-    func testSevenZipSource_mailboxesImport_nonMailCounted_oneLevelOfNestingFollowed() async throws {
+    func testSevenZipSource_mailboxesImport_nonMailCounted_everyLevelOfNestingFollowed() async throws {
         let deeper = dir.appendingPathComponent("deeper.7z")
         try SevenZipFixtureWriter.write([.init(name: "lost.mbox", data: Self.mbox(["Lost"]))], to: deeper)
         let inner = dir.appendingPathComponent("inner.7z")
@@ -100,12 +100,13 @@ final class ImportContainerTests: XCTestCase {
         XCTAssertEqual(SourceFormatClassifier.classify(url: url).format, .sevenZip)
         XCTAssertEqual(SourceFormatClassifier.preflight(url: url).condition, .ready)
         let result = try await importBothWays(url)
-        XCTAssertEqual(result.array, 6)
-        XCTAssertEqual(result.streamed, 6)
-        XCTAssertEqual(result.subjects, ["First", "Second", "Third", "Fourth", "Fifth", "Sixth"])
+        // CLOSE-02: deeper.7z inside inner.7z (two levels down) is opened too.
+        XCTAssertEqual(result.array, 7)
+        XCTAssertEqual(result.streamed, 7)
+        XCTAssertEqual(result.subjects, ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Lost"])
         XCTAssertEqual(result.report.failed, 0)
         XCTAssertEqual(result.report.errorCategories["container_member_not_mail"], 1)
-        XCTAssertEqual(result.report.errorCategories["container_nested_skipped"], 1, "deeper.7z inside inner.7z is two levels down")
+        XCTAssertNil(result.report.errorCategories["container_nested_skipped"], "no level is skipped")
         XCTAssertNil(result.report.errorCategories["container_member_refused"])
     }
 
