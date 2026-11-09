@@ -1642,7 +1642,7 @@ struct FoundationModelEngine {
         var expertFindings: [(ExpertRole, AISessionFindings)] = []
         var subFindings: [(String, AISessionFindings)] = []
 
-        #if !NO_NETWORK_BUILD
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         var cloudExpertResults: [CloudExpertFinding] = []
         let cloudAIReady = await CloudAIManager.shared.isReady
         let cloudRoles: [CloudAIManager.CloudExpertRole] = cloudAIReady
@@ -1741,7 +1741,7 @@ struct FoundationModelEngine {
             }
         }
 
-        #if !NO_NETWORK_BUILD
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         // Integrate cloud expert findings into the unified findings list
         for cloudResult in cloudExpertResults {
             for f in cloudResult.findings {
@@ -1839,7 +1839,7 @@ struct FoundationModelEngine {
 
         synthesisContext = String(synthesisContext.prefix(contextCharBudget))
 
-        #if !NO_NETWORK_BUILD
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         // Append cloud expert findings to synthesis context
         if !cloudExpertResults.isEmpty {
             synthesisContext += "\nCLOUD EXPERT FINDINGS (world knowledge + advanced analysis):\n"
@@ -1885,7 +1885,7 @@ struct FoundationModelEngine {
         }
 
         // Cloud cross-validation when available and findings are substantial
-        #if !NO_NETWORK_BUILD
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         if cloudAIReady && allFindings.count >= 3 {
             let validationEmailCtx = CloudAIManager.buildEmailContext(
                 from: ragRetrievedEmails.isEmpty ? emails : ragRetrievedEmails, maxEmails: 8
@@ -1938,7 +1938,7 @@ struct FoundationModelEngine {
         provenanceBuilder.highRelevanceCount = highCount
         provenanceBuilder.linkedFindings = linkedCount
         var synthesisLayers = layerCount
-        #if !NO_NETWORK_BUILD
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         if cloudExpertCount > 0 { synthesisLayers += 1 }
         #endif
         provenanceBuilder.synthesisLayerCount = synthesisLayers
@@ -5344,7 +5344,7 @@ struct FoundationModelEngine {
         emailCount: Int,
         intent: QueryIntent
     ) -> ModelRoute {
-        #if NO_NETWORK_BUILD
+        #if NO_NETWORK_BUILD || !MAILIN_CLOUD_AI
         return .onDeviceOnly
         #else
         let cloudReady: Bool = {
@@ -5388,7 +5388,7 @@ struct FoundationModelEngine {
         emails: [MBOXParser.RawEmail],
         onUpdate: @MainActor @Sendable @escaping (String) -> Void
     ) async -> String {
-        #if NO_NETWORK_BUILD
+        #if NO_NETWORK_BUILD || !MAILIN_CLOUD_AI
         return onDeviceAnswer
         #else
         switch route {

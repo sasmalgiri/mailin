@@ -382,10 +382,11 @@ final class ModuleRegistry {
         }
     }
 
-    /// Pages absent from this build. Live Mail and the cloud tiers are compiled
-    /// out of the no-network edition, so they can never be switched on there.
+    /// Pages absent from this build. Live Mail is compiled in only under
+    /// `MAILIN_CONNECTED_MAIL` (V4-01) and never under `NO_NETWORK_BUILD`, so a
+    /// build without the mail transports can never switch it on.
     nonisolated static var buildExclusions: Set<AppModule> {
-        #if NO_NETWORK_BUILD
+        #if NO_NETWORK_BUILD || !MAILIN_CONNECTED_MAIL
         return [.liveMail]
         #else
         return []

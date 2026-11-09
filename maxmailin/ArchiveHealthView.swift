@@ -74,6 +74,9 @@ struct ArchiveHealthView: View {
                 }
             }
 
+            // V4-01: the mail network policy — Mail on/off, account modes, refused attempts.
+            MailNetworkHealthSection()
+
             // LIFE-05: every recovery action in one place, each saying what it
             // does before it runs; none of them deletes data.
             Section("Recovery") {

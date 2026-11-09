@@ -750,23 +750,32 @@ final class V2VerificationTests: XCTestCase {
     }
 
     /// NO_NETWORK_BUILD gate integrity (structural, per-file; the flag was
-    /// named OFFLINE_MODE before 3.0 Phase P): any production file
-    /// that references a network-connector symbol must contain the
-    /// `#if !NO_NETWORK_BUILD` compile gate, so the offline build provably cannot
-    /// link connector code paths. Comment-only mentions are ignored.
+    /// named OFFLINE_MODE before 3.0 Phase P). V4-01 split the one gate in two:
+    /// a production file that references a MAIL connector symbol must carry
+    /// `#if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD`, and one that references
+    /// a CLOUD AI symbol must carry `#if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD`,
+    /// so the offline build provably cannot link either and connecting mail
+    /// cannot compile cloud AI. Comment-only mentions are ignored.
+    static let mailGate = "#if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD"
+    static let cloudAIGate = "#if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD"
+    static let mailConnectorSymbols = [
+        "GmailConnector", "OutlookConnector", "IMAPClient", "IMAPConfigView",
+        "SMTPClient", "CloudConnectView", "ComposeViewModel",
+    ]
+    static let cloudAISymbols = ["CloudAIProvider", "CloudAIManager"]
+
     private func offlineGateViolations() throws -> [String] {
-        let connectorSymbols = [
-            "GmailConnector", "OutlookConnector", "IMAPClient", "IMAPConfigView",
-            "SMTPClient", "CloudAIProvider", "CloudConnectView",
-        ]
         var violations: [String] = []
         for f in try productionSwiftFiles() {
             guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
-            guard !text.contains("#if !NO_NETWORK_BUILD") else { continue }   // gated file — OK
-            for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-                if line.contains("//") { continue }
-                for sym in connectorSymbols where line.contains(sym) {
-                    violations.append("\(f.lastPathComponent):\(i + 1)  \(sym) referenced without #if !NO_NETWORK_BUILD")
+            for (gate, symbols) in [(Self.mailGate, Self.mailConnectorSymbols),
+                                    (Self.cloudAIGate, Self.cloudAISymbols)] {
+                guard !text.contains(gate) else { continue }   // gated file — OK
+                for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                    if line.contains("//") { continue }
+                    for sym in symbols where line.contains(sym) {
+                        violations.append("\(f.lastPathComponent):\(i + 1)  \(sym) referenced without \(gate)")
+                    }
                 }
             }
         }
@@ -776,7 +785,7 @@ final class V2VerificationTests: XCTestCase {
     func testArchitectureGuards_offlineModeGateIntegrity() throws {
         let violations = try offlineGateViolations()
         XCTAssertTrue(violations.isEmpty,
-            "Connector symbol referenced in a file with no #if !NO_NETWORK_BUILD gate:\n"
+            "Connector symbol referenced in a file without its mail / cloud-AI compile gate:\n"
             + violations.joined(separator: "\n"))
     }
 
@@ -857,7 +866,7 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(violations.isEmpty, "Network access in the on-device bounded layer:\n" + violations.joined(separator: "\n"))
 
         // W1 — offline gate integrity across the WHOLE production tree:
-        // connector symbols only in #if !NO_NETWORK_BUILD-gated files.
+        // connector symbols only in files carrying their own mail / cloud-AI gate.
         let gateViolations = try offlineGateViolations()
         XCTAssertTrue(gateViolations.isEmpty,
             "Connector symbol outside an OFFLINE_MODE-gated file:\n" + gateViolations.joined(separator: "\n"))
@@ -6418,5 +6427,317 @@ final class RecipeRunTruthTests: XCTestCase {
         // An old run with nothing done is a draft.
         let draft = try coordinator(wf: "WF-2026-0043", isNew: false)
         XCTAssertEqual(draft.state(confirmed: []), .draft)
+    }
+}
+
+// MARK: - V4-01 — mail network policy (plan §3 A01/A02, §7, §9 T01/T03/T47)
+
+/// Thread-safe counter for cancellation handlers.
+private final class MailPolicyCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() { lock.withLock { n += 1 } }
+    var value: Int { lock.withLock { n } }
+}
+
+@MainActor
+final class MailPolicyTests: XCTestCase {
+
+    private let imapHost = "imap.example.org"
+    private let authHost = "login.example.org"
+
+    override func setUp() async throws {
+        MailNetworkPolicy.shared.resetForTesting()
+    }
+
+    override func tearDown() async throws {
+        CapabilityWiring.resetAll()
+        MailNetworkPolicy.shared.resetForTesting()
+    }
+
+    /// Every combination a transport could ask about.
+    private func everyRequest(accountID: UUID?, host: String) -> [MailNetworkRequest] {
+        var out: [MailNetworkRequest] = []
+        for destination in MailNetworkDestination.allCases {
+            for operation in MailNetworkOperation.allCases {
+                for purpose in MailAccountMode.allCases {
+                    out.append(MailNetworkRequest(accountID: accountID, host: host,
+                                                  destination: destination,
+                                                  operation: operation, purpose: purpose))
+                }
+            }
+        }
+        return out
+    }
+
+    private func grantedAccount(_ modes: Set<MailAccountMode> = Set(MailAccountMode.allCases)) -> MailAccountNetworkPolicy {
+        MailAccountNetworkPolicy(id: UUID(), isEnabled: true, modes: modes,
+                                 mailHosts: [imapHost], authorizationHosts: [authHost])
+    }
+
+    private func request(_ account: UUID?, host: String? = nil,
+                         _ destination: MailNetworkDestination = .mailServer,
+                         _ operation: MailNetworkOperation = .socket,
+                         _ purpose: MailAccountMode = .preserveMail) -> MailNetworkRequest {
+        MailNetworkRequest(accountID: account, host: host ?? imapHost, destination: destination,
+                           operation: operation, purpose: purpose)
+    }
+
+    // MARK: T01
+
+    /// T01: a fresh install with Mail disabled refuses every mail destination —
+    /// socket, OAuth refresh, redirect, retry, download — for known and unknown
+    /// accounts, and no attempt is ever permitted. Tested with the transports
+    /// treated as compiled, so it is the RUNTIME switch that refuses here.
+    func testT01_freshInstallWithMailDisabled_refusesEverything_zeroPermitted() {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        XCTAssertFalse(policy.isMailEnabled, "Mail must be off on a fresh install")
+        // Even an account that has been fully granted is refused while Mail is off.
+        let account = grantedAccount()
+        policy.setAccount(account)
+        let requests = everyRequest(accountID: account.id, host: imapHost)
+            + everyRequest(accountID: account.id, host: authHost)
+            + everyRequest(accountID: nil, host: imapHost)
+            + everyRequest(accountID: UUID(), host: "imap.gmail.com")
+        for r in requests {
+            XCTAssertThrowsError(try policy.permit(r), "\(r) must be refused while Mail is off")
+        }
+        let s = policy.snapshot()
+        XCTAssertEqual(s.permittedAttempts, 0, "no attempt may be permitted with Mail off")
+        XCTAssertEqual(s.refusedAttempts, requests.count, "every refused attempt is counted")
+        XCTAssertNil(policy.register(accountID: account.id, label: "sync") {},
+                     "no mail work may even be registered while Mail is off")
+    }
+
+    /// T01 through the real wiring: a fresh registry leaves `connectedMail` off
+    /// (preview, Live Mail page off) and the shared policy closed.
+    func testT01_freshRegistryLeavesSharedPolicyClosed() {
+        let registry = ModuleRegistry(
+            store: ModuleStateStore(url: FileManager.default.temporaryDirectory
+                .appendingPathComponent("modules-\(UUID().uuidString).json")),
+            excludedByBuild: [], trapsOnMisuse: false)
+        XCTAssertEqual(Capability.connectedMail.owner, .liveMail)
+        XCTAssertEqual(Capability.connectedMail.maturity, .preview)
+        XCTAssertFalse(Capability.connectedMail.defaultsOn)
+        XCTAssertFalse(registry.isOn(.connectedMail))
+        CapabilityWiring.applyAll(registry)
+        XCTAssertFalse(MailNetworkPolicy.shared.isMailEnabled)
+        for r in everyRequest(accountID: UUID(), host: imapHost) {
+            XCTAssertThrowsError(try MailNetworkPolicy.shared.permit(r))
+        }
+        XCTAssertEqual(MailNetworkPolicy.shared.snapshot().permittedAttempts, 0)
+
+        // Switching the page and the capability on opens the runtime switch;
+        // switching the page off closes it again.
+        XCTAssertNoThrow(try registry.enable(.liveMail))
+        registry.set(.connectedMail, enabled: true)
+        XCTAssertTrue(registry.isOn(.connectedMail))
+        XCTAssertTrue(MailNetworkPolicy.shared.isMailEnabled)
+        registry.disable(.liveMail)
+        XCTAssertFalse(MailNetworkPolicy.shared.isMailEnabled,
+                       "switching Live Mail off must close the mail policy")
+    }
+
+    // MARK: T03
+
+    /// T03: disabling Mail cancels every registered task (account-bound or not,
+    /// including real Swift tasks) and refuses new connections and new work.
+    func testT03_disablingMailCancelsRegisteredTasksAndRefusesNew() async throws {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let account = grantedAccount([.preserveMail])
+        policy.setAccount(account)
+        XCTAssertNoThrow(try policy.permit(request(account.id)))
+
+        let counter = MailPolicyCounter()
+        let t1 = policy.register(accountID: account.id, label: "download") { counter.bump() }
+        let t2 = policy.register(accountID: account.id, label: "refresh") { counter.bump() }
+        let t3 = policy.register(accountID: nil, label: "discovery") { counter.bump() }
+        XCTAssertNotNil(t1); XCTAssertNotNil(t2); XCTAssertNotNil(t3)
+        let longTask = Task<Void, Error> { try await Task.sleep(for: .seconds(60)) }
+        XCTAssertNotNil(policy.register(longTask, accountID: account.id, label: "sync"))
+        XCTAssertEqual(policy.snapshot().activeTasks, 4)
+
+        policy.setMailEnabled(false)
+
+        XCTAssertEqual(counter.value, 3, "every registered task is cancelled")
+        XCTAssertTrue(longTask.isCancelled, "a registered Swift task is cancelled")
+        let s = policy.snapshot()
+        XCTAssertEqual(s.activeTasks, 0)
+        XCTAssertEqual(s.cancelledTasks, 4)
+        XCTAssertNil(policy.register(accountID: account.id, label: "retry") {},
+                     "no new work after Mail is switched off")
+        for op in MailNetworkOperation.allCases {
+            XCTAssertThrowsError(try policy.permit(request(account.id, .mailServer, op))) { error in
+                XCTAssertEqual(error as? MailNetworkRefusal, .mailOff)
+            }
+        }
+        XCTAssertEqual(policy.snapshot().permittedAttempts, 1, "only the attempt made while Mail was on")
+    }
+
+    /// T03 for one account: switching account B off stops B's work only.
+    func testT03_disablingAnAccountCancelsOnlyThatAccount() {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        var a = grantedAccount()
+        var b = grantedAccount()
+        policy.setAccount(a)
+        policy.setAccount(b)
+        let ca = MailPolicyCounter()
+        let cb = MailPolicyCounter()
+        XCTAssertNotNil(policy.register(accountID: a.id, label: "a") { ca.bump() })
+        XCTAssertNotNil(policy.register(accountID: b.id, label: "b") { cb.bump() })
+
+        b.isEnabled = false
+        policy.setAccount(b)
+        XCTAssertEqual(cb.value, 1)
+        XCTAssertEqual(ca.value, 0)
+        XCTAssertThrowsError(try policy.permit(request(b.id))) { XCTAssertEqual($0 as? MailNetworkRefusal, .accountOff) }
+        XCTAssertNoThrow(try policy.permit(request(a.id)))
+
+        // Withdrawing a mode also stops that account's work.
+        a.modes = [.preserveMail]
+        policy.setAccount(a)
+        XCTAssertEqual(ca.value, 1)
+        policy.removeAccount(a.id)
+        XCTAssertThrowsError(try policy.permit(request(a.id))) { XCTAssertEqual($0 as? MailNetworkRefusal, .noAccount) }
+    }
+
+    // MARK: Modes and hosts
+
+    /// The three permission modes are off for a new account, each is checked on
+    /// its own, and a redirect / OAuth refresh to a host the account does not
+    /// use is refused (no bearer token to an arbitrary host).
+    func testAccountModesAreOffByDefaultAndHostsAreBound() {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let fresh = MailAccountNetworkPolicy(id: UUID())
+        XCTAssertFalse(fresh.isEnabled)
+        XCTAssertTrue(fresh.modes.isEmpty)
+        policy.setAccount(fresh)
+        XCTAssertEqual(policy.wouldPermit(request(fresh.id)), .accountOff)
+
+        var on = fresh
+        on.isEnabled = true
+        on.mailHosts = [imapHost]
+        on.authorizationHosts = [authHost]
+        policy.setAccount(on)
+        for mode in MailAccountMode.allCases {
+            XCTAssertEqual(policy.wouldPermit(request(on.id, .mailServer, .socket, mode)), .modeNotGranted)
+        }
+        on.modes = [.preserveMail]
+        policy.setAccount(on)
+        XCTAssertNil(policy.wouldPermit(request(on.id, .mailServer, .download, .preserveMail)))
+        XCTAssertNil(policy.wouldPermit(request(on.id, host: authHost, .authorization, .oauthRefresh)))
+        XCTAssertEqual(policy.wouldPermit(request(on.id, .mailServer, .socket, .sendMail)), .modeNotGranted)
+        XCTAssertEqual(policy.wouldPermit(request(on.id, .mailServer, .socket, .changeServerMail)), .modeNotGranted)
+        XCTAssertEqual(policy.wouldPermit(request(on.id, host: "evil.example.net", .mailServer, .redirect)),
+                       .hostNotAuthorized)
+        XCTAssertEqual(policy.wouldPermit(request(on.id, host: imapHost, .authorization, .oauthRefresh)),
+                       .hostNotAuthorized, "a token refresh goes only to the account's sign-in host")
+        XCTAssertNil(policy.wouldPermit(request(on.id, host: "IMAP.Example.org.", .mailServer, .retry)),
+                     "host match ignores case and a trailing dot")
+    }
+
+    // MARK: AI destinations
+
+    /// The mail policy never permits an AI destination or remote content — not
+    /// with Mail on, every mode granted and the AI host listed as the account's
+    /// own server, and not in the offline build either.
+    func testAIDestinationsAreAlwaysRefused() {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let aiHosts = ["api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com",
+                       "API.MISTRAL.AI", "x.ai"]
+        let account = MailAccountNetworkPolicy(id: UUID(), isEnabled: true,
+                                               modes: Set(MailAccountMode.allCases),
+                                               mailHosts: Set(aiHosts + [imapHost]),
+                                               authorizationHosts: Set(aiHosts))
+        policy.setAccount(account)
+        for host in aiHosts {
+            for r in everyRequest(accountID: account.id, host: host) {
+                XCTAssertEqual(policy.wouldPermit(r), .aiDestination, "\(host) \(r.destination)")
+            }
+        }
+        for op in MailNetworkOperation.allCases {
+            XCTAssertEqual(policy.wouldPermit(request(account.id, .aiService, op)), .aiDestination)
+            XCTAssertEqual(policy.wouldPermit(request(account.id, .remoteContent, op)), .remoteContent)
+        }
+        XCTAssertFalse(MailNetworkPolicy.isAIHost("imap.gmail.com"))
+        XCTAssertFalse(MailNetworkPolicy.isAIHost("notopenai.com"), "suffix match is on a label boundary")
+        // The shipped (offline) policy gives the same answer for AI.
+        XCTAssertEqual(MailNetworkPolicy.shared.wouldPermit(request(nil, host: "api.openai.com")), .aiDestination)
+        XCTAssertEqual(policy.snapshot().permittedAttempts, 0)
+    }
+
+    // MARK: Compile-time (T47 offline half)
+
+    /// The APP's compile-time answers (the test target has its own, separate
+    /// conditions, so this reads the host binary, not `#if` in the test):
+    /// a binary built with NO_NETWORK_BUILD — or with neither
+    /// MAILIN_CONNECTED_MAIL nor MAILIN_CLOUD_AI — contains no mail transport
+    /// or cloud-AI class, excludes the Live Mail page, and its shared policy
+    /// refuses as "not compiled" even with Mail switched on. Each flag's answer
+    /// is cross-checked against the classes actually present in the binary.
+    func testOfflineBuildHasNoMailTransportSymbols() {
+        let ownName = String(reflecting: MailNetworkPolicy.self)
+        let module = ownName.components(separatedBy: ".").first ?? "maxmailin"
+        // The lookup works for a class that is compiled…
+        XCTAssertNotNil(NSClassFromString(ownName), "class lookup must find a compiled class: \(ownName)")
+        if NoNetworkAttestation.offlineModeCompiledIn {
+            XCTAssertFalse(ConnectedBuildFeatures.mailTransportsCompiled, "NO_NETWORK_BUILD keeps mail out")
+            XCTAssertFalse(ConnectedBuildFeatures.cloudAICompiled, "NO_NETWORK_BUILD keeps cloud AI out")
+        }
+        let mail = ConnectedBuildFeatures.mailTransportsCompiled
+        for name in ["IMAPClient", "GmailConnector", "OutlookConnector", "ComposeViewModel"] {
+            XCTAssertEqual(NSClassFromString("\(module).\(name)") != nil, mail,
+                           "\(name) present must equal mailTransportsCompiled (\(mail))")
+        }
+        XCTAssertEqual(NSClassFromString("\(module).CloudAIManager") != nil, ConnectedBuildFeatures.cloudAICompiled,
+                       "CloudAIManager present must equal cloudAICompiled")
+        guard !mail else { return }
+        XCTAssertTrue(ModuleRegistry.buildExclusions.contains(.liveMail))
+        MailNetworkPolicy.shared.setMailEnabled(true)
+        let account = grantedAccount()
+        MailNetworkPolicy.shared.setAccount(account)
+        XCTAssertEqual(MailNetworkPolicy.shared.wouldPermit(request(account.id)), .notCompiled)
+        XCTAssertNil(MailNetworkPolicy.shared.register(accountID: account.id, label: "x") {})
+        XCTAssertEqual(MailNetworkPolicy.shared.snapshot().permittedAttempts, 0)
+    }
+
+    /// A02: connecting mail must never compile cloud AI. No file inside the
+    /// mail gate references a cloud-AI symbol, and no file inside the cloud-AI
+    /// gate references a mail transport, so each condition compiles alone.
+    func testMailAndCloudAIGatesAreIndependent() throws {
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" && $0.lastPathComponent != "MailNetworkPolicy.swift" }
+        XCTAssertGreaterThan(files.count, 100, "production source not found at \(dir.path)")
+        var mailGated = 0
+        var aiGated = 0
+        var violations: [String] = []
+        for f in files {
+            let text = try String(contentsOf: f, encoding: .utf8)
+            XCTAssertFalse(text.contains("#if !NO_NETWORK_BUILD"),
+                           "\(f.lastPathComponent) still uses the undivided network gate")
+            let code = text.split(separator: "\n").filter { !$0.contains("//") }
+            if text.contains(V2VerificationTests.mailGate) {
+                mailGated += 1
+                for sym in V2VerificationTests.cloudAISymbols where code.contains(where: { $0.contains(sym) }) {
+                    violations.append("\(f.lastPathComponent) (mail) → \(sym)")
+                }
+            }
+            if text.contains(V2VerificationTests.cloudAIGate) {
+                aiGated += 1
+                for sym in V2VerificationTests.mailConnectorSymbols where code.contains(where: { $0.contains(sym) }) {
+                    violations.append("\(f.lastPathComponent) (cloud AI) → \(sym)")
+                }
+            }
+        }
+        XCTAssertEqual(mailGated, 8, "the eight mail files carry the mail gate")
+        XCTAssertEqual(aiGated, 4, "the four cloud-AI files carry the cloud-AI gate")
+        XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
 }

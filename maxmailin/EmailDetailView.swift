@@ -77,7 +77,7 @@ struct EmailDetailView: View {
     @State private var selectedReplyTone: Int = 0
 
     // Compose / Reply / Forward
-    #if !NO_NETWORK_BUILD
+    #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
     #endif
 
     // Translation

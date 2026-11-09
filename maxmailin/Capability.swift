@@ -180,6 +180,10 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// layout (NotesODSPolicy) instead of the heuristic NSF parser. Preview:
     /// verified on one public sample only.
     case notesODSReader
+    /// V4-01: connected mail — the runtime network policy every mail transport
+    /// asks (MailNetworkPolicy). Owned by the Live Mail page, which the offline
+    /// edition excludes, so it can never be on there. Preview, off by default.
+    case connectedMail
 
     var id: String { rawValue }
 
@@ -201,6 +205,8 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
              .batesNumbering, .redaction, .gdprReport, .chainOfCustody,
              .investigationReport, .reportBuilder, .reasoningStudios:
             return .professional
+        case .connectedMail:
+            return .liveMail
         default:
             return .archive   // unreachable: every 3.0 engine has an EngineSpec
         }
@@ -332,6 +338,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         case .investigationReport: return String(localized: "Investigation report")
         case .reportBuilder: return String(localized: "Report builder")
         case .reasoningStudios: return String(localized: "Reasoning studios")
+        case .connectedMail: return String(localized: "Connected mail")
         default: return rawValue
         }
     }
@@ -373,6 +380,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         case .investigationReport: return String(localized: "The full case report as a PDF.")
         case .reportBuilder: return String(localized: "Assemble a report from archive sections.")
         case .reasoningStudios: return String(localized: "ACH matrix, reasoning studio, fact–evidence matrix, evidence desks, action register.")
+        case .connectedMail: return String(localized: "Lets mail accounts connect to their own mail servers, each only for what you allow it: preserve mail, send mail, change server mail. Never connects to an AI service or loads remote content.")
         default: return ""
         }
     }
@@ -412,6 +420,8 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
             return String(localized: "Every studio's saved cases, matrices and registers are kept and reappear unchanged when it is back on.")
         case .batesNumbering:
             return String(localized: "Numbers already assigned are kept, and the sequence resumes where it left off.")
+        case .connectedMail:
+            return String(localized: "Every mail connection in progress stops and no new one starts. Mail already in the archive stays and is fully usable.")
         default:
             return String(localized: "The surface is hidden. Work already saved is kept and returns unchanged when this is switched back on.")
         }
