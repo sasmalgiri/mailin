@@ -17,7 +17,9 @@
 //                     Index/ lives inside an inner Index.zip
 //  Password-protected '09 documents store their members under Apple's own ZIP
 //  methods 25451/25452: reported locked without a password, opened with one
-//  (audit R6, IWork09Encryption.swift). IWA tables are decoded cell by cell
+//  (audit R6, IWork09Encryption.swift); protected 2013+ documents carry a
+//  ".iwpv2" verifier and encrypted IWA members, likewise locked or opened
+//  with the password (IWork13Encryption.swift). IWA tables are decoded cell by cell
 //  by IWATableDecoder.swift (audit R6).
 //
 //  What the '09 collector reads (the elements Tika's handlers read, plus
@@ -59,13 +61,23 @@ enum IWorkDocumentReader {
             return OfficeTextExtractor.Result(text: result.text, components: result.components, skipped: result.skipped,
                                               notText: (result.notText + unlocked.leftOut).sorted())
         }
+        // iWork 2013+ saved with a password: a ".iwpv2" verifier and encrypted
+        // Index/*.iwa (IWork13Encryption.swift). Locked without a password;
+        // with one, read from a plain copy of the IWA members in scratch.
+        if members.contains(where: { IWork13Encryption.isVerifier($0.name) && !$0.isDirectory }) {
+            guard let password else { throw OfficeTextExtractor.ExtractError.encrypted }
+            let unlocked = try IWork13Encryption.unlock(fileURL: fileURL, members: members, password: password, scratch: scratch,
+                                                        limit: ExtractionLimits.effective.partBytes)
+            let plainMembers = try ZIPArchiveReader.members(of: unlocked.url)
+            let result = try extract(members: plainMembers, archive: unlocked.url, kind: kind, scratch: scratch, nested: true)
+            return OfficeTextExtractor.Result(text: result.text, components: result.components, skipped: result.skipped + unlocked.skipped,
+                                              notText: Array(Set(result.notText + notTextNames(members))).sorted())
+        }
         return try extract(members: members, archive: fileURL, kind: kind, scratch: scratch, nested: false)
     }
 
-    private static func extract(members: [ZIPArchiveReader.Member], archive: URL, kind: DocumentKind, scratch: URL, nested: Bool) throws -> OfficeTextExtractor.Result {
-        if members.contains(where: { protectedMethods.contains($0.method) }) {
-            throw OfficeTextExtractor.ExtractError.encrypted
-        }
+    /// Members that are not text: images, previews, Data/, Metadata/.
+    private static func notTextNames(_ members: [ZIPArchiveReader.Member]) -> [String] {
         var notText: [String] = []
         for m in members where !m.isDirectory {
             let base = (m.name as NSString).lastPathComponent.lowercased()
@@ -74,6 +86,14 @@ enum IWorkDocumentReader {
                 notText.append(m.name)
             }
         }
+        return notText
+    }
+
+    private static func extract(members: [ZIPArchiveReader.Member], archive: URL, kind: DocumentKind, scratch: URL, nested: Bool) throws -> OfficeTextExtractor.Result {
+        if members.contains(where: { protectedMethods.contains($0.method) }) {
+            throw OfficeTextExtractor.ExtractError.encrypted
+        }
+        let notText = notTextNames(members)
         let limit = ExtractionLimits.effective.partBytes
 
         // iWork '09: one XML document, plain or gzip-compressed.
