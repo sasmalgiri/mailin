@@ -37,7 +37,9 @@ final class AttachmentOCRStateTests: XCTestCase {
         let url = await store.attachmentOCRStateURL
         XCTAssertEqual(url.deletingLastPathComponent().standardizedFileURL.path, dir.standardizedFileURL.path)
         XCTAssertEqual(url.lastPathComponent, "attachment-ocr.sqlite")
-        XCTAssertEqual(SQLiteEmailStore.currentSchemaVersion, 20, "E1 adds no archive schema version")
+        // E1 adds no archive schema version: its state lives in its own file beside the store. The version
+        // itself moved on with later work (v26 at v4.0), so it is no longer pinned here.
+        XCTAssertGreaterThanOrEqual(SQLiteEmailStore.currentSchemaVersion, 20)
         let none = try await store.attachmentOCRCandidateIDs(after: nil, limit: 10)
         XCTAssertEqual(none, [])
         let count = try await store.attachmentOCRCandidateCount()

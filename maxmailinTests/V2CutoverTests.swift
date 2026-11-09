@@ -1608,7 +1608,7 @@ final class V2CutoverTests: XCTestCase {
     func testFOLD02_schemaGuardMatchesTheMigrationChain() async throws {
         let env = try makeEnv()
         let v = try await env.store.schemaVersion()
-        XCTAssertEqual(v, 25, "v21 adds folders, v22/v23 the search chunks, v24 contiguous chunks (R02), v25 attachment children (§13.3)")
+        XCTAssertEqual(v, 26, "v21 adds folders, v22/v23 the search chunks, v24 contiguous chunks (R02), v25 attachment children (§13.3), v26 connected-mail accounts and provider identities (v4.0 V4-03)")
         XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion, "the guard follows the chain")
         // Reopening the same directory is the real check: a lagging guard refuses here.
         let reopened = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
