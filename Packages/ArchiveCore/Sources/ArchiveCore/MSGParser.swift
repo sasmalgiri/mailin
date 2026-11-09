@@ -17,33 +17,22 @@ struct MSGParser {
         return [email]
     }
 
-    enum MSGError: LocalizedError {
-        case fileTooLarge(Int64)
-        var errorDescription: String? {
-            switch self {
-            case .fileTooLarge(let size):
-                return "MSG file is too large (\(size / 1_000_000) MB). Maximum supported size is 2 GB."
-            }
-        }
-    }
-
     /// Messages embedded in messages are expanded at every level (plan v4
     /// §13.8 step 3). R5b (owner 2026-11-08: "there should be no limit at
     /// all"): the former fixed depth of 3 kept a deeper message only by name,
     /// with none of its bytes. A storage that contains itself (a damaged or
     /// hostile file) is the only stop: it is listed as the attachment it is.
-
-    /// A .msg file is read whole into memory; larger files are refused with
-    /// that reason. Listed in Settings ▸ Health ▸ Limits (R5b).
-    static let maxFileBytes: Int64 = 2_000_000_000
-
+    ///
+    /// CLOSE-01: a .msg file is no longer read whole into memory, and the
+    /// former 2,000,000,000-byte refusal is gone. The compound file is read
+    /// through a file handle (`OLE2Reader(fileURL:)`): sectors, the FAT, the
+    /// mini FAT and the mini stream are read as they are needed. A file above
+    /// the offset engine's full-parse ceiling is imported by
+    /// `OffsetImportEngine.importLargeSingleMessage`, which streams its bodies
+    /// and attachments into a rendered RFC 5322 file in bounded memory.
     private static func parseSingleMSG(fileURL: URL, senderEmail: String) throws -> MBOXParser.RawEmail {
-        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let fileSize = attrs[.size] as? Int64 ?? 0
-        if fileSize > maxFileBytes { throw MSGError.fileTooLarge(fileSize) }
-
-        let data = try Data(contentsOf: fileURL)
-        return try parse(data: data, senderEmail: senderEmail)
+        let ole2 = try OLE2Reader(fileURL: fileURL)
+        return try email(from: ole2, storage: 0, propertiesHeader: 32, depth: 0, ancestors: [0], senderEmail: senderEmail)
     }
 
     /// One Outlook message (or .oft template) from its bytes — also the path
@@ -61,64 +50,13 @@ struct MSGParser {
                               senderEmail: String) throws -> MBOXParser.RawEmail {
         let properties = try ole2.readMAPIProperties(storage: storage, propertiesHeader: propertiesHeader)
 
-        let senderAddr = properties.stringProperty(.senderEmailAddress)
-            ?? properties.stringProperty(.senderSmtpAddress)
-            ?? ""
-        let senderName = properties.stringProperty(.senderName) ?? ""
-        let from = !senderAddr.isEmpty ? (senderName.isEmpty ? senderAddr : "\(senderName) <\(senderAddr)>") : senderName
-
-        let to = properties.stringProperty(.displayTo) ?? ""
-        let cc = properties.stringProperty(.displayCc) ?? ""
-        let bcc = properties.stringProperty(.displayBcc) ?? ""
-        let subject = properties.stringProperty(.subject) ?? "(No Subject)"
+        let parts = messageHeaders(properties)
+        let headers = parts.headers, from = parts.from, subject = parts.subject, timestamp = parts.timestamp
+        let references = properties.stringProperty(.references)
         let body = properties.stringProperty(.body) ?? ""
         let htmlBodyData = properties.binaryProperty(.htmlBody)
         let htmlBody = htmlBodyData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         let rtfBody = properties.binaryProperty(.rtfCompressed).flatMap { decompressRTF($0) } ?? ""
-
-        let dateValue = properties.dateProperty(.messageDeliveryTime)
-            ?? properties.dateProperty(.clientSubmitTime)
-            ?? properties.dateProperty(.creationTime)
-            ?? Date.distantPast
-
-        let isoFormatter = ISO8601DateFormatter()
-        let timestamp = isoFormatter.string(from: dateValue)
-
-        let replyTo = properties.stringProperty(.replyToAddress)
-        let references = properties.stringProperty(.references)
-        let conversationTopic = properties.stringProperty(.conversationTopic)
-        let transportHeaders = properties.stringProperty(.transportMessageHeaders)
-        let importance = properties.intProperty(.importance)
-        let sensitivity = properties.intProperty(.sensitivity)
-
-        var headers: [String: String] = [
-            "From": from,
-            "To": to,
-            "Subject": subject,
-            "Date": timestamp
-        ]
-        if !cc.isEmpty { headers["Cc"] = cc }
-        if !bcc.isEmpty { headers["Bcc"] = bcc }
-        if let messageID = properties.stringProperty(.internetMessageId) {
-            headers["Message-ID"] = messageID
-        }
-        if let inReplyTo = properties.stringProperty(.inReplyToId) {
-            headers["In-Reply-To"] = inReplyTo
-        }
-        if let replyTo { headers["Reply-To"] = replyTo }
-        if let references { headers["References"] = references }
-        if let conversationTopic { headers["Thread-Topic"] = conversationTopic }
-        if let importance {
-            headers["X-Priority"] = importance == 2 ? "1" : importance == 0 ? "5" : "3"
-        }
-        if let sensitivity {
-            let labels = ["Normal", "Personal", "Private", "Confidential"]
-            if sensitivity < labels.count { headers["Sensitivity"] = labels[Int(sensitivity)] }
-        }
-
-        if let transportHeaders {
-            mergeTransportHeaders(transportHeaders, into: &headers)
-        }
 
         let messageType = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
 
@@ -168,6 +106,67 @@ struct MSGParser {
         // The top-level message keeps a rendered raw source so its attachment
         // bytes survive the import; embedded ones are rendered by their parent.
         return depth == 0 ? email.withRenderedSource("Outlook .msg") : email
+    }
+
+    /// The RFC 5322 headers of one message storage, from its MAPI properties
+    /// (shared by the in-memory reader and the streamed renderer, CLOSE-01).
+    static func messageHeaders(_ properties: MAPIPropertySet) -> (headers: [String: String], from: String, subject: String, timestamp: String) {
+        let senderAddr = properties.stringProperty(.senderEmailAddress)
+            ?? properties.stringProperty(.senderSmtpAddress)
+            ?? ""
+        let senderName = properties.stringProperty(.senderName) ?? ""
+        let from = !senderAddr.isEmpty ? (senderName.isEmpty ? senderAddr : "\(senderName) <\(senderAddr)>") : senderName
+
+        let to = properties.stringProperty(.displayTo) ?? ""
+        let cc = properties.stringProperty(.displayCc) ?? ""
+        let bcc = properties.stringProperty(.displayBcc) ?? ""
+        let subject = properties.stringProperty(.subject) ?? "(No Subject)"
+
+        let dateValue = properties.dateProperty(.messageDeliveryTime)
+            ?? properties.dateProperty(.clientSubmitTime)
+            ?? properties.dateProperty(.creationTime)
+            ?? Date.distantPast
+
+        let isoFormatter = ISO8601DateFormatter()
+        let timestamp = isoFormatter.string(from: dateValue)
+
+        let replyTo = properties.stringProperty(.replyToAddress)
+        let references = properties.stringProperty(.references)
+        let conversationTopic = properties.stringProperty(.conversationTopic)
+        let transportHeaders = properties.stringProperty(.transportMessageHeaders)
+        let importance = properties.intProperty(.importance)
+        let sensitivity = properties.intProperty(.sensitivity)
+
+        var headers: [String: String] = [
+            "From": from,
+            "To": to,
+            "Subject": subject,
+            "Date": timestamp
+        ]
+        if !cc.isEmpty { headers["Cc"] = cc }
+        if !bcc.isEmpty { headers["Bcc"] = bcc }
+        if let messageID = properties.stringProperty(.internetMessageId) {
+            headers["Message-ID"] = messageID
+        }
+        if let inReplyTo = properties.stringProperty(.inReplyToId) {
+            headers["In-Reply-To"] = inReplyTo
+        }
+        if let replyTo { headers["Reply-To"] = replyTo }
+        if let references { headers["References"] = references }
+        if let conversationTopic { headers["Thread-Topic"] = conversationTopic }
+        if let importance {
+            headers["X-Priority"] = importance == 2 ? "1" : importance == 0 ? "5" : "3"
+        }
+        if let sensitivity {
+            let labels = ["Normal", "Personal", "Private", "Confidential"]
+            if sensitivity < labels.count { headers["Sensitivity"] = labels[Int(sensitivity)] }
+        }
+
+        if let transportHeaders {
+            mergeTransportHeaders(transportHeaders, into: &headers)
+        }
+
+        return (headers, from, subject, timestamp)
     }
 
     /// "Subject.eml" for an embedded message, safe as a file name.
@@ -368,450 +367,6 @@ struct MSGParser {
     }
 }
 
-// MARK: - OLE2 Compound Document Reader
-
-struct OLE2Reader {
-    private let data: Data
-    private let sectorSize: Int
-    private let miniSectorSize: Int
-    private let fatSectors: [Int]
-    private let miniStreamCutoff: Int
-    private var fat: [Int32] = []
-    private var miniFat: [Int32] = []
-    private var directories: [DirectoryEntry] = []
-    private var miniStreamData: Data = Data()
-
-    // R5b: no fixed sector-chain or directory-entry count. A chain is bounded by
-    // the FAT it walks (each sector visited once — `seen`), the directory by the
-    // sectors of its own chain; the former 100,000-sector chain cap silently cut
-    // every stream above 51 MB (512-byte sectors) and returned it as whole.
-
-    struct DirectoryEntry {
-        let index: Int
-        let name: String
-        let type: UInt8
-        let startSector: Int
-        let size: Int
-        let childID: Int
-        let leftSiblingID: Int
-        let rightSiblingID: Int
-    }
-
-    init(data: Data) throws {
-        guard data.count >= 512 else {
-            throw MSGError.invalidFormat("File too small for OLE2")
-        }
-        guard data[0] == 0xD0, data[1] == 0xCF, data[2] == 0x11, data[3] == 0xE0,
-              data[4] == 0xA1, data[5] == 0xB1, data[6] == 0x1A, data[7] == 0xE1 else {
-            throw MSGError.invalidFormat("Not a valid OLE2 compound document (bad magic bytes)")
-        }
-
-        self.data = data
-
-        let sectorSizePower = Int(readUInt16(data, offset: 30))
-        guard sectorSizePower >= 7 && sectorSizePower <= 16 else {
-            throw MSGError.invalidFormat("Invalid sector size power: \(sectorSizePower)")
-        }
-        self.sectorSize = 1 << sectorSizePower
-        let miniSectorSizePower = Int(readUInt16(data, offset: 32))
-        guard miniSectorSizePower >= 0 && miniSectorSizePower <= 16 else {
-            throw MSGError.invalidFormat("Invalid mini sector size power: \(miniSectorSizePower)")
-        }
-        self.miniSectorSize = 1 << miniSectorSizePower
-        self.miniStreamCutoff = Int(readUInt32(data, offset: 56))
-
-        let fatSectorCount = Int(readUInt32(data, offset: 44))
-        let firstDirSector = Int(readInt32(data, offset: 48))
-        let firstMiniFatSector = Int(readInt32(data, offset: 60))
-        let miniFatSectorCount = Int(readUInt32(data, offset: 64))
-
-        let difatFirstSector = Int(readInt32(data, offset: 68))
-        let difatSectorCount = Int(readUInt32(data, offset: 72))
-
-        var fatSectorList: [Int] = []
-        for i in 0..<min(fatSectorCount, 109) {
-            let sector = Int(readInt32(data, offset: 76 + i * 4))
-            if sector >= 0 { fatSectorList.append(sector) }
-        }
-
-        if difatSectorCount > 0 && difatFirstSector >= 0 {
-            var difatSector = difatFirstSector
-            var difatRead = 0
-            while difatSector >= 0 && difatRead < difatSectorCount && difatRead < 1000 {
-                let base = (difatSector + 1) * sectorSize
-                guard base >= 0 && base < data.count else { break }
-                let entriesPerSector = (sectorSize / 4) - 1
-                for i in 0..<entriesPerSector {
-                    let pos = base + i * 4
-                    guard pos + 4 <= data.count else { break }
-                    let s = Int(readInt32(data, offset: pos))
-                    if s >= 0 { fatSectorList.append(s) }
-                }
-                let nextPos = base + entriesPerSector * 4
-                difatSector = nextPos + 4 <= data.count ? Int(readInt32(data, offset: nextPos)) : -1
-                difatRead += 1
-            }
-        }
-
-        self.fatSectors = fatSectorList
-
-        let headerSectorSize = 1 << sectorSizePower
-        self.fat = Self.buildFAT(data: data, fatSectors: fatSectorList, sectorSize: headerSectorSize)
-
-        let dirChain = Self.buildChain(startSector: firstDirSector, fat: fat)
-        self.directories = Self.readDirectories(data: data, chain: dirChain, sectorSize: sectorSize)
-
-        if firstMiniFatSector >= 0 && miniFatSectorCount > 0 {
-            let miniFatChain = Self.buildChain(startSector: firstMiniFatSector, fat: fat)
-            self.miniFat = Self.readFATFromChain(data: data, chain: miniFatChain, sectorSize: sectorSize)
-        } else {
-            self.miniFat = []
-        }
-
-        if let rootDir = directories.first, rootDir.size > 0 {
-            let rootChain = Self.buildChain(startSector: rootDir.startSector, fat: fat)
-            self.miniStreamData = Self.readStreamData(data: data, chain: rootChain, sectorSize: sectorSize, streamSize: rootDir.size)
-        }
-    }
-
-    // MARK: - Directory Tree Traversal
-
-    private func childrenOf(directoryIndex: Int) -> [DirectoryEntry] {
-        guard directoryIndex >= 0 && directoryIndex < directories.count else { return [] }
-        let parent = directories[directoryIndex]
-        guard parent.childID >= 0 && parent.childID < directories.count else { return [] }
-        var result: [DirectoryEntry] = []
-        var visited = Set<Int>()
-        collectTree(parent.childID, into: &result, visited: &visited)
-        return result
-    }
-
-    private func collectTree(_ nodeIndex: Int, into result: inout [DirectoryEntry], visited: inout Set<Int>) {
-        // Iterative in-order traversal with an explicit stack. A recursive walk
-        // could overflow the stack on a degenerate/hostile directory chain
-        // (e.g. 500k right-siblings). `visited` guards cycles and bounds the
-        // output by the directory itself.
-        var stack: [Int] = []
-        var current = nodeIndex
-        while true {
-            while current >= 0 && current < directories.count && visited.insert(current).inserted {
-                stack.append(current)
-                current = directories[current].leftSiblingID
-            }
-            guard let node = stack.popLast() else { break }
-            result.append(directories[node])
-            current = directories[node].rightSiblingID
-        }
-    }
-
-    // MARK: - Read MAPI Properties
-
-    /// The properties of one message storage. The fixed-property stream's
-    /// header is 32 bytes at the root, 24 in an embedded message, 8 in an
-    /// attachment or recipient (MS-OXMSG §2.4.1) — reading with the wrong
-    /// header misaligns every entry, so the caller says which it is.
-    func readMAPIProperties(storage: Int = 0, propertiesHeader: Int = 32) throws -> MAPIPropertySet {
-        var props = MAPIPropertySet()
-
-        for entry in childrenOf(directoryIndex: storage) {
-            if entry.name.hasPrefix("__substg1.0_"), entry.type == 2 {
-                parseSubstgEntry(entry, into: &props)
-            } else if entry.name.lowercased() == "__properties_version1.0" {
-                let streamData = readEntryData(entry)
-                Self.parseFixedProperties(from: streamData, into: &props, header: propertiesHeader)
-            }
-        }
-        return props
-    }
-
-    /// One attachment storage: its metadata and, for an embedded message
-    /// (PR_ATTACH_METHOD 5, `__substg1.0_3701000D` storage), where it lives.
-    struct AttachmentRecord {
-        var metadata: AttachmentMetadata
-        var embeddedMessageStorage: Int?
-    }
-
-    private func parseSubstgEntry(_ entry: DirectoryEntry, into props: inout MAPIPropertySet) {
-        let tag = String(entry.name.dropFirst(12).prefix(8))
-        guard let tagInt = UInt32(tag, radix: 16) else { return }
-        let propID = UInt16(tagInt >> 16)
-        let propType = UInt16(tagInt & 0xFFFF)
-        let streamData = readEntryData(entry)
-
-        switch propType {
-        case 0x001F: // Unicode string
-            if let str = String(data: streamData, encoding: .utf16LittleEndian) ?? String(data: streamData, encoding: .utf8) {
-                props.strings[propID] = str
-            }
-        case 0x001E: // ANSI string
-            if let str = String(data: streamData, encoding: .windowsCP1252) ?? String(data: streamData, encoding: .ascii) ?? String(data: streamData, encoding: .utf8) {
-                props.strings[propID] = str
-            }
-        case 0x0102: // Binary
-            props.binaries[propID] = streamData
-        default:
-            break
-        }
-    }
-
-    // MARK: - Attachment Reading (Properly Scoped)
-
-    func readAttachments() throws -> [AttachmentMetadata] {
-        try readAttachments(storage: 0).map(\.metadata)
-    }
-
-    func readAttachments(storage: Int) throws -> [AttachmentRecord] {
-        var attachments: [AttachmentRecord] = []
-        let rootChildren = childrenOf(directoryIndex: storage)
-
-        for entry in rootChildren where entry.name.hasPrefix("__attach_version1.0") && entry.type == 1 {
-            let attachChildren = childrenOf(directoryIndex: entry.index)
-            var attachProps = MAPIPropertySet()
-            var embeddedStorage: Int?
-
-            for child in attachChildren {
-                if child.name.hasPrefix("__substg1.0_3701000D"), child.type == 1 {
-                    embeddedStorage = child.index
-                } else if child.name.hasPrefix("__substg1.0_"), child.type == 2 {
-                    parseSubstgEntry(child, into: &attachProps)
-                } else if child.name.lowercased() == "__properties_version1.0" {
-                    let streamData = readEntryData(child)
-                    Self.parseFixedProperties(from: streamData, into: &attachProps, header: 8)
-                }
-            }
-
-            let filename = attachProps.strings[MAPIPropertyID.attachLongFilename.rawValue]
-                ?? attachProps.strings[MAPIPropertyID.attachFilename.rawValue]
-                ?? attachProps.strings[MAPIPropertyID.displayName.rawValue]
-                ?? "attachment"
-            let mimeType = attachProps.strings[MAPIPropertyID.attachMimeTag.rawValue]
-                ?? "application/octet-stream"
-            let contentID = attachProps.strings[MAPIPropertyID.attachContentId.rawValue]
-            let attachData = attachProps.binaries[MAPIPropertyID.attachDataBinary.rawValue]
-            let isInline = contentID != nil ||
-                (attachProps.ints[MAPIPropertyID.attachFlags.rawValue].map { $0 & 0x04 != 0 } ?? false)
-
-            let metadata = AttachmentMetadata(
-                filename: filename.trimmingCharacters(in: .controlCharacters),
-                mimeType: mimeType.trimmingCharacters(in: .controlCharacters),
-                size: attachData?.count ?? 0,
-                isInline: isInline,
-                contentID: contentID,
-                base64: attachData?.base64EncodedString(),
-                fileURL: nil
-            )
-            // An embedded message (method 5) is expanded by the caller, depth-limited.
-            let method = attachProps.ints[MAPIPropertyID.attachMethod.rawValue]
-            attachments.append(AttachmentRecord(metadata: metadata, embeddedMessageStorage: (method == 5 || attachData == nil) ? embeddedStorage : nil))
-        }
-        return attachments
-    }
-
-    // MARK: - Named streams (TYPE-01: legacy Office readers share this container reader)
-
-    /// Every stream and storage name in the compound file, root excluded.
-    var streamNames: [String] { directories.dropFirst().map(\.name) }
-
-    /// The bytes of the first stream whose name matches (case-insensitive), or nil.
-    func streamData(named name: String) -> Data? {
-        let wanted = name.lowercased()
-        guard let entry = directories.dropFirst().first(where: { $0.type == 2 && $0.name.lowercased() == wanted }) else { return nil }
-        return readEntryData(entry)
-    }
-
-    // MARK: - Storage paths (directive 2026-11-07 §6: Publisher, Visio and Project readers)
-
-    /// One child of a storage, as the other-business-format readers see it.
-    struct StorageEntry {
-        let name: String
-        let isStorage: Bool
-        let size: Int
-        fileprivate let index: Int
-    }
-
-    /// The children of the storage at `path` (the root for `[]`), names matched
-    /// case-insensitively; nil when a component is missing or is a stream.
-    func entries(at path: [String]) -> [StorageEntry]? {
-        guard let storage = storageIndex(at: path) else { return nil }
-        return childrenOf(directoryIndex: storage).map { StorageEntry(name: $0.name, isStorage: $0.type == 1, size: $0.size, index: $0.index) }
-    }
-
-    /// The bytes of the stream at `path` — `["Quill", "QuillSub", "CONTENTS"]`
-    /// for Quill/QuillSub/CONTENTS — or nil when it is not there. Unlike
-    /// `streamData(named:)` this never confuses two streams of the same name
-    /// in different storages (Publisher has a root `Contents` and a Quill `CONTENTS`).
-    func streamData(at path: [String]) -> Data? {
-        guard let last = path.last, let storage = storageIndex(at: Array(path.dropLast())) else { return nil }
-        let wanted = last.lowercased()
-        guard let entry = childrenOf(directoryIndex: storage).first(where: { $0.type == 2 && $0.name.lowercased() == wanted }) else { return nil }
-        return readEntryData(entry)
-    }
-
-    /// The bytes of a stream found through `entries(at:)`; nil for a storage.
-    func data(of entry: StorageEntry) -> Data? {
-        guard entry.index >= 0, entry.index < directories.count, directories[entry.index].type == 2 else { return nil }
-        return readEntryData(directories[entry.index])
-    }
-
-    private func storageIndex(at path: [String]) -> Int? {
-        var current = 0
-        for component in path {
-            let wanted = component.lowercased()
-            guard let next = childrenOf(directoryIndex: current).first(where: { $0.type == 1 && $0.name.lowercased() == wanted }) else { return nil }
-            current = next.index
-        }
-        return current
-    }
-
-    private func readEntryData(_ entry: DirectoryEntry) -> Data {
-        if entry.size < miniStreamCutoff && entry.type != 5 {
-            let chain = Self.buildChain(startSector: entry.startSector, fat: miniFat)
-            return Self.readMiniStreamData(miniStream: miniStreamData, chain: chain, miniSectorSize: miniSectorSize, streamSize: entry.size)
-        } else {
-            let chain = Self.buildChain(startSector: entry.startSector, fat: fat)
-            return Self.readStreamData(data: data, chain: chain, sectorSize: sectorSize, streamSize: entry.size)
-        }
-    }
-
-    // MARK: - Static Helpers
-
-    private static func buildFAT(data: Data, fatSectors: [Int], sectorSize: Int) -> [Int32] {
-        var fat: [Int32] = []
-        for sector in fatSectors {
-            let offset = (sector + 1) * sectorSize
-            let entries = sectorSize / 4
-            for i in 0..<entries {
-                let pos = offset + i * 4
-                if pos + 4 <= data.count {
-                    fat.append(readInt32(data, offset: pos))
-                }
-            }
-        }
-        return fat
-    }
-
-    private static func buildChain(startSector: Int, fat: [Int32]) -> [Int] {
-        var chain: [Int] = []
-        var current = startSector
-        var seen = Set<Int>()
-        while current >= 0 && current < fat.count && !seen.contains(current) {
-            chain.append(current)
-            seen.insert(current)
-            let next = Int(fat[current])
-            if next == -2 || next == -1 { break } // ENDOFCHAIN or FREESECT
-            current = next
-        }
-        return chain
-    }
-
-    private static func readDirectories(data: Data, chain: [Int], sectorSize: Int) -> [DirectoryEntry] {
-        var dirs: [DirectoryEntry] = []
-        let entriesPerSector = sectorSize / 128
-        for sector in chain {
-            let base = (sector + 1) * sectorSize
-            for i in 0..<entriesPerSector {
-                let offset = base + i * 128
-                guard offset + 128 <= data.count else { continue }
-
-                let rawNameLen = Int(readUInt16(data, offset: offset + 64))
-                let nameLen = (rawNameLen / 2) * 2
-                let nameData = data[offset..<(offset + min(nameLen, 64))]
-                let name = String(data: nameData, encoding: .utf16LittleEndian)?
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\0")) ?? ""
-
-                // MS-CFB §2.6.1: left sibling at 68, right sibling at 72, child at 76
-                // (checked against a real Word file: Root Entry = -1, -1, 3). The
-                // three were read in the wrong order before §13.8 step 3, so no
-                // storage's children could be walked — a real .msg came out empty.
-                let type = data[offset + 66]
-                let leftID = Int(readInt32(data, offset: offset + 68))
-                let rightID = Int(readInt32(data, offset: offset + 72))
-                let childID = Int(readInt32(data, offset: offset + 76))
-                let startSector = Int(readInt32(data, offset: offset + 116))
-                let size: Int
-                if sectorSize == 4096 {
-                    // clamping: a crafted 64-bit size with the high bit set
-                    // would trap `Int(UInt64)`.
-                    size = Int(clamping: readUInt64(data, offset: offset + 120))
-                } else {
-                    size = Int(readUInt32(data, offset: offset + 120))
-                }
-
-                // Every entry keeps its position: sibling and child ids are
-                // absolute, so an unallocated entry (type 0) is kept as a hole.
-                dirs.append(DirectoryEntry(
-                    index: dirs.count,
-                    name: type > 0 ? name : "", type: type,
-                    startSector: startSector, size: max(0, size),
-                    childID: type > 0 ? childID : -1, leftSiblingID: type > 0 ? leftID : -1, rightSiblingID: type > 0 ? rightID : -1
-                ))
-            }
-        }
-        return dirs
-    }
-
-    private static func readStreamData(data: Data, chain: [Int], sectorSize: Int, streamSize: Int) -> Data {
-        var result = Data()
-        for sector in chain {
-            let offset = (sector + 1) * sectorSize
-            let end = min(offset + sectorSize, data.count)
-            guard offset >= 0 && offset < data.count else { break }
-            result.append(data[offset..<end])
-        }
-        return Data(result.prefix(max(0, streamSize)))
-    }
-
-    private static func readMiniStreamData(miniStream: Data, chain: [Int], miniSectorSize: Int, streamSize: Int) -> Data {
-        var result = Data()
-        for sector in chain {
-            let offset = sector * miniSectorSize
-            let end = min(offset + miniSectorSize, miniStream.count)
-            guard offset >= 0 && offset < miniStream.count else { break }
-            result.append(miniStream[offset..<end])
-        }
-        return Data(result.prefix(max(0, streamSize)))
-    }
-
-    private static func readFATFromChain(data: Data, chain: [Int], sectorSize: Int) -> [Int32] {
-        var entries: [Int32] = []
-        for sector in chain {
-            let base = (sector + 1) * sectorSize
-            for i in 0..<(sectorSize / 4) {
-                let pos = base + i * 4
-                if pos + 4 <= data.count {
-                    entries.append(readInt32(data, offset: pos))
-                }
-            }
-        }
-        return entries
-    }
-
-    private static func parseFixedProperties(from data: Data, into props: inout MAPIPropertySet, header: Int) {
-        var offset = min(header, data.count)
-        while offset + 16 <= data.count {
-            let propType = readUInt16(data, offset: offset)
-            let propID = readUInt16(data, offset: offset + 2)
-            switch propType {
-            case 0x0040: // PT_SYSTIME
-                let fileTime = readUInt64(data, offset: offset + 8)
-                if fileTime > 0 {
-                    let seconds = Double(fileTime) / 10_000_000.0 - 11_644_473_600.0
-                    props.dates[propID] = Date(timeIntervalSince1970: seconds)
-                }
-            case 0x0003: // PT_LONG
-                let value = readUInt32(data, offset: offset + 8)
-                props.ints[propID] = value
-            case 0x000B: // PT_BOOLEAN
-                let value = readUInt16(data, offset: offset + 8)
-                props.ints[propID] = UInt32(value)
-            default:
-                break
-            }
-            offset += 16
-        }
-    }
-}
-
 // MARK: - MAPI Property IDs
 
 struct MAPIPropertySet {
@@ -819,6 +374,14 @@ struct MAPIPropertySet {
     var binaries: [UInt16: Data] = [:]
     var dates: [UInt16: Date] = [:]
     var ints: [UInt16: UInt32] = [:]
+    /// CLOSE-01: string and binary streams too large to read in place, by
+    /// property id — streamed by the caller (`OLE2Reader.streamEntry`).
+    var deferred: [UInt16: DeferredStream] = [:]
+
+    struct DeferredStream {
+        let entry: OLE2Reader.DirectoryEntry
+        let propType: UInt16
+    }
 
     func stringProperty(_ id: MAPIPropertyID) -> String? { strings[id.rawValue] }
     func binaryProperty(_ id: MAPIPropertyID) -> Data? { binaries[id.rawValue] }
@@ -874,29 +437,5 @@ enum MSGError: LocalizedError {
         case .invalidFormat(let reason): return "Invalid MSG format: \(reason)"
         case .propertyNotFound(let name): return "MSG property not found: \(name)"
         }
-    }
-}
-
-// MARK: - Binary Read Helpers
-
-private func readUInt16(_ data: Data, offset: Int) -> UInt16 {
-    guard offset + 2 <= data.count else { return 0 }
-    return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
-}
-
-private func readUInt32(_ data: Data, offset: Int) -> UInt32 {
-    guard offset + 4 <= data.count else { return 0 }
-    return UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8) |
-           (UInt32(data[offset + 2]) << 16) | (UInt32(data[offset + 3]) << 24)
-}
-
-private func readInt32(_ data: Data, offset: Int) -> Int32 {
-    Int32(bitPattern: readUInt32(data, offset: offset))
-}
-
-private func readUInt64(_ data: Data, offset: Int) -> UInt64 {
-    guard offset + 8 <= data.count else { return 0 }
-    return (0..<8).reduce(UInt64(0)) { result, i in
-        result | (UInt64(data[offset + i]) << (i * 8))
     }
 }

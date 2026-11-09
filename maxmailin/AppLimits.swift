@@ -97,8 +97,9 @@ enum AppLimits {
                      why: String(localized: "Header fields beyond it are not read; the message, its body and its bytes are kept whole.")),
             AppLimit(kind: .safety, what: String(localized: "Mailboxes inside archives"), value: String(localized: "one archive level"),
                      why: String(localized: "A mailbox inside a ZIP, TAR or 7z is imported; one inside an archive inside an archive is counted as skipped in the import report.")),
-            AppLimit(kind: .device, what: String(localized: "Single Outlook .msg or Apple Mail .emlx file"), value: String(localized: "\(bytes(MSGParser.maxFileBytes)) .msg; \(bytes(EMLXParser.maxFileBytes)) .emlx"),
-                     why: String(localized: "These files are read whole into memory; a larger one is refused with that reason.")),
+            // CLOSE-01: the .msg (2 GB) and .emlx (500 MB) whole-file refusals are gone — both are read by
+            // range through a file handle; one above the full-parse ceiling is imported like any large
+            // message (the "Single message size" row above), so there is no row of their own.
             AppLimit(kind: .safety, what: String(localized: "Message recovered from damaged bytes"), value: bytes(Int64(MIMECarver.maxMessage)),
                      why: String(localized: "A message carved out of damaged data is cut there and marked truncated.")),
             AppLimit(kind: .device, what: String(localized: "RAR decoding window"), value: bytes(RARReader.maxDecoderDictionaryBytes),

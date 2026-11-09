@@ -280,6 +280,19 @@ struct OffsetMBOXScanner: Sendable {
 
     // MARK: - One message
 
+    /// CLOSE-01: the locator and header fields of one message whose byte range
+    /// is already known (the RFC 822 part of an .emlx file). Only its header
+    /// block is read.
+    func locate(fileURL: URL, messageRange: ByteRange, ordinal: Int = 0) throws
+        -> (locator: MessageLocator, headers: [String: String], truncated: Bool) {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            throw ExtractionError.invalidEmail(reason: "Cannot open \(fileURL.lastPathComponent) for scanning.")
+        }
+        defer { try? handle.close() }
+        let found = try buildLocator(handle: handle, path: fileURL.path, messageRange: messageRange, ordinal: ordinal)
+        return (found.0, found.1, found.truncated)
+    }
+
     /// Reads just the header block of a message range and returns its locator.
     /// The body is never read.
     private func buildLocator(handle: FileHandle,
