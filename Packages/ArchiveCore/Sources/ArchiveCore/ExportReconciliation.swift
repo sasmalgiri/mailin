@@ -984,8 +984,14 @@ enum ExportReconciliation {
         defer { cache.removeTemporaryFiles() }
         var missing = 0
         let list = email.attachments.enumerated().map { index, a -> Occurrence in
-            let data = AttachmentHydrator.data(for: a, index: index, email: email, cache: cache)
-            if data == nil { missing += 1 }
+            let raw = AttachmentHydrator.data(for: a, index: index, email: email, cache: cache)
+            if raw == nil { missing += 1 }
+            // A message/* or text/* part travels as line-oriented text (message/rfc822 can never be
+            // base64-encoded, RFC 2046 §5.2.1), so its line endings follow the transport: LF in an
+            // mbox file, CRLF from a server or an .eml. Compared after CRLF → LF so the same mail
+            // from two sources is not a different attachment; binary types keep exact bytes, and the
+            // byte-identical duplicate class still compares the raw source.
+            let data = raw.map { Self.lineOrientedPart(a.mimeType) ? Self.normalisedLineEndings($0) : $0 }
             return Occurrence(name: a.filename.trimmingCharacters(in: .whitespacesAndNewlines),
                               sha256: data.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() },
                               size: data?.count,
@@ -994,6 +1000,26 @@ enum ExportReconciliation {
                               mimeType: includeMIMEType ? normalisedMIMEType(a.mimeType) : nil)
         }
         return (list, missing)
+    }
+
+    /// Whether an attachment's bytes are line-oriented text whose line endings follow the transport.
+    static func lineOrientedPart(_ mimeType: String) -> Bool {
+        let type = mimeType.split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? ""
+        return type.hasPrefix("message/") || type.hasPrefix("text/")
+    }
+
+    /// CRLF (and a lone CR) → LF, byte by byte.
+    static func normalisedLineEndings(_ data: Data) -> Data {
+        guard data.contains(0x0D) else { return data }
+        var out = Data(); out.reserveCapacity(data.count)
+        var previousCR = false
+        for byte in data {
+            if byte == 0x0D { out.append(0x0A); previousCR = true; continue }
+            if byte == 0x0A && previousCR { previousCR = false; continue }
+            previousCR = false
+            out.append(byte)
+        }
+        return out
     }
 
     /// Occurrences as a multiset of whole tuples (count kept, order ignored).
