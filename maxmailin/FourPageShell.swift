@@ -237,14 +237,10 @@ struct FourPageShell: View {
         case .professional:
             ProfessionalPageView()
         case .liveMail:
-            PageNotBuiltView(
-                module: .liveMail,
-                detail: """
-                    Live Mail is planned for this release but is not implemented in \
-                    this build. Nothing here connects to a mail server yet, and no \
-                    account can be added.
-                    """
-            )
+            // V4-13: the Mail workspace. In a build without the mail
+            // transports it shows the honest "no mail connection" state and
+            // no actionable control.
+            MailWorkspaceView()
             // A place in the history too (no sections), so Back/Forward
             // arriving here consumes its pending request.
             .navigationSection(.liveMail, current: nil) { _ in }

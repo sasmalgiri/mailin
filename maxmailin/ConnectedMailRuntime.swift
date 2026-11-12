@@ -116,6 +116,9 @@ final class ConnectedMailRuntime {
         /// After a batch of captured records was indexed (app: attachment
         /// text job, corpus revision, list refresh).
         var afterIndex: @Sendable ([UUID]) async -> Void = { _ in }
+        /// V4-13: hosts an account talks to besides its capture host (its
+        /// outgoing SMTP server), granted in the policy with the account.
+        var extraMailHosts: @Sendable (MailAccount) -> Set<String> = { _ in [] }
         var scheduler = FairDownloadScheduler()
         var backoff = BackoffPolicy()
         var storage = StorageProbe()
@@ -138,6 +141,9 @@ final class ConnectedMailRuntime {
     private(set) var unavailable: [UUID: String] = [:]
     private(set) var reconcileReport: ConnectedReconcileReport?
     private(set) var lastReports: [UUID: SyncRunReport] = [:]
+    /// V4-13: accounts whose capture the person paused (modes unchanged;
+    /// running capture cancelled; Sync now and automatic runs refused).
+    private(set) var paused: Set<UUID> = []
     private var started = false
 
     init(dependencies: Dependencies) {
@@ -170,7 +176,11 @@ final class ConnectedMailRuntime {
         var seen = Set<UUID>()
         for account in accounts {
             seen.insert(account.id)
-            guard account.connectionState == .connected, account.enabledModes.contains(.capture) else {
+            // V4-13: an account is granted in the policy when it is signed in
+            // and allowed at least one mode (Send or Change server mail work
+            // without Preserve mail); it gets a capture engine only when
+            // Preserve mail is on and the person has not paused it.
+            guard account.connectionState == .connected, !account.enabledModes.isEmpty else {
                 let reason: String
                 switch account.connectionState {
                 case .removed: reason = String(localized: "The account was removed; its saved mail stays in the archive.")
@@ -187,15 +197,26 @@ final class ConnectedMailRuntime {
                     disable(account.id, reason: String(localized: "This edition has no mail connection code."))
                     continue
                 }
+                var modes = Self.networkModes(account.enabledModes)
+                let capturing = account.enabledModes.contains(.capture) && !paused.contains(account.id)
+                if !capturing { modes.remove(.preserveMail) }
                 policy.setAccount(MailAccountNetworkPolicy(
-                    id: account.id, isEnabled: true, modes: Self.networkModes(account.enabledModes),
-                    mailHosts: [adapter.mailHost], authorizationHosts: adapter.authorizationHost.map { [$0] } ?? []))
-                if engines[account.id] == nil {
-                    engines[account.id] = SyncEngine(adapter: adapter, sink: sink, scheduler: deps.scheduler,
-                                                     tokens: deps.tokens, permission: permission,
-                                                     backoff: deps.backoff, storage: deps.storage)
+                    id: account.id, isEnabled: true, modes: modes,
+                    mailHosts: Set([adapter.mailHost]).union(deps.extraMailHosts(account)),
+                    authorizationHosts: adapter.authorizationHost.map { [$0] } ?? []))
+                if capturing {
+                    if engines[account.id] == nil {
+                        engines[account.id] = SyncEngine(adapter: adapter, sink: sink, scheduler: deps.scheduler,
+                                                         tokens: deps.tokens, permission: permission,
+                                                         backoff: deps.backoff, storage: deps.storage)
+                    }
+                    unavailable[account.id] = nil
+                } else {
+                    engines[account.id] = nil
+                    unavailable[account.id] = paused.contains(account.id)
+                        ? String(localized: "Capture paused by you; saved mail remains available.")
+                        : String(localized: "Saving mail is switched off for this account.")
                 }
-                unavailable[account.id] = nil
             } catch {
                 disable(account.id, reason: error.localizedDescription)
             }
@@ -215,6 +236,21 @@ final class ConnectedMailRuntime {
         }
     }
 
+    /// The account's credential store and token coordinator (the Mail workspace signs in through them).
+    var credentials: any CredentialStore { deps.credentials }
+    var tokens: TokenRefreshCoordinator? { deps.tokens }
+
+    /// Stops one account's engine and cancels its registered work (account
+    /// removal, V4-12); returns how many engines were stopped.
+    @discardableResult
+    func stopAccount(_ id: UUID) -> Int {
+        let had = engines[id] != nil ? 1 : 0
+        engines[id] = nil
+        policy.setAccount(MailAccountNetworkPolicy(id: id))   // off, no modes: cancels its tasks
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+        return had
+    }
+
     /// Stops every capture of this process (Mail switched off).
     func stop() {
         for id in Array(engines.keys) { policy.removeAccount(id) }
@@ -228,8 +264,10 @@ final class ConnectedMailRuntime {
     /// cancellation registry. Nil when the account has no engine or the
     /// policy refuses the work (Mail or the account off).
     @discardableResult
-    func sync(_ id: UUID, selection: SyncSelection = .allFolders) async -> SyncRunReport? {
-        guard let engine = engines[id] else { return nil }
+    func sync(_ id: UUID, selection explicit: SyncSelection? = nil) async -> SyncRunReport? {
+        guard let engine = engines[id], !paused.contains(id) else { return nil }
+        let selection: SyncSelection
+        if let explicit { selection = explicit } else { selection = await savedSelection(id) }
         let box = CaptureTaskBox()
         guard let token = policy.register(accountID: id, label: "capture", cancel: { box.cancel() }) else { return nil }
         let task = Task { await engine.sync(selection) }
@@ -247,8 +285,24 @@ final class ConnectedMailRuntime {
     }
 
     /// Every account with an engine, concurrently (fairness is the scheduler's).
+    /// The person's folder selection (V4-13): every folder until one is
+    /// deselected; then exactly the selected ones, stated as a selection.
+    func savedSelection(_ id: UUID) async -> SyncSelection {
+        guard let folders = try? await sink.folderSummaries(accountID: id), folders.contains(where: { !$0.selected }) else {
+            return .allFolders
+        }
+        return .folders(Set(folders.filter(\.selected).map(\.serverID)))
+    }
+
+    /// Pauses (or resumes) one account's capture without changing its modes.
+    /// Pausing cancels its running capture at once (the policy narrows).
+    func setPaused(_ isPaused: Bool, account id: UUID) async throws {
+        if isPaused { paused.insert(id) } else { paused.remove(id) }
+        try await reloadAccounts()
+    }
+
     @discardableResult
-    func syncAll(selection: SyncSelection = .allFolders) async -> [UUID: SyncRunReport] {
+    func syncAll(selection: SyncSelection? = nil) async -> [UUID: SyncRunReport] {
         let ids = Array(engines.keys)
         let results = await withTaskGroup(of: (UUID, SyncRunReport?).self, returning: [UUID: SyncRunReport].self) { group in
             for id in ids {
@@ -435,7 +489,15 @@ enum ConnectedMailProduction {
             }
             let settings = GraphSignInSettings(clientID: info(graphClientIDKey), tenant: c.account.tenant ?? "common",
                                                redirectURI: redirect)
-            await c.tokens?.register(account: c.account.id, configuration: try GraphOAuth.configuration(settings))
+            // V4-13: Graph refreshes name their scopes, so the refresh asks
+            // for every Graph scope the person granted (Mail.Send,
+            // Mail.ReadWrite after a re-consent) — never fewer, never more.
+            var configuration = try GraphOAuth.configuration(settings)
+            let resource = GraphAudience.resource()
+            for scope in c.account.grantedScopes where scope.hasPrefix(resource + "/") && !configuration.scopes.contains(scope) {
+                configuration.scopes.insert(scope, at: 0)
+            }
+            await c.tokens?.register(account: c.account.id, configuration: configuration)
             return GraphAdapter(accountID: c.account.id, transport: URLSessionGraphTransport(), permission: c.permission)
         case .imap:
             return try IMAPAdapter(account: c.account, credentials: c.credentials, permission: c.permission)

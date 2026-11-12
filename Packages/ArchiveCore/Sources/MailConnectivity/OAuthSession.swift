@@ -124,7 +124,7 @@ public struct OAuthTokenSet: Sendable, Equatable, Codable {
         self.refreshToken = refreshToken; self.expiresAt = expiresAt; self.scopes = scopes; self.tokenType = tokenType
     }
 
-    func encoded() throws -> Data {
+    public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
         encoder.outputFormatting = [.sortedKeys]
