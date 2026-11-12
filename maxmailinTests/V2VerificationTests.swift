@@ -1,4 +1,5 @@
 @testable import ArchiveCore
+import MailConnectivity
 import XCTest
 @testable import maxmailin
 import CoreGraphics
@@ -6736,7 +6737,8 @@ final class MailPolicyTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(mailGated, 8, "the eight mail files carry the mail gate")
+        // V4-08: ConnectedMailRuntime.swift is the ninth (its production adapters).
+        XCTAssertEqual(mailGated, 9, "the nine mail files carry the mail gate")
         XCTAssertEqual(aiGated, 4, "the four cloud-AI files carry the cloud-AI gate")
         XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
@@ -7514,5 +7516,800 @@ final class AIScaffoldTests: XCTestCase {
         let freeResult = await free.submit(request(p))
         XCTAssertEqual(freeResult.status, .error(.notEntitled))
         XCTAssertTrue(transport.calls.isEmpty)
+    }
+}
+
+// MARK: - v4.0 V4-08: connected mail through the five jobs
+
+/// Account-scoped secrets in memory (the Keychain store has its own package tests).
+final class ConnectedFiveJobsCredentials: CredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String: Data] = [:]
+    private static func key(_ kind: CredentialKind, _ account: UUID) -> String { "\(account.uuidString)/\(kind.rawValue)" }
+    func read(_ kind: CredentialKind, account: UUID) throws -> Data? { lock.withLock { items[Self.key(kind, account)] } }
+    func write(_ secret: Data, kind: CredentialKind, account: UUID) throws { lock.withLock { items[Self.key(kind, account)] = secret } }
+    func delete(_ kind: CredentialKind, account: UUID) throws { lock.withLock { items[Self.key(kind, account)] = nil } }
+    func secretCount(for account: UUID) -> Int { lock.withLock { items.keys.filter { $0.hasPrefix(account.uuidString) }.count } }
+}
+
+/// What the runtime's search feed reported as indexed.
+final class ConnectedFiveJobsIndexed: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: [UUID] = []
+    func add(_ more: [UUID]) { lock.withLock { ids += more } }
+    var all: [UUID] { lock.withLock { ids } }
+}
+
+struct ConnectedFiveJobsParseFailure: LocalizedError {
+    var errorDescription: String? { "fixture: the reader cannot parse these bytes" }
+}
+
+/// A deterministic provider in memory — folders, messages carrying real MIME
+/// bytes, an account-wide change log, scripted download failures, a revoked
+/// grant and slow downloads. It stands in for a Gmail / Graph / IMAP adapter
+/// (no network); the sync engine, the archive sink and the app runtime under
+/// test are the real ones.
+actor ConnectedFiveJobsProvider: MailProviderAdapter {
+    nonisolated let accountID: UUID
+    nonisolated let provider: MailProviderKind = .gmail
+    nonisolated let mailHost = "mail.fixture.example"
+    nonisolated let authorizationHost: String? = nil
+    nonisolated let tokenAudience: String? = nil
+
+    private struct Message { var folders: [String]; let bytes: Data; let seq: Int }
+    private var folders: [RemoteFolderOccurrence] = []
+    private var messages: [String: Message] = [:]
+    private var log: [(seq: Int, change: RemoteChange)] = []
+    private var seq = 0
+    private var failing: Set<String> = []
+    private var revoked = false
+    private var fetchDelay: UInt64 = 0
+    private(set) var fetches = 0
+
+    init(accountID: UUID) { self.accountID = accountID }
+
+    func addFolder(_ id: String, path: String) {
+        folders.append(RemoteFolderOccurrence(serverID: id, displayPath: path, kind: .label))
+    }
+
+    func renameFolder(_ id: String, to path: String) {
+        guard let i = folders.firstIndex(where: { $0.serverID == id }) else { return }
+        folders[i].displayPath = path
+    }
+
+    func add(_ id: String, bytes: Data, folders ids: [String]) {
+        seq += 1
+        messages[id] = Message(folders: ids, bytes: bytes, seq: seq)
+        log.append((seq, upsert(id, ids)))
+    }
+
+    func label(_ id: String, with ids: [String]) {
+        guard var message = messages[id] else { return }
+        seq += 1
+        message.folders = ids
+        messages[id] = message
+        log.append((seq, upsert(id, ids)))
+    }
+
+    func delete(_ id: String) {
+        guard messages.removeValue(forKey: id) != nil else { return }
+        seq += 1
+        log.append((seq, .deleted(.gmail(messageID: id))))
+    }
+
+    func setFailing(_ id: String, _ on: Bool) { if on { failing.insert(id) } else { failing.remove(id) } }
+    func revoke() { revoked = true }
+    func setFetchDelay(_ nanoseconds: UInt64) { fetchDelay = nanoseconds }
+
+    private func occurrence(_ id: String) -> RemoteFolderOccurrence {
+        folders.first { $0.serverID == id } ?? RemoteFolderOccurrence(serverID: id, displayPath: id, kind: .label)
+    }
+
+    private func upsert(_ id: String, _ ids: [String]) -> RemoteChange {
+        let occurrences = ids.map { occurrence($0) }
+        return .upserted(RemoteItemRef(identity: .gmail(messageID: id), folder: occurrences.first), occurrences: occurrences)
+    }
+
+    private func checkGrant() throws {
+        if revoked { throw MailProviderError.reauthorisationRequired }
+    }
+
+    func limits() async -> ProviderLimits {
+        ProviderLimits(maxConcurrentDownloads: 2, pageSize: 2, changeTracking: .accountWide)
+    }
+
+    func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {
+        try checkGrant()
+        return FolderPage(folders: folders, nextPageToken: nil)
+    }
+
+    func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
+                   context: ProviderRequestContext) async throws -> EnumerationPage {
+        try checkGrant()
+        let after = Int(cursor ?? "0") ?? 0
+        let inFolder = messages.filter { $0.value.folders.contains(folder.serverID) && $0.value.seq > after }
+            .sorted { $0.value.seq < $1.value.seq }
+        let page = Array(inFolder.prefix(pageSize))
+        let current = occurrence(folder.serverID)
+        let items = page.map { RemoteItemRef(identity: .gmail(messageID: $0.key), folder: current, sizeHint: Int64($0.value.bytes.count)) }
+        return EnumerationPage(items: items, nextCursor: inFolder.count > pageSize ? page.last.map { String($0.value.seq) } : nil)
+    }
+
+    func fetchRaw(_ item: RemoteItemRef, into sink: RawByteSink, context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+        try checkGrant()
+        guard case .gmail(let id) = item.identity else { throw MailProviderError.permanent("not a fixture identity") }
+        fetches += 1
+        if fetchDelay > 0 { try await Task.sleep(nanoseconds: fetchDelay) }
+        if failing.contains(id) { throw MailProviderError.permanent("fixture: this message cannot be downloaded now") }
+        guard let message = messages[id] else { throw MailProviderError.itemUnavailable }
+        var offset = 0
+        while offset < message.bytes.count {
+            let end = min(message.bytes.count, offset + 1_000)
+            try sink.write(message.bytes.subdata(in: offset..<end))
+            offset = end
+        }
+        return FetchedItemMetadata(occurrences: message.folders.map { occurrence($0) },
+                                   metadata: ProviderMetadata(representation: .gmailRaw, revision: String(message.seq)),
+                                   expectedByteCount: Int64(message.bytes.count))
+    }
+
+    func changeBoundary(scope: ChangeScope, context: ProviderRequestContext) async throws -> String {
+        try checkGrant()
+        return String(seq)
+    }
+
+    func changes(scope: ChangeScope, since token: String, context: ProviderRequestContext) async throws -> ChangePage {
+        try checkGrant()
+        let start = Int(token) ?? 0
+        return ChangePage(changes: log.filter { $0.seq > start }.map { $0.change }, resume: String(seq), hasMore: false)
+    }
+}
+
+/// V4-08 (plan §5.5, §9): connected mail through the five jobs, without
+/// network. Messages are captured through the real `SyncEngine` and
+/// `ConnectedArchiveSink`, wired by the app's `ConnectedMailRuntime`, from an
+/// in-test provider carrying real MIME (PDF, DOCX inside ZIP, inline image,
+/// nested .eml, S/MIME-locked part).
+///   T14/T15  the same bytes imported from a file or captured give the same
+///            coverage, children, chunk text and evidence, also after restart
+///   T20      download and parse failures: preserved / acquired / searchable distinct; exact retry
+///   T21      server deletion, revoked grant, account removal: everything saved keeps working offline
+///   T25      search while capture is incomplete says "may still match", negative queries included
+///   T26      imported and captured copies: content-equivalent, provenance kept
+///   T28      repeated sync idempotent, new labels are occurrences, holds respected
+///   T29      capture → backup → clean-profile restore → export → verify, no credential anywhere
+@MainActor
+final class ConnectedFiveJobsTests: XCTestCase {
+
+    private struct Env {
+        let root: URL
+        let storeDir: URL
+        let store: SQLiteEmailStore
+        let fts: FTSSearchIndex
+        let archive: ArchiveDataService
+    }
+
+    private struct Connected {
+        let runtime: ConnectedMailRuntime
+        let provider: ConnectedFiveJobsProvider
+        let policy: MailNetworkPolicy
+        let credentials: ConnectedFiveJobsCredentials
+        let indexed: ConnectedFiveJobsIndexed
+        var accountID: UUID { provider.accountID }
+    }
+
+    private static let secret = "fixture-oauth-secret-7Q2xV9-never-written"
+    private var chunkPolicyWas = false
+
+    override func setUp() async throws {
+        chunkPolicyWas = SearchChunkPolicy.isEnabled
+        SearchChunkPolicy.isEnabled = true
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    override func tearDown() async throws {
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = nil
+        AttachmentTextIndexJob.testSuppressKicks = false
+        SearchChunkPolicy.isEnabled = chunkPolicyWas
+    }
+
+    // MARK: Fixtures
+
+    private func makeEnv() async throws -> Env {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("V408-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let storeDir = root.appendingPathComponent("store", isDirectory: true)
+        let store = SQLiteEmailStore(directory: storeDir)
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        AttachmentTextIndexJob.testStoreOverride = store
+        return Env(root: root, storeDir: storeDir, store: store, fts: fts,
+                   archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)))
+    }
+
+    /// A runtime on the test store with one Gmail-shaped account, its own
+    /// policy (Mail on, transports treated as compiled) and in-memory secrets.
+    private func connect(_ env: Env, display: String = "asha@example.com") async throws -> Connected {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let credentials = ConnectedFiveJobsCredentials()
+        let indexed = ConnectedFiveJobsIndexed()
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        let deps = ConnectedMailRuntime.Dependencies(
+            store: env.store, fts: env.fts, policy: policy, credentials: credentials, tokens: nil,
+            adapters: { context -> (any MailProviderAdapter)? in context.account.id == provider.accountID ? provider : nil },
+            afterIndex: { ids in indexed.add(ids) },
+            storage: StorageProbe(reserveBytes: 0))
+        let runtime = ConnectedMailRuntime(dependencies: deps)
+        await provider.addFolder("INBOX", path: "Inbox")
+        await provider.addFolder("Label_P", path: "Projects")
+        try await runtime.registry.add(MailAccount(id: provider.accountID, provider: .gmail, issuer: GmailOAuth.issuer,
+                                                   displayIdentity: display, grantedScopes: [GmailOAuth.readOnlyScope]),
+                                       secret: Data(Self.secret.utf8), kind: .oauthTokenSet)
+        try await runtime.start()
+        return Connected(runtime: runtime, provider: provider, policy: policy, credentials: credentials, indexed: indexed)
+    }
+
+    private static func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = (crc >> 1) ^ (0xEDB88320 & (0 &- (crc & 1))) }
+        }
+        return crc ^ 0xFFFFFFFF
+    }
+
+    /// A stored (uncompressed) ZIP with correct CRCs — an Office package is one.
+    private static func storedZip(_ members: [(name: String, data: Data)]) -> Data {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        var local = Data(), central = Data()
+        for m in members {
+            let name = Array(m.name.utf8)
+            let crc = crc32(m.data)
+            let size = UInt32(m.data.count)
+            let offset = UInt32(local.count)
+            local.append(contentsOf: le32(0x04034b50) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                         + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + name)
+            local.append(m.data)
+            central.append(contentsOf: le32(0x02014b50) + le16(20) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(offset) + name)
+        }
+        var file = local
+        file.append(central)
+        file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(members.count) + le16(members.count)
+                    + le32(UInt32(central.count)) + le32(UInt32(local.count)) + le16(0))
+        return file
+    }
+
+    /// Real MIME with CRLF line ends: a PDF, a DOCX inside a ZIP, an inline
+    /// image with a Content-ID, a nested message and an S/MIME-locked part.
+    private static func fixture(messageID: String, subject: String = "Quarterly figures") -> Data {
+        let docx = storedZip([
+            ("[Content_Types].xml", Data("<Types/>".utf8)),
+            ("word/document.xml", Data("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>\
+                <w:p><w:r><w:t>The xylophone covenant applies.</w:t></w:r></w:p></w:body></w:document>
+                """.utf8)),
+        ])
+        let bundle = storedZip([("minutes.docx", docx)])
+        let pdf = V2CutoverTests.pdfData(pages: ["Fixture ledger quorum"])
+        let png = V2CutoverTests.pngData()
+        let smime = Data((0..<600).map { UInt8(truncatingIfNeeded: $0 &* 37 &+ 11) })
+        let nested = ["From: Ravi <ravi@example.org>", "To: Asha <asha@example.com>", "Subject: Nested note",
+                      "Date: Sun, 5 Jan 2025 09:00:00 +0530", "Message-ID: <nested-\(messageID)>", "MIME-Version: 1.0",
+                      "Content-Type: text/plain; charset=utf-8", "", "The nested marmalade memo."].joined(separator: "\r\n")
+        func file(_ type: String, _ name: String, _ data: Data, contentID: String? = nil) -> [String] {
+            var part = ["--MIX", "Content-Type: \(type); name=\"\(name)\""]
+            if let contentID {
+                part += ["Content-Disposition: inline; filename=\"\(name)\"", "Content-ID: <\(contentID)>"]
+            } else {
+                part.append("Content-Disposition: attachment; filename=\"\(name)\"")
+            }
+            return part + ["Content-Transfer-Encoding: base64", "", data.base64EncodedString(options: .lineLength76Characters)]
+        }
+        var lines = ["From: Asha <asha@example.com>", "To: Ravi <ravi@example.org>", "Subject: \(subject)",
+                     "Date: Mon, 6 Jan 2025 10:00:00 +0530", "Message-ID: <\(messageID)>", "MIME-Version: 1.0",
+                     "Content-Type: multipart/mixed; boundary=\"MIX\"", "",
+                     "--MIX", "Content-Type: text/plain; charset=utf-8", "", "The quarterly figures are attached."]
+        lines += file("application/pdf", "report.pdf", pdf)
+        lines += file("application/zip", "bundle.zip", bundle)
+        lines += file("image/png", "logo.png", png, contentID: "logo@fixture.example")
+        lines += ["--MIX", "Content-Type: message/rfc822; name=\"forwarded.eml\"",
+                  "Content-Disposition: attachment; filename=\"forwarded.eml\"", "", nested]
+        lines += file("application/pkcs7-mime; smime-type=enveloped-data", "smime.p7m", smime)
+        lines += ["--MIX--", ""]
+        return Data(lines.joined(separator: "\r\n").utf8)
+    }
+
+    private static func plain(_ messageID: String, body: String, subject: String = "Note") -> Data {
+        Data(["From: Asha <asha@example.com>", "To: Ravi <ravi@example.org>", "Subject: \(subject)",
+              "Date: Mon, 6 Jan 2025 10:00:00 +0530", "Message-ID: <\(messageID)>", "MIME-Version: 1.0",
+              "Content-Type: text/plain; charset=utf-8", "", body, ""].joined(separator: "\r\n").utf8)
+    }
+
+    private func importFile(_ env: Env, _ bytes: Data) async throws -> MBOXParser.RawEmail {
+        let email = try MBOXParser.processRawMessage(String(decoding: bytes, as: UTF8.self), senderEmail: "")
+        _ = try await env.store.insertBatch([email], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                            dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        try await env.fts.indexBatch([email])
+        return email
+    }
+
+    private func capturedID(_ c: Connected, _ env: Env, _ gmailID: String) async throws -> UUID {
+        let existing = try await env.store.existingRemoteMessage(accountID: c.accountID,
+                                                                 key: try ProviderMessageIdentity.gmail(messageID: gmailID).key())
+        return try XCTUnwrap(existing?.emailID, "\(gmailID) was captured")
+    }
+
+    private func ids(_ archive: ArchiveDataService, _ spec: SearchSpec) async throws -> Set<UUID> {
+        var q = EmailQuery.all
+        q.spec = spec
+        var out = Set<UUID>()
+        for try await batch in archive.streamFullEmails(query: q, batchSize: 50) { for e in batch { out.insert(e.id) } }
+        return out
+    }
+
+    private func coverageRows(_ env: Env, _ id: UUID) async throws -> [AttachmentCoverageRow] {
+        try AttachmentCoverageStore(url: await env.store.attachmentCoverageURL).rows(for: id)
+    }
+
+    private static func key(_ row: AttachmentCoverageRow) -> String {
+        "\(row.ordinal)|\(row.filename)|\(row.mimeType)|\(row.state.rawValue)|\(row.extractor)|\(row.characters)"
+    }
+
+    private static func sidecar(_ folder: URL) throws -> ConnectedProvenanceSidecar {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(ConnectedProvenanceSidecar.self,
+                                  from: Data(contentsOf: folder.appendingPathComponent(ConnectedProvenanceSidecar.filename)))
+    }
+
+    private static func files(under folder: URL) -> [URL] {
+        guard let e = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        return e.compactMap { $0 as? URL }.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+    }
+
+    // MARK: Wiring
+
+    /// The runtime registers each account in the policy with its adapter's
+    /// host and the capture mode only, reconciles before capturing, asks the
+    /// policy for every step, and switching Mail or the account off stops the
+    /// capture. The offline build never creates a runtime.
+    func testV408_runtimeWiring_policyAsked_switchingOffStopsCapture_offlineBuildCreatesNone() async throws {
+        let env = try await makeEnv()
+        let c = try await connect(env)
+        let account = try XCTUnwrap(c.policy.account(c.accountID))
+        XCTAssertTrue(account.isEnabled)
+        XCTAssertEqual(account.modes, [.preserveMail], "capture only: no send, no server changes")
+        XCTAssertEqual(account.mailHosts, ["mail.fixture.example"])
+        XCTAssertNotNil(c.runtime.reconcileReport, "restart reconciliation ran before any capture")
+
+        for i in 1...6 { await c.provider.add("w\(i)", bytes: Self.plain("w\(i)@fixture.example", body: "wiring \(i)"), folders: ["INBOX"]) }
+        await c.provider.setFetchDelay(300_000_000)
+        let run = Task { await c.runtime.sync(c.accountID) }
+        var waited = 0
+        while await c.provider.fetches == 0, waited < 500 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            waited += 1
+        }
+        XCTAssertGreaterThan(c.policy.snapshot().permittedAttempts, 0, "every step asked the mail policy")
+        XCTAssertEqual(c.policy.snapshot().activeTasks, 1, "the capture is in the cancellation registry")
+        c.policy.setMailEnabled(false)
+        let report = await run.value
+        XCTAssertNotNil(report)
+        XCTAssertFalse(report?.outcome.isCompletion ?? true, "switching Mail off stops the capture; it never claims completion")
+        XCTAssertEqual(c.policy.snapshot().activeTasks, 0)
+        XCTAssertGreaterThanOrEqual(c.policy.snapshot().cancelledTasks, 1)
+        let refused = await c.runtime.sync(c.accountID)
+        XCTAssertNil(refused, "with Mail off no capture starts")
+
+        c.policy.setMailEnabled(true)
+        try await c.runtime.setCaptureEnabled(false, account: c.accountID)
+        XCTAssertNil(c.runtime.engines[c.accountID], "saving switched off for the account: its engine is gone")
+        XCTAssertEqual(c.policy.account(c.accountID)?.isEnabled, false)
+
+        // This test build compiles no transport: the capability never creates a runtime.
+        XCTAssertFalse(ConnectedBuildFeatures.mailTransportsCompiled)
+        ConnectedMailRuntime.capabilityChanged(isOn: true)
+        XCTAssertNil(ConnectedMailRuntime.shared)
+        XCTAssertNil(ConnectedMailRuntime.makeProductionDependencies())
+    }
+
+    /// A08: the unscoped ingest path is used for sample data only; the legacy
+    /// connectors' messages are routed to the accounts' capture instead.
+    func testV408_A08_onlineMailNeverUsesTheUnscopedIngestPath() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        XCTAssertGreaterThan(files.count, 100)
+        var callers: [String] = []
+        for f in files {
+            let text = try String(contentsOf: f, encoding: .utf8)
+            for line in text.split(separator: "\n") where line.contains(".ingestEmails(")
+                && !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+                callers.append("\(f.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        XCTAssertEqual(callers.count, 1, callers.joined(separator: "\n"))
+        XCTAssertTrue(callers.first?.contains("SampleData") == true, callers.joined(separator: "\n"))
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains("ConnectedMailRuntime.requestCaptureOfAllAccounts()"))
+    }
+
+    // MARK: T14 / T15
+
+    func testV408_T14_T15_sameBytesImportedOrCaptured_sameCoverageAndEvidence_afterRestart() async throws {
+        let env = try await makeEnv()
+        let bytes = Self.fixture(messageID: "t14@fixture.example")
+        // From a file: the reader every import uses.
+        let imported = try await importFile(env, bytes)
+        // From an account: provider adapter → engine → sink, the same bytes.
+        let c = try await connect(env)
+        await c.provider.add("m1", bytes: bytes, folders: ["INBOX", "Label_P"])
+        let report = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(report?.outcome, .completed)
+        let captured = try await capturedID(c, env, "m1")
+        XCTAssertNotEqual(captured, imported.id, "Message-ID never merges a capture into an import")
+        XCTAssertEqual(c.indexed.all, [captured], "the stored outcome reached the search feed")
+        let inFTS = try await env.fts.indexedSubset(of: [imported.id, captured])
+        XCTAssertEqual(inFTS, [imported.id, captured], "captured mail is in the full-text index like an import")
+        let loaded = try await env.store.emails(withIDs: [captured])
+        XCTAssertEqual(loaded.first?.rawSource, String(decoding: bytes, as: UTF8.self), "the original bytes are retained")
+
+        // The existing attachment reader, over both.
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 2)
+        let rowsA = try await coverageRows(env, imported.id)
+        let rowsB = try await coverageRows(env, captured)
+        XCTAssertGreaterThanOrEqual(imported.attachments.count, 4, "PDF, ZIP, inline image, nested message, S/MIME part")
+        XCTAssertEqual(rowsA.count, imported.attachments.count)
+        XCTAssertEqual(rowsA.map(Self.key), rowsB.map(Self.key), "the same coverage, attachment by attachment")
+        let childA = try await env.store.attachmentChildren(forEmailID: imported.id).map { "\($0.path)|\($0.kind)|\($0.sha256)|\($0.state)" }
+        let childB = try await env.store.attachmentChildren(forEmailID: captured).map { "\($0.path)|\($0.kind)|\($0.sha256)|\($0.state)" }
+        XCTAssertFalse(childA.isEmpty, "the DOCX inside the ZIP and the nested message are documents")
+        XCTAssertEqual(childA, childB)
+        for row in rowsA {
+            let a = try await env.store.searchChunks(emailID: imported.id, kind: .attachmentText, ordinal: row.ordinal)
+            let b = try await env.store.searchChunks(emailID: captured, kind: .attachmentText, ordinal: row.ordinal)
+            XCTAssertEqual(a, b, "attachment \(row.ordinal) \(row.filename)")
+        }
+
+        // T15: the S/MIME part is retained, shown as not read, and no text is invented for it.
+        let smime = try XCTUnwrap(rowsB.first { $0.filename == "smime.p7m" })
+        XCTAssertNotEqual(smime.state, .extracted)
+        XCTAssertNotEqual(smime.state, .truncated)
+        let smimeText = try await env.store.searchChunks(emailID: captured, kind: .attachmentText, ordinal: smime.ordinal)
+        XCTAssertTrue(smimeText.isEmpty, "no text is invented for a locked part")
+
+        // The same search finds both, with the same evidence.
+        let pdfSpec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "PDF", contentMatch: .phrase, content: "ledger quorum")])])
+        let found = try await ids(env.archive, pdfSpec)
+        XCTAssertEqual(found, [imported.id, captured])
+        let childSpec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(contentMatch: .phrase, content: "xylophone covenant")])])
+        let foundChild = try await ids(env.archive, childSpec)
+        XCTAssertEqual(foundChild.contains(imported.id), foundChild.contains(captured), "the DOCX inside the ZIP answers the same for both")
+        let evidenceA = try await env.store.matchEvidence(emailID: imported.id, spec: pdfSpec, freeText: nil).map(\.location)
+        let evidenceB = try await env.store.matchEvidence(emailID: captured, spec: pdfSpec, freeText: nil).map(\.location)
+        XCTAssertEqual(evidenceA, evidenceB)
+        XCTAssertFalse(evidenceB.isEmpty)
+        XCTAssertFalse(evidenceB.contains(.unavailable), "exact evidence, not a guess")
+
+        // After a restart: a new connection on the same archive answers the same.
+        let reopened = SQLiteEmailStore(directory: env.storeDir)
+        let reArchive = ArchiveDataService(repository: EmailStoreRepository(store: reopened, fts: env.fts))
+        let again = try await ids(reArchive, pdfSpec)
+        XCTAssertEqual(again, [imported.id, captured])
+        let evidenceAfter = try await reopened.matchEvidence(emailID: captured, spec: pdfSpec, freeText: nil).map(\.location)
+        XCTAssertEqual(evidenceAfter, evidenceB)
+    }
+
+    // MARK: T20
+
+    func testV408_T20_downloadAndParseFailures_countsStayDistinct_andRetryExactly() async throws {
+        let env = try await makeEnv()
+        let c = try await connect(env)
+        await c.provider.add("ok", bytes: Self.plain("ok@fixture.example", body: "alpha readable"), folders: ["INBOX"])
+        await c.provider.add("broken", bytes: Self.plain("broken@fixture.example", body: "UNPARSABLE-MARKER"), folders: ["INBOX"])
+        await c.provider.add("late", bytes: Self.plain("late@fixture.example", body: "gamma later"), folders: ["INBOX"])
+        await c.provider.setFailing("late", true)
+        await c.runtime.sink.setParseFaultHook { data in
+            if data.range(of: Data("UNPARSABLE-MARKER".utf8)) != nil { throw ConnectedFiveJobsParseFailure() }
+        }
+        let first = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(first?.outcome, .completedWithFailures(failed: 1))
+        let maybeStatus = try await c.runtime.status(of: c.accountID)
+        let status = try XCTUnwrap(maybeStatus)
+        XCTAssertEqual(status.completeness.acquisition.captured, 2, "preserved: the readable and the unreadable message")
+        XCTAssertEqual(status.completeness.acquisition.failed, 1, "a transfer failure is never counted as preserved")
+        XCTAssertEqual(status.completeness.preservation.unreadable, 1, "preserved but not readable is its own count")
+        XCTAssertFalse(status.acquisitionComplete)
+        let readable = try await ids(env.archive, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "alpha")])]))
+        XCTAssertEqual(readable.count, 1)
+        let marker = try await ids(env.archive, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "unparsable")])]))
+        XCTAssertTrue(marker.isEmpty, "no text is claimed for the unreadable record")
+
+        await c.provider.setFailing("late", false)
+        await c.runtime.sink.setParseFaultHook(nil)
+        let second = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(second?.outcome, .completed)
+        XCTAssertEqual(second?.receipt?.stored, 1, "exactly the failed download is fetched again")
+        let unreadable = try await c.runtime.sink.unreadableCaptures(accountID: c.accountID)
+        XCTAssertEqual(unreadable.map { $0.identity }, [.gmail(messageID: "broken")], "the parse failure stays listed for a retry from the kept bytes")
+    }
+
+    // MARK: T21
+
+    func testV408_T21_serverDeletion_revoke_removal_savedMailFoldersSearchFilesExportsKeepWorkingOffline() async throws {
+        let env = try await makeEnv()
+        let c = try await connect(env)
+        await c.provider.add("keep", bytes: Self.fixture(messageID: "keep@fixture.example", subject: "Keep me"), folders: ["INBOX", "Label_P"])
+        await c.provider.add("gone", bytes: Self.plain("gone@fixture.example", body: "deleted on the server later"), folders: ["Label_P"])
+        let first = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(first?.outcome, .completed)
+        let keep = try await capturedID(c, env, "keep")
+        let gone = try await capturedID(c, env, "gone")
+
+        // Deleted on the server: the connected projection changes, the record stays.
+        await c.provider.delete("gone")
+        let second = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(second?.outcome, .completed)
+        let removed = try await ids(env.archive, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.captureState, .equals, "removedOnServer")])]))
+        XCTAssertEqual(removed, [gone])
+
+        // Revoked grant: the account needs sign-in; saved mail is untouched.
+        await c.provider.revoke()
+        let third = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(third?.outcome, .needsSignIn)
+        let revoked = try await c.runtime.registry.account(c.accountID)
+        XCTAssertEqual(revoked.connectionState, .needsReauthorisation)
+
+        // Removed: secrets deleted, engine gone, the policy no longer lets it connect.
+        try await c.runtime.removeAccount(c.accountID)
+        XCTAssertEqual(c.credentials.secretCount(for: c.accountID), 0)
+        XCTAssertNil(c.runtime.engines[c.accountID])
+        XCTAssertNotEqual(c.policy.account(c.accountID)?.isEnabled, true)
+        let permittedBefore = c.policy.snapshot().permittedAttempts
+        let none = await c.runtime.sync(c.accountID)
+        XCTAssertNil(none, "a removed account starts nothing")
+
+        // Offline, everything saved still works.
+        let total = try await env.archive.count(query: .all)
+        XCTAssertEqual(total, 2)
+        let accountRecord = try await env.store.connectedAccounts().first
+        let nodes = try await env.archive.folderNodes()
+        let mine = nodes.filter { $0.sourceID == accountRecord?.archiveSourceID && $0.messageCount > 0 }
+        XCTAssertEqual(Set(mine.map(\.path)), ["Inbox", "Projects"], "folders under the account's source")
+        let byAccount = try await ids(env.archive, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.account, .equals, c.accountID.uuidString)])]))
+        XCTAssertEqual(byAccount, [keep, gone])
+        let text = try await ids(env.archive, SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "deleted server")])]))
+        XCTAssertEqual(text, [gone])
+        let kept = try await env.store.emails(withIDs: [keep])
+        XCTAssertGreaterThanOrEqual(kept.first?.attachments.count ?? 0, 4, "the files are still there")
+        let out = env.root.appendingPathComponent("export-after-removal", isDirectory: true)
+        let result = try await ArchiveExportService(archive: env.archive).exportEMLFiles(scope: .explicit([keep, gone]), to: out)
+        XCTAssertEqual(result.recordsWritten, 2)
+        XCTAssertTrue(try ExportInventory.verify(folder: out).isClean)
+        let sidecar = try Self.sidecar(out)
+        XCTAssertEqual(Set(sidecar.entries.map(\.provenance.emailID)), [keep, gone])
+        XCTAssertTrue(sidecar.entries.allSatisfy(\.bytesIdenticalToCapture))
+        XCTAssertEqual(c.policy.snapshot().permittedAttempts, permittedBefore, "no network step after the removal")
+    }
+
+    // MARK: T25
+
+    func testV408_T25_searchWhileCaptureIncomplete_saysMayStillMatch_negativeQueriesIncluded() async throws {
+        let env = try await makeEnv()
+        let c = try await connect(env, display: "pending@example.com")
+        await c.provider.add("a", bytes: Self.plain("a@fixture.example", body: "routine status"), folders: ["INBOX"])
+        await c.provider.add("b", bytes: Self.plain("b@fixture.example", body: "the zeppelin contract"), folders: ["INBOX"])
+        await c.provider.setFailing("b", true)
+        let first = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(first?.outcome, .completedWithFailures(failed: 1))
+
+        let positive = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.body, .allWords, "zeppelin")])])
+        let negative = SearchSpec(groups: [SearchGroup(.exclude, [SearchCondition(.body, .allWords, "zeppelin")])])
+        let zero = try await ids(env.archive, positive)
+        XCTAssertTrue(zero.isEmpty, "the message holding the word is not saved yet")
+        let excluded = try await ids(env.archive, negative)
+        XCTAssertEqual(excluded.count, 1)
+
+        let model = SearchCoverageModel(archive: env.archive, fts: env.fts)
+        await model.refresh()
+        let snapshot = try XCTUnwrap(model.snapshot)
+        XCTAssertEqual(snapshot.captureGaps.map(\.accountID), [c.accountID])
+        XCTAssertEqual(snapshot.captureGaps.first?.failed, 1)
+        XCTAssertTrue(snapshot.needsNotice, "an empty result or an exclusion is not presented as complete")
+        XCTAssertTrue(snapshot.summaryLine.contains("pending@example.com"), snapshot.summaryLine)
+        XCTAssertTrue(snapshot.summaryLine.contains("may still match"), snapshot.summaryLine)
+        let maybeStatus = try await c.runtime.status(of: c.accountID)
+        let status = try XCTUnwrap(maybeStatus)
+        XCTAssertFalse(status.acquisitionComplete)
+        XCTAssertEqual(status.headline, .savedWithFailures(saved: 1, failed: 1))
+
+        // Everything saved: the notice goes and the word is found.
+        await c.provider.setFailing("b", false)
+        let second = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(second?.outcome, .completed)
+        await model.refresh()
+        let after = try XCTUnwrap(model.snapshot)
+        XCTAssertTrue(after.captureGaps.isEmpty)
+        XCTAssertFalse(after.summaryLine.contains("pending@example.com"), after.summaryLine)
+        let found = try await ids(env.archive, positive)
+        XCTAssertEqual(found.count, 1)
+    }
+
+    // MARK: T26
+
+    func testV408_T26_importedAndCapturedCopies_contentEquivalent_provenanceKept_cleanupTouchesNoServer() async throws {
+        let env = try await makeEnv()
+        let crlf = Self.fixture(messageID: "dup@fixture.example", subject: "Board minutes")
+        // The file copy has LF line ends (as an mbox keeps it); the capture has CRLF.
+        let lf = Data(String(decoding: crlf, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n").utf8)
+        let imported = try await importFile(env, lf)
+        let c = try await connect(env)
+        await c.provider.add("d1", bytes: crlf, folders: ["INBOX", "Label_P"])
+        let report = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(report?.outcome, .completed)
+        let captured = try await capturedID(c, env, "d1")
+
+        let groups = try await env.store.messageIDDuplicateGroups()
+        let group = try XCTUnwrap(groups.first { Set($0) == [imported.id, captured] }, "the two copies are grouped")
+        let members = try await env.store.emails(withIDs: group)
+        let verdict = DuplicateVerification.verify(members)
+        if case .contentEquivalent(attachmentBytesCompared: true) = verdict {} else {
+            XCTFail("expected content-equivalent, got \(verdict)")
+        }
+        let capturedProvenance = try await c.runtime.sink.provenance(emailID: captured)
+        XCTAssertEqual(capturedProvenance?.accountID, c.accountID)
+        XCTAssertEqual(capturedProvenance?.byteCount, Int64(crlf.count), "the captured copy keeps its own bytes")
+        let importedProvenance = try await c.runtime.sink.provenance(emailID: imported.id)
+        XCTAssertNil(importedProvenance, "the file copy is not attributed to the account")
+
+        // Removing the captured copy keeps the file copy, merges the account's folders into it, keeps provenance.
+        let cleanup = try await env.store.removeDuplicateCopies([.init(survivor: imported.id, removed: [captured])])
+        XCTAssertEqual(cleanup.trashed, [captured])
+        XCTAssertGreaterThan(cleanup.membershipsMerged, 0)
+        let kept = try await c.runtime.sink.provenance(emailID: captured)
+        XCTAssertNotNil(kept)
+        // The next sync neither downloads it again nor brings it back (local cleanup is not a server action).
+        let fetchesBefore = await c.provider.fetches
+        let again = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(again?.outcome, .completed)
+        let fetchesAfter = await c.provider.fetches
+        XCTAssertEqual(fetchesAfter, fetchesBefore)
+        let visible = try await env.archive.count(query: .all)
+        XCTAssertEqual(visible, 1)
+    }
+
+    // MARK: T28
+
+    func testV408_T28_repeatedSyncIdempotent_newLabelsAreOccurrences_holdsRespected() async throws {
+        let env = try await makeEnv()
+        let c = try await connect(env)
+        for i in 1...5 { await c.provider.add("r\(i)", bytes: Self.plain("r\(i)@fixture.example", body: "repeat \(i)"), folders: ["INBOX"]) }
+        let first = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(first?.receipt?.stored, 5)
+        let total = try await env.store.totalCount()
+        XCTAssertEqual(total, 5)
+
+        let second = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(second?.outcome, .completed)
+        XCTAssertEqual(second?.receipt?.stored, 0, "nothing new on the server: nothing stored")
+        await c.provider.label("r1", with: ["INBOX", "Label_P"])
+        let third = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(third?.receipt?.stored, 0)
+        XCTAssertEqual(third?.receipt?.alreadyPreserved, 1, "a new label is an occurrence of the saved message")
+        let totalAfter = try await env.store.totalCount()
+        XCTAssertEqual(totalAfter, 5)
+        XCTAssertEqual(c.indexed.all.count, 5, "nothing indexed twice")
+        let r1 = try await capturedID(c, env, "r1")
+        let accountRecord = try await env.store.connectedAccounts().first
+        let projects = try await env.archive.folderNodes().first { $0.sourceID == accountRecord?.archiveSourceID && $0.path == "Projects" }
+        XCTAssertEqual(projects?.messageCount, 1)
+        let provenance = try await c.runtime.sink.provenance(emailID: r1)
+        XCTAssertEqual(Set(provenance?.memberships ?? []), ["Inbox", "Projects"])
+
+        // A held captured copy is never removed by duplicate cleanup, and the next sync leaves the hold alone.
+        let r2 = try await capturedID(c, env, "r2")
+        let fileCopy = try await importFile(env, Self.plain("r2@fixture.example", body: "repeat 2"))
+        _ = try await env.store.legalHoldsAdd([r2], sync: true)
+        let cleanup = try await env.store.removeDuplicateCopies([.init(survivor: fileCopy.id, removed: [r2])])
+        XCTAssertEqual(cleanup.heldKept, [r2])
+        XCTAssertTrue(cleanup.trashed.isEmpty)
+        let fourth = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(fourth?.outcome, .completed)
+        XCTAssertEqual(fourth?.receipt?.stored, 0)
+        let held = try await env.store.legalHeldAmong([r2])
+        XCTAssertEqual(held, [r2])
+        let finalTotal = try await env.store.totalCount()
+        XCTAssertEqual(finalTotal, 6, "five captured and one imported, nothing duplicated, nothing removed")
+    }
+
+    // MARK: Folders
+
+    /// The account's folders are an account-qualified tree; a folder renamed
+    /// on the server shows the new path and keeps the historical one; an
+    /// empty server folder is listed.
+    func testV408_folders_accountTree_renameKeepsHistory_emptyFolderListed() async throws {
+        let env = try await makeEnv()
+        let c = try await connect(env, display: "folders@example.com")
+        await c.provider.add("f1", bytes: Self.plain("f1@fixture.example", body: "folder one"), folders: ["Label_P"])
+        let first = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(first?.outcome, .completed)
+        await c.provider.renameFolder("Label_P", to: "Projects/2025")
+        await c.provider.addFolder("Label_E", path: "Empty")
+        let second = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(second?.outcome, .completed)
+
+        let accountRecord = try await env.store.connectedAccounts().first
+        let sourceID = try XCTUnwrap(accountRecord?.archiveSourceID)
+        let nodes = try await env.archive.folderNodes().filter { $0.sourceID == sourceID }
+        XCTAssertEqual(Set(nodes.filter { $0.messageCount > 0 }.map(\.path)), ["Projects", "Projects/2025"],
+                       "the historical path stays, the current path is added")
+        XCTAssertTrue(nodes.contains { $0.path == "Empty" && $0.declared && $0.messageCount == 0 })
+        let sources = try await env.store.sources()
+        XCTAssertEqual(sources.first { $0.sourceID == sourceID }?.filename, "folders@example.com", "the tree hangs under the account")
+    }
+
+    // MARK: T29
+
+    func testV408_T29_capture_backup_cleanProfileRestore_export_verify_noCredentialAnywhere() async throws {
+        let env = try await makeEnv()
+        let c = try await connect(env, display: "archive@example.com")
+        let bytes = Self.fixture(messageID: "t29@fixture.example", subject: "Restore me")
+        await c.provider.add("t29", bytes: bytes, folders: ["INBOX", "Label_P"])
+        let report = await c.runtime.sync(c.accountID)
+        XCTAssertEqual(report?.outcome, .completed)
+        let id = try await capturedID(c, env, "t29")
+        let loaded = try await env.store.emails(withIDs: [id])
+        let original = try XCTUnwrap(loaded.first)
+
+        let backup = env.root.appendingPathComponent("backup", isDirectory: true)
+        _ = try await ArchiveBackup.create(store: env.store, to: backup)
+        XCTAssertTrue(try ArchiveBackup.verify(backup: backup).isClean)
+        let profile = env.root.appendingPathComponent("clean-profile", isDirectory: true)
+        try ArchiveBackup.restore(backup: backup, intoStoreDirectory: profile, mode: .cleanProfile)
+        let restored = SQLiteEmailStore(directory: profile)
+        let restoredArchive = ArchiveDataService(repository: EmailStoreRepository(
+            store: restored, fts: FTSSearchIndex(shardsDirectory: env.root.appendingPathComponent("fts-restored", isDirectory: true))))
+
+        // The account comes back as metadata without a credential: it needs sign-in.
+        let registry = MailAccountRegistry(records: ConnectedArchiveSink(store: restored), credentials: ConnectedFiveJobsCredentials())
+        let accounts = try await registry.accounts()
+        XCTAssertEqual(accounts.map(\.id), [c.accountID])
+        XCTAssertEqual(accounts.first?.connectionState, .needsReauthorisation)
+        XCTAssertEqual(accounts.first?.displayIdentity, "archive@example.com")
+
+        let out = env.root.appendingPathComponent("export-restored", isDirectory: true)
+        let result = try await ArchiveExportService(archive: restoredArchive).exportEMLFiles(scope: .explicit([id]), to: out)
+        XCTAssertEqual(result.recordsWritten, 1)
+        XCTAssertNil(result.inventoryFailure)
+        XCTAssertTrue(try ExportInventory.verify(folder: out).isClean, "the export verifies")
+        let entry = try XCTUnwrap(try Self.sidecar(out).entries.first)
+        XCTAssertTrue(entry.bytesIdenticalToCapture)
+        XCTAssertEqual(entry.provenance.accountID, c.accountID)
+        XCTAssertEqual(entry.provenance.displayIdentity, "archive@example.com")
+        XCTAssertEqual(Set(entry.provenance.memberships), ["Inbox", "Projects"])
+
+        // An independent read of the exported file reconciles with the archive.
+        let emlURL = out.appendingPathComponent(entry.path)
+        XCTAssertEqual(try Data(contentsOf: emlURL), bytes, "the exported file is the captured bytes")
+        let reread = try MBOXParser.processRawMessage(String(decoding: try Data(contentsOf: emlURL), as: UTF8.self), senderEmail: "")
+        XCTAssertEqual(reread.headers["Subject"], original.headers["Subject"])
+        XCTAssertEqual(reread.headers["From"], original.headers["From"])
+        XCTAssertEqual(reread.attachments.map(\.filename), original.attachments.map(\.filename))
+        let nodes = try await restoredArchive.folderNodes()
+        XCTAssertTrue(Set(nodes.filter { $0.messageCount > 0 }.map(\.path)).isSuperset(of: ["Inbox", "Projects"]))
+
+        // No credential in the backup or the export.
+        let secret = Data(Self.secret.utf8)
+        for file in Self.files(under: backup) + Self.files(under: out) {
+            let data = try Data(contentsOf: file)
+            XCTAssertNil(data.range(of: secret), "\(file.lastPathComponent) holds the account's secret")
+        }
     }
 }

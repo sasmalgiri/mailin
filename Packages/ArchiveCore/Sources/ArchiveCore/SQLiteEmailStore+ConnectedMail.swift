@@ -282,13 +282,43 @@ extension SQLiteEmailStore {
         let sourceID = try accountSourceID(db, accountID: accountID)
         try exec(db, SQLiteHygiene.beginWrite)
         do {
+            // V4-08 (§5.5 folders): the paths recorded before this listing, so
+            // a folder renamed on the server is recognised by its server id.
+            var previous: [String: String] = [:]
+            let read = try prepare(db, "SELECT server_id, path FROM remote_folders WHERE account_id = ?;")
+            bindText(read, 1, accountID.uuidString)
+            while try stepRow(read, db) { previous[columnText(read, 0)] = columnText(read, 1) }
+            sqlite3_finalize(read)
+
             try upsertRemoteFolders(db, accountID: accountID, folders: folders, now: Int64(Date().timeIntervalSince1970))
             var cache: [String: Int64] = [:]
             for f in folders where !f.cleanPath.isEmpty {
-                _ = try folderID(db, sourceID: sourceID, path: f.cleanPath, declared: true, cache: &cache)
+                let fid = try folderID(db, sourceID: sourceID, path: f.cleanPath, declared: true, cache: &cache)
+                guard let old = previous[f.serverID], old != f.displayPath else { continue }
+                // Renamed: every preserved message observed in this server
+                // folder is shown under the new path as well. The old path's
+                // memberships are the historical capture and stay.
+                try addRenamedFolderMemberships(db, accountID: accountID, serverID: f.serverID, folderID: fid, path: f.cleanPath)
             }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    private func addRenamedFolderMemberships(_ db: OpaquePointer, accountID: UUID, serverID: String, folderID: Int64, path: String) throws {
+        let members = "FROM remote_memberships m JOIN remote_messages r ON r.account_id = m.account_id AND r.identity_key = m.identity_key "
+            + "WHERE m.account_id = ? AND m.folder_server_id = ? AND r.email_id IS NOT NULL "
+            + "AND EXISTS (SELECT 1 FROM emails e WHERE e.id = r.email_id)"
+        let folders = try prepare(db, "INSERT OR IGNORE INTO email_folders(email_id, folder_id) SELECT r.email_id, ? \(members);")
+        defer { sqlite3_finalize(folders) }
+        sqlite3_bind_int64(folders, 1, folderID)
+        bindText(folders, 2, accountID.uuidString); bindText(folders, 3, serverID)
+        guard sqlite3_step(folders) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        // FOLD-02 dual write: the legacy tag follows the folder.
+        let tags = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) SELECT r.email_id, ? \(members);")
+        defer { sqlite3_finalize(tags) }
+        bindText(tags, 1, path)
+        bindText(tags, 2, accountID.uuidString); bindText(tags, 3, serverID)
+        guard sqlite3_step(tags) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
     }
 
     func accountSourceID(_ db: OpaquePointer, accountID: UUID) throws -> Int64 {
@@ -472,8 +502,13 @@ extension SQLiteEmailStore {
             bindText(insert, 1, item.accountID.uuidString); bindText(insert, 2, key)
             bindText(insert, 3, occurrence.serverID); sqlite3_bind_int64(insert, 4, now)
             guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
-            guard sqlite3_changes(db) == 1 else { continue }
-            added += 1
+            if sqlite3_changes(db) == 1 { added += 1 }
+            // V4-08 (§5.5 folders): the archive membership follows the folder's
+            // CURRENT path, even for a membership already observed — a server
+            // folder renamed since the last sync puts the message in the new
+            // path too, and the earlier path's membership (the historical
+            // capture) is never removed. INSERT OR IGNORE keeps a repeated
+            // sync idempotent.
             guard let emailID, !occurrence.cleanPath.isEmpty else { continue }
             let fid = try folderID(db, sourceID: sourceID, path: occurrence.cleanPath, declared: false, cache: &cache)
             sqlite3_reset(folder); sqlite3_clear_bindings(folder)

@@ -53,7 +53,16 @@ struct SearchCondition: Codable, Equatable, Hashable, Sendable {
         case folder            // value = folders.folder_id
         case source            // value = sources.source_id
         case messageType       // "sent" / "received"
+        // V4-08 (plan §5.5): connected-mail scope as conditions, so OR
+        // branches and exclusions combine with them like any other field.
+        case account           // value = connected account UUID (mail_accounts.account_id)
+        case sourceKind        // "file" (imported from a file) / "connected" (captured from an account)
+        case captureState      // "onServer" / "removedOnServer" (connected copies only)
     }
+
+    /// V4-08: the values `sourceKind` and `captureState` accept.
+    static let sourceKindValues = ["file", "connected"]
+    static let captureStateValues = ["onServer", "removedOnServer"]
 
     enum Match: String, Codable, CaseIterable, Sendable {
         /// Literal, case-insensitive substring.
@@ -290,6 +299,18 @@ struct SearchSpec: Codable, Equatable, Hashable, Sendable {
                 case .folder, .source:
                     if Int64(condition.trimmedValue) == nil {
                         out.append(Problem(groupIndex: g, conditionIndex: c, message: "\(condition.field.rawValue) must name one item"))
+                    }
+                case .account:
+                    if UUID(uuidString: condition.trimmedValue) == nil {
+                        out.append(Problem(groupIndex: g, conditionIndex: c, message: "account must name one account"))
+                    }
+                case .sourceKind:
+                    if !SearchCondition.sourceKindValues.contains(condition.trimmedValue) {
+                        out.append(Problem(groupIndex: g, conditionIndex: c, message: "source must be file or connected"))
+                    }
+                case .captureState:
+                    if !SearchCondition.captureStateValues.contains(condition.trimmedValue) {
+                        out.append(Problem(groupIndex: g, conditionIndex: c, message: "capture state must be onServer or removedOnServer"))
                     }
                 default:
                     break

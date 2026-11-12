@@ -29,15 +29,21 @@ struct SearchCoverageSnapshot: Equatable, Sendable {
     var chunks: SQLiteEmailStore.SearchDocCoverage?
     /// FIND-03: per-attachment states (nil when nothing recorded or unreadable).
     var attachments: AttachmentCoverageSummary?
+    /// V4-08 (§5.4, T25): connected accounts whose mail is not all saved yet.
+    /// Messages not saved cannot be searched, so an empty result or an
+    /// exclusion "may still match" them. Empty without connected mail.
+    var captureGaps: [ConnectedAcquisitionGap] = []
     var takenAt: Date = Date()
 
     init(storedMessages: Int?, indexedMessages: Int?, partiallyIndexedMessages: Int?,
-         chunks: SQLiteEmailStore.SearchDocCoverage? = nil, attachments: AttachmentCoverageSummary? = nil, takenAt: Date = Date()) {
+         chunks: SQLiteEmailStore.SearchDocCoverage? = nil, attachments: AttachmentCoverageSummary? = nil,
+         captureGaps: [ConnectedAcquisitionGap] = [], takenAt: Date = Date()) {
         self.storedMessages = storedMessages
         self.indexedMessages = indexedMessages
         self.partiallyIndexedMessages = partiallyIndexedMessages
         self.chunks = chunks
         self.attachments = attachments
+        self.captureGaps = captureGaps
         self.takenAt = takenAt
     }
 
@@ -71,7 +77,16 @@ struct SearchCoverageSnapshot: Equatable, Sendable {
     /// Anything the line should say while a search is on screen.
     var needsNotice: Bool {
         isUnavailable || isPartial || (partiallyIndexedMessages ?? 0) > 0 || chunkPendingBodies > 0 || attachmentsNotEvaluable > 0
-            || childNotice != nil
+            || childNotice != nil || !captureGaps.isEmpty
+    }
+
+    /// V4-08 (T25): one sentence per account whose acquisition is incomplete.
+    var captureNotice: String? {
+        guard !captureGaps.isEmpty else { return nil }
+        return captureGaps.map { gap in
+            let name = gap.displayIdentity
+            return String(localized: "\(name): not every message has been saved yet (\(gap.saved) saved) — messages not saved are not searched and may still match")
+        }.joined(separator: " · ")
     }
 
     var budgetLabel: String {
@@ -107,6 +122,7 @@ struct SearchCoverageSnapshot: Equatable, Sendable {
         }
         // SEARCH-03: the files inside attachments are part of what was searched.
         if let childNotice { parts.append(childNotice) }
+        if let captureNotice { parts.append(captureNotice) }
         if parts.isEmpty { return String(localized: "Index covers every message") }
         return parts.joined(separator: " · ")
     }
@@ -144,8 +160,14 @@ final class SearchCoverageModel: ObservableObject {
                 attachments = await AttachmentTextIndexJob.coverageSummary(store: store, scope: scope)
             }
         }
+        // V4-08 (T25): connected accounts still being saved. Unreadable = the
+        // error is reported like the other counters, never "complete".
+        var gaps: [ConnectedAcquisitionGap] = []
+        if let store = archive.sqliteStore {
+            gaps = await read("capture") { try await store.connectedAcquisitionGaps() } ?? []
+        }
         snapshot = SearchCoverageSnapshot(storedMessages: stored, indexedMessages: indexed, partiallyIndexedMessages: partial,
-                                          chunks: chunks, attachments: attachments)
+                                          chunks: chunks, attachments: attachments, captureGaps: gaps)
         lastError = errors.isEmpty ? nil : errors.joined(separator: "; ")
     }
 }

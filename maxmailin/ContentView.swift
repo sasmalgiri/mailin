@@ -4767,11 +4767,18 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func importFromCloud(_ emails: [MBOXParser.RawEmail]) {
         guard !emails.isEmpty else { return }
-        // Part Q: cloud fetches are persisted into the SQLite authority + FTS
-        // — no in-RAM corpus, no v1 JSON writes. `.parsingFinished` (posted by
-        // ingestEmails) re-pages the list and refreshes derived caches.
+        // V4-08 (plan §3 A08): online mail enters the archive ONLY through the
+        // connected-mail sink — account, provider identity, folders and the
+        // original bytes, never Message-ID deduplication. The legacy
+        // connectors' parsed messages are not inserted (the unscoped
+        // `ingestEmails` stays for sample data); the accounts' capture runs instead.
+        let fetched = emails.count
         Task { @MainActor in
-            await viewModel.ingestEmails(emails, sourceLabel: "cloud")
+            let started = await ConnectedMailRuntime.requestCaptureOfAllAccounts()
+            viewModel.statusMessage = started
+                ? String(localized: "Saving mail from your connected accounts, with their folders and original messages.")
+                : String(localized: "Mail from online accounts is saved only through a connected account, with its account, folders and original messages; these \(fetched) messages were not added.")
+            viewModel.statusColor = started ? .green : .orange
         }
     }
 
