@@ -135,7 +135,7 @@ final class MailAccountCredentialTests: XCTestCase {
         XCTAssertTrue(flagged)
         // Signing in again clears it.
         try await coordinator.store(OAuthTokenSet(accountID: account, issuer: Fixtures.google.issuer, audience: Fixtures.google.audience,
-                                                  accessToken: "fresh", refreshToken: "R2", expiresAt: Date(timeIntervalSinceNow: 3600),
+                                                  accessToken: "fresh", refreshToken: "R2", expiresAt: Fixtures.wholeSeconds(3600),
                                                   scopes: Fixtures.google.scopes))
         let token = try await coordinator.accessToken(for: account, audience: Fixtures.google.audience)
         XCTAssertEqual(token, "fresh")
@@ -151,7 +151,8 @@ final class MailAccountCredentialTests: XCTestCase {
         try credentials.write(try Fixtures.expiredSet(a, refresh: "RA").encoded(), kind: .oauthTokenSet, account: a)
         try credentials.write(try Fixtures.expiredSet(b, refresh: "RB").encoded(), kind: .oauthTokenSet, account: b)
         let cValid = OAuthTokenSet(accountID: c, issuer: Fixtures.google.issuer, audience: Fixtures.google.audience, accessToken: "C-valid",
-                                   refreshToken: "RC", expiresAt: Date(timeIntervalSinceNow: 3600), scopes: Fixtures.google.scopes)
+                                   refreshToken: "RC", expiresAt: Date(timeIntervalSince1970: (Date().timeIntervalSince1970 + 3600).rounded()),
+                                   scopes: Fixtures.google.scopes)   // whole seconds: the JSON round trip is exact
         try credentials.write(try cValid.encoded(), kind: .oauthTokenSet, account: c)
         let endpoint = FakeTokenEndpoint()
         await endpoint.setDelay(30_000_000)
@@ -259,7 +260,7 @@ final class MailAccountCredentialTests: XCTestCase {
         let i2 = MailAccount(provider: .imap, host: "imap.two.example", port: 993, loginName: "asha", displayIdentity: "asha@two.example")
         func set(_ id: UUID, _ name: String) throws -> Data {
             try OAuthTokenSet(accountID: id, issuer: Fixtures.google.issuer, audience: Fixtures.google.audience, accessToken: "access-\(name)",
-                              refreshToken: "refresh-\(name)", expiresAt: Date(timeIntervalSinceNow: 3600), scopes: Fixtures.google.scopes).encoded()
+                              refreshToken: "refresh-\(name)", expiresAt: Fixtures.wholeSeconds(3600), scopes: Fixtures.google.scopes).encoded()
         }
         try await registry!.add(g1, secret: try set(g1.id, "g1"), kind: .oauthTokenSet)
         try await registry!.add(g2, secret: try set(g2.id, "g2"), kind: .oauthTokenSet)
@@ -316,7 +317,7 @@ final class MailAccountCredentialTests: XCTestCase {
                                   grantedScopes: Fixtures.google.scopes)
         try await registry.add(account, secret: try OAuthTokenSet(
             accountID: account.id, issuer: Fixtures.google.issuer, audience: Fixtures.google.audience, accessToken: secretAccess,
-            refreshToken: secretRefresh, expiresAt: Date(timeIntervalSinceNow: 3600), scopes: Fixtures.google.scopes).encoded(),
+            refreshToken: secretRefresh, expiresAt: Fixtures.wholeSeconds(3600), scopes: Fixtures.google.scopes).encoded(),
             kind: .oauthTokenSet)
         // One captured message.
         let run = try await sink.beginRun(accountID: account.id, selection: "INBOX")

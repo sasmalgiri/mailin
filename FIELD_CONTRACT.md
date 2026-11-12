@@ -183,5 +183,21 @@ connected messages can carry `mailin-connected-provenance.json` (account provide
 exported file is byte-identical to the capture); the inventory verifier treats it as a description,
 not output.
 
+**Sync engine (V4-04, `MailConnectivity.SyncEngine`).** Checkpoint scopes in `sync_checkpoints`: `sync`
+(account-wide change cursor) or `changes:<folder id>` (per-folder cursor), with `bootstrap_state`
+`bootstrapping@<generation>` (boundary taken before enumeration; not yet reconciled) or `ready@<generation>`;
+`enum:<folder id>` (enumeration resume cursor, `enumerating@<generation>` / `enumerated@<generation>`). A new
+generation (first sync, expired history / delta) re-lists everything; preserved identities are only observed
+(memberships), never downloaded or recorded twice. A server deletion of a preserved message sets
+`remote_messages.remote_present = 0` (projection only); one never preserved is a `capture_items` row
+`unavailable`. A run stopped before its end (pause, cancel, sign-in) is `capture_runs.state = 'stopped'` and is
+never the "last successful sync". A message whose bytes the reader cannot parse is still preserved: the record
+points at the published bytes and `remote_messages.metadata_json` carries `mailinParseError` (counted as
+*unreadable*, separately from captured and preserved). Completeness (`ConnectedArchiveSink.completeness`) is
+computed from these tables: acquisition (captured / remaining / failed / unavailable / inventory known /
+reconciled-to point), preservation (records with bytes, bytes, missing, unreadable), last attempted and last
+successful run; search coverage and export verification come from the existing coverage and receipt code.
+
 Tests: `ConnectedArchiveSinkTests` (v26 upgrade + snapshot, T19 kill at each boundary, T12, identity
-keys, staged-bytes integrity, export provenance) and `MailAccountCredentialTests` (T04–T07, T45, T46).
+keys, staged-bytes integrity, export provenance), `MailAccountCredentialTests` (T04–T07, T45, T46) and
+`SyncEngineTests` (T08, T16–T20, T23, idempotent re-sync, policy refusal).
