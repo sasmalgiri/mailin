@@ -740,3 +740,255 @@ public actor SyncEngine {
         return status
     }
 }
+
+// MARK: - REC-07: selective capture (list → preview → capture exactly that)
+
+/// What a selective capture takes: folders / labels, a date range and a
+/// sender. Applied to what the provider LISTS; a listing that does not state
+/// a message's date or sender leaves it "undetermined", counted on its own
+/// and captured only when `includeUndetermined` is on (never silently dropped).
+public struct SelectiveCaptureFilter: Sendable, Equatable, Codable {
+    /// Server folder / label ids; empty = every folder the provider lists.
+    public var folderIDs: Set<String>
+    /// Inclusive lower bound.
+    public var receivedFrom: Date?
+    /// Exclusive upper bound.
+    public var receivedBefore: Date?
+    /// Sender address contains (case-insensitive).
+    public var sender: String?
+    public var includeUndetermined: Bool
+
+    public init(folderIDs: Set<String> = [], receivedFrom: Date? = nil, receivedBefore: Date? = nil,
+                sender: String? = nil, includeUndetermined: Bool = true) {
+        self.folderIDs = folderIDs; self.receivedFrom = receivedFrom; self.receivedBefore = receivedBefore
+        let trimmed = sender?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.sender = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        self.includeUndetermined = includeUndetermined
+    }
+
+    public enum Judgement: Sendable, Equatable { case included, undetermined, excludedByDate, excludedBySender }
+
+    public var hasDateOrSender: Bool { receivedFrom != nil || receivedBefore != nil || sender != nil }
+
+    public func judge(_ ref: RemoteItemRef) -> Judgement {
+        var unknown = false
+        if receivedFrom != nil || receivedBefore != nil {
+            if let at = ref.receivedAt {
+                if let from = receivedFrom, at < from { return .excludedByDate }
+                if let before = receivedBefore, at >= before { return .excludedByDate }
+            } else {
+                unknown = true
+            }
+        }
+        if let sender {
+            if let listed = ref.sender {
+                if !listed.localizedCaseInsensitiveContains(sender) { return .excludedBySender }
+            } else {
+                unknown = true
+            }
+        }
+        return unknown ? .undetermined : .included
+    }
+
+    public var description: String {
+        var parts: [String] = [folderIDs.isEmpty ? "all folders" : "folders: " + folderIDs.sorted().joined(separator: ", ")]
+        let f = ISO8601DateFormatter()
+        if let from = receivedFrom { parts.append("from \(f.string(from: from))") }
+        if let before = receivedBefore { parts.append("before \(f.string(from: before))") }
+        if let sender { parts.append("sender contains \(sender)") }
+        if hasDateOrSender { parts.append(includeUndetermined ? "undetermined included" : "undetermined left out") }
+        return "selective: " + parts.joined(separator: "; ")
+    }
+}
+
+/// The frozen result of listing a selection: exactly the messages a capture
+/// of it will request, and the counts of what the filter left out.
+public struct SelectiveCaptureListing: Sendable {
+    public struct Item: Sendable, Hashable {
+        public var ref: RemoteItemRef
+        /// Every selected folder the message was listed in.
+        public var folders: [RemoteFolderOccurrence]
+    }
+    public var accountID: UUID
+    public var filter: SelectiveCaptureFilter
+    /// The selected folders that were enumerated.
+    public var folders: [RemoteFolderOccurrence]
+    /// What the capture will request, in listing order, each identity once.
+    public var items: [Item]
+    /// Distinct messages listed in the selected folders.
+    public var listed: Int
+    public var excludedByDate: Int
+    public var excludedBySender: Int
+    /// The listing did not state the date / sender (captured only when the filter includes them).
+    public var undetermined: Int
+    public var listedAt: Date
+
+    public var identityKeys: [String] { items.compactMap { try? $0.ref.identity.key() } }
+}
+
+/// A listing that stopped before its end — never a partial preview.
+public struct SelectiveListingStopped: Error, Sendable {
+    public var outcome: SyncOutcome
+}
+
+extension SyncEngine {
+
+    /// Every folder / label of the account (all pages). Asks the policy first.
+    public func folderList() async throws -> [RemoteFolderOccurrence] {
+        do {
+            limits = await adapter.limits()
+            return try await listAllFolders()
+        } catch {
+            throw SelectiveListingStopped(outcome: outcome(of: classify(error)))
+        }
+    }
+
+    /// Lists the selection to its end (every page of every selected folder)
+    /// and freezes it. Writes nothing to the archive and moves no checkpoint;
+    /// every request asks the network policy first.
+    public func listSelection(_ filter: SelectiveCaptureFilter) async throws -> SelectiveCaptureListing {
+        do {
+            limits = await adapter.limits()
+            let all = try await listAllFolders()
+            let selected = filter.folderIDs.isEmpty ? all : all.filter { filter.folderIDs.contains($0.serverID) }
+            var order: [String] = []
+            var byKey: [String: SelectiveCaptureListing.Item] = [:]
+            var judged: [String: SelectiveCaptureFilter.Judgement] = [:]
+            for folder in selected {
+                var cursor: String?
+                repeat {
+                    let page: EnumerationPage
+                    do {
+                        let pageSize = limits.pageSize
+                        page = try await perform(.request) { [adapter, cursor] ctx in
+                            try await adapter.enumerate(folder: folder, cursor: cursor, pageSize: pageSize, context: ctx)
+                        }
+                    } catch MailProviderError.folderUnavailable(let why) {
+                        throw Stop.failed("The folder \(folder.displayPath) could not be listed: \(why)")
+                    }
+                    for ref in page.items {
+                        let key = try ref.identity.key()
+                        let occurrence = ref.folder ?? folder
+                        if var existing = byKey[key] {
+                            if !existing.folders.contains(occurrence) { existing.folders.append(occurrence) }
+                            byKey[key] = existing
+                        } else {
+                            order.append(key)
+                            byKey[key] = .init(ref: ref, folders: [occurrence])
+                            judged[key] = filter.judge(ref)
+                        }
+                    }
+                    cursor = page.nextCursor
+                } while cursor != nil
+            }
+            var items: [SelectiveCaptureListing.Item] = []
+            var byDate = 0, bySender = 0, undetermined = 0
+            for key in order {
+                guard let item = byKey[key] else { continue }
+                switch judged[key] {
+                case .included?: items.append(item)
+                case .undetermined?:
+                    undetermined += 1
+                    if filter.includeUndetermined { items.append(item) }
+                case .excludedByDate?: byDate += 1
+                case .excludedBySender?: bySender += 1
+                case nil: break
+                }
+            }
+            return SelectiveCaptureListing(accountID: accountID, filter: filter, folders: selected, items: items,
+                                           listed: order.count, excludedByDate: byDate, excludedBySender: bySender,
+                                           undetermined: undetermined, listedAt: Date())
+        } catch let stopped as SelectiveListingStopped {
+            throw stopped
+        } catch {
+            throw SelectiveListingStopped(outcome: outcome(of: classify(error)))
+        }
+    }
+
+    /// Captures exactly the listing's messages in one run (pages of the
+    /// provider's page size): each one stored, already preserved, failed (with
+    /// its reason) or unavailable. Change cursors and folder enumeration
+    /// checkpoints are NOT touched, so a later full capture still sees every
+    /// message the selection left out.
+    public func captureListed(_ listing: SelectiveCaptureListing) async -> SyncRunReport {
+        let started = Date()
+        let label = listing.filter.description + "; \(listing.items.count) listed messages"
+        guard listing.accountID == accountID else {
+            return SyncRunReport(runID: nil, outcome: .failed("The listing belongs to another account."), receipt: nil,
+                                 startedAt: started, endedAt: Date(), reconciledTo: nil, fullEnumeration: false, selection: label)
+        }
+        guard !running else {
+            return SyncRunReport(runID: nil, outcome: .failed("A capture of this account is already running."), receipt: nil,
+                                 startedAt: started, endedAt: Date(), reconciledTo: nil, fullEnumeration: false, selection: label)
+        }
+        running = true
+        defer { running = false }
+        state = .syncing
+        missingDrive = nil
+        largestWriteNeed = 0
+        throttleWaited = 0
+        var runID: String?
+        do {
+            limits = await adapter.limits()
+            try storageCheck(nextBytes: 0)
+            let id = try await sink.beginRun(accountID: accountID, selection: label)
+            runID = id
+            if !listing.folders.isEmpty { try await sink.recordFolders(accountID: accountID, folders: listing.folders) }
+            var start = 0
+            while start < listing.items.count {
+                let end = min(listing.items.count, start + limits.pageSize)
+                try await process(listing.items[start..<end].map { ($0.ref, $0.folders) }, runID: id)
+                start = end
+            }
+            let receipt = try await sink.finishRun(id)
+            let outcome: SyncOutcome
+            if receipt.pending > 0 {
+                outcome = .failed("\(receipt.pending) listed messages have no outcome.")
+            } else if receipt.failed > 0 {
+                outcome = .completedWithFailures(failed: receipt.failed)
+            } else {
+                outcome = .completed
+            }
+            state = .idle
+            return SyncRunReport(runID: id, outcome: outcome, receipt: receipt, startedAt: started, endedAt: Date(),
+                                 reconciledTo: nil, fullEnumeration: false, selection: label)
+        } catch {
+            let stop = classify(error)
+            let outcome = self.outcome(of: stop)
+            if case .aborted = stop {
+                return SyncRunReport(runID: runID, outcome: .aborted, receipt: nil, startedAt: started, endedAt: Date(),
+                                     reconciledTo: nil, fullEnumeration: false, selection: label)
+            }
+            switch stop {
+            case .paused(let why):
+                state = .paused(why)
+                if why == .driveUnavailable { missingDrive = storage.drive }
+            case .needsSignIn: state = .needsSignIn
+            case .notPermitted(let why): state = .notPermitted(why)
+            case .cancelled: state = .cancelled
+            case .failed(let why): state = .failed(why)
+            case .aborted: break
+            }
+            var receipt: CaptureRunReceipt?
+            if let runID {
+                receipt = try? await sink.finishRun(runID)
+                if receipt != nil { receipt?.state = .partial }
+                try? await sink.markRunStopped(runID, reason: "\(outcome)")
+            }
+            return SyncRunReport(runID: runID, outcome: outcome, receipt: receipt, startedAt: started, endedAt: Date(),
+                                 reconciledTo: nil, fullEnumeration: false, selection: label,
+                                 missingDrive: outcome == .paused(.driveUnavailable) ? storage.drive : nil)
+        }
+    }
+
+    private func outcome(of stop: Stop) -> SyncOutcome {
+        switch stop {
+        case .paused(let why): return .paused(why)
+        case .needsSignIn: return .needsSignIn
+        case .notPermitted(let why): return .notPermitted(why)
+        case .cancelled: return .cancelled
+        case .failed(let why): return .failed(why)
+        case .aborted: return .aborted
+        }
+    }
+}

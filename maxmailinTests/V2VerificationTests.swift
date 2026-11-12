@@ -8567,3 +8567,491 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertFalse(MailCleanupGate.confirms(typed: "0", plan: none), "nothing to change: nothing to confirm")
     }
 }
+
+// MARK: - v4.0 REC-07: online recipes (selective capture, server cleanup, capture rules)
+
+/// A provider whose LISTING states each message's date and sender (as Graph
+/// and IMAP ENVELOPE listings do), with scripted download failures and
+/// messages that vanish between listing and download. No network.
+actor OnlineRecipeProvider: MailProviderAdapter {
+    nonisolated let accountID: UUID
+    nonisolated let provider: MailProviderKind = .gmail
+    nonisolated let mailHost = "mail.recipes.example"
+    nonisolated let authorizationHost: String? = nil
+    nonisolated let tokenAudience: String? = nil
+
+    struct Message { var folders: [String]; let bytes: Data; let date: Date?; let sender: String?; let seq: Int }
+    private var folders: [RemoteFolderOccurrence] = []
+    private var messages: [String: Message] = [:]
+    private var seq = 0
+    private var failing: Set<String> = []
+    private var vanishOnFetch: Set<String> = []
+    private(set) var fetches = 0
+    private(set) var enumerations = 0
+
+    init(accountID: UUID) { self.accountID = accountID }
+
+    func addFolder(_ id: String, path: String) { folders.append(RemoteFolderOccurrence(serverID: id, displayPath: path, kind: .label)) }
+
+    func add(_ id: String, bytes: Data, folders ids: [String], date: Date?, sender: String?) {
+        seq += 1
+        messages[id] = Message(folders: ids, bytes: bytes, date: date, sender: sender, seq: seq)
+    }
+
+    func setFailing(_ id: String) { failing.insert(id) }
+    func setVanishOnFetch(_ id: String) { vanishOnFetch.insert(id) }
+
+    private func occurrence(_ id: String) -> RemoteFolderOccurrence {
+        folders.first { $0.serverID == id } ?? RemoteFolderOccurrence(serverID: id, displayPath: id, kind: .label)
+    }
+
+    func limits() async -> ProviderLimits { ProviderLimits(maxConcurrentDownloads: 2, pageSize: 2, changeTracking: .none) }
+
+    func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {
+        FolderPage(folders: folders, nextPageToken: nil)
+    }
+
+    func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
+                   context: ProviderRequestContext) async throws -> EnumerationPage {
+        enumerations += 1
+        let after = Int(cursor ?? "0") ?? 0
+        let inFolder = messages.filter { $0.value.folders.contains(folder.serverID) && $0.value.seq > after }
+            .sorted { $0.value.seq < $1.value.seq }
+        let page = Array(inFolder.prefix(pageSize))
+        let items = page.map { RemoteItemRef(identity: .gmail(messageID: $0.key), folder: occurrence(folder.serverID),
+                                             sizeHint: Int64($0.value.bytes.count), receivedAt: $0.value.date, sender: $0.value.sender) }
+        return EnumerationPage(items: items, nextCursor: inFolder.count > pageSize ? page.last.map { String($0.value.seq) } : nil)
+    }
+
+    func fetchRaw(_ item: RemoteItemRef, into sink: RawByteSink, context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+        guard case .gmail(let id) = item.identity else { throw MailProviderError.permanent("not a fixture identity") }
+        fetches += 1
+        if failing.contains(id) { throw MailProviderError.permanent("fixture: this message cannot be downloaded now") }
+        if vanishOnFetch.contains(id) { messages[id] = nil }
+        guard let message = messages[id] else { throw MailProviderError.itemUnavailable }
+        try sink.write(message.bytes)
+        return FetchedItemMetadata(occurrences: message.folders.map { occurrence($0) },
+                                   metadata: ProviderMetadata(representation: .gmailRaw, revision: String(message.seq)),
+                                   expectedByteCount: Int64(message.bytes.count))
+    }
+
+    func changeBoundary(scope: ChangeScope, context: ProviderRequestContext) async throws -> String { "" }
+
+    func changes(scope: ChangeScope, since token: String, context: ProviderRequestContext) async throws -> ChangePage {
+        ChangePage(changes: [], resume: token, hasMore: false)
+    }
+}
+
+/// The server side of server actions, in memory: every message's labels and
+/// Trash state, and every change that reached it.
+final class OnlineRecipeServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var labels: [String: Set<String>] = [:]
+    private var trash: Set<String> = []
+    private(set) var mutationLog: [String] = []
+    private(set) var executorsBuilt = 0
+
+    func put(_ id: String, _ l: [String]) { lock.withLock { labels[id] = Set(l) } }
+    func inTrash(_ id: String) -> Bool { lock.withLock { trash.contains(id) } }
+    var mutations: [String] { lock.withLock { mutationLog } }
+    func noteExecutorBuilt() { lock.withLock { executorsBuilt += 1 } }
+    var built: Int { lock.withLock { executorsBuilt } }
+
+    func state(_ id: String) -> RemoteItemState {
+        lock.withLock {
+            guard let l = labels[id] else { return .gone }
+            return RemoteItemState(exists: true, folders: Array(l).sorted(), inTrash: trash.contains(id))
+        }
+    }
+
+    func apply(_ request: RemoteChangeRequest, _ id: String) {
+        lock.withLock {
+            mutationLog.append("\(id):\(request)")
+            switch request {
+            case .moveToTrash: trash.insert(id); labels[id]?.remove("INBOX")
+            case .archiveOnServer: labels[id]?.remove("INBOX")
+            default: break
+            }
+        }
+    }
+}
+
+struct OnlineRecipeExecutor: RemoteActionExecutor {
+    let accountID: UUID
+    let provider: MailProviderKind = .gmail
+    let server: OnlineRecipeServer
+
+    func resolve(_ request: RemoteChangeRequest, precondition: RemotePrecondition,
+                 for identity: ProviderMessageIdentity) async throws -> ResolvedChange {
+        ResolvedChange(request: request, precondition: precondition)
+    }
+
+    func state(of identity: ProviderMessageIdentity) async throws -> RemoteItemState {
+        guard case .gmail(let id) = identity else { throw RemoteRequestFailure.gone }
+        return server.state(id)
+    }
+
+    func apply(_ change: ResolvedChange, to identity: ProviderMessageIdentity, before: RemoteItemState) async throws -> ProviderMessageIdentity? {
+        guard case .gmail(let id) = identity else { throw RemoteRequestFailure.gone }
+        server.apply(change.request, id)
+        return nil
+    }
+}
+
+/// Counts every tag write a capture rule makes, and writes it to the store.
+final class OnlineRecipeTagWrites: @unchecked Sendable {
+    private let lock = NSLock()
+    private var writes: [String] = []
+    func add(_ tag: String, _ ids: [UUID]) { lock.withLock { writes += ids.map { "\(tag)|\($0.uuidString)" } } }
+    var all: [String] { lock.withLock { writes } }
+}
+
+/// v4.0 REC-07 (plan §2.1, §8.2, §8.5, RQ09, RQ10): the connected-mail
+/// recipes through the real runtime, `SyncEngine`, `ConnectedArchiveSink`,
+/// `SafeCleanup` and `RemoteActionService`, against an in-test provider and
+/// an in-test server (no network).
+@MainActor
+final class OnlineRecipeTests: XCTestCase {
+
+    private struct Setup {
+        let root: URL
+        let store: SQLiteEmailStore
+        let archive: ArchiveDataService
+        let runtime: ConnectedMailRuntime
+        let provider: OnlineRecipeProvider
+        let server: OnlineRecipeServer
+        let policy: MailNetworkPolicy
+        let engine: OnlineRecipeEngine
+        var accountID: UUID { provider.accountID }
+    }
+
+    private var chunkPolicyWas = false
+
+    override func setUp() async throws {
+        chunkPolicyWas = SearchChunkPolicy.isEnabled
+        SearchChunkPolicy.isEnabled = true
+        AttachmentTextIndexJob.testSuppressKicks = true
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+    }
+
+    override func tearDown() async throws {
+        await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
+        AttachmentTextIndexJob.testStoreOverride = nil
+        AttachmentTextIndexJob.testSuppressKicks = false
+        SearchChunkPolicy.isEnabled = chunkPolicyWas
+    }
+
+    private static func day(_ text: String) -> Date {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withFullDate]
+        return f.date(from: text)!
+    }
+
+    private static func rfc2822(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "EEE, d MMM yyyy HH:mm:ss Z"
+        return f.string(from: date)
+    }
+
+    private static func mail(_ id: String, from: String, subject: String, date: Date) -> Data {
+        Data(["From: \(from)", "To: Ravi <ravi@example.org>", "Subject: \(subject)", "Date: \(rfc2822(date))",
+              "Message-ID: <\(id)@recipes.example>", "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "",
+              "Body of \(id).", ""].joined(separator: "\r\n").utf8)
+    }
+
+    private func setUpRuntime(modes: Set<MailAccount.Mode> = [.capture, .serverActions],
+                              scopes: [String] = [GmailOAuth.readOnlyScope, ServerActionScopes.gmailModify],
+                              held: @escaping @Sendable (UUID) -> Bool = { _ in false }) async throws -> Setup {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("REC07-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        AttachmentTextIndexJob.testStoreOverride = store
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let provider = OnlineRecipeProvider(accountID: UUID())
+        let server = OnlineRecipeServer()
+        let deps = ConnectedMailRuntime.Dependencies(
+            store: store, fts: fts, policy: policy, credentials: ConnectedFiveJobsCredentials(), tokens: nil,
+            adapters: { context -> (any MailProviderAdapter)? in context.account.id == provider.accountID ? provider : nil },
+            storage: StorageProbe(reserveBytes: 0),
+            actionExecutors: { context in
+                server.noteExecutorBuilt()
+                return OnlineRecipeExecutor(accountID: context.account.id, server: server)
+            })
+        let runtime = ConnectedMailRuntime(dependencies: deps)
+        try await runtime.registry.add(MailAccount(id: provider.accountID, provider: .gmail, issuer: GmailOAuth.issuer,
+                                                   displayIdentity: "asha@example.com", grantedScopes: scopes, enabledModes: modes),
+                                       secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await runtime.start()
+        let engine = OnlineRecipeEngine(env: .init(
+            runtime: runtime, results: OnlineRecipeResultStore(directory: root.appendingPathComponent("results", isDirectory: true)),
+            journalDirectory: root.appendingPathComponent("journal", isDirectory: true),
+            hold: { id in held(id) ? "Litigation hold 2026-11" : nil }))
+        return Setup(root: root, store: store, archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)),
+                     runtime: runtime, provider: provider, server: server, policy: policy, engine: engine)
+    }
+
+    /// INBOX / Projects / Other; a mix that every filter rule touches.
+    private func seed(_ s: Setup) async {
+        let p = s.provider
+        await p.addFolder("INBOX", path: "Inbox")
+        await p.addFolder("Label_P", path: "Projects")
+        await p.addFolder("Label_X", path: "Other")
+        let alice = "alice@example.com"
+        func add(_ id: String, _ folders: [String], _ date: Date?, _ sender: String?) async {
+            await p.add(id, bytes: Self.mail(id, from: sender ?? "Unknown <x@example.net>", subject: "Note \(id)",
+                                             date: date ?? Self.day("2024-07-07")),
+                        folders: folders, date: date, sender: sender)
+        }
+        await add("a1", ["INBOX"], Self.day("2024-03-01"), alice)
+        await add("a2", ["INBOX"], Self.day("2023-01-01"), alice)          // before the range
+        await add("a3", ["INBOX"], Self.day("2024-05-01"), "bob@example.org") // another sender
+        await add("a4", ["Label_P"], Self.day("2024-04-01"), alice)
+        await add("a5", ["Label_X"], Self.day("2024-04-01"), alice)        // folder not chosen
+        await add("a6", ["INBOX"], nil, nil)                               // the list shows no date / sender
+        await add("a7", ["INBOX", "Label_P"], Self.day("2024-06-01"), alice) // listed twice, captured once
+        await add("a8", ["INBOX"], Self.day("2024-02-02"), alice)          // download fails
+        await add("a9", ["INBOX"], Self.day("2024-02-03"), alice)          // gone before download
+        await p.setFailing("a8")
+        await p.setVanishOnFetch("a9")
+    }
+
+    private static let filter = SelectiveCaptureFilter(folderIDs: ["INBOX", "Label_P"], receivedFrom: day("2024-01-01"),
+                                                       receivedBefore: day("2025-01-01"), sender: "alice", includeUndetermined: true)
+
+    private static func key(_ id: String) -> String { try! ProviderMessageIdentity.gmail(messageID: id).key() }
+
+    // MARK: Selective capture
+
+    /// The preview's frozen list is exactly what the run captured; the
+    /// result comes from the run's receipt with a reason for every message
+    /// not saved, and a later full capture still sees what the selection left out.
+    func testREC07_selectiveCapture_previewEqualsCapturedSet_resultFromReceipt() async throws {
+        let s = try await setUpRuntime()
+        await seed(s)
+        let preview = try await s.engine.previewCapture(account: s.accountID, filter: Self.filter)
+        XCTAssertEqual(preview.listing.listed, 8, "a1 a2 a3 a4 a6 a7 a8 a9 — a7 listed in two folders counts once")
+        XCTAssertEqual(preview.listing.excludedByDate, 1)
+        XCTAssertEqual(preview.listing.excludedBySender, 1)
+        XCTAssertEqual(preview.listing.undetermined, 1)
+        XCTAssertEqual(Set(preview.listing.identityKeys), Set(["a1", "a4", "a6", "a7", "a8", "a9"].map(Self.key)))
+        XCTAssertEqual(preview.toCapture, 6)
+        XCTAssertEqual(preview.alreadySaved, 0)
+        let fetchesAfterPreview = await s.provider.fetches
+        XCTAssertEqual(fetchesAfterPreview, 0, "the preview downloads nothing")
+        let tables = try await s.store.connectedTableCounts()
+        XCTAssertEqual(tables["remote_messages"] ?? 0, 0, "the preview saves nothing")
+        XCTAssertGreaterThan(s.policy.snapshot().permittedAttempts, 0, "the listing asked the mail policy")
+
+        let captured = await s.engine.capture(preview)
+        let outcome = try XCTUnwrap(captured)
+        XCTAssertEqual(Set(outcome.items.map(\.identityKey)), Set(preview.listing.identityKeys), "captured set == previewed set")
+        XCTAssertEqual(Set(outcome.captured.map(\.identityKey)), Set(["a1", "a4", "a6", "a7"].map(Self.key)))
+        XCTAssertEqual(outcome.failed.map(\.identityKey), [Self.key("a8")])
+        XCTAssertTrue(outcome.failed.first?.reason?.contains("cannot be downloaded") ?? false)
+        XCTAssertEqual(outcome.unavailable.map(\.identityKey), [Self.key("a9")])
+        XCTAssertNotNil(outcome.unavailable.first?.reason)
+        let fetches = await s.provider.fetches
+        XCTAssertEqual(fetches, 6, "a7 downloaded once although listed in two folders; nothing outside the list")
+
+        let facts = try XCTUnwrap(outcome.result.facts.first)
+        XCTAssertEqual(facts.requested, 6)
+        XCTAssertEqual(facts.completed, 4)
+        XCTAssertEqual(facts.skipped.count, 2, "a8 failed and a9 unavailable, each with its reason")
+        XCTAssertEqual(facts.verificationPassed, true, "every previewed message has exactly one recorded outcome")
+        XCTAssertEqual(outcome.result.state, .partial, "4 of 6 saved is never Completed")
+        XCTAssertEqual(OnlineRecipeResultStore(directory: s.root.appendingPathComponent("results")).list().first?.id, outcome.result.id)
+
+        // The selection moved no checkpoint: a full capture later still saves what it left out.
+        _ = await s.runtime.sync(s.accountID)
+        for id in ["a2", "a3", "a5"] {
+            let existing = try await s.store.existingRemoteMessage(accountID: s.accountID, key: Self.key(id))
+            XCTAssertNotNil(existing, "\(id) is captured by the later full sync")
+        }
+    }
+
+    // MARK: Server cleanup (RQ10)
+
+    func testREC07_serverCleanup_onlyReviewedVerifiedIDs_holdsRespected_replayNoDuplicateMutation() async throws {
+        let heldBox = OnlineRecipeTagWrites()   // reused as a thread-safe box for the held record id
+        let s = try await setUpRuntime(held: { id in heldBox.all.contains { $0.hasSuffix(id.uuidString) } })
+        await seed(s)
+        for id in ["a1", "a4", "a6", "a7", "a8", "a9"] { s.server.put(id, ["INBOX"]) }
+        let preview = try await s.engine.previewCapture(account: s.accountID, filter: Self.filter)
+        let captured = await s.engine.capture(preview)
+        let outcome = try XCTUnwrap(captured)
+        let a4 = try XCTUnwrap(outcome.items.first { $0.identityKey == Self.key("a4") }?.emailID)
+        heldBox.add("", [a4])
+
+        var candidates = s.engine.candidates(from: outcome, preview: preview)
+        let other = CleanupCandidate(accountID: UUID(), identity: .gmail(messageID: "a1"), emailID: outcome.captured.first?.emailID, folder: "INBOX")
+        candidates.append(other)
+        let review = try await s.engine.cleanupReview(account: s.accountID, candidates: candidates, action: .moveToTrash,
+                                                      captureFailures: OnlineRecipeEngine.captureFailures(outcome))
+        XCTAssertNil(review.refusal)
+        let plan = try XCTUnwrap(review.plan)
+        XCTAssertEqual(Set(plan.included.map(\.candidate.identity)), [.gmail(messageID: "a1"), .gmail(messageID: "a6"), .gmail(messageID: "a7")])
+        let reasons = Set(plan.excluded.map(\.reason.key))
+        XCTAssertEqual(reasons, ["onHold", "captureFailed", "otherAccount"])
+        XCTAssertEqual(plan.excluded.filter { $0.reason.key == "captureFailed" }.count, 2, "a8 failed, a9 unavailable")
+        XCTAssertEqual(plan.preview.toChange, 3)
+        XCTAssertEqual(plan.preview.selected, 7)
+        XCTAssertEqual(review.confirmTitle, "Move 3 messages to the server's Trash")
+        XCTAssertEqual(review.exclusionLines.count, 4, "on hold, two different capture failures, another account")
+        XCTAssertEqual(s.server.mutations, [], "the review sends nothing")
+
+        // A confirmation for a different count changes nothing.
+        var wrong = plan.confirmation(); wrong.confirmedCount = 4
+        let refused = await s.engine.executeCleanup(review, confirmation: wrong)
+        XCTAssertEqual(refused.state, .failed)
+        XCTAssertEqual(s.server.mutations, [])
+
+        let result = await s.engine.executeCleanup(review, confirmation: plan.confirmation(), earlier: outcome.result.facts)
+        XCTAssertEqual(Set(s.server.mutations.map { String($0.prefix(while: { $0 != ":" })) }), ["a1", "a6", "a7"], "exactly the reviewed, verified messages")
+        XCTAssertEqual(s.server.mutations.count, 3)
+        for id in ["a1", "a6", "a7"] { XCTAssertTrue(s.server.inTrash(id)) }
+        for id in ["a4", "a8", "a9"] { XCTAssertFalse(s.server.inTrash(id), "\(id) untouched on the server") }
+        let cleanup = try XCTUnwrap(result.facts.last)
+        XCTAssertEqual(cleanup.completed, 3)
+        XCTAssertEqual(cleanup.requested, 7)
+        XCTAssertEqual(cleanup.verificationPassed, true, "mailin's copies verify after the server change")
+
+        // The archived copies stay: bytes identical, not in mailin's Trash (a separate choice).
+        let saved = outcome.captured.compactMap(\.emailID)
+        for item in outcome.captured {
+            let raw = try await s.store.rawBytes(id: try XCTUnwrap(item.emailID))
+            XCTAssertNotNil(raw, "\(item.identityKey) still readable")
+        }
+        let states = try await s.store.reviewStates(ids: saved)
+        XCTAssertFalse(saved.contains { states[$0]?.trashed == true }, "server cleanup never touches mailin's Trash")
+
+        // Replaying the confirmed plan sends nothing more.
+        _ = await s.engine.executeCleanup(review, confirmation: plan.confirmation())
+        XCTAssertEqual(s.server.mutations.count, 3, "replay: no item is changed twice")
+    }
+
+    /// Without "Change server mail" the recipe says so and nothing is sent —
+    /// no executor is even built.
+    func testREC07_missingChangeServerMailPermission_recipeExplains_nothingSent() async throws {
+        let s = try await setUpRuntime(modes: [.capture])
+        await seed(s)
+        for id in ["a1", "a4", "a6", "a7"] { s.server.put(id, ["INBOX"]) }
+        let preview = try await s.engine.previewCapture(account: s.accountID, filter: Self.filter)
+        let captured = await s.engine.capture(preview)
+        let outcome = try XCTUnwrap(captured)
+        let review = try await s.engine.cleanupReview(account: s.accountID, candidates: s.engine.candidates(from: outcome, preview: preview),
+                                                      action: .moveToTrash)
+        let refusal = try XCTUnwrap(review.refusal)
+        XCTAssertTrue(refusal.contains("Change server mail"), refusal)
+        XCTAssertNil(review.plan)
+        let result = await s.engine.executeCleanup(review, confirmation: CleanupConfirmation(planID: UUID(), selectionDigest: "", confirmedCount: 0))
+        XCTAssertEqual(result.state, .failed)
+        XCTAssertTrue(result.facts.last?.summary.contains("Nothing was changed on the server") ?? false)
+        XCTAssertEqual(s.server.mutations, [])
+        XCTAssertEqual(s.server.built, 0, "no server-action executor was built")
+        // The policy refuses a change request for this account, too.
+        XCTAssertEqual(ConnectedMailRuntime.serverChangeRefusal(policy: s.policy, account: s.accountID), .modeNotGranted)
+        do { _ = try await s.runtime.actionService(s.accountID, journal: try RemoteOperationJournal(storeDirectory: s.root.appendingPathComponent("j")))
+            XCTFail("must refuse")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Change server mail"))
+        }
+        XCTAssertEqual(s.server.built, 0)
+    }
+
+    // MARK: Capture rules (RQ09)
+
+    func testREC07_captureRules_fireOncePerMessage_acrossReplayAndRestart_historicalCounted_overlapsNeverDoubleCount() async throws {
+        let s = try await setUpRuntime()
+        let p = s.provider
+        await p.addFolder("INBOX", path: "Inbox")
+        let created = Date().addingTimeInterval(-3_600)
+        let recent = Date().addingTimeInterval(-60)
+        await p.add("m1", bytes: Self.mail("m1", from: "Alice <alice@example.com>", subject: "Invoice 2010-17", date: Self.day("2010-05-05")),
+                    folders: ["INBOX"], date: nil, sender: nil)
+        await p.add("m2", bytes: Self.mail("m2", from: "Alice <alice@example.com>", subject: "Hello", date: recent),
+                    folders: ["INBOX"], date: nil, sender: nil)
+        await p.add("m3", bytes: Self.mail("m3", from: "Bob <bob@example.org>", subject: "Invoice 88", date: recent),
+                    folders: ["INBOX"], date: nil, sender: nil)
+        await p.add("m4", bytes: Self.mail("m4", from: "Carol <carol@example.net>", subject: "Lunch", date: recent),
+                    folders: ["INBOX"], date: nil, sender: nil)
+
+        let writes = OnlineRecipeTagWrites()
+        let rulesDir = s.root.appendingPathComponent("rules", isDirectory: true)
+        let store = s.store
+        func makeEngine() -> CaptureRuleEngine {
+            CaptureRuleEngine(directory: rulesDir, store: store, writeTag: { tag, ids in
+                writes.add(tag, ids)
+                try await store.userTagAdd(tag, ids: ids)
+            })
+        }
+        let rules = makeEngine()
+        let fromAlice = CaptureRule(name: "From Alice", spec: SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "alice")])]),
+                                    tag: "Follow up", createdAt: created)
+        let invoices = CaptureRule(name: "Invoices", spec: SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.subject, .contains, "Invoice")])]),
+                                   tag: "Follow up", createdAt: created)          // overlaps fromAlice on m1, same tag
+        let invoiceTag = CaptureRule(name: "Invoice tag", spec: invoices.spec, tag: "Invoices", createdAt: created)
+        try await rules.save(fromAlice)
+        try await rules.save(invoices)
+        try await rules.save(invoiceTag)
+        s.runtime.rules = rules
+
+        // Capture → index → rules.
+        let report = await s.runtime.sync(s.accountID)
+        XCTAssertEqual(report?.outcome, .completed)
+        var ids: [String: UUID] = [:]
+        for id in ["m1", "m2", "m3", "m4"] {
+            let existing = try await s.store.existingRemoteMessage(accountID: s.accountID, key: Self.key(id))
+            ids[id] = try XCTUnwrap(existing?.emailID)
+        }
+        let a = try await rules.totals(fromAlice)
+        XCTAssertEqual(a, CaptureRuleTotals(fired: 2, historical: 1, noMatch: 2), "m1 (dated 2010, captured now) is a historical arrival, counted")
+        let b = try await rules.totals(invoices)
+        XCTAssertEqual(b.fired, 2)
+        XCTAssertEqual(b.historical, 1)
+        let c = try await rules.totals(invoiceTag)
+        XCTAssertEqual(c.fired, 2)
+        XCTAssertEqual(Set(writes.all), Set(["Follow up|\(ids["m1"]!.uuidString)", "Follow up|\(ids["m2"]!.uuidString)",
+                                              "Follow up|\(ids["m3"]!.uuidString)", "Invoices|\(ids["m1"]!.uuidString)",
+                                              "Invoices|\(ids["m3"]!.uuidString)"]))
+        XCTAssertEqual(writes.all.count, 5, "overlapping rules with one tag write it once per message")
+        var q = EmailQuery.all
+        q.userTag = "Follow up"
+        let followUp = try await s.archive.count(query: q)
+        XCTAssertEqual(followUp, 3)
+
+        // Replay of the same capture / index events, a catch-up, and a second sync: nothing fires again.
+        let replay = await rules.handleIndexed(Array(ids.values))
+        XCTAssertEqual(replay.tagWrites, 0)
+        XCTAssertTrue(replay.fired.isEmpty)
+        let catchUp = await rules.catchUp()
+        XCTAssertEqual(catchUp.tagWrites, 0)
+        _ = await s.runtime.sync(s.accountID)
+        XCTAssertEqual(writes.all.count, 5)
+
+        // Restart: a new engine reads the ledger; replaying every event fires nothing.
+        let restarted = makeEngine()
+        let afterRestart = await restarted.handleIndexed(Array(ids.values))
+        XCTAssertEqual(afterRestart.tagWrites, 0)
+        let restartCatchUp = await restarted.catchUp()
+        XCTAssertEqual(restartCatchUp.tagWrites, 0)
+        let aAgain = try await restarted.totals(fromAlice)
+        XCTAssertEqual(aAgain, a, "the ledger survives the restart unchanged")
+        XCTAssertEqual(writes.all.count, 5)
+
+        // A new arrival after the restart fires once.
+        await p.add("m5", bytes: Self.mail("m5", from: "Alice <alice@example.com>", subject: "Invoice 2026-11", date: recent),
+                    folders: ["INBOX"], date: nil, sender: nil)
+        s.runtime.rules = restarted
+        _ = await s.runtime.sync(s.accountID)
+        let m5Record = try await s.store.existingRemoteMessage(accountID: s.accountID, key: Self.key("m5"))
+        let m5 = try XCTUnwrap(m5Record?.emailID)
+        XCTAssertEqual(writes.all.filter { $0.hasSuffix(m5.uuidString) }.sorted(), ["Follow up|\(m5.uuidString)", "Invoices|\(m5.uuidString)"])
+        let final = try await restarted.totals(fromAlice)
+        XCTAssertEqual(final.fired, 3)
+        XCTAssertEqual(final.historical, 1)
+    }
+}

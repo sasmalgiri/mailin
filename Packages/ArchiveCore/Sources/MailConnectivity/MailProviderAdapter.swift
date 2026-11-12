@@ -92,9 +92,16 @@ public struct RemoteItemRef: Sendable, Hashable {
     public var changeToken: String?
     /// Provider's size estimate, used for the disk check before download.
     public var sizeHint: Int64?
+    /// REC-07: the date the listing states (Graph receivedDateTime, IMAP
+    /// INTERNALDATE), when it states one. nil = not known before download.
+    public var receivedAt: Date?
+    /// REC-07: the sender address the listing states, when it states one.
+    public var sender: String?
 
-    public init(identity: ProviderMessageIdentity, folder: RemoteFolderOccurrence?, changeToken: String? = nil, sizeHint: Int64? = nil) {
+    public init(identity: ProviderMessageIdentity, folder: RemoteFolderOccurrence?, changeToken: String? = nil, sizeHint: Int64? = nil,
+                receivedAt: Date? = nil, sender: String? = nil) {
         self.identity = identity; self.folder = folder; self.changeToken = changeToken; self.sizeHint = sizeHint
+        self.receivedAt = receivedAt; self.sender = sender
     }
 }
 

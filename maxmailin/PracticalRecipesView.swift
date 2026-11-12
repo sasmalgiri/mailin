@@ -46,6 +46,7 @@ struct PracticalRecipesHome: View {
 
     @EnvironmentObject private var storeManager: StoreManager
     @State private var running: PracticalRecipeKind?
+    @State private var runningOnline: OnlineRecipeKind?
     @State private var recent: [PracticalRecipeResult] = []
 
     var body: some View {
@@ -58,6 +59,8 @@ struct PracticalRecipesHome: View {
                 } footer: {
                     Text("Each recipe uses the archive's own search, export, duplicate and backup engines. Its result is read from the job's receipt.")
                 }
+                // REC-07: connected-mail recipes, only while Mail runs.
+                OnlineRecipesSection(running: $runningOnline)
                 if !recent.isEmpty {
                     Section(String(localized: "Recent results")) {
                         ForEach(recent.prefix(5)) { result in
@@ -90,6 +93,9 @@ struct PracticalRecipesHome: View {
             .navigationDestination(item: $running) { kind in
                 PracticalRecipeRunView(kind: kind, scopeName: scopeName, currentSpec: currentSpec,
                                        onFinished: { recent = PracticalRecipeResultStore.production.list() })
+            }
+            .navigationDestination(item: $runningOnline) { kind in
+                OnlineRecipeRunView(kind: kind)
             }
         }
         .frame(minWidth: 420, minHeight: 480)
