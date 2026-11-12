@@ -41,6 +41,18 @@ public actor Outbox {
     /// Records whose latest state is in memory only (the disk refused the write).
     private var unsaved: Set<UUID> = []
     private var inFlight: Set<UUID> = []
+    /// V4-12: decides, per due operation, whether it may be submitted now
+    /// (subscription lapse, restored or stale items awaiting the user's
+    /// decision, removed account, missing archive drive). nil = always.
+    private var admission: OutboxAdmission?
+    /// Why each due operation was held at the last `runDue` (shown, never hidden).
+    private var held: [UUID: OutboxHoldReason] = [:]
+
+    /// V4-12: install the lifecycle admission check (`ConnectedLifecycle.outboxAdmission`).
+    public func setAdmission(_ check: OutboxAdmission?) { admission = check }
+
+    /// Due operations the admission check held at the last `runDue`, with the reason.
+    public func heldOperations() -> [UUID: OutboxHoldReason] { held }
 
     public init(store: OutboxStore, permission: @escaping NetworkPermission, defaultRetryDelay: TimeInterval = 60,
                 now: @escaping @Sendable () -> Date = { Date() }) {
@@ -65,6 +77,12 @@ public actor Outbox {
     public func operations() async throws -> [OutboxOperation] {
         try await loadIfNeeded()
         return cache.values.sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
+    }
+
+    /// V4-12: the frozen message bytes of an operation (verified), so a held,
+    /// cancelled or restored item's contents can always be shown or saved.
+    public func frozenMessage(_ id: UUID) async throws -> Data {
+        try await store.message(for: try await operation(id))
     }
 
     /// Whether the record on disk is behind the state shown (the disk refused a write).
@@ -123,12 +141,13 @@ public actor Outbox {
 
     /// Undo Send / cancel: only before submission. Afterwards there is no recall.
     @discardableResult
-    public func cancel(_ id: UUID) async throws -> OutboxOperation {
+    public func cancel(_ id: UUID, note: String = "cancelled by the user") async throws -> OutboxOperation {
         var op = try await operation(id)
         if op.state.isPastSubmission || inFlight.contains(id) {
             throw OutboxError.cannotCancelAfterSubmission(state: op.state.name)
         }
-        try op.move(to: .cancelledBeforeSubmission(at: now()), at: now(), note: "cancelled by the user")
+        try op.move(to: .cancelledBeforeSubmission(at: now()), at: now(), note: note)
+        held[id] = nil
         try await store.save(op)          // a cancel that is not durable did not happen
         cache[id] = op
         unsaved.remove(id)
@@ -143,9 +162,15 @@ public actor Outbox {
         try await loadIfNeeded()
         await flushUnsaved()
         var touched: [OutboxOperation] = []
+        var stillHeld: [UUID: OutboxHoldReason] = [:]
         for op in try await operations() where isDue(op) {
+            if let admission, case .hold(let why) = await admission(op, now()) {
+                stillHeld[op.id] = why
+                continue
+            }
             if let result = try await submit(op.id) { touched.append(result) }
         }
+        held = stillHeld
         return touched
     }
 

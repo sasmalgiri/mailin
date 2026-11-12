@@ -125,6 +125,9 @@ public struct SyncRunReport: Sendable {
     /// True when this run (re)built the inventory from a full enumeration.
     public var fullEnumeration: Bool
     public var selection: String
+    /// V4-12: set when the run paused because the archive's drive is gone —
+    /// the drive the user must reconnect (never a fallback archive elsewhere).
+    public var missingDrive: ArchiveDriveIdentity? = nil
 }
 
 /// Where engine-level kill tests interrupt a run.
@@ -145,7 +148,17 @@ public actor SyncEngine {
     let storage: StorageProbe
 
     public private(set) var state: AccountSyncState = .idle
+    /// V4-12: the drive named by the last `.driveUnavailable` pause.
+    public private(set) var missingDrive: ArchiveDriveIdentity?
     private var running = false
+    /// V4-12: bytes the downloads in flight may still need on the archive
+    /// volume (staged copy + published copy each), so parallel downloads
+    /// never pass the free-space check on the same bytes.
+    private var reservedForInFlight: Int64 = 0
+    /// The largest archive write need seen in this run: a failed archive
+    /// write is re-checked against it, so a volume that filled up mid-write
+    /// pauses the account instead of failing it.
+    private var largestWriteNeed: Int64 = 0
     private var limits = ProviderLimits(changeTracking: .none)
     private var selection: SyncSelection = .allFolders
 
@@ -207,6 +220,8 @@ public actor SyncEngine {
         defer { running = false }
         self.selection = selection
         state = .syncing
+        missingDrive = nil
+        largestWriteNeed = 0
         throttleWaited = 0
         var runID: String?
         do {
@@ -240,7 +255,9 @@ public actor SyncEngine {
             }
             let outcome: SyncOutcome
             switch stop {
-            case .paused(let why): outcome = .paused(why); state = .paused(why)
+            case .paused(let why):
+                outcome = .paused(why); state = .paused(why)
+                if why == .driveUnavailable { missingDrive = storage.drive }
             case .needsSignIn: outcome = .needsSignIn; state = .needsSignIn
             case .notPermitted(let why): outcome = .notPermitted(why); state = .notPermitted(why)
             case .cancelled: outcome = .cancelled; state = .cancelled
@@ -254,7 +271,8 @@ public actor SyncEngine {
                 try? await sink.markRunStopped(runID, reason: "\(outcome)")
             }
             return SyncRunReport(runID: runID, outcome: outcome, receipt: receipt, startedAt: started, endedAt: Date(),
-                                 reconciledTo: nil, fullEnumeration: false, selection: selection.description)
+                                 reconciledTo: nil, fullEnumeration: false, selection: selection.description,
+                                 missingDrive: outcome == .paused(.driveUnavailable) ? storage.drive : nil)
         }
     }
 
@@ -271,8 +289,15 @@ public actor SyncEngine {
             }
         }
         if case OAuthError.reauthorisationNeeded = error { return .needsSignIn }
-        // Archive-side write failures: the volume decides what the user is told.
-        if let storageStop = storageStopIfAny() { return storageStop }
+        // V4-12: the volume itself said it is full (its free-space figure can
+        // be optimistic): a pause until space is freed, never a failure.
+        if ArchiveWriteError.isOutOfSpace(error) {
+            guard let available = storage.availableBytes(archiveDirectory) else { return .paused(.driveUnavailable) }
+            return .paused(.diskFull(availableBytes: available))
+        }
+        // Archive-side write failures: the volume decides what the user is told
+        // (V4-12: re-checked against what the failed write needed).
+        if let storageStop = storageStopIfAny(nextBytes: largestWriteNeed) { return storageStop }
         return .failed(error.localizedDescription)
     }
 
@@ -672,7 +697,13 @@ public actor SyncEngine {
                                  context: ProviderRequestContext) async throws -> CaptureOutcome {
         // Checked immediately before the bytes are written: a full or
         // missing volume pauses the account before anything is spooled.
-        try storageCheck(nextBytes: ref.sizeHint ?? 0)
+        // V4-12: a message needs room twice (the staged copy and the
+        // published copy), and downloads already in flight hold their share —
+        // the spool is bounded by the volume's free space, never assumed.
+        let need = 2 * max(0, ref.sizeHint ?? 0)
+        try storageCheck(nextBytes: reservedForInFlight + need)
+        reservedForInFlight += need
+        defer { reservedForInFlight -= need }
         downloadsAttempted += 1
         let bytes = RawByteSink(writer: try sink.makeStagingWriter())
         do {
@@ -688,6 +719,7 @@ public actor SyncEngine {
                                    metadata: fetched.metadata)
             return try await sink.capture(item, runID: runID)
         } catch {
+            largestWriteNeed = max(largestWriteNeed, need, 2 * bytes.bytesWritten)
             bytes.discard()
             throw error
         }
@@ -703,6 +735,8 @@ public actor SyncEngine {
         let completeness = try await sink.completeness(accountID: accountID)
         let search = await searchCoverage?(accountID)
         let export = await exportVerification?(accountID)
-        return CaptureStatus(accountID: accountID, state: state, completeness: completeness, search: search, export: export)
+        var status = CaptureStatus(accountID: accountID, state: state, completeness: completeness, search: search, export: export)
+        if case .paused(.driveUnavailable) = state { status.missingDrive = missingDrive }
+        return status
     }
 }

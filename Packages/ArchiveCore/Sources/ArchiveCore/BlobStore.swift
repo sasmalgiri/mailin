@@ -42,9 +42,19 @@ enum BlobStoreError: LocalizedError, Equatable {
     case digestMismatch(expected: String, actual: String)
     case rangeOutOfBounds(offset: Int64, length: Int64, blobLength: Int64)
     case writeFailed(String)
+    /// V4-12: the volume is full (ENOSPC / NSFileWriteOutOfSpaceError) — a
+    /// pause until space is freed, not a damaged message.
+    case outOfSpace(String)
+
+    /// `writeFailed`, or `outOfSpace` when the volume ran out of room.
+    static func write(_ error: Error) -> BlobStoreError {
+        ArchiveWriteError.isOutOfSpace(error) ? .outOfSpace(error.localizedDescription) : .writeFailed(error.localizedDescription)
+    }
 
     var errorDescription: String? {
         switch self {
+        case .outOfSpace(let reason):
+            return "Could not store a message body because the archive's disk is full: \(reason)"
         case .notFound(let digest):
             return "The stored message body \(digest.prefix(12))… is missing from the archive."
         case .digestMismatch(let expected, let actual):
@@ -148,7 +158,7 @@ struct BlobStore: Sendable {
         } catch {
             try? output.close()
             try? FileManager.default.removeItem(at: staging)
-            throw BlobStoreError.writeFailed(error.localizedDescription)
+            throw BlobStoreError.write(error)
         }
 
         let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
@@ -165,7 +175,7 @@ struct BlobStore: Sendable {
             try FileManager.default.moveItem(at: staging, to: destination)
         } catch {
             try? FileManager.default.removeItem(at: staging)
-            throw BlobStoreError.writeFailed(error.localizedDescription)
+            throw BlobStoreError.write(error)
         }
         return BlobReference(digest: digest, length: total)
     }

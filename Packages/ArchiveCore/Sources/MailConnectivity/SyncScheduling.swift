@@ -155,10 +155,15 @@ public struct StorageProbe: Sendable {
     public var availableBytes: @Sendable (URL) -> Int64?
     /// Kept free beyond the next message (database growth, other jobs).
     public var reserveBytes: Int64
+    /// V4-12: the drive the archive must be on (external storage). When the
+    /// volume is unavailable the pause names it; nil = the archive's own
+    /// volume is not tracked (internal storage).
+    public var drive: ArchiveDriveIdentity?
 
     public init(reserveBytes: Int64 = 256 * 1_048_576,
-                availableBytes: @escaping @Sendable (URL) -> Int64? = StorageProbe.volumeAvailableBytes) {
-        self.reserveBytes = reserveBytes; self.availableBytes = availableBytes
+                availableBytes: @escaping @Sendable (URL) -> Int64? = StorageProbe.volumeAvailableBytes,
+                drive: ArchiveDriveIdentity? = nil) {
+        self.reserveBytes = reserveBytes; self.availableBytes = availableBytes; self.drive = drive
     }
 
     public static let volumeAvailableBytes: @Sendable (URL) -> Int64? = { url in

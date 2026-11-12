@@ -86,11 +86,25 @@ actor FakeMailProvider: MailProviderAdapter {
 
     // MARK: Setup
 
-    static func body(_ id: String) -> Data {
-        Data(("Message-ID: <\(id)@fake.example>\r\nFrom: Asha <asha@example.com>\r\nTo: ravi@example.org\r\n"
-              + "Subject: Message \(id) – ü\r\nDate: Mon, 6 Jan 2025 10:00:00 +0530\r\nMIME-Version: 1.0\r\n"
-              + "Content-Type: text/plain; charset=utf-8\r\n\r\nBody \(id) end\r\n").utf8)
+    static func body(_ id: String) -> Data { body(id, padding: 0) }
+
+    /// `padding` > 0 (V4-12 storage tests): that many extra body bytes, in 76-byte lines.
+    static func body(_ id: String, padding: Int) -> Data {
+        var text = "Message-ID: <\(id)@fake.example>\r\nFrom: Asha <asha@example.com>\r\nTo: ravi@example.org\r\n"
+            + "Subject: Message \(id) – ü\r\nDate: Mon, 6 Jan 2025 10:00:00 +0530\r\nMIME-Version: 1.0\r\n"
+            + "Content-Type: text/plain; charset=utf-8\r\n\r\nBody \(id) end\r\n"
+        if padding > 0 {
+            let line = String(repeating: "x", count: 74) + "\r\n"
+            text += String(repeating: line, count: max(1, padding / line.utf8.count))
+        }
+        return Data(text.utf8)
     }
+
+    /// V4-12: message size for newly added mail, and whether listings carry size hints.
+    var padding = 0
+    var omitSizeHints = false
+    func setPadding(_ bytes: Int) { padding = bytes }
+    func setOmitSizeHints(_ omit: Bool) { omitSizeHints = omit }
 
     func addFolder(_ id: String, path: String? = nil) {
         folders.append(RemoteFolderOccurrence(serverID: id, displayPath: path ?? id, kind: .label))
@@ -116,7 +130,7 @@ actor FakeMailProvider: MailProviderAdapter {
         switch action {
         case .add(let id, let folder):
             seq += 1
-            messages[id] = Message(folders: [folder], seq: seq, body: Self.body(id))
+            messages[id] = Message(folders: [folder], seq: seq, body: Self.body(id, padding: padding))
             history.append((seq, .upsert(id, [folder])))
         case .move(let id, let to):
             guard messages[id] != nil else { return }
@@ -177,7 +191,7 @@ actor FakeMailProvider: MailProviderAdapter {
             .sorted { $0.value.seq < $1.value.seq }
         let page = inFolder.prefix(pageSize)
         let items = page.map { RemoteItemRef(identity: .gmail(messageID: $0.key), folder: folder,
-                                             sizeHint: Int64($0.value.body.count)) }
+                                             sizeHint: omitSizeHints ? nil : Int64($0.value.body.count)) }
         maxItemsInOnePage = max(maxItemsInOnePage, items.count)
         let next = inFolder.count > pageSize ? page.last.map { String($0.value.seq) } : nil
         enumeratePages += 1
