@@ -6737,8 +6737,9 @@ final class MailPolicyTests: XCTestCase {
                 }
             }
         }
-        // V4-08: ConnectedMailRuntime.swift is the ninth (its production adapters).
-        XCTAssertEqual(mailGated, 9, "the nine mail files carry the mail gate")
+        // V4-08: ConnectedMailRuntime.swift is the ninth (its production adapters); V4-13 adds
+        // ConnectedMailProductionTransports.swift and MailWorkspaceBackend.swift.
+        XCTAssertEqual(mailGated, 11, "the eleven mail files carry the mail gate")
         XCTAssertEqual(aiGated, 4, "the four cloud-AI files carry the cloud-AI gate")
         XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
@@ -9053,5 +9054,24 @@ final class OnlineRecipeTests: XCTestCase {
         let final = try await restarted.totals(fromAlice)
         XCTAssertEqual(final.fired, 3)
         XCTAssertEqual(final.historical, 1)
+    }
+}
+
+/// Memory pressure must never delete files in the temporary folder: they are
+/// live work (export staging, extraction scratch, open stores). Before the fix,
+/// a pressure event unlinked a store's emails.db while it was being written.
+@MainActor
+final class MemoryPressureTempFilesTests: XCTestCase {
+    func testPressureEventsKeepTemporaryFiles() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-pressure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("emails.db")
+        try Data("live".utf8).write(to: file)
+        for level in [MemoryPressureHandler.PressureLevel.warning, .critical, .thermal] {
+            MemoryPressureHandler.shared.simulatePressure(level: level)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "\(level) pressure deleted a temporary file")
+        }
     }
 }
