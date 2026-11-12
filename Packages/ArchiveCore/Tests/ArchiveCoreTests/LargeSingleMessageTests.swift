@@ -308,7 +308,8 @@ final class LargeSingleMessageTests: XCTestCase {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        // Each read in its own pool: the helper must not be what a peak-memory row measures.
+        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 4 << 20) }), !chunk.isEmpty { hasher.update(data: chunk) }
         return hex(hasher.finalize())
     }
 
@@ -727,6 +728,353 @@ final class LargeSingleMessageTests: XCTestCase {
         XCTAssertEqual(layout.message, ByteRange(offset: 6, length: Int64("From: a@b.c\nSubject: Short\n\nbody text\n".utf8.count)))
         XCTAssertEqual(try EMLXParser.parse(fileURL: url, senderEmail: "").first?.headers["Subject"], "Short")
     }
+}
+
+// MARK: - CLOSE-01 follow-up: large messages inside library folders and archives
+
+extension LargeSingleMessageTests {
+
+    /// Peak footprint sampled on a background thread every millisecond, so a
+    /// whole-message read inside the coordinator cannot slip between samples.
+    final class BackgroundPeak: @unchecked Sendable {
+        private let lock = NSLock()
+        private var running = true
+        private var peak: UInt64
+        let baseline: UInt64
+        init() {
+            baseline = currentFootprintBytes()
+            peak = baseline
+            Thread { [self] in
+                while true {
+                    let now = currentFootprintBytes()
+                    lock.lock()
+                    if now > peak { peak = now }
+                    let go = running
+                    lock.unlock()
+                    if !go { break }
+                    usleep(1_000)
+                }
+            }.start()
+        }
+        /// Stops sampling; the peak growth over the baseline, in bytes.
+        func stop() -> Int64 {
+            let now = currentFootprintBytes()
+            lock.lock(); running = false; if now > peak { peak = now }; let p = peak; lock.unlock()
+            usleep(5_000)
+            return Int64(p) - Int64(baseline)
+        }
+    }
+
+    private func runImport(_ url: URL, into env: Env, offsetEngine: Bool) async throws -> BulkImportCoordinator.RunSummary {
+        let coordinator = await BulkImportCoordinator(store: env.store, fts: env.fts,
+                                                      checkpoints: ImportCheckpointStore(store: env.store),
+                                                      requiresStorageActivation: false)
+        var options = BulkImportCoordinator.Options()
+        options.enforceStoragePreflight = false
+        options.useOffsetEngine = offsetEngine
+        options.recordLocators = true
+        return try await coordinator.runImport(urls: [url], options: options)
+    }
+
+    /// Copies `source` into `handle` at `offset`, leaving runs of zeros as holes.
+    private static func sparseCopy(_ source: URL, into handle: FileHandle, at offset: UInt64) throws {
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        let slice = 4 << 20
+        let zeros = Data(count: slice)
+        var at = offset
+        while let chunk = try autoreleasepool(invoking: { try input.read(upToCount: slice) }), !chunk.isEmpty {
+            if !(chunk.count == slice && chunk == zeros) {
+                try handle.seek(toOffset: at)
+                try handle.write(contentsOf: chunk)
+            }
+            at += UInt64(chunk.count)
+        }
+    }
+
+    private static func crc32(of url: URL) throws -> UInt32 {
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+        var crc = ZIPArchiveReader.CRC32()
+        while let chunk = try autoreleasepool(invoking: { try input.read(upToCount: 4 << 20) }), !chunk.isEmpty { crc.update(chunk) }
+        return crc.value
+    }
+
+    /// A ZIP holding `file` as one STORED member named `name`, written sparsely.
+    private static func writeStoredZIP(member file: URL, name: String, to url: URL) throws {
+        let size = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber).uint32Value
+        let crc = try crc32(of: file)
+        let nameData = Data(name.utf8)
+        func fixed(_ signature: UInt32, central: Bool) -> Data {
+            var d = Data()
+            d.le32append(signature)
+            if central { d.le16append(20) }               // version made by
+            d.le16append(20); d.le16append(0); d.le16append(0)   // version needed, flags, stored
+            d.le16append(0); d.le16append(0x5821)                // time, date
+            d.le32append(crc); d.le32append(size); d.le32append(size)
+            d.le16append(UInt16(nameData.count)); d.le16append(0)
+            if central {
+                d.le16append(0); d.le16append(0); d.le16append(0)   // comment, disk, internal attributes
+                d.le32append(0); d.le32append(0)                     // external attributes, local header offset
+            }
+            return d + nameData
+        }
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        let local = fixed(0x0403_4B50, central: false)
+        try handle.write(contentsOf: local)
+        try sparseCopy(file, into: handle, at: UInt64(local.count))
+        let centralOffset = UInt64(local.count) + UInt64(size)
+        let central = fixed(0x0201_4B50, central: true)
+        var end = Data()
+        end.le32append(0x0605_4B50); end.le16append(0); end.le16append(0)
+        end.le16append(1); end.le16append(1)
+        end.le32append(UInt32(central.count)); end.le32append(UInt32(centralOffset)); end.le16append(0)
+        try handle.seek(toOffset: centralOffset)
+        try handle.write(contentsOf: central + end)
+    }
+
+    /// A ustar TAR holding `file` as one member named `name`, written sparsely.
+    private static func writeTAR(member file: URL, name: String, to url: URL) throws {
+        let size = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber).int64Value
+        var header = Data(count: 512)
+        func put(_ text: String, at offset: Int) { for (k, b) in text.utf8.enumerated() { header[offset + k] = b } }
+        put(name, at: 0)
+        put("0000644", at: 100); put("0000000", at: 108); put("0000000", at: 116)
+        put(String(String(size, radix: 8).leftPadded(to: 11)), at: 124)
+        put("00000000000", at: 136)
+        put("        ", at: 148)
+        header[156] = 0x30
+        put("ustar", at: 257); put("00", at: 263)
+        let sum = header.reduce(0) { $0 + Int($1) }
+        put(String(sum, radix: 8).leftPadded(to: 6), at: 148)
+        header[154] = 0; header[155] = 0x20
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: header)
+        try sparseCopy(file, into: handle, at: 512)
+        let padded = (size + 511) / 512 * 512
+        try handle.truncate(atOffset: UInt64(512 + padded + 1024))   // two zero blocks end it
+    }
+
+    /// The one message whose body was not decoded: its locator, text indexed,
+    /// and its attachment streamed out — returns the attachment's SHA-256.
+    private func streamedAttachment(_ env: Env, expectedName: String) async throws -> (locator: MessageLocator, email: MBOXParser.RawEmail, digest: String, bytes: Int64) {
+        let ids = try await env.store.deferredBodyIDs(limit: 5)
+        XCTAssertEqual(ids.count, 1, "exactly one message imported by range")
+        let id = try XCTUnwrap(ids.first)
+        let storedLocator = try await env.store.locator(forEmailID: id)
+        let locator = try XCTUnwrap(storedLocator)
+        let stored = try await env.archive.fullEmail(id: id)
+        let email = try XCTUnwrap(stored)
+        let indexPeak = BackgroundPeak()
+        let pass = await StreamedBodyIndexer().indexPending(store: env.store)
+        let indexGrew = indexPeak.stop()
+        XCTAssertEqual(pass, StreamedBodyIndexer.PassOutcome(indexed: 1, failed: 0))
+        let located = try await env.store.streamedAttachmentParts(emailID: id)
+        let (sourcePath, parts) = try XCTUnwrap(located)
+        XCTAssertEqual(parts.map { $0.filename ?? "" }, [expectedName])
+        let out = root.appendingPathComponent("part-\(UUID().uuidString).out")
+        defer { try? FileManager.default.removeItem(at: out) }
+        let decodePeak = BackgroundPeak()
+        let decoded = try StreamedPartDecoder.decode(part: parts[0], sourcePath: sourcePath, to: out)
+        let decodeGrew = decodePeak.stop()
+        print("CLOSE-01 after import: text index peak \(indexGrew / Self.mib) MiB, attachment decode peak \(decodeGrew / Self.mib) MiB")
+        return (locator, email, try Self.fileDigest(out), decoded.bytesWritten)
+    }
+
+    private func smallEMLX(_ url: URL, subject: String) throws {
+        let message = "From: small@example.com\nTo: you@example.com\nSubject: \(subject)\nMessage-ID: <\(subject)@example.com>\nDate: Fri, 17 Mar 2017 12:00:00 +0000\n\nA small message.\n"
+        try Data("\(message.utf8.count)\n\(message)".utf8).write(to: url)
+    }
+
+    // (1) .emlx inside an Apple Mail library folder
+
+    func testCLOSE01_emlxAbove500MBInsideALibraryFolder_importsByRangeInBoundedMemory_attachmentByteExact() async throws {
+        let attachmentLength: Int64 = 500_100_000
+        let library = root.appendingPathComponent("V10", isDirectory: true)
+        let messages = library.appendingPathComponent("Inbox.mbox/1F2E3D4C/Data/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messages, withIntermediateDirectories: true)
+        let big = messages.appendingPathComponent("101.emlx")
+        let (expected, messageLength) = try writeSparseEMLX(big, attachmentLength: attachmentLength, flags: 0x11)
+        XCTAssertGreaterThan(WholeMessageReadLimit.fileSize(big), 500_000_000)
+        try smallEMLX(messages.appendingPathComponent("102.emlx"), subject: "SmallOne")
+        XCTAssertEqual(SourceFormatClassifier.classify(url: library).format, .appleMailLibrary)
+
+        let env = makeEnv("library")
+        let peak = BackgroundPeak()
+        let summary = try await runImport(library, into: env, offsetEngine: true)
+        let importPeak = peak.stop()
+        XCTAssertEqual(summary.fileErrors.count, 0, "\(summary.fileErrors.map(\.message))")
+        XCTAssertEqual(summary.inserted, 2)
+        XCTAssertEqual(summary.bodiesNotDecoded, 1, "the large one by headers plus a locator")
+        XCTAssertLessThan(importPeak, 160 * Self.mib, "import peak \(importPeak / Self.mib) MiB for a \(attachmentLength / Self.mib) MiB message")
+
+        let after = BackgroundPeak()
+        let result = try await streamedAttachment(env, expectedName: "huge.bin")
+        let streamPeak = after.stop()
+        XCTAssertEqual(URL(fileURLWithPath: result.locator.sourcePath).resolvingSymlinksInPath().path, big.resolvingSymlinksInPath().path, "range reads of the .emlx in the library itself")
+        XCTAssertEqual(result.locator.messageRange.length, messageLength)
+        XCTAssertEqual(result.locator.sourceDigest, try Self.fileDigest(big), "the .emlx's digest proves later reads")
+        XCTAssertEqual(result.email.headers["Subject"], "Large emlx")
+        XCTAssertTrue(result.email.tags.contains("Read") && result.email.tags.contains("Flagged"), "flags: \(result.email.tags)")
+        XCTAssertTrue(result.email.tags.contains("Inbox"), "the mailbox from the library path: \(result.email.tags)")
+        XCTAssertEqual(result.bytes, attachmentLength)
+        XCTAssertEqual(result.digest, expected, "attachment of \(attachmentLength) bytes byte for byte")
+        XCTAssertLessThan(streamPeak, 160 * Self.mib)
+        print("CLOSE-01 library emlx \(WholeMessageReadLimit.fileSize(big)) bytes: import peak \(importPeak / Self.mib) MiB, index+decode peak \(streamPeak / Self.mib) MiB")
+    }
+
+    // (2) .emlx member of a ZIP (stored)
+
+    func testCLOSE01_emlxAbove500MBStoredInAZIP_importsFromItsScratchFileByRange_keptInTheArchive_attachmentByteExact() async throws {
+        let attachmentLength: Int64 = 500_100_000
+        let staging = root.appendingPathComponent("staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let member = staging.appendingPathComponent("big.emlx")
+        let (expected, messageLength) = try writeSparseEMLX(member, attachmentLength: attachmentLength, flags: 0x11)
+        let zip = root.appendingPathComponent("mail.zip")
+        try Self.writeStoredZIP(member: member, name: "Inbox.mbox/Messages/big.emlx", to: zip)
+        try FileManager.default.removeItem(at: member)
+        XCTAssertEqual(SourceFormatClassifier.classify(url: zip).format, .zip)
+
+        func scratchFolders() -> Set<String> {
+            Set(((try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? [])
+                .filter { $0.hasPrefix("mailin-container-") })
+        }
+        let scratchBefore = scratchFolders()   // other runs may have left theirs
+        let env = makeEnv("zip")
+        let peak = BackgroundPeak()
+        let summary = try await runImport(zip, into: env, offsetEngine: true)
+        let importPeak = peak.stop()
+        XCTAssertEqual(summary.fileErrors.count, 0, "\(summary.fileErrors.map(\.message))")
+        XCTAssertEqual(summary.inserted, 1)
+        XCTAssertEqual(summary.bodiesNotDecoded, 1)
+        XCTAssertLessThan(importPeak, 160 * Self.mib, "import peak \(importPeak / Self.mib) MiB")
+
+        let after = BackgroundPeak()
+        let result = try await streamedAttachment(env, expectedName: "huge.bin")
+        let streamPeak = after.stop()
+        let sources = SourceCopies.directory(in: env.store.storeDirectory)
+        XCTAssertTrue(result.locator.sourcePath.hasPrefix(sources.path), "kept inside the archive, not the deleted scratch file: \(result.locator.sourcePath)")
+        XCTAssertTrue(result.locator.sourcePath.contains("/members/0/"), result.locator.sourcePath)
+        XCTAssertEqual(WholeMessageReadLimit.fileSize(URL(fileURLWithPath: result.locator.sourcePath)), messageLength, "the message range, copied")
+        XCTAssertEqual(result.locator.sourceDigest, try Self.fileDigest(URL(fileURLWithPath: result.locator.sourcePath)))
+        XCTAssertEqual(result.email.headers["Subject"], "Large emlx")
+        XCTAssertTrue(result.email.tags.contains("Read") && result.email.tags.contains("Flagged"), "flags from the member's plist: \(result.email.tags)")
+        XCTAssertTrue(result.email.tags.contains("Inbox"), "the folder from the member's path in the archive: \(result.email.tags)")
+        XCTAssertEqual(result.digest, expected, "attachment of \(attachmentLength) bytes byte for byte")
+        XCTAssertLessThan(streamPeak, 160 * Self.mib)
+        XCTAssertEqual(scratchFolders().subtracting(scratchBefore), [], "this import's scratch folder is gone")
+        print("CLOSE-01 zip emlx member \(messageLength) bytes: import peak \(importPeak / Self.mib) MiB, index+decode peak \(streamPeak / Self.mib) MiB")
+    }
+
+    // (2) .msg member of a TAR
+
+    func testCLOSE01_msgAbove2GBInsideATAR_renderedFromItsScratchFileInsideTheArchive_attachmentByteExact() async throws {
+        let attachmentLength: Int64 = 2_000_100_000
+        let marks = Self.markers(attachmentLength)
+        let staging = root.appendingPathComponent("staging-msg", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let member = staging.appendingPathComponent("huge.msg")
+        try CFB.write(Self.msgEntries(subject: "Huge msg in tar", body: .data(CFB.utf16("A short body.")),
+                                      attachmentName: "huge.bin", attachment: .sparse(length: attachmentLength, markers: marks),
+                                      messageID: "<close01-tar@example.com>"), to: member)
+        let msgSize = WholeMessageReadLimit.fileSize(member)
+        XCTAssertGreaterThan(msgSize, 2_000_000_000)
+        let tar = root.appendingPathComponent("outlook.tar")
+        try Self.writeTAR(member: member, name: "Outlook/huge.msg", to: tar)
+        try FileManager.default.removeItem(at: member)
+        XCTAssertEqual(SourceFormatClassifier.classify(url: tar).format, .tar)
+
+        let env = makeEnv("tar")
+        let peak = BackgroundPeak()
+        let summary = try await runImport(tar, into: env, offsetEngine: true)
+        let importPeak = peak.stop()
+        XCTAssertEqual(summary.fileErrors.count, 0, "\(summary.fileErrors.map(\.message))")
+        XCTAssertEqual(summary.inserted, 1)
+        XCTAssertEqual(summary.bodiesNotDecoded, 1)
+        XCTAssertLessThan(importPeak, 160 * Self.mib, "import peak \(importPeak / Self.mib) MiB for a \(msgSize / Self.mib) MiB .msg")
+
+        let after = BackgroundPeak()
+        let result = try await streamedAttachment(env, expectedName: "huge.bin")
+        let streamPeak = after.stop()
+        let sources = SourceCopies.directory(in: env.store.storeDirectory)
+        XCTAssertTrue(result.locator.sourcePath.hasPrefix(sources.path), result.locator.sourcePath)
+        XCTAssertTrue(result.locator.sourcePath.hasSuffix("/members/0/0-huge.rendered.eml"), result.locator.sourcePath)
+        XCTAssertEqual(result.email.headers["Subject"], "Huge msg in tar")
+        XCTAssertEqual(result.bytes, attachmentLength)
+        XCTAssertEqual(result.digest, Self.sparseDigest(length: attachmentLength, markers: marks), "attachment of \(attachmentLength) bytes byte for byte")
+        XCTAssertLessThan(streamPeak, 160 * Self.mib)
+        print("CLOSE-01 tar msg member \(msgSize) bytes: import (render) peak \(importPeak / Self.mib) MiB, index+decode peak \(streamPeak / Self.mib) MiB")
+    }
+
+    // (3) the previous engine: a named refusal above its ceiling, small files unchanged
+
+    func testCLOSE01_offsetEngineOff_refusesAboveTheWholeReadCeilingByName_smallFilesImportAsBefore() async throws {
+        // A standalone .emlx and .msg above the ceilings.
+        let bigEMLX = root.appendingPathComponent("big.emlx")
+        _ = try writeSparseEMLX(bigEMLX, attachmentLength: 500_100_000, flags: 0)
+        let bigMSG = root.appendingPathComponent("big.msg")
+        try CFB.write(Self.msgEntries(subject: "Too big", body: .data(CFB.utf16("b")), attachmentName: "huge.bin",
+                                      attachment: .sparse(length: 2_000_100_000, markers: Self.markers(2_000_100_000)),
+                                      messageID: "<too-big@example.com>"), to: bigMSG)
+        for url in [bigEMLX, bigMSG] {
+            let env = makeEnv("off-\(url.pathExtension)")
+            let peak = BackgroundPeak()
+            let summary = try await runImport(url, into: env, offsetEngine: false)
+            let grew = peak.stop()
+            XCTAssertEqual(summary.inserted, 0)
+            let message = summary.fileErrors.first?.message ?? ""
+            XCTAssertTrue(message.contains("previous import engine") && message.contains("offset import engine on"), message)
+            XCTAssertLessThan(grew, 64 * Self.mib, "refused before anything is read: \(grew / Self.mib) MiB")
+        }
+        try FileManager.default.removeItem(at: bigMSG)
+
+        // In a library folder: the small message imports, the large one is counted as refused.
+        let messages = root.appendingPathComponent("Lib/Work.mbox/AB12/Data/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messages, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: bigEMLX, to: messages.appendingPathComponent("1.emlx"))
+        try smallEMLX(messages.appendingPathComponent("2.emlx"), subject: "Kept")
+        var env = makeEnv("off-library")
+        var summary = try await runImport(root.appendingPathComponent("Lib"), into: env, offsetEngine: false)
+        XCTAssertEqual(summary.fileErrors.count, 0, "\(summary.fileErrors.map(\.message))")
+        XCTAssertEqual(summary.inserted, 1)
+        XCTAssertEqual(summary.damaged, 0, "refused is not damaged")
+        XCTAssertTrue(summary.warnings.contains { $0.contains("1 message not imported") && $0.contains("previous import engine") }, "\(summary.warnings)")
+
+        // In a ZIP: the member is refused with its reason, the rest imports.
+        let zipMember = root.appendingPathComponent("zip-big.emlx")
+        try FileManager.default.moveItem(at: messages.appendingPathComponent("1.emlx"), to: zipMember)
+        let zip = root.appendingPathComponent("off.zip")
+        try Self.writeStoredZIP(member: zipMember, name: "Inbox.mbox/Messages/big.emlx", to: zip)
+        try FileManager.default.removeItem(at: zipMember)
+        env = makeEnv("off-zip")
+        summary = try await runImport(zip, into: env, offsetEngine: false)
+        XCTAssertEqual(summary.fileErrors.count, 0, "a refused member is not a failed import: \(summary.fileErrors.map(\.message))")
+        XCTAssertEqual(summary.inserted, 0)
+        XCTAssertTrue(summary.warnings.contains { $0.contains("1 archive member not imported") && $0.contains(WholeMessageReadLimit.memberReason) }, "\(summary.warnings)")
+
+        // Small files: unchanged with the engine off.
+        let smallMSG = root.appendingPathComponent("small.msg")
+        try CFB.write(Self.msgEntries(subject: "Small msg", body: .data(CFB.utf16("A short body.")), attachmentName: "a.bin",
+                                      attachment: .data(Data(repeating: 0x42, count: 10_000)), messageID: "<small-msg@example.com>"), to: smallMSG)
+        let smallEMLXURL = root.appendingPathComponent("small.emlx")
+        try smallEMLX(smallEMLXURL, subject: "SmallAlone")
+        for url in [smallMSG, smallEMLXURL] {
+            env = makeEnv("off-small-\(url.pathExtension)")
+            summary = try await runImport(url, into: env, offsetEngine: false)
+            XCTAssertEqual(summary.fileErrors.count, 0, "\(summary.fileErrors.map(\.message))")
+            XCTAssertEqual(summary.inserted, 1)
+            XCTAssertEqual(summary.bodiesNotDecoded, 0, "read whole, as before")
+        }
+    }
+}
+
+private extension String {
+    func leftPadded(to width: Int) -> String { String(repeating: "0", count: max(0, width - count)) + self }
 }
 
 // MARK: - Little-endian helpers

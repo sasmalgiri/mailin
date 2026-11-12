@@ -24,13 +24,19 @@ struct MSGParser {
     /// hostile file) is the only stop: it is listed as the attachment it is.
     ///
     /// CLOSE-01: a .msg file is no longer read whole into memory, and the
-    /// former 2,000,000,000-byte refusal is gone. The compound file is read
+    /// former 2,000,000,000-byte refusal is gone on the offset engine's path. The compound file is read
     /// through a file handle (`OLE2Reader(fileURL:)`): sectors, the FAT, the
     /// mini FAT and the mini stream are read as they are needed. A file above
     /// the offset engine's full-parse ceiling is imported by
     /// `OffsetImportEngine.importLargeSingleMessage`, which streams its bodies
     /// and attachments into a rendered RFC 5322 file in bounded memory.
+    ///
+    /// The in-memory reader still holds the message's bodies and attachments
+    /// whole, so above `WholeMessageReadLimit.msgBytes` it refuses the file
+    /// by name (the previous engine's ceiling); the offset engine never calls
+    /// it for a file above its full-parse ceiling.
     private static func parseSingleMSG(fileURL: URL, senderEmail: String) throws -> MBOXParser.RawEmail {
+        try WholeMessageReadRefusal.check(fileURL, kind: .msg)
         let ole2 = try OLE2Reader(fileURL: fileURL)
         return try email(from: ole2, storage: 0, propertiesHeader: 32, depth: 0, ancestors: [0], senderEmail: senderEmail)
     }

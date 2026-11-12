@@ -15,6 +15,9 @@ struct EMLXParser {
         let totalFiles: Int
         let failedFiles: Int
         let errors: [(filename: String, reason: String)]
+        /// Files refused by the whole-read ceiling (`WholeMessageReadLimit`,
+        /// previous engine only) — not damaged, and not in `failedFiles`.
+        var refusedTooLarge: Int = 0
 
         var summary: String? {
             guard failedFiles > 0 else { return nil }
@@ -58,17 +61,22 @@ struct EMLXParser {
 
         var emails: [MBOXParser.RawEmail] = []
         var errors: [(filename: String, reason: String)] = []
+        var refused = 0
         let total = Double(emlxFiles.count)
         for (idx, file) in emlxFiles.enumerated() {
             do {
                 let email = try parseSingleEMLX(fileURL: file, senderEmail: senderEmail)
                 emails.append(email)
+            } catch let refusal as WholeMessageReadRefusal {
+                refused += 1
+                errors.append((filename: file.lastPathComponent, reason: refusal.localizedDescription))
             } catch {
                 errors.append((filename: file.lastPathComponent, reason: error.localizedDescription))
             }
             onProgress?((Double(idx + 1)) / total)
         }
-        return ParseResult(emails: emails, totalFiles: emlxFiles.count, failedFiles: errors.count, errors: errors)
+        return ParseResult(emails: emails, totalFiles: emlxFiles.count, failedFiles: errors.count - refused, errors: errors,
+                           refusedTooLarge: refused)
     }
 
     /// Where the parts of an .emlx file are: the byte-count line, the RFC 822
@@ -81,7 +89,8 @@ struct EMLXParser {
     }
 
     /// CLOSE-01: an .emlx file is no longer read whole into memory (the former
-    /// 500,000,000-byte refusal is gone). Only its first line is read to find
+    /// 500,000,000-byte refusal is gone on the offset engine's path; the
+    /// previous engine keeps it, `WholeMessageReadLimit`). Only its first line is read to find
     /// the message's byte range; the message and the property list are then
     /// read by range — in full for a message at or under the offset engine's
     /// full-parse ceiling, by a byte locator above it
@@ -127,7 +136,11 @@ struct EMLXParser {
         return plist
     }
 
-    private static func parseSingleEMLX(fileURL: URL, senderEmail: String) throws -> MBOXParser.RawEmail {
+    /// Reads one .emlx whole. Above `WholeMessageReadLimit.emlxBytes` it is
+    /// refused by name (the previous engine's ceiling); the offset engine
+    /// never calls this for a file above its full-parse ceiling.
+    static func parseSingleEMLX(fileURL: URL, senderEmail: String) throws -> MBOXParser.RawEmail {
+        try WholeMessageReadRefusal.check(fileURL, kind: .emlx)
         let layout = try layout(of: fileURL)
         let data = try FileRandomAccessSource(url: fileURL).read(at: layout.message.offset, count: Int(clamping: layout.message.length))
         guard data.contains(where: { !($0 == 0x20 || $0 == 0x09 || $0 == 0x0A || $0 == 0x0D) }) else {

@@ -367,6 +367,7 @@ struct ParserFactory {
         nestedContainerAllowed: Bool = true,
         containerResume: ContainerWalkCursor? = nil,
         onContainerMemberFinished: ((ContainerWalkCursor) async throws -> Void)? = nil,
+        largeMessages: LargeMessageRoute? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> MBOXParser.ParseRecoveryReport {
         // Content decides which parser runs. Routing on the extension alone
@@ -418,7 +419,24 @@ struct ParserFactory {
                 case .mailbox(let url, let folder, let path, let names):
                     let base = walk.topLevelFraction
                     let count = Double(max(1, walk.topLevelCount))
-                    let report = try await parseStreamingCallback(
+                    // CLOSE-01 follow-up: a large .emlx/.msg member is imported
+                    // from its scratch file by range, kept in the archive.
+                    if let route = largeMessages, let kind = route.kind(of: url) {
+                        let report = try await route.importMessage(
+                            url, kind: kind, transient: true, keepIn: route.memberDirectory(path: path),
+                            senderEmail: senderEmail, folder: folder,
+                            onProgress: { fraction in onProgress?(base + fraction / count) })
+                        emitted += report.successfullyParsed
+                        total += report.totalMessages
+                        parsed += report.successfullyParsed
+                        failed += report.failed
+                        quietSinceReport = 0
+                        try await onContainerMemberFinished?(cursor(path, names))
+                        continue
+                    }
+                    let report: MBOXParser.ParseRecoveryReport
+                    do {
+                      report = try await parseStreamingCallback(
                         fileURL: url,
                         senderEmail: senderEmail,
                         batchSize: batchSize,
@@ -431,7 +449,15 @@ struct ParserFactory {
                             emitted += batch.count
                             try await onBatch(Self.stamp(batch, folder: folder))
                         }
-                    )
+                      )
+                    } catch let refusal as WholeMessageReadRefusal {
+                        // The previous engine's ceiling: a refused member with its reason, not a failed import.
+                        walk.refuseMember(names.last ?? "", reason: WholeMessageReadLimit.memberReason,
+                                          detail: refusal.localizedDescription)
+                        quietSinceReport = 0
+                        try await onContainerMemberFinished?(cursor(path, names))
+                        continue
+                    }
                     total += report.totalMessages
                     parsed += report.successfullyParsed
                     failed += report.failed
@@ -472,6 +498,18 @@ struct ParserFactory {
                 // FOLD-02: the mailbox this member belongs to, from the layout.
                 let folder = SourceFormatClassifier.folderPath(member: member, root: fileURL, format: classification.format)
                 if let folder { declaredFolders.insert(folder) }
+                if classification.format == .appleMailLibrary, let route = largeMessages {
+                    // CLOSE-01 follow-up: message by message, a large one by range.
+                    let counts = try await parseLibraryMailbox(
+                        member, root: fileURL, folder: folder, senderEmail: senderEmail, batchSize: batchSize,
+                        route: route, onProgress: { fraction in onProgress?((Double(index) + fraction) / Double(members.count)) },
+                        onBatch: onBatch)
+                    total += counts.total
+                    parsed += counts.parsed
+                    failed += counts.failed
+                    for (key, count) in counts.categories { categories[key, default: 0] += count }
+                    continue
+                }
                 if classification.format == .appleMailLibrary {
                     // One mailbox folder at a time, in batches.
                     try Task.checkCancellation()
@@ -482,6 +520,7 @@ struct ParserFactory {
                     parsed += result.emails.count
                     failed += result.failedFiles
                     if result.failedFiles > 0 { categories["emlx_damaged", default: 0] += result.failedFiles }
+                    if result.refusedTooLarge > 0 { categories[WholeMessageReadLimit.category, default: 0] += result.refusedTooLarge }
                     for start in stride(from: 0, to: result.emails.count, by: max(1, batchSize)) {
                         try await onBatch(Self.stamp(Array(result.emails[start..<min(start + max(1, batchSize), result.emails.count)]), folder: folder))
                     }

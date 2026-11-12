@@ -1000,7 +1000,34 @@ final class BulkImportCoordinator {
                             self?.live.fileFraction = prog
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
-                        let batchSink = MainActorSink<[MBOXParser.RawEmail]> { batch in try await persistBatch(batch) }
+                        let batchSink = MainActorSink<[MBOXParser.RawEmail]> { batch in
+                            // Locators belong to the batch that set them (the large-message route below).
+                            batchLocators.removeAll(keepingCapacity: true)
+                            try await persistBatch(batch)
+                        }
+                        // CLOSE-01 follow-up: with the offset engine on, a large
+                        // .emlx in a library folder or .emlx/.msg inside an
+                        // archive is imported by range, as a file of its own is.
+                        var largeRoute: LargeMessageRoute? = nil
+                        if options.useOffsetEngine {
+                            let largeSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
+                                batchLocators.removeAll(keepingCapacity: true)
+                                if options.recordLocators {
+                                    for item in imported {
+                                        batchLocators[item.email.id] =
+                                            (item.locator, item.bodyWasDecoded, item.parts)
+                                    }
+                                }
+                                try await persistBatch(imported.map(\.email))
+                            }
+                            largeRoute = LargeMessageRoute(
+                                engine: largeEngine,
+                                keepDirectory: SourceCopies.directory(in: store.storeDirectory)
+                                    .appendingPathComponent(hash, isDirectory: true),
+                                copyLibraryMessages: SourceCopyPolicy.isEnabled,
+                                materializeAttachments: false,   // bulk import: no temp copy per attachment
+                                onImported: { @Sendable imported in try await largeSink.send(imported) })
+                        }
                         // CLOSE-02: a container source resumes after the last
                         // member whose messages are all committed, with its
                         // ordinals continuing from the cursor — never ahead of
@@ -1032,6 +1059,7 @@ final class BulkImportCoordinator {
                                 onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } },
                                 containerResume: containerResume,
                                 onContainerMemberFinished: { @Sendable cursor in try await cursorSink.send(cursor) },
+                                largeMessages: largeRoute,
                                 onBatch: { @Sendable batch in try await batchSink.send(batch) }
                             )
                         } catch let error as ContainerWalkError {
@@ -1057,10 +1085,16 @@ final class BulkImportCoordinator {
                     // OPEN-05: this file's own accounting; container members that
                     // were not mail, encrypted or nested are "unresolved", as are
                     // Maildir tmp/ files the layout says are not messages.
-                    let unresolved = report.errorCategories.filter { $0.key.hasPrefix("container_") || $0.key.hasPrefix("maildir_") }.values.reduce(0, +)
+                    let unresolved = report.errorCategories.filter {
+                        $0.key.hasPrefix("container_") || $0.key.hasPrefix("maildir_") || $0.key == WholeMessageReadLimit.category
+                    }.values.reduce(0, +)
                     // CLOSE-02: archive members not imported, each with its reason.
                     if let line = Self.containerRefusalLine(sourceName: sourceName, categories: report.errorCategories) {
                         summary.warnings.append(line)
+                    }
+                    // The previous engine's whole-read ceiling, inside a folder source.
+                    if let n = report.errorCategories[WholeMessageReadLimit.category], n > 0 {
+                        summary.warnings.append("\(sourceName): \(n) message\(n == 1 ? "" : "s") not imported — larger than the previous import engine reads whole into memory (\(ByteCountFormatter.string(fromByteCount: WholeMessageReadLimit.emlxBytes, countStyle: .file)) .emlx, \(ByteCountFormatter.string(fromByteCount: WholeMessageReadLimit.msgBytes, countStyle: .file)) .msg). Turn the offset import engine on to import \(n == 1 ? "it" : "them") by range.")
                     }
                     noteSource {
                         $0.discovered = report.totalMessages
