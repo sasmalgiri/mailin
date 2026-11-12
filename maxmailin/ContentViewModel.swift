@@ -751,10 +751,15 @@ class ContentViewModel: ObservableObject {
 
     // MARK: - Direct email ingestion (sample data / cloud fetch)
 
-    /// Persist already-parsed emails (bundled sample data, cloud/IMAP fetches)
-    /// into the SQLite authority + FTS index — the same substrate file imports
-    /// land in. Nothing is retained in RAM; callers refresh their paged
-    /// surfaces via `.parsingFinished`.
+    /// Persist already-parsed emails (bundled sample data) into the SQLite
+    /// authority + FTS index — the same substrate file imports land in.
+    /// Nothing is retained in RAM; callers refresh their paged surfaces via
+    /// `.parsingFinished`.
+    ///
+    /// V4-08 (plan §3 A08): NEVER for online mail. This path has no account,
+    /// no source, no provider identity and deduplicates by Message-ID; online
+    /// mail enters only through `ConnectedArchiveSink` (`ConnectedMailRuntime`).
+    /// `ConnectedFiveJobsTests` holds the call sites to sample data.
     func ingestEmails(_ emails: [MBOXParser.RawEmail], sourceLabel: String) async {
         guard !emails.isEmpty else { return }
         do {

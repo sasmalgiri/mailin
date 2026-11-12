@@ -161,6 +161,26 @@ extension SQLiteEmailStore {
             return ("e.source_id = ?", [.int(Int64(value) ?? -1)])
         case .messageType:
             return ("e.message_type = ?", [.text(value)])
+        case .account:
+            // V4-08: the account's captured copies (provider identity → record).
+            return ("EXISTS (SELECT 1 FROM remote_messages ra WHERE ra.email_id = e.id AND ra.account_id = ?)",
+                    [.text(UUID(uuidString: value)?.uuidString ?? value)])
+        case .sourceKind:
+            let connected = "EXISTS (SELECT 1 FROM remote_messages rk WHERE rk.email_id = e.id)"
+            switch value {
+            case "connected": return (connected, [])
+            case "file": return ("NOT " + connected, [])
+            default: return ("0", [])
+            }
+        case .captureState:
+            switch value {
+            case "onServer":
+                return ("EXISTS (SELECT 1 FROM remote_messages rs WHERE rs.email_id = e.id AND rs.remote_present = 1)", [])
+            case "removedOnServer":
+                return ("EXISTS (SELECT 1 FROM remote_messages rs WHERE rs.email_id = e.id AND rs.remote_present = 0)", [])
+            default:
+                return ("0", [])
+            }
         }
     }
 

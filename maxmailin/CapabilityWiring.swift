@@ -174,6 +174,12 @@ enum CapabilityWiring {
             // V4-01: every mail transport asks MailNetworkPolicy before any network
             // step; off (page or switch) cancels registered mail work.
             MailNetworkPolicy.shared.setMailEnabled(isOn)
+            // V4-08: the connected-mail runtime (sink, accounts, one engine per
+            // account) exists only while this is on, and only in a build with
+            // the mail transports — the offline build never creates it.
+            if ConnectedBuildFeatures.mailTransportsCompiled {
+                Task { @MainActor in ConnectedMailRuntime.capabilityChanged(isOn: isOn) }
+            }
 
         case .aiAssistant:
             // Language detection's low-confidence path consults the on-device

@@ -24,6 +24,9 @@ struct AdvancedSearchView: View {
     let onCancel: () -> Void
 
     @State private var spec: SearchSpec
+    /// V4-08: connected accounts (id, name). The account / source / server
+    /// conditions are offered only when the archive holds connected mail.
+    @State private var connectedAccounts: [ConnectedAccountChoice] = []
 
     init(applied: SearchSpec?, scopeDescription: String, onApply: @escaping (SearchSpec?) -> Void, onCancel: @escaping () -> Void) {
         self.applied = applied
@@ -102,6 +105,7 @@ struct AdvancedSearchView: View {
         #if os(macOS)
         .frame(width: 620)
         #endif
+        .task { await loadConnectedAccounts() }
     }
 
     // MARK: Groups
@@ -164,6 +168,18 @@ struct AdvancedSearchView: View {
         .anyText, .subject, .body, .sender, .recipient, .recipientTo, .recipientCc, .recipientBcc,
         .attachmentName, .hasAttachments, .dateOnOrAfter, .dateOnOrBefore, .tag, .messageType,
     ]
+    /// V4-08: offered when connected accounts exist.
+    private static let connectedFields: [SearchCondition.Field] = [.account, .sourceKind, .captureState]
+
+    private var offeredFields: [SearchCondition.Field] {
+        connectedAccounts.isEmpty ? Self.builderFields : Self.builderFields + Self.connectedFields
+    }
+
+    private func loadConnectedAccounts() async {
+        guard let records = try? await SQLiteEmailStore.shared.connectedAccounts() else { return }
+        connectedAccounts = records.map { ConnectedAccountChoice(id: $0.accountID.uuidString, name: $0.displayIdentity) }
+        SearchSpecDescriber.accountNames = Dictionary(connectedAccounts.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+    }
 
     private func matchOptions(for field: SearchCondition.Field) -> [SearchCondition.Match] {
         switch field {
@@ -185,12 +201,15 @@ struct AdvancedSearchView: View {
                     let options = matchOptions(for: field)
                     if !options.contains(binding.wrappedValue.match) { binding.wrappedValue.match = options[0] }
                     if field == .hasAttachments { binding.wrappedValue.value = "yes" }
+                    if field == .sourceKind { binding.wrappedValue.value = "connected" }
+                    if field == .captureState { binding.wrappedValue.value = "removedOnServer" }
+                    if field == .account { binding.wrappedValue.value = connectedAccounts.first?.id ?? "" }
                     if field == .dateOnOrAfter || field == .dateOnOrBefore {
                         binding.wrappedValue.timeZone = TimeZone.current.identifier
                         if SearchSpec.parseDay(binding.wrappedValue.value, timeZone: nil) == nil { binding.wrappedValue.value = Self.dayString(Date()) }
                     }
                 })) {
-                ForEach(Self.builderFields, id: \.self) { field in
+                ForEach(offeredFields, id: \.self) { field in
                     Text(SearchSpecDescriber.fieldName(field)).tag(field)
                 }
             }
@@ -221,6 +240,20 @@ struct AdvancedSearchView: View {
                 }
                 .labelsHidden()
                 .frame(width: 120)
+            case .sourceKind, .captureState:
+                Picker("", selection: binding.value) {
+                    ForEach(field == .sourceKind ? SearchCondition.sourceKindValues : SearchCondition.captureStateValues, id: \.self) {
+                        Text(SearchSpecDescriber.valueName(field, $0)).tag($0)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 200)
+            case .account:
+                Picker("", selection: binding.value) {
+                    ForEach(connectedAccounts, id: \.id) { Text($0.name).tag($0.id) }
+                }
+                .labelsHidden()
+                .frame(width: 220)
             default:
                 let options = matchOptions(for: field)
                 if options.count > 1 {
@@ -399,3 +432,9 @@ struct ActiveFiltersBar: View {
     }
 }
 
+
+/// V4-08: one connected account offered by the builder's account condition.
+struct ConnectedAccountChoice: Hashable, Identifiable {
+    let id: String
+    let name: String
+}

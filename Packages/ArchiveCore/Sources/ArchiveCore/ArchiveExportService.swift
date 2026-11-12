@@ -759,6 +759,29 @@ final class ArchiveExportService {
                         write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
                         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+        var result = try await exportEMLFilesBody(scope: scope, to: folder, limit: limit, render: render, write: options,
+                                                  onProgress: onProgress, onProduced: onProduced)
+        // V4-08 (§5.5 exports): a finished export holding connected mail gets
+        // its provenance sidecar — account, provider identity, folders and the
+        // captured SHA-256 per file, never a credential. The export verifier
+        // ignores the sidecar (ExportInventory), so verification is unchanged.
+        if !result.cancelled, result.inventoryURL != nil, let store = archive.sqliteStore,
+           (try? await store.hasConnectedMessages()) == true {
+            do {
+                try await ConnectedArchiveSink(store: store).writeProvenanceSidecar(exportFolder: folder)
+            } catch {
+                let note = "connected-mail provenance was not written: \(error.localizedDescription)"
+                result.inventoryFailure = result.inventoryFailure.map { $0 + "; " + note } ?? note
+            }
+        }
+        return result
+    }
+
+    private func exportEMLFilesBody(scope: ArchiveSelectionScope, to folder: URL, limit: Int?,
+                                    render: (@MainActor @Sendable (MBOXParser.RawEmail) -> String)?,
+                                    write options: ExportWriteOptions,
+                                    onProgress: (@MainActor @Sendable (Int, Int) -> Void)?,
+                                    onProduced: (@MainActor @Sendable (Int) -> Void)?) async throws -> ArchiveExportResult {
         try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options,
                                      locatedRawExtension: "eml", onProgress: onProgress, onProduced: onProduced) { email, index in
             // A message without raw source (PST, MSG, OLM, NSF imports) is

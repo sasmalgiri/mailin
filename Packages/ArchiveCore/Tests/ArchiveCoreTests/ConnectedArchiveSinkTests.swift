@@ -338,4 +338,147 @@ final class ConnectedArchiveSinkTests: XCTestCase {
         XCTAssertEqual(entry.provenance.representation, "imap-literal")
         XCTAssertTrue(try ExportInventory.verify(folder: out).isClean, "the sidecar is not stray output")
     }
+
+    // MARK: V4-08 — the archive side of the five jobs
+
+    final class IDBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var ids: [UUID] = []
+        func add(_ id: UUID) { lock.withLock { ids.append(id) } }
+        var value: [UUID] { lock.withLock { ids } }
+    }
+
+    /// The search feed hears of every NEW record once, after its commit — not
+    /// of a repeated provider event.
+    func testV408_storedObserver_firesOncePerNewRecord_notForRepeatedEvents() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("store", isDirectory: true))
+        let heard = IDBox()
+        await sink.setStoredObserver { id in heard.add(id) }
+        let account = try await makeAccount(sink)
+        let run = try await sink.beginRun(accountID: account, selection: "INBOX")
+        let first = try await sink.capture(try item(sink, account: account, gmailID: "o1", bytes: Self.message(id: "o1@x", body: "one")), runID: run)
+        let again = try await sink.capture(try item(sink, account: account, gmailID: "o1", bytes: Self.message(id: "o1@x", body: "one"),
+                                                     labels: ["INBOX", "Work"]), runID: run)
+        XCTAssertEqual(first.state, .stored)
+        XCTAssertEqual(again.state, .alreadyPreserved)
+        XCTAssertEqual(heard.value, [try XCTUnwrap(first.emailID)], "one notification, for the stored record only")
+    }
+
+    /// A server folder renamed between syncs: the message shows under the new
+    /// path, and its membership of the old path (the historical capture) stays.
+    func testV408_serverFolderRenamed_keepsHistoricalMembership_andShowsTheCurrentPath() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("store", isDirectory: true))
+        let account = try await makeAccount(sink)
+        let projects = RemoteFolderOccurrence(serverID: "Label_7", displayPath: "Projects", kind: .label)
+        try await sink.recordFolders(accountID: account, folders: [projects])
+        let run = try await sink.beginRun(accountID: account, selection: "all")
+        var it = try item(sink, account: account, gmailID: "r1", bytes: Self.message(id: "r1@x", body: "renamed"))
+        it.occurrences = [projects]
+        let outcome = try await sink.capture(it, runID: run)
+        _ = try await sink.finishRun(run)
+        let id = try XCTUnwrap(outcome.emailID)
+
+        try await sink.recordFolders(accountID: account, folders: [RemoteFolderOccurrence(serverID: "Label_7", displayPath: "Projects 2025", kind: .label)])
+        let nodes = try await sink.store.folderNodes()
+        let paths = Set(nodes.filter { $0.messageCount > 0 }.map(\.path))
+        XCTAssertEqual(paths, ["Projects", "Projects 2025"], "old path kept, new path added")
+        let loaded = try await sink.store.emails(withIDs: [id])
+        let email = try XCTUnwrap(loaded.first)
+        XCTAssertTrue(email.tags.contains("Projects 2025") || email.folderPath == "Projects 2025", "legacy tag dual write follows")
+        // Listing again (no rename) adds nothing.
+        try await sink.recordFolders(accountID: account, folders: [RemoteFolderOccurrence(serverID: "Label_7", displayPath: "Projects 2025", kind: .label)])
+        let after = try await sink.store.folderNodes()
+        XCTAssertEqual(after.reduce(0) { $0 + $1.messageCount }, 2)
+    }
+
+    /// Account, source (file vs account) and capture state are search
+    /// conditions: they combine with OR branches and exclusions.
+    func testV408_searchConditions_accountSourceKindCaptureState() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("store", isDirectory: true))
+        let store = sink.store
+        let fileCopy = try MBOXParser.processRawMessage(String(decoding: Self.message(id: "file@x", body: "from a file"), as: UTF8.self), senderEmail: "")
+        _ = try await store.insertBatch([fileCopy], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        let a = try await makeAccount(sink, display: "a@example.com")
+        let b = try await makeAccount(sink, display: "b@example.com")
+        let runA = try await sink.beginRun(accountID: a, selection: "all")
+        let onA = try await sink.capture(try item(sink, account: a, gmailID: "a1", bytes: Self.message(id: "a1@x", body: "a one")), runID: runA)
+        let goneA = try await sink.capture(try item(sink, account: a, gmailID: "a2", bytes: Self.message(id: "a2@x", body: "a two")), runID: runA)
+        let runB = try await sink.beginRun(accountID: b, selection: "all")
+        _ = try await sink.capture(try item(sink, account: b, gmailID: "b1", bytes: Self.message(id: "b1@x", body: "b one")), runID: runB)
+        let marked = try await sink.markRemoteAbsent(accountID: a, identity: .gmail(messageID: "a2"))
+        XCTAssertTrue(marked)
+
+        let fts = FTSSearchIndex(shardsDirectory: dir.appendingPathComponent("fts", isDirectory: true))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        func expect(_ groups: [SearchGroup], _ expected: Int, line: UInt = #line) async throws {
+            var q = EmailQuery()
+            q.spec = SearchSpec(groups: groups)
+            XCTAssertTrue(q.spec!.isValid, "\(groups)", line: line)
+            let n = try await archive.count(query: q)
+            XCTAssertEqual(n, expected, "\(groups)", line: line)
+        }
+        try await expect([SearchGroup(.all, [SearchCondition(.account, .equals, a.uuidString)])], 2)
+        try await expect([SearchGroup(.all, [SearchCondition(.sourceKind, .equals, "connected")])], 3)
+        try await expect([SearchGroup(.all, [SearchCondition(.sourceKind, .equals, "file")])], 1)
+        try await expect([SearchGroup(.all, [SearchCondition(.captureState, .equals, "removedOnServer")])], 1)
+        try await expect([SearchGroup(.all, [SearchCondition(.captureState, .equals, "onServer")])], 2)
+        try await expect([SearchGroup(.any, [SearchCondition(.account, .equals, b.uuidString),
+                                             SearchCondition(.sourceKind, .equals, "file")])], 2)
+        try await expect([SearchGroup(.exclude, [SearchCondition(.account, .equals, a.uuidString)])], 2)
+        XCTAssertFalse(SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sourceKind, .equals, "cloud")])]).isValid)
+        XCTAssertFalse(SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.account, .equals, "not-a-uuid")])]).isValid)
+        _ = (onA, goneA)
+    }
+
+    /// An account whose inventory is not fully listed, or with queued /
+    /// failed items, is a gap; a completed one is not.
+    func testV408_acquisitionGaps_andAccountSearchCounts() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("store", isDirectory: true))
+        let account = try await makeAccount(sink, display: "gap@example.com")
+        let run = try await sink.beginRun(accountID: account, selection: "all")
+        _ = try await sink.capture(try item(sink, account: account, gmailID: "g1", bytes: Self.message(id: "g1@x", body: "saved")), runID: run)
+        try await sink.recordDiscovered(runID: run, identities: [.gmail(messageID: "g2")])
+        var gaps = try await sink.acquisitionGaps()
+        XCTAssertEqual(gaps.map(\.accountID), [account])
+        XCTAssertEqual(gaps.first?.saved, 1)
+        XCTAssertEqual(gaps.first?.inventoryKnown, false)
+        try await sink.recordFailure(runID: run, identity: .gmail(messageID: "g2"), state: .unavailable, reason: "gone")
+        try await sink.advanceCheckpoint(accountID: account, scope: "sync", cursor: "9", bootstrapState: "ready@1", runID: run)
+        _ = try await sink.finishRun(run)
+        gaps = try await sink.acquisitionGaps()
+        XCTAssertEqual(gaps, [], "listed to its end, nothing pending or failed: no gap")
+        let counts = try await sink.searchCounts(accountID: account)
+        XCTAssertEqual(counts.messages, 1)
+        XCTAssertEqual(counts.attachments, 0)
+    }
+
+    /// The EML export writes the provenance sidecar itself; an export without
+    /// connected mail gets none.
+    @MainActor
+    func testV408_emlExport_writesTheProvenanceSidecar_onlyWhenConnectedMailIsExported() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("store", isDirectory: true))
+        let store = sink.store
+        let fileCopy = try MBOXParser.processRawMessage(String(decoding: Self.message(id: "plain@x", body: "file"), as: UTF8.self), senderEmail: "")
+        _ = try await store.insertBatch([fileCopy], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .preserveAll, batchSize: 10, progress: nil)
+        let fts = FTSSearchIndex(shardsDirectory: dir.appendingPathComponent("fts", isDirectory: true))
+        let service = ArchiveExportService(archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)))
+        let plain = dir.appendingPathComponent("plain", isDirectory: true)
+        _ = try await service.exportEMLFiles(scope: .explicit([fileCopy.id]), to: plain)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: plain.appendingPathComponent(ConnectedProvenanceSidecar.filename).path))
+
+        let account = try await makeAccount(sink)
+        let run = try await sink.beginRun(accountID: account, selection: "all")
+        let outcome = try await sink.capture(try item(sink, account: account, gmailID: "e1", bytes: Self.message(id: "e1@x", body: "captured")), runID: run)
+        let out = dir.appendingPathComponent("export", isDirectory: true)
+        let result = try await service.exportEMLFiles(scope: .explicit([fileCopy.id, try XCTUnwrap(outcome.emailID)]), to: out)
+        XCTAssertEqual(result.recordsWritten, 2)
+        XCTAssertNil(result.inventoryFailure)
+        let data = try Data(contentsOf: out.appendingPathComponent(ConnectedProvenanceSidecar.filename))
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(ConnectedProvenanceSidecar.self, from: data)
+        XCTAssertEqual(sidecar.entries.map(\.provenance.accountID), [account], "only the connected message has provenance")
+        XCTAssertTrue(try ExportInventory.verify(folder: out).isClean)
+    }
 }

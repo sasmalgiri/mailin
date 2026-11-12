@@ -372,6 +372,15 @@ public actor ConnectedArchiveSink {
     /// The app passes its shared store so all writes share one connection.
     init(store: SQLiteEmailStore) { self.store = store }
 
+    /// V4-08 (plan §5.5): told about every NEWLY stored record, after its
+    /// commit, so the app indexes captured mail into search exactly as it
+    /// indexes an import. A repeated provider event (`alreadyPreserved`) and a
+    /// locally deleted occurrence are not reported — they were indexed when
+    /// they were stored. A process that dies between the commit and the
+    /// observer leaves a row the launch-time search reconcile indexes.
+    var storedObserver: (@Sendable (UUID) async -> Void)?
+    public func setStoredObserver(_ observer: (@Sendable (UUID) async -> Void)?) { storedObserver = observer }
+
     func setFaultHook(_ hook: (@Sendable (CaptureBoundary) throws -> Void)?) { faultHook = hook }
 
     /// `<store>/connected-staging` — owner-only; holds bytes not yet published.
@@ -472,6 +481,7 @@ public actor ConnectedArchiveSink {
         }
         try faultHook?(.afterCommit)
         try? fm.removeItem(at: item.raw.fileURL)
+        if outcome.state == .stored, let id = outcome.emailID, let storedObserver { await storedObserver(id) }
         return outcome
     }
 

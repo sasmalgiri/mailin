@@ -32,8 +32,27 @@ enum SearchSpecDescriber {
         case .folder: return String(localized: "Folder")
         case .source: return String(localized: "Source")
         case .messageType: return String(localized: "Type")
+        case .account: return String(localized: "Mail account")
+        case .sourceKind: return String(localized: "Came from")
+        case .captureState: return String(localized: "On the server")
         }
     }
+
+    /// V4-08: the words for the connected-mail condition values.
+    static func valueName(_ field: SearchCondition.Field, _ value: String) -> String {
+        switch (field, value) {
+        case (.sourceKind, "file"): return String(localized: "a file import")
+        case (.sourceKind, "connected"): return String(localized: "a mail account")
+        case (.captureState, "onServer"): return String(localized: "still on the server")
+        case (.captureState, "removedOnServer"): return String(localized: "removed from the server")
+        case (.account, _): return accountNames[value.uppercased()] ?? value
+        default: return value
+        }
+    }
+
+    /// Display names of connected accounts by UUID, set by the builder when it
+    /// loads them, so chips name the account instead of its identifier.
+    nonisolated(unsafe) static var accountNames: [String: String] = [:]
 
     static func matchName(_ match: SearchCondition.Match) -> String {
         switch match {
@@ -65,6 +84,8 @@ enum SearchSpecDescriber {
         case .subject where condition.match == .contains, .sender where condition.match == .contains,
              .attachmentName, .tag, .folder, .source, .messageType:
             return "\(fieldName(condition.field)): \(value)"
+        case .account, .sourceKind, .captureState:
+            return "\(fieldName(condition.field)): \(valueName(condition.field, value))"
         default:
             return "\(fieldName(condition.field)) \(matchName(condition.match)) “\(value)”"
         }
