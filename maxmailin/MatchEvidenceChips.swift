@@ -75,7 +75,10 @@ struct MatchEvidenceChips: View {
                         .accessibilityLabel(String(localized: "Matched text: \(excerpt.text)"))
                 }
             }
-            .accessibilityElement(children: .combine)
+            // CLOSE-06: `.contain`, not `.combine` — a combined element swallowed
+            // the chip buttons, so neither VoiceOver nor a UI test could press
+            // "open this attachment" on its own.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("search.matchEvidence")
             .sheet(item: $textTarget) { text in
                 if let emailID {

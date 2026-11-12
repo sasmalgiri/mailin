@@ -537,7 +537,7 @@ public extension URL {
     }
 }
 public func appSupportDirectory(appFolder: String = "mailin") throws -> URL {
-        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        guard let dir = UITestStorageRoot.override ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             throw NSError(domain: "FileUtils", code: 1, userInfo: [NSLocalizedDescriptionKey: "Application Support directory not found"])
         }
         let folder = dir.appendingPathComponent(appFolder, isDirectory: true)

@@ -315,11 +315,13 @@ struct ArchiveSidebarView: View {
         List(selection: $selection) {
             Section("Mailboxes") {
                 row(.allMail, "All Mail", "tray.full", count: model.totalCount)
+                    .accessibilityIdentifier("archive.sidebar.allMail")
                 row(.received, "Received", "tray.and.arrow.down", count: model.receivedCount)
                 row(.sent, "Sent", "paperplane", count: model.sentCount)
                 row(.withAttachments, "With Attachments", "paperclip", count: model.attachmentCount)
                 row(.pinned, "Pinned", "pin", count: model.pinnedCount)
                 row(.trash, "Trash", "trash", count: model.trashedCount)
+                    .accessibilityIdentifier("archive.sidebar.trash")
             }
 
             if !model.sources.isEmpty {

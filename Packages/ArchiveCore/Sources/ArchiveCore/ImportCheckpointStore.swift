@@ -414,8 +414,7 @@ actor ImportCheckpointStore {
 
     nonisolated static func legacyJSONURL() -> URL {
         if let legacyJSONURLOverride { return legacyJSONURLOverride }
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return appSupport.appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
             .appendingPathComponent("import_checkpoints.json")
     }

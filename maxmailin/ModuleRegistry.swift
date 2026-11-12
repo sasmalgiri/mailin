@@ -166,9 +166,7 @@ struct ModuleStateStore: Sendable {
     let url: URL
 
     static var productionURL: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return appSupport
             .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
             .appendingPathComponent("modules.v1.json", isDirectory: false)

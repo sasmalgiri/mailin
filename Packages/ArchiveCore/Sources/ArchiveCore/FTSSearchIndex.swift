@@ -1196,9 +1196,7 @@ actor FTSSearchIndex {
     /// its own short-lived read connection per shard rather than touching the
     /// actor's handles.
     nonisolated static func partiallyIndexedCountSnapshot() throws -> Int {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         let dir = appSupport
             .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
             .appendingPathComponent("fts5", isDirectory: true)
@@ -1347,9 +1345,7 @@ actor FTSSearchIndex {
     }
 
     private func legacySingleFileURL() throws -> URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return appSupport
             .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
             .appendingPathComponent("fts5_search.db")

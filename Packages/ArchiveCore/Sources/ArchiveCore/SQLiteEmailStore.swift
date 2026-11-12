@@ -47,9 +47,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// The default location, always under Application Support.
     static var defaultProductionDirectory: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return appSupport
             .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
             .appendingPathComponent("sqlite", isDirectory: true)

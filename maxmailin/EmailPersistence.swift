@@ -18,7 +18,8 @@ struct EmailPersistence {
             try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
             return override
         }
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let appSupport = UITestStorageRoot.override
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("mailin")
         let appDir = appSupport.appendingPathComponent("mailin", isDirectory: true)
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)

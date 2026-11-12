@@ -412,4 +412,18 @@ final class CapabilityMatrixTests: XCTestCase {
         XCTAssertTrue(registry.switchPosition(capability),
                       "and the capability's own switch is untouched, so it resumes on re-enable")
     }
+
+    /// CLOSE-06 (plan §8.1): a Release-config run is strict-mode evidence only
+    /// when MAILIN_RELEASE_PREFLIGHT reaches THIS process. An xcodebuild build
+    /// setting does not; `TEST_RUNNER_MAILIN_RELEASE_PREFLIGHT=1` in
+    /// xcodebuild's environment (or the scheme's test environment) does.
+    func testReleaseConfiguration_preflightReachesTheTestHost() throws {
+        #if DEBUG
+        throw XCTSkip("Debug build: the Release preflight applies to the Release configuration only")
+        #else
+        XCTAssertEqual(ProcessInfo.processInfo.environment[ExternalFixtures.releasePreflightKey], "1",
+                       "Release test run without MAILIN_RELEASE_PREFLIGHT=1 in the test process — pass TEST_RUNNER_MAILIN_RELEASE_PREFLIGHT=1 to xcodebuild")
+        XCTAssertNil(UITestStorageRoot.override, "unit tests never run on the UI test's isolated archive")
+        #endif
+    }
 }

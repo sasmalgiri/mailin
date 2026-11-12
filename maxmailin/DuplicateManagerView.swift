@@ -75,6 +75,7 @@ struct DuplicateManagerView: View {
 
             Toggle("Include near-duplicates", isOn: $showNearDuplicates)
                 .font(Typography.callout)
+                .accessibilityIdentifier("duplicates.includeNear")
                 .onChange(of: showNearDuplicates) { _, _ in scanForDuplicates() }
             if let v3Note {
                 Text(v3Note)
@@ -279,6 +280,7 @@ struct DuplicateManagerView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(redundantCount == 0)
+            .accessibilityIdentifier("duplicates.selectAllVerified")
             .help(Inflect.string("Selects every extra copy in the ^[\(verifiedGroups.count) verified group](inflect: true), keeping one of each — then press Move Selected to Trash. Candidates and near-duplicates are never selected in bulk."))
 
             if !selectedForRemoval.isEmpty {
@@ -306,6 +308,14 @@ struct DuplicateManagerView: View {
         case near
 
         var allowsBulkSelect: Bool { if case .verified = self { return true } else { return false } }
+        /// CLOSE-06: the group header's accessibility identifier suffix.
+        var identifierKey: String {
+            switch self {
+            case .verified: return "verified"
+            case .candidate: return "candidate"
+            case .near: return "similar"
+            }
+        }
         var symbol: String {
             switch self {
             case .verified: return "checkmark.seal.fill"
@@ -373,6 +383,7 @@ struct DuplicateManagerView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(Inflect.string("\(kind.name) duplicate group: \(group.first?.headers["Subject"] ?? String(localized: "No Subject")), ^[\(group.count) copy](inflect: true)"))
+            .accessibilityIdentifier("duplicates.group.\(kind.identifierKey)")
             if let note = kind.note {
                 Text(note)
                     .font(Typography.caption2)
@@ -423,6 +434,7 @@ struct DuplicateManagerView: View {
                     .font(Typography.callout)
                     .foregroundColor(AppColors.secondary)
                     .accessibilityLabel(Inflect.string("^[\(selectedForRemoval.count) email](inflect: true) selected to move to the Trash"))
+                    .accessibilityIdentifier("duplicates.selectedCount")
                 if !selectedForRemoval.isEmpty, let reclaimEstimate {
                     Text("The Trash frees no space. Deleting these copies permanently later would free about \(ByteCountFormatter.string(fromByteCount: reclaimEstimate, countStyle: .file)).")
                         .font(Typography.caption2)
@@ -448,6 +460,7 @@ struct DuplicateManagerView: View {
             .disabled(selectedForRemoval.isEmpty || isRemoving)
             .accessibilityLabel(Inflect.string("Move ^[\(selectedForRemoval.count) selected email](inflect: true) to the Trash"))
             .accessibilityHint("Moves the selected copies to the Trash, restorable; their folders, labels, tags and notes are merged into the kept copy")
+            .accessibilityIdentifier("duplicates.moveSelected")
         }
         .padding(Spacing.medium)
         .task(id: selectedForRemoval) {

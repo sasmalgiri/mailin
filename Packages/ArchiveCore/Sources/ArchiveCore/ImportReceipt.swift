@@ -331,8 +331,7 @@ struct ImportReceiptStore {
     let directory: URL
 
     static var production: ImportReceiptStore {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return ImportReceiptStore(directory: appSupport
             .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
             .appendingPathComponent("receipts", isDirectory: true))

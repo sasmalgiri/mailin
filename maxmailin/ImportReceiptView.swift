@@ -117,6 +117,8 @@ struct ImportReceiptView: View {
         }
         .padding()
         .background(verdictColor(verdict).opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("import.receipt.verdict")
     }
 
     /// S0: messages whose body exceeded the index budget are searchable only
@@ -221,6 +223,9 @@ struct ImportReceiptView: View {
             Divider()
             row("Duration", text: String(format: "%.1f s", receipt.durationSeconds))
         }
+        // CLOSE-06: one element the five-journey UI test (and VoiceOver) reads whole.
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("import.receipt.accounting")
     }
 
     // MARK: Collection (§3-E4, EDRM processing)
