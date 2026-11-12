@@ -88,6 +88,15 @@ enum PageFeatureCatalog {
                 .init(name: String(localized: "Productions"), detail: String(localized: "Numbered documents, hash manifests and delivery-ready exports"), availability: .requiresProfessional),
             ]
         case .liveMail:
+            // V4-13: in a build with the mail transports the workspace exists.
+            if ConnectedBuildFeatures.mailTransportsCompiled {
+                return [
+                    .init(name: String(localized: "Add mail accounts"), detail: String(localized: "Gmail, Microsoft 365 or standards-based IMAP + SMTP"), availability: .available),
+                    .init(name: String(localized: "Preserve mail"), detail: String(localized: "Each message's original bytes saved in the archive, with its folders and labels, then searched like any import"), availability: .available),
+                    .init(name: String(localized: "Send mail"), detail: String(localized: "Compose, reply, forward, drafts and a per-account outbox"), availability: .available),
+                    .init(name: String(localized: "Change server mail"), detail: String(localized: "Read, flag and Trash changes you choose, each listed, and a previewed safe cleanup"), availability: .available),
+                ]
+            }
             return [
                 .init(name: String(localized: "Add mail accounts"), detail: String(localized: "Gmail, Microsoft 365 or standards-based IMAP + SMTP"), availability: .notInThisBuild),
                 .init(name: String(localized: "Receive mail"), detail: String(localized: "Headers first, bodies on demand, with per-account limits"), availability: .notInThisBuild),
@@ -115,6 +124,12 @@ enum PageFeatureCatalog {
                 "Switching it off hides the page but keeps cases, custodians, holds and documents. No hold is ever lifted.",
             ]
         case .liveMail:
+            if ConnectedBuildFeatures.mailTransportsCompiled {
+                return [
+                    String(localized: "Enabling the page connects to nothing. Each account is added and allowed separately by you."),
+                    String(localized: "Switching it off stops every mail connection. Mail already saved stays in the archive."),
+                ]
+            }
             return [
                 "Nothing in this build: no account can be added and no mail server is contacted.",
                 "When it ships, enabling it alone still connects to nothing — each account is authorised separately by you.",

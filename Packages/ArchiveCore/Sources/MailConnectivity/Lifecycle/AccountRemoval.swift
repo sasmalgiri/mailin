@@ -53,6 +53,11 @@ public struct AccountRemovalPlan: Sendable, Equatable {
     public var outboxAwaitingOutcome: Int
     /// Archived mail, kept unless deleted separately.
     public var archive: ConnectedAccountArchiveSummary
+
+    public init(account: MailAccount, drafts: Int, outboxToKeep: Int, outboxAwaitingOutcome: Int, archive: ConnectedAccountArchiveSummary) {
+        self.account = account; self.drafts = drafts; self.outboxToKeep = outboxToKeep
+        self.outboxAwaitingOutcome = outboxAwaitingOutcome; self.archive = archive
+    }
 }
 
 public struct AccountRemovalReport: Sendable, Equatable {
@@ -68,6 +73,13 @@ public struct AccountRemovalReport: Sendable, Equatable {
     public var secretsRemoved: Bool
     public var liveCacheRowsRemoved: Int
     public var archivedRecordsKept: Int
+
+    public init(accountID: UUID, tasksCancelled: Int, keptAsDrafts: [UUID], keptInOutbox: [UUID], awaitingOutcome: [UUID],
+                secretsRemoved: Bool, liveCacheRowsRemoved: Int, archivedRecordsKept: Int) {
+        self.accountID = accountID; self.tasksCancelled = tasksCancelled; self.keptAsDrafts = keptAsDrafts
+        self.keptInOutbox = keptInOutbox; self.awaitingOutcome = awaitingOutcome; self.secretsRemoved = secretsRemoved
+        self.liveCacheRowsRemoved = liveCacheRowsRemoved; self.archivedRecordsKept = archivedRecordsKept
+    }
 }
 
 public actor AccountRemovalCoordinator {

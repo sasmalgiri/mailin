@@ -8313,3 +8313,257 @@ final class ConnectedFiveJobsTests: XCTestCase {
         }
     }
 }
+
+// MARK: - V4-13 Mail workspace
+
+/// A Mail workspace backend with no network: records what the page asked.
+@MainActor
+private final class FakeMailWorkspaceBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var providerInfo: [String: String] = [:]
+    var snapshots: [MailAccountSnapshot] = []
+    var added: [MailAccount] = []
+    var signInCalls = 0
+    var removeCalls = 0
+    var deleteCalls = 0
+    var plan: AccountRemovalPlan?
+
+    func accounts() async throws -> [MailAccountSnapshot] { snapshots }
+
+    func addIMAP(_ form: MailIMAPForm) async throws -> UUID {
+        let account = MailOnboarding.newAccount(form)
+        added.append(account)
+        snapshots.append(MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil))
+        return account.id
+    }
+
+    func signIn(_ choice: MailProviderChoice, address: String, existing: UUID?, extraScopes: [String]) async throws -> UUID {
+        signInCalls += 1
+        return UUID()
+    }
+
+    func removalPlan(_ account: UUID) async throws -> AccountRemovalPlan {
+        guard let plan else { throw MailBackendUnavailable() }
+        return plan
+    }
+
+    func remove(_ account: UUID) async throws -> AccountRemovalReport {
+        removeCalls += 1
+        snapshots.removeAll { $0.id == account }
+        return AccountRemovalReport(accountID: account, tasksCancelled: 1, keptAsDrafts: [UUID()], keptInOutbox: [], awaitingOutcome: [UUID()],
+                                    secretsRemoved: true, liveCacheRowsRemoved: 3, archivedRecordsKept: plan?.archive.records ?? 0)
+    }
+
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
+        deleteCalls += 1
+        throw MailBackendUnavailable()
+    }
+}
+
+private struct FixedCopyVerifier: ArchivedCopyVerifier {
+    func verify(emailID: UUID, accountID: UUID, identity: ProviderMessageIdentity) async -> ArchivedCopyStatus {
+        .verified(sha256: String(repeating: "a", count: 64), byteCount: 100)
+    }
+}
+
+/// V4-13 (plan §2, §5.4, §6, §7): the Mail workspace's decisions, at
+/// view-model level and without any network.
+@MainActor
+final class MailWorkspaceTests: XCTestCase {
+
+    private static let imapForm: MailIMAPForm = {
+        var form = MailIMAPForm()
+        form.apply(.fastmail)
+        form.address = "asha@fastmail.example"
+        form.password = "app-password-for-test"
+        return form
+    }()
+
+    /// The offline build (the test build compiles no mail transport) shows
+    /// one honest state and offers no actionable control.
+    func testOfflineBuildShowsHonestStateAndNoActionableControls() async {
+        XCTAssertFalse(ConnectedBuildFeatures.mailTransportsCompiled, "the test build is the offline edition")
+        let backend = ConnectedMailBackend.current()
+        XCTAssertEqual(backend.availability, .notInThisEdition)
+        let model = MailWorkspaceModel(backend: backend)
+        await model.refresh()
+        XCTAssertEqual(model.availability, .notInThisEdition)
+        XCTAssertTrue(model.actions.isEmpty, "no Add / Sync / Compose / Outbox / Cleanup in the offline edition")
+        XCTAssertTrue(model.accounts.isEmpty)
+        XCTAssertFalse(model.availability.title.isEmpty)
+        XCTAssertTrue(model.availability.detail.contains("Archive"), "the honest state says the archive keeps working")
+        for choice in MailProviderChoice.allCases {
+            XCTAssertFalse(model.providerReadiness(choice).isReady, "\(choice) must not be addable in the offline edition")
+        }
+        let signedIn = await model.signIn(.iCloud, address: "asha@icloud.example")
+        XCTAssertFalse(signedIn)
+        let added = await model.addIMAP(Self.imapForm)
+        XCTAssertFalse(added, "the offline backend refuses to add an account")
+        XCTAssertNotNil(model.lastError)
+        // Mail switched off in a connected build: also nothing actionable on the page.
+        XCTAssertTrue(MailWorkspaceModel(backend: UnavailableMailBackend(.mailSwitchedOff)).actions.isEmpty)
+    }
+
+    /// A new account is allowed nothing; each mode explains what it allows.
+    func testModesDefaultOff() async {
+        XCTAssertTrue(MailOnboarding.newAccount(Self.imapForm).enabledModes.isEmpty)
+        XCTAssertTrue(MailOnboarding.newOAuthAccount(id: UUID(), provider: .gmail, issuer: GmailOAuth.issuer, tenant: nil,
+                                                     address: "asha@gmail.example", scopes: [GmailOAuth.readOnlyScope]).enabledModes.isEmpty)
+        let fake = FakeMailWorkspaceBackend()
+        let model = MailWorkspaceModel(backend: fake)
+        let added = await model.addIMAP(Self.imapForm)
+        XCTAssertTrue(added)
+        XCTAssertEqual(fake.added.count, 1)
+        XCTAssertEqual(fake.added.first?.enabledModes, [], "Preserve, Send and Change server mail all start off")
+        XCTAssertEqual(fake.added.first?.host, "imap.fastmail.com")
+        XCTAssertEqual(model.accounts.first?.account.enabledModes, [])
+        XCTAssertFalse(model.actions.contains(.compose))
+        XCTAssertFalse(model.actions.contains(.syncNow))
+        XCTAssertFalse(model.actions.contains(.cleanup))
+        let texts = MailModeText.order.map(MailModeText.explanation)
+        XCTAssertEqual(Set(texts).count, 3)
+        XCTAssertTrue(texts.allSatisfy { !$0.isEmpty })
+        XCTAssertEqual(MailModeText.order.map(MailModeText.title), ["Preserve mail", "Send mail", "Change server mail"])
+    }
+
+    /// A missing or placeholder client ID disables Add with the reason, and
+    /// pressing it does nothing; a well-formed one is accepted.
+    func testMissingClientIDDisablesAddWithReason() async {
+        for choice in [MailProviderChoice.gmail, .outlook] {
+            guard case .unavailable(let reason) = choice.readiness(info: [:]) else { return XCTFail("\(choice) must be unavailable") }
+            XCTAssertFalse(reason.isEmpty)
+        }
+        XCTAssertFalse(MailProviderChoice.gmail.readiness(info: [MailProviderChoice.gmailClientIDKey: "YOUR_CLIENT_ID.apps.googleusercontent.com"]).isReady)
+        XCTAssertTrue(MailProviderChoice.gmail.readiness(info: [MailProviderChoice.gmailClientIDKey: "123456789012-abcdefghijklmnopqrstuv.apps.googleusercontent.com"]).isReady)
+        XCTAssertFalse(MailProviderChoice.outlook.readiness(info: [MailProviderChoice.graphClientIDKey: "00000000-0000-0000-0000-000000000000",
+                                                                   MailProviderChoice.graphRedirectKey: "msauth.com.ecosanskriti.mailin://auth"]).isReady)
+        XCTAssertFalse(MailProviderChoice.outlook.readiness(info: [MailProviderChoice.graphClientIDKey: "6b2f0c1e-3d4a-4f5b-9c8d-7e6f5a4b3c2d"]).isReady,
+                       "no redirect address: not configured")
+        XCTAssertTrue(MailProviderChoice.outlook.readiness(info: [MailProviderChoice.graphClientIDKey: "6b2f0c1e-3d4a-4f5b-9c8d-7e6f5a4b3c2d",
+                                                                  MailProviderChoice.graphRedirectKey: "msauth.com.ecosanskriti.mailin://auth"]).isReady)
+        for choice in [MailProviderChoice.iCloud, .fastmail, .otherIMAP] { XCTAssertTrue(choice.readiness(info: [:]).isReady) }
+
+        let fake = FakeMailWorkspaceBackend()
+        let model = MailWorkspaceModel(backend: fake)
+        XCTAssertEqual(model.providerReadiness(.gmail), .unavailable(MailProviderChoice.notConfiguredReason(.gmail)))
+        let ok = await model.signIn(.gmail, address: "asha@gmail.example")
+        XCTAssertFalse(ok)
+        XCTAssertEqual(fake.signInCalls, 0, "an unconfigured provider's Add does nothing")
+    }
+
+    /// Removing an account shows its counts first, keeps its archived mail,
+    /// and never deletes that mail as part of the removal.
+    func testRemovingAccountShowsCountsAndKeepsMail() async {
+        let account = MailAccount(provider: .imap, host: "imap.example.org", displayIdentity: "asha@example.org", enabledModes: [.capture])
+        let fake = FakeMailWorkspaceBackend()
+        fake.snapshots = [MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        fake.plan = AccountRemovalPlan(account: account, drafts: 2, outboxToKeep: 1, outboxAwaitingOutcome: 1,
+                                       archive: ConnectedAccountArchiveSummary(accountID: account.id, records: 42, held: 2, deletable: 40,
+                                                                               exclusiveBlobs: 40, exclusiveBytes: 4_000, sharedBlobs: 0))
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        guard let plan = await model.removalPlan(account.id) else { return XCTFail("no removal plan") }
+        let lines = MailRemovalText.summary(plan)
+        XCTAssertTrue(lines[0].contains("42") && lines[0].contains("kept"), lines[0])
+        XCTAssertTrue(lines.contains { $0.contains("2 drafts") })
+        XCTAssertTrue(lines.contains { $0.contains("1 unsent") })
+        XCTAssertTrue(MailRemovalText.confirmTitle(plan).contains("42"))
+        XCTAssertEqual(fake.removeCalls, 0, "showing the plan removes nothing")
+
+        let report = await model.remove(account.id)
+        XCTAssertEqual(report?.archivedRecordsKept, 42)
+        XCTAssertEqual(fake.removeCalls, 1)
+        XCTAssertEqual(fake.deleteCalls, 0, "archived mail is kept unless deleted separately")
+        XCTAssertTrue(model.message?.contains("42 archived messages kept") == true, model.message ?? "")
+        XCTAssertTrue(model.accounts.isEmpty)
+        // The separate deletion names its own count.
+        XCTAssertTrue(MailRemovalText.deletionTitle(plan.archive).contains("40"))
+        XCTAssertTrue(MailRemovalText.deletionDetail(plan.archive).contains("2 are on hold"))
+    }
+
+    /// A draft needs an explicitly chosen identity of its own account; a
+    /// reply to an archive addressed to its former owner starts without one.
+    func testIdentityPickerRequired() throws {
+        let me = MailAccount(provider: .imap, host: "imap.new.example", displayIdentity: "me@new.example", enabledModes: [.send])
+        let other = MailAccount(provider: .imap, host: "imap.other.example", displayIdentity: "other@other.example", enabledModes: [.send])
+        let mine = try SendingIdentity.primary(for: me)
+        let theirs = try SendingIdentity.primary(for: other)
+        let unverified = SendingIdentity(accountID: me.id, address: try MailAddress(parsing: "alias@new.example"), permission: .unverified)
+        let identities = [mine, theirs, unverified]
+
+        var draft = Draft(accountID: me.id, to: [try MailAddress(parsing: "bob@example.com")])
+        XCTAssertEqual(MailComposeGate.problems(draft: draft, account: me, identities: identities, unavailableAttachments: []), [.noIdentity])
+        draft.senderIdentityID = theirs.id
+        XCTAssertEqual(MailComposeGate.problems(draft: draft, account: me, identities: identities, unavailableAttachments: []), [.identityNotOfAccount])
+        draft.senderIdentityID = unverified.id
+        XCTAssertEqual(MailComposeGate.problems(draft: draft, account: me, identities: identities, unavailableAttachments: []), [.identityNotOfAccount])
+        draft.senderIdentityID = mine.id
+        XCTAssertEqual(MailComposeGate.problems(draft: draft, account: me, identities: identities, unavailableAttachments: []), [])
+        XCTAssertEqual(MailComposeGate.offeredIdentities(for: me.id, from: identities).map(\.id), [mine.id])
+        draft.switchAccount(to: other.id)
+        XCTAssertNil(draft.senderIdentityID, "switching account clears the identity")
+        XCTAssertTrue(MailComposeGate.problems(draft: draft, account: other, identities: identities, unavailableAttachments: ["a.pdf"])
+            .contains(.attachmentUnavailable("a.pdf")))
+
+        let raw = "From: Alice <alice@example.com>\r\nTo: Former Owner <former.owner@old.example>\r\nSubject: Budget\r\n"
+            + "Message-ID: <budget-1@example.com>\r\nDate: Tue, 3 Nov 2026 10:00:00 +0000\r\n\r\nPlease review.\r\n"
+        let source = ArchivedMessageSource(raw: Data(raw.utf8))
+        let seed = try ReplyBuilder.reply(to: source, mode: .reply, accountID: me.id, identities: [mine],
+                                          formerSelfAddresses: [try MailAddress(parsing: "former.owner@old.example")])
+        XCTAssertNil(seed.draft.senderIdentityID, "never defaulted to the archive's former owner")
+        XCTAssertEqual(MailComposeGate.problems(draft: seed.draft, account: me, identities: [mine], unavailableAttachments: []), [.noIdentity])
+        XCTAssertFalse(MailComposeGate.text(.noIdentity).isEmpty)
+    }
+
+    /// Outbox states in plain words; acceptance is never called delivery;
+    /// "Send anyway" only after an uncertain outcome was checked.
+    func testOutboxStateMappingToText() {
+        let now = Date()
+        XCTAssertEqual(MailOutboxText.state(.queued), "Waiting to send")
+        let accepted = MailOutboxText.state(.accepted(at: now, response: "250 OK"))
+        XCTAssertTrue(accepted.contains("not yet confirmed delivered"), accepted)
+        XCTAssertEqual(MailOutboxText.state(.outcomeUncertain(reason: "connection lost", reconciliation: .notChecked)),
+                       "Send outcome uncertain; checking Sent")
+        XCTAssertTrue(MailOutboxText.state(.sentReconciled(at: now, how: .foundInSent)).contains("Sent folder"))
+        XCTAssertTrue(MailOutboxText.state(.cancelledBeforeSubmission(at: now)).contains("cancelled"))
+        XCTAssertTrue(MailOutboxText.state(.rejected(reason: "550 no such user", rejectedRecipients: ["x@y.z"])).contains("550 no such user"))
+        XCTAssertEqual(MailOutboxText.state(.needsSignIn(reason: "revoked")), "Not sent: the account needs sign-in")
+
+        XCTAssertFalse(MailOutboxText.canResendAnyway(.outcomeUncertain(reason: "lost", reconciliation: .notChecked)))
+        XCTAssertTrue(MailOutboxText.canResendAnyway(.outcomeUncertain(reason: "lost", reconciliation: .notFound(checkedAt: now))))
+        XCTAssertTrue(MailOutboxText.canResendAnyway(.outcomeUncertain(reason: "lost", reconciliation: .lookupFailed("no Sent search"))))
+        XCTAssertFalse(MailOutboxText.canResendAnyway(.accepted(at: now, response: "202")))
+        XCTAssertFalse(MailOutboxText.canResendAnyway(.sentReconciled(at: now, how: .foundInSent)))
+        XCTAssertTrue(MailOutboxText.canCheckSent(.accepted(at: now, response: "202")))
+        XCTAssertFalse(MailOutboxText.canCancel(.submitting))
+        XCTAssertTrue(MailOutboxText.canCancel(.queued))
+        XCTAssertTrue(MailOutboxText.hold(.decisionNeededAfterLapse(queuedAt: now, lapsedFor: 3 * 86_400)).contains("3 days"))
+        XCTAssertTrue(MailOutboxText.hold(.archiveDriveMissing(volumeName: "Vault")).contains("Vault"))
+    }
+
+    /// The safe cleanup runs only after the exact count is typed.
+    func testCleanupConfirmationRequiresExactCount() async {
+        let account = MailAccount(provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@gmail.example",
+                                  enabledModes: [.capture, .serverActions])
+        let candidates = [
+            CleanupCandidate(accountID: account.id, identity: .gmail(messageID: "m1"), emailID: UUID(), folder: "INBOX"),
+            CleanupCandidate(accountID: account.id, identity: .gmail(messageID: "m2"), emailID: UUID(), folder: "INBOX"),
+            CleanupCandidate(accountID: account.id, identity: .gmail(messageID: "m3"), emailID: nil, folder: "INBOX"),
+        ]
+        let plan = await SafeCleanup.plan(candidates, action: .moveToTrash, account: account,
+                                          checks: CleanupSafetyChecks(archive: FixedCopyVerifier()))
+        XCTAssertEqual(plan.included.count, 2)
+        XCTAssertEqual(plan.preview.excludedByReason["notCaptured"], 1)
+        XCTAssertTrue(MailCleanupGate.confirms(typed: "2", plan: plan))
+        XCTAssertTrue(MailCleanupGate.confirms(typed: " 2 ", plan: plan))
+        for wrong in ["", "3", "1", "02", "two", "2 messages"] {
+            XCTAssertFalse(MailCleanupGate.confirms(typed: wrong, plan: plan), "“\(wrong)” must not confirm")
+        }
+        XCTAssertTrue(MailCleanupGate.confirmationPrompt(plan).contains("2"))
+        XCTAssertFalse(MailCleanupGate.exclusionTitle("notCaptured").isEmpty)
+
+        let none = await SafeCleanup.plan([candidates[2]], action: .moveToTrash, account: account,
+                                          checks: CleanupSafetyChecks(archive: FixedCopyVerifier()))
+        XCTAssertFalse(MailCleanupGate.confirms(typed: "0", plan: none), "nothing to change: nothing to confirm")
+    }
+}

@@ -55,6 +55,10 @@ public struct DraftListing: Sendable {
     public var unreadable: [(id: String, reason: String)]
     /// Attachment copies on disk that no saved draft names (a save killed after publishing them).
     public var unrecordedAttachmentFiles: Int
+
+    public init(drafts: [Draft], unreadable: [(id: String, reason: String)], unrecordedAttachmentFiles: Int) {
+        self.drafts = drafts; self.unreadable = unreadable; self.unrecordedAttachmentFiles = unrecordedAttachmentFiles
+    }
 }
 
 public enum DraftStoreError: LocalizedError, Equatable {
