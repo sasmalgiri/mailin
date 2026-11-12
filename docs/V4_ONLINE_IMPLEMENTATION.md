@@ -30,7 +30,7 @@ A dash means no evidence yet. An empty cell is never "done".
 | V4-11 | Journalled server actions | — | — | — | — |
 | V4-12 | Drives, backup/restore, account removal, lifecycle | — | — | — | — |
 | V4-13 | Mail workspace UI, accessibility, 10 languages | — | — | — | — |
-| V4-14 | Google / Entra registrations, privacy, store metadata (owner) | agent part: V4-14 commit (packets, drafts, manifest reasons, edition-aware About / privacy summary, T47 check) | `V414ClaimsTests` (5) **not yet run** (run with `RunSomeTests`); `Scripts/check-connected-release.sh` exercised on mock bundles | — (owner: registrations, verification) | — (T47 on the connected candidate) |
+| V4-14 | Google / Entra registrations, privacy, store metadata (owner) | agent part: 9259d4a (packets, drafts, manifest reasons, edition-aware About / privacy summary, T47 check) | `V414ClaimsTests` (5) **not yet run** (run with `RunSomeTests`); `Scripts/check-connected-release.sh` exercised on mock bundles | — (owner: registrations, verification) | — (T47 on the connected candidate) |
 | V4-15 | All gates on one candidate | — | — | — | — |
 
 ## Archive closeout, recipes, Advanced Search, AI scaffolding
