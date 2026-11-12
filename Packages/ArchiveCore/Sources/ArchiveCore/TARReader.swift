@@ -195,10 +195,16 @@ struct TARReader {
         }
         var remaining = member.size
         while remaining > 0 {
-            let chunk = try handle.read(upToCount: Int(min(Int64(windowSize), remaining))) ?? Data()
-            guard !chunk.isEmpty else { throw ReadError.truncated("\(member.name): member data") }
-            remaining -= Int64(chunk.count)
-            try out.write(contentsOf: chunk)
+            // CLOSE-01 follow-up: each window in its own autorelease pool —
+            // without it every window of the member stayed resident until the
+            // extraction returned (measured: +1.9 GB for a 2 GB .msg member).
+            let count = try autoreleasepool { () throws -> Int in
+                let chunk = try handle.read(upToCount: Int(min(Int64(windowSize), remaining))) ?? Data()
+                guard !chunk.isEmpty else { throw ReadError.truncated("\(member.name): member data") }
+                try out.write(contentsOf: chunk)
+                return chunk.count
+            }
+            remaining -= Int64(count)
         }
         succeeded = true
     }

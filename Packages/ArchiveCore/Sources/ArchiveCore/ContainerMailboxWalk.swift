@@ -279,6 +279,12 @@ final class ContainerMailboxWalk {
         prefix.isEmpty ? folder : (prefix + [folder]).joined(separator: "/")
     }
 
+    /// A member the consumer could not take (the previous engine's
+    /// whole-read ceiling): counted as refused, with its reason.
+    func refuseMember(_ name: String, reason: String, detail: String) {
+        refuse(name, reason: reason, detail: detail)
+    }
+
     private func refuse(_ name: String, reason: String, detail: String) {
         categories["container_member_refused", default: 0] += 1
         categories["reason:\(reason)", default: 0] += 1
