@@ -7215,3 +7215,304 @@ final class PracticalRecipeTests: XCTestCase {
         XCTAssertNil(PracticalRecipeKind.findAndExport.limitNote(pro))
     }
 }
+
+/// Plan v4 SCAF-01…05 + B01/B02/B04/B05 (app side): the disabled BYOK AI
+/// scaffolding. The contracts themselves are tested with fakes in the package
+/// (`AIScaffoldContractTests`); these prove the app wiring: nothing reaches the
+/// scaffold, the existing Pro entitlement is the only gate, and an AI key never
+/// lands in preferences, backups, exports, diagnostics or scripts.
+@MainActor
+final class AIScaffoldTests: XCTestCase {
+
+    private let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+
+    override func setUp() async throws {
+        MailNetworkPolicy.shared.resetForTesting()
+        AIPolicy.shared.resetForTesting()
+        AIScaffoldCounters.shared.resetForTesting()
+    }
+
+    override func tearDown() async throws {
+        MailNetworkPolicy.shared.resetForTesting()
+        AIPolicy.shared.resetForTesting()
+        AIScaffoldCounters.shared.resetForTesting()
+    }
+
+    private struct Env {
+        let root: URL
+        let store: SQLiteEmailStore
+        let archive: ArchiveDataService
+        let defaults: UserDefaults
+        let engine: PracticalRecipeEngine
+    }
+
+    private func makeEnv() async throws -> Env {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AIScaffold-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let suite = "AIScaffold-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        var environment = PracticalRecipeEngine.Environment(
+            archive: archive, store: store,
+            exportReceipts: ExportReceiptStore(directory: root.appendingPathComponent("receipts")),
+            results: PracticalRecipeResultStore(directory: root.appendingPathComponent("results")),
+            savedSearches: ArchiveSavedSearchStore(defaults: defaults), policy: AccessPolicy(state: .active(.professional)),
+            defaults: defaults)
+        environment.postDocument = { _, _ in "CLN-AI-1" }
+        environment.documentExists = { $0 == "CLN-AI-1" }
+        environment.scratch = root.appendingPathComponent("scratch", isDirectory: true)
+        try FileManager.default.createDirectory(at: environment.scratch, withIntermediateDirectories: true)
+        // Archive work: parse and store two messages, index them.
+        var emails: [MBOXParser.RawEmail] = []
+        for n in 1...2 {
+            let raw = ["From: alice@acme.com", "To: me@example.com", "Subject: Invoice \(n)",
+                       "Date: Wed, 0\(n) Mar 2025 12:00:00 +0000", "Message-ID: <ai-scaffold-\(n)@test>", "MIME-Version: 1.0",
+                       "Content-Type: multipart/mixed; boundary=\"B\"", "", "--B", "Content-Type: text/plain", "", "body \(n)",
+                       "--B", "Content-Type: application/pdf; name=\"inv-\(n).pdf\"",
+                       "Content-Disposition: attachment; filename=\"inv-\(n).pdf\"", "Content-Transfer-Encoding: base64", "",
+                       Data("%PDF-1.4 invoice \(n)".utf8).base64EncodedString(), "--B--"].joined(separator: "\n")
+            emails.append(try MBOXParser.processRawMessage(raw, senderEmail: ""))
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .preserveAll, batchSize: 50, progress: nil)
+        try await fts.indexBatch(emails)
+        return Env(root: root, store: store, archive: archive, defaults: defaults, engine: PracticalRecipeEngine(env: environment))
+    }
+
+    /// Search + a full recipe (search, freeze, export, verify) + a backup.
+    /// Returns the folders the run wrote.
+    private func exerciseArchiveSearchRecipeBackup(_ env: Env) async throws -> [URL] {
+        let spec = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.sender, .contains, "alice")])])
+        var query = EmailQuery()
+        query.spec = spec
+        let page = try await env.archive.page(query: query, cursor: nil, limit: 50)
+        XCTAssertEqual(page.summaries.count, 2, "search ran")
+        let preview = try await env.engine.preview(spec: spec, scopeName: "All mail")
+        let out = env.root.appendingPathComponent("export", isDirectory: true)
+        let result = await env.engine.findAndExport(preview, format: .emlFolder, destination: out)
+        XCTAssertEqual(result.state, .completed, "the recipe ran end to end")
+        let backup = env.root.appendingPathComponent("backup", isDirectory: true)
+        _ = try await ArchiveBackup.create(store: env.store, to: backup)
+        return [out, backup, env.root.appendingPathComponent("receipts"), env.root.appendingPathComponent("results")]
+    }
+
+    /// The capture path: a connected-mail message through the archive sink.
+    private func exerciseCapture(_ env: Env) async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: env.root.appendingPathComponent("connected", isDirectory: true))
+        let account = UUID()
+        try await sink.saveAccount(ConnectedAccountRecord(
+            accountID: account, provider: .gmail, issuer: "https://accounts.google.com", displayIdentity: "asha@example.com",
+            grantedScopes: ["https://www.googleapis.com/auth/gmail.readonly"], enabledModes: ["capture"],
+            connectionState: "connected", createdAt: Date(), updatedAt: Date()))
+        let run = try await sink.beginRun(accountID: account, selection: "INBOX")
+        let writer = try sink.makeStagingWriter()
+        try writer.append(Data("Message-ID: <cap-1@test>\r\nFrom: a@example.com\r\nSubject: captured\r\n\r\nhello\r\n".utf8))
+        let staged = try writer.finish()
+        let item = CaptureItem(accountID: account, identity: .gmail(messageID: "g1"),
+                               occurrences: [RemoteFolderOccurrence(serverID: "INBOX", displayPath: "Inbox", kind: .label)],
+                               raw: staged, metadata: ProviderMetadata(representation: .gmailRaw))
+        let outcome = try await sink.capture(item, runID: run)
+        XCTAssertNotNil(outcome.emailID, "capture stored the message")
+        _ = try await sink.finishRun(run)
+    }
+
+    private func files(under folders: [URL]) -> [URL] {
+        folders.flatMap { folder -> [URL] in
+            guard let e = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+            return e.compactMap { $0 as? URL }.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+        }
+    }
+
+    private func swiftSources(_ relative: String) -> [URL] {
+        files(under: [repo.appendingPathComponent(relative, isDirectory: true)]).filter { $0.pathExtension == "swift" }
+    }
+
+    /// The scaffold's names. Outside the scaffold folder and its one glue file,
+    /// nothing in the app or the package may mention them.
+    private let scaffoldSymbols = ["AIRequestCoordinator", "AIKeyProfileStore", "AIPolicy", "AIProductionTransport",
+                                   "UnavailableAITransport", "MockAITransport", "ScriptedConsentBroker", "AIPendingConsentQueue",
+                                   "AIScaffoldRuntime", "ProAIEntitlement", "InMemoryAISecretKeychain", "AITransport"]
+
+    private func request(_ profile: AIProviderProfile) -> AIRequest {
+        AIRequest(profile: profile, purpose: .summary, sources: AISourceSelection(items: [], dataTypes: [.messageBody]),
+                  payload: Data("p".utf8), promptVersion: "1", maxOutputTokens: 1, price: nil)
+    }
+
+    private func profile(_ host: String = "api.provider.example") -> AIProviderProfile {
+        AIProviderProfile(provider: .anthropic, endpoint: AIEndpoint(host: host, ownership: .providerOperated), modelID: "model-a")
+    }
+
+    // MARK: B01
+
+    /// B01: with Mail enabled (and an account fully granted) and AI disabled,
+    /// archive import, search, a recipe, a backup and a connected capture make
+    /// zero AI requests; no production path can reach the scaffold; the only
+    /// production transport is unavailable; the legacy cloud code is not compiled.
+    func testB01_mailOnAIOff_archiveSearchRecipeCapture_makeZeroAIRequests() async throws {
+        let mail = MailNetworkPolicy.shared
+        mail.setMailEnabled(true)
+        mail.setAccount(MailAccountNetworkPolicy(id: UUID(), isEnabled: true, modes: Set(MailAccountMode.allCases),
+                                                 mailHosts: ["imap.example.org"], authorizationHosts: ["login.example.org"]))
+        XCTAssertTrue(mail.isMailEnabled)
+        XCTAssertFalse(AIPolicy.shared.isCloudAIEnabled, "connecting mail never enables AI")
+        XCTAssertFalse(AIPolicy.shared.isRuntimeShipped)
+
+        let env = try await makeEnv()
+        _ = try await exerciseArchiveSearchRecipeBackup(env)
+        try await exerciseCapture(env)
+
+        XCTAssertEqual(AIScaffoldCounters.shared.snapshot(), AIScaffoldCounters.Snapshot(),
+                       "no AI request was submitted, prompted or transported by any of those paths")
+        XCTAssertFalse(AIScaffoldRuntime.liveInferenceAvailable)
+        XCTAssertFalse(AIProductionTransport.current.isAvailable)
+        XCTAssertFalse(ConnectedBuildFeatures.cloudAICompiled, "the legacy cloud provider is not in this build")
+        XCTAssertEqual(mail.wouldPermit(MailNetworkRequest(accountID: nil, host: "api.anthropic.com", destination: .mailServer,
+                                                           operation: .request, purpose: .preserveMail)), .aiDestination)
+
+        // Reachability: no production file outside the scaffold names it.
+        var offenders: [String] = []
+        for file in swiftSources("maxmailin") + swiftSources("Packages/ArchiveCore/Sources")
+            where !file.path.contains("/AIScaffold/") && file.lastPathComponent != "AIScaffoldRuntime.swift" {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for symbol in scaffoldSymbols where text.contains(symbol) { offenders.append("\(file.lastPathComponent): \(symbol)") }
+        }
+        XCTAssertEqual(offenders, [], "a production caller of the AI scaffold exists")
+        let glue = try String(contentsOf: repo.appendingPathComponent("maxmailin/AIScaffoldRuntime.swift"), encoding: .utf8)
+        XCTAssertFalse(glue.contains("URLSession"))
+        XCTAssertFalse(glue.contains("MockAITransport"))
+        // The legacy provider stays behind its compile flag.
+        let legacy = try String(contentsOf: repo.appendingPathComponent("maxmailin/CloudAIProvider.swift"), encoding: .utf8)
+        XCTAssertTrue(legacy.contains("#if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD"))
+
+        // Even the glue's own coordinator, with Pro, refuses without a prompt or a key read.
+        let coordinator = AIScaffoldRuntime.makeCoordinator(store: StoreManager(testTier: .professional))
+        let result = await coordinator.submit(request(profile()))
+        XCTAssertEqual(result.status, .error(.runtimeNotShipped))
+        XCTAssertEqual(coordinator.snapshot.consentPrompts, 0)
+        XCTAssertEqual(coordinator.snapshot.keyReads, 0)
+        XCTAssertEqual(AIScaffoldCounters.shared.snapshot().transportInvocations, 0)
+    }
+
+    /// SCAF-01: the two policies are independent in both directions.
+    func testSCAF01_mailPolicyAndAIPolicyAreIndependent() {
+        let mail = MailNetworkPolicy(transportsCompiled: true)
+        let ai = AIPolicy(runtimeShipped: true)
+        mail.setMailEnabled(true)
+        XCTAssertFalse(ai.isCloudAIEnabled, "mail on does not switch AI on")
+        ai.setCloudAIEnabled(true)
+        ai.setCloudAIEnabled(false)
+        XCTAssertTrue(mail.isMailEnabled, "AI off does not switch mail off")
+        let account = MailAccountNetworkPolicy(id: UUID(), isEnabled: true, modes: [.preserveMail],
+                                               mailHosts: ["imap.example.org"], authorizationHosts: [])
+        mail.setAccount(account)
+        XCTAssertNotNil(mail.register(accountID: account.id, label: "sync") {}, "mail work still registers")
+        // Neither lends the other a host.
+        XCTAssertEqual(mail.wouldPermit(MailNetworkRequest(accountID: account.id, host: "api.openai.com", destination: .mailServer,
+                                                           operation: .socket, purpose: .preserveMail)), .aiDestination)
+        XCTAssertEqual(AIPolicy.destinationRefusal(request(profile("imap.example.org"))), .mailHostRefused)
+        XCTAssertNotEqual(AIKeyProfileStore.service, "com.ecosanskriti.mailin.connected-account", "AI never reads a mail credential")
+        XCTAssertNotEqual(AIKeyProfileStore.service, "com.ecosanskriti.mailin", "nor the legacy global item")
+    }
+
+    // MARK: SCAF-02 / B02
+
+    /// A saved AI key appears in no preference, backup, export, receipt,
+    /// diagnostic or script output; it lives only in the (fake) Keychain.
+    func testSCAF02_B02_savedKeyNeverReachesPreferencesBackupsExportsDiagnosticsOrScripts() async throws {
+        let secret = "sk-scaf-\(UUID().uuidString)-DO-NOT-LEAK"
+        let secretData = Data(secret.utf8)
+        let keychain = InMemoryAISecretKeychain()
+        let keys = AIKeyProfileStore(keychain: keychain, useDataProtectionKeychain: false)
+        let p = profile()
+        try keys.add(secretData, for: p.credentialReference)
+        XCTAssertEqual(keychain.storedSecrets, [secretData], "the key is in the Keychain")
+
+        let env = try await makeEnv()
+        let folders = try await exerciseArchiveSearchRecipeBackup(env)
+        let written = files(under: folders)
+        XCTAssertGreaterThan(written.count, 3, "the export, receipts and backup wrote files to scan")
+        for file in written {
+            let data = try Data(contentsOf: file)
+            XCTAssertNil(data.range(of: secretData), "\(file.path) contains the AI key")
+        }
+        // Preferences: the app's own and the run's suite.
+        XCTAssertFalse("\(UserDefaults.standard.dictionaryRepresentation())".contains(secret))
+        XCTAssertFalse("\(env.defaults.dictionaryRepresentation())".contains(secret))
+        // Diagnostics as shown and shared.
+        XCTAssertFalse(DiagnosticsCenter.shared.summaryText().contains(secret))
+        XCTAssertFalse(DiagnosticsCenter.shared.latestReportsText().contains(secret))
+        // Scripts: every script as exported to a .mailinscript file.
+        for script in ScriptLibraryStore.shared.scripts {
+            XCTAssertNil(try ScriptFile.export(script).range(of: secretData))
+        }
+        // The persisted AI shapes name the key by reference only.
+        let shapes = try JSONEncoder().encode(p) + JSONEncoder().encode(p.credentialReference) + JSONEncoder().encode(request(p).record)
+        XCTAssertNil(shapes.range(of: secretData))
+        XCTAssertFalse(AIScaffoldRuntime.showsKeyProfileSettings, "the key settings stay hidden until a runtime exists")
+        XCTAssertTrue(try keys.remove(p.credentialReference))
+        XCTAssertTrue(keychain.storedSecrets.isEmpty)
+    }
+
+    /// No embedded or default developer key in the glue, and no screen for the scaffold.
+    func testSCAF02_B05_noDeveloperKey_noScaffoldUIInThePrimaryJourney() throws {
+        let glue = try String(contentsOf: repo.appendingPathComponent("maxmailin/AIScaffoldRuntime.swift"), encoding: .utf8)
+        for shape in [#"sk-[A-Za-z0-9_\-]{16,}"#, #"AIza[0-9A-Za-z_\-]{30,}"#, #"Bearer "#, #"x-api-key"#] {
+            XCTAssertNil(glue.range(of: shape, options: .regularExpression), shape)
+        }
+        XCTAssertFalse(glue.contains("import SwiftUI"), "no screen in the glue")
+        XCTAssertFalse(AIScaffoldRuntime.showsKeyProfileSettings)
+    }
+
+    // MARK: SCAF-04 / B04
+
+    /// The existing Pro entitlement is the only gate: only an active or lifetime
+    /// Professional plan passes; a key unlocks nothing; Free Advanced Search and
+    /// the product list are unchanged; even Pro with a key makes no request.
+    func testSCAF04_keyNeverUnlocksPro_freeSearchUnaffected_noNewProduct() async throws {
+        let expected: [(EntitlementState, Bool)] = [
+            (.free, false), (.active(.personal), false), (.lifetime(.personal), false),
+            (.active(.professional), true), (.lifetime(.professional), true),
+            (.lapsed(previous: .professional), false), (.lapsed(previous: .personal), false),
+        ]
+        let keychain = InMemoryAISecretKeychain()
+        let keys = AIKeyProfileStore(keychain: keychain, useDataProtectionKeychain: false)
+        let p = profile()
+        let policyBefore = StoreManager(testTier: .free).accessPolicy
+        try keys.add(Data("customer-key".utf8), for: p.credentialReference)
+        for (state, allows) in expected {
+            XCTAssertEqual(ProAIEntitlement(state: state).allowsAIWork, allows, "\(state)")
+        }
+        let freeAfter = StoreManager(testTier: .free)
+        XCTAssertFalse(freeAfter.isProfessional, "a saved key does not unlock Pro")
+        XCTAssertEqual(freeAfter.accessPolicy, policyBefore)
+        XCTAssertEqual(freeAfter.accessPolicy.archiveReadLimit, StoreManager.freeEmailLimit, "Free data scope unchanged")
+        // No new product: the purchase list is the existing six.
+        XCTAssertEqual(StoreManager.allProductIDs.count, 6)
+        XCTAssertEqual(StoreManager.allProductIDs, StoreManager.personalProductIDs.union(StoreManager.professionalProductIDs))
+        // Advanced Search code has no AI or tier hook.
+        for path in ["maxmailin/AdvancedSearchView.swift", "Packages/ArchiveCore/Sources/ArchiveCore/SearchSpecCompiler.swift"] {
+            let text = try String(contentsOf: repo.appendingPathComponent(path), encoding: .utf8)
+            for word in scaffoldSymbols + ["isProfessional"] { XCTAssertFalse(text.contains(word), "\(path): \(word)") }
+        }
+        // Pro + key + a yes + a working (mock) transport still cannot start: no runtime shipped.
+        let transport = MockAITransport(.success(text: "x", usage: nil))
+        let pro = AIRequestCoordinator(entitlement: ProAIEntitlement(state: .lifetime(.professional)), keys: keys,
+                                       consent: ScriptedConsentBroker(.grantExactly), budget: AIRunBudget(perRunLimit: 10, periodLimit: 10),
+                                       transport: transport, counters: AIScaffoldCounters())
+        let result = await pro.submit(request(p))
+        XCTAssertEqual(result.status, .error(.runtimeNotShipped))
+        XCTAssertTrue(transport.calls.isEmpty)
+        // Free with a key, even with a runtime, is refused for the entitlement.
+        let ai = AIPolicy(runtimeShipped: true)
+        ai.setCloudAIEnabled(true)
+        let free = AIRequestCoordinator(policy: ai, entitlement: ProAIEntitlement(state: .free), keys: keys,
+                                        consent: ScriptedConsentBroker(.grantExactly), budget: AIRunBudget(perRunLimit: 10, periodLimit: 10),
+                                        transport: transport, counters: AIScaffoldCounters())
+        let freeResult = await free.submit(request(p))
+        XCTAssertEqual(freeResult.status, .error(.notEntitled))
+        XCTAssertTrue(transport.calls.isEmpty)
+    }
+}
