@@ -634,3 +634,11 @@ final class SentFlag: @unchecked Sendable {
     init(initialSent: Bool) { sent = initialSent }
     func take() -> Bool { lock.withLock { let was = sent; sent = true; return was } }
 }
+
+// MARK: - V4-11 server actions (additive)
+
+extension IMAPSession {
+    /// Forgets the cached selection so the next EXAMINE / SELECT is really
+    /// sent (server actions SELECT read-write, outside `examine`'s cache).
+    func forgetSelection() { selected = nil }
+}

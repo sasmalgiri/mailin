@@ -144,6 +144,70 @@ final class IMAPServerModel: @unchecked Sendable {
         lock.withLock { _mailboxes.first { $0.name == name }?.messages.first { $0.uid == uid }?.flags }
     }
 
+    // MARK: V4-11 server actions (served only when `serveServerActions` is on)
+
+    /// Off: STORE / COPY / MOVE / EXPUNGE answer BAD, as for the read-only tests.
+    var serveServerActions = false
+    /// Called with each client command line before it is served ("another
+    /// client" changes the mailbox at an exact moment).
+    var onCommand: (@Sendable (String, IMAPServerModel) -> Void)?
+
+    func setFlags(_ uid: UInt32, in name: String, add: [String], remove: [String]) -> Bool {
+        lock.withLock {
+            guard let i = _mailboxes.firstIndex(where: { $0.name == name }),
+                  let k = _mailboxes[i].messages.firstIndex(where: { $0.uid == uid }) else { return false }
+            var flags = _mailboxes[i].messages[k].flags
+            for f in add where !flags.contains(where: { $0.caseInsensitiveCompare(f) == .orderedSame }) { flags.append(f) }
+            flags.removeAll { f in remove.contains { $0.caseInsensitiveCompare(f) == .orderedSame } }
+            _mailboxes[i].modseq += 1
+            _mailboxes[i].messages[k].flags = flags
+            _mailboxes[i].messages[k].modseq = _mailboxes[i].modseq
+            return true
+        }
+    }
+
+    /// Copies `uids` from `source` to `dest`: (dest UIDVALIDITY, [(source uid, new uid)]).
+    func copy(_ uids: [UInt32], from source: String, to dest: String) -> (UInt32, [(UInt32, UInt32)])? {
+        lock.withLock {
+            guard let s = _mailboxes.firstIndex(where: { $0.name == source }),
+                  let d = _mailboxes.firstIndex(where: { $0.name == dest }) else { return nil }
+            var pairs: [(UInt32, UInt32)] = []
+            for m in _mailboxes[s].messages where uids.contains(m.uid) {
+                let uid = _mailboxes[d].uidNext
+                _mailboxes[d].uidNext += 1
+                _mailboxes[d].modseq += 1
+                var copy = m
+                copy.uid = uid; copy.modseq = _mailboxes[d].modseq
+                copy.flags.removeAll { $0.caseInsensitiveCompare("\\Deleted") == .orderedSame }
+                _mailboxes[d].messages.append(copy)
+                pairs.append((m.uid, uid))
+            }
+            return (_mailboxes[d].uidValidity, pairs)
+        }
+    }
+
+    /// Removes messages carrying \Deleted (all of them, or only `only`).
+    /// Returns the 1-based sequence numbers in the order to report them.
+    func expungeDeleted(in name: String, only: Set<UInt32>? = nil, force: Set<UInt32> = []) -> [Int] {
+        lock.withLock {
+            guard let i = _mailboxes.firstIndex(where: { $0.name == name }) else { return [] }
+            var reported: [Int] = []
+            var index = _mailboxes[i].messages.count - 1
+            while index >= 0 {
+                let m = _mailboxes[i].messages[index]
+                let deleted = m.flags.contains { $0.caseInsensitiveCompare("\\Deleted") == .orderedSame }
+                if force.contains(m.uid) || (deleted && (only?.contains(m.uid) ?? true)) {
+                    _mailboxes[i].messages.remove(at: index)
+                    _mailboxes[i].modseq += 1
+                    _mailboxes[i].expunged.append((m.uid, _mailboxes[i].modseq))
+                    reported.append(index + 1)
+                }
+                index -= 1
+            }
+            return reported
+        }
+    }
+
     fileprivate func setSeen(_ uid: UInt32, in name: String) {
         lock.withLock {
             guard let i = _mailboxes.firstIndex(where: { $0.name == name }),
@@ -333,6 +397,7 @@ private final class ServerConnection: @unchecked Sendable {
             return
         }
         model.record(line)
+        model.onCommand?(line, model)
         var cursor = IMAPTokenCursor(command)
         let tag = cursor.word()
         let values = (try? cursor.values()) ?? []
@@ -391,7 +456,14 @@ private final class ServerConnection: @unchecked Sendable {
                 }
             }
             else if sub == "SEARCH" { uidSearch(tag, rest) }
+            else if model.serveServerActions, ["STORE", "COPY", "MOVE", "EXPUNGE"].contains(sub) { uidAction(tag, sub, rest) }
             else { write("\(tag) BAD UID \(sub) is not served by the test server\r\n") }
+        case "EXPUNGE" where model.serveServerActions:
+            // A mailbox-wide EXPUNGE: served like a real server (it removes
+            // EVERY \Deleted message), so a test can prove mailin never sends it.
+            guard let name = selected, !readOnly else { write("\(tag) NO not selected read-write\r\n"); return }
+            for n in model.expungeDeleted(in: name) { write("* \(n) EXPUNGE\r\n") }
+            ok(tag, "EXPUNGE completed")
         case "IDLE":
             guard has("IDLE") else { write("\(tag) BAD no IDLE\r\n"); return }
             idleTag = tag; write("+ idling\r\n")
@@ -552,6 +624,51 @@ private final class ServerConnection: @unchecked Sendable {
             write(d)
         }
         ok(tag, "UID FETCH completed")
+    }
+
+    /// V4-11: UID STORE / COPY / MOVE / EXPUNGE on the selected mailbox.
+    private func uidAction(_ tag: String, _ sub: String, _ args: [IMAPValue]) {
+        guard let name = selected, let m = model.mailboxes.first(where: { $0.name == name }),
+              let setText = args.first?.atomText else { write("\(tag) BAD no mailbox selected\r\n"); return }
+        guard !readOnly else { write("\(tag) NO [READ-ONLY] the mailbox is read-only\r\n"); return }
+        let wanted = Self.uids(setText, existing: m.messages.map(\.uid))
+        let uidplus = has("UIDPLUS")
+        switch sub {
+        case "STORE":
+            guard args.count >= 3, let item = args[1].atomText?.uppercased() else {
+                write("\(tag) BAD STORE syntax\r\n"); return
+            }
+            let flags = (args[2].list ?? [args[2]]).compactMap(\.atomText)
+            let silent = item.hasSuffix(".SILENT")
+            for uid in wanted.sorted() {
+                if item.hasPrefix("+") { _ = model.setFlags(uid, in: name, add: flags, remove: []) }
+                else if item.hasPrefix("-") { _ = model.setFlags(uid, in: name, add: [], remove: flags) }
+                if !silent, let f = model.flags(of: uid, in: name),
+                   let seq = model.mailboxes.first(where: { $0.name == name })?.messages.firstIndex(where: { $0.uid == uid }) {
+                    write("* \(seq + 1) FETCH (UID \(uid) FLAGS (\(f.joined(separator: " "))))\r\n")
+                }
+            }
+            ok(tag, "STORE completed")
+        case "COPY", "MOVE":
+            if sub == "MOVE", !has("MOVE") { write("\(tag) BAD MOVE not offered\r\n"); return }
+            guard args.count >= 2, let dest = decodeName(args[1]) else { write("\(tag) BAD \(sub) syntax\r\n"); return }
+            guard let (validity, pairs) = model.copy(Array(wanted), from: name, to: dest) else {
+                write("\(tag) NO [TRYCREATE] no such mailbox\r\n"); return
+            }
+            let code = uidplus && !pairs.isEmpty
+                ? "[COPYUID \(validity) \(pairs.map { String($0.0) }.joined(separator: ",")) \(pairs.map { String($0.1) }.joined(separator: ","))] "
+                : ""
+            if sub == "COPY" { ok(tag, code + "COPY completed"); return }
+            if !code.isEmpty { write("* OK \(code)moved\r\n") }
+            for n in model.expungeDeleted(in: name, only: [], force: Set(pairs.map(\.0))) { write("* \(n) EXPUNGE\r\n") }
+            ok(tag, "MOVE completed")
+        case "EXPUNGE":
+            guard uidplus else { write("\(tag) BAD UID EXPUNGE needs UIDPLUS\r\n"); return }
+            for n in model.expungeDeleted(in: name, only: wanted) { write("* \(n) EXPUNGE\r\n") }
+            ok(tag, "UID EXPUNGE completed")
+        default:
+            write("\(tag) BAD\r\n")
+        }
     }
 
     private func uidSearch(_ tag: String, _ args: [IMAPValue]) {

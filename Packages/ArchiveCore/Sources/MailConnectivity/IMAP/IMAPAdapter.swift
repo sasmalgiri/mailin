@@ -606,3 +606,35 @@ public actor IMAPAdapter: MailProviderAdapter {
         }
     }
 }
+
+// MARK: - V4-11 server actions (additive)
+
+extension IMAPAdapter {
+    /// One pooled connection for a server action (`IMAPActionExecutor`). The
+    /// cached selection is dropped before and after, so capture never reuses
+    /// a mailbox the action opened read-write.
+    func withActionSession<T: Sendable>(_ body: @Sendable (IMAPSession) async throws -> T) async throws -> T {
+        let context = ProviderRequestContext(accountID: accountID, accessToken: nil, attempt: 0)
+        // A server-action verdict (`RemoteRequestFailure`) passes through as
+        // a value: `withSession` would map it onto a transport error, and the
+        // connection stays usable after it.
+        let result: Result<T, RemoteRequestFailure> = try await withSession(context) { s in
+            await s.forgetSelection()
+            do {
+                let r = try await body(s)
+                await s.forgetSelection()
+                return .success(r)
+            } catch let verdict as RemoteRequestFailure {
+                await s.forgetSelection()
+                return .failure(verdict)
+            } catch {
+                await s.forgetSelection()
+                throw error
+            }
+        }
+        return try result.get()
+    }
+
+    /// The mailbox's wire name as LISTed (or encoded from its name).
+    func actionWire(_ serverID: String, utf8: Bool) -> [UInt8] { info(serverID, utf8: utf8).wire }
+}
