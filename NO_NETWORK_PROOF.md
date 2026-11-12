@@ -101,3 +101,25 @@ apply — hence the platform caveat above.
   one is a project-file change for the owner to make in Xcode.
 - **CI wiring.** The script is written to be a build-phase or CI gate
   (non-zero exit on failure); nothing invokes it automatically yet.
+
+---
+
+## v4.0 (V4-14, 2026-11-12): offline proof unchanged; the connected edition is checked differently
+
+- **Offline edition** (`Release`, `Debug`, enterprise): nothing in this document changes. `NO_NETWORK_BUILD` is
+  still defined, `mailin/mailin.entitlements` still has no network key, `NoNetworkAttestation.buildMarker` is
+  `mailin.offline.attested`, and `Scripts/verify-no-network.sh` must PASS. The mail transports are gated
+  `#if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD`, so they are absent from this binary (V4-01 symbol check:
+  0 IMAPClient / GmailConnector / OutlookConnector / CloudAIManager symbols).
+- **Connected edition** (`Release-Connected`, `MAILIN_CONNECTED_MAIL`, signed with
+  `mailin/mailin-connected.entitlements`): this document's claim does **not** apply and its script is expected to
+  report "online capable". It is checked instead by `Scripts/check-connected-release.sh <app>` (T47): marker
+  `mailin.online.capable`; sandbox on, `network.client` granted, `network.server` not granted; real Gmail / Graph
+  client IDs and the `msauth.<bundle id>://auth` redirect in `Info.plist` (no placeholders); 0 `CloudAIManager`
+  symbols. The same Info.plist rules run in `V414ClaimsTests.testT47_thisConnectedReleaseBuildHasRealClientIDs`.
+- **Run-time gate in the connected edition**: `MailNetworkPolicy` (off on a fresh install until the Live Mail page /
+  `connectedMail` capability is on; per-account modes all off; per-account host binding; AI hosts and remote
+  content always refused). Hosts it can permit, per provider: `NETWORK_AND_PRIVACY_MATRIX.md` § v4.
+- **In-app wording follows the binary**: About shows "Offline & Private — No account, no mail servers…" only when
+  `ConnectedBuildFeatures.mailTransportsCompiled` is false; the connected edition shows "Private by design" with
+  text that depends on whether Connected mail is on (`EditionPrivacyClaim`, `V414ClaimsTests`).

@@ -72,3 +72,25 @@ paid for and who can install it.
 - Enterprise: per-seat yearly (e.g. a 10-seat minimum), with a 30-day pilot key (`--days 30`) for evaluations.
   Larger customers will ask for the assurance pack (`ENTERPRISE_ASSURANCE_PACK.md`) and the security
   whitepaper — both exist.
+
+# Third-party software compiled into the app (V4-14 check, 2026-11-12)
+
+Checked for v4.0: `Packages/ArchiveCore/Package.swift` (targets and dependencies), the project's package
+references (one local package, `Packages/ArchiveCore`; **no remote Swift packages**), and every vendored source
+folder. The connected edition adds no third-party code: it uses Apple's AuthenticationServices, Network,
+URLSession, Security (Keychain) and CryptoKit only.
+
+| Component | Where | Licence | Notice shipped in the app | Licence file in the repo |
+|---|---|---|---|---|
+| libarchive 3.8.11 — RAR 1.5–4.x and RAR 5.0 readers and the read core they need | `Packages/ArchiveCore/Sources/CLibArchiveRAR/libarchive` (target `CLibArchiveRAR`) | BSD-2-Clause; `archive_blake2*` CC0 1.0 (chosen from CC0 / OpenSSL / Apache-2.0); `archive_ppmd7*` public domain | About ▸ Licenses ("Third-Party Notices") = `LegalComplianceManager.thirdPartyNotices` + `VendoredNotices.libarchive` (verbatim BSD-2 text, held to `COPYING` by a test) | `Packages/ArchiveCore/Sources/CLibArchiveRAR/COPYING` (upstream, verbatim); provenance and SHA-256s in `VENDORED.md`, `VENDORED-SHA256SUMS` |
+| Apple frameworks (SwiftUI, Foundation, NaturalLanguage, FoundationModels, Vision, Speech, PDFKit, CryptoKit, StoreKit, AuthenticationServices, Network, Security, …) | system | Apple SDK licence | listed in Third-Party Notices | — |
+
+Not compiled into the app (no notice needed): test fixtures under `maxmailinTests/Fixtures` and
+`Packages/ArchiveCore/Tests/…/Fixtures` (their own licences sit beside them), `Scripts/*` (developer tools),
+`ModelRunner.xcodeproj` references (not a target dependency). Format knowledge taken from public specifications or
+read for understanding only (MS-PST, libpff / libpst / libnsfdb documentation, the Notes C API) is not copied code;
+`NSFODSReader.swift` records that no libnsfdb (LGPL) code was copied.
+
+Gaps found: **none** for v4.0. Re-run this check if any package, vendored folder or SDK (e.g. a crypto or IMAP
+library) is added; a new component needs its licence file copied from its source and an entry in
+`VendoredNotices.all`.

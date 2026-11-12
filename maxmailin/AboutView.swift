@@ -110,10 +110,13 @@ struct AboutView: View {
                         title: String(localized: "7 Format Support"),
                         description: String(localized: "MBOX, EML, EMLX, MSG, PST, OST, NSF — Gmail, Outlook, Thunderbird, Apple Mail, Lotus Notes.")
                     )
+                    // V4-14 (A17): "no mail servers" is true only of the offline
+                    // edition; the connected edition says what it really does.
+                    let privacyClaim = EditionPrivacyClaim.current()
                     featureRow(
                         icon: "lock.shield.fill",
-                        title: String(localized: "Offline & Private"),
-                        description: String(localized: "No account, no mail servers, no data collection. Your archive never leaves your device.")
+                        title: privacyClaim.title,
+                        description: privacyClaim.detail
                     )
                     // D1: state what the PLATFORM enforces for this build, read
                     // from its own signed entitlements — not what the app
@@ -239,7 +242,8 @@ struct AboutView: View {
 
     private func textForSheet(_ sheet: LegalSheet) -> String {
         switch sheet {
-        case .privacy: return LegalComplianceManager.privacyPolicySummary
+        // V4-14: the connected edition's summary describes its mail connections.
+        case .privacy: return LegalComplianceManager.privacyPolicyText()
         case .terms: return LegalComplianceManager.termsOfUseSummary
         case .licenses: return LegalComplianceManager.thirdPartyNotices
         case .forensic: return LegalComplianceManager.forensicDisclaimer

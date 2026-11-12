@@ -9212,3 +9212,117 @@ final class AppLimitsReconciliationTests: XCTestCase {
         XCTAssertFalse(paywall.contains(#"featureRow("Download attachments", free: "10""#))
     }
 }
+
+// MARK: - V4-14: product claims match the edition; T47 connected Release check
+
+@MainActor
+final class V414ClaimsTests: XCTestCase {
+    private let offlineDetail = "No account, no mail servers, no data collection. Your archive never leaves your device."
+
+    func testV414_offlineEditionKeepsItsWording() {
+        for on in [false, true] {
+            let claim = EditionPrivacyClaim.about(mailTransportsCompiled: false, connectedMailOn: on)
+            XCTAssertEqual(claim.title, "Offline & Private")
+            XCTAssertEqual(claim.detail, offlineDetail)
+        }
+        XCTAssertEqual(LegalComplianceManager.privacyPolicyText(mailTransportsCompiled: false),
+                       LegalComplianceManager.privacyPolicySummary)
+    }
+
+    func testV414_connectedEditionNoLongerClaimsNoMailServers() {
+        let off = EditionPrivacyClaim.about(mailTransportsCompiled: true, connectedMailOn: false)
+        let on = EditionPrivacyClaim.about(mailTransportsCompiled: true, connectedMailOn: true)
+        for claim in [off, on] {
+            XCTAssertNotEqual(claim.title, "Offline & Private")
+            XCTAssertFalse(claim.detail.localizedCaseInsensitiveContains("no mail servers"), claim.detail)
+            XCTAssertFalse(claim.detail.contains("never leaves your device"), claim.detail)
+            XCTAssertTrue(claim.detail.contains("mailin server"), claim.detail)
+        }
+        XCTAssertTrue(off.detail.contains("Connected mail is off"), off.detail)
+        XCTAssertTrue(on.detail.contains("connects directly to the mail providers"), on.detail)
+
+        let summary = LegalComplianceManager.privacyPolicyText(mailTransportsCompiled: true)
+        XCTAssertFalse(summary.contains("does not connect to any mail server"), "stale A17 claim in the connected summary")
+        XCTAssertFalse(summary.contains("Cloud AI feature"), "the connected edition compiles no cloud AI")
+        XCTAssertTrue(summary.contains("Keychain"))
+        XCTAssertTrue(summary.contains("There is no mailin server"))
+        // The offline summary still carries the sentence the connected one replaces.
+        XCTAssertTrue(LegalComplianceManager.privacyPolicySummary.contains("does not connect to any mail server"))
+    }
+
+    func testV414_thisBuildShowsItsOwnEditionText() throws {
+        let claim = EditionPrivacyClaim.current()
+        if ConnectedBuildFeatures.mailTransportsCompiled {
+            XCTAssertNotEqual(claim.detail, offlineDetail)
+        } else {
+            XCTAssertEqual(claim.detail, offlineDetail)
+        }
+        // About and the terms sheet read the edition-aware texts, not the fixed literals.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let about = try String(contentsOf: repo.appendingPathComponent("maxmailin/AboutView.swift"), encoding: .utf8)
+        XCTAssertFalse(about.contains(#"String(localized: "No account, no mail servers"#), "About hard-codes the offline claim")
+        XCTAssertTrue(about.contains("EditionPrivacyClaim.current()"))
+        XCTAssertTrue(about.contains("LegalComplianceManager.privacyPolicyText()"))
+        let legal = try String(contentsOf: repo.appendingPathComponent("maxmailin/LegalComplianceManager.swift"), encoding: .utf8)
+        XCTAssertTrue(legal.contains(": LegalComplianceManager.privacyPolicyText())"))
+    }
+
+    // T47: no placeholder client IDs in a connected Release build.
+    private let goodGmail = "123456789012-abcdefghijklmnop0123456789qrstuv.apps.googleusercontent.com"
+    private let goodGraph = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    private func info(_ gmail: String?, _ graph: String?, _ redirect: String?,
+                      bundle: String = "com.ecosanskriti.mailin") -> [String: Any] {
+        var d: [String: Any] = ["CFBundleIdentifier": bundle]
+        if let gmail { d["MailinGmailClientID"] = gmail }
+        if let graph { d["MailinGraphClientID"] = graph }
+        if let redirect { d["MailinGraphRedirectURI"] = redirect }
+        return d
+    }
+    private func keys(_ p: [ConnectedReleaseCheck.Problem]) -> [String] { p.map(\.key) }
+
+    func testT47_connectedReleaseCheckRefusesMissingAndPlaceholderClientIDs() {
+        let all = ["MailinGmailClientID", "MailinGraphClientID", "MailinGraphRedirectURI"]
+        // Missing keys.
+        XCTAssertEqual(keys(ConnectedReleaseCheck.problems(info: info(nil, nil, nil), mailTransportsCompiled: true)), all)
+        // The legacy connectors' placeholders and an unexpanded build setting.
+        let legacy = ConnectedReleaseCheck.problems(
+            info: info("YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com", "YOUR_AZURE_CLIENT_ID", "$(MAILIN_GRAPH_REDIRECT_URI)"),
+            mailTransportsCompiled: true)
+        XCTAssertEqual(keys(legacy), all, "\(legacy)")
+        // Empty values (an Info.plist $(VAR) whose build setting is not set expands to "").
+        XCTAssertEqual(keys(ConnectedReleaseCheck.problems(info: info("", "", ""), mailTransportsCompiled: true)), all)
+        // A non-Google client ID and an all-zero GUID.
+        let zeros = ConnectedReleaseCheck.problems(
+            info: info("123456789012-abcdefghijklmnop0123456789qrstuv.apps.examplecloud.com", "00000000-0000-0000-0000-000000000000",
+                       "msauth.com.ecosanskriti.mailin://auth"),
+            mailTransportsCompiled: true)
+        XCTAssertEqual(keys(zeros), ["MailinGmailClientID", "MailinGraphClientID"], "\(zeros)")
+        // A redirect registered for another bundle.
+        let wrongBundle = ConnectedReleaseCheck.problems(
+            info: info(goodGmail, goodGraph, "msauth.com.ecosanskriti.mailin://auth", bundle: "com.ecosanskriti.mailin.enterprise"),
+            mailTransportsCompiled: true)
+        XCTAssertEqual(keys(wrongBundle), ["MailinGraphRedirectURI"])
+        XCTAssertTrue(wrongBundle.first?.reason.contains("msauth.com.ecosanskriti.mailin.enterprise://auth") ?? false, "\(wrongBundle)")
+        // Real-shaped values pass.
+        XCTAssertEqual(ConnectedReleaseCheck.problems(info: info(goodGmail, goodGraph, "msauth.com.ecosanskriti.mailin://auth"),
+                                                      mailTransportsCompiled: true), [])
+        // The offline edition has no sign-in code: nothing to check.
+        XCTAssertEqual(ConnectedReleaseCheck.problems(info: info(nil, nil, nil), mailTransportsCompiled: false), [])
+        // The check and the Add-account readiness agree on the same values.
+        let ready = info(goodGmail, goodGraph, "msauth.com.ecosanskriti.mailin://auth").compactMapValues { $0 as? String }
+        XCTAssertTrue(MailProviderChoice.gmail.readiness(info: ready).isReady)
+        XCTAssertTrue(MailProviderChoice.outlook.readiness(info: ready).isReady)
+    }
+
+    /// Runs on the candidate: a connected, non-Debug build must pass the check on its own Info.plist.
+    func testT47_thisConnectedReleaseBuildHasRealClientIDs() throws {
+        #if DEBUG
+        throw XCTSkip("T47 applies to the connected Release candidate (ReleaseTesting-Connected).")
+        #else
+        guard ConnectedBuildFeatures.mailTransportsCompiled else {
+            throw XCTSkip("The offline edition has no sign-in code; T47's client-ID check does not apply.")
+        }
+        XCTAssertEqual(ConnectedReleaseCheck.problemsForThisBuild().map(\.description), [])
+        #endif
+    }
+}

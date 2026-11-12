@@ -212,7 +212,7 @@ struct TermsAcceptanceView: View {
             ScrollView {
                 Text(activeTab == 0
                      ? LegalComplianceManager.termsOfUseSummary
-                     : LegalComplianceManager.privacyPolicySummary)
+                     : LegalComplianceManager.privacyPolicyText())
                     .font(.system(.caption, design: .monospaced))
                     .padding(Spacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)

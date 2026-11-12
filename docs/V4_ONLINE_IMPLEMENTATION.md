@@ -30,7 +30,7 @@ A dash means no evidence yet. An empty cell is never "done".
 | V4-11 | Journalled server actions | — | — | — | — |
 | V4-12 | Drives, backup/restore, account removal, lifecycle | — | — | — | — |
 | V4-13 | Mail workspace UI, accessibility, 10 languages | — | — | — | — |
-| V4-14 | Google / Entra registrations, privacy, store metadata (owner) | — | — | — | — |
+| V4-14 | Google / Entra registrations, privacy, store metadata (owner) | agent part: V4-14 commit (packets, drafts, manifest reasons, edition-aware About / privacy summary, T47 check) | `V414ClaimsTests` (5) **not yet run** (run with `RunSomeTests`); `Scripts/check-connected-release.sh` exercised on mock bundles | — (owner: registrations, verification) | — (T47 on the connected candidate) |
 | V4-15 | All gates on one candidate | — | — | — | — |
 
 ## Archive closeout, recipes, Advanced Search, AI scaffolding
@@ -91,21 +91,25 @@ Do these in Xcode's project editor (not by editing `project.pbxproj` while Xcode
    - `CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]` stays `mailin/mailin_iOS.entitlements` (iOS needs no network
      entitlement).
    - Leave `Release` exactly as it is: `NO_NETWORK_BUILD`, `mailin/mailin.entitlements` (the offline build).
-3. **OAuth callback URL schemes** (`CFBundleURLTypes` in `Info.plist`), connected build only. Add beside the
-   existing `mailin` scheme (do not remove it):
-   - Gmail: scheme **`com.ecosanskriti.mailin`** (redirect `com.ecosanskriti.mailin:/oauth2callback`, as
-     `GmailConnector` uses). If the Google iOS/macOS client is registered with the reversed client ID
-     instead, the scheme is `com.googleusercontent.apps.<CLIENT_ID_PREFIX>` and `GmailConnector`'s
-     redirect must change to match — decide when the client is registered (V4-14).
-   - Microsoft: scheme **`msauth.com.ecosanskriti.mailin`** (redirect `msauth.com.ecosanskriti.mailin://auth`,
-     as `OutlookConnector` uses). The 3.0 Private edition's bundle is `com.ecosanskriti.mailin.enterprise`;
-     its scheme would be `msauth.com.ecosanskriti.mailin.enterprise` with its own Entra redirect.
-   - Because `Info.plist` is shared by both configurations, either accept that the offline build also
-     declares the two schemes (nothing in it handles them — mail code is not compiled), or give
-     `Release-Connected` its own `INFOPLIST_FILE` (e.g. `Info-Connected.plist`, a copy plus the schemes).
-     Owner choice; the second keeps the offline build's declarations unchanged.
-   - Client IDs are still placeholders (`kGmailClientIDPlaceholder`, `YOUR_AZURE_CLIENT_ID`): no connected
-     build is labelled ready until they are real (plan A03, T47).
+3. **OAuth client values and callbacks** (V4-14 — exact packets in
+   [`V4_PROVIDER_REGISTRATION.md`](V4_PROVIDER_REGISTRATION.md); corrected 2026-11-12 from the code):
+   - The shipped sign-in (`ConnectedMailProductionTransports`) reads `Info.plist` keys **`MailinGmailClientID`**,
+     **`MailinGraphClientID`**, **`MailinGraphRedirectURI`**. Put them in the connected build only (plist fragment
+     and build settings `MAILIN_GMAIL_CLIENT_ID` / `MAILIN_GRAPH_CLIENT_ID` in the registration doc's "paste these
+     values back" lists).
+   - Gmail redirect = the **reversed client ID** `com.googleusercontent.apps.<CLIENT_ID_PREFIX>:/oauth2redirect`
+     (`GmailOAuth.defaultRedirectURI`; any other custom scheme is refused). The older
+     `com.ecosanskriti.mailin:/oauth2callback` belongs to the legacy `GmailConnector`, which has no caller.
+   - Microsoft redirect = **`msauth.com.ecosanskriti.mailin://auth`** (Entra iOS / macOS platform for bundle
+     `com.ecosanskriti.mailin`). The enterprise edition is built with `NO_NETWORK_BUILD`
+     (`Scripts/testflight.sh --edition enterprise`), so it needs no registration.
+   - `CFBundleURLTypes`: not required — `ASWebAuthenticationSession` receives the callback itself. If declared,
+     declare only in the connected plist. Either way, giving `Release-Connected` its own `INFOPLIST_FILE`
+     (`Info-Connected.plist`, a copy plus the three keys) keeps the offline build's `Info.plist` byte-identical.
+   - T47: `Scripts/check-connected-release.sh <connected app>` and
+     `V414ClaimsTests.testT47_thisConnectedReleaseBuildHasRealClientIDs` fail while any value is missing, empty,
+     `YOUR_…`, `$(…)` or malformed. The legacy connectors' placeholders (`kGmailClientIDPlaceholder`,
+     `YOUR_AZURE_CLIENT_ID`) are in uncalled code and are not read by the check.
 4. **`Info.plist` path case (A03).** The project's `INFOPLIST_FILE` is **`info.plist`** (target `maxmailin`,
    Debug and Release), but the file on disk and in Git is **`Info.plist`** (repository root). It builds only
    because the Mac's disk is case-insensitive; a case-sensitive checkout (CI, Xcode Cloud) would not find it.
@@ -125,7 +129,20 @@ Do these in Xcode's project editor (not by editing `project.pbxproj` while Xcode
    `codesign -d --entitlements - <app>` — offline Release shows **no** `network.client`;
    Release-Connected shows `network.client` and nothing else new. `Scripts/verify-no-network.sh` must PASS
    on the offline Release and is expected to report "online capable" on the connected one.
-   `nm <binary> | grep -c CloudAIManager` must be 0 on both.
+   `nm <binary> | grep -c CloudAIManager` must be 0 on both. On the connected archive also run
+   `Scripts/check-connected-release.sh <app>` (T47, all checks PASS).
+8. **Accounts, verification, privacy, store (V4-14).** Follow, in this order:
+   1. [`V4_PROVIDER_REGISTRATION.md`](V4_PROVIDER_REGISTRATION.md) §1 Google Cloud (project, Gmail API, iOS-type
+      client for `com.ecosanskriti.mailin`, scopes, consent screen, verification + demo video) and §2 Microsoft
+      Entra (registration, redirect, delegated permissions, publisher verification); paste the values back (step 3).
+   2. Verify `sasmalgiri.github.io` (or a custom domain) in Google Search Console and as the Entra publisher domain.
+   3. Publish [`privacy/v4-connected-draft.html`](privacy/v4-connected-draft.html) at `/privacy/` **when the connected
+      build is distributed** (not before — the live page describes the shipping offline app); reasoning and the
+      `PrivacyPolicy.html` section in [`PRIVACY_V4_DRAFT.md`](PRIVACY_V4_DRAFT.md).
+   4. App Store Connect ▸ App Privacy from [`V4_APP_PRIVACY_ANSWERS.md`](V4_APP_PRIVACY_ANSWERS.md) (owner decides).
+   5. Listing and App Review notes from [`V4_STORE_METADATA_DRAFT.md`](V4_STORE_METADATA_DRAFT.md); demo Gmail /
+      IMAP account in the review credentials.
+   6. Run `~/mailin-loc-work/keys-v414.py` once the strings are extracted (3 new keys), then `V414ClaimsTests`.
 
 ## New user-facing strings (V4-01) — to translate into the 10 languages
 

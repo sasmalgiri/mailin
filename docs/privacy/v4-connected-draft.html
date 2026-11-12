@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<!--
+  DRAFT (V4-14, 2026-11-12) — privacy policy for the mailin v4.0 CONNECTED edition
+  (configuration Release-Connected, MAILIN_CONNECTED_MAIL). Not linked from anywhere yet.
+  When the connected edition ships, this text replaces docs/privacy/index.html (keep the
+  offline-edition paragraph below, because the offline edition stays on sale), and the
+  matching in-app summary is LegalComplianceManager.connectedPrivacyPolicySummary.
+  Source of every statement: docs/V4_PROVIDER_REGISTRATION.md §0 and PRIVACY_V4_DRAFT.md.
+  Placeholders in angle brackets are for the owner. Effective date is set on publication.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mailin - Privacy Policy</title>
+    <meta name="description" content="mailin Privacy Policy. mailin collects no user data. Your archive is processed on your device; optional connected mail talks directly to your own mail provider.">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            color: #1d1d1f;
+            background: #fff;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: #0071e3; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        nav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            background: rgba(255,255,255,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(0,0,0,0.08);
+            padding: 0 24px;
+        }
+        nav .nav-inner {
+            max-width: 1080px; margin: 0 auto;
+            display: flex; align-items: center; justify-content: space-between;
+            height: 52px;
+        }
+        nav .logo { font-size: 20px; font-weight: 700; color: #1d1d1f; }
+        nav .nav-links a {
+            margin-left: 28px; font-size: 14px; font-weight: 500; color: #6e6e73;
+        }
+        nav .nav-links a:hover { color: #1d1d1f; text-decoration: none; }
+        nav .nav-links a.active { color: #1d1d1f; }
+
+        .page-header {
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            color: #fff;
+            text-align: center;
+            padding: 120px 20px 60px;
+        }
+        .page-header h1 { font-size: 44px; font-weight: 800; margin-bottom: 12px; }
+        .page-header p { font-size: 18px; color: rgba(255,255,255,0.65); }
+
+        .content { max-width: 740px; margin: 0 auto; padding: 48px 20px 80px; line-height: 1.7; }
+
+        .highlight {
+            background: #f0f8f0; border-left: 4px solid #34c759;
+            padding: 16px 20px; margin: 0 0 36px; border-radius: 0 8px 8px 0;
+            font-size: 16px; font-weight: 600;
+        }
+
+        h2 {
+            font-size: 22px; font-weight: 700; margin: 36px 0 12px;
+            letter-spacing: -0.2px;
+        }
+        p { font-size: 15px; color: #444; margin-bottom: 12px; }
+        ul { padding-left: 20px; margin-bottom: 12px; }
+        li { font-size: 15px; color: #444; margin-bottom: 6px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 16px; font-size: 14px; color: #444; }
+        th, td { border: 1px solid #e5e5ea; padding: 8px 10px; text-align: left; vertical-align: top; }
+        th { background: #f5f5f7; font-weight: 600; }
+        code { font-size: 13px; }
+
+        .effective { font-size: 14px; color: #86868b; margin-bottom: 32px; }
+
+        footer {
+            background: #1d1d1f; color: rgba(255,255,255,0.6);
+            text-align: center; padding: 40px 20px; font-size: 13px;
+        }
+        footer a { color: rgba(255,255,255,0.8); }
+        footer .links { margin-bottom: 16px; }
+        footer .links a { margin: 0 16px; }
+
+        @media (max-width: 640px) {
+            .page-header { padding: 100px 20px 48px; }
+            .page-header h1 { font-size: 32px; }
+            nav .nav-links a { margin-left: 16px; font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="nav-inner">
+            <a href="../" class="logo">mailin</a>
+            <div class="nav-links">
+                <a href="../#features">Features</a>
+                <a href="../#pricing">Pricing</a>
+                <a href="../support/">Support</a>
+                <a href="./" class="active">Privacy</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="page-header">
+        <h1>Privacy Policy</h1>
+        <p>Local archive and search. Optional connected mail, directly with your own provider.</p>
+    </section>
+
+    <div class="content">
+        <p class="effective">Effective Date: &lt;date of publication&gt; (version 4.0)</p>
+
+        <div class="highlight">
+            mailin collects no personal data. There is no mailin server: your archive, your mail and your sign-in details stay on your device or go directly to the mail provider you chose.
+        </div>
+
+        <h2>Two editions</h2>
+        <p><strong>Offline edition.</strong> Built without any network code. It cannot connect to any server and no account can be added. Everything on this page about connected mail does not apply to it.</p>
+        <p><strong>Connected edition.</strong> Adds optional connected mail for Gmail, Outlook / Microsoft 365 and IMAP / SMTP accounts. Connected mail is <strong>off</strong> until you turn it on, and each account is allowed nothing until you switch on, one by one, what it may do. The About window in the app says which edition you have.</p>
+
+        <h2>Data Collection</h2>
+        <p>mailin collects <strong>no</strong> user data in either edition. We do not collect analytics, usage data, crash reports, device information, contact lists, email content or any other personal information, and we have no server that could receive it. Nothing you import, save, search or send reaches the developer.</p>
+
+        <h2>Email Processing</h2>
+        <p>All parsing, search, duplicate detection, exports and analysis happen <strong>on your device</strong>. AI features use Apple's on-device frameworks only.</p>
+
+        <h2>No Cloud AI</h2>
+        <p>Neither edition contains cloud AI. No email content, attachment, search or summary is sent to any AI provider. Mail captured from Gmail is never used for AI outside your device.</p>
+
+        <h2>Connected Mail (connected edition only)</h2>
+        <p>When you turn on Connected mail and add an account, your device connects <strong>directly</strong> to that account's own mail provider. Nothing is relayed through a mailin server or any other intermediary. Each account does only what you allowed it:</p>
+        <ul>
+            <li><strong>Preserve mail</strong> (read-only): downloads your messages, folders and labels and keeps a copy in your archive on this device. Nothing on the server is changed and nothing is marked as read.</li>
+            <li><strong>Send mail</strong>: sends a message you wrote and submitted from the outbox, from that account's own address.</li>
+            <li><strong>Change server mail</strong>: applies changes you choose (read / unread, flag, move or label, move to Trash, restore). Each change is listed first; a bulk cleanup runs only after you type the exact count shown.</li>
+        </ul>
+        <table>
+            <tr><th>Account</th><th>Servers your device contacts</th><th>Permission you grant</th></tr>
+            <tr><td>Gmail</td><td><code>accounts.google.com</code> (sign-in page), <code>oauth2.googleapis.com</code> (sign-in tokens), <code>gmail.googleapis.com</code> (mail)</td><td>Read your mail (Preserve mail); send mail (Send mail); modify labels and move to Trash (Change server mail). Full mailbox deletion access is never requested.</td></tr>
+            <tr><td>Outlook / Microsoft 365</td><td><code>login.microsoftonline.com</code> (sign-in; personal accounts may continue on <code>login.live.com</code>), <code>graph.microsoft.com</code> (mail)</td><td>Mail.Read and offline access (Preserve mail); Mail.Send (Send mail); Mail.ReadWrite (Change server mail)</td></tr>
+            <tr><td>iCloud Mail, Fastmail, other IMAP</td><td>the IMAP and SMTP servers of that provider or the ones you enter (for example <code>imap.mail.me.com</code>, <code>smtp.mail.me.com</code>)</td><td>your app-specific password, sent only to those servers over TLS</td></tr>
+        </table>
+        <p>Your mail provider processes your mail under its own terms and privacy policy, as it does for any mail app. Messages are shown with remote content (images, tracking pixels) blocked, so opening a message does not contact the sender.</p>
+
+        <h2>Sign-in and Credentials</h2>
+        <p>You sign in on Google's or Microsoft's own page; mailin never sees your Google or Microsoft password. The sign-in tokens the provider issues, and any IMAP / SMTP password you enter, are stored only in this device's Keychain. They are never synchronised to other devices, never included in backups or exports, and never sent anywhere except to the provider that issued them. A restored or new device asks you to sign in again.</p>
+
+        <h2>Google API Services</h2>
+        <p>mailin's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Gmail data is used only to provide the features you switched on, stays on your device, is not transferred to anyone, is not used for advertising and is not read by any person at mailin.</p>
+
+        <h2>Removing an Account and Deleting Data</h2>
+        <ul>
+            <li>Removing an account stops its connections and deletes its sign-in data from the Keychain. Mail already saved in your archive is kept; deleting it is a separate step that shows the number of messages first.</li>
+            <li>To also withdraw mailin's access at the provider, remove mailin in your Google Account (Security &rsaquo; Third-party connections) or Microsoft account (app permissions). mailin cannot do this for you because it has no server.</li>
+            <li>Turning Connected mail off stops every mail connection at once; saved mail stays readable, searchable and exportable.</li>
+            <!-- OWNER/ENGINEERING: as of d4a3ec3, Delete All Data (LegalComplianceManager.deleteAllUserData) does not
+                 remove the connected-account Keychain items (service com.ecosanskriti.mailin.connected-account).
+                 Until it does, keep the words "remove each connected account first"; drop them once fixed. -->
+            <li>You can delete all data at any time in Settings &rsaquo; Data &amp; Privacy &rsaquo; Delete All Data. Remove each connected account first, so that its sign-in data is deleted too.</li>
+        </ul>
+
+        <h2>Network Access</h2>
+        <p>The offline edition has no network capability at all. The connected edition may open connections only to the mail and sign-in servers listed above, only for accounts you added and for what you allowed; every attempt is checked first and can be seen in Settings &rsaquo; Health &rsaquo; Mail network. Apple's StoreKit handles in-app purchases in Apple's systems.</p>
+
+        <h2>Third-Party Services</h2>
+        <p>mailin integrates no third-party analytics, advertising, tracking or AI services. In the connected edition, the only third parties your device talks to are the mail providers of the accounts you add.</p>
+
+        <h2>In-App Purchases &amp; Subscriptions</h2>
+        <p>All transactions are processed by Apple through the App Store. Apple's privacy policy governs purchase and subscription data. mailin does not have access to your payment information. Subscription status is verified locally through Apple's StoreKit framework.</p>
+
+        <h2>Spotlight Indexing</h2>
+        <p>mailin optionally indexes email subjects and senders using Apple's CoreSpotlight framework so you can find emails from Spotlight. This index is stored locally on your device and is never transmitted.</p>
+
+        <h2>Data Storage</h2>
+        <p>Your archive &mdash; imported files, mail saved from connected accounts, drafts and the outbox &mdash; is a folder you own, stored locally in mailin's app container or on a disk you choose. You can clear all saved data at any time from Settings; cleared data is permanently deleted.</p>
+
+        <h2>Children's Privacy</h2>
+        <p>mailin does not knowingly collect any information from anyone, including children under the age of 13.</p>
+
+        <h2>Changes to This Policy</h2>
+        <p>If what the app does with data changes, this page is updated before that version is released.</p>
+
+        <h2>Contact</h2>
+        <p>Questions about this policy: <a href="mailto:&lt;SUPPORT EMAIL&gt;">&lt;SUPPORT EMAIL &mdash; owner&gt;</a>.</p>
+    </div>
+
+    <footer>
+        <div class="links">
+            <a href="./">Privacy Policy</a>
+            <a href="../terms/">Terms of Use</a>
+            <a href="../support/">Support</a>
+        </div>
+        <p>&copy; 2025-2026 mailin. All rights reserved. Built with native Apple technology.</p>
+    </footer>
+
+</body>
+</html>

@@ -38,3 +38,56 @@ proven. Written 2026-09-27. `NO_NETWORK_PROOF.md` holds the artifact-level check
 - If the Live Mail branch merges: the label must state that email content is transmitted to the
   user's own mail providers at the user's request, and that cloud AI, when enabled and consented per
   request, sends selected text to the chosen provider. Draft text is in `STORE_LISTING_3_0.md`.
+
+## v4.0 (V4-14, 2026-11-12) — offline and connected editions
+
+The table above is the 3.0 record. From v4.0 there are two configurations of one code base. Details and sources:
+`docs/V4_PROVIDER_REGISTRATION.md` §0, `docs/PRIVACY_V4_DRAFT.md`.
+
+| Configuration | Compile conditions | Entitlements (macOS) | Mail at run time |
+|---|---|---|---|
+| **Offline** (`Release`, `Debug`, enterprise edition) | `NO_NETWORK_BUILD` | no `network.client` / `network.server` | not compiled: `ConnectedBuildFeatures.mailTransportsCompiled == false`; Mail page shows "This edition has no mail connection"; proof unchanged (`NO_NETWORK_PROOF.md`) |
+| **Connected** (`Release-Connected`, owner creates it) | `MAILIN_CONNECTED_MAIL`, **not** `NO_NETWORK_BUILD`, **not** `MAILIN_CLOUD_AI` | `mailin/mailin-connected.entitlements` = offline set + `network.client` | **off by default**: `MailNetworkPolicy` refuses everything until the Live Mail page / `connectedMail` capability is on; each account off with no modes until granted |
+
+Every mail request asks `MailNetworkPolicy` first (socket, OAuth refresh, redirect, retry, download, request); an
+account is bound to its own hosts; AI hosts (`aiHostSuffixes`) and remote content are always refused; no redirect
+is followed with a bearer token.
+
+### Hosts the connected edition may contact (exact)
+
+| Provider | Host | Used for | Opened by |
+|---|---|---|---|
+| Google | `accounts.google.com` | sign-in page | system sign-in window (`ASWebAuthenticationSession`, ephemeral) |
+| Google | `oauth2.googleapis.com` | token exchange / refresh (POST) | app, `PolicyCheckedTokenTransport` |
+| Google | `gmail.googleapis.com` | capture (`profile`, `labels`, `messages`, `messages/{id}?format=raw`, `history`), send (`upload/…/messages/send`), server actions (`modify`, `trash`, `untrash`) | app (`GmailAdapter`, `GmailSendSubmitter`, `GmailActionExecutor`) |
+| Microsoft | `login.microsoftonline.com` (`/common/oauth2/v2.0/authorize`, `/token`); personal accounts may continue on `login.live.com` inside the sign-in window | sign-in, token exchange / refresh | sign-in window; app for `/token` |
+| Microsoft | `graph.microsoft.com` | capture (mail folders, delta, `/$value`), `sendMail`, PATCH / move | app (`GraphAdapter`, `GraphSendSubmitter`, `GraphActionExecutor`) |
+| iCloud Mail | `imap.mail.me.com:993`, `smtp.mail.me.com:587` | IMAP capture / actions, SMTP send | app (Network.framework, TLS before AUTH) |
+| Fastmail | `imap.fastmail.com:993`, `smtp.fastmail.com:465` | same | app |
+| Other IMAP | the host and port the user enters | same | app |
+
+Nothing else: no mailin server, no analytics, no AI provider, no remote images. Cloud AI stays uncompiled in both
+editions (BYOK scaffolding only, refuses every request).
+
+### Per feature (connected edition)
+
+| Feature | Network use | Default | Consent | Proof |
+|---|---|---|---|---|
+| Connected mail — Preserve mail | provider → device | off (page + capability + per-account mode) | account sign-in (provider consent screen) + mode switch | `MailPolicyTests`, `GmailAdapterTests`, `GraphAdapterTests`, `IMAPAdapterTests` |
+| Connected mail — Send mail | device → provider | off | mode switch + re-consent (`gmail.send` / `Mail.Send`) + explicit Send per message | `OutboxSendTests` |
+| Connected mail — Change server mail | device → provider | off | mode switch + re-consent (`gmail.modify` / `Mail.ReadWrite`) + preview / typed count | `RemoteActionService` tests |
+| Everything else (import, search, export, on-device AI) | none | as 3.0 | — | as 3.0 |
+
+### Data at rest added by v4
+
+| Data | Where | Protection |
+|---|---|---|
+| OAuth tokens, IMAP / SMTP passwords | Keychain service `com.ecosanskriti.mailin.connected-account`, account `<UUID>/<kind>` | not synchronised, `AfterFirstUnlockThisDeviceOnly`, never in backup / export |
+| Connected accounts, remote folders / messages / memberships, sync checkpoints, capture runs | archive SQLite (`mail_accounts`, `remote_*`, `sync_checkpoints`, `capture_*`) | as the archive |
+| Drafts, outbox | archive folder (`draft.json`, `operation.json`, `message.eml`) | as the archive |
+| Sending identities, SMTP host names | UserDefaults (`MailAccountExtrasStore`), no secrets | app container |
+
+### Privacy label consequences (v4)
+
+Not decided mechanically from the entitlement: see `docs/V4_APP_PRIVACY_ANSWERS.md` (recommended "Data Not
+Collected" with reasoning; conservative alternative; owner questions). Offline edition: unchanged.
