@@ -62,9 +62,10 @@ bound to its own mail and sign-in hosts; AI hosts and remote content always refu
 ## Owner decisions / checks before publishing
 
 1. Effective date and version; support e-mail address on the page (placeholder `<SUPPORT EMAIL>`).
-2. **Defect to fix first (or keep the caveat):** Settings ▸ Delete All Data (`LegalComplianceManager.deleteAllUserData`)
-   removes only the legacy Keychain keys, not the connected-account items. The draft says "remove each connected
-   account first"; drop that sentence when Delete All Data also clears `com.ecosanskriti.mailin.connected-account`.
+2. **Fixed 2026-11-12:** Settings ▸ Delete All Data (`ArchiveLifecycleService.eraseAllData`) now also removes every
+   `com.ecosanskriti.mailin.connected-account` Keychain item (`KeychainCredentialStore.deleteAll`, guarded by
+   `EraseConnectedSecretsTests` and `MailAccountCredentialTests.testDeleteAll_…`); the "remove each connected account
+   first" caveat is gone from the drafts.
 3. The in-app offline summary (`LegalComplianceManager.privacyPolicySummary`, unchanged by request) still mentions an
    optional Cloud AI feature and iCloud review sync that the offline 3.0.x build does not compile — worth a
    correction in a later offline release (it is English legal text, not in the string catalog).

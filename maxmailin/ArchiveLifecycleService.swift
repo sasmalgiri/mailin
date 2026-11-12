@@ -1,4 +1,5 @@
 @testable import ArchiveCore
+import MailConnectivity
 //
 //  ArchiveLifecycleService.swift
 //  maxmailin
@@ -31,6 +32,7 @@
 //
 
 import Foundation
+import MailConnectivity
 import os.log
 
 @MainActor
@@ -194,6 +196,16 @@ final class ArchiveLifecycleService {
         // tombstone and migration flags — so they are re-stamped below.
         LegalComplianceManager.shared.deleteAllUserData()
         UserDefaults.standard.set(true, forKey: Self.migrationTombstoneKey)
+        // Connected-account sign-in data (tokens, passwords) lives in its own
+        // Keychain service; the erase removes it too.
+        if let warning = Self.eraseConnectedMailSecrets(KeychainCredentialStore()) { outcome.warnings.append(warning) }
         return outcome
+    }
+
+    /// Removes every connected-account secret; a failure is a stated warning.
+    static func eraseConnectedMailSecrets(_ store: KeychainCredentialStore) -> String? {
+        do { try store.deleteAll(); return nil } catch {
+            return "Connected-account sign-in data could not be erased: \(error.localizedDescription)"
+        }
     }
 }

@@ -156,10 +156,7 @@
             <li>Removing an account stops its connections and deletes its sign-in data from the Keychain. Mail already saved in your archive is kept; deleting it is a separate step that shows the number of messages first.</li>
             <li>To also withdraw mailin's access at the provider, remove mailin in your Google Account (Security &rsaquo; Third-party connections) or Microsoft account (app permissions). mailin cannot do this for you because it has no server.</li>
             <li>Turning Connected mail off stops every mail connection at once; saved mail stays readable, searchable and exportable.</li>
-            <!-- OWNER/ENGINEERING: as of d4a3ec3, Delete All Data (LegalComplianceManager.deleteAllUserData) does not
-                 remove the connected-account Keychain items (service com.ecosanskriti.mailin.connected-account).
-                 Until it does, keep the words "remove each connected account first"; drop them once fixed. -->
-            <li>You can delete all data at any time in Settings &rsaquo; Data &amp; Privacy &rsaquo; Delete All Data. Remove each connected account first, so that its sign-in data is deleted too.</li>
+            <li>You can delete all data at any time in Settings &rsaquo; Data &amp; Privacy &rsaquo; Delete All Data. This also deletes every connected account's sign-in data from this device's Keychain.</li>
         </ul>
 
         <h2>Network Access</h2>

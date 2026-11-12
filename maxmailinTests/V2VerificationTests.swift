@@ -9392,3 +9392,32 @@ final class ReconsentScopeTests: XCTestCase {
         XCTAssertEqual(ConnectedMailBackend.reconsentScopes(granted: ["x"], provider: .imap, adding: []), [])
     }
 }
+
+/// V4-14 finding: Delete All Data left connected-account Keychain items behind.
+final class EraseConnectedSecretsTests: XCTestCase {
+    private final class Keychain: KeychainAPI, @unchecked Sendable {
+        var deletes: [[String: Any]] = []
+        var status: OSStatus = errSecSuccess
+        func copyMatching(_ query: [String: Any]) -> (status: OSStatus, data: Data?) { (errSecItemNotFound, nil) }
+        func add(_ attributes: [String: Any]) -> OSStatus { errSecSuccess }
+        func update(_ query: [String: Any], _ changes: [String: Any]) -> OSStatus { errSecItemNotFound }
+        func delete(_ query: [String: Any]) -> OSStatus { deletes.append(query); return status }
+    }
+
+    @MainActor
+    func testEraseAllRemovesTheConnectedAccountService() throws {
+        let keychain = Keychain()
+        XCTAssertNil(ArchiveLifecycleService.eraseConnectedMailSecrets(KeychainCredentialStore(api: keychain, useDataProtectionKeychain: false)))
+        let query = try XCTUnwrap(keychain.deletes.first)
+        XCTAssertEqual(query[kSecAttrService as String] as? String, KeychainCredentialStore.service)
+        XCTAssertNil(query[kSecAttrAccount as String], "every account of the service, not one")
+        keychain.status = errSecInteractionNotAllowed
+        XCTAssertNotNil(ArchiveLifecycleService.eraseConnectedMailSecrets(KeychainCredentialStore(api: keychain, useDataProtectionKeychain: false)),
+                        "a failure is stated, not swallowed")
+        // eraseAllData runs it (the whole erase is not run here: it would wipe this Mac's app data).
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("maxmailin/ArchiveLifecycleService.swift"), encoding: .utf8)
+        let erase = try XCTUnwrap(source.range(of: "func eraseAllData()"))
+        XCTAssertTrue(source[erase.upperBound...].prefix(2_500).contains("eraseConnectedMailSecrets(KeychainCredentialStore())"))
+    }
+}

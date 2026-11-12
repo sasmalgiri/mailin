@@ -72,7 +72,7 @@ extension LegalComplianceManager {
 
     Third-Party Services: Apple App Store for purchases. Your own mail providers, only as described above. No advertising SDKs, no analytics frameworks, no tracking.
 
-    Data Deletion: You can delete all data at any time via Settings > Data & Privacy > Delete All Data. Remove each connected account first, so that its sign-in data is deleted too.
+    Data Deletion: You can delete all data at any time via Settings > Data & Privacy > Delete All Data. This also deletes every connected account's sign-in data from this device's Keychain.
 
     Children: mailin is not directed at children under 13 and does not knowingly collect data from children.
 

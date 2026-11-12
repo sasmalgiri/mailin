@@ -156,4 +156,20 @@ public struct KeychainCredentialStore: CredentialStore {
             throw CredentialStoreError.keychain(operation: "removed", status: status)
         }
     }
+
+    /// Erase-all: removes every connected-account item (all accounts, all
+    /// kinds) — the query names the service only, so SecItemDelete matches
+    /// them all. Items of other services are never touched.
+    public func deleteAll() throws {
+        var q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
+        ]
+        if useDataProtectionKeychain { q[kSecUseDataProtectionKeychain as String] = true }
+        let status = api.delete(q)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw CredentialStoreError.keychain(operation: "removed", status: status)
+        }
+    }
 }

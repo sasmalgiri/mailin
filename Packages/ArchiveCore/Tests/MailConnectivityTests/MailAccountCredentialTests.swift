@@ -448,4 +448,19 @@ final class MailAccountCredentialTests: XCTestCase {
         XCTAssertNil(try store.read(.password, account: account))
         try store.delete(.password, account: account)   // absent: not an error
     }
+
+    /// Delete All Data: every connected-account secret goes, other services stay.
+    func testDeleteAll_removesEveryConnectedAccountItem_andNothingElse() throws {
+        let keychain = FakeKeychain()
+        let store = KeychainCredentialStore(api: keychain, useDataProtectionKeychain: false)
+        let a = UUID(), b = UUID()
+        try store.write(Data("t-a".utf8), kind: .oauthTokenSet, account: a)
+        try store.write(Data("p-b".utf8), kind: .password, account: b)
+        keychain.stored["com.ecosanskriti.mailin|legacy"] = Data("other".utf8)
+        try store.deleteAll()
+        XCTAssertNil(try store.read(.oauthTokenSet, account: a))
+        XCTAssertNil(try store.read(.password, account: b))
+        XCTAssertEqual(keychain.stored["com.ecosanskriti.mailin|legacy"], Data("other".utf8))
+        XCTAssertNoThrow(try store.deleteAll(), "nothing left is not an error")
+    }
 }

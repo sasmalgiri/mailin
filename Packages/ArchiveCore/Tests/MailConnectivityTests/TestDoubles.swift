@@ -78,6 +78,13 @@ final class FakeKeychain: KeychainAPI, @unchecked Sendable {
     func delete(_ query: [String: Any]) -> OSStatus {
         lock.lock(); defer { lock.unlock() }
         calls.append("delete")
+        // Like SecItemDelete: a query without an account matches every item of the service.
+        if query[kSecAttrAccount as String] == nil {
+            let prefix = (query[kSecAttrService as String] as? String ?? "") + "|"
+            let matching = stored.keys.filter { $0.hasPrefix(prefix) }
+            matching.forEach { stored[$0] = nil }
+            return matching.isEmpty ? errSecItemNotFound : errSecSuccess
+        }
         return stored.removeValue(forKey: account(query)) == nil ? errSecItemNotFound : errSecSuccess
     }
 }
