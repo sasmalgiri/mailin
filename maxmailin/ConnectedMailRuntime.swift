@@ -58,6 +58,10 @@ struct ConnectedAdapterContext: Sendable {
 /// A thrown error is the reason shown for the account (e.g. sign-in not configured).
 typealias ConnectedAdapterFactory = @Sendable (ConnectedAdapterContext) async throws -> (any MailProviderAdapter)?
 
+/// REC-07: builds an account's server-action executor (V4-11); the context's
+/// permission asks the policy with purpose "change server mail".
+typealias ConnectedActionExecutorFactory = @Sendable (ConnectedAdapterContext) async throws -> (any RemoteActionExecutor)?
+
 // MARK: - Search feed
 
 /// Indexes newly captured records into the full-text index exactly as an
@@ -71,8 +75,18 @@ actor ConnectedSearchFeed {
     private let batchSize: Int
     private let afterIndex: @Sendable ([UUID]) async -> Void
     private var pending: [UUID] = []
+    /// REC-07: records indexed successfully and not yet handed to the
+    /// capture rules (a failed batch is never handed over: the rules' catch-up
+    /// evaluates it once the launch reconcile has indexed it).
+    private var indexedForRules: [UUID] = []
     private(set) var indexed = 0
     private(set) var lastError: String?
+
+    /// The records indexed since the last call (REC-07 capture rules).
+    func drainIndexed() -> [UUID] {
+        defer { indexedForRules.removeAll() }
+        return indexedForRules
+    }
 
     init(store: SQLiteEmailStore, fts: FTSSearchIndex, batchSize: Int = 200,
          afterIndex: @escaping @Sendable ([UUID]) async -> Void) {
@@ -93,6 +107,7 @@ actor ConnectedSearchFeed {
             let emails = try await store.emails(withIDs: ids)
             try await fts.indexBatch(emails)
             indexed += emails.count
+            indexedForRules += emails.map(\.id)
             lastError = nil
         } catch {
             lastError = error.localizedDescription
@@ -119,6 +134,10 @@ final class ConnectedMailRuntime {
         var scheduler = FairDownloadScheduler()
         var backoff = BackoffPolicy()
         var storage = StorageProbe()
+        /// REC-07: builds an account's server-action executor (nil = this
+        /// build cannot change server mail for it). Asked only after the
+        /// account's "Change server mail" permission was checked.
+        var actionExecutors: ConnectedActionExecutorFactory = { _ in nil }
     }
 
     nonisolated static let didChange = Notification.Name("ConnectedMailRuntime.didChange")
@@ -237,6 +256,7 @@ final class ConnectedMailRuntime {
         let report = await task.value
         policy.finish(token)
         await feed.flush()
+        await applyCaptureRules()
         lastReports[id] = report
         if case .needsSignIn = report.outcome {
             // A revoked grant: the account says so; its saved mail stays usable.
@@ -259,6 +279,100 @@ final class ConnectedMailRuntime {
             return out
         }
         return results
+    }
+
+    // MARK: REC-07 — selective capture, capture rules, server cleanup
+
+    /// Deterministic capture rules (RQ09), evaluated after every capture's
+    /// records were indexed; nil = no rules engine in this process.
+    var rules: CaptureRuleEngine?
+
+    /// Hands the newly indexed records to the rules (each rule fires at most
+    /// once per message, also across replays and restarts).
+    func applyCaptureRules() async {
+        let ids = await feed.drainIndexed()
+        guard let rules, !ids.isEmpty else { return }
+        _ = await rules.handleIndexed(ids)
+    }
+
+    /// The account's folders / labels (every page), for the selection.
+    func folderList(_ id: UUID) async throws -> [RemoteFolderOccurrence] {
+        guard let engine = engines[id] else { throw ConnectedRecipeError.noEngine(unavailable[id]) }
+        guard let token = policy.register(accountID: id, label: "list folders", cancel: {}) else {
+            throw ConnectedRecipeError.notPermitted(String(localized: "Mail is switched off."))
+        }
+        defer { policy.finish(token) }
+        return try await engine.folderList()
+    }
+
+    /// Lists a selection to its end and freezes it (nothing is saved yet).
+    func listSelection(_ id: UUID, filter: SelectiveCaptureFilter) async throws -> SelectiveCaptureListing {
+        guard let engine = engines[id] else { throw ConnectedRecipeError.noEngine(unavailable[id]) }
+        let box = ListingTaskBox()
+        guard let token = policy.register(accountID: id, label: "capture preview", cancel: { box.cancel() }) else {
+            throw ConnectedRecipeError.notPermitted(String(localized: "Mail is switched off."))
+        }
+        defer { policy.finish(token) }
+        let task = Task { try await engine.listSelection(filter) }
+        box.set { task.cancel() }
+        return try await task.value
+    }
+
+    /// Captures exactly a frozen listing, registered like a sync; the
+    /// captured records are indexed and handed to the capture rules.
+    func captureListed(_ listing: SelectiveCaptureListing) async -> SyncRunReport? {
+        let id = listing.accountID
+        guard let engine = engines[id] else { return nil }
+        let box = CaptureTaskBox()
+        guard let token = policy.register(accountID: id, label: "selective capture", cancel: { box.cancel() }) else { return nil }
+        let task = Task { await engine.captureListed(listing) }
+        box.set(task)
+        let report = await task.value
+        policy.finish(token)
+        await feed.flush()
+        await applyCaptureRules()
+        lastReports[id] = report
+        if case .needsSignIn = report.outcome {
+            try? await registry.setState(.needsReauthorisation, account: id)
+        }
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+        return report
+    }
+
+    /// Why this account may not change server mail now, or nil. Never
+    /// touches the network.
+    func serverChangeRefusal(_ id: UUID) async -> String? {
+        guard let account = try? await registry.account(id) else { return MailNetworkRefusal.noAccount.explanation }
+        guard account.enabledModes.contains(.serverActions) else {
+            return String(localized: "This account is not allowed to change server mail. Turn on Change server mail for it in Mail settings first.")
+        }
+        guard account.connectionState == .connected else {
+            return String(localized: "Account needs sign-in; saved mail remains available.")
+        }
+        if let refusal = Self.serverChangeRefusal(policy: policy, account: id) { return refusal.explanation }
+        return nil
+    }
+
+    nonisolated static func serverChangeRefusal(policy: MailNetworkPolicy, account id: UUID) -> MailNetworkRefusal? {
+        guard let host = policy.account(id)?.mailHosts.first else { return policy.isMailEnabled ? .noAccount : .mailOff }
+        return policy.wouldPermit(MailNetworkRequest(accountID: id, host: host, destination: .mailServer,
+                                                     operation: .request, purpose: .changeServerMail))
+    }
+
+    /// The journalled server-action service of one account, or the reason
+    /// there is none. Built only after the permission check passed.
+    func actionService(_ id: UUID, journal: RemoteOperationJournal) async throws -> RemoteActionService {
+        if let why = await serverChangeRefusal(id) { throw ConnectedRecipeError.notPermitted(why) }
+        let account = try await registry.account(id)
+        let context = ConnectedAdapterContext(account: account, credentials: deps.credentials, tokens: deps.tokens,
+                                              permission: Self.permission(policy: policy, purpose: .changeServerMail))
+        guard let executor = try await deps.actionExecutors(context) else {
+            throw ConnectedRecipeError.notPermitted(String(localized: "This edition cannot change mail on this account's server."))
+        }
+        let policy = self.policy
+        return RemoteActionService(account: account, executor: executor, journal: journal, changePermission: { id in
+            if let refusal = Self.serverChangeRefusal(policy: policy, account: id) { throw refusal }
+        })
     }
 
     // MARK: Accounts
@@ -311,7 +425,7 @@ final class ConnectedMailRuntime {
 
     /// The engine's network question, asked of the mail policy (purpose:
     /// preserve mail). A refusal stops the account's sync without a retry.
-    nonisolated static func permission(policy: MailNetworkPolicy) -> NetworkPermission {
+    nonisolated static func permission(policy: MailNetworkPolicy, purpose: MailAccountMode = .preserveMail) -> NetworkPermission {
         { ask in
             let operation: MailNetworkOperation
             switch ask.operation {
@@ -323,7 +437,7 @@ final class ConnectedMailRuntime {
             try policy.permit(MailNetworkRequest(
                 accountID: ask.accountID, host: ask.host,
                 destination: ask.destination == .authorization ? .authorization : .mailServer,
-                operation: operation, purpose: .preserveMail))
+                operation: operation, purpose: purpose))
         }
     }
 
@@ -338,10 +452,14 @@ final class ConnectedMailRuntime {
         if isOn {
             guard shared == nil, let deps = makeProductionDependencies() else { return }
             let runtime = ConnectedMailRuntime(dependencies: deps)
+            runtime.rules = CaptureRuleEngine.production(store: deps.store)
             shared = runtime
             Task { @MainActor in
                 do {
                     try await runtime.start()
+                    // REC-07: arrivals a rule has not decided yet (an earlier
+                    // indexing failure, a crash) — the ledger keeps it once-only.
+                    _ = await runtime.rules?.catchUp()
                     await runtime.syncAll()
                 } catch {
                     log.error("connected mail did not start: \(error.localizedDescription, privacy: .public)")
@@ -416,7 +534,28 @@ enum ConnectedMailProduction {
         return ConnectedMailRuntime.Dependencies(
             store: .shared, fts: .shared, policy: .shared, credentials: credentials, tokens: tokens,
             adapters: { context in try await adapter(context) },
-            afterIndex: { ids in await ConnectedMailRuntime.afterIndexInApp(ids) })
+            afterIndex: { ids in await ConnectedMailRuntime.afterIndexInApp(ids) },
+            actionExecutors: { context in try actionExecutor(context) })
+    }
+
+    /// REC-07 / V4-11: the account's server-action executor. Its requests ask
+    /// the policy with purpose "change server mail" (the context's permission).
+    static func actionExecutor(_ c: ConnectedAdapterContext) throws -> (any RemoteActionExecutor)? {
+        switch c.account.provider {
+        case .gmail:
+            guard let tokens = c.tokens else { return nil }
+            return GmailActionExecutor(accountID: c.account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport(),
+                                       permission: c.permission)
+        case .microsoftGraph:
+            guard let tokens = c.tokens else { return nil }
+            return GraphActionExecutor(accountID: c.account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport(),
+                                       permission: c.permission)
+        case .imap:
+            // No Trash mailbox is assumed: without one, Move to Trash is
+            // refused with its reason (never a mailbox-wide EXPUNGE).
+            let adapter = try IMAPAdapter(account: c.account, credentials: c.credentials, permission: c.permission)
+            return IMAPActionExecutor(adapter: adapter, trashMailbox: nil, permission: c.permission)
+        }
     }
 
     private static func info(_ key: String) -> String {

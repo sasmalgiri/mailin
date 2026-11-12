@@ -4011,6 +4011,29 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
+    /// v4.0 REC-07: which of `candidates` the spec cannot decide yet (their
+    /// text is not indexed) — `specUnresolvedCount` for an id batch, so a
+    /// capture rule never records "no match" for a message it could not read.
+    func specUnresolvedIDs(among candidates: [UUID], query: EmailQuery) throws -> Set<UUID> {
+        guard !candidates.isEmpty, let spec = query.spec, let unresolved = Self.unresolvedClauses(spec) else { return [] }
+        var scoped = query
+        scoped.spec = nil
+        let (scopeSQL, scopeBinds) = Self.filterClauses(scoped)
+        let db = try ensureDB()
+        var out = Set<UUID>()
+        for chunk in candidates.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let clauses = ["e.id IN (\(placeholders))"] + scopeSQL + unresolved.sql
+            let stmt = try prepare(db, "SELECT e.id FROM emails e WHERE " + clauses.joined(separator: " AND ") + ";")
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            for id in chunk { bindText(stmt, idx, id.uuidString); idx += 1 }
+            _ = bindQueryValues(stmt, scopeBinds + unresolved.binds, startingAt: idx)
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        }
+        return out
+    }
+
     /// R7 / §13.3 (8): files inside attachments by state, for the messages in
     /// `scope` (its filters only — the search's own conditions and free text
     /// are left out, so the counts describe where the search looked).
