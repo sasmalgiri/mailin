@@ -79,6 +79,8 @@ public struct CaptureStatus: Sendable, Equatable {
     public var completeness: ConnectedCompleteness
     public var search: SearchCoverageSnapshot?
     public var export: ExportVerificationSnapshot?
+    /// V4-12: the archive drive to reconnect, when capture paused because it is gone.
+    public var missingDrive: ArchiveDriveIdentity? = nil
 
     public var lastSuccessfulSync: Date? { completeness.runs.lastSuccessfulAt }
     public var lastAttemptedSync: Date? { completeness.runs.lastAttemptedAt }
@@ -113,7 +115,9 @@ public struct CaptureStatus: Sendable, Equatable {
     public var defaultText: String {
         switch headline {
         case .needsSignIn: return "Account needs sign-in; saved mail remains available"
-        case .paused(.driveUnavailable): return "Capture paused: drive unavailable"
+        case .paused(.driveUnavailable):
+            if let drive = missingDrive { return "Capture paused: reconnect the drive “\(drive.volumeName)” that holds the archive" }
+            return "Capture paused: drive unavailable"
         case .paused(.diskFull): return "Capture paused: not enough free space"
         case .paused(.quotaExceeded): return "Capture paused: the provider's limit was reached; it resumes later"
         case .paused(.rateLimited): return "Capture paused: the provider asked mailin to slow down; it resumes later"

@@ -105,6 +105,10 @@ enum ArchiveBackup {
     static let blobsFolder = "blobs"
     static let sourcesFolder = "sources"
     static let receiptsFolder = "receipts"
+    /// V4-12: connected-mail drafts, outbox and lifecycle ledger (MailConnectivity
+    /// writes them under the store folder). They hold message content and
+    /// account UUIDs, never a credential; restored as "add what is missing".
+    static let connectedFolders = ["ConnectedDrafts", "ConnectedOutbox", "ConnectedLifecycle"]
 
     // MARK: Create
 
@@ -150,6 +154,16 @@ enum ArchiveBackup {
                                                   relativePrefix: folder, kind: kind))
         }
 
+        // 3b. V4-12: connected drafts / outbox / lifecycle ledger (no credentials
+        //     exist in them; secrets live only in the Keychain).
+        for folder in connectedFolders {
+            let root = storeDirectory.appendingPathComponent(folder, isDirectory: true)
+            guard fm.fileExists(atPath: root.path) else { continue }
+            progress?(folder)
+            files.append(contentsOf: try copyTree(from: root, to: destination.appendingPathComponent(folder, isDirectory: true),
+                                                  relativePrefix: folder, kind: "connected"))
+        }
+
         // 4. Receipts — the verification records.
         for receipt in receiptDirectories where fm.fileExists(atPath: receipt.url.path) {
             progress?("receipts")
@@ -165,7 +179,9 @@ enum ArchiveBackup {
             schemaVersion: try await store.schemaVersion(),
             counts: counts,
             files: files,
-            omitted: ["fts5 search shards — rebuildable from the database (Settings ▸ Health ▸ Rebuild search index); the in-database chunk index is included"],
+            omitted: ["fts5 search shards — rebuildable from the database (Settings ▸ Health ▸ Rebuild search index); the in-database chunk index is included",
+                      "connected-account credentials — never backed up (they stay in this device's Keychain); restored accounts ask to sign in again",
+                      "connected-staging — downloads not yet preserved; they are fetched again after a restore"],
             linkedSources: try await store.linkedSourceInventory())
         try write(inventory, to: destination)
         return inventory
@@ -239,11 +255,18 @@ enum ArchiveBackup {
                 throw ArchiveBackupError.copyFailed(error.localizedDescription)
             }
         }
-        // Blobs and sources: add what is missing; existing files are left alone.
-        for file in verification.inventory.files where file.kind == "blob" || file.kind == "source" {
+        // V4-12: the backup holds no credential, so on a new device or profile
+        // every connected account must sign in again.
+        if mode == .cleanProfile {
+            try markConnectedAccountsNeedSignIn(databaseAt: dbTarget)
+        }
+        // Blobs, sources and connected drafts / outbox: add what is missing;
+        // existing files are left alone.
+        for file in verification.inventory.files where file.kind == "blob" || file.kind == "source" || file.kind == "connected" {
             let destination = target.appendingPathComponent(file.path)
             guard !fm.fileExists(atPath: destination.path) else { continue }
-            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                   attributes: file.kind == "connected" ? [.posixPermissions: 0o700] : nil)
             do { try fm.copyItem(at: backup.appendingPathComponent(file.path), to: destination) }
             catch { throw ArchiveBackupError.copyFailed(error.localizedDescription) }
         }

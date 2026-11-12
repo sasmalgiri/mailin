@@ -283,9 +283,12 @@ public enum ConnectedArchiveError: LocalizedError, Equatable {
     case itemsNotTerminal(runID: String, pending: Int)
     case invalidIdentity(String)
     case stagingFailed(String)
+    /// V4-12: the archive's volume ran out of space while a download was staged.
+    case volumeFull(String)
 
     public var errorDescription: String? {
         switch self {
+        case .volumeFull(let why): return "The archive's disk is full; the download was not kept (\(why))."
         case .stagedFileMissing(let p): return "The downloaded message file \(p) is missing; it was not preserved and will be downloaded again."
         case .stagedBytesMismatch(let e, let a): return "A downloaded message changed before it was preserved (expected \(e.prefix(12))…, found \(a.prefix(12))…); it was not preserved."
         case .stagedSizeMismatch(let e, let a): return "A downloaded message is \(a) bytes, not the \(e) bytes staged; it was not preserved."
@@ -329,7 +332,8 @@ public final class StagingWriter {
         guard let handle else { throw ConnectedArchiveError.stagingFailed("the staging file is closed") }
         do { try handle.write(contentsOf: data) } catch {
             discard()
-            throw ConnectedArchiveError.stagingFailed(error.localizedDescription)
+            throw ArchiveWriteError.isOutOfSpace(error) ? ConnectedArchiveError.volumeFull(error.localizedDescription)
+                                                        : ConnectedArchiveError.stagingFailed(error.localizedDescription)
         }
         hasher.update(data: data)
         count += Int64(data.count)
@@ -340,7 +344,8 @@ public final class StagingWriter {
         guard let handle else { throw ConnectedArchiveError.stagingFailed("the staging file is closed") }
         do { try handle.synchronize(); try handle.close() } catch {
             discard()
-            throw ConnectedArchiveError.stagingFailed(error.localizedDescription)
+            throw ArchiveWriteError.isOutOfSpace(error) ? ConnectedArchiveError.volumeFull(error.localizedDescription)
+                                                        : ConnectedArchiveError.stagingFailed(error.localizedDescription)
         }
         self.handle = nil
         let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
