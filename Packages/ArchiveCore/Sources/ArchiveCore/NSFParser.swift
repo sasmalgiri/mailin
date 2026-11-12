@@ -274,6 +274,11 @@ struct NSFReader {
 
     // R5b: no fixed note count (the former 500,000 stopped the rollback reader without a word).
 
+    /// The text-scan fallback reads the whole file as one string, so it is
+    /// bounded: a larger file that the structured read could not parse is
+    /// refused with that reason (listed in Settings ▸ Health ▸ Limits).
+    static let scanFallbackMaxBytes = 200 * 1024 * 1024
+
     init(data: Data) {
         self.data = data
     }
@@ -644,8 +649,7 @@ struct NSFReader {
         // The scan fallback materialises the entire file as a String. Cap it so
         // a multi-GB NSF that fails structured parse fails cleanly rather than
         // OOM'ing (structured parse handles large files via mmap; this doesn't).
-        let maxScanBytes = 200 * 1024 * 1024
-        guard data.count <= maxScanBytes else {
+        guard data.count <= Self.scanFallbackMaxBytes else {
             throw NSFParser.NSFError.invalidFormat("File too large for scan fallback (\(data.count) bytes)")
         }
 

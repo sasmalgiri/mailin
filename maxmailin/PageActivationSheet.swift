@@ -114,7 +114,8 @@ enum PageFeatureCatalog {
         case .aiInsights:
             return [
                 "Runs analysis in the background and keeps a weekly digest schedule.",
-                "Uses the on-device model only. No cloud provider is ever contacted; the app has no network access.",
+                // CLOSE-05: a connected-mail build does have network access (mail only), so the line says only what is true of AI.
+                String(localized: "Uses the on-device model only. No cloud AI provider is ever contacted."),
                 "Switching it off stops the work and unloads the model; saved summaries and reports are kept.",
             ]
         case .professional:

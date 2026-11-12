@@ -9075,3 +9075,140 @@ final class MemoryPressureTempFilesTests: XCTestCase {
         }
     }
 }
+
+// MARK: - CLOSE-05: the extractor-version migration's per-reader branches
+
+/// `requeueStale` re-queues completed rows of the readers that changed at
+/// versions 11 and 12. Before this the only guards used version-1 and
+/// version-9 rows, which the generic branches catch anyway — removing the
+/// version-11 or version-12 branch failed no test.
+@MainActor
+final class ExtractorVersionRequeueTests: XCTestCase {
+    func testRequeueStale_version11And12ReaderBranches_reQueueTheirReadersOnly() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-requeue-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let coverage = try AttachmentCoverageStore(url: await store.attachmentCoverageURL)
+
+        func record(_ id: UUID, _ filename: String, _ mime: String, extractor: String, version: Int) throws {
+            try coverage.record(emailID: id, rows: [
+                AttachmentCoverageRow(emailID: id, ordinal: 0, filename: filename, mimeType: mime, state: .extracted,
+                                      extractor: extractor, extractorVersion: version, characters: 42, note: nil),
+            ])
+        }
+        // Completed ("extracted") rows only: the generic stale-state branch never takes these.
+        let iwork10 = UUID(), office10 = UUID(), archive11 = UUID(), pdf11 = UUID()
+        try record(iwork10, "plan.pages", "application/x-iwork-pages-sffpages", extractor: "iwork", version: 10)
+        // version-11 branch only: "office" is not a version-12 reader, and version 10 is not below the boundary pass.
+        try record(office10, "memo.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                   extractor: "office", version: 10)
+        // version-12 branch only: read at 11, so neither the boundary pass (< 10) nor the version-11 pass takes it.
+        try record(archive11, "bundle.7z", "application/x-7z-compressed", extractor: "archive", version: 11)
+        // No branch: PDFKit's output did not change after version 10.
+        try record(pdf11, "scan.pdf", "application/pdf", extractor: "pdfkit", version: 11)
+        XCTAssertTrue(AttachmentTextIndexJob.version11Extractors.contains("office")
+                      && !AttachmentTextIndexJob.version12Extractors.contains("office"), "fixture assumption")
+        XCTAssertTrue(AttachmentTextIndexJob.version12Extractors.contains("archive")
+                      && AttachmentTextIndexJob.version12Extractors.contains("iwork"), "fixture assumption")
+
+        let requeued = try await AttachmentTextIndexJob.requeueStale(store: store, coverage: coverage)
+
+        XCTAssertEqual(requeued, 3, "the iwork, office and archive emails go back on the work list, the PDF does not")
+        XCTAssertTrue(try coverage.rows(for: iwork10).isEmpty, "iwork read at 10 is re-read for versions 11 and 12")
+        XCTAssertTrue(try coverage.rows(for: office10).isEmpty, "office read at 10 is re-read for version 11")
+        XCTAssertTrue(try coverage.rows(for: archive11).isEmpty, "archive read at 11 is re-read for version 12")
+        let kept = try coverage.rows(for: pdf11)
+        XCTAssertEqual(kept.map(\.extractor), ["pdfkit"], "a PDF read at 11 is not re-read")
+        XCTAssertEqual(kept.first?.extractorVersion, 11)
+
+        // A second pass finds nothing more: the migration is not repeated.
+        let again = try await AttachmentTextIndexJob.requeueStale(store: store, coverage: coverage)
+        XCTAssertEqual(again, 0)
+    }
+}
+
+// MARK: - CLOSE-05: Limits screen rows match the code
+
+@MainActor
+final class AppLimitsReconciliationTests: XCTestCase {
+    private func plain(_ s: String) -> String {
+        s.replacingOccurrences(of: "\u{202F}", with: " ").replacingOccurrences(of: "\u{00A0}", with: " ").replacingOccurrences(of: ",", with: "")
+    }
+    private func bytes(_ b: Int64) -> String { plain(ByteCountFormatter.string(fromByteCount: b, countStyle: .file)) }
+    private func binaryBytes(_ b: Int64) -> String { plain(ByteCountFormatter.string(fromByteCount: b, countStyle: .binary)) }
+    private func row(_ what: String) -> AppLimit? { AppLimits.all.first { $0.what == what } }
+
+    func testCLOSE05_limitRowsNameTheRealRules() throws {
+        let limits = AppLimits.all
+        XCTAssertEqual(Set(limits.map(\.id)).count, limits.count, "every row has its own name")
+
+        // PST: the ANSI ceiling is a refusal (SourceSizePolicy.pstVerdict), not a warning.
+        let pst = try XCTUnwrap(row("Outlook PST"))
+        XCTAssertTrue(plain(pst.value).contains("refused above \(bytes(SourceSizePolicy.ansiPSTMaxBytes))"), pst.value)
+        XCTAssertTrue(pst.why.contains("is refused"), pst.why)
+        XCTAssertFalse(pst.why.contains("does not refuse"), pst.why)
+        XCTAssertNotNil(SourceSizePolicy.pstVerdict(version: .ansi(14), fileSize: SourceSizePolicy.ansiPSTMaxBytes + 1).refusal)
+
+        // NSF: a warning above the legacy ceiling, a refusal above the current one.
+        let nsf = try XCTUnwrap(row("Notes NSF"))
+        XCTAssertTrue(plain(nsf.value).contains("warning above \(bytes(SourceSizePolicy.nsfLegacyMaxBytes))"), nsf.value)
+        XCTAssertTrue(plain(nsf.value).contains("refused above \(bytes(SourceSizePolicy.nsfModernMaxBytes))"), nsf.value)
+        XCTAssertNotNil(SourceSizePolicy.nsfVerdict(fileSize: SourceSizePolicy.nsfModernMaxBytes + 1).refusal)
+
+        // MIME nesting: the default (offset) reader's guard first.
+        let mime = try XCTUnwrap(row("Parts nested inside one message"))
+        XCTAssertTrue(mime.value.hasPrefix("\(MIMEPartScanner.maxDepth) levels"), mime.value)
+        XCTAssertTrue(mime.value.contains("\(MIMEParser.maxRecursionDepth) with the previous reader"), mime.value)
+        XCTAssertTrue(mime.why.contains("undivided part"), mime.why)
+
+        // Rows that were missing.
+        let table = try XCTUnwrap(row("Previous attachment text table"))
+        XCTAssertEqual(table.kind, .previousEngine)
+        XCTAssertTrue(plain(table.value).contains("\(AttachmentTextIndexJob.maxTextPerAttachment) characters"), table.value)
+
+        let scan = try XCTUnwrap(row("Notes NSF text-scan fallback"))
+        XCTAssertEqual(scan.kind, .safety)
+        XCTAssertEqual(plain(scan.value), binaryBytes(Int64(NSFReader.scanFallbackMaxBytes)))
+        XCTAssertEqual(NSFReader.scanFallbackMaxBytes, 200 * 1024 * 1024)
+
+        let sevenZip = try XCTUnwrap(row("Encrypted 7z key derivation"))
+        XCTAssertEqual(sevenZip.kind, .safety)
+        XCTAssertTrue(plain(sevenZip.value).contains("\(1 << SevenZipReader.maxCyclesPower) iterations"), sevenZip.value)
+
+        let argon = try XCTUnwrap(row("Encrypted OpenDocument key derivation (Argon2id)"))
+        XCTAssertEqual(argon.kind, .safety)
+        XCTAssertTrue(plain(argon.value).contains(binaryBytes(Int64(Argon2.maxMemoryKiB) * 1024)), argon.value)
+        XCTAssertTrue(plain(argon.value).contains("\(Argon2.maxPasses) passes"), argon.value)
+
+        let filters = try XCTUnwrap(row("Free plan — AI smart filters"))
+        XCTAssertEqual(filters.kind, .plan)
+        XCTAssertTrue(filters.value.contains("\(ParsedEmailListView.freeAIFilterLimit) a day"), filters.value)
+        let audit = try XCTUnwrap(row("Free and Personal plans — audit trail"))
+        XCTAssertEqual(audit.kind, .plan)
+        XCTAssertTrue(audit.value.contains("\(AuditTrailView.freeViewLimit) entries"), audit.value)
+
+        // The providers' send limits are listed exactly when the build can send.
+        let gmail = row("Sending through Gmail"), graph = row("Sending through Microsoft 365")
+        if ConnectedBuildFeatures.mailTransportsCompiled {
+            XCTAssertEqual(gmail?.kind, .format)
+            XCTAssertTrue(plain(gmail?.value ?? "").contains(binaryBytes(Int64(GmailSendSubmitter.maximumMessageBytes))), gmail?.value ?? "no row")
+            XCTAssertTrue(plain(graph?.value ?? "").contains(binaryBytes(Int64(GraphSendSubmitter.maximumRequestBytes))), graph?.value ?? "no row")
+        } else {
+            XCTAssertNil(gmail, "a build that cannot send lists no send limit")
+            XCTAssertNil(graph)
+        }
+    }
+
+    func testCLOSE05_helpTextSaysWhatIsTrue() throws {
+        // The AI page no longer claims the app has no network access (a connected-mail build does).
+        let ai = PageFeatureCatalog.consequences(for: .aiInsights).joined(separator: " ")
+        XCTAssertTrue(ai.contains("No cloud AI provider is ever contacted"), ai)
+        XCTAssertFalse(ai.contains("network access"), ai)
+        // The paywall's attachment-save cell names the per-day rule from its constant.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let paywall = try String(contentsOf: repo.appendingPathComponent("maxmailin/PaywallView.swift"), encoding: .utf8)
+        XCTAssertTrue(paywall.contains(#"featureRow("Download attachments", free: String(localized: "\(StoreManager.freeAttachmentDownloadsPerDay)/day")"#))
+        XCTAssertFalse(paywall.contains(#"featureRow("Download attachments", free: "10""#))
+    }
+}

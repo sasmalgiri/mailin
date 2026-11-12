@@ -127,7 +127,8 @@ struct ParsedEmailListView: View {
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("personaFiltersInitialized") private var personaFiltersInitialized = false
     @State private var showAIPaywall = false
-    private static let freeAIFilterLimit = 5
+    /// AI smart filters a day on the Free plan (listed in Settings ▸ Health ▸ Limits).
+    static let freeAIFilterLimit = 5
     @AppStorage("freeAIFilterUsageCount") private var aiFilterUsageCount: Int = 0
     @State private var listExportError: String?
     #if os(iOS)

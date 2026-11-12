@@ -322,7 +322,8 @@ struct PaywallView: View {
             featureRow("AI Smart Filters", free: String(localized: "5/day"), personal: true, pro: true)
             featureRow("Analytics & charts", free: true, personal: true, pro: true)
             featureRow("Export (EML/CSV)", free: "500", personal: true, pro: true)
-            featureRow("Download attachments", free: "10", personal: true, pro: true)
+            // CLOSE-05: the Free rule is per day (StoreManager.resetDailyCountersIfNeeded), so the row says so.
+            featureRow("Download attachments", free: String(localized: "\(StoreManager.freeAttachmentDownloadsPerDay)/day"), personal: true, pro: true)
             // LIFE-06: what stays after a plan ends, said before anyone buys.
             Text(AccessPolicy.afterExpiryStatement)
                 .font(Typography.caption2)

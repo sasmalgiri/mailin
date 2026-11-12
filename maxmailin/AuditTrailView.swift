@@ -82,7 +82,8 @@ struct AuditTrailView: View {
     @State private var dailyReportNote: String? = nil
     @State private var expandedEntryID: UUID? = nil
 
-    private static let freeViewLimit = 10
+    /// Entries shown below Professional; every entry is kept (listed in Settings ▸ Health ▸ Limits).
+    static let freeViewLimit = 10
 
     private var filtered: [ForensicManager.AuditEntry] {
         forensicManager.auditLog.reversed().filter {

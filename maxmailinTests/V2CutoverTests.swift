@@ -5735,7 +5735,9 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(listed("\(AppLimits.previousEngineDuplicateWindow)"))
         XCTAssertTrue(listed(bytes(Int64(FTSSearchIndex.indexedTextBudgetBytes))), "R5b: the previous search index's real body budget is named")
         // R5b: the remaining guards of the five jobs are named with what happens at them.
-        XCTAssertTrue(listed("\(MIMEParser.maxRecursionDepth) levels") && listed(bytes(Int64(OffsetMBOXScanner().maxLineBytes)))
+        // CLOSE-05: the default (offset) reader's MIME guard leads the row; the previous reader's follows it.
+        XCTAssertTrue(listed("\(MIMEPartScanner.maxDepth) levels (\(MIMEParser.maxRecursionDepth) with the previous reader)")
+                      && listed(bytes(Int64(OffsetMBOXScanner().maxLineBytes)))
                       && listed(bytes(Int64(OffsetMBOXScanner().maxHeaderBytes)))
                       && listed(bytes(Int64(MIMECarver.maxMessage)))
                       && listed(bytes(RARReader.maxDecoderDictionaryBytes)) && listed("\(BoundedRegexSearch.literalCandidateCap) candidates")

@@ -17,6 +17,7 @@
 
 @testable import ArchiveCore
 import Foundation
+import MailConnectivity
 
 struct AppLimit: Identifiable, Equatable, Sendable {
     enum Kind: String, Sendable {
@@ -46,7 +47,9 @@ enum AppLimits {
 
     static var all: [AppLimit] {
         let bytes = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
-        return [
+        // CLOSE-05: limits defined in binary units (MiB, GiB) are shown in them, so 35 MiB reads "35 MB".
+        let binaryBytes = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .binary) }
+        var rows: [AppLimit] = [
             // The five jobs: no cap of the app's own.
             AppLimit(kind: .none, what: String(localized: "Opening archives"), value: String(localized: "no preset size or message count"),
                      why: String(localized: "Imports stream in batches sized to free memory and disk; a single message of any size is indexed by its boundaries.")),
@@ -67,11 +70,16 @@ enum AppLimits {
                      why: String(localized: "Opening attachments is never limited; saving them in bulk is, on the Free plan.")),
             AppLimit(kind: .plan, what: String(localized: "Free plan — AI questions"), value: String(localized: "\(AIAssistantView.freeQueryLimit) a day"),
                      why: String(localized: "On-device AI answers; the archive itself is never limited by this.")),
+            // CLOSE-05: the two remaining plan rules, named with their constants.
+            AppLimit(kind: .plan, what: String(localized: "Free plan — AI smart filters"), value: String(localized: "\(ParsedEmailListView.freeAIFilterLimit) a day"),
+                     why: String(localized: "Each AI filter you turn on counts once; the count starts again every day.")),
+            AppLimit(kind: .plan, what: String(localized: "Free and Personal plans — audit trail"), value: String(localized: "newest \(AuditTrailView.freeViewLimit) entries shown"),
+                     why: String(localized: "Every entry is kept; the older ones are shown with Professional.")),
             // Formats and devices.
-            AppLimit(kind: .format, what: String(localized: "Outlook PST"), value: String(localized: "warning above \(bytes(SourceSizePolicy.pstTestedCeilingBytes)); ANSI PST \(bytes(SourceSizePolicy.ansiPSTMaxBytes))"),
-                     why: String(localized: "Outlook's own default maximum; mailin opens the file and says so, it does not refuse.")),
-            AppLimit(kind: .format, what: String(localized: "Notes NSF"), value: String(localized: "warning between \(bytes(SourceSizePolicy.nsfLegacyMaxBytes)) and \(bytes(SourceSizePolicy.nsfModernMaxBytes))"),
-                     why: String(localized: "HCL's documented ceilings for older and current Notes databases.")),
+            AppLimit(kind: .format, what: String(localized: "Outlook PST"), value: String(localized: "warning above \(bytes(SourceSizePolicy.pstTestedCeilingBytes)); ANSI PST refused above \(bytes(SourceSizePolicy.ansiPSTMaxBytes))"),
+                     why: String(localized: "Outlook's own default maximum is a warning: mailin opens the file and says so. An ANSI PST larger than \(bytes(SourceSizePolicy.ansiPSTMaxBytes)) is refused — the format cannot be that large, so the file is damaged or mislabelled.")),
+            AppLimit(kind: .format, what: String(localized: "Notes NSF"), value: String(localized: "warning above \(bytes(SourceSizePolicy.nsfLegacyMaxBytes)); refused above \(bytes(SourceSizePolicy.nsfModernMaxBytes))"),
+                     why: String(localized: "HCL's documented ceilings for older and current Notes databases. A larger file is refused: no Domino configuration writes one, so it is damaged or not a single database.")),
             AppLimit(kind: .device, what: String(localized: "FAT32 drives"), value: bytes(ArchiveLocationPolicy.fat32FileCeilingBytes),
                      why: String(localized: "A file system fact: one file cannot exceed 4 GiB on FAT32 (exFAT and APFS have no such ceiling); mbox exports can be split into 2 GB parts.")),
             // Safety budgets.
@@ -89,8 +97,8 @@ enum AppLimits {
             AppLimit(kind: .none, what: String(localized: "Single message size"), value: String(localized: "no limit"),
                      why: String(localized: "A message of any size is kept and exported byte for byte. One larger than \(bytes(OffsetImportEngine().fullParseCeilingBytes)) is read from its original file in slices after import: its text is indexed whole for search, and each attachment is streamed out of the file and read like any other attachment.")),
             // R5b: the remaining guards of the five jobs, each named with what happens at it.
-            AppLimit(kind: .safety, what: String(localized: "Parts nested inside one message"), value: String(localized: "\(MIMEParser.maxRecursionDepth) levels"),
-                     why: String(localized: "Deeper nesting is a sign of damage; those parts are not read, the message is kept and exported byte for byte.")),
+            AppLimit(kind: .safety, what: String(localized: "Parts nested inside one message"), value: String(localized: "\(MIMEPartScanner.maxDepth) levels (\(MIMEParser.maxRecursionDepth) with the previous reader)"),
+                     why: String(localized: "Deeper nesting is a sign of damage. The offset reader keeps everything below the last level as one undivided part, never dropped; the previous reader does not read it. Either way the message is kept and exported byte for byte.")),
             AppLimit(kind: .safety, what: String(localized: "One line of a mailbox"), value: bytes(Int64(OffsetMBOXScanner().maxLineBytes)),
                      why: String(localized: "A file with a longer unbroken line is not a mailbox; it is refused with that reason, never partly read.")),
             AppLimit(kind: .safety, what: String(localized: "Header block of one message"), value: bytes(Int64(OffsetMBOXScanner().maxHeaderBytes)),
@@ -113,6 +121,15 @@ enum AppLimits {
             AppLimit(kind: .safety, what: String(localized: "Pattern (regular expression) search"),
                      value: String(localized: "\(BoundedRegexSearch.literalCandidateCap) candidates, or \(BoundedRegexSearch.defaultNoLiteralScanCap) messages for a pattern without a word; patterns up to \(BoundedRegexSearch.maxPatternLength) characters"),
                      why: String(localized: "A broader pattern stops there and the results say so; each candidate is checked against its whole text.")),
+            // CLOSE-05: the reader guards against files built to exhaust the device.
+            AppLimit(kind: .safety, what: String(localized: "Encrypted 7z key derivation"),
+                     value: String(localized: "\(1 << SevenZipReader.maxCyclesPower) iterations"),
+                     why: String(localized: "7-Zip itself refuses more. An encrypted 7z archive that asks for more is not opened, and says why.")),
+            AppLimit(kind: .safety, what: String(localized: "Encrypted OpenDocument key derivation (Argon2id)"),
+                     value: String(localized: "\(binaryBytes(Int64(Argon2.maxMemoryKiB) * 1024)) of memory, \(Int(Argon2.maxPasses)) passes"),
+                     why: String(localized: "A document whose password protection asks for more is not opened, and says why.")),
+            AppLimit(kind: .safety, what: String(localized: "Notes NSF text-scan fallback"), value: binaryBytes(Int64(NSFReader.scanFallbackMaxBytes)),
+                     why: String(localized: "Runs only when the structured reader finds no note in a Notes database. It reads the file whole, so a larger file is refused with that reason.")),
             AppLimit(kind: .format, what: String(localized: "Outlook PST export"), value: String(localized: "\(bytes(Int64(PSTStreamWriter.maxFileBytes))) per file"),
                      why: String(localized: "The PST format's own maximum; a larger export is written as several PST files.")),
             // Previous engines.
@@ -124,6 +141,21 @@ enum AppLimits {
                      why: String(localized: "Runs only when the offset reader is switched off; a larger message is counted as skipped in the import report.")),
             AppLimit(kind: .previousEngine, what: String(localized: "Previous folder list"), value: String(localized: "\(ArchiveSidebarModel.labelLimit) busiest folders"),
                      why: String(localized: "Only when Complete lists is switched off; the complete list pages through every folder.")),
+            AppLimit(kind: .previousEngine, what: String(localized: "Previous attachment text table"),
+                     value: String(localized: "first \(AttachmentTextIndexJob.maxTextPerAttachment) characters per attachment"),
+                     why: String(localized: "The table behind the plain box when the search model is off. The search model reads the chunk index, which holds every attachment's text whole.")),
         ]
+        // CLOSE-05: the providers' own send limits, only in a build that can send.
+        if ConnectedBuildFeatures.mailTransportsCompiled {
+            rows += [
+                AppLimit(kind: .format, what: String(localized: "Sending through Gmail"),
+                         value: String(localized: "\(binaryBytes(Int64(GmailSendSubmitter.maximumMessageBytes))) per message"),
+                         why: String(localized: "Gmail's own limit for one message. A larger one is not sent; the outbox says why.")),
+                AppLimit(kind: .format, what: String(localized: "Sending through Microsoft 365"),
+                         value: String(localized: "\(binaryBytes(Int64(GraphSendSubmitter.maximumRequestBytes))) per message, once encoded"),
+                         why: String(localized: "Microsoft's limit for one send request. A message that is larger once encoded is not sent; the outbox says why.")),
+            ]
+        }
+        return rows
     }
 }
