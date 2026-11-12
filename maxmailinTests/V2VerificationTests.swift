@@ -9326,3 +9326,69 @@ final class V414ClaimsTests: XCTestCase {
         #endif
     }
 }
+
+/// Records what a sign-in asked for and grants exactly that (plus the
+/// configuration's own capture scope), like a provider that approves all.
+@MainActor
+private final class ReconsentRecordingTransports: ConnectedMailTransports {
+    var requested: [[String]] = []
+    func signIn(_ choice: MailProviderChoice, accountID: UUID, extraScopes: [String], info: [String: String],
+                policy: MailNetworkPolicy) async throws -> (tokens: OAuthTokenSet, issuer: String, tenant: String?) {
+        requested.append(extraScopes)
+        var scopes = GmailOAuth.captureScopes
+        for s in extraScopes where !scopes.contains(s) { scopes.append(s) }
+        return (OAuthTokenSet(accountID: accountID, issuer: GmailOAuth.issuer, audience: "gmail", accessToken: "a",
+                              refreshToken: "r", expiresAt: Date().addingTimeInterval(3600), scopes: scopes),
+                GmailOAuth.issuer, nil)
+    }
+    func registerSending(_ account: MailAccount, extras: MailAccountExtras, outbox: Outbox, credentials: any CredentialStore,
+                         tokens: TokenRefreshCoordinator?, permission: @escaping NetworkPermission) async {}
+    func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
+                        permission: @escaping NetworkPermission) throws -> (any RemoteActionExecutor)? { nil }
+}
+
+/// V4-14 finding: asking an account for Change server mail must not drop the
+/// Send scope it already had (the re-consent used to request only the new scope
+/// and then overwrite the stored scopes with that answer).
+@MainActor
+final class ReconsentScopeTests: XCTestCase {
+    func testReconsentForServerActionsKeepsSendAndCapture() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("RECONSENT-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let deps = ConnectedMailRuntime.Dependencies(
+            store: store, fts: fts, policy: policy, credentials: ConnectedFiveJobsCredentials(), tokens: nil,
+            adapters: { _ -> (any MailProviderAdapter)? in nil }, storage: StorageProbe(reserveBytes: 0))
+        let runtime = ConnectedMailRuntime(dependencies: deps)
+        let id = UUID()
+        try await runtime.registry.add(MailAccount(id: id, provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                                   grantedScopes: [GmailOAuth.readOnlyScope, MailScopeNeeds.gmailSend],
+                                                   enabledModes: [.capture, .send]),
+                                       secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        let transports = ReconsentRecordingTransports()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "reconsent-\(UUID().uuidString)"))
+        let backend = try ConnectedMailBackend(runtime: runtime, storeDirectory: root.appendingPathComponent("store", isDirectory: true),
+                                               credentials: ConnectedFiveJobsCredentials(), tokens: nil, transports: transports,
+                                               extras: MailAccountExtrasStore(defaults: defaults),
+                                               providerInfo: [MailProviderChoice.gmailClientIDKey: "418093572046-k2pq7rnv5x3w9hfsd8a1jc4mty6bzle0.apps.googleusercontent.com"])
+        _ = try await backend.signIn(.gmail, address: "asha@example.com", existing: id, extraScopes: [ServerActionScopes.gmailModify])
+
+        XCTAssertEqual(transports.requested.last.map(Set.init),
+                       [GmailOAuth.readOnlyScope, MailScopeNeeds.gmailSend, ServerActionScopes.gmailModify])
+        let saved = try await runtime.registry.account(id)
+        XCTAssertTrue(saved.grantedScopes.contains(MailScopeNeeds.gmailSend), "Send was dropped by the re-consent")
+        XCTAssertTrue(saved.grantedScopes.contains(ServerActionScopes.gmailModify))
+        XCTAssertNil(MailScopeNeeds.missing(.send, account: saved))
+    }
+
+    func testReconsentScopesKeepOnlyTheProvidersMailScopes() {
+        let graph = GraphAudience.resource()
+        XCTAssertEqual(ConnectedMailBackend.reconsentScopes(granted: ["\(graph)/Mail.Read", "offline_access", "openid", "\(graph)/Mail.Send"],
+                                                            provider: .microsoftGraph, adding: ["\(graph)/Mail.ReadWrite", "\(graph)/Mail.Send"]),
+                       ["\(graph)/Mail.Read", "\(graph)/Mail.Send", "\(graph)/Mail.ReadWrite"])
+        XCTAssertEqual(ConnectedMailBackend.reconsentScopes(granted: ["x"], provider: .imap, adding: []), [])
+    }
+}

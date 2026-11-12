@@ -204,9 +204,16 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         if existing == nil, (try? MailAddress(parsing: address.trimmingCharacters(in: .whitespaces))) == nil {
             throw MailWorkspaceError(String(localized: "Enter your email address."))
         }
+        // A re-consent asks again for every scope the account already holds, so
+        // asking for Change server mail never drops Send (the provider's answer
+        // replaces the stored scopes below).
+        var requested = extraScopes
+        if let existing, let account = try? await runtime.registry.account(existing) {
+            requested = Self.reconsentScopes(granted: account.grantedScopes, provider: account.provider, adding: extraScopes)
+        }
         let result: (tokens: OAuthTokenSet, issuer: String, tenant: String?)
         do {
-            result = try await transports.signIn(choice, accountID: id, extraScopes: extraScopes, info: providerInfo, policy: runtime.policy)
+            result = try await transports.signIn(choice, accountID: id, extraScopes: requested, info: providerInfo, policy: runtime.policy)
         } catch {
             if existing == nil { runtime.policy.removeAccount(id) }
             try? await runtime.reloadAccounts()
@@ -229,6 +236,23 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         try await runtime.reloadAccounts()
         await registerSendRoutes()
         return id
+    }
+
+    /// The scopes a re-consent requests: the account's own mail scopes for its
+    /// provider (Gmail API scopes; Graph resource scopes) plus `adding`, once each.
+    /// Sign-in housekeeping scopes (offline_access, openid) come from the
+    /// provider configuration, not from here.
+    nonisolated static func reconsentScopes(granted: [String], provider: MailProviderKind, adding: [String]) -> [String] {
+        let kept = granted.filter { scope in
+            switch provider {
+            case .gmail: return scope.hasPrefix("https://www.googleapis.com/auth/gmail.") || scope == ServerActionScopes.gmailFullAccess
+            case .microsoftGraph: return scope.hasPrefix(GraphAudience.resource() + "/")
+            case .imap: return false
+            }
+        }
+        var out: [String] = []
+        for scope in kept + adding where !out.contains(scope) { out.append(scope) }
+        return out
     }
 
     func setMode(_ mode: MailAccount.Mode, enabled: Bool, account id: UUID) async throws {
