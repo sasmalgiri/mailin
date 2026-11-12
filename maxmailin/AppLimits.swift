@@ -102,6 +102,10 @@ enum AppLimits {
             // CLOSE-01: the .msg (2 GB) and .emlx (500 MB) whole-file refusals are gone — both are read by
             // range through a file handle; one above the full-parse ceiling is imported like any large
             // message (the "Single message size" row above), so there is no row of their own.
+            // CLOSE-01b: only the previous import engine (offset engine switched off) still reads them whole.
+            AppLimit(kind: .previousEngine, what: String(localized: "Single Outlook .msg or Apple Mail .emlx file"),
+                     value: String(localized: "\(bytes(WholeMessageReadLimit.msgBytes)) .msg; \(bytes(WholeMessageReadLimit.emlxBytes)) .emlx"),
+                     why: String(localized: "Previous import engine only (offset engine switched off): these files are read whole into memory; a larger one is refused with that reason. With the offset engine on there is no such limit.")),
             AppLimit(kind: .safety, what: String(localized: "Message recovered from damaged bytes"), value: bytes(Int64(MIMECarver.maxMessage)),
                      why: String(localized: "A message carved out of damaged data is cut there and marked truncated.")),
             AppLimit(kind: .device, what: String(localized: "RAR decoding window"), value: bytes(RARReader.maxDecoderDictionaryBytes),

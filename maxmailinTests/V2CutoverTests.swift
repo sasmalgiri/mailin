@@ -5727,7 +5727,11 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(listed(bytes(OfficeTextExtractor.maxPartBytes)), "the Office part budget is named")
         XCTAssertTrue(listed("\(Int(AttachmentOCR.maxPixels)) px"))
         XCTAssertFalse(listed("Phrase verification"), "R02: phrases of any length are verified on the stored text — no limit row")
-        XCTAssertFalse(listed("Single Outlook .msg or Apple Mail .emlx file"), "CLOSE-01: .msg and .emlx are read by range — no refusal row")
+        // CLOSE-01/01b: with the offset engine on, .msg and .emlx are read by range with no limit; the only
+        // remaining row belongs to the previous engine (rollback) and says so.
+        let msgRow = limits.first { $0.what == "Single Outlook .msg or Apple Mail .emlx file" }
+        XCTAssertEqual(msgRow?.kind, AppLimit.Kind.previousEngine, "only the previous engine refuses large .msg/.emlx")
+        XCTAssertTrue(msgRow?.why.contains("offset engine") == true, msgRow?.why ?? "no row")
         XCTAssertTrue(listed("\(AppLimits.previousEngineDuplicateWindow)"))
         XCTAssertTrue(listed(bytes(Int64(FTSSearchIndex.indexedTextBudgetBytes))), "R5b: the previous search index's real body budget is named")
         // R5b: the remaining guards of the five jobs are named with what happens at them.
