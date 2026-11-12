@@ -155,9 +155,15 @@ enum Fixtures {
         return s + "}"
     }
 
+    /// Now + `offset`, in whole seconds: a token set read back from the
+    /// store (JSON, seconds since 1970) then compares exactly.
+    static func wholeSeconds(_ offset: TimeInterval) -> Date {
+        Date(timeIntervalSince1970: (Date().timeIntervalSince1970 + offset).rounded())
+    }
+
     static func expiredSet(_ account: UUID, refresh: String, access: String = "old-access",
                            audience: String = google.audience) -> OAuthTokenSet {
         OAuthTokenSet(accountID: account, issuer: google.issuer, audience: audience, accessToken: access,
-                      refreshToken: refresh, expiresAt: Date(timeIntervalSinceNow: -10), scopes: google.scopes)
+                      refreshToken: refresh, expiresAt: wholeSeconds(-10), scopes: google.scopes)
     }
 }

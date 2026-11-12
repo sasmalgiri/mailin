@@ -360,6 +360,9 @@ public actor ConnectedArchiveSink {
     nonisolated let store: SQLiteEmailStore
     /// Tests only: throws at a boundary to simulate the process being killed there.
     var faultHook: (@Sendable (CaptureBoundary) throws -> Void)?
+    /// Tests only: throws to simulate the reader failing on the published bytes (T20).
+    var parseFaultHook: (@Sendable (Data) throws -> Void)?
+    func setParseFaultHook(_ hook: (@Sendable (Data) throws -> Void)?) { parseFaultHook = hook }
 
     /// The archive at `storeDirectory` (opened on its own connection).
     public init(storeDirectory: URL) {
@@ -451,7 +454,18 @@ public actor ConnectedArchiveSink {
             outcome = CaptureOutcome(identity: item.identity, state: state, emailID: existing.emailID,
                                      sha256: existing.digest, byteCount: existing.length, newMemberships: added)
         } else {
-            let email = try Self.record(from: blob, store: store, occurrences: item.occurrences)
+            // V4-04 (§5.2, T20): a message whose bytes cannot be parsed is
+            // still PRESERVED — the record points at the published bytes and
+            // carries the parse failure, so preserved and readable counts stay
+            // distinct and the parse can be retried from the retained bytes.
+            var item = item
+            let email: MBOXParser.RawEmail
+            do {
+                email = try Self.record(from: blob, store: store, occurrences: item.occurrences, parseHook: parseFaultHook)
+            } catch {
+                item.metadata.extra[Self.parseErrorKey] = error.localizedDescription
+                email = try Self.unreadableRecord(occurrences: item.occurrences, reason: error.localizedDescription)
+            }
             let added = try await store.commitConnectedCapture(email, blob: blob, item: item, key: key, runID: runID)
             outcome = CaptureOutcome(identity: item.identity, state: .stored, emailID: email.id,
                                      sha256: blob.digest, byteCount: blob.length, newMemberships: added)
@@ -465,10 +479,29 @@ public actor ConnectedArchiveSink {
     /// file). Labels and folders become memberships; provider flags stay in
     /// the connected projection, never in the archive's folders.
     static func record(from blob: BlobReference, store: SQLiteEmailStore,
-                       occurrences: [RemoteFolderOccurrence]) throws -> MBOXParser.RawEmail {
+                       occurrences: [RemoteFolderOccurrence],
+                       parseHook: (@Sendable (Data) throws -> Void)? = nil) throws -> MBOXParser.RawEmail {
         let data = try store.blobStore.read(blob)
+        try parseHook?(data)
         let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
         var email = try MBOXParser.processRawMessage(text, senderEmail: "")
+        let paths = occurrences.map(\.cleanPath).filter { !$0.isEmpty }
+        email.folderPath = paths.first
+        for path in paths.dropFirst() where !email.tags.contains(path) { email.tags.append(path) }
+        return email
+    }
+
+    /// `remote_messages.metadata_json` key holding the reader failure of a
+    /// preserved-but-unreadable connected message.
+    public static let parseErrorKey = "mailinParseError"
+
+    /// The record of a message whose bytes the reader could not parse: no
+    /// header is invented (the parser's empty-input defaults only), the
+    /// failure is an anomaly on the record, and the raw bytes stay the
+    /// published blob.
+    static func unreadableRecord(occurrences: [RemoteFolderOccurrence], reason: String) throws -> MBOXParser.RawEmail {
+        var email = try MBOXParser.processRawMessage("", senderEmail: "", materializeAttachments: false)
+        email.anomalies.append("connected-parse-failed: \(reason)")
         let paths = occurrences.map(\.cleanPath).filter { !$0.isEmpty }
         email.folderPath = paths.first
         for path in paths.dropFirst() where !email.tags.contains(path) { email.tags.append(path) }

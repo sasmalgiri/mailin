@@ -457,7 +457,7 @@ extension SQLiteEmailStore {
 
     /// remote_memberships rows, plus archive folder memberships (and the
     /// legacy tag, FOLD-02 dual write) when the record exists.
-    private func writeMemberships(_ db: OpaquePointer, item: CaptureItem, key: String, emailID: UUID?,
+    func writeMemberships(_ db: OpaquePointer, item: CaptureItem, key: String, emailID: UUID?,
                                   sourceID: Int64, now: Int64) throws -> Int {
         let insert = try prepare(db, """
             INSERT OR IGNORE INTO remote_memberships(account_id, identity_key, folder_server_id, observed_at) VALUES (?,?,?,?);
