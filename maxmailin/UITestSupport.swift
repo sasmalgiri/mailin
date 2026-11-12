@@ -34,6 +34,9 @@ enum UITestSupport {
         defaults.set(true, forKey: "hasCompletedPersonaSelection")
         PersonaManager.shared.hasCompletedPersonaSelection = true
 
+        // CLOSE-06: a fresh-archive run (MAILIN_UITEST_FRESH_ARCHIVE) starts
+        // empty — the test imports its own fixture, so no demo seed.
+        guard UITestStorageRoot.override == nil else { return }
         Task { @MainActor in
             let count = (try? await SQLiteEmailStore.shared.totalCount()) ?? 0
             guard count == 0 else { return }

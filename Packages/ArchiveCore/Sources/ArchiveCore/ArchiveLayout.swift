@@ -77,8 +77,7 @@ enum ArchiveLayout {
 
     /// `<Application Support>/com.ecosanskriti.mailin`.
     static var defaultRoot: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return appSupport.appendingPathComponent(containerName, isDirectory: true)
     }
 

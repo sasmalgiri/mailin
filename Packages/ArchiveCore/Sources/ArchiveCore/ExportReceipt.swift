@@ -245,8 +245,9 @@ struct ExportReceiptStore {
     let directory: URL
 
     static var production: ExportReceiptStore {
-        let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                 appropriateFor: nil, create: true))
+        let base = UITestStorageRoot.override
+            ?? (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                             appropriateFor: nil, create: true))
             ?? FileManager.default.temporaryDirectory
         return ExportReceiptStore(directory: base.appendingPathComponent("mailin/exports/receipts", isDirectory: true))
     }

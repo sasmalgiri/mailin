@@ -181,7 +181,7 @@ struct ScopeJobEnvironment: Sendable {
 enum ScopeJobCheckpointStore {
     static var directory: URL {
         if let dir = ScopeJobEnvironment.current?.checkpoints { return dir }
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let base = UITestStorageRoot.applicationSupport
         return base.appendingPathComponent("ScopeJobs", isDirectory: true)
     }
     private static func url(_ key: String) -> URL {

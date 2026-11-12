@@ -196,8 +196,7 @@ final class ReviewStateService: ObservableObject {
     private static let migrationKey = "mailin.reviewstate.jsonMigrated.v1"
 
     static var legacyJSONURL: URL {
-        let dir = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                   ?? FileManager.default.temporaryDirectory)
+        let dir = UITestStorageRoot.applicationSupport
             .appendingPathComponent("mailin", isDirectory: true)
         return dir.appendingPathComponent("user_review_data.json")
     }

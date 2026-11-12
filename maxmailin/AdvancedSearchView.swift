@@ -129,6 +129,7 @@ struct AdvancedSearchView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .accessibilityLabel(String(localized: "Add to \(groupTitle(spec.groups[g].kind))"))
+                .accessibilityIdentifier("advancedSearch.add.\(spec.groups[g].kind.rawValue)")
             }
             if spec.groups[g].isEmpty {
                 Text(groupHint(spec.groups[g].kind))
@@ -265,6 +266,7 @@ struct AdvancedSearchView: View {
                 }
                 TextField(String(localized: "value"), text: binding.value)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("advancedSearch.condition.value")
             }
             Button { spec.groups[g].conditions.remove(at: c) } label: { Image(systemName: "minus.circle") }
                 .buttonStyle(.plain)
@@ -306,6 +308,7 @@ struct AdvancedSearchView: View {
                 .frame(width: 170)
                 TextField(String(localized: "words or phrase inside the file"), text: Binding(get: { binding.wrappedValue.content ?? "" }, set: { binding.wrappedValue.content = $0 }))
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("advancedSearch.attachment.content")
             }
         }
         .padding(8)

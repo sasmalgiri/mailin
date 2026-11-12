@@ -12,6 +12,7 @@
 import XCTest
 #if os(macOS)
 import AppKit
+import CoreText
 #endif
 import StoreKitTest
 
@@ -2533,4 +2534,574 @@ final class MailinClickThroughUITests: XCTestCase {
         print("AI-IPAD>>>\(report)\n<<<AI-IPAD")
     }
     #endif
+
+    #if os(macOS)
+    // MARK: - CLOSE-06: the five archive jobs, end to end, on a fresh archive
+
+    /// One focused journey per job (not a crawl; no AI / Professional page):
+    /// a fresh, isolated archive (`MAILIN_UITEST_FRESH_ARCHIVE`, see
+    /// UITestStorageRoot.swift) is fed a fixture built here — an Apple Mail
+    /// export with nested and empty mailboxes, an exact duplicate, a near
+    /// duplicate, a PDF and a DOCX inside a ZIP — and each job is driven
+    /// through the real UI. Every journey logs `FIVE-JOURNEYS J<n> … PASS|FAIL`.
+    ///
+    /// Run on the Release candidate with the "maxmailin Release Tests" scheme
+    /// (Test action = Release). Release defaults matter: the folder tree needs
+    /// "Complete lists (3.0)" and the paid exports need a plan — a FAIL there
+    /// names the switch or plan, it is not hidden.
+    func testFiveJourneys_release() throws {
+        let token = "fj\(Int(Date().timeIntervalSince1970))"
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("mailin-fivejobs-\(token)", isDirectory: true)
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: work) }
+        let zipURL = try FiveJobsFixture.build(in: work)
+        let exportDir = work.appendingPathComponent("eml-export", isDirectory: true)
+        try fm.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
+        var results: [(job: String, pass: Bool, detail: String)] = []
+        func record(_ job: String, _ pass: Bool, _ detail: String) {
+            let line = "FIVE-JOURNEYS \(job): \(pass ? "PASS" : "FAIL") — \(detail)"
+            print(line)
+            results.append((job, pass, detail))
+            if !pass { snapshotScreen("fivejobs-fail-\(job.prefix(2))") }
+        }
+
+        // The three-pane shell (Advanced Search lives there).
+        fjLaunch(token: token, simpleList: true)
+
+        // ── J1 open: import completes, the receipt shows the counts ──
+        if let failure = fjImport(zipURL) {
+            record("J1 open", false, failure)
+        } else {
+            let all = fjElement("archive.sidebar.allMail")
+            let settled = fjWait(timeout: 240) { all.exists && all.label.contains("\(FiveJobsFixture.total) messages") }
+            // Attachment text is indexed after the import (search depends on it).
+            _ = fjWait(timeout: 240) { !self.fjElement("import.queue.attachmentIndexing").exists }
+            let receipt = fjOpenImportReceipt()
+            let saved = receipt.accounting.range(of: #"Saved to the archive\W+\#(FiveJobsFixture.total)\b"#, options: .regularExpression) != nil
+            let verdictOK = !receipt.verdict.isEmpty && !receipt.verdict.contains("Failed")
+            record("J1 open", settled && saved && verdictOK,
+                   "sidebar: \(all.exists ? all.label : "All Mail row missing"); receipt verdict: \(receipt.verdict.prefix(120)); accounting: \(receipt.accounting.prefix(240))")
+        }
+
+        // ── J2 folders: nested and empty source folders, with counts ──
+        do {
+            let sidebar = app.outlines["archive.sidebar"].firstMatch
+            // Folder trees open collapsed: expand every disclosure triangle.
+            for _ in 0..<12 {
+                let closed = sidebar.disclosureTriangles.matching(NSPredicate(format: "value == 0")).allElementsBoundByIndex
+                guard let next = closed.first(where: { $0.isHittable }) else { break }
+                next.click()
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            let rows = app.descendants(matching: .any).matching(identifier: "archive.sidebar.folder").allElementsBoundByIndex
+            let labels = rows.map(\.label)
+            func row(_ prefix: String) -> XCUIElement? { rows.first { $0.label.hasPrefix(prefix + ",") } }
+            let expected = FiveJobsFixture.folders.map { "\($0.name), \($0.count) messages" }
+            let allPresent = expected.allSatisfy { labels.contains($0) }
+            let nested: Bool = {
+                guard let work = row("Work"), let clients = row("Clients") else { return false }
+                return clients.frame.minX > work.frame.minX + 4
+            }()
+            let empty = labels.contains("Archive 2019, 0 messages")
+            record("J2 folders", allPresent && nested && empty,
+                   "expected \(expected); shown \(labels)\(labels.isEmpty ? " (tree hidden — is “Complete lists (3.0)” on?)" : ""); Clients indented under Work: \(nested)")
+        }
+
+        // ── J3 search: the word inside the DOCX inside the ZIP; evidence; no-match ──
+        do {
+            var detail: [String] = []
+            var pass = true
+            let found = fjAdvancedSearch(attachmentWord: FiveJobsFixture.docxWord, expectRows: 1)
+            detail.append("“\(FiveJobsFixture.docxWord)”: \(found) row(s)")
+            if found != 1 { pass = false }
+            let chip = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'search.matchEvidence.open.'")).firstMatch
+            if chip.waitForExistence(timeout: 30) {
+                detail.append("chip: \(chip.label)")
+                if !chip.label.contains(FiveJobsFixture.docxName) { pass = false; detail.append("chip does not name \(FiveJobsFixture.docxName)") }
+                // In-app proof: the text at this match is the DOCX's own text.
+                let showText = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'search.matchEvidence.showText.'")).firstMatch
+                if showText.exists {
+                    showText.click()
+                    let count = fjElement("attachment.text.count")
+                    if count.waitForExistence(timeout: 15) {
+                        let header = fjTexts(in: app.sheets.firstMatch).first { $0.contains(FiveJobsFixture.docxName) } ?? "(no header naming the file)"
+                        detail.append("text sheet: \(header); \(fjText(count))")
+                        if !header.contains(FiveJobsFixture.docxName) { pass = false }
+                    } else { pass = false; detail.append("text sheet did not open") }
+                    app.typeKey(.escape, modifierFlags: [])
+                    Thread.sleep(forTimeInterval: 0.8)
+                }
+                // The chip itself opens that file with the system (outside mailin).
+                let before = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+                chip.click()
+                Thread.sleep(forTimeInterval: 4)
+                let failed = app.staticTexts["Could not open the attachment"].exists
+                var opened = "no other app came to the front"
+                if let front = NSWorkspace.shared.frontmostApplication, let bid = front.bundleIdentifier, !bid.hasPrefix("com.ecosanskriti.mailin") {
+                    let other = XCUIApplication(bundleIdentifier: bid)
+                    let window = other.windows.matching(NSPredicate(format: "title CONTAINS %@", "report")).firstMatch
+                    opened = window.exists ? "\(bid) shows “\(window.title)”" : "\(bid) in front"
+                    if !before.contains(bid) { other.terminate() }
+                }
+                detail.append("chip opened: \(opened)")
+                if failed { pass = false; detail.append("the app said the attachment could not be opened"); app.typeKey(.return, modifierFlags: []) }
+                app.activate()
+            } else { pass = false; detail.append("no evidence chip naming an attachment") }
+
+            // The PDF's word is found too.
+            let pdf = fjAdvancedSearch(attachmentWord: FiveJobsFixture.pdfWord, expectRows: 1)
+            detail.append("“\(FiveJobsFixture.pdfWord)” (PDF): \(pdf) row(s)")
+            if pdf != 1 { pass = false }
+
+            // A no-match says what was searched.
+            let miss = fjAdvancedSearch(attachmentWord: FiveJobsFixture.missWord, expectRows: 0)
+            let notice = fjElement("archive.list.noResults")
+            let noticeText = fjTexts(in: notice).joined(separator: " / ")
+            let filters = fjElement("activeFilters")
+            let filtersText = filters.exists ? ([filters.label] + fjTexts(in: filters)).joined(separator: " / ") : ""
+            let saysWhat = !noticeText.isEmpty && filtersText.contains(FiveJobsFixture.missWord)
+            detail.append("no-match: \(miss) rows; notice “\(noticeText.prefix(200))”; filters “\(filtersText.prefix(160))”")
+            if miss != 0 || !saysWhat { pass = false }
+            let clear = fjElement("activeFilters.clear")
+            if clear.exists { clear.click(); Thread.sleep(forTimeInterval: 1) }
+            record("J3 search", pass, detail.joined(separator: "; "))
+        }
+
+        // ── J4 duplicates: identical vs similar, count before moving, Trash restore ──
+        do {
+            var detail: [String] = []
+            var pass = true
+            app.activate()
+            app.menuBars.menuBarItems["Analysis"].click()
+            let item = app.menuItems["Find Duplicates..."]
+            if item.waitForExistence(timeout: 5), item.isEnabled {
+                item.click()
+            } else {
+                app.typeKey(.escape, modifierFlags: [])
+                pass = false; detail.append("Analysis ▸ Find Duplicates… missing or disabled")
+            }
+            let verified = fjElement("duplicates.group.verified")
+            if verified.waitForExistence(timeout: 60) {
+                detail.append("exact: \(verified.label)")
+                if !(verified.label.hasPrefix("Byte-identical") && verified.label.contains(FiveJobsFixture.exactSubject)) { pass = false }
+            } else { pass = false; detail.append("no verified-identical group") }
+            // Near-duplicates: listed as Similar (never bulk-selected).
+            let near = fjElement("duplicates.includeNear")
+            var similarLabel = ""
+            for attempt in 0..<4 where similarLabel.isEmpty {
+                if near.exists, "\(near.value ?? "")" != "1" { near.click() }
+                if fjWait(timeout: attempt == 0 ? 30 : 20, { self.fjSimilarGroup() != nil }) {
+                    similarLabel = fjSimilarGroup()?.label ?? ""
+                } else if near.exists {
+                    near.click()   // off, then on again next round: a fresh scan once the index caught up
+                    Thread.sleep(forTimeInterval: 2)
+                }
+            }
+            detail.append("similar: \(similarLabel.isEmpty ? "none listed" : similarLabel)")
+            if !similarLabel.hasPrefix("Similar") { pass = false }
+            // The count is on screen before anything moves.
+            let selectAll = fjElement("duplicates.selectAllVerified")
+            if selectAll.waitForExistence(timeout: 10), selectAll.isEnabled { selectAll.click() } else { pass = false; detail.append("Select all but first (verified groups) unavailable") }
+            let count = fjElement("duplicates.selectedCount")
+            let move = fjElement("duplicates.moveSelected")
+            let countLine = count.exists ? count.label : ""
+            detail.append("before moving: “\(countLine)” / button “\(move.exists ? move.label : "missing")”")
+            if !(countLine.hasPrefix("1 ") && move.exists && move.label.contains("1 selected")) { pass = false }
+            if move.exists, move.isEnabled { move.click() } else { pass = false }
+            let trash = fjElement("archive.sidebar.trash")
+            app.activate()
+            let inTrash = fjWait(timeout: 30) { trash.exists && trash.label.contains("1 messages") }
+            detail.append("after moving: \(trash.exists ? trash.label : "Trash row missing")")
+            if !inTrash { pass = false }
+            // Restore from the Trash.
+            if inTrash {
+                trash.click()
+                let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'archive.row.'")).firstMatch
+                if row.waitForExistence(timeout: 15) {
+                    row.rightClick()
+                    let restore = app.menuItems["Restore from Trash"]
+                    if restore.waitForExistence(timeout: 5) { restore.click() } else {
+                        pass = false; detail.append("no Restore from Trash on the trashed row"); app.typeKey(.escape, modifierFlags: [])
+                    }
+                } else { pass = false; detail.append("the Trash list showed no row") }
+                let back = fjWait(timeout: 30) { trash.label.contains("0 messages") }
+                let all = fjElement("archive.sidebar.allMail")
+                detail.append("after restore: \(trash.label); \(all.exists ? all.label : "")")
+                if !back || !all.label.contains("\(FiveJobsFixture.total) messages") { pass = false }
+                if all.exists { all.click() }
+            }
+            record("J4 duplicates", pass, detail.joined(separator: "; "))
+        }
+
+        // ── J5 export: one folder as EML, receipt X of Y, Verify export ──
+        // File-per-message export is on the Advanced list's Export menu.
+        fjLaunch(token: token, simpleList: false)
+        do {
+            var detail: [String] = []
+            var pass = true
+            _ = openPage("Archive")
+            let folder = app.descendants(matching: .any).matching(identifier: "sidebar.sourceFolder")
+                .matching(NSPredicate(format: "label BEGINSWITH %@", FiveJobsFixture.exportFolder + ",")).firstMatch
+            var expected = FiveJobsFixture.folders.first { $0.name == FiveJobsFixture.exportFolder }?.count ?? 0
+            if folder.waitForExistence(timeout: 30) {
+                if let n = Int(folder.label.components(separatedBy: ", ").last?.components(separatedBy: " ").first ?? "") { expected = n }
+                folder.click()
+                Thread.sleep(forTimeInterval: 1.5)
+                detail.append("folder: \(folder.label)")
+            } else { pass = false; detail.append("\(FiveJobsFixture.exportFolder) not in the Advanced list's source folders") }
+            let menu = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Export filtered emails'")).firstMatch
+            var receiptShown = false
+            if menu.waitForExistence(timeout: 10) {
+                menu.click()
+                let eml = app.menuItems["Individual .eml Files"]
+                if eml.waitForExistence(timeout: 5) {
+                    eml.click()
+                    if fjChooseFolder(exportDir.path) {
+                        let start = fjElement("export.preflight.start")
+                        if start.waitForExistence(timeout: 20) {
+                            detail.append("pre-flight: \(fjTexts(in: fjElement("export.preflight")).filter { $0.contains("email") }.prefix(2).joined(separator: " / "))")
+                            start.click()
+                            receiptShown = fjElement("export.receipt").waitForExistence(timeout: 180)
+                        } else { pass = false; detail.append("no pre-flight sheet") }
+                    } else { pass = false; detail.append("folder chooser did not appear") }
+                } else { pass = false; detail.append("Export menu has no “Individual .eml Files”"); app.typeKey(.escape, modifierFlags: []) }
+            } else { pass = false; detail.append("no Export filtered emails menu") }
+            if receiptShown {
+                let verdict = fjText(fjElement("export.receipt.verdict"))
+                let reconciliation = fjText(fjElement("export.receipt.reconciliation"))
+                detail.append("receipt: \(verdict); \(reconciliation)")
+                if !verdict.hasPrefix("Complete") || !reconciliation.contains("selected \(expected)") || !reconciliation.contains("of \(expected)") { pass = false }
+                let verify = fjElement("export.receipt.verify")
+                if verify.waitForExistence(timeout: 10) {
+                    verify.click()
+                    let content = fjElement("export.receipt.content")
+                    _ = content.waitForExistence(timeout: 120)
+                    let rehash = fjText(fjElement("export.receipt.verification"))
+                    let contentLine = fjText(content)
+                    detail.append("verify: \(rehash); \(contentLine)")
+                    let clean = rehash.contains("files match") && !rehash.contains("missing") && !rehash.contains("changed")
+                    if !clean || !contentLine.contains("content checked: \(expected) of \(expected)") { pass = false }
+                } else { pass = false; detail.append("no Verify export button") }
+            } else if pass { pass = false; detail.append("no export receipt within 3 minutes") }
+            let files = ((try? fm.contentsOfDirectory(atPath: exportDir.path)) ?? []).filter { $0.lowercased().hasSuffix(".eml") }
+            detail.append("on disk: \(files.count) .eml file(s)")
+            if files.count != expected { pass = false }
+            record("J5 export", pass, detail.joined(separator: "; "))
+        }
+
+        let report = results.map { "- \($0.job): \($0.pass ? "PASS" : "FAIL") — \($0.detail)" }.joined(separator: "\n")
+        print("FIVE-JOURNEYS>>>\n\(report)\n<<<FIVE-JOURNEYS")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "five-journeys.md"; attachment.lifetime = .keepAlways
+        add(attachment)
+        for r in results { XCTAssertTrue(r.pass, "\(r.job): \(r.detail)") }
+        XCTAssertEqual(results.count, 5, "every journey ran")
+    }
+
+    // MARK: Five-journey helpers
+
+    private func fjLaunch(token: String, simpleList: Bool) {
+        app.terminate()
+        app = makeApp()
+        // `-listModeSimple` lands in the argument domain: the shell is chosen
+        // without touching the person's own setting.
+        app.launchArguments = ["--uitest", "-listModeSimple", simpleList ? "YES" : "NO"]
+        app.launchEnvironment["MAILIN_UITEST_FRESH_ARCHIVE"] = token
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 30)
+        app.activate()
+        _ = app.windows.firstMatch.waitForExistence(timeout: 30)
+        Thread.sleep(forTimeInterval: 2)
+    }
+
+    private func fjElement(_ id: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: id).firstMatch
+    }
+
+    private func fjWait(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 1)
+        } while Date() < deadline
+        return condition()
+    }
+
+    /// A Text's words: on macOS the value, else the label.
+    private func fjText(_ e: XCUIElement) -> String {
+        guard e.exists else { return "" }
+        let value = (e.value as? String) ?? ""
+        return value.isEmpty ? e.label : value
+    }
+
+    private func fjTexts(in root: XCUIElement) -> [String] {
+        guard root.exists, let snap = try? root.snapshot() else { return [] }
+        var out: [String] = []
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.elementType == .staticText {
+                let t = (s.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? s.label
+                if !t.isEmpty { out.append(t) }
+            }
+            s.children.forEach(walk)
+        }
+        walk(snap)
+        return out
+    }
+
+    private func fjPaste(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("v", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
+    /// File ▸ Open Email Archive… ▸ the fixture ▸ "Keep every copy" ▸ Start.
+    /// Returns nil when the import was started, else why not.
+    private func fjImport(_ url: URL) -> String? {
+        app.activate()
+        app.menuBars.menuBarItems["File"].click()
+        let open = app.menuItems["Open Email Archive..."]
+        guard open.waitForExistence(timeout: 5) else { app.typeKey(.escape, modifierFlags: []); return "File ▸ Open Email Archive… missing" }
+        open.click()
+        let panel = app.sheets.firstMatch.waitForExistence(timeout: 10) ? app.sheets.firstMatch : app.dialogs.firstMatch
+        guard panel.waitForExistence(timeout: 10) else { return "open panel did not appear" }
+        panel.typeKey("g", modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 1.0)
+        fjPaste(url.path)
+        app.typeKey(.return, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 1.5)
+        let openButton = panel.buttons["Open"].firstMatch
+        if openButton.exists, openButton.isEnabled { openButton.click() } else { app.typeKey(.return, modifierFlags: []) }
+        let start = app.buttons["Start import"].firstMatch
+        guard start.waitForExistence(timeout: 60) else { return "import sheet did not appear after choosing \(url.lastPathComponent)" }
+        // Keep every copy: the exact duplicate must reach the archive for Duplicates to show it.
+        let policy = fjElement("import.sheet.duplicates")
+        if policy.exists {
+            policy.click()
+            let keep = app.menuItems["Keep every copy"]
+            if keep.waitForExistence(timeout: 5) { keep.click() } else { app.typeKey(.escape, modifierFlags: []) }
+        }
+        let attachmentText = fjElement("import.sheet.attachmentText")
+        if attachmentText.exists, "\(attachmentText.value ?? "")" == "0" { attachmentText.click() }
+        start.click()
+        return nil
+    }
+
+    /// File ▸ Last Import Receipt…: the verdict and the accounting, then closes the window.
+    private func fjOpenImportReceipt() -> (verdict: String, accounting: String) {
+        app.activate()
+        app.menuBars.menuBarItems["File"].click()
+        let item = app.menuItems["Last Import Receipt..."]
+        guard item.waitForExistence(timeout: 5) else { app.typeKey(.escape, modifierFlags: []); return ("", "") }
+        item.click()
+        let accounting = fjElement("import.receipt.accounting")
+        guard accounting.waitForExistence(timeout: 20) else { return ("", "") }
+        let verdict = fjElement("import.receipt.verdict")
+        let result = (verdict.exists ? verdict.label : "", accounting.label)
+        snapshotScreen("fivejobs-import-receipt")
+        app.typeKey("w", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 1)
+        return result
+    }
+
+    /// Advanced Search with one attachment condition ("words or phrase inside
+    /// the file"); retried while attachment text may still be indexing.
+    /// Returns the rows listed (-1: the builder could not be driven).
+    private func fjAdvancedSearch(attachmentWord: String, expectRows: Int) -> Int {
+        let rowsQuery = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'archive.row.'"))
+        var rows = -1
+        for attempt in 0..<6 {
+            app.activate()
+            let clear = fjElement("activeFilters.clear")
+            if clear.exists { clear.click(); Thread.sleep(forTimeInterval: 1) }
+            let open = fjElement("archive.list.advancedSearch")
+            guard open.waitForExistence(timeout: 10) else { return -1 }
+            open.click()
+            let add = fjElement("advancedSearch.add.all")
+            guard add.waitForExistence(timeout: 10) else { return -1 }
+            add.click()
+            let addAttachment = app.menuItems["Add attachment condition"]
+            guard addAttachment.waitForExistence(timeout: 5) else { app.typeKey(.escape, modifierFlags: []); return -1 }
+            addAttachment.click()
+            let field = fjElement("advancedSearch.attachment.content")
+            guard field.waitForExistence(timeout: 5) else { return -1 }
+            field.click()
+            field.typeText(attachmentWord)
+            fjElement("advancedSearch.apply").click()
+            // Settled: rows listed, or the no-match notice.
+            _ = fjWait(timeout: 20) { rowsQuery.count > 0 || self.fjElement("archive.list.noResults").exists }
+            Thread.sleep(forTimeInterval: 1)
+            rows = rowsQuery.count
+            if rows == expectRows { return rows }
+            if attempt < 5 { Thread.sleep(forTimeInterval: 10) }   // the attachment-text index may still be running
+        }
+        return rows
+    }
+
+    private func fjSimilarGroup() -> XCUIElement? {
+        let groups = app.descendants(matching: .any).matching(identifier: "duplicates.group.similar").allElementsBoundByIndex
+        return groups.first { $0.label.contains(FiveJobsFixture.nearSubject) }
+    }
+
+    /// The per-message export's folder chooser: Go to Folder, then its "Save" prompt.
+    private func fjChooseFolder(_ path: String) -> Bool {
+        let panel = app.sheets.firstMatch.waitForExistence(timeout: 10) ? app.sheets.firstMatch : app.dialogs.firstMatch
+        guard panel.waitForExistence(timeout: 10) else { return false }
+        panel.typeKey("g", modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 1.0)
+        fjPaste(path)
+        app.typeKey(.return, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 1.5)
+        let save = panel.buttons["Save"].firstMatch
+        if save.exists, save.isEnabled { save.click() } else { app.typeKey(.return, modifierFlags: []) }
+        Thread.sleep(forTimeInterval: 1.0)
+        return true
+    }
+    #endif
 }
+
+#if os(macOS)
+/// CLOSE-06 fixture, built at test time: an Apple Mail "Export Mailbox…"
+/// folder (Inbox; Work with Clients nested inside; an empty Archive 2019),
+/// zipped the way Finder compresses it.
+///
+/// - an exact duplicate: the same message, byte for byte, in Inbox and Work;
+/// - a near duplicate: the same 120-word note in Work and Work/Clients, last word changed;
+/// - a PDF and a ZIP holding a DOCX, each with its own known word.
+enum FiveJobsFixture {
+    static let docxWord = "zanzibarite"
+    static let pdfWord = "pelicanfjord"
+    static let missWord = "xylophonequartz"
+    static let docxName = "report.docx"
+    static let exactSubject = "Quarterly ledger"
+    static let nearSubject = "Travel plans"
+    static let exportFolder = "Inbox"
+    static let total = 7
+    static let folders: [(name: String, count: Int)] = [("Inbox", 3), ("Work", 2), ("Clients", 2), ("Archive 2019", 0)]
+
+    static func build(in dir: URL) throws -> URL {
+        let fm = FileManager.default
+        let root = dir.appendingPathComponent("FiveJobs", isDirectory: true)
+        func package(_ relative: String, _ messages: [String]) throws {
+            let p = root.appendingPathComponent(relative, isDirectory: true)
+            try fm.createDirectory(at: p, withIntermediateDirectories: true)
+            try Data(messages.joined().utf8).write(to: p.appendingPathComponent("mbox"))
+            try Data("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>\n".utf8).write(to: p.appendingPathComponent("Info.plist"))
+            try Data([0, 1, 2, 3]).write(to: p.appendingPathComponent("table_of_contents"))
+        }
+        let ledger = message(from: "Alice Ledger <alice@example.com>", subject: exactSubject, day: 6, id: "fj-exact",
+                             body: "The quarterly ledger is closed. Totals are final and signed off.")
+        let cities = ["rome", "oslo", "lima", "kyiv", "baku", "doha"]
+        let words = (0..<120).map { "itinerary\(cities[$0 % cities.count])\($0)" }
+        let nearA = message(from: "Erin Travel <erin@example.com>", subject: nearSubject, day: 8, id: "fj-near-a",
+                            body: words.joined(separator: " "))
+        let nearB = message(from: "Erin Travel <erin@example.com>", subject: nearSubject + " (revised)", day: 9, id: "fj-near-b",
+                            body: (words.dropLast() + ["itineraryfinalchange"]).joined(separator: " "))
+        try package("Inbox.mbox", [
+            ledger,
+            try attachmentMessage(),
+            message(from: "Dave Notes <dave@example.com>", subject: "Plain note", day: 10, id: "fj-plain", body: "Lunch at noon."),
+        ])
+        try package("Work.mbox", [ledger, nearA])
+        try package("Work.mbox/Clients.mbox", [
+            nearB,
+            message(from: "Frank Client <frank@example.com>", subject: "Client intro", day: 11, id: "fj-client", body: "Meet the new client team."),
+        ])
+        try package("Archive 2019.mbox", [])
+
+        let zip = dir.appendingPathComponent("FiveJobs.zip")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        process.currentDirectoryURL = dir
+        process.arguments = ["-q", "-r", zip.path, "FiveJobs"]
+        try process.run(); process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw NSError(domain: "FiveJobsFixture", code: Int(process.terminationStatus)) }
+        return zip
+    }
+
+    private static func message(from: String, subject: String, day: Int, id: String, body: String) -> String {
+        "From sender@example.com Mon Jan \(day < 10 ? " " : "")\(day) 10:00:00 2025\n"
+            + "From: \(from)\nTo: me@example.org\nSubject: \(subject)\n"
+            + "Date: Mon, \(day) Jan 2025 10:00:00 +0000\nMessage-ID: <\(id)@example.com>\n\n\(body)\n\n"
+    }
+
+    /// A message with minutes.pdf (the PDF word) and bundle.zip ▸ report.docx (the DOCX word).
+    private static func attachmentMessage() throws -> String {
+        let pdf = try pdfData(text: "Board minutes. Action item: \(pdfWord) review.")
+        let docx = zipPackage([
+            ("[Content_Types].xml", Data("<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>".utf8)),
+            ("word/document.xml", Data("<?xml version=\"1.0\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>The audit found \(docxWord) in the ledger.</w:t></w:r></w:p></w:body></w:document>".utf8)),
+        ])
+        let bundle = zipPackage([(docxName, docx)])
+        func part(_ name: String, _ type: String, _ data: Data) -> String {
+            "--FJBOUNDARY\nContent-Type: \(type); name=\"\(name)\"\nContent-Disposition: attachment; filename=\"\(name)\"\n"
+                + "Content-Transfer-Encoding: base64\n\n"
+                + data.base64EncodedString(options: [.lineLength76Characters, .endLineWithLineFeed]) + "\n"
+        }
+        return "From sender@example.com Tue Jan  7 09:00:00 2025\n"
+            + "From: Carol Board <carol@example.com>\nTo: me@example.org\nSubject: Board pack\n"
+            + "Date: Tue, 7 Jan 2025 09:00:00 +0000\nMessage-ID: <fj-attach@example.com>\nMIME-Version: 1.0\n"
+            + "Content-Type: multipart/mixed; boundary=\"FJBOUNDARY\"\n\n"
+            + "--FJBOUNDARY\nContent-Type: text/plain; charset=utf-8\n\nThe board pack: minutes and the bundle.\n"
+            + part("minutes.pdf", "application/pdf", pdf)
+            + part("bundle.zip", "application/zip", bundle)
+            + "--FJBOUNDARY--\n\n"
+    }
+
+    /// A one-page PDF with real, extractable text.
+    private static func pdfData(text: String) throws -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+            throw NSError(domain: "FiveJobsFixture", code: 1)
+        }
+        context.beginPDFPage(nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 14)]))
+        context.textPosition = CGPoint(x: 72, y: 700)
+        CTLineDraw(line, context)
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+
+    private static func crc32(_ data: Data) -> UInt32 {
+        var table = [UInt32](repeating: 0, count: 256)
+        for i in 0..<256 {
+            var c = UInt32(i)
+            for _ in 0..<8 { c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1 }
+            table[i] = c
+        }
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in data { crc = table[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8) }
+        return crc ^ 0xFFFFFFFF
+    }
+
+    /// A stored (uncompressed) ZIP with correct CRCs — an Office package is one.
+    private static func zipPackage(_ members: [(name: String, data: Data)]) -> Data {
+        func le16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
+        func le32(_ v: UInt32) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        var local = Data(), central = Data()
+        for m in members {
+            let name = Array(m.name.utf8)
+            let crc = crc32(m.data)
+            let size = UInt32(m.data.count)
+            let offset = UInt32(local.count)
+            local.append(contentsOf: le32(0x04034b50) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                         + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + name)
+            local.append(m.data)
+            central.append(contentsOf: le32(0x02014b50) + le16(20) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(crc) + le32(size) + le32(size) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0)
+                           + le32(0) + le32(offset) + name)
+        }
+        var file = local
+        file.append(central)
+        file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(members.count) + le16(members.count)
+                    + le32(UInt32(central.count)) + le32(UInt32(local.count)) + le16(0))
+        return file
+    }
+}
+#endif

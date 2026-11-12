@@ -377,8 +377,7 @@ final class RecipeRunFileStore: RecipeRunStoring {
     init(directory: URL) { self.directory = directory }
 
     static var baseDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let base = UITestStorageRoot.applicationSupport
         return base.appendingPathComponent("mailin", isDirectory: true)
     }
     static var production: RecipeRunFileStore {

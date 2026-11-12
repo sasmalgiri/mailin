@@ -82,9 +82,7 @@ struct MailinStorageEnvironment: Sendable {
     /// The real production storage directory: `<AppSupport>/com.ecosanskriti.mailin`.
     /// Both the SwiftData store and the FTS shards live under this tree.
     static var productionStorageDirectory: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return appSupport.appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
     }
 
