@@ -447650,6 +447650,201 @@
           }
         }
       }
+    },
+    "Google requires 2-Step Verification for this. Create an app password at myaccount.google.com/apppasswords and paste the 16-character password here. A normal Google password will be refused." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google verlangt dafür die Bestätigung in zwei Schritten. Erstellen Sie unter myaccount.google.com/apppasswords ein App-Passwort und fügen Sie das 16-stellige Passwort hier ein. Ein normales Google-Passwort wird abgelehnt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google exige para esto la verificación en dos pasos. Crea una contraseña de aplicación en myaccount.google.com/apppasswords y pega aquí la contraseña de 16 caracteres. Una contraseña normal de Google se rechazará."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google exige pour cela la validation en deux étapes. Créez un mot de passe d'application sur myaccount.google.com/apppasswords et collez ici le mot de passe de 16 caractères. Un mot de passe Google normal sera refusé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इसके लिए Google को 2-चरणों में पुष्टि चालू होना ज़रूरी है। myaccount.google.com/apppasswords पर एक ऐप पासवर्ड बनाएँ और 16 वर्णों वाला पासवर्ड यहाँ चिपकाएँ। सामान्य Google पासवर्ड अस्वीकार कर दिया जाएगा।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google richiede per questo la verifica in due passaggi. Crea una password per le app su myaccount.google.com/apppasswords e incolla qui la password di 16 caratteri. Una normale password Google verrà rifiutata."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これには Google の 2 段階認証プロセスが必要です。myaccount.google.com/apppasswords でアプリ パスワードを作成し、16 文字のパスワードをここに貼り付けてください。通常の Google パスワードは拒否されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기능에는 Google 2단계 인증이 필요합니다. myaccount.google.com/apppasswords에서 앱 비밀번호를 만들고 16자리 비밀번호를 여기에 붙여 넣으세요. 일반 Google 비밀번호는 거부됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google exige a verificação em duas etapas para isso. Crie uma senha de app em myaccount.google.com/apppasswords e cole aqui a senha de 16 caracteres. Uma senha normal do Google será recusada."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 要求为此开启两步验证。请在 myaccount.google.com/apppasswords 创建应用专用密码，并将这 16 个字符的密码粘贴到这里。普通 Google 密码会被拒绝。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 要求為此開啟兩步驟驗證。請在 myaccount.google.com/apppasswords 建立應用程式密碼，並將這 16 個字元的密碼貼到這裡。一般 Google 密碼會遭到拒絕。"
+          }
+        }
+      }
+    },
+    "A Google app password has 16 characters. Create one at myaccount.google.com/apppasswords; a normal Google password will be refused." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein Google-App-Passwort hat 16 Zeichen. Erstellen Sie eines unter myaccount.google.com/apppasswords; ein normales Google-Passwort wird abgelehnt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una contraseña de aplicación de Google tiene 16 caracteres. Crea una en myaccount.google.com/apppasswords; una contraseña normal de Google se rechazará."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un mot de passe d'application Google comporte 16 caractères. Créez-en un sur myaccount.google.com/apppasswords ; un mot de passe Google normal sera refusé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google ऐप पासवर्ड में 16 वर्ण होते हैं। myaccount.google.com/apppasswords पर एक बनाएँ; सामान्य Google पासवर्ड अस्वीकार कर दिया जाएगा।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una password per le app di Google ha 16 caratteri. Creane una su myaccount.google.com/apppasswords; una normale password Google verrà rifiutata."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google のアプリ パスワードは 16 文字です。myaccount.google.com/apppasswords で作成してください。通常の Google パスワードは拒否されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 앱 비밀번호는 16자리입니다. myaccount.google.com/apppasswords에서 만드세요. 일반 Google 비밀번호는 거부됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma senha de app do Google tem 16 caracteres. Crie uma em myaccount.google.com/apppasswords; uma senha normal do Google será recusada."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 应用专用密码有 16 个字符。请在 myaccount.google.com/apppasswords 创建一个；普通 Google 密码会被拒绝。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 應用程式密碼有 16 個字元。請在 myaccount.google.com/apppasswords 建立一個；一般 Google 密碼會遭到拒絕。"
+          }
+        }
+      }
+    },
+    "Google refused the password. Gmail needs an app password here: turn on 2-Step Verification, create an app password at myaccount.google.com/apppasswords and paste the 16-character password. A normal Google password will be refused. Saved mail remains available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google hat das Passwort abgelehnt. Gmail braucht hier ein App-Passwort: Schalten Sie die Bestätigung in zwei Schritten ein, erstellen Sie unter myaccount.google.com/apppasswords ein App-Passwort und fügen Sie das 16-stellige Passwort ein. Ein normales Google-Passwort wird abgelehnt. Gespeicherte E-Mails bleiben verfügbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google rechazó la contraseña. Gmail necesita aquí una contraseña de aplicación: activa la verificación en dos pasos, crea una contraseña de aplicación en myaccount.google.com/apppasswords y pega la contraseña de 16 caracteres. Una contraseña normal de Google se rechazará. El correo guardado sigue disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google a refusé le mot de passe. Gmail a besoin ici d'un mot de passe d'application : activez la validation en deux étapes, créez un mot de passe d'application sur myaccount.google.com/apppasswords et collez le mot de passe de 16 caractères. Un mot de passe Google normal sera refusé. Les e-mails enregistrés restent disponibles."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google ने पासवर्ड अस्वीकार कर दिया। यहाँ Gmail को ऐप पासवर्ड चाहिए: 2-चरणों में पुष्टि चालू करें, myaccount.google.com/apppasswords पर एक ऐप पासवर्ड बनाएँ और 16 वर्णों वाला पासवर्ड चिपकाएँ। सामान्य Google पासवर्ड अस्वीकार कर दिया जाएगा। सहेजे गए ईमेल उपलब्ध रहते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google ha rifiutato la password. Qui Gmail richiede una password per le app: attiva la verifica in due passaggi, crea una password per le app su myaccount.google.com/apppasswords e incolla la password di 16 caratteri. Una normale password Google verrà rifiutata. La posta salvata resta disponibile."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google がパスワードを拒否しました。ここでは Gmail にアプリ パスワードが必要です。2 段階認証プロセスをオンにし、myaccount.google.com/apppasswords でアプリ パスワードを作成して、16 文字のパスワードを貼り付けてください。通常の Google パスワードは拒否されます。保存済みのメールは引き続き利用できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google에서 비밀번호를 거부했습니다. 여기서는 Gmail에 앱 비밀번호가 필요합니다. 2단계 인증을 켜고 myaccount.google.com/apppasswords에서 앱 비밀번호를 만든 다음 16자리 비밀번호를 붙여 넣으세요. 일반 Google 비밀번호는 거부됩니다. 저장된 메일은 계속 사용할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google recusou a senha. Aqui o Gmail precisa de uma senha de app: ative a verificação em duas etapas, crie uma senha de app em myaccount.google.com/apppasswords e cole a senha de 16 caracteres. Uma senha normal do Google será recusada. Os e-mails salvos continuam disponíveis."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 拒绝了该密码。这里 Gmail 需要应用专用密码：请开启两步验证，在 myaccount.google.com/apppasswords 创建应用专用密码，并粘贴这 16 个字符的密码。普通 Google 密码会被拒绝。已保存的邮件仍然可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 拒絕了該密碼。這裡 Gmail 需要應用程式密碼：請開啟兩步驟驗證，在 myaccount.google.com/apppasswords 建立應用程式密碼，並貼上這 16 個字元的密碼。一般 Google 密碼會遭到拒絕。已儲存的郵件仍可使用。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
