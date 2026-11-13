@@ -227,6 +227,7 @@ private struct MailWorkspaceReadyView: View {
             .padding(.vertical, Spacing.xxSmall)
             .background(.bar)
             .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(model.lastError == nil ? "mail.status.message" : "mail.status.error")
         }
     }
 }
@@ -256,9 +257,11 @@ private struct MailSidebar: View {
                             .tag(MailWorkspaceModel.Section.folder(snapshot.id, folder.serverID))
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel(Text("\(folder.path), \(folder.messages) messages, \(folder.unread) unread"))
+                            .accessibilityIdentifier("mail.sidebar.folder")
                         }
                     } label: {
                         MailAccountBadge(account: snapshot.account, headline: snapshot.headline)
+                            .accessibilityIdentifier("mail.sidebar.account")
                             .tag(MailWorkspaceModel.Section.account(snapshot.id))
                     }
                 }
@@ -365,6 +368,7 @@ private struct MailContentColumn: View {
                     .keyboardShortcut("l", modifiers: [.command, .option])
                 Spacer()
                 Text(model.showingCountText).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("mail.list.showing")
             }
             .controlSize(.small)
             .padding(.horizontal, Spacing.small)

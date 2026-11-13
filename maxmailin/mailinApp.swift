@@ -264,7 +264,7 @@ struct mailinApp: App {
                         // every surface against real data.
                         if storageState == .active,
                            ProcessInfo.processInfo.arguments.contains("--uitest") {
-                            UITestSupport.prepareForUITests()
+                            UITestSupport.prepareForUITests(modules: modules)
                         }
                         // C-2: every launch-time job — fidelity repair,
                         // attachment-text index, store↔FTS reconcile, weekly

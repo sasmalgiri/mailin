@@ -15,7 +15,7 @@ import Foundation
 @MainActor
 enum UITestSupport {
 
-    static func prepareForUITests() {
+    static func prepareForUITests(modules: ModuleRegistry? = nil) {
         let defaults = UserDefaults.standard
         // No first-run sheets over the UI while the test clicks through.
         defaults.set(true, forKey: "hasSeenGettingStarted")
@@ -33,6 +33,15 @@ enum UITestSupport {
         LegalComplianceManager.shared.acceptedTermsVersion = LegalComplianceManager.currentTermsVersion
         defaults.set(true, forKey: "hasCompletedPersonaSelection")
         PersonaManager.shared.hasCompletedPersonaSelection = true
+
+        // Live Gmail check (MailinClickThroughUITests.testConnectedGmail_liveSignIn_preserveAndVerify):
+        // only on a fresh, isolated archive AND with the explicit environment
+        // switch, turn on the Live Mail page and Connected mail exactly as
+        // Settings ▸ Modules and the Mail page's "Turn on Connected mail" do.
+        if UITestStorageRoot.override != nil,
+           ProcessInfo.processInfo.environment[connectedMailEnvironmentKey] == "1" {
+            enableConnectedMail(modules ?? ModuleRegistry.live)
+        }
 
         // CLOSE-06: a fresh-archive run (MAILIN_UITEST_FRESH_ARCHIVE) starts
         // empty — the test imports its own fixture, so no demo seed.
@@ -58,6 +67,26 @@ enum UITestSupport {
                 // Seeding is best-effort; the UI test asserts on visible state.
             }
         }
+    }
+
+    static let connectedMailEnvironmentKey = "MAILIN_UITEST_ENABLE_CONNECTED_MAIL"
+
+    /// The registry path the Settings switches use: `enable(.liveMail)` (no
+    /// activation sheet — that sheet is only shown for a tab clicked while its
+    /// page is off) and then the `connectedMail` capability, whose wiring sets
+    /// MailNetworkPolicy and starts the connected-mail runtime. Compiled only
+    /// into a build with the mail transports; elsewhere it does nothing (the
+    /// page is excluded there and `enable` would refuse anyway).
+    private static func enableConnectedMail(_ modules: ModuleRegistry?) {
+        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        guard let modules else { return }
+        do {
+            try modules.enable(.liveMail)
+        } catch {
+            return
+        }
+        modules.set(.connectedMail, enabled: true)
+        #endif
     }
 
     /// Twelve sample messages carrying the markers mail clients leave on

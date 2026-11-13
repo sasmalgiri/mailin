@@ -2946,6 +2946,356 @@ final class MailinClickThroughUITests: XCTestCase {
         return groups.first { $0.label.contains(FiveJobsFixture.nearSubject) }
     }
 
+    // MARK: - V4: live Gmail check (owner-run, semi-automated)
+
+    /// How long the test waits for the owner's sign-in, and for capture.
+    private static let liveGmailWait: TimeInterval = 600
+
+    /// A real Gmail test account (Google project in "Testing" mode) is signed
+    /// in, its mail preserved into a fresh, isolated archive, and what the UI
+    /// reports is checked. Every click is the test's except the human part:
+    /// typing the address in Add account, pressing "Sign in…", and signing in /
+    /// allowing access in Google's window. The test waits up to 10 minutes.
+    ///
+    /// Connected build only. Skips when the Live Mail tab is absent (the
+    /// offline edition has no tab), when the Mail page says the edition has no
+    /// mail connection, or when Add account says Gmail sign-in is not set up
+    /// (no `MailinGmailClientID` in the app's Info.plist). The UI test runner
+    /// cannot read the app's Info.plist, so the build is judged by what the
+    /// app itself shows. Every check logs `LIVE-GMAIL <check>: PASS|FAIL`.
+    func testConnectedGmail_liveSignIn_preserveAndVerify() throws {
+        let token = "gm\(Int(Date().timeIntervalSince1970))"
+        var results: [(check: String, pass: Bool, detail: String)] = []
+        func record(_ check: String, _ pass: Bool, _ detail: String) {
+            let line = "LIVE-GMAIL \(check): \(pass ? "PASS" : "FAIL") — \(detail)"
+            print(line)
+            results.append((check, pass, detail))
+            snapshotScreen("gmail-\(results.count)-\(check.replacingOccurrences(of: " ", with: "-"))")
+        }
+        func finish() {
+            let report = results.map { "- \($0.check): \($0.pass ? "PASS" : "FAIL") — \($0.detail)" }.joined(separator: "\n")
+            print("LIVE-GMAIL>>>\n\(report)\n<<<LIVE-GMAIL")
+            let attachment = XCTAttachment(string: report)
+            attachment.name = "live-gmail.md"; attachment.lifetime = .keepAlways
+            add(attachment)
+            for r in results { XCTAssertTrue(r.pass, "\(r.check): \(r.detail)") }
+        }
+        func errorBanner() -> String? {
+            let banner = fjElement("mail.status.error")
+            return banner.exists ? banner.label : nil
+        }
+
+        // Fresh archive + the app-side switch that turns on Live Mail and
+        // Connected mail (UITestSupport.enableConnectedMail).
+        app.terminate()
+        app = makeApp()
+        app.launchArguments = ["--uitest", "-listModeSimple", "YES"]
+        app.launchEnvironment["MAILIN_UITEST_FRESH_ARCHIVE"] = token
+        app.launchEnvironment["MAILIN_UITEST_ENABLE_CONNECTED_MAIL"] = "1"
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 30)
+        app.activate()
+        _ = app.windows.firstMatch.waitForExistence(timeout: 30)
+        Thread.sleep(forTimeInterval: 3)
+
+        // ── Is this a connected build? ──
+        let mailTab = app.buttons.matching(NSPredicate(format: "label == %@", "Live Mail")).firstMatch
+        guard mailTab.waitForExistence(timeout: 20) else {
+            throw XCTSkip("No Live Mail tab: this build has no connected mail (offline edition). Test the Debug-Connected or Release-Connected build.")
+        }
+        mailTab.click()
+        // Only if the launch switch did not take: the page's own activation sheet.
+        let turnOnPage = app.buttons["Turn on Live Mail"].firstMatch
+        if turnOnPage.waitForExistence(timeout: 3) { turnOnPage.click() }
+        let addAccount = fjElement("mail.addAccount")
+        let unavailable = fjElement("mail.unavailable")
+        _ = fjWait(timeout: 30) { addAccount.exists || unavailable.exists }
+        if !addAccount.exists, unavailable.exists {
+            let turnOn = fjElement("mail.turnOn")
+            guard turnOn.exists else {
+                throw XCTSkip("The Mail page says this edition has no mail connection.")
+            }
+            turnOn.click()   // the same switch as Settings ▸ Modules ▸ Connected mail
+            _ = addAccount.waitForExistence(timeout: 30)
+        }
+        guard addAccount.exists, addAccount.isEnabled else {
+            record("mail page", false, "no enabled Add account control on the Mail page")
+            finish(); return
+        }
+
+        // ── Add account ▸ Gmail ──
+        addAccount.click()
+        let provider = fjElement("mail.add.provider")
+        guard provider.waitForExistence(timeout: 20) else {
+            record("add account", false, "the Add account sheet did not open")
+            finish(); return
+        }
+        if !"\(provider.value ?? "")".contains("Gmail") {
+            provider.click()
+            let gmail = app.menuItems["Gmail"]
+            if gmail.waitForExistence(timeout: 5) { gmail.click() } else { app.typeKey(.escape, modifierFlags: []) }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        if fjElement("mail.add.notConfigured").exists {
+            throw XCTSkip("Gmail sign-in is not set up in this build (no MailinGmailClientID in its Info.plist).")
+        }
+        let addressField = fjElement("mail.add.address")
+        guard addressField.waitForExistence(timeout: 10) else {
+            record("add account", false, "Gmail chosen (\(provider.value ?? "")) but no email address field")
+            finish(); return
+        }
+        addressField.click()   // focused, so the owner can type straight away
+        snapshotScreen("gmail-0-add-account")
+
+        // ── The human part: address, Sign in…, Google sign-in and consent ──
+        let accountRow = fjElement("mail.sidebar.account")
+        let instructions = "OWNER: type the Gmail test address, press Sign in… (Continue), sign in and allow 'View your email messages and settings'"
+        let signedIn: Bool = XCTContext.runActivity(named: instructions) { _ in
+            print("""
+
+                ============================================================
+                LIVE-GMAIL — OWNER ACTION NEEDED (waiting up to \(Int(Self.liveGmailWait / 60)) minutes)
+                1. In mailin's Add account sheet (Gmail is chosen), type the
+                   Gmail TEST account address, then press "Sign in…".
+                2. In Google's sign-in window: choose / sign in to that account,
+                   press Continue past the "Google hasn't verified this app"
+                   (Testing mode) notice, and allow
+                   "View your email messages and settings".
+                The test continues by itself once the account is listed.
+                ============================================================
+
+                """)
+            let deadline = Date().addingTimeInterval(Self.liveGmailWait)
+            var nextReminder = Date().addingTimeInterval(60)
+            // Queries only — no clicks or app.activate() while the owner works.
+            while Date() < deadline {
+                if accountRow.exists { return true }
+                if Date() >= nextReminder {
+                    print("LIVE-GMAIL waiting for the owner's sign-in — \(Int(deadline.timeIntervalSinceNow)) s left")
+                    nextReminder = Date().addingTimeInterval(60)
+                }
+                Thread.sleep(forTimeInterval: 2)
+            }
+            return accountRow.exists
+        }
+        guard signedIn else {
+            let error = fjElement("mail.add.error")
+            record("sign-in", false, "no account listed within \(Int(Self.liveGmailWait)) s\(error.exists ? "; the sheet says: \(fjText(error))" : "")")
+            finish(); return
+        }
+        app.activate()
+        Thread.sleep(forTimeInterval: 2)
+        record("sign-in", errorBanner() == nil,
+               "account listed: \(accountRow.label)\(errorBanner().map { "; error banner: \($0)" } ?? "")")
+
+        // From here on the account exists: every step runs (no early return)
+        // so the removal at the end always deletes its Keychain item.
+
+        // ── Permissions: all three off, then Preserve mail only ──
+        if !fjElement("mail.mode.capture").exists { accountRow.click(); Thread.sleep(forTimeInterval: 1) }
+        let capture = fjElement("mail.mode.capture")
+        let send = fjElement("mail.mode.send")
+        let serverActions = fjElement("mail.mode.serverActions")
+        do {
+            let found = capture.waitForExistence(timeout: 20) && send.exists && serverActions.exists
+            let before = [capture, send, serverActions].map { $0.exists ? (lgIsOn($0) ? "on" : "off") : "missing" }
+            record("modes off at start", found && before == ["off", "off", "off"],
+                   "Preserve mail / Send mail / Change server mail: \(before.joined(separator: " / "))")
+            let turnedOn = found && lgSetOn(capture)
+            Thread.sleep(forTimeInterval: 1.5)
+            let reconsent = app.buttons["Sign in again"].exists
+            let after = [capture, send, serverActions].map { $0.exists ? (lgIsOn($0) ? "on" : "off") : "missing" }
+            record("preserve mail only", turnedOn && after == ["on", "off", "off"] && !reconsent,
+                   "after switching Preserve mail on: \(after.joined(separator: " / "))\(reconsent ? "; an extra-permission prompt appeared" : "")")
+        }
+
+        // ── Sync now, until capture is complete ──
+        let headline = fjElement("mail.account.headline")
+        let syncButton = fjElement("mail.account.syncNow")
+        func isComplete(_ h: String) -> Bool { h.hasPrefix("Up to date:") || h == "Saved locally; attachment text pending" }
+        func isStopped(_ h: String) -> Bool {
+            h.hasPrefix("Last capture stopped") || h.hasPrefix("Capture paused") || h.hasPrefix("Capture is not allowed")
+                || h.hasPrefix("Account needs sign-in") || h.contains("could not be downloaded yet")
+        }
+        var saved = -1
+        do {
+            var rounds = 0
+            var state = "not finished within \(Int(Self.liveGmailWait)) s"
+            let deadline = Date().addingTimeInterval(Self.liveGmailWait)
+            while Date() < deadline {
+                guard syncButton.waitForExistence(timeout: 30) else { state = "no Sync now button in the account's Status"; break }
+                // A capture started by switching Preserve mail on may still be running.
+                _ = fjWait(timeout: max(1, deadline.timeIntervalSinceNow)) { syncButton.isEnabled }
+                Thread.sleep(forTimeInterval: 3)   // the refresh after a run lands just after the button re-enables
+                let h = fjText(headline)
+                if rounds > 0, isComplete(h) { state = "complete"; break }
+                if rounds > 0, isStopped(h) { state = "stopped"; break }
+                syncButton.click()
+                rounds += 1
+                _ = fjWait(timeout: 10) { !syncButton.isEnabled }
+                _ = fjWait(timeout: max(1, deadline.timeIntervalSinceNow)) {
+                    syncButton.isEnabled && !self.fjText(headline).hasPrefix("Saving mail")
+                }
+            }
+            let h = fjText(headline)
+            saved = lgNumbers(h).first ?? -1
+            record("sync", state == "complete" && errorBanner() == nil,
+                   "\(state) after \(rounds) Sync now press(es); headline “\(h)”\(errorBanner().map { "; error banner: \($0)" } ?? "")")
+        }
+
+        // ── Status: the server's list is fully captured (captured == listed) ──
+        var captured = -1
+        do {
+            let acquisition = fjText(fjElement("mail.status.line.0"))
+            let n = lgNumbers(acquisition)
+            let listed = !acquisition.contains("not complete") && n.count == 4
+            if n.count >= 1 { captured = n[0] }
+            let clean = listed && n[1] == 0 && n[2] == 0 && n[3] == 0
+            // "Saved locally; attachment text pending" carries no count; the headline's
+            // count, when shown, is the account's saved total and must agree.
+            let headlineAgrees = saved < 0 || saved == captured
+            record("acquisition", clean && captured > 0 && headlineAgrees,
+                   "“\(acquisition)” (captured, remaining, failed, unavailable); headline saved \(saved < 0 ? "not shown" : "\(saved)")")
+            if saved < 0 { saved = captured }
+            let preservation = fjText(fjElement("mail.status.line.1"))
+            let p = lgMatch(#"^([\d,.\x{00A0}\x{202F} ]+) kept with their original bytes .*; ([\d,.\x{00A0}\x{202F} ]+) missing bytes; ([\d,.\x{00A0}\x{202F} ]+) unreadable$"#, preservation)
+                .map { $0.map { Int($0.filter(\.isNumber)) ?? -1 } }
+            record("preservation", p.map { $0[0] == captured && $0[1] == 0 && $0[2] == 0 } ?? false,
+                   "“\(preservation)”; captured \(captured)")
+            print("LIVE-GMAIL info: search coverage “\(fjText(fjElement("mail.status.line.2")))”; export “\(fjText(fjElement("mail.status.line.3")))”")
+        }
+
+        // ── Folders / labels: the account's list vs each folder's own message list ──
+        do {
+            var detail: [String] = []
+            var pass = true
+            var folderCounts: [String: Int] = [:]
+            for folder in app.descendants(matching: .any).matching(identifier: "mail.folder").allElementsBoundByIndex {
+                guard let m = lgMatch(#"^(.*): ([\d,.\x{00A0}\x{202F} ]+) saved, ([\d,.\x{00A0}\x{202F} ]+) unread$"#, folder.label) else {
+                    pass = false; detail.append("unreadable folder line “\(folder.label)”"); continue
+                }
+                let count = Int(m[1].filter(\.isNumber)) ?? -1
+                folderCounts[m[0]] = count
+                if !lgIsOn(folder) { pass = false; detail.append("\(m[0]) is not selected for preserving") }
+                if count < 0 || count > captured { pass = false; detail.append("\(m[0]): \(count) saved, more than the \(captured) captured") }
+            }
+            if folderCounts.isEmpty { pass = false; detail.append("no folders listed under “Folders to preserve”") }
+            snapshotScreen("gmail-folders-to-preserve")
+            // The sidebar lists the same folders under the account (collapsed at first).
+            for _ in 0..<6 {
+                let closed = app.disclosureTriangles.matching(NSPredicate(format: "value == 0")).allElementsBoundByIndex
+                guard let next = closed.first(where: { $0.isHittable }) else { break }
+                next.click()
+                Thread.sleep(forTimeInterval: 0.8)
+            }
+            let rows = app.descendants(matching: .any).matching(identifier: "mail.sidebar.folder")
+            let showing = fjElement("mail.list.showing")
+            let total = rows.count
+            if total == 0 { pass = false; detail.append("no folders under the account in the sidebar") }
+            // A long Form may not expose rows scrolled out of view, so a folder
+            // missing there is noted, not failed; a differing count fails.
+            detail.append("sidebar lists \(total) folders; “Folders to preserve” shows \(folderCounts.count)")
+            for i in 0..<total {
+                let row = rows.element(boundBy: i)
+                guard let m = lgMatch(#"^(.*), ([\d,.\x{00A0}\x{202F} ]+) messages, ([\d,.\x{00A0}\x{202F} ]+) unread$"#, row.label) else {
+                    pass = false; detail.append("unreadable sidebar row “\(row.label)”"); continue
+                }
+                let path = m[0], count = Int(m[1].filter(\.isNumber)) ?? -1
+                if let expected = folderCounts[path], expected != count {
+                    pass = false; detail.append("\(path): sidebar \(count), account \(expected)")
+                } else if folderCounts[path] == nil {
+                    detail.append("\(path) not visible under “Folders to preserve”")
+                }
+                row.click()
+                // "Showing X of Y messages": Y is the folder's own message list.
+                let listed = fjWait(timeout: 20) {
+                    showing.exists && self.lgMatch(#"of ([\d,.\x{00A0}\x{202F} ]+) messages"#, self.fjText(showing))
+                        .map { Int($0[0].filter(\.isNumber)) == count } == true
+                }
+                detail.append("\(path): \(count) saved; list “\(fjText(showing))”")
+                if !listed { pass = false }
+            }
+            record("folders", pass, detail.joined(separator: "; "))
+        }
+
+        // ── Five jobs touchpoint: the captured mail is in the archive ──
+        do {
+            let archiveTab = app.buttons.matching(NSPredicate(format: "label == %@", "Archive")).firstMatch
+            var detail = "no Archive tab"
+            var pass = false
+            if archiveTab.exists {
+                archiveTab.click()
+                let all = fjElement("archive.sidebar.allMail")
+                pass = fjWait(timeout: 90) { all.exists && self.lgNumbers(all.label).first == saved && saved > 0 }
+                detail = "\(all.exists ? all.label : "All Mail row missing"); captured \(saved)"
+            }
+            record("archive", pass, detail)
+            mailTab.click()
+            _ = accountRow.waitForExistence(timeout: 30)
+        }
+
+        // ── Cleanup: Remove account (counts first, archived mail kept) ──
+        do {
+            var detail: [String] = []
+            var pass = true
+            if app.sheets.count > 0 { app.typeKey(.escape, modifierFlags: []); Thread.sleep(forTimeInterval: 1) }
+            if accountRow.exists { accountRow.click(); Thread.sleep(forTimeInterval: 1.5) }
+            let remove = fjElement("mail.account.remove")
+            if remove.waitForExistence(timeout: 20) {
+                remove.click()
+                let confirm = fjElement("mail.remove.confirm")
+                if confirm.waitForExistence(timeout: 60) {
+                    let summary = fjTexts(in: app.sheets.firstMatch)
+                    snapshotScreen("gmail-remove-counts")
+                    detail.append("before: \(summary.joined(separator: " / ")); button “\(confirm.label)”")
+                    if !summary.contains(where: { $0.contains("removed from the Keychain") }) { pass = false; detail.append("no Keychain line") }
+                    if lgNumbers(confirm.label).last != saved { pass = false; detail.append("the button does not keep \(saved) archived messages") }
+                    confirm.click()
+                    let report = fjElement("mail.remove.report")
+                    if report.waitForExistence(timeout: 60) {
+                        detail.append("after: \(fjText(report))")
+                        if !fjText(report).hasPrefix("Account removed.") { pass = false }
+                    } else { pass = false; detail.append("no removal report") }
+                    let close = fjElement("mail.remove.close")
+                    if close.exists { close.click() } else { app.typeKey(.escape, modifierFlags: []) }
+                } else { pass = false; detail.append("no counted confirmation in the Remove account sheet") }
+            } else { pass = false; detail.append("no Remove account… button in the account's settings") }
+            let gone = fjWait(timeout: 30) { !accountRow.exists }
+            if !gone { pass = false; detail.append("the account is still listed — remove it by hand (Mail ▸ account ▸ Remove account…) so its Keychain item goes") }
+            if let banner = errorBanner() { pass = false; detail.append("error banner: \(banner)") }
+            record("remove account", pass, detail.joined(separator: "; "))
+        }
+
+        finish()
+    }
+
+    private func lgIsOn(_ e: XCUIElement) -> Bool { e.exists && "\(e.value ?? "")" == "1" }
+
+    /// Switches a Form toggle on: a click on the element, then on its trailing
+    /// edge (where the switch sits) if the first click landed on the label.
+    private func lgSetOn(_ e: XCUIElement) -> Bool {
+        if lgIsOn(e) { return true }
+        e.click()
+        if fjWait(timeout: 8, { self.lgIsOn(e) }) { return true }
+        e.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).click()
+        return fjWait(timeout: 8) { self.lgIsOn(e) }
+    }
+
+    /// The whole numbers in a line, in order ("1,234" → 1234).
+    private func lgNumbers(_ text: String) -> [Int] {
+        guard let regex = try? NSRegularExpression(pattern: "\\d[\\d,.\u{00A0}\u{202F}]*") else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { m in
+            Range(m.range, in: text).flatMap { Int(text[$0].filter(\.isNumber)) }
+        }
+    }
+
+    /// The capture groups of the first match, or nil.
+    private func lgMatch(_ pattern: String, _ text: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+        return (1..<m.numberOfRanges).map { i in Range(m.range(at: i), in: text).map { String(text[$0]) } ?? "" }
+    }
+
     /// The per-message export's folder chooser: Go to Folder, then its "Save" prompt.
     private func fjChooseFolder(_ path: String) -> Bool {
         let panel = app.sheets.firstMatch.waitForExistence(timeout: 10) ? app.sheets.firstMatch : app.dialogs.firstMatch

@@ -49,7 +49,7 @@ struct MailAddAccountView: View {
                 }
 
                 if let error = model.lastError {
-                    Section { Text(error).foregroundStyle(.red).font(.callout) }
+                    Section { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("mail.add.error") }
                 }
             }
             .formStyle(.grouped)
@@ -90,6 +90,7 @@ struct MailAddAccountView: View {
                 .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
+                .accessibilityIdentifier("mail.add.address")
         } footer: {
             Text("You sign in on the provider's own page; mailin never sees your password. Only reading mail is requested now; sending or changing mail asks again when you switch it on.")
         }
@@ -204,6 +205,7 @@ struct MailAccountSettingsView: View {
                         HStack {
                             Button(String(localized: "Sync now")) { Task { await model.syncNow(accountID) } }
                                 .disabled(snapshot.isPaused || model.busy)
+                                .accessibilityIdentifier("mail.account.syncNow")
                             Button(snapshot.isPaused ? String(localized: "Resume capture") : String(localized: "Pause capture")) {
                                 Task { await model.setPaused(!snapshot.isPaused, account: accountID) }
                             }
@@ -212,8 +214,11 @@ struct MailAccountSettingsView: View {
                             let times = MailStatusText.syncTimes(status)
                             LabeledContent(String(localized: "Last successful sync"), value: times.successful)
                             LabeledContent(String(localized: "Last attempted sync"), value: times.attempted)
-                            ForEach(Array(MailStatusText.completenessLines(status).enumerated()), id: \.offset) { _, line in
-                                LabeledContent(line.title) { Text(line.value).multilineTextAlignment(.trailing) }
+                            ForEach(Array(MailStatusText.completenessLines(status).enumerated()), id: \.offset) { offset, line in
+                                LabeledContent(line.title) {
+                                    Text(line.value).multilineTextAlignment(.trailing)
+                                        .accessibilityIdentifier("mail.status.line.\(offset)")
+                                }
                             }
                         }
                         if let summary = snapshot.lastRunSummary {
@@ -240,6 +245,7 @@ struct MailAccountSettingsView: View {
                             }
                         }
                         .accessibilityLabel(Text("\(folder.path): \(folder.messages) saved, \(folder.unread) unread"))
+                        .accessibilityIdentifier("mail.folder")
                     }
                 } header: {
                     Text("Folders to preserve")
@@ -282,6 +288,7 @@ struct MailRemoveAccountView: View {
                 if let report {
                     Section {
                         Text(MailRemovalText.report(report))
+                            .accessibilityIdentifier("mail.remove.report")
                     }
                     if let deletion, deletion.deletable > 0, deleted == nil {
                         Section {
@@ -326,6 +333,7 @@ struct MailRemoveAccountView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(report == nil ? String(localized: "Cancel") : String(localized: "Done"), action: dismiss)
+                        .accessibilityIdentifier("mail.remove.close")
                 }
             }
         }
