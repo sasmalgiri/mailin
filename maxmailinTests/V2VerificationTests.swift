@@ -6738,8 +6738,9 @@ final class MailPolicyTests: XCTestCase {
             }
         }
         // V4-08: ConnectedMailRuntime.swift is the ninth (its production adapters); V4-13 adds
-        // ConnectedMailProductionTransports.swift and MailWorkspaceBackend.swift.
-        XCTAssertEqual(mailGated, 11, "the eleven mail files carry the mail gate")
+        // ConnectedMailProductionTransports.swift and MailWorkspaceBackend.swift; the live Gmail
+        // UI-test hook in UITestSupport.swift (5ce933d) is the twelfth.
+        XCTAssertEqual(mailGated, 12, "the twelve mail files carry the mail gate")
         XCTAssertEqual(aiGated, 4, "the four cloud-AI files carry the cloud-AI gate")
         XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
