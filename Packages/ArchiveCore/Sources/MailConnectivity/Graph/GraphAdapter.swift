@@ -215,6 +215,23 @@ public actor GraphAdapter: MailProviderAdapter {
     /// Ends the transport's session (the app drops or replaces this adapter).
     public func close() async { transport.invalidate() }
 
+    /// The signed-in mailbox's own address as Microsoft Graph states it (`/me`:
+    /// `mail`, else `userPrincipalName`; needs User.Read), so the account is
+    /// named by the provider's answer. Nil when Graph states no address.
+    public func profileAddress(context: ProviderRequestContext) async throws -> String? {
+        let response = try await get(try url([], query: [("$select", "mail,userPrincipalName")]), context: context)
+        guard (200..<300).contains(response.status) else {
+            throw await failure(response, notFound: .permanent("Microsoft Graph states no profile for this account"))
+        }
+        struct Me: Decodable { let mail: String?; let userPrincipalName: String? }
+        let me = try await decode(Me.self, response)
+        for candidate in [me.mail, me.userPrincipalName] {
+            let address = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if address.contains("@") { return address }
+        }
+        return nil
+    }
+
     /// The folder id Graph reports for a well-known name (after a folder listing).
     public func wellKnownFolderID(_ name: String) -> String? {
         specialUse.first { $0.value == name }?.key

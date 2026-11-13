@@ -262,6 +262,9 @@ actor GraphSimulator: GraphHTTPTransport {
         }
 
         switch rest.count {
+        case 0:
+            // `/me` (User.Read): the mailbox's own address.
+            return json(200, ["mail": primary, "userPrincipalName": primary])
         case 1 where rest[0] == "mailFolders":
             return listFolders(parent: box.rootID, path: "mailFolders")
         case 1 where rest[0] == "messages":

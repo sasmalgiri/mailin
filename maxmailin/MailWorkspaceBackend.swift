@@ -36,9 +36,8 @@ protocol ConnectedMailTransports: AnyObject {
     func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
                         permission: @escaping NetworkPermission) throws -> (any RemoteActionExecutor)?
     /// The mailbox address the provider states for the signed-in account
-    /// (Gmail: users.getProfile). Nil = the provider was not asked or did not
-    /// say (Microsoft Graph states it only with an extra profile permission
-    /// mailin does not request).
+    /// (Gmail: users.getProfile; Microsoft Graph: `/me` with User.Read). Nil =
+    /// the provider was not asked or did not say.
     func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
                           policy: MailNetworkPolicy) async -> String?
 }

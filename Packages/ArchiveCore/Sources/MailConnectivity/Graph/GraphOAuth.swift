@@ -14,8 +14,11 @@
 //     `consumers`, a tenant GUID or a verified domain; the authority host
 //     defaults to login.microsoftonline.com.
 //   • Capture asks for delegated `Mail.Read` (+ `Mail.Read.Shared` only when
-//     shared / delegated mailboxes are wanted) and `offline_access`. Nothing
-//     else: sending, writing and server actions are separate grants.
+//     shared / delegated mailboxes are wanted), `User.Read` (only so the
+//     account's own address can be read from `/me` and the account is named
+//     by Microsoft's answer, never by what was typed — owner 2026-11-13) and
+//     `offline_access`. Nothing else: sending, writing and server actions are
+//     separate grants.
 //   • A Graph token is for Graph ONLY. Exchange protocol resources
 //     (IMAP / POP / SMTP / EWS on outlook.office.com / outlook.office365.com)
 //     have their own scopes and tokens; a scope for them is refused in a
@@ -148,6 +151,7 @@ public enum GraphOAuth {
         let resource = GraphAudience.resource(graphHost: settings.graphHost)
         var scopes = ["\(resource)/Mail.Read"]
         if settings.sharedMailboxes { scopes.append("\(resource)/Mail.Read.Shared") }
+        scopes.append("\(resource)/User.Read")
         scopes.append("offline_access")
         try validateScopes(scopes, graphHost: settings.graphHost)
         let authority = "https://\(settings.authorityHost)/\(settings.tenant)"

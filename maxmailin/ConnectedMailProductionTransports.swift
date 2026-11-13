@@ -100,26 +100,37 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
     /// the read-only scope the sign-in already holds). The read asks the policy
     /// like every capture request: for its duration the account may read
     /// (purpose Preserve mail) from the Gmail API host only, then the grant
-    /// is put back as it was. Microsoft Graph states the address only with
-    /// the profile permission User.Read, which mailin does not request: nil.
+    /// is put back as it was. Microsoft Graph states the address from `/me`
+    /// with User.Read, which the Outlook sign-in requests (owner 2026-11-13).
     func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
                           policy: MailNetworkPolicy) async -> String? {
-        guard choice == .gmail else { return nil }
+        let host: String
+        switch choice {
+        case .gmail: host = GmailAPI.host
+        case .outlook: host = GraphSignInSettings.defaultGraphHost
+        default: return nil
+        }
         let previous = policy.account(accountID)
         var grant = previous ?? MailAccountNetworkPolicy(id: accountID)
-        let alreadyAllowed = grant.isEnabled && grant.modes.contains(.preserveMail) && grant.mailHosts.contains(GmailAPI.host)
+        let alreadyAllowed = grant.isEnabled && grant.modes.contains(.preserveMail) && grant.mailHosts.contains(host)
         if !alreadyAllowed {
             grant.isEnabled = true
             grant.modes.insert(.preserveMail)
-            grant.mailHosts.insert(GmailAPI.host)
+            grant.mailHosts.insert(host)
             policy.setAccount(grant)
         }
-        let transport = URLSessionGmailTransport()
-        let adapter = GmailAdapter(accountID: accountID, transport: transport,
-                                   permission: ConnectedMailRuntime.permission(policy: policy))
-        let address = try? await adapter.profileAddress(context: ProviderRequestContext(accountID: accountID,
-                                                                                         accessToken: tokens.accessToken, attempt: 0))
-        await adapter.close()
+        let context = ProviderRequestContext(accountID: accountID, accessToken: tokens.accessToken, attempt: 0)
+        let permission = ConnectedMailRuntime.permission(policy: policy)
+        let address: String?
+        if choice == .gmail {
+            let adapter = GmailAdapter(accountID: accountID, transport: URLSessionGmailTransport(), permission: permission)
+            address = try? await adapter.profileAddress(context: context)
+            await adapter.close()
+        } else {
+            let adapter = GraphAdapter(accountID: accountID, transport: URLSessionGraphTransport(), permission: permission)
+            address = try? await adapter.profileAddress(context: context)
+            await adapter.close()
+        }
         if !alreadyAllowed { policy.setAccount(previous ?? MailAccountNetworkPolicy(id: accountID)) }
         return address
     }

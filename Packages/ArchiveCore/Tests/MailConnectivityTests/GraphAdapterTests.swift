@@ -506,12 +506,12 @@ final class GraphAdapterTests: XCTestCase {
         XCTAssertEqual(config.authorizationEndpoint.absoluteString, "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize")
         XCTAssertEqual(config.tokenEndpoint.absoluteString, "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token")
         XCTAssertEqual(config.issuer, "https://login.microsoftonline.com/contoso.onmicrosoft.com/v2.0")
-        XCTAssertEqual(config.scopes, ["https://graph.microsoft.com/Mail.Read", "https://graph.microsoft.com/Mail.Read.Shared", "offline_access"])
+        XCTAssertEqual(config.scopes, ["https://graph.microsoft.com/Mail.Read", "https://graph.microsoft.com/Mail.Read.Shared", "https://graph.microsoft.com/User.Read", "offline_access"])
         XCTAssertFalse(config.scopes.contains { $0.contains("Send") || $0.contains("ReadWrite") }, "capture asks for reading only")
         XCTAssertEqual(config.audience, "https://graph.microsoft.com")
         XCTAssertTrue(config.sendsScopeOnRefresh)
         let capture = try GraphOAuth.configuration(GraphSignInSettings(clientID: "6731de76-14a6-49ae-97bc-6eba6914391e", redirectURI: redirect))
-        XCTAssertEqual(capture.scopes, ["https://graph.microsoft.com/Mail.Read", "offline_access"])
+        XCTAssertEqual(capture.scopes, ["https://graph.microsoft.com/Mail.Read", "https://graph.microsoft.com/User.Read", "offline_access"])
         XCTAssertTrue(capture.authorizationEndpoint.absoluteString.contains("/common/"))
 
         let session = OAuthSession(accountID: UUID(), configuration: config, transport: FakeTokenEndpoint())
@@ -675,5 +675,21 @@ final class GraphAdapterTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(waits.value.first ?? 0, 9, "Retry-After: 9 honoured")
         let v23 = try await capturedIDs(engineSink, account: account)
         XCTAssertEqual(v23, ["e1"])
+    }
+
+    /// Owner 2026-11-13 (User.Read): after sign-in the account is named by the
+    /// address Microsoft states for `/me`, read through the policy like every request.
+    func testUserRead_profileAddress_isGraphsAnswer_andAsksThePolicy() async throws {
+        let sim = GraphSimulator(primary: "ravi@contoso.com")
+        let asks = Box<[NetworkAsk]>([])
+        let adapter = makeAdapter(sim, asks: asks)
+        let address = try await adapter.profileAddress(context: ctx)
+        XCTAssertEqual(address, "ravi@contoso.com")
+        XCTAssertEqual(asks.value.count, 1, "the profile read asked the policy first")
+        let lastRequest = await sim.requests.last
+        let request = try XCTUnwrap(lastRequest)
+        XCTAssertEqual(request.url.path, "/v1.0/me")
+        let refused = makeAdapter(sim, refuse: Box(true))
+        do { _ = try await refused.profileAddress(context: ctx); XCTFail("a refused policy must send nothing") } catch {}
     }
 }

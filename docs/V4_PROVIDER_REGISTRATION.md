@@ -42,7 +42,7 @@ mode that needs more access asks for it the first time it is used ("re-consent",
 | Add account + **Preserve mail** (read-only capture) | `https://www.googleapis.com/auth/gmail.readonly` (`GmailOAuth.captureScopes`) | `https://graph.microsoft.com/Mail.Read` + `offline_access` (`GraphOAuth.configuration`) | password / app password, no scope |
 | **Send mail** | adds `https://www.googleapis.com/auth/gmail.send` (`MailScopeNeeds.gmailSend`) | adds `Mail.Send` (`MailScopeNeeds.graphSend`) | SMTP AUTH after TLS |
 | **Change server mail** (flag, read/unread, move/label, Trash, restore) | adds `https://www.googleapis.com/auth/gmail.modify` (`ServerActionScopes.gmailModify`) | adds `Mail.ReadWrite` (`ServerActionScopes.graphReadWrite`); `Mail.ReadWrite.Shared` only for a shared mailbox | IMAP STORE / MOVE, no EXPUNGE of other messages |
-| Never requested | `https://mail.google.com/` (full access, incl. permanent delete), `gmail.labels`, `gmail.metadata`, `openid`/`email`/`profile` | `User.Read`, `Mail.ReadBasic`, `Mail.Read.Shared` (no UI sets `sharedMailboxes`), `IMAP.AccessAsUser.All`, `SMTP.Send`, EWS | — |
+| Never requested | `https://mail.google.com/` (full access, incl. permanent delete), `gmail.labels`, `gmail.metadata`, `openid`/`email`/`profile` | `Mail.ReadBasic`, `Mail.Read.Shared` (no UI sets `sharedMailboxes`), `IMAP.AccessAsUser.All`, `SMTP.Send`, EWS | — |
 
 `GmailOAuth.configuration` refuses any scope outside `https://www.googleapis.com/auth/gmail.*`;
 `GraphOAuth.validateScopes` refuses Exchange-protocol scopes in a Graph configuration.
@@ -210,7 +210,7 @@ entra.microsoft.com ▸ Identity ▸ Applications ▸ App registrations ▸ **Ne
 
 ### 2.2 API permissions (Microsoft Graph, **Delegated**)
 
-Remove the default `User.Read` (not requested by the app). Add:
+Keep the default `User.Read` (owner 2026-11-13: the Outlook sign-in asks for it with `Mail.Read`, only so the account's own address is read from `/me` — the account is named and sends as Microsoft's answer, never a typed address). If it was removed earlier, add it back. Add:
 
 | Permission | Mode | Rationale | Admin consent required? |
 |---|---|---|---|
