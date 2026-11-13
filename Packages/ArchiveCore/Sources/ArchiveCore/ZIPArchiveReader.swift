@@ -487,10 +487,12 @@ struct ZIPArchiveReader {
                                    sink: (Data) throws -> Void) throws {
         var remaining = count
         while remaining > 0 {
-            let chunk = try supply(Int(min(Int64(windowSize), remaining)))
-            guard !chunk.isEmpty else { throw ReadError.truncated("\(member): stored data") }
-            remaining -= Int64(chunk.count)
-            try sink(chunk)
+            try autoreleasepool {   // as in `inflate`: no window outlives its turn
+                let chunk = try supply(Int(min(Int64(windowSize), remaining)))
+                guard !chunk.isEmpty else { throw ReadError.truncated("\(member): stored data") }
+                remaining -= Int64(chunk.count)
+                try sink(chunk)
+            }
         }
     }
 
@@ -522,30 +524,38 @@ struct ZIPArchiveReader {
         var status = COMPRESSION_STATUS_OK
 
         while status == COMPRESSION_STATUS_OK {
-            if unsafe streamPointer.pointee.src_size == 0 && remaining > 0 {
-                let chunk = try supply(Int(min(Int64(windowSize), remaining)))
-                guard !chunk.isEmpty else { throw ReadError.truncated("\(member): compressed data") }
-                unsafe chunk.copyBytes(to: source, count: chunk.count)
-                remaining -= Int64(chunk.count)
-                unsafe streamPointer.pointee.src_ptr = UnsafePointer(source)
-                unsafe streamPointer.pointee.src_size = chunk.count
-            }
-            let flags = remaining == 0 ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
-            unsafe streamPointer.pointee.dst_ptr = output
-            unsafe streamPointer.pointee.dst_size = windowSize
-            status = unsafe compression_stream_process(streamPointer, flags)
-            let produced = windowSize - (unsafe streamPointer.pointee.dst_size)
-            if produced > 0 {
-                try sink(unsafe Data(bytes: output, count: produced))
-            }
-            if status == COMPRESSION_STATUS_ERROR {
-                throw ReadError.malformed("\(member): deflate stream is corrupt")
-            }
-            // Input exhausted with FINALIZE sent and nothing more produced:
-            // the stream ended without signalling END — treat as truncated.
-            if status == COMPRESSION_STATUS_OK, remaining == 0,
-               unsafe streamPointer.pointee.src_size == 0, produced == 0 {
-                throw ReadError.truncated("\(member): deflate stream ended early")
+            // CLOSE-01 follow-up (as TARReader): each window in its own
+            // autorelease pool — `FileHandle.read(upToCount:)` hands back
+            // autoreleased buffers, and without a drain every window of the
+            // input stayed resident until the call returned (measured: +193 MiB
+            // gunzipping a 192 MiB file; `GunzipFootprintTests`).
+            status = try autoreleasepool { () throws -> compression_status in
+                if unsafe streamPointer.pointee.src_size == 0 && remaining > 0 {
+                    let chunk = try supply(Int(min(Int64(windowSize), remaining)))
+                    guard !chunk.isEmpty else { throw ReadError.truncated("\(member): compressed data") }
+                    unsafe chunk.copyBytes(to: source, count: chunk.count)
+                    remaining -= Int64(chunk.count)
+                    unsafe streamPointer.pointee.src_ptr = UnsafePointer(source)
+                    unsafe streamPointer.pointee.src_size = chunk.count
+                }
+                let flags = remaining == 0 ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
+                unsafe streamPointer.pointee.dst_ptr = output
+                unsafe streamPointer.pointee.dst_size = windowSize
+                let step = unsafe compression_stream_process(streamPointer, flags)
+                let produced = windowSize - (unsafe streamPointer.pointee.dst_size)
+                if produced > 0 {
+                    try sink(unsafe Data(bytes: output, count: produced))
+                }
+                if step == COMPRESSION_STATUS_ERROR {
+                    throw ReadError.malformed("\(member): deflate stream is corrupt")
+                }
+                // Input exhausted with FINALIZE sent and nothing more produced:
+                // the stream ended without signalling END — treat as truncated.
+                if step == COMPRESSION_STATUS_OK, remaining == 0,
+                   unsafe streamPointer.pointee.src_size == 0, produced == 0 {
+                    throw ReadError.truncated("\(member): deflate stream ended early")
+                }
+                return step
             }
         }
     }
