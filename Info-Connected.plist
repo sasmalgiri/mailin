@@ -131,7 +131,7 @@
 	<key>MailinGmailClientID</key>
 	<string>176638907273-vn0bn1md8l3gtvhed1ogrs9b147c2674.apps.googleusercontent.com</string>
 	<key>MailinGraphClientID</key>
-	<string>$(MAILIN_GRAPH_CLIENT_ID)</string>
+	<string>78c2a12e-26e0-4043-a1a8-cbcdb847cb49</string>
 	<key>MailinGraphRedirectURI</key>
 	<string>msauth.$(PRODUCT_BUNDLE_IDENTIFIER)://auth</string>
 	<key>UILaunchScreen</key>
