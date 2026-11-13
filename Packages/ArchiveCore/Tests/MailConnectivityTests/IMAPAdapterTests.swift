@@ -530,9 +530,223 @@ final class IMAPAdapterTests: XCTestCase {
         XCTAssertEqual(IMAPProviderPreset.iCloud.security, .implicitTLS)
         XCTAssertEqual(IMAPProviderPreset.fastmail.host, "imap.fastmail.com")
         XCTAssertEqual(IMAPProviderPreset.generic(host: "mail.example.org", port: 143, security: .startTLS).configuration(login: "a").security, .startTLS)
-        for p in [IMAPProviderPreset.iCloud, .fastmail, .generic(host: "x")] {
+        for p in [IMAPProviderPreset.iCloud, .fastmail, .gmail, .generic(host: "x")] {
             XCTAssertFalse(p.verifiedAgainstRealServer, "a preset is not proof of compatibility")
             XCTAssertNotEqual(p.security, .plaintextLoopbackOnly)
         }
+    }
+
+    // MARK: V4-16 Gmail over IMAP (X-GM-EXT-1)
+
+    /// Gmail's folder layout: labels as folders, All Mail (\All) holding
+    /// every message but Spam and Trash. Listed with INBOX first, as Gmail does.
+    static let gmailTree: [(String, [String])] = [
+        ("INBOX", ["\\HasNoChildren"]),
+        ("Work", ["\\HasNoChildren"]),
+        ("[Gmail]", ["\\Noselect", "\\HasChildren"]),
+        ("[Gmail]/All Mail", ["\\HasNoChildren", "\\All"]),
+        ("[Gmail]/Sent Mail", ["\\HasNoChildren", "\\Sent"]),
+        ("[Gmail]/Spam", ["\\HasNoChildren", "\\Junk"]),
+        ("[Gmail]/Trash", ["\\HasNoChildren", "\\Trash"]),
+    ]
+    static let allMail = "[Gmail]/All Mail"
+
+    /// Seeds three messages seen in five folder copies, plus one in Spam and
+    /// one in Trash. Returns X-GM-MSGID → bytes.
+    func seedGmail(_ model: IMAPServerModel) -> [UInt64: Data] {
+        for (name, attrs) in Self.gmailTree { model.addMailbox(name, attributes: attrs) }
+        let m1 = Self.message("gm-inbox-work"), m2 = Self.message("gm-sent"), m3 = Self.message("gm-archived")
+        let spam = Self.message("gm-spam"), trash = Self.message("gm-trash")
+        model.addGmail(m1, msgID: 1_766_000_000_000_001, labels: ["\\Inbox", "Work", "\\Important"], in: [Self.allMail, "INBOX", "Work"])
+        model.addGmail(m2, msgID: 1_766_000_000_000_002, labels: ["\\Sent"], in: [Self.allMail, "[Gmail]/Sent Mail"])
+        model.addGmail(m3, msgID: 1_766_000_000_000_003, labels: [], in: [Self.allMail])
+        model.addGmail(spam, msgID: 1_766_000_000_000_004, labels: ["\\Spam"], in: ["[Gmail]/Spam"])
+        model.addGmail(trash, msgID: 1_766_000_000_000_005, labels: ["\\Trash"], in: ["[Gmail]/Trash"])
+        return [1_766_000_000_000_001: m1, 1_766_000_000_000_002: m2, 1_766_000_000_000_003: m3,
+                1_766_000_000_000_004: spam, 1_766_000_000_000_005: trash]
+    }
+
+    /// X-GM-MSGID → (digest, emailID) of the account's Gmail-over-IMAP records.
+    func gmailRecords(_ sink: ConnectedArchiveSink, account: UUID) async throws -> [UInt64: (digest: String, emailID: UUID?)] {
+        var out: [UInt64: (digest: String, emailID: UUID?)] = [:]
+        for row in try await sink.store.remoteMessageDigests() where row.account == account {
+            guard case .gmailIMAP(let id) = try ProviderMessageIdentity(key: row.key) else {
+                XCTFail("a Gmail message was keyed by its folder UID: \(row.key)"); continue
+            }
+            out[id] = (row.digest, row.emailID)
+        }
+        return out
+    }
+
+    func bodyFetches(_ model: IMAPServerModel) -> [String] { model.transcript.filter { $0.uppercased().contains("BODY") } }
+
+    /// One Gmail message seen in All Mail, INBOX and a label folder is ONE
+    /// archived record with every folder / label as a membership, downloaded
+    /// once; Spam and Trash are left out until selected. Fails without the
+    /// X-GM-MSGID identity: each folder copy (5 copies + Spam + Trash) would be
+    /// a separate record.
+    func testV416_gmailSameMessageInAllMailInboxAndLabel_isOneCaptureWithEveryMembership() async throws {
+        let server = try await startServer { $0.postAuthCapabilities.append("X-GM-EXT-1") }
+        let model = server.model
+        let bytes = seedGmail(model)
+        let sink = makeSink()
+        let adapter = try makeAdapter(server, pageSize: 2)
+        try await register(adapter, in: sink)
+        let engine = makeEngine(adapter, sink)
+
+        let report = await engine.sync()
+        XCTAssertEqual(report.outcome, .completed, "\(report.outcome)")
+        XCTAssertEqual(report.receipt?.stored, 3, "three messages, each stored once")
+        XCTAssertEqual(report.receipt?.pending, 0)
+        let isGmail = await adapter.isGmail
+        XCTAssertTrue(isGmail)
+        let recs = try await gmailRecords(sink, account: adapter.accountID)
+        XCTAssertEqual(Set(recs.keys), [1_766_000_000_000_001, 1_766_000_000_000_002, 1_766_000_000_000_003])
+        for (id, r) in recs { XCTAssertEqual(r.digest, Self.sha(bytes[id]!), "\(id) preserved byte-exact") }
+        XCTAssertEqual(bodyFetches(model).count, 3, "each message downloaded once: \(bodyFetches(model))")
+        XCTAssertTrue(bodyFetches(model).allSatisfy { $0.contains(" UID FETCH ") && $0.contains("BODY.PEEK[]") && !$0.contains(" BODY[]") })
+
+        // Memberships: every folder and label of the one record.
+        let inboxWork = try await sink.provenance(emailID: XCTUnwrap(recs[1_766_000_000_000_001]?.emailID))
+        XCTAssertEqual(Set(inboxWork?.memberships ?? []), ["INBOX", "Work", Self.allMail], "\(inboxWork?.memberships ?? [])")
+        XCTAssertEqual(inboxWork?.provider, "imap")
+        XCTAssertEqual(inboxWork?.providerMessageID, "1766000000000001")
+        let sent = try await sink.provenance(emailID: XCTUnwrap(recs[1_766_000_000_000_002]?.emailID))
+        XCTAssertEqual(Set(sent?.memberships ?? []), ["[Gmail]/Sent Mail", Self.allMail])
+        let archived = try await sink.provenance(emailID: XCTUnwrap(recs[1_766_000_000_000_003]?.emailID))
+        XCTAssertEqual(archived?.memberships, [Self.allMail], "an archived message is in All Mail only")
+        let nodes = try await sink.store.folderNodes()
+        let byPath = Dictionary(nodes.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        XCTAssertEqual(byPath["INBOX"]?.messageCount, 1)
+        XCTAssertEqual(byPath["Work"]?.messageCount, 1)
+        XCTAssertEqual(byPath[Self.allMail]?.messageCount, 3)
+        XCTAssertEqual(byPath["[Gmail]/Spam"]?.messageCount, 0, "Spam is in the tree, not captured")
+        XCTAssertNotNil(byPath["[Gmail]/Trash"])
+
+        // Spam and Trash: listed, recorded not selected, never opened.
+        let summaries = try await sink.folderSummaries(accountID: adapter.accountID)
+        let selected = Dictionary(summaries.map { ($0.serverID, $0.selected) }, uniquingKeysWith: { a, _ in a })
+        XCTAssertEqual(selected["[Gmail]/Spam"], false)
+        XCTAssertEqual(selected["[Gmail]/Trash"], false)
+        XCTAssertEqual(selected["INBOX"], true)
+        XCTAssertFalse(model.transcript.contains { $0.contains("EXAMINE") && ($0.contains("Spam") || $0.contains("Trash")) })
+        // The Mail workspace lists each message once, with its X-GM-MSGID
+        // identity (it has no mailbox / UID columns to rebuild one from).
+        let page = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [adapter.accountID]))
+        XCTAssertEqual(page.total, 3)
+        XCTAssertEqual(Set(page.rows.map(\.identity)),
+                       [.gmailIMAP(messageID: 1_766_000_000_000_001), .gmailIMAP(messageID: 1_766_000_000_000_002),
+                        .gmailIMAP(messageID: 1_766_000_000_000_003)])
+        let inboxRow = page.rows.first { $0.identity == .gmailIMAP(messageID: 1_766_000_000_000_001) }
+        XCTAssertEqual(Set(inboxRow?.folderServerIDs ?? []), ["INBOX", "Work", Self.allMail])
+        // All Mail is read first (listed after INBOX by the server).
+        let examined = model.transcript.filter { $0.contains(" EXAMINE ") }
+        XCTAssertTrue(examined.first?.contains("All Mail") ?? false, "\(examined)")
+        // Read-only: no SELECT / STORE / EXPUNGE / COPY / MOVE.
+        for forbidden in [" SELECT ", " STORE ", " EXPUNGE", " COPY ", " MOVE "] {
+            XCTAssertFalse(model.transcript.contains { $0.uppercased().contains(forbidden) }, "\(forbidden) was sent")
+        }
+        for m in model.mailboxes { for msg in m.messages { XCTAssertFalse(msg.flags.contains("\\Seen")) } }
+
+        // Nothing new: nothing downloaded again.
+        model.clearTranscript()
+        let again = await engine.sync(.allFolders)
+        XCTAssertEqual(again.outcome, .completed, "\(again.outcome)")
+        XCTAssertEqual(again.receipt?.stored, 0)
+        XCTAssertEqual(bodyFetches(model).count, 0)
+
+        // A new message in INBOX (and so in All Mail): one download, one record.
+        let new = Self.message("gm-new")
+        model.addGmail(new, msgID: 1_766_000_000_000_006, labels: ["\\Inbox"], in: [Self.allMail, "INBOX"])
+        model.clearTranscript()
+        let third = await engine.sync(.allFolders)
+        XCTAssertEqual(third.outcome, .completed, "\(third.outcome)")
+        XCTAssertEqual(third.receipt?.stored, 1)
+        XCTAssertEqual(bodyFetches(model).count, 1, "\(bodyFetches(model))")
+        let after = try await gmailRecords(sink, account: adapter.accountID)
+        XCTAssertEqual(after.count, 4)
+        let newOne = try await sink.provenance(emailID: XCTUnwrap(after[1_766_000_000_000_006]?.emailID))
+        XCTAssertEqual(Set(newOne?.memberships ?? []), ["INBOX", Self.allMail])
+
+        // Spam selected by name: captured then.
+        let spam = await engine.sync(.folders(["[Gmail]/Spam"]))
+        XCTAssertEqual(spam.outcome, .completed, "\(spam.outcome)")
+        XCTAssertEqual(spam.receipt?.stored, 1)
+        let withSpam = try await gmailRecords(sink, account: adapter.accountID)
+        XCTAssertEqual(withSpam.count, 5)
+        XCTAssertEqual(withSpam[1_766_000_000_000_004]?.digest, Self.sha(bytes[1_766_000_000_000_004]!))
+        await adapter.disconnect()
+    }
+
+    /// A download with no listing to hand (a retry after a restart) finds the
+    /// message by X-GM-MSGID in All Mail; a message gone from the server is
+    /// unavailable, never preserved.
+    func testV416_gmailRetryFindsMessageByXGMMSGID_inAllMail() async throws {
+        let server = try await startServer { $0.postAuthCapabilities.append("X-GM-EXT-1") }
+        let bytes = seedGmail(server.model)
+        let sink = makeSink()
+        let adapter = try makeAdapter(server)
+        let ctx = ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0)
+        let listed = try await adapter.listFolders(pageToken: nil, context: ctx).folders
+        XCTAssertEqual(listed.first?.serverID, Self.allMail, "All Mail is listed first on Gmail")
+        let skipped = await adapter.foldersSkippedByDefault()
+        XCTAssertEqual(skipped, ["[Gmail]/Spam", "[Gmail]/Trash"])
+
+        let raw = RawByteSink(writer: try sink.makeStagingWriter())
+        let fetched = try await adapter.fetchRaw(RemoteItemRef(identity: .gmailIMAP(messageID: 1_766_000_000_000_001), folder: nil),
+                                                 into: raw, context: ctx)
+        let staged = try raw.finish()
+        XCTAssertEqual(staged.sha256, Self.sha(bytes[1_766_000_000_000_001]!))
+        XCTAssertEqual(Set(fetched.occurrences.map(\.serverID)), ["INBOX", "Work", Self.allMail])
+        XCTAssertEqual(fetched.occurrences.first?.serverID, "INBOX", "a label, not All Mail, is the main folder")
+        XCTAssertEqual(fetched.metadata.extra["imap.gmailMessageID"], "1766000000000001")
+        XCTAssertTrue(server.model.transcript.contains { $0.hasSuffix("UID SEARCH X-GM-MSGID 1766000000000001") })
+        try? FileManager.default.removeItem(at: staged.fileURL)
+
+        let gone = RawByteSink(writer: try sink.makeStagingWriter())
+        do {
+            _ = try await adapter.fetchRaw(RemoteItemRef(identity: .gmailIMAP(messageID: 99), folder: nil), into: gone, context: ctx)
+            XCTFail("a message not on the server must not be fetched")
+        } catch let e as MailProviderError {
+            XCTAssertEqual(e, .itemUnavailable)
+        }
+        gone.discard()
+
+        // The identity key round-trips and is distinct from any folder UID key.
+        let key = try ProviderMessageIdentity.gmailIMAP(messageID: 1_766_000_000_000_001).key()
+        XCTAssertEqual(try ProviderMessageIdentity(key: key), .gmailIMAP(messageID: 1_766_000_000_000_001))
+        XCTAssertEqual(ProviderMessageIdentity.gmailIMAP(messageID: 1).provider, .imap)
+        XCTAssertThrowsError(try ProviderMessageIdentity.gmailIMAP(messageID: 0).key())
+        await adapter.disconnect()
+    }
+
+    /// A server without X-GM-EXT-1 is unchanged: identities stay mailbox +
+    /// UIDVALIDITY + UID, every folder (Spam and Trash too) is captured, and
+    /// no Gmail command is sent.
+    func testV416_nonGmailServer_unchanged_folderUIDIdentities_everyFolderCaptured() async throws {
+        let server = try await startServer()
+        let model = server.model
+        for (name, attrs) in Self.gmailTree { model.addMailbox(name, attributes: attrs) }
+        let same = Self.message("same-bytes")
+        model.add(same, to: "INBOX")
+        model.add(same, to: Self.allMail)
+        model.add(Self.message("junk"), to: "[Gmail]/Spam")
+        let sink = makeSink()
+        let adapter = try makeAdapter(server)
+        try await register(adapter, in: sink)
+        let report = await makeEngine(adapter, sink).sync()
+        XCTAssertEqual(report.outcome, .completed, "\(report.outcome)")
+        XCTAssertEqual(report.receipt?.stored, 3, "plain IMAP: one record per folder occurrence, as before")
+        let recs = try await records(sink, account: adapter.accountID)
+        XCTAssertEqual(recs.count, 3)
+        try await assertByteExact(sink, account: adapter.accountID, oracle: oracle(model))
+        let isGmail = await adapter.isGmail
+        XCTAssertFalse(isGmail)
+        let skipped = await adapter.foldersSkippedByDefault()
+        XCTAssertTrue(skipped.isEmpty)
+        XCTAssertFalse(model.transcript.contains { $0.contains("X-GM-") }, "no Gmail extension is used on another server")
+        let summaries = try await sink.folderSummaries(accountID: adapter.accountID)
+        XCTAssertTrue(summaries.allSatisfy(\.selected), "no folder is deselected on another server")
+        await adapter.disconnect()
     }
 }

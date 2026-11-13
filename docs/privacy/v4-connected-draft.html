@@ -139,22 +139,22 @@
         </ul>
         <table>
             <tr><th>Account</th><th>Servers your device contacts</th><th>Permission you grant</th></tr>
-            <tr><td>Gmail</td><td><code>accounts.google.com</code> (sign-in page), <code>oauth2.googleapis.com</code> (sign-in tokens), <code>gmail.googleapis.com</code> (mail)</td><td>Read your mail (Preserve mail); send mail (Send mail); modify labels and move to Trash (Change server mail). Full mailbox deletion access is never requested.</td></tr>
+            <tr><td>Gmail</td><td><code>imap.gmail.com</code> (mail, IMAP over TLS) and <code>smtp.gmail.com</code> (sending, SMTP over TLS)</td><td>a Google app password you create in your Google Account (2-Step Verification on, <code>myaccount.google.com/apppasswords</code>), sent only to those two Google servers. Reading is read-only; in this version mailin does not change Gmail mail on the server.</td></tr>
             <tr><td>Outlook / Microsoft 365</td><td><code>login.microsoftonline.com</code> (sign-in; personal accounts may continue on <code>login.live.com</code>), <code>graph.microsoft.com</code> (mail)</td><td>Mail.Read and offline access (Preserve mail); Mail.Send (Send mail); Mail.ReadWrite (Change server mail)</td></tr>
             <tr><td>iCloud Mail, Fastmail, other IMAP</td><td>the IMAP and SMTP servers of that provider or the ones you enter (for example <code>imap.mail.me.com</code>, <code>smtp.mail.me.com</code>)</td><td>your app-specific password, sent only to those servers over TLS</td></tr>
         </table>
         <p>Your mail provider processes your mail under its own terms and privacy policy, as it does for any mail app. Messages are shown with remote content (images, tracking pixels) blocked, so opening a message does not contact the sender.</p>
 
         <h2>Sign-in and Credentials</h2>
-        <p>You sign in on Google's or Microsoft's own page; mailin never sees your Google or Microsoft password. The sign-in tokens the provider issues, and any IMAP / SMTP password you enter, are stored only in this device's Keychain. They are never synchronised to other devices, never included in backups or exports, and never sent anywhere except to the provider that issued them. A restored or new device asks you to sign in again.</p>
+        <p>Gmail connects with a Google app password; mailin never asks for your Google account password. Outlook / Microsoft 365 sign-in happens on Microsoft's own page; mailin never sees your Microsoft password. The sign-in tokens the provider issues, and any app password or IMAP / SMTP password you enter, are stored only in this device's Keychain. They are never synchronised to other devices, never included in backups or exports, and never sent anywhere except to the provider that issued them. A restored or new device asks you to sign in again.</p>
 
         <h2>Google API Services</h2>
-        <p>mailin's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Gmail data is used only to provide the features you switched on, stays on your device, is not transferred to anyone, is not used for advertising and is not read by any person at mailin.</p>
+        <p>This version connects Gmail over IMAP and uses no Google API. When a later version offers Google sign-in, mailin's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Gmail data is used only to provide the features you switched on, stays on your device, is not transferred to anyone, is not used for advertising and is not read by any person at mailin.</p>
 
         <h2>Removing an Account and Deleting Data</h2>
         <ul>
             <li>Removing an account stops its connections and deletes its sign-in data from the Keychain. Mail already saved in your archive is kept; deleting it is a separate step that shows the number of messages first.</li>
-            <li>To also withdraw mailin's access at the provider, remove mailin in your Google Account (Security &rsaquo; Third-party connections) or Microsoft account (app permissions). mailin cannot do this for you because it has no server.</li>
+            <li>To also withdraw mailin's access at the provider, revoke the app password in your Google Account (Security &rsaquo; App passwords) or remove mailin in your Microsoft account (app permissions). mailin cannot do this for you because it has no server.</li>
             <li>Turning Connected mail off stops every mail connection at once; saved mail stays readable, searchable and exportable.</li>
             <li>You can delete all data at any time in Settings &rsaquo; Data &amp; Privacy &rsaquo; Delete All Data. This also deletes every connected account's sign-in data from this device's Keychain.</li>
         </ul>

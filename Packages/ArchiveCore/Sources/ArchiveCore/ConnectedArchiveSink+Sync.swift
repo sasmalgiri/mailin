@@ -37,6 +37,11 @@ extension ProviderMessageIdentity {
                 throw ConnectedArchiveError.invalidIdentity("the IMAP identity key has a non-numeric UIDVALIDITY or UID")
             }
             self = .imap(mailbox: parts[1], uidValidity: validity, uid: uid)
+        case ("imap-gm", 2):
+            guard let id = UInt64(parts[1]) else {
+                throw ConnectedArchiveError.invalidIdentity("the Gmail IMAP identity key has a non-numeric X-GM-MSGID")
+            }
+            self = .gmailIMAP(messageID: id)
         default:
             throw ConnectedArchiveError.invalidIdentity("“\(key.replacingOccurrences(of: "\u{1F}", with: "|"))” is not an identity key")
         }

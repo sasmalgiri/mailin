@@ -571,4 +571,22 @@ final class ServerActionTests: XCTestCase {
         guard case .rejected(.unsupported)? = label.outcome else { return XCTFail("got \(String(describing: label.outcome))") }
         XCTAssertEqual(graph.mutations.count, n)
     }
+
+    /// V4-16: a Gmail-over-IMAP message (one record keyed by X-GM-MSGID) is
+    /// not changed on the server in 4.0: refused as unsupported, nothing sent.
+    func testV416_gmailIMAPIdentity_serverChangeIsUnsupported_nothingSent() async throws {
+        let server = try await startServer { m in
+            m.postAuthCapabilities.append("X-GM-EXT-1")
+            m.addMailbox("INBOX"); m.addMailbox("[Gmail]/Trash", attributes: ["\\Trash"])
+            m.addGmail(Self.message("gm-action"), msgID: 77, labels: ["\\Inbox"], in: ["INBOX"])
+        }
+        let (service, adapter) = try imapService(server, journal: try journal(), trash: "[Gmail]/Trash")
+        for request in [RemoteChangeRequest.markRead, .moveToTrash(from: "INBOX")] {
+            let op = try await service.perform(.gmailIMAP(messageID: 77), request)
+            guard case .rejected(.unsupported)? = op.outcome else { return XCTFail("\(request): got \(String(describing: op.outcome))") }
+        }
+        XCTAssertEqual(mutatingLines(server.model), [])
+        XCTAssertEqual(server.model.flags(of: 1, in: "INBOX"), [])
+        await adapter.disconnect()
+    }
 }

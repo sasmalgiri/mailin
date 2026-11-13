@@ -66,12 +66,19 @@ enum MailWorkspaceAction: String, CaseIterable, Sendable {
 // MARK: - Providers and client IDs
 
 enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
-    case gmail, outlook, iCloud, fastmail, otherIMAP
+    /// Gmail with Google sign-in (OAuth, Gmail API). Offered only when the
+    /// build's `MailinGmailSignInMode` is "oauth" (TestFlight / demo builds;
+    /// 4.0.x once Google has verified the restricted scopes).
+    case gmail
+    case outlook, iCloud, fastmail, otherIMAP
+    /// V4-16: Gmail over IMAP with a Google app password — the 4.0 App Store
+    /// Gmail path (`MailinGmailSignInMode` "imap" or missing).
+    case gmailAppPassword
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .gmail: return String(localized: "Gmail")
+        case .gmail, .gmailAppPassword: return String(localized: "Gmail")
         case .outlook: return String(localized: "Outlook and Microsoft 365")
         case .iCloud: return String(localized: "iCloud Mail")
         case .fastmail: return String(localized: "Fastmail")
@@ -83,7 +90,7 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .gmail: return .gmail
         case .outlook: return .microsoftGraph
-        case .iCloud, .fastmail, .otherIMAP: return .imap
+        case .iCloud, .fastmail, .otherIMAP, .gmailAppPassword: return .imap
         }
     }
 
@@ -94,6 +101,7 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
         case .iCloud: return .iCloud
         case .fastmail: return .fastmail
         case .otherIMAP: return .generic(host: "")
+        case .gmailAppPassword: return .gmail
         case .gmail, .outlook: return nil
         }
     }
@@ -104,8 +112,19 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
         case .iCloud: return String(localized: "Use an app-specific password from your Apple Account settings. Keep two-factor authentication on.")
         case .fastmail: return String(localized: "Use an app password created in Fastmail's Privacy & Security settings.")
         case .otherIMAP: return String(localized: "Use the server settings your mail provider publishes.")
+        case .gmailAppPassword: return Self.gmailAppPasswordGuidance
         case .gmail, .outlook: return nil
         }
+    }
+
+    /// V4-16: what Gmail over IMAP needs, shown beside the password field.
+    static var gmailAppPasswordGuidance: String {
+        String(localized: "Google requires 2-Step Verification for this. Create an app password at myaccount.google.com/apppasswords and paste the 16-character password here. A normal Google password will be refused.")
+    }
+
+    /// The password field's label.
+    var passwordLabel: String {
+        self == .gmailAppPassword ? String(localized: "App password") : String(localized: "Password or app password")
     }
 
     /// The outgoing server the preset implies (nil = the person enters one).
@@ -113,6 +132,7 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .iCloud: return .init(host: "smtp.mail.me.com", port: 587, implicitTLS: false)
         case .fastmail: return .init(host: "smtp.fastmail.com", port: 465, implicitTLS: true)
+        case .gmailAppPassword: return .init(host: "smtp.gmail.com", port: 465, implicitTLS: true)
         case .otherIMAP, .gmail, .outlook: return nil
         }
     }
@@ -121,6 +141,25 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
     static let gmailClientIDKey = "MailinGmailClientID"
     static let graphClientIDKey = "MailinGraphClientID"
     static let graphRedirectKey = "MailinGraphRedirectURI"
+    /// V4-16: how Gmail is offered in Add account — "imap" (app password, the
+    /// 4.0 App Store value in Info-Connected.plist) or "oauth" (Google sign-in;
+    /// TestFlight / demo builds set it). Missing or anything else = "imap".
+    static let gmailSignInModeKey = "MailinGmailSignInMode"
+
+    enum GmailSignInMode: String, Sendable { case imap, oauth }
+
+    static func gmailSignInMode(info: [String: String]) -> GmailSignInMode {
+        let raw = (info[gmailSignInModeKey] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return raw == GmailSignInMode.oauth.rawValue ? .oauth : .imap
+    }
+
+    /// The providers Add account lists, in order: ONE Gmail choice — Google
+    /// sign-in when the mode is "oauth", the app-password path otherwise.
+    /// The other Gmail path stays in the code, switched off (rule 14).
+    static func offered(info: [String: String]) -> [MailProviderChoice] {
+        let gmail: MailProviderChoice = gmailSignInMode(info: info) == .oauth ? .gmail : .gmailAppPassword
+        return [gmail, .outlook, .iCloud, .fastmail, .otherIMAP]
+    }
 
     enum Readiness: Equatable, Sendable {
         case ready
@@ -146,7 +185,7 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
                 _ = try GraphOAuth.configuration(GraphSignInSettings(clientID: info[Self.graphClientIDKey] ?? "", redirectURI: redirect))
             } catch { return .unavailable(Self.notConfiguredReason(self)) }
             return .ready
-        case .iCloud, .fastmail, .otherIMAP:
+        case .iCloud, .fastmail, .otherIMAP, .gmailAppPassword:
             return .ready
         }
     }
@@ -164,7 +203,7 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
     /// The app's Info.plist values for the client-ID keys.
     static func bundleInfo(_ bundle: Bundle = .main) -> [String: String] {
         var out: [String: String] = [:]
-        for key in [gmailClientIDKey, graphClientIDKey, graphRedirectKey] {
+        for key in [gmailClientIDKey, graphClientIDKey, graphRedirectKey, gmailSignInModeKey] {
             if let value = bundle.object(forInfoDictionaryKey: key) as? String { out[key] = value }
         }
         return out
@@ -636,7 +675,16 @@ struct MailIMAPForm: Equatable, Sendable {
         if host.trimmingCharacters(in: .whitespaces).isEmpty { return String(localized: "Enter the incoming (IMAP) server.") }
         guard let p = Int(port), (1...65535).contains(p) else { return String(localized: "Enter a port between 1 and 65535.") }
         if password.isEmpty { return String(localized: "Enter the password or app password.") }
+        if choice == .gmailAppPassword, secret.count != 16 {
+            return String(localized: "A Google app password has 16 characters. Create one at myaccount.google.com/apppasswords; a normal Google password will be refused.")
+        }
         return nil
+    }
+
+    /// The password as stored: a Google app password is shown in groups of
+    /// four ("abcd efgh ijkl mnop"); the spaces are not part of it.
+    var secret: String {
+        choice == .gmailAppPassword ? password.filter { !$0.isWhitespace } : password
     }
 }
 
@@ -859,6 +907,9 @@ final class MailWorkspaceModel {
         if accounts.contains(where: { $0.account.enabledModes.contains(.serverActions) }) { out.append(.cleanup) }
         return out
     }
+
+    /// V4-16: the providers Add account lists (one Gmail entry, by the build's mode).
+    var offeredProviders: [MailProviderChoice] { MailProviderChoice.offered(info: backend.providerInfo) }
 
     func providerReadiness(_ choice: MailProviderChoice) -> MailProviderChoice.Readiness {
         guard availability == .ready else { return .unavailable(availability.title) }

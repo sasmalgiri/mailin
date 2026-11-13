@@ -12,7 +12,13 @@
 #        MailinGraphClientID     a GUID, not all zeros
 #        MailinGraphRedirectURI  msauth.<CFBundleIdentifier>://auth
 #      and none is a placeholder (YOUR_…, $(…), empty);
-#   4. no cloud-AI code (CloudAIManager) is linked.
+#   4. no cloud-AI code (CloudAIManager) is linked;
+#   5. the Gmail sign-in mode (V4-16, MailinGmailSignInMode) is reported:
+#        imap   Gmail over IMAP with a Google app password — the 4.0 App Store
+#               value in Info-Connected.plist (also when the key is missing);
+#        oauth  Google sign-in (Gmail API) — TestFlight / demo builds set it,
+#               and 4.0.x once Google has verified the restricted scopes.
+#      Either value PASSes (the mode is printed); any other value FAILs.
 # The same Info.plist rules run in the app test
 # V414ClaimsTests.testT47_thisConnectedReleaseBuildHasRealClientIDs.
 #
@@ -84,6 +90,16 @@ echo "4. No cloud AI linked"
 # shellcheck disable=SC2086
 N=$( (nm $FILES 2>/dev/null || true) | grep -c CloudAIManager)
 [ "$N" = 0 ] && pass "no CloudAIManager symbol" || fail "$N CloudAIManager symbols — MAILIN_CLOUD_AI must not be defined"
+
+echo "5. Gmail sign-in mode"
+MODE_RAW=$(read_key MailinGmailSignInMode)
+MODE=$(printf '%s' "$MODE_RAW" | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+case "$MODE" in
+    imap)  pass "MailinGmailSignInMode = imap (Gmail over IMAP with an app password; the 4.0 App Store mode)" ;;
+    oauth) pass "MailinGmailSignInMode = oauth (Google sign-in; TestFlight / demo / 4.0.x mode)" ;;
+    "")    pass "MailinGmailSignInMode missing: the app reads it as imap (Gmail over IMAP with an app password)" ;;
+    *)     fail "MailinGmailSignInMode is '$MODE_RAW', expected imap or oauth" ;;
+esac
 
 echo
 if [ "$FAILURES" -eq 0 ]; then echo "T47 connected checks: PASS"; exit 0; fi

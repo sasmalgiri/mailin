@@ -45,6 +45,11 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
     }
 
     private func parts(_ identity: ProviderMessageIdentity) throws -> (mailbox: String, validity: UInt32, uid: UInt32) {
+        if case .gmailIMAP = identity {
+            // V4-16: a Gmail message is one record across its label folders;
+            // changing it on the server over IMAP is not offered in 4.0.
+            throw RemoteRequestFailure.notSent(.unsupported("Changing Gmail mail on the server over IMAP is not offered yet; nothing was changed."))
+        }
         guard case .imap(let m, let v, let u) = identity else { throw RemoteRequestFailure.notSent(.accountMismatch) }
         return (m, v, u)
     }

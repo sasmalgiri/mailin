@@ -19,17 +19,24 @@ import SwiftUI
 struct MailAddAccountView: View {
     let model: MailWorkspaceModel
     let dismiss: () -> Void
-    @State private var choice: MailProviderChoice = .gmail
+    @State private var choice: MailProviderChoice
     @State private var address = ""
     @State private var form = MailIMAPForm()
     @State private var working = false
+
+    init(model: MailWorkspaceModel, dismiss: @escaping () -> Void) {
+        self.model = model
+        self.dismiss = dismiss
+        // V4-16: the build decides which Gmail path is listed (and so first).
+        _choice = State(initialValue: model.offeredProviders.first ?? .iCloud)
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     Picker(String(localized: "Provider"), selection: $choice) {
-                        ForEach(MailProviderChoice.allCases) { Text($0.title).tag($0) }
+                        ForEach(model.offeredProviders) { Text($0.title).tag($0) }
                     }
                     .onChange(of: choice) { _, new in form.apply(new) }
                     .accessibilityIdentifier("mail.add.provider")
@@ -107,7 +114,8 @@ struct MailAddAccountView: View {
                 .autocorrectionDisabled()
             TextField(String(localized: "Login name (if different)"), text: $form.loginName)
                 .autocorrectionDisabled()
-            SecureField(String(localized: "Password or app password"), text: $form.password)
+            SecureField(choice.passwordLabel, text: $form.password)
+                .accessibilityIdentifier("mail.add.password")
         } footer: {
             if let note = choice.signInNote { Text(note) }
         }

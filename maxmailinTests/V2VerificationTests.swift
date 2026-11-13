@@ -10312,3 +10312,150 @@ final class ReleasePurchaseBypassTests: XCTestCase {
         XCTAssertEqual(outside, [], "a purchase / entitlement override is compiled outside #if DEBUG")
     }
 }
+
+// MARK: - V4-16 Gmail via IMAP app password for 4.0; OAuth switch for 4.0.x
+
+/// Owner decision 2026-11-13: 4.0 offers Gmail over IMAP with a Google app
+/// password; Google sign-in (OAuth) is the same code switched off by the
+/// build's `MailinGmailSignInMode` ("oauth" in TestFlight / demo builds).
+@MainActor
+final class V416GmailIMAPTests: XCTestCase {
+    private static let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+
+    /// "imap" or a missing key offers the app-password path; only "oauth"
+    /// offers Google sign-in. Exactly one Gmail entry either way.
+    func testV416_signInMode_imapOrMissing_offersAppPassword_oauthOffersGoogleSignIn() async {
+        let key = MailProviderChoice.gmailSignInModeKey
+        XCTAssertEqual(key, "MailinGmailSignInMode")
+        for info in [[:], [key: "imap"], [key: " IMAP "], [key: "something else"], [key: ""]] as [[String: String]] {
+            XCTAssertEqual(MailProviderChoice.gmailSignInMode(info: info), .imap, "\(info)")
+            let offered = MailProviderChoice.offered(info: info)
+            XCTAssertEqual(offered.first, .gmailAppPassword, "\(info)")
+            XCTAssertFalse(offered.contains(.gmail), "Google sign-in is switched off unless the mode is oauth: \(info)")
+        }
+        for info in [[key: "oauth"], [key: "OAuth\n"]] as [[String: String]] {
+            XCTAssertEqual(MailProviderChoice.gmailSignInMode(info: info), .oauth)
+            let offered = MailProviderChoice.offered(info: info)
+            XCTAssertEqual(offered.first, .gmail)
+            XCTAssertFalse(offered.contains(.gmailAppPassword))
+        }
+        for info in [[:], [key: "oauth"]] as [[String: String]] {
+            let offered = MailProviderChoice.offered(info: info)
+            XCTAssertEqual(offered.filter { $0.title == "Gmail" }.count, 1, "one Gmail entry")
+            XCTAssertEqual(Array(offered.dropFirst()), [.outlook, .iCloud, .fastmail, .otherIMAP])
+        }
+        // The OAuth path is intact (rule 14): Google sign-in, ready with a client ID.
+        XCTAssertTrue(MailProviderChoice.gmail.usesOAuth)
+        XCTAssertEqual(MailProviderChoice.gmail.provider, .gmail)
+        XCTAssertTrue(MailProviderChoice.gmail.readiness(info: [MailProviderChoice.gmailClientIDKey: "123456789012-abcdefghijklmnopqrstuv.apps.googleusercontent.com",
+                                                               key: "oauth"]).isReady)
+        // The page reads the backend's Info.plist values.
+        let fake = FakeMailWorkspaceBackend()
+        let model = MailWorkspaceModel(backend: fake)
+        XCTAssertEqual(model.offeredProviders.first, .gmailAppPassword)
+        XCTAssertTrue(model.providerReadiness(.gmailAppPassword).isReady, "no Google client ID is needed for the app-password path")
+        fake.providerInfo = [key: "oauth"]
+        XCTAssertEqual(model.offeredProviders.first, .gmail)
+    }
+
+    /// The preset: imap.gmail.com:993 TLS, smtp.gmail.com:465 TLS, login =
+    /// full address, an "App password" field with the guidance; the 16
+    /// characters are stored without Google's display spaces.
+    func testV416_gmailAppPasswordPreset_fillsServers_guidance_and16Characters() async {
+        let choice = MailProviderChoice.gmailAppPassword
+        XCTAssertEqual(choice.provider, .imap)
+        XCTAssertFalse(choice.usesOAuth)
+        XCTAssertEqual(choice.title, "Gmail")
+        XCTAssertEqual(choice.preset?.host, "imap.gmail.com")
+        XCTAssertEqual(choice.preset?.port, 993)
+        XCTAssertEqual(choice.preset?.security, .implicitTLS)
+        XCTAssertEqual(choice.smtpDefault?.host, "smtp.gmail.com")
+        XCTAssertEqual(choice.smtpDefault?.port, 465)
+        XCTAssertEqual(choice.smtpDefault?.implicitTLS, true)
+        XCTAssertEqual(choice.passwordLabel, "App password")
+        XCTAssertEqual(MailProviderChoice.iCloud.passwordLabel, "Password or app password")
+        let note = choice.signInNote ?? ""
+        for part in ["2-Step Verification", "myaccount.google.com/apppasswords", "16-character", "normal Google password"] {
+            XCTAssertTrue(note.contains(part), "guidance names \(part): \(note)")
+        }
+
+        var form = MailIMAPForm()
+        form.apply(choice)
+        XCTAssertEqual(form.host, "imap.gmail.com")
+        XCTAssertEqual(form.port, "993")
+        XCTAssertEqual(form.smtpHost, "smtp.gmail.com")
+        XCTAssertEqual(form.smtpPort, "465")
+        form.address = "asha.example@gmail.com"
+        form.password = "hunter2-normal-password"
+        XCTAssertTrue(form.problem?.contains("myaccount.google.com/apppasswords") ?? false, "a normal password is caught: \(form.problem ?? "nil")")
+        form.password = "abcd efgh ijkl mnop"
+        XCTAssertNil(form.problem)
+        XCTAssertEqual(form.secret, "abcdefghijklmnop")
+        let account = MailOnboarding.newAccount(form)
+        XCTAssertEqual(account.provider, .imap)
+        XCTAssertEqual(account.host, "imap.gmail.com")
+        XCTAssertEqual(account.port, 993)
+        XCTAssertEqual(account.loginName, "asha.example@gmail.com", "login is the full address")
+        XCTAssertTrue(account.enabledModes.isEmpty)
+        // Other presets keep their password exactly as typed.
+        var other = MailIMAPForm()
+        other.apply(.fastmail)
+        other.password = "with spaces kept"
+        XCTAssertEqual(other.secret, "with spaces kept")
+
+        let fake = FakeMailWorkspaceBackend()
+        let model = MailWorkspaceModel(backend: fake)
+        let added = await model.addIMAP(form)
+        XCTAssertTrue(added)
+        XCTAssertEqual(fake.added.first?.host, "imap.gmail.com")
+    }
+
+    /// Gmail's IMAP AUTHENTICATIONFAILED (and SMTP 535) is told as "needs an
+    /// app password"; other servers keep the general sign-in sentence.
+    func testV416_gmailAuthenticationFailed_mapsToAppPasswordGuidance() {
+        let guidance = ConnectedMailErrorText.gmailAppPasswordRefused
+        for part in ["2-Step Verification", "myaccount.google.com/apppasswords", "16-character", "normal Google password"] {
+            XCTAssertTrue(guidance.contains(part), part)
+        }
+        for host in ["imap.gmail.com", "smtp.gmail.com", "IMAP.GMAIL.COM", "imap.googlemail.com"] {
+            for error in [MailProviderError.reauthorisationRequired, .unauthorized] {
+                XCTAssertEqual(ConnectedMailErrorText.sentence(for: error, mailHost: host), guidance, "\(host) \(error)")
+            }
+        }
+        let general = ConnectedMailErrorText.sentence(for: MailProviderError.reauthorisationRequired)
+        XCTAssertNotEqual(general, guidance)
+        XCTAssertEqual(ConnectedMailErrorText.sentence(for: MailProviderError.reauthorisationRequired, mailHost: "imap.fastmail.com"), general)
+        XCTAssertEqual(ConnectedMailErrorText.sentence(for: MailProviderError.reauthorisationRequired, mailHost: nil), general)
+        // Not a password problem on Gmail: the usual sentence.
+        XCTAssertEqual(ConnectedMailErrorText.sentence(for: MailProviderError.rateLimited(retryAfter: nil), mailHost: "imap.gmail.com"),
+                       ConnectedMailErrorText.sentence(for: MailProviderError.rateLimited(retryAfter: nil)))
+        XCTAssertTrue(ConnectedMailErrorText.isPresentable(guidance))
+    }
+
+    /// Info-Connected.plist ships "imap" (the 4.0 App Store default); the
+    /// release check accepts imap / oauth / missing and refuses anything else;
+    /// the release script reports the mode.
+    func testV416_infoPlistIsImap_releaseCheckAcceptsBothModes_scriptReportsMode() throws {
+        let plist = try XCTUnwrap(NSDictionary(contentsOf: Self.repo.appendingPathComponent("Info-Connected.plist")) as? [String: Any])
+        XCTAssertEqual(plist["MailinGmailSignInMode"] as? String, "imap")
+        func info(_ mode: String?) -> [String: Any] {
+            var d: [String: Any] = ["CFBundleIdentifier": "com.ecosanskriti.mailin",
+                                    "MailinGmailClientID": "123456789012-abcdefghijklmnop0123456789qrstuv.apps.googleusercontent.com",
+                                    "MailinGraphClientID": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+                                    "MailinGraphRedirectURI": "msauth.com.ecosanskriti.mailin://auth"]
+            if let mode { d["MailinGmailSignInMode"] = mode }
+            return d
+        }
+        for mode in ["imap", "oauth", "OAuth", nil] as [String?] {
+            XCTAssertEqual(ConnectedReleaseCheck.problems(info: info(mode), mailTransportsCompiled: true), [], "\(mode ?? "missing")")
+        }
+        for bad in ["imap-app-password", "", "google"] {
+            XCTAssertEqual(ConnectedReleaseCheck.problems(info: info(bad), mailTransportsCompiled: true).map(\.key), ["MailinGmailSignInMode"], bad)
+        }
+        let script = try String(contentsOf: Self.repo.appendingPathComponent("Scripts/check-connected-release.sh"), encoding: .utf8)
+        XCTAssertTrue(script.contains("read_key MailinGmailSignInMode"))
+        XCTAssertTrue(script.contains("imap)") && script.contains("oauth)"), "both modes PASS and are printed")
+        // This build: the connected scheme carries "imap"; the offline build has no key (read as imap).
+        XCTAssertEqual(MailProviderChoice.gmailSignInMode(info: MailProviderChoice.bundleInfo()), .imap)
+    }
+}

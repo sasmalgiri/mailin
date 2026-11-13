@@ -12,14 +12,15 @@ the live page). The in-app summary for the connected build is `LegalComplianceMa
 | Data | Where it goes | Where it is kept | Source |
 |---|---|---|---|
 | Imported archives, search index, duplicates, exports, receipts | nowhere | archive folder (container or chosen disk) | unchanged from 3.0 |
-| Gmail mail (raw RFC 822, labels, history ids) | Google → device only (`gmail.googleapis.com`) | archive tables `mail_accounts`, `remote_folders`, `remote_messages`, `remote_memberships`, `sync_checkpoints`, `capture_runs`, `capture_items` + message blobs | `SQLiteEmailStore+ConnectedMail.swift`, `GmailAdapter` |
+| Gmail mail in 4.0 (V4-16): over IMAP with a Google app password — raw RFC 822 bytes, X-GM-MSGID, X-GM-LABELS | Google → device only (`imap.gmail.com:993`, TLS; sending via `smtp.gmail.com:465`, TLS) | same tables as IMAP mail; one record per X-GM-MSGID, labels as memberships | `IMAPAdapter` (Gmail extensions, EXAMINE + BODY.PEEK, no mutation) |
+| Gmail mail with Google sign-in (switched off in 4.0 by `MailinGmailSignInMode = imap`; TestFlight / demo builds and 4.0.x) (raw RFC 822, labels, history ids) | Google → device only (`gmail.googleapis.com`) | archive tables `mail_accounts`, `remote_folders`, `remote_messages`, `remote_memberships`, `sync_checkpoints`, `capture_runs`, `capture_items` + message blobs | `SQLiteEmailStore+ConnectedMail.swift`, `GmailAdapter` |
 | Outlook / M365 mail (Graph `/$value` MIME, folders, delta tokens) | Microsoft → device only (`graph.microsoft.com`) | same tables | `GraphAdapter` |
 | IMAP mail | IMAP server → device only (the host the account uses) | same tables | `IMAPAdapter` (EXAMINE + BODY.PEEK, no mutation in capture) |
 | Messages the user sends | device → that account's provider (Gmail API, Graph sendMail, or the account's SMTP server) | outbox folder (`operation.json`, `message.eml`) until settled; drafts folder | `Outbox`, `OutboxStore`, `DraftStore`, `APISendSubmitters`, `SMTPSubmitter` |
 | Server changes the user confirms | device → provider | journal of operations | `RemoteActionService`, `APIActionExecutors` |
-| OAuth tokens, IMAP/SMTP passwords | only to the issuing provider's token / mail host | Keychain `com.ecosanskriti.mailin.connected-account`, not synchronised, this-device-only | `CredentialStore.swift` |
+| OAuth tokens, IMAP/SMTP passwords (incl. a Google app password) | only to the issuing provider's token / mail host (a Google app password only to `imap.gmail.com` / `smtp.gmail.com`) | Keychain `com.ecosanskriti.mailin.connected-account`, not synchronised, this-device-only | `CredentialStore.swift` |
 | Account display settings (sending identities, SMTP host names) | nowhere | `UserDefaults` (no secrets) | `MailAccountExtrasStore` |
-| Sign-in page traffic | the system sign-in window loads the provider's page (`accounts.google.com`; `login.microsoftonline.com`, `login.live.com`) — ephemeral session, no cookies kept | — | `ASWebAuthenticationSession`, `prefersEphemeralWebBrowserSession = true` |
+| Sign-in page traffic | the system sign-in window loads the provider's page (`login.microsoftonline.com`, `login.live.com`; `accounts.google.com` only when Google sign-in is switched on — not in 4.0) — ephemeral session, no cookies kept | — | `ASWebAuthenticationSession`, `prefersEphemeralWebBrowserSession = true` |
 | Anything to the developer | **nothing** — no server, no relay, no analytics, no crash SDK | — | no SDK linked; `PrivacyInfo.xcprivacy` collects nothing |
 | Anything to an AI provider | **nothing** — cloud AI not compiled (`MAILIN_CLOUD_AI` not defined); BYOK scaffolding refuses everything (`AIProductionTransport.liveInferenceShipped = false`) | — | `docs/V4_ONLINE_IMPLEMENTATION.md` SCAF |
 | Remote content in messages | never loaded by mail code (`MailNetworkPolicy` refuses `.remoteContent`) | — | `MailNetworkPolicy.swift` |
@@ -36,24 +37,29 @@ bound to its own mail and sign-in hosts; AI hosts and remote content always refu
 > switch on what it may do. About mailin says which edition you have.
 >
 > **Connected mail.** When you turn it on and add an account, your device connects directly to that account's own
-> mail provider — Google (`accounts.google.com`, `oauth2.googleapis.com`, `gmail.googleapis.com`), Microsoft
+> mail provider — Google (Gmail's IMAP and SMTP servers, `imap.gmail.com` and `smtp.gmail.com`), Microsoft
 > (`login.microsoftonline.com`, `graph.microsoft.com`) or the IMAP and SMTP servers of your provider. Nothing goes
 > through a mailin server or any other relay. *Preserve mail* downloads a read-only copy into your archive; *Send
 > mail* sends messages you submit; *Change server mail* applies the changes you confirm. Your provider handles
 > your mail under its own terms.
 >
-> **Sign-in and credentials.** You sign in on the provider's own page; mailin never sees your Google or Microsoft
-> password. Tokens and any IMAP / SMTP password are kept only in this device's Keychain, never synchronised, never
-> in backups or exports, and sent only to the provider that issued them.
+> **Sign-in and credentials.** Gmail connects with a Google app password you create in your Google Account
+> (2-Step Verification on, myaccount.google.com/apppasswords); mailin never asks for your Google account password.
+> Outlook / Microsoft 365 sign-in happens on Microsoft's own page; mailin never sees your Microsoft password. Tokens,
+> app passwords and any IMAP / SMTP password are kept only in this device's Keychain, never synchronised, never in
+> backups or exports, and sent only to the provider that issued them — a Google app password only to Google's mail
+> servers. To withdraw it, revoke the app password in your Google Account.
 >
-> **Google API Services.** mailin's use and transfer of information received from Google APIs adheres to the Google
-> API Services User Data Policy, including the Limited Use requirements.
+> **Google API Services.** (Only when Google sign-in is offered — 4.0.x, after Google's verification; 4.0 connects
+> Gmail over IMAP and uses no Google API.) mailin's use and transfer of information received from Google APIs adheres
+> to the Google API Services User Data Policy, including the Limited Use requirements.
 >
 > **No cloud AI.** Neither edition contains cloud AI; no email content is sent to an AI provider.
 >
 > **Removing an account.** Removing an account stops its connections and deletes its sign-in data from the
 > Keychain; its saved mail stays in your archive until you delete it in a separate step that shows the count first.
-> To withdraw mailin's access at the provider, remove it in your Google or Microsoft account's app permissions.
+> To withdraw mailin's access at the provider, revoke the app password in your Google Account, or remove mailin in
+> your Microsoft account's app permissions.
 >
 > **Network access.** The offline edition has none. The connected edition connects only to the servers above, only
 > for accounts you added and only for what you allowed; Settings ▸ Health ▸ Mail network shows every allowed and
@@ -71,5 +77,9 @@ bound to its own mail and sign-in hosts; AI hosts and remote content always refu
    correction in a later offline release (it is English legal text, not in the string catalog).
 4. Publish the connected page at the same URL (`/privacy/`) when the connected build is distributed — Google's
    consent screen and Entra's branding point to it, and Google reads it during verification.
+6. **V4-16 (owner, 2026-11-13):** 4.0 connects Gmail over IMAP with an app password (`MailinGmailSignInMode = imap`);
+   Google sign-in returns in 4.0.x after Google verifies the restricted scopes. When 4.0.x switches the key to
+   `oauth`, restore the Gmail API rows (`accounts.google.com`, `oauth2.googleapis.com`, `gmail.googleapis.com`) as
+   the Gmail path and keep the IMAP wording for accounts added with an app password.
 5. Have the text reviewed for the jurisdictions you sell in (plan §10: engineering tests do not establish legal
    compliance).

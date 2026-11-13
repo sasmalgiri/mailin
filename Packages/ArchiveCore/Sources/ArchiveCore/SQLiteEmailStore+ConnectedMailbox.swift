@@ -210,13 +210,16 @@ extension SQLiteEmailStore {
             if rows.count == q.pageSize { more = true; break }
             let mailbox = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : columnText(stmt, 4)
             let providerID = sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : columnText(stmt, 5)
-            let identity: ProviderMessageIdentity
+            var identity: ProviderMessageIdentity
             switch provider {
             case .gmail: identity = .gmail(messageID: providerID ?? "")
             case .microsoftGraph: identity = .graph(mailbox: mailbox ?? "me", immutableID: providerID ?? "")
             case .imap: identity = .imap(mailbox: mailbox ?? "", uidValidity: UInt32(clamping: sqlite3_column_int64(stmt, 6)),
                                          uid: UInt32(clamping: sqlite3_column_int64(stmt, 7)))
             }
+            // V4-16: a Gmail-over-IMAP row has no mailbox / UID columns; its
+            // identity is its key (X-GM-MSGID).
+            if let keyed = try? ProviderMessageIdentity(key: columnText(stmt, 2)) { identity = keyed }
             rows.append(ConnectedMailboxRow(
                 emailID: emailID, accountID: accountID, identity: identity, subject: columnText(stmt, 11),
                 from: columnText(stmt, 12), date: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 10))),

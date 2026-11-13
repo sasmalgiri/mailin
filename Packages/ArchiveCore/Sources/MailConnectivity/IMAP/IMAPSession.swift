@@ -7,7 +7,9 @@
 //  AUTHENTICATE, LOGIN, ENABLE, NAMESPACE, LIST, EXAMINE, UID FETCH (with
 //  BODY.PEEK[] only), UID SEARCH, IDLE/DONE, NOOP and LOGOUT. There is no
 //  SELECT, STORE, COPY, MOVE, EXPUNGE, APPEND or non-UID FETCH/SEARCH here
-//  (server actions are V4-11, in their own type).
+//  (server actions are V4-11, in their own type). On a Gmail server
+//  (X-GM-EXT-1) the same UID FETCH also asks for X-GM-MSGID / X-GM-LABELS, and
+//  UID SEARCH X-GM-MSGID finds one message — both read-only (V4-16).
 //
 //  Security, in order: the greeting is read; for STARTTLS the server must
 //  offer it, the upgrade happens on the same connection and every pre-TLS
@@ -105,6 +107,18 @@ public struct IMAPFetchedBody: Sendable {
     public var flags: [String]
     public var internalDate: Date?
     public var modSeq: UInt64?
+    /// V4-16, Gmail (X-GM-EXT-1) only: the message's X-GM-MSGID …
+    public var gmailMessageID: UInt64? = nil
+    /// … and its labels: system labels as sent (`\Inbox`, `\Sent` …), user
+    /// labels decoded like mailbox names.
+    public var gmailLabels: [String] = []
+}
+
+/// V4-16: one message listed on a Gmail server — UID, size and X-GM-MSGID.
+public struct IMAPGmailListing: Sendable, Equatable {
+    public var uid: UInt32
+    public var size: Int64?
+    public var messageID: UInt64?
 }
 
 struct IMAPCommandResult: Sendable {
@@ -550,6 +564,8 @@ public actor IMAPSession {
     func fetchBody(uid: UInt32, into sink: @escaping IMAPLiteralSink) async throws -> IMAPFetchedBody? {
         var items = "UID RFC822.SIZE FLAGS INTERNALDATE"
         if condstoreEnabled { items += " MODSEQ" }
+        let gmail = hasGmailExtensions
+        if gmail { items += " X-GM-MSGID X-GM-LABELS" }
         items += " BODY.PEEK[]"
         let r = try await runOK([.raw("UID FETCH \(uid) (\(items))")], context: .fetch, bodySink: sink)
         var found: IMAPFetchedBody?
@@ -568,8 +584,46 @@ public actor IMAPSession {
             let date = attrs.first(where: { $0.name == "INTERNALDATE" })?.value.text.flatMap(Self.parseInternalDate)
             let modseq = attrs.first(where: { $0.name == "MODSEQ" })?.value.list?.first?.number
             found = IMAPFetchedBody(uid: u, byteCount: n, flags: flags, internalDate: date, modSeq: modseq)
+            if gmail {
+                found?.gmailMessageID = attrs.first(where: { $0.name == "X-GM-MSGID" })?.value.number
+                found?.gmailLabels = (attrs.first(where: { $0.name == "X-GM-LABELS" })?.value.list ?? []).compactMap(gmailLabel)
+            }
         }
         return found
+    }
+
+    // MARK: Gmail extensions (V4-16, read-only)
+
+    /// The server is Gmail (or speaks its IMAP extensions).
+    var hasGmailExtensions: Bool { capabilities.has("X-GM-EXT-1") }
+
+    /// One X-GM-LABELS entry: a system label (`\Inbox`) as sent, a user label
+    /// decoded like a mailbox name (modified UTF-7 unless UTF8=ACCEPT is on).
+    func gmailLabel(_ value: IMAPValue) -> String? {
+        guard let b = value.bytes, !b.isEmpty else { return nil }
+        if b.first == UInt8(ascii: "\\") { return String(decoding: b, as: UTF8.self) }
+        return IMAPMailboxName(wire: b, utf8: utf8Enabled).name
+    }
+
+    /// `UID FETCH set (UID RFC822.SIZE X-GM-MSGID)`: identities and sizes, never bodies.
+    func gmailListing(_ set: String) async throws -> [IMAPGmailListing] {
+        let r = try await runOK([.raw("UID FETCH \(set) (UID RFC822.SIZE X-GM-MSGID)")], context: .fetch)
+        var out: [IMAPGmailListing] = []
+        for case .fetch(_, let items) in r.untagged {
+            guard let uid = items.first(where: { $0.name == "UID" })?.value.number.flatMap({ UInt32(exactly: $0) }) else { continue }
+            let size = items.first(where: { $0.name == "RFC822.SIZE" })?.value.number.flatMap { Int64(exactly: $0) }
+            out.append(IMAPGmailListing(uid: uid, size: size, messageID: items.first(where: { $0.name == "X-GM-MSGID" })?.value.number))
+        }
+        return out
+    }
+
+    /// `UID SEARCH X-GM-MSGID n` in the selected mailbox: the message's UID there, if any.
+    func gmailSearch(messageID: UInt64) async throws -> UInt32? {
+        let r = try await runOK([.raw("UID SEARCH X-GM-MSGID \(messageID)")])
+        for case .data("SEARCH", let values) in r.untagged {
+            if let uid = values.compactMap({ $0.number.flatMap { UInt32(exactly: $0) } }).first { return uid }
+        }
+        return nil
     }
 
     /// "17-Jul-1996 02:44:25 -0700"

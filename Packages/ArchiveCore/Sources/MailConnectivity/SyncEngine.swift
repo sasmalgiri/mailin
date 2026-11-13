@@ -240,8 +240,17 @@ public actor SyncEngine {
             let id = try await sink.beginRun(accountID: accountID, selection: selection.description)
             runID = id
             let all = try await listAllFolders()
+            // V4-16: a provider rule (Gmail IMAP: Spam, Trash) — the folders
+            // stay in the folder list, are recorded NOT selected when first
+            // seen (the person can select them), and "all folders" leaves them out.
+            let skipped = await adapter.foldersSkippedByDefault()
+            let known = skipped.isEmpty ? [] : Set(try await sink.folderSummaries(accountID: accountID).map(\.serverID))
             try await sink.recordFolders(accountID: accountID, folders: all)
-            let selected = selection.apply(all)
+            for id in skipped where !known.contains(id) {
+                try await sink.setFolderSelected(accountID: accountID, serverID: id, selected: false)
+            }
+            var selected = selection.apply(all)
+            if selection == .allFolders, !skipped.isEmpty { selected.removeAll { skipped.contains($0.serverID) } }
             try await retryEarlierFailures(runID: id)
             let (point, full) = try await syncScopes(selected, runID: id)
             let receipt = try await sink.finishRun(id)

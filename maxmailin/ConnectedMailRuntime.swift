@@ -226,7 +226,11 @@ final class ConnectedMailRuntime {
                 let reason: String
                 switch account.connectionState {
                 case .removed: reason = String(localized: "The account was removed; its saved mail stays in the archive.")
-                case .needsReauthorisation: reason = String(localized: "Account needs sign-in; saved mail remains available.")
+                case .needsReauthorisation:
+                    // V4-16: Gmail over IMAP refused the password — say what it needs.
+                    reason = account.provider == .imap && ConnectedMailErrorText.isGmailHost(account.host)
+                        ? ConnectedMailErrorText.gmailAppPasswordRefused
+                        : String(localized: "Account needs sign-in; saved mail remains available.")
                 case .disconnected, .connected: reason = String(localized: "Saving mail is switched off for this account.")
                 }
                 disable(account.id, reason: reason)

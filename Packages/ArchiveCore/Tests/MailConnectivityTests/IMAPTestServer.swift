@@ -27,6 +27,9 @@ final class IMAPServerModel: @unchecked Sendable {
         var flags: [String]
         var modseq: UInt64
         var internalDate = "06-Jan-2025 10:00:00 +0530"
+        /// V4-16 Gmail: the X-GM-MSGID shared by every folder copy, and its labels.
+        var gmMsgID: UInt64? = nil
+        var gmLabels: [String] = []
     }
     struct Mailbox {
         var name: String
@@ -99,6 +102,26 @@ final class IMAPServerModel: @unchecked Sendable {
             _mailboxes[i].modseq += 1
             _mailboxes[i].messages.append(Message(uid: uid, bytes: bytes, flags: flags, modseq: _mailboxes[i].modseq))
             return uid
+        }
+    }
+
+    /// V4-16: one Gmail message shown in several folders (All Mail, INBOX,
+    /// label folders), each copy with its own UID and the same X-GM-MSGID and
+    /// labels. Returns the UID per folder.
+    @discardableResult
+    func addGmail(_ bytes: Data, msgID: UInt64, labels: [String], in names: [String], flags: [String] = []) -> [String: UInt32] {
+        lock.withLock {
+            var out: [String: UInt32] = [:]
+            for name in names {
+                guard let i = _mailboxes.firstIndex(where: { $0.name == name }) else { fatalError("no mailbox \(name)") }
+                let uid = _mailboxes[i].uidNext
+                _mailboxes[i].uidNext += 1
+                _mailboxes[i].modseq += 1
+                _mailboxes[i].messages.append(Message(uid: uid, bytes: bytes, flags: flags, modseq: _mailboxes[i].modseq,
+                                                      gmMsgID: msgID, gmLabels: labels))
+                out[name] = uid
+            }
+            return out
         }
     }
 
@@ -613,6 +636,11 @@ private final class ServerConnection: @unchecked Sendable {
             if items.contains("FLAGS") { parts.append("FLAGS (" + flags.joined(separator: " ") + ")") }
             if items.contains("INTERNALDATE") { parts.append("INTERNALDATE \"\(msg.internalDate)\"") }
             if items.contains("MODSEQ") || changedSince != nil { parts.append("MODSEQ (\(msg.modseq))") }
+            if has("X-GM-EXT-1"), items.contains("X-GM-MSGID"), let id = msg.gmMsgID { parts.append("X-GM-MSGID \(id)") }
+            if has("X-GM-EXT-1"), items.contains("X-GM-LABELS") {
+                let labels = msg.gmLabels.map { $0.hasPrefix("\\") ? $0 : "\"" + $0.replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+                parts.append("X-GM-LABELS (" + labels.joined(separator: " ") + ")")
+            }
             var d = Data("* \(index + 1) FETCH (".utf8)
             d.append(Data(parts.joined(separator: " ").utf8))
             if wantsBody {
@@ -682,6 +710,10 @@ private final class ServerConnection: @unchecked Sendable {
         if let i = words.firstIndex(of: "UID"), i + 1 < words.count {
             let set = Self.uids(words[i + 1], existing: result)
             result = result.filter { set.contains($0) }
+        }
+        if has("X-GM-EXT-1"), let i = words.firstIndex(of: "X-GM-MSGID"), i + 1 < words.count, let id = UInt64(words[i + 1]) {
+            let matching = Set(m.messages.filter { $0.gmMsgID == id }.map(\.uid))
+            result = result.filter { matching.contains($0) }
         }
         if esearch {
             let set = IMAPUIDSet(result).sequenceSet

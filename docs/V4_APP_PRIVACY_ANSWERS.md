@@ -27,6 +27,14 @@ In the connected edition, at the user's request: mail content and metadata (Gmai
 *to* the device; sending uploads the user's message *to* their provider; server actions send message IDs and the
 requested change), and OAuth tokens / app passwords to the provider that issued them.
 
+**Gmail in 4.0 (V4-16, owner 2026-11-13):** Gmail connects over IMAP with a Google app password
+(`MailinGmailSignInMode = imap` in `Info-Connected.plist`). The device connects to `imap.gmail.com:993` and
+`smtp.gmail.com:465` (both TLS) only; the app password is kept in the device Keychain
+(`com.ecosanskriti.mailin.connected-account`, this device only) and never leaves the device except to those two
+Google servers. No Google API and no Google sign-in page is used in 4.0; Google sign-in (Gmail API) returns in
+4.0.x after Google verifies the restricted scopes. None of this changes the answer: Google is the user's own
+provider, reached directly.
+
 The provider here is the **user's own service**, reached directly by the device, under the user's own account and
 contract with that provider. The developer has no access to it and no agreement with the provider about the user's
 data. On Apple's definition this is the app acting as a client for the user's account, as any mail app does; it is
@@ -61,9 +69,13 @@ and goes directly to the user's provider (drafts in `V4_STORE_METADATA_DRAFT.md`
    reconsider "Data Not Collected" for that path.
 4. Is Apple's opt-in crash-log sharing (App Store Connect ▸ crashes) used for support? Apple collects that, not the
    app; confirm the owner is comfortable not declaring it (Apple's guidance has treated it as Apple's data).
-5. Age rating / "unrestricted web access": the sign-in window shows only provider sign-in pages; answer No unless
-   Apple's questionnaire is read otherwise.
+5. Age rating / "unrestricted web access": the sign-in window shows only provider sign-in pages (in 4.0 only
+   Microsoft's; Gmail uses an app password, no page); answer No unless Apple's questionnaire is read otherwise.
 6. Export-compliance (`ITSAppUsesNonExemptEncryption = NO` today): the connected build uses only Apple's TLS
    (Network.framework / URLSession) and CryptoKit — standard exempt encryption; confirm the answer stays No.
 7. Google's Limited Use and Microsoft's publisher terms: confirm the published privacy page states what the
-   registrations state (`V4_PROVIDER_REGISTRATION.md` §1.5, §2.5).
+   registrations state (`V4_PROVIDER_REGISTRATION.md` §1.5, §2.5). In 4.0 Gmail uses no Google API, so Limited
+   Use applies from 4.0.x (Google sign-in); the 4.0 page says so.
+8. App Review: give a demo Gmail address **with its Google app password** (2-Step Verification on; not the
+   account password, which Gmail refuses over IMAP), or an iCloud address with an app-specific password
+   (`V4_STORE_METADATA_DRAFT.md`, App Review notes).

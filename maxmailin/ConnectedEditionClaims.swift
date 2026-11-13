@@ -130,7 +130,20 @@ enum ConnectedReleaseCheck {
         } else {
             out.append(Problem(key: graphRedirectKey, reason: "missing"))
         }
+
+        // V4-16: how Gmail is offered. "imap" (app password, the 4.0 App
+        // Store value) or "oauth" (Google sign-in); missing reads as "imap".
+        if let raw = info[gmailSignInModeKey] as? String, gmailSignInModeValue(raw) == nil {
+            out.append(Problem(key: gmailSignInModeKey, reason: "expected imap or oauth, found \(raw.isEmpty ? "an empty value" : raw)"))
+        }
         return out
+    }
+
+    static let gmailSignInModeKey = MailProviderChoice.gmailSignInModeKey
+
+    /// The mode a value names exactly, or nil for anything else.
+    static func gmailSignInModeValue(_ raw: String) -> MailProviderChoice.GmailSignInMode? {
+        MailProviderChoice.GmailSignInMode(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     static func redirectProblem(_ raw: String, bundleID: String) -> String? {

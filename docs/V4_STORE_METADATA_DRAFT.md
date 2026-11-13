@@ -35,7 +35,7 @@ OPTIONAL CONNECTED MAIL — OFF UNTIL YOU TURN IT ON
 • Add Gmail, Outlook / Microsoft 365, iCloud Mail, Fastmail or another IMAP account. Your device connects directly to that provider — there is no mailin server and no relay.
 • Each account starts with nothing allowed. Switch on, one by one: Preserve mail (a read-only copy into your archive), Send mail (from your outbox, only when you send), Change server mail (only changes you confirm).
 • Saved mail goes through the same five jobs as imported files: folders, search, duplicates and verified export.
-• Sign-in happens on Google's or Microsoft's own page. Tokens and passwords stay in this device's Keychain.
+• Gmail connects over IMAP with a Google app password (Google requires 2-Step Verification; create the app password at myaccount.google.com/apppasswords). Outlook / Microsoft 365 sign-in happens on Microsoft's own page. Passwords and sign-in tokens stay in this device's Keychain and are sent only to that provider.
 • Remove an account at any time; its saved mail stays in your archive.
 
 PRIVATE BY DESIGN
@@ -47,7 +47,7 @@ Plans: Free, Personal and Professional, monthly, yearly or lifetime — unchange
 
 ## What's New in 4.0
 
-• Connected mail (optional, off until you turn it on): save Gmail, Outlook / Microsoft 365 and IMAP mail into your archive, directly from your provider. (V4-15)
+• Connected mail (optional, off until you turn it on): save Gmail, Outlook / Microsoft 365 and IMAP mail into your archive, directly from your provider. Gmail connects over IMAP with a Google app password; each Gmail message is saved once, with all its labels. (V4-15, V4-16)
 • Drafts and an outbox: messages wait until you send them; nothing is sent twice. (V4-15)
 • Server changes you confirm — mark read, flag, move, Trash — each listed first. (V4-15)
 • Advanced Search is now in every plan.
@@ -67,23 +67,32 @@ mailin is a local email archive. Connected mail is optional and OFF on a fresh i
 To test connected mail:
 1. Settings ▸ Modules ▸ switch on "Live Mail" (the sheet explains that enabling it connects to nothing), and make sure "Connected mail" is on.
 2. Open the Mail page ▸ Add account.
-   • Gmail: choose Gmail, enter <DEMO GMAIL ADDRESS>, sign in on Google's page with the password below. Or choose "Other IMAP server" with imap.gmail.com / smtp.gmail.com and the app password below.
-   • IMAP: choose "Other IMAP server" (or iCloud / Fastmail) and use <DEMO IMAP ACCOUNT>.
+   • Gmail (4.0 connects Gmail over IMAP — there is no Google sign-in page in this version): choose Gmail, enter <DEMO GMAIL ADDRESS> and paste the 16-character Google app password below into "App password". The servers are filled in (imap.gmail.com:993 and smtp.gmail.com:465, both TLS). The demo Gmail account has 2-Step Verification on and an app password created at myaccount.google.com/apppasswords.
+   • Or iCloud Mail: choose iCloud Mail, enter <DEMO ICLOUD ADDRESS> and the app-specific password below.
+   • Outlook / Microsoft 365: choose it, enter <DEMO OUTLOOK ADDRESS> and sign in on Microsoft's page.
 3. The new account has Preserve mail, Send mail and Change server mail all off. Switch on Preserve mail, then Sync now: folders and counts appear and messages can be opened and searched in Archive.
-4. Switch on Send mail (Gmail asks for the send permission once), write a message to <TEST RECIPIENT>, and send it from the outbox.
-5. Switch on Change server mail to mark a message read or move it to Trash; each change is shown before it runs.
+4. Switch on Send mail (Outlook asks for the send permission once; Gmail and iCloud send with the same app password over SMTP), write a message to <TEST RECIPIENT>, and send it from the outbox.
+5. Switch on Change server mail to mark a message read or move it to Trash; each change is shown before it runs. (For Gmail over IMAP, 4.0 does not change server mail; it says so and changes nothing — use the iCloud or Outlook account for this step.)
 6. Remove the account in its menu: counts are shown first and the saved mail stays.
 
-Demo account credentials: <supplied by the owner in the credential fields, never in public text>.
+Demo account credentials: <supplied by the owner in the credential fields, never in public text> — a demo Gmail address with its Google app password (not the Google account password, which Gmail refuses over IMAP), or an iCloud address with an app-specific password.
 Without an account the app's archive features work fully: use File ▸ Open with any .mbox or .eml file (owner: attach a small sample .mbox to the review submission).
 There is no mailin server, no sign-up and no data collection. Purchases use StoreKit; the Professional tools need a Professional purchase (sandbox account).
 
 (Owner: confirm the exact menu names on the candidate before pasting — the Modules / Live Mail / Connected mail labels are those in `ModuleRegistry` and `Capability` at d4a3ec3.)
 
+### Gmail sign-in mode (V4-16)
+
+4.0 for the App Store ships `MailinGmailSignInMode = imap` in `Info-Connected.plist`: the Gmail entry in Add account is
+Gmail over IMAP with an app password, and Google sign-in (OAuth, Gmail API) is switched off — its code stays in the
+app (rule 14). TestFlight / demo builds that need Google sign-in set the key to `oauth`; 4.0.x ships `oauth` once
+Google has verified the restricted Gmail scopes (`V4_PROVIDER_REGISTRATION.md` §1). `Scripts/check-connected-release.sh`
+prints the mode of the built app (step 5).
+
 ## Screenshots (owner, on the candidate)
 
 1. Mail page with one Gmail and one IMAP account, modes visible (all three switches).
-2. Add account sheet with the provider list and the "not set up" reason absent (real client IDs).
+2. Add account sheet with Gmail chosen: the "App password" field and its guidance (2-Step Verification, myaccount.google.com/apppasswords), servers filled in.
 3. Archive search showing a captured message next to an imported one.
 4. Outbox with one queued message and its Send button.
 5. About ▸ "Private by design" line (connected edition text).

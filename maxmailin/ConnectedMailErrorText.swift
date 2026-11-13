@@ -53,6 +53,43 @@ enum ConnectedMailErrorText {
         }
     }
 
+    // MARK: Gmail over IMAP (V4-16)
+
+    /// The sentence for `error` from the account whose mail server is
+    /// `mailHost`: Gmail's IMAP / SMTP refusing the password (IMAP
+    /// AUTHENTICATIONFAILED, SMTP 535) means it needs an app password.
+    static func text(for error: Error, mailHost: String?) -> String {
+        if isGmailPasswordRefusal(error, mailHost: mailHost) {
+            log.error("Gmail refused the IMAP / SMTP password")
+            return gmailAppPasswordRefused
+        }
+        return text(for: error)
+    }
+
+    /// The sentence only (tests; no log entry).
+    static func sentence(for error: Error, mailHost: String?) -> String {
+        isGmailPasswordRefusal(error, mailHost: mailHost) ? gmailAppPasswordRefused : sentence(for: error)
+    }
+
+    static func isGmailHost(_ host: String?) -> Bool {
+        guard let host = host?.trimmingCharacters(in: .whitespaces).lowercased(), !host.isEmpty else { return false }
+        return IMAPProviderPreset.gmailHosts.contains(host)
+    }
+
+    static func isGmailPasswordRefusal(_ error: Error, mailHost: String?) -> Bool {
+        guard isGmailHost(mailHost) else { return false }
+        switch error {
+        case MailProviderError.reauthorisationRequired, MailProviderError.unauthorized: return true
+        case let e as SelectiveListingStopped: if case .needsSignIn = e.outcome { return true }; return false
+        default: return false
+        }
+    }
+
+    /// Gmail refused the password: what to do.
+    static var gmailAppPasswordRefused: String {
+        String(localized: "Google refused the password. Gmail needs an app password here: turn on 2-Step Verification, create an app password at myaccount.google.com/apppasswords and paste the 16-character password. A normal Google password will be refused. Saved mail remains available.")
+    }
+
     static var fallback: String {
         String(localized: "Something went wrong with this mail account. Saved mail is not affected; the details are in the app's log.")
     }

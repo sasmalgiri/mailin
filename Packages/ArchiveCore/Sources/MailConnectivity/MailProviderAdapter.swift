@@ -273,11 +273,19 @@ public protocol MailProviderAdapter: Sendable {
     /// Releases the adapter's network session (the app calls it when it
     /// replaces or drops the adapter). The adapter is not used afterwards.
     func close() async
+
+    /// Server ids of listed folders that `.allFolders` leaves out, as a
+    /// provider rule (Gmail over IMAP: Spam and Trash, which All Mail does not
+    /// hold). They are captured when the person selects them by name. Asked
+    /// after `listFolders`.
+    func foldersSkippedByDefault() async -> Set<String>
 }
 
 extension MailProviderAdapter {
     /// Adapters without a session of their own have nothing to release.
     public func close() async {}
+    /// Every listed folder is part of "all folders".
+    public func foldersSkippedByDefault() async -> Set<String> { [] }
 }
 
 // MARK: - Network policy and credentials

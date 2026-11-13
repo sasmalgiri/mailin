@@ -12,6 +12,15 @@ Related: [`V4_ONLINE_IMPLEMENTATION.md`](V4_ONLINE_IMPLEMENTATION.md) (owner pro
 
 ## 0. Facts both packets depend on
 
+> **Gmail in 4.0 (V4-16, owner decision 2026-11-13).** 4.0 ships Gmail over **IMAP with a Google app password**
+> (§3) — no Google OAuth verification is needed for 4.0. `Info-Connected.plist` carries
+> **`MailinGmailSignInMode = imap`** (the App Store default): Add account lists one "Gmail" entry, the app-password
+> path. Google sign-in (Gmail API, §1) is the same code switched off, not removed (rule 14); a TestFlight / demo
+> build sets the key to **`oauth`** to offer it, and 4.0.x ships `oauth` once Google has verified the restricted
+> scopes (§1.4). A missing key reads as `imap`; any other value fails `ConnectedReleaseCheck` and
+> `Scripts/check-connected-release.sh` (step 5 prints the mode). Accounts already added with Google sign-in keep
+> working in either mode (re-sign-in still uses §1). Packet §1 below is for 4.0.x.
+
 | Fact | Value | Source |
 |---|---|---|
 | Which build connects | Only the **connected** configuration (`Release-Connected`, `MAILIN_CONNECTED_MAIL`, no `NO_NETWORK_BUILD`). Today's `Release` and `Debug` define `NO_NETWORK_BUILD` and contain no transport. | `MailNetworkPolicy.swift` `ConnectedBuildFeatures`; project build settings |
@@ -52,7 +61,7 @@ fake, not Google). Not yet seen on a real provider: confirm on Gmail and Microso
 
 ---
 
-## 1. Google Cloud packet (Gmail API)
+## 1. Google Cloud packet (Gmail API) — for 4.0.x (Google sign-in); 4.0 uses §3
 
 ### 1.1 Project and API
 
@@ -163,6 +172,10 @@ Record on a Mac with the **connected Release candidate**, a demo Gmail account, 
 - Build: the connected Release candidate (TestFlight link or notarised build for Google, as they request).
 - Account: `<DEMO GMAIL ADDRESS — owner>` / `<PASSWORD — owner, via the reviewer notes field only>`; 2-step
   verification off or a backup code supplied; seeded with ~50 messages in 3 labels (V4-15 seeded corpus).
+- **App Review for 4.0** (Gmail over IMAP): the demo Gmail account has 2-Step Verification **on** and a Google
+  app password created at myaccount.google.com/apppasswords; give the reviewer the address and the 16-character
+  app password (not the account password — Gmail refuses it over IMAP), or an iCloud account with an
+  app-specific password instead (`V4_STORE_METADATA_DRAFT.md`, App Review notes).
 - Steps: as video steps 2–6. Expected: label counts equal Gmail's; nothing changes on the server until Change server
   mail is on and a change is confirmed.
 
@@ -258,6 +271,8 @@ Do not add a client secret anywhere. Do not put any value in `Info.plist` of the
 ```xml
 <key>MailinGmailClientID</key>
 <string>$(MAILIN_GMAIL_CLIENT_ID)</string>
+<key>MailinGmailSignInMode</key>
+<string>imap</string>          <!-- 4.0 App Store; "oauth" in TestFlight / demo builds and 4.0.x -->
 <key>MailinGraphClientID</key>
 <string>$(MAILIN_GRAPH_CLIENT_ID)</string>
 <key>MailinGraphRedirectURI</key>
@@ -275,6 +290,18 @@ no sign-in code is compiled there). The separate `Info-Connected.plist` keeps th
 Presets (`IMAPAdapter` presets, `MailProviderChoice.smtpDefault`): iCloud Mail `imap.mail.me.com:993` (TLS),
 `smtp.mail.me.com:587` (STARTTLS), app-specific password; Fastmail `imap.fastmail.com:993`, `smtp.fastmail.com:465`,
 app password; Other IMAP: the host and port the user enters. TLS before any credential; no plaintext fallback.
-Gmail over IMAP works with a Google app password (2-step verification on); Microsoft accounts should use the Graph
+**Gmail (the 4.0 Gmail path, V4-16):** Add account ▸ Gmail fills `imap.gmail.com:993` (TLS) and
+`smtp.gmail.com:465` (TLS); login = the full address; the field is labelled "App password" with the guidance
+(2-Step Verification on, create the app password at myaccount.google.com/apppasswords, paste the 16 characters —
+Google's display spaces are dropped; a normal Google password is refused). Gmail's IMAP AUTHENTICATIONFAILED (or
+SMTP 535) is shown as that guidance (`ConnectedMailErrorText.gmailAppPasswordRefused`). The app password is kept in
+the Keychain like every IMAP password and is sent only to `imap.gmail.com` / `smtp.gmail.com`.
+Capture uses Gmail's IMAP extensions when the server offers `X-GM-EXT-1`: the identity is the message's
+**X-GM-MSGID**, so a message seen in INBOX, [Gmail]/All Mail and label folders is ONE archived record with each
+folder / X-GM-LABELS label as a membership, downloaded once; All Mail (`\All`) is read first; Spam and Trash are
+listed but not selected (captured only when the person selects them). Still read-only (EXAMINE, BODY.PEEK,
+UID SEARCH X-GM-MSGID). Changing Gmail mail on the server over IMAP is not offered in 4.0 (refused as
+unsupported, nothing sent). Non-Gmail servers are unchanged (mailbox + UIDVALIDITY + UID).
+Microsoft accounts should use the Graph
 route (Microsoft has turned off basic-auth IMAP for most accounts; the app does not request
 `IMAP.AccessAsUser.All`).

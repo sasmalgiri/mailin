@@ -142,7 +142,7 @@ public enum ServerActionScopes {
             let needed = mailbox == "me" ? graphReadWrite : graphReadWriteShared
             let ok = lower.contains { $0 == needed.lowercased() || $0.hasSuffix("/" + needed.lowercased()) }
             return ok ? nil : needed
-        case .imap:
+        case .imap, .gmailIMAP:
             return nil          // IMAP sign-in is not scoped; the account mode still applies
         }
     }

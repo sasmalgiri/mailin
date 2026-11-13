@@ -54,12 +54,18 @@ public enum ProviderMessageIdentity: Sendable, Hashable, Codable {
     case graph(mailbox: String, immutableID: String)
     /// IMAP: mailbox + UIDVALIDITY + UID. Never a sequence number, never a UID alone.
     case imap(mailbox: String, uidValidity: UInt32, uid: UInt32)
+    /// V4-16: an IMAP account on a server that advertises X-GM-EXT-1 (Gmail).
+    /// Gmail shows labels as folders, so one message has a different UID in
+    /// INBOX, [Gmail]/All Mail and every label folder; its X-GM-MSGID is the
+    /// same in all of them. Keyed by it, the message is ONE record and every
+    /// folder / label it is seen in is a membership (as for the Gmail API).
+    case gmailIMAP(messageID: UInt64)
 
     public var provider: MailProviderKind {
         switch self {
         case .gmail: return .gmail
         case .graph: return .microsoftGraph
-        case .imap: return .imap
+        case .imap, .gmailIMAP: return .imap
         }
     }
 
@@ -69,6 +75,7 @@ public enum ProviderMessageIdentity: Sendable, Hashable, Codable {
         case .gmail(let id): return Fields(mailbox: nil, messageID: id, uidValidity: nil, uid: nil)
         case .graph(let mailbox, let id): return Fields(mailbox: mailbox, messageID: id, uidValidity: nil, uid: nil)
         case .imap(let mailbox, let validity, let uid): return Fields(mailbox: mailbox, messageID: nil, uidValidity: validity, uid: uid)
+        case .gmailIMAP(let id): return Fields(mailbox: nil, messageID: String(id), uidValidity: nil, uid: nil)
         }
     }
 
@@ -88,6 +95,9 @@ public enum ProviderMessageIdentity: Sendable, Hashable, Codable {
         case .imap(let mailbox, let validity, let uid):
             guard validity != 0, uid != 0 else { throw ConnectedArchiveError.invalidIdentity("IMAP UIDVALIDITY and UID must be non-zero") }
             return try checked(["imap", mailbox, String(validity), String(uid)])
+        case .gmailIMAP(let id):
+            guard id != 0 else { throw ConnectedArchiveError.invalidIdentity("a Gmail X-GM-MSGID must be non-zero") }
+            return try checked(["imap-gm", String(id)])
         }
     }
 }

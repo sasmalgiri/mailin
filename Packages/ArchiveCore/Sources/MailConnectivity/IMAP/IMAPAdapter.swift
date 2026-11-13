@@ -23,6 +23,18 @@
 //
 //  No mutation commands exist in this file or in `IMAPSession` (V4-11).
 //
+//  Gmail (V4-16): a server that advertises X-GM-EXT-1 shows every label as a
+//  folder, so one message has a different UID in INBOX, [Gmail]/All Mail and
+//  each label folder. There the identity is the message's X-GM-MSGID
+//  (`.gmailIMAP`), the same in every folder: it is downloaded ONCE and each
+//  folder it is listed in, plus every label in X-GM-LABELS, becomes a
+//  membership of that one record. [Gmail]/All Mail (special-use \All) is
+//  listed first so the capture reads from it; Spam and Trash (not in All Mail)
+//  are left out of "all folders" and captured only when selected. Still
+//  read-only: EXAMINE, UID FETCH … BODY.PEEK[], UID SEARCH X-GM-MSGID.
+//  A message's UID disappearing from a label folder is a label change, not a
+//  deletion, so no `.deleted` is reported on Gmail (the record stays as is).
+//
 
 import ArchiveCore
 import Foundation
@@ -89,6 +101,18 @@ public struct IMAPProviderPreset: Sendable, Equatable, Identifiable {
         id: "fastmail", displayName: "Fastmail", host: "imap.fastmail.com", port: 993, security: .implicitTLS,
         auth: .password, signInNote: "Use an app password created in Fastmail's Privacy & Security settings.",
         verifiedAgainstRealServer: false)
+
+    /// Gmail over IMAP (V4-16, the 4.0 Gmail path): IMAP over TLS with a
+    /// Google app password (2-Step Verification on, created at
+    /// myaccount.google.com/apppasswords). A normal Google password is refused.
+    public static let gmail = IMAPProviderPreset(
+        id: "gmail", displayName: "Gmail", host: "imap.gmail.com", port: 993, security: .implicitTLS,
+        auth: .password,
+        signInNote: "Use a Google app password: turn on 2-Step Verification, create the app password at myaccount.google.com/apppasswords and paste its 16 characters. A normal Google password is refused.",
+        verifiedAgainstRealServer: false)
+
+    /// Hosts of Gmail's IMAP and SMTP servers (for the app-password guidance).
+    public static let gmailHosts: Set<String> = ["imap.gmail.com", "smtp.gmail.com", "imap.googlemail.com", "smtp.googlemail.com"]
 
     /// Any standards-based server: the user enters host, port and security.
     public static func generic(host: String, port: UInt16 = 993, security: IMAPSecurity = .implicitTLS) -> IMAPProviderPreset {
@@ -199,6 +223,21 @@ public actor IMAPAdapter: MailProviderAdapter {
 
     private struct FolderInfo { var wire: [UInt8]; var occurrence: RemoteFolderOccurrence; var selectable: Bool }
     private var folders: [String: FolderInfo] = [:]
+
+    // V4-16 Gmail (X-GM-EXT-1), learnt from the folder list.
+    /// The server speaks Gmail's IMAP extensions.
+    public private(set) var isGmail = false
+    /// Label (as X-GM-LABELS names it) → the folder that shows it.
+    private var gmailLabelFolders: [String: RemoteFolderOccurrence] = [:]
+    /// [Gmail]/All Mail's server id (special-use \All).
+    private var gmailAllMail: String?
+    /// Spam and Trash: not in All Mail, left out of "all folders".
+    private var gmailSkipped: Set<String> = []
+    /// Where the CURRENT page's messages were listed (X-GM-MSGID → mailbox,
+    /// UIDVALIDITY, UID), so a download needs no search. Replaced at every
+    /// page; a message not in it (a retry after a restart) is found with
+    /// UID SEARCH X-GM-MSGID.
+    private var gmailLocations: [UInt64: (mailbox: String, validity: UInt32, uid: UInt32)] = [:]
 
     private var idle: [IMAPSession] = []
     private var open = 0
@@ -367,7 +406,7 @@ public actor IMAPAdapter: MailProviderAdapter {
                                       "\\JUNK": "\\Junk", "\\SENT": "\\Sent", "\\TRASH": "\\Trash"]
 
     public func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {
-        let (listed, personal) = try await withSession(context) { s -> ([IMAPListedMailbox], IMAPNamespace?) in
+        let (listed, personal, gmail) = try await withSession(context) { s -> ([IMAPListedMailbox], IMAPNamespace?, Bool) in
             var all = try await s.list()
             if self.configuration.includeSharedNamespaces {
                 for ns in await s.otherNamespaces where !ns.prefix.isEmpty {
@@ -376,10 +415,13 @@ public actor IMAPAdapter: MailProviderAdapter {
                     all += try await s.list(pattern: pattern)
                 }
             }
-            return (all, await s.personalNamespace)
+            return (all, await s.personalNamespace, await s.hasGmailExtensions)
         }
         var out: [RemoteFolderOccurrence] = []
         var seen = Set<String>()
+        var labels: [String: RemoteFolderOccurrence] = [:]
+        var allMail: String?
+        var skipped = Set<String>()
         for m in listed where seen.insert(m.name.name).inserted {
             let special = m.name.name == "INBOX" ? "INBOX"
                 : Self.specialUses.first(where: { m.attributes.contains($0.key) })?.value
@@ -387,8 +429,56 @@ public actor IMAPAdapter: MailProviderAdapter {
                                              kind: .folder, specialUse: special)
             folders[m.name.name] = FolderInfo(wire: m.name.wire, occurrence: occ, selectable: m.isSelectable)
             out.append(occ)
+            if gmail, m.isSelectable {
+                if let label = Self.gmailLabel(forFolder: m) { labels[label.lowercased()] = occ }
+                if m.attributes.contains("\\ALL") { allMail = m.name.name }
+                if m.attributes.contains("\\JUNK") || m.attributes.contains("\\TRASH") { skipped.insert(m.name.name) }
+            }
+        }
+        isGmail = gmail
+        gmailLabelFolders = labels
+        gmailAllMail = allMail
+        gmailSkipped = skipped
+        if let allMail, let i = out.firstIndex(where: { $0.serverID == allMail }) {
+            // Read from All Mail first: every other folder's messages are then
+            // already preserved and only gain a membership.
+            out.insert(out.remove(at: i), at: 0)
         }
         return FolderPage(folders: out, nextPageToken: nil)
+    }
+
+    // MARK: Gmail labels (V4-16)
+
+    /// The X-GM-LABELS name of the label a Gmail folder shows (nil for All Mail).
+    static func gmailLabel(forFolder m: IMAPListedMailbox) -> String? {
+        if m.name.name == "INBOX" { return "\\Inbox" }
+        let system = ["\\SENT": "\\Sent", "\\DRAFTS": "\\Draft", "\\TRASH": "\\Trash", "\\JUNK": "\\Spam",
+                      "\\FLAGGED": "\\Starred", "\\IMPORTANT": "\\Important"]
+        if let s = system.first(where: { m.attributes.contains($0.key) }) { return s.value }
+        if m.attributes.contains("\\ALL") { return nil }
+        return m.name.name
+    }
+
+    /// Spam and Trash on Gmail: captured only when the person selects them.
+    public func foldersSkippedByDefault() async -> Set<String> { isGmail ? gmailSkipped : [] }
+
+    /// The folders a Gmail message's labels name. A user label with no listed
+    /// folder (hidden from IMAP) is still a membership; a system label with
+    /// no folder (e.g. \Important hidden) is not.
+    private func gmailOccurrences(_ labels: [String]) -> [RemoteFolderOccurrence] {
+        var out: [RemoteFolderOccurrence] = []
+        for label in labels {
+            if let occ = gmailLabelFolders[label.lowercased()] {
+                if !out.contains(where: { $0.serverID == occ.serverID }) { out.append(occ) }
+            } else if !label.hasPrefix("\\"), !out.contains(where: { $0.serverID == label }) {
+                out.append(RemoteFolderOccurrence(serverID: label, displayPath: label, kind: .label))
+            }
+        }
+        return out
+    }
+
+    private static func gmailRef(_ id: UInt64, _ occ: RemoteFolderOccurrence, _ size: Int64?) -> RemoteItemRef {
+        RemoteItemRef(identity: .gmailIMAP(messageID: id), folder: occ, sizeHint: size)
     }
 
     private func info(_ serverID: String, utf8: Bool) -> FolderInfo {
@@ -430,6 +520,8 @@ public actor IMAPAdapter: MailProviderAdapter {
             var after = c?.after ?? 0
             var window = max(UInt32(clamping: pageSize), c?.window ?? 0)
             let occ = self.occurrence(folder.serverID, uidValidity: status.uidValidity)
+            let gmail = await s.hasGmailExtensions
+            if gmail { self.gmailLocations = [:] }      // only this page's messages
             guard status.exists > 0 else { return EnumerationPage(items: [], nextCursor: nil) }
             let top: UInt32? = status.uidNext.map { $0 > 0 ? $0 - 1 : 0 }
             var items: [RemoteItemRef] = []
@@ -438,20 +530,23 @@ public actor IMAPAdapter: MailProviderAdapter {
                 let lo = after + 1
                 let hi: UInt32? = top.map { UInt32(min(UInt64($0), UInt64(lo) + UInt64(window) - 1)) }
                 let set = hi.map { "\(lo):\($0)" } ?? "\(lo):*"
-                let found = try await s.uidSizes(set)
+                let listed: [IMAPGmailListing] = gmail
+                    ? try await s.gmailListing(set)
+                    : try await s.uidSizes(set).map { IMAPGmailListing(uid: $0.uid, size: $0.size, messageID: nil) }
+                let found = listed
                     .filter { $0.uid >= lo && (hi == nil || $0.uid <= hi!) }
                     .sorted { $0.uid < $1.uid }
                 let room = pageSize - items.count
                 if found.count > room {
                     for f in found.prefix(room) {
-                        items.append(Self.ref(folder.serverID, status.uidValidity, f.uid, occ, f.size))
+                        items.append(self.listedRef(folder.serverID, status.uidValidity, f, occ))
                     }
-                    after = items.last.map { Self.uid($0) } ?? after
+                    after = found[room - 1].uid
                     let next = IMAPEnumerationCursor(uidValidity: status.uidValidity, after: after,
                                                      window: found.count > 2 * pageSize ? max(UInt32(clamping: pageSize), window / 2) : window)
                     return EnumerationPage(items: items, nextCursor: next.encoded)
                 }
-                for f in found { items.append(Self.ref(folder.serverID, status.uidValidity, f.uid, occ, f.size)) }
+                for f in found { items.append(self.listedRef(folder.serverID, status.uidValidity, f, occ)) }
                 guard let hi else {
                     // No UIDNEXT: "lo:*" returned everything after `lo`.
                     return EnumerationPage(items: items, nextCursor: nil)
@@ -472,14 +567,18 @@ public actor IMAPAdapter: MailProviderAdapter {
         RemoteItemRef(identity: .imap(mailbox: mailbox, uidValidity: validity, uid: uid), folder: occ, sizeHint: size)
     }
 
-    private static func uid(_ ref: RemoteItemRef) -> UInt32 {
-        if case .imap(_, _, let u) = ref.identity { return u }
-        return 0
+    /// The ref of a listed message: its X-GM-MSGID on Gmail (where it was
+    /// listed is remembered for the download), else mailbox + UIDVALIDITY + UID.
+    private func listedRef(_ mailbox: String, _ validity: UInt32, _ f: IMAPGmailListing, _ occ: RemoteFolderOccurrence) -> RemoteItemRef {
+        guard let id = f.messageID, id != 0 else { return Self.ref(mailbox, validity, f.uid, occ, f.size) }
+        gmailLocations[id] = (mailbox, validity, f.uid)
+        return Self.gmailRef(id, occ, f.size)
     }
 
     // MARK: Download
 
     public func fetchRaw(_ item: RemoteItemRef, into sink: RawByteSink, context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+        if case .gmailIMAP(let id) = item.identity { return try await fetchGmail(id, item, into: sink, context: context) }
         guard case .imap(let mailbox, let validity, let uid) = item.identity else {
             throw MailProviderError.permanent("not an IMAP identity")
         }
@@ -513,6 +612,51 @@ public actor IMAPAdapter: MailProviderAdapter {
                                             revision: body.modSeq.map(String.init), flags: body.flags, extra: extra)
             return FetchedItemMetadata(occurrences: [self.occurrence(mailbox, uidValidity: validity)], metadata: metadata,
                                        expectedByteCount: body.byteCount)
+        }
+    }
+
+    /// V4-16: one Gmail message, downloaded once wherever it is: from where
+    /// this page listed it, else found by X-GM-MSGID in All Mail (then in the
+    /// folder the ref names). Its memberships are the folder it was read
+    /// from plus every label X-GM-LABELS names.
+    private func fetchGmail(_ id: UInt64, _ item: RemoteItemRef, into sink: RawByteSink,
+                            context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+        let host = "\(configuration.host):\(configuration.port)"
+        let known = gmailLocations[id]
+        var places: [String] = known.map { [$0.mailbox] } ?? []
+        for p in [gmailAllMail, item.folder?.serverID].compactMap({ $0 }) where !places.contains(p) { places.append(p) }
+        return try await withSession(context) { s in
+            for mailbox in places {
+                let cached = known.flatMap { $0.mailbox == mailbox ? $0 : nil }
+                let status: IMAPMailboxStatus
+                do {
+                    // A search needs the folder's current state; a listed UID
+                    // is valid for as long as UIDVALIDITY is unchanged.
+                    status = try await self.examine(s, mailbox, force: cached == nil)
+                } catch MailProviderError.folderUnavailable { continue }
+                let uid: UInt32?
+                if let cached, cached.validity == status.uidValidity { uid = cached.uid }
+                else { uid = try await s.gmailSearch(messageID: id) }
+                guard let uid, let body = try await s.fetchBody(uid: uid, into: { try sink.write($0) }) else { continue }
+                if let got = body.gmailMessageID, got != id {
+                    throw MailProviderError.permanent("the server sent message \(got) for a request of message \(id)")
+                }
+                let here = self.occurrence(mailbox, uidValidity: status.uidValidity)
+                // Labels first, so the record's main folder is INBOX / Sent /
+                // a label rather than All Mail (which holds every message).
+                var occurrences = self.gmailOccurrences(body.gmailLabels)
+                if !occurrences.contains(where: { $0.serverID == here.serverID }) { occurrences.append(here) }
+                var extra = ["imap.server": host, "imap.mailbox": mailbox, "imap.uidValidity": String(status.uidValidity),
+                             "imap.uid": String(uid), "imap.gmailMessageID": String(id)]
+                if !body.gmailLabels.isEmpty, let json = try? JSONEncoder().encode(body.gmailLabels) {
+                    extra["imap.gmailLabels"] = String(decoding: json, as: UTF8.self)
+                }
+                if let size = item.sizeHint { extra["imap.rfc822Size"] = String(size) }
+                let metadata = ProviderMetadata(representation: .imapLiteral, internalDate: body.internalDate,
+                                                revision: body.modSeq.map(String.init), flags: body.flags, extra: extra)
+                return FetchedItemMetadata(occurrences: occurrences, metadata: metadata, expectedByteCount: body.byteCount)
+            }
+            throw MailProviderError.itemUnavailable
         }
     }
 
@@ -570,18 +714,38 @@ public actor IMAPAdapter: MailProviderAdapter {
             }
 
             let occ = self.occurrence(id, uidValidity: status.uidValidity)
+            let gmail = await s.hasGmailExtensions
             var changes: [RemoteChange] = []
             var next = old
+            var consumed = 0
             for uid in deleted.prefix(pageSize) {
-                changes.append(.deleted(.imap(mailbox: id, uidValidity: status.uidValidity, uid: uid)))
+                // Gmail: a UID leaving a label folder is a label change, not a
+                // deletion of the message (whose identity is its X-GM-MSGID).
+                if !gmail { changes.append(.deleted(.imap(mailbox: id, uidValidity: status.uidValidity, uid: uid))) }
                 next.known.remove(uid)
+                consumed += 1
             }
-            for uid in arrivals.prefix(max(0, pageSize - changes.count)) {
-                let ref = Self.ref(id, status.uidValidity, uid, occ, nil)
-                changes.append(.upserted(ref, occurrences: [occ]))
-                next.known.insert(uid)
+            let page = Array(arrivals.prefix(max(0, pageSize - consumed)))
+            if gmail {
+                self.gmailLocations = [:]
+                let listed = page.isEmpty ? [] : try await s.gmailListing(IMAPUIDSet(page).sequenceSet)
+                let byUID = Dictionary(listed.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
+                for uid in page {
+                    consumed += 1
+                    // Gone again before it could be listed: nothing to capture.
+                    guard let f = byUID[uid] else { continue }
+                    changes.append(.upserted(self.listedRef(id, status.uidValidity, f, occ), occurrences: [occ]))
+                    next.known.insert(uid)
+                }
+            } else {
+                for uid in page {
+                    let ref = Self.ref(id, status.uidValidity, uid, occ, nil)
+                    changes.append(.upserted(ref, occurrences: [occ]))
+                    next.known.insert(uid)
+                    consumed += 1
+                }
             }
-            let hasMore = deleted.count + arrivals.count > changes.count
+            let hasMore = deleted.count + arrivals.count > consumed
             if hasMore {
                 // Progress is carried by the known set; the boundary values
                 // stay old so the "nothing moved" shortcut is not taken early.

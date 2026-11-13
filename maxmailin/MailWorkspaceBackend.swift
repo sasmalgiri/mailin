@@ -199,7 +199,7 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     func addIMAP(_ form: MailIMAPForm) async throws -> UUID {
         if let problem = form.problem { throw MailWorkspaceError(problem) }
         let account = MailOnboarding.newAccount(form)
-        try await runtime.registry.add(account, secret: Data(form.password.utf8), kind: .password)
+        try await runtime.registry.add(account, secret: Data(form.secret.utf8), kind: .password)
         var e = extras.extras(account.id)
         let smtpHost = form.smtpHost.trimmingCharacters(in: .whitespaces).lowercased()
         if !smtpHost.isEmpty, let port = Int(form.smtpPort) {
