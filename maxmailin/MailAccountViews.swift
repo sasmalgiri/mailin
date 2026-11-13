@@ -66,7 +66,11 @@ struct MailAddAccountView: View {
                 }
             }
         }
-        .onAppear { form.apply(choice) }
+        .onAppear {
+            form.apply(choice)
+            // An error from elsewhere on the page is not this sheet's.
+            model.lastError = nil
+        }
     }
 
     private var canAdd: Bool {
@@ -166,9 +170,15 @@ struct MailAccountSettingsView: View {
             Form {
                 Section {
                     MailAccountBadge(account: snapshot.account)
-                    Text(snapshot.headline)
-                        .font(.headline)
-                        .accessibilityIdentifier("mail.account.headline")
+                    HStack(spacing: Spacing.xSmall) {
+                        if snapshot.isRunning {
+                            ProgressView().controlSize(.small)
+                                .accessibilityLabel(Text("Saving mail"))
+                        }
+                        Text(snapshot.headline)
+                            .font(.headline)
+                            .accessibilityIdentifier("mail.account.headline")
+                    }
                     if let reason = snapshot.unavailableReason, snapshot.status == nil, reason != snapshot.headline {
                         Text(reason).font(.callout).foregroundStyle(.secondary)
                     }
@@ -204,7 +214,7 @@ struct MailAccountSettingsView: View {
                     Section {
                         HStack {
                             Button(String(localized: "Sync now")) { Task { await model.syncNow(accountID) } }
-                                .disabled(snapshot.isPaused || model.busy)
+                                .disabled(snapshot.isPaused || model.busy || snapshot.isRunning)
                                 .accessibilityIdentifier("mail.account.syncNow")
                             Button(snapshot.isPaused ? String(localized: "Resume capture") : String(localized: "Pause capture")) {
                                 Task { await model.setPaused(!snapshot.isPaused, account: accountID) }

@@ -35,6 +35,17 @@ protocol ConnectedMailTransports: AnyObject {
     /// The account's server-action executor (nil = not available for it).
     func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
                         permission: @escaping NetworkPermission) throws -> (any RemoteActionExecutor)?
+    /// The mailbox address the provider states for the signed-in account
+    /// (Gmail: users.getProfile). Nil = the provider was not asked or did not
+    /// say (Microsoft Graph states it only with an extra profile permission
+    /// mailin does not request).
+    func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                          policy: MailNetworkPolicy) async -> String?
+}
+
+extension ConnectedMailTransports {
+    func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                          policy: MailNetworkPolicy) async -> String? { nil }
 }
 
 @MainActor
@@ -167,9 +178,12 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         var out: [MailAccountSnapshot] = []
         for account in try await runtime.registry.accounts() {
             let status = try? await runtime.status(of: account.id)
-            out.append(MailAccountSnapshot(account: account, status: status, unavailableReason: runtime.unavailable[account.id],
-                                           isPaused: runtime.paused.contains(account.id),
-                                           lastRunSummary: runtime.lastReports[account.id].map(Self.runSummary)))
+            var snapshot = MailAccountSnapshot(account: account, status: status, unavailableReason: runtime.unavailable[account.id],
+                                               isPaused: runtime.paused.contains(account.id),
+                                               lastRunSummary: runtime.lastReports[account.id].map(Self.runSummary))
+            snapshot.isRunning = runtime.running.contains(account.id)
+            snapshot.nextRetry = runtime.nextRetry[account.id]
+            out.append(snapshot)
         }
         return out
     }
@@ -220,18 +234,25 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
             throw error
         }
         let secret = try result.tokens.encoded()
+        // The sending identity is the address the PROVIDER states, never only
+        // what was typed (a typed-but-unconfirmed address is never `.verified`).
+        let confirmed = await transports.confirmedAddress(choice, accountID: id, tokens: result.tokens, policy: runtime.policy)
+            .flatMap { try? MailAddress(parsing: $0) }
         if let existing {
             var account = try await runtime.registry.account(existing)
             try await runtime.registry.updateSecret(secret, kind: .oauthTokenSet, account: existing)
             account.grantedScopes = result.tokens.scopes
             account.connectionState = .connected
+            if let confirmed { account.displayIdentity = confirmed.addrSpec }
             try await runtime.registry.save(account)
             try? await tokens?.store(result.tokens)
+            if confirmed != nil { extras.confirmPrimaryIdentity(of: account) }
         } else {
+            let typed = address.trimmingCharacters(in: .whitespaces)
             let account = MailOnboarding.newOAuthAccount(id: id, provider: choice.provider, issuer: result.issuer, tenant: result.tenant,
-                                                         address: address, scopes: result.tokens.scopes)
+                                                         address: confirmed?.addrSpec ?? typed, scopes: result.tokens.scopes)
             try await runtime.registry.add(account, secret: secret, kind: .oauthTokenSet)
-            _ = extras.identities(for: account)
+            _ = extras.identities(for: account, addressConfirmed: confirmed != nil)
         }
         try await runtime.reloadAccounts()
         await registerSendRoutes()
@@ -261,6 +282,8 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         try await runtime.registry.save(account)
         try await runtime.reloadAccounts()
         if mode == .send, enabled { await registerSendRoutes() }
+        // Switching Preserve mail on starts saving at once (the page says so).
+        if mode == .capture, enabled { runtime.startCapture(id) }
     }
 
     func syncNow(_ account: UUID) async { await runtime.sync(account) }

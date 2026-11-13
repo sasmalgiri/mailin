@@ -102,6 +102,9 @@ public enum SyncOutcome: Sendable, Equatable {
     case failed(String)
     /// Tests only: a simulated process death — nothing after it ran.
     case aborted
+    /// A run of this account was already under way: nothing was started and
+    /// nothing failed (the running one goes on and reports for itself).
+    case alreadyRunning
 
     public var isCompletion: Bool {
         switch self {
@@ -128,6 +131,11 @@ public struct SyncRunReport: Sendable {
     /// V4-12: set when the run paused because the archive's drive is gone —
     /// the drive the user must reconnect (never a fallback archive elsewhere).
     public var missingDrive: ArchiveDriveIdentity? = nil
+    /// When the run stopped for a reason that passes by itself (the provider's
+    /// throttling or quota, a server that kept failing transiently): how many
+    /// seconds to wait before the account is tried again on its own. Nil = do
+    /// not retry automatically (finished, cancelled, sign-in, disk, policy…).
+    public var suggestedRetry: TimeInterval? = nil
 }
 
 /// Where engine-level kill tests interrupt a run.
@@ -148,6 +156,8 @@ public actor SyncEngine {
     let storage: StorageProbe
 
     public private(set) var state: AccountSyncState = .idle
+    /// True while a sync or selective capture of this account runs.
+    public var isRunning: Bool { running }
     /// V4-12: the drive named by the last `.driveUnavailable` pause.
     public private(set) var missingDrive: ArchiveDriveIdentity?
     private var running = false
@@ -212,7 +222,7 @@ public actor SyncEngine {
     public func sync(_ selection: SyncSelection = .allFolders) async -> SyncRunReport {
         let started = Date()
         guard !running else {
-            return SyncRunReport(runID: nil, outcome: .failed("A capture of this account is already running."), receipt: nil,
+            return SyncRunReport(runID: nil, outcome: .alreadyRunning, receipt: nil,
                                  startedAt: started, endedAt: Date(), reconciledTo: nil, fullEnumeration: false,
                                  selection: selection.description)
         }
@@ -272,7 +282,8 @@ public actor SyncEngine {
             }
             return SyncRunReport(runID: runID, outcome: outcome, receipt: receipt, startedAt: started, endedAt: Date(),
                                  reconciledTo: nil, fullEnumeration: false, selection: selection.description,
-                                 missingDrive: outcome == .paused(.driveUnavailable) ? storage.drive : nil)
+                                 missingDrive: outcome == .paused(.driveUnavailable) ? storage.drive : nil,
+                                 suggestedRetry: retryDelay(after: stop, error: error))
         }
     }
 
@@ -285,7 +296,7 @@ public actor SyncEngine {
             case .reauthorisationRequired, .unauthorized: return .needsSignIn
             case .quotaExceeded(let reset): return .paused(.quotaExceeded(resetAfter: reset))
             case .rateLimited(let after): return .paused(.rateLimited(retryAfter: after))
-            default: return .failed(String(describing: e))
+            default: return .failed(e.localizedDescription)
             }
         }
         if case OAuthError.reauthorisationNeeded = error { return .needsSignIn }
@@ -299,6 +310,18 @@ public actor SyncEngine {
         // (V4-12: re-checked against what the failed write needed).
         if let storageStop = storageStopIfAny(nextBytes: largestWriteNeed) { return storageStop }
         return .failed(error.localizedDescription)
+    }
+
+    /// How long to wait before trying the account again on its own, for the
+    /// stops that pass by themselves; nil for every other stop. The provider's
+    /// own Retry-After / reset time wins; without one, the backoff's longest step.
+    private func retryDelay(after stop: Stop, error: Error) -> TimeInterval? {
+        switch stop {
+        case .paused(.rateLimited(let after)): return max(1, after ?? backoff.maximum)
+        case .paused(.quotaExceeded(let reset)): return max(1, reset ?? max(backoff.maximum, 3_600))
+        case .failed where error is RetriesExhausted: return max(1, backoff.maximum)
+        default: return nil
+        }
     }
 
     private func fault(_ boundary: SyncBoundary) throws {
@@ -918,7 +941,7 @@ extension SyncEngine {
                                  startedAt: started, endedAt: Date(), reconciledTo: nil, fullEnumeration: false, selection: label)
         }
         guard !running else {
-            return SyncRunReport(runID: nil, outcome: .failed("A capture of this account is already running."), receipt: nil,
+            return SyncRunReport(runID: nil, outcome: .alreadyRunning, receipt: nil,
                                  startedAt: started, endedAt: Date(), reconciledTo: nil, fullEnumeration: false, selection: label)
         }
         running = true

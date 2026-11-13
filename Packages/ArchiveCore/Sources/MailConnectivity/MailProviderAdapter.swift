@@ -188,6 +188,24 @@ public enum MailProviderError: Error, Sendable, Equatable {
     case permanent(String)
 }
 
+/// A sentence for people (English reference; the app shows its own
+/// localised wording), never the enum's debug form.
+extension MailProviderError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .rateLimited: return "The mail provider asked mailin to slow down."
+        case .quotaExceeded: return "The mail provider's limit for this account was reached."
+        case .transient(let why): return "The mail server did not answer properly (\(why))."
+        case .unauthorized: return "The mail provider did not accept the account's sign-in."
+        case .reauthorisationRequired: return "This account needs you to sign in again."
+        case .itemUnavailable: return "The message is no longer on the server."
+        case .changeTokenExpired: return "The server's list of changes expired; the mailbox is listed again."
+        case .folderUnavailable(let folder): return "The folder \(folder) is no longer on the server."
+        case .permanent(let why): return why
+        }
+    }
+}
+
 // MARK: - Byte stream
 
 /// Where an adapter streams one message's raw bytes: an owner-only staging
@@ -251,6 +269,15 @@ public protocol MailProviderAdapter: Sendable {
     /// Changes after `token`, one page at a time. `.changeTokenExpired`
     /// triggers a full reconciliation.
     func changes(scope: ChangeScope, since token: String, context: ProviderRequestContext) async throws -> ChangePage
+
+    /// Releases the adapter's network session (the app calls it when it
+    /// replaces or drops the adapter). The adapter is not used afterwards.
+    func close() async
+}
+
+extension MailProviderAdapter {
+    /// Adapters without a session of their own have nothing to release.
+    public func close() async {}
 }
 
 // MARK: - Network policy and credentials

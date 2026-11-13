@@ -212,6 +212,9 @@ public actor GraphAdapter: MailProviderAdapter {
         ProviderLimits(maxConcurrentDownloads: options.maxConcurrentDownloads, pageSize: options.pageSize, changeTracking: .perFolder)
     }
 
+    /// Ends the transport's session (the app drops or replaces this adapter).
+    public func close() async { transport.invalidate() }
+
     /// The folder id Graph reports for a well-known name (after a folder listing).
     public func wellKnownFolderID(_ name: String) -> String? {
         specialUse.first { $0.value == name }?.key

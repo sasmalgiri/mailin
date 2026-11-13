@@ -141,9 +141,19 @@ final class ConnectedMailRuntime {
         /// build cannot change server mail for it). Asked only after the
         /// account's "Change server mail" permission was checked.
         var actionExecutors: ConnectedActionExecutorFactory = { _ in nil }
+        /// How often a running capture tells the page to redraw its counts
+        /// (at most once per interval, only while a capture runs).
+        var progressInterval: TimeInterval = 2
+        /// Waits before an automatic retry (injected so tests do not wait).
+        var retrySleep: @Sendable (TimeInterval) async throws -> Void = { seconds in
+            try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+        }
     }
 
     nonisolated static let didChange = Notification.Name("ConnectedMailRuntime.didChange")
+    /// Posted (throttled to `progressInterval`) while a capture runs, so the
+    /// page can redraw the account's "N saved, M to go" without a full reload.
+    nonisolated static let progress = Notification.Name("ConnectedMailRuntime.progress")
     private static let log = Logger(subsystem: "com.ecosanskriti.mailin", category: "ConnectedMail")
 
     /// The process's runtime; nil while connected mail is off (always nil in the offline build).
@@ -163,6 +173,19 @@ final class ConnectedMailRuntime {
     /// V4-13: accounts whose capture the person paused (modes unchanged;
     /// running capture cancelled; Sync now and automatic runs refused).
     private(set) var paused: Set<UUID> = []
+    /// Accounts with a capture under way right now (Sync now, launch sync,
+    /// automatic retry, selective capture).
+    private(set) var running: Set<UUID> = []
+    /// When an account paused by its provider (throttling, quota) or by a
+    /// server that kept failing is tried again on its own.
+    private(set) var nextRetry: [UUID: Date] = [:]
+    private var retryTasks: [UUID: Task<Void, Never>] = [:]
+    /// One adapter per account, kept while the account's connection settings
+    /// are unchanged (each adapter owns a URLSession; rebuilding it on every
+    /// reload leaked one session per account per reload).
+    private var adapters: [UUID: (fingerprint: String, adapter: any MailProviderAdapter)] = [:]
+    /// Adapters replaced while their account was capturing: closed when that run ends.
+    private var retiredAdapters: [UUID: [any MailProviderAdapter]] = [:]
     private var started = false
 
     init(dependencies: Dependencies) {
@@ -210,11 +233,23 @@ final class ConnectedMailRuntime {
                 continue
             }
             do {
-                let context = ConnectedAdapterContext(account: account, credentials: deps.credentials,
-                                                      tokens: deps.tokens, permission: permission)
-                guard let adapter = try await deps.adapters(context) else {
-                    disable(account.id, reason: String(localized: "This edition has no mail connection code."))
-                    continue
+                let fingerprint = Self.adapterFingerprint(account)
+                let adapter: any MailProviderAdapter
+                let rebuilt: Bool
+                if let cached = adapters[account.id], cached.fingerprint == fingerprint {
+                    adapter = cached.adapter
+                    rebuilt = false
+                } else {
+                    let context = ConnectedAdapterContext(account: account, credentials: deps.credentials,
+                                                          tokens: deps.tokens, permission: permission)
+                    guard let built = try await deps.adapters(context) else {
+                        disable(account.id, reason: String(localized: "This edition has no mail connection code."))
+                        continue
+                    }
+                    if let old = adapters[account.id]?.adapter { retire(old, account: account.id) }
+                    adapters[account.id] = (fingerprint, built)
+                    adapter = built
+                    rebuilt = true
                 }
                 var modes = Self.networkModes(account.enabledModes)
                 let capturing = account.enabledModes.contains(.capture) && !paused.contains(account.id)
@@ -224,7 +259,7 @@ final class ConnectedMailRuntime {
                     mailHosts: Set([adapter.mailHost]).union(deps.extraMailHosts(account)),
                     authorizationHosts: adapter.authorizationHost.map { [$0] } ?? []))
                 if capturing {
-                    if engines[account.id] == nil {
+                    if engines[account.id] == nil || rebuilt {
                         engines[account.id] = SyncEngine(adapter: adapter, sink: sink, scheduler: deps.scheduler,
                                                          tokens: deps.tokens, permission: permission,
                                                          backoff: deps.backoff, storage: deps.storage)
@@ -232,20 +267,23 @@ final class ConnectedMailRuntime {
                     unavailable[account.id] = nil
                 } else {
                     engines[account.id] = nil
+                    cancelRetry(account.id)
                     unavailable[account.id] = paused.contains(account.id)
                         ? String(localized: "Capture paused by you; saved mail remains available.")
                         : String(localized: "Saving mail is switched off for this account.")
                 }
             } catch {
-                disable(account.id, reason: error.localizedDescription)
+                disable(account.id, reason: ConnectedMailErrorText.text(for: error))
             }
         }
-        for id in Array(engines.keys) where !seen.contains(id) { disable(id, reason: nil) }
+        for id in Set(engines.keys).union(adapters.keys) where !seen.contains(id) { disable(id, reason: nil) }
         NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
     private func disable(_ id: UUID, reason: String?) {
         engines[id] = nil
+        cancelRetry(id)
+        if let old = adapters.removeValue(forKey: id)?.adapter { retire(old, account: id) }
         if let reason {
             unavailable[id] = reason
             policy.setAccount(MailAccountNetworkPolicy(id: id))   // off, no modes: cancels its work
@@ -253,6 +291,28 @@ final class ConnectedMailRuntime {
             unavailable[id] = nil
             policy.removeAccount(id)
         }
+    }
+
+    /// What an account's adapter is built from: a change to any of it builds a
+    /// new adapter (and engine); anything else (modes, state, the shown
+    /// address) reuses the existing one.
+    nonisolated static func adapterFingerprint(_ a: MailAccount) -> String {
+        [a.provider.rawValue, a.issuer, a.tenant ?? "", a.host ?? "", a.port.map(String.init) ?? "", a.loginName ?? "",
+         a.grantedScopes.sorted().joined(separator: " ")].joined(separator: "\u{1F}")
+    }
+
+    /// Closes a replaced adapter's session now, or when its account's running capture ends.
+    private func retire(_ adapter: any MailProviderAdapter, account id: UUID) {
+        if running.contains(id) {
+            retiredAdapters[id, default: []].append(adapter)
+        } else {
+            Task { await adapter.close() }
+        }
+    }
+
+    private func closeRetired(_ id: UUID) {
+        guard let old = retiredAdapters.removeValue(forKey: id) else { return }
+        Task { for adapter in old { await adapter.close() } }
     }
 
     /// The account's credential store and token coordinator (the Mail workspace signs in through them).
@@ -265,6 +325,7 @@ final class ConnectedMailRuntime {
     func stopAccount(_ id: UUID) -> Int {
         let had = engines[id] != nil ? 1 : 0
         engines[id] = nil
+        cancelRetry(id)
         policy.setAccount(MailAccountNetworkPolicy(id: id))   // off, no modes: cancels its tasks
         NotificationCenter.default.post(name: Self.didChange, object: self)
         return had
@@ -274,6 +335,9 @@ final class ConnectedMailRuntime {
     func stop() {
         for id in Array(engines.keys) { policy.removeAccount(id) }
         engines.removeAll()
+        for id in Array(retryTasks.keys) { cancelRetry(id) }
+        for (id, entry) in adapters { retire(entry.adapter, account: id) }
+        adapters.removeAll()
         NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
@@ -282,26 +346,111 @@ final class ConnectedMailRuntime {
     /// One capture run of one account, registered with the policy's
     /// cancellation registry. Nil when the account has no engine or the
     /// policy refuses the work (Mail or the account off).
+    /// A second request while the account's capture runs is a no-op (nil):
+    /// the running capture goes on and reports for itself.
     @discardableResult
     func sync(_ id: UUID, selection explicit: SyncSelection? = nil) async -> SyncRunReport? {
-        guard let engine = engines[id], !paused.contains(id) else { return nil }
+        guard let engine = engines[id], !paused.contains(id), !running.contains(id) else { return nil }
+        // Marked before the first suspension, so two requests never both start.
+        running.insert(id)
+        cancelRetry(id)
+        NotificationCenter.default.post(name: Self.didChange, object: self)
         let selection: SyncSelection
         if let explicit { selection = explicit } else { selection = await savedSelection(id) }
         let box = CaptureTaskBox()
-        guard let token = policy.register(accountID: id, label: "capture", cancel: { box.cancel() }) else { return nil }
+        guard let token = policy.register(accountID: id, label: "capture", cancel: { box.cancel() }) else {
+            endRun(id)
+            return nil
+        }
+        let ticker = progressTicker(id)
         let task = Task { await engine.sync(selection) }
         box.set(task)
         let report = await task.value
+        ticker.cancel()
         policy.finish(token)
         await feed.flush()
         await applyCaptureRules()
+        if case .alreadyRunning = report.outcome {
+            endRun(id)
+            return nil
+        }
         lastReports[id] = report
         if case .needsSignIn = report.outcome {
             // A revoked grant: the account says so; its saved mail stays usable.
             try? await registry.setState(.needsReauthorisation, account: id)
         }
+        endRun(id)
+        scheduleRetryIfNeeded(id, after: report)
         NotificationCenter.default.post(name: Self.didChange, object: self)
         return report
+    }
+
+    private func endRun(_ id: UUID) {
+        running.remove(id)
+        closeRetired(id)
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+    }
+
+    /// While a capture runs: a progress notice at most every `progressInterval`.
+    private func progressTicker(_ id: UUID) -> Task<Void, Never> {
+        let nanoseconds = UInt64(max(0.01, deps.progressInterval) * 1_000_000_000)
+        return Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: nanoseconds)
+                guard !Task.isCancelled, let self, self.running.contains(id) else { return }
+                NotificationCenter.default.post(name: Self.progress, object: self, userInfo: ["accountID": id])
+            }
+        }
+    }
+
+    // MARK: Automatic retry
+
+    /// After a stop that passes by itself (provider throttling or quota, a
+    /// server that kept failing), the account is tried again on its own after
+    /// the engine's suggested wait — the provider's Retry-After / reset first.
+    /// Cancelled by Mail off, the account paused, switched off or removed, and
+    /// by a manual Sync now (which runs at once instead).
+    private func scheduleRetryIfNeeded(_ id: UUID, after report: SyncRunReport) {
+        guard let delay = report.suggestedRetry, engines[id] != nil, !paused.contains(id) else { return }
+        cancelRetry(id)
+        nextRetry[id] = Date().addingTimeInterval(delay)
+        let sleep = deps.retrySleep
+        retryTasks[id] = Task { @MainActor [weak self] in
+            do { try await sleep(delay) } catch { return }
+            guard !Task.isCancelled, let self else { return }
+            self.retryTasks[id] = nil
+            self.nextRetry[id] = nil
+            await self.sync(id)
+        }
+    }
+
+    private func cancelRetry(_ id: UUID) {
+        retryTasks.removeValue(forKey: id)?.cancel()
+        nextRetry[id] = nil
+    }
+
+    // MARK: Sign-in lost outside a capture
+
+    /// A send or server action hit a refused refresh (`invalid_grant`): the
+    /// account says "Sign in again", exactly as after a capture would.
+    func accountNeedsSignIn(_ id: UUID) async {
+        guard let account = try? await registry.account(id), account.connectionState == .connected else { return }
+        try? await registry.setState(.needsReauthorisation, account: id)
+        try? await reloadAccounts()
+    }
+
+    /// The token coordinator's `onReauthorisationNeeded`: the coordinator is
+    /// made before the runtime, so it reaches the process's runtime when called.
+    nonisolated static let reauthorisationHandler: @Sendable (UUID) async -> Void = { id in
+        let runtime = await MainActor.run { ConnectedMailRuntime.shared }
+        await runtime?.accountNeedsSignIn(id)
+    }
+
+    /// Starts a capture of the account without waiting for it (Preserve mail
+    /// switched on). Nothing happens when it cannot capture or already runs.
+    func startCapture(_ id: UUID) {
+        guard engines[id] != nil, !paused.contains(id), !running.contains(id) else { return }
+        Task { @MainActor [weak self] in await self?.sync(id) }
     }
 
     /// Every account with an engine, concurrently (fairness is the scheduler's).
@@ -317,7 +466,7 @@ final class ConnectedMailRuntime {
     /// Pauses (or resumes) one account's capture without changing its modes.
     /// Pausing cancels its running capture at once (the policy narrows).
     func setPaused(_ isPaused: Bool, account id: UUID) async throws {
-        if isPaused { paused.insert(id) } else { paused.remove(id) }
+        if isPaused { paused.insert(id); cancelRetry(id) } else { paused.remove(id) }
         try await reloadAccounts()
     }
 
@@ -376,19 +525,30 @@ final class ConnectedMailRuntime {
     /// captured records are indexed and handed to the capture rules.
     func captureListed(_ listing: SelectiveCaptureListing) async -> SyncRunReport? {
         let id = listing.accountID
-        guard let engine = engines[id] else { return nil }
+        guard let engine = engines[id], !running.contains(id) else { return nil }
+        running.insert(id)
         let box = CaptureTaskBox()
-        guard let token = policy.register(accountID: id, label: "selective capture", cancel: { box.cancel() }) else { return nil }
+        guard let token = policy.register(accountID: id, label: "selective capture", cancel: { box.cancel() }) else {
+            endRun(id)
+            return nil
+        }
+        let ticker = progressTicker(id)
         let task = Task { await engine.captureListed(listing) }
         box.set(task)
         let report = await task.value
+        ticker.cancel()
         policy.finish(token)
         await feed.flush()
         await applyCaptureRules()
+        if case .alreadyRunning = report.outcome {
+            endRun(id)
+            return nil
+        }
         lastReports[id] = report
         if case .needsSignIn = report.outcome {
             try? await registry.setState(.needsReauthorisation, account: id)
         }
+        endRun(id)
         NotificationCenter.default.post(name: Self.didChange, object: self)
         return report
     }
@@ -446,6 +606,7 @@ final class ConnectedMailRuntime {
     func removeAccount(_ id: UUID) async throws {
         policy.removeAccount(id)
         engines[id] = nil
+        cancelRetry(id)
         try await registry.remove(id)
         try await reloadAccounts()
     }
@@ -583,8 +744,11 @@ enum ConnectedMailProduction {
     @MainActor
     static func dependencies() -> ConnectedMailRuntime.Dependencies {
         let credentials = KeychainCredentialStore()
+        // A refused refresh during a send or server action marks the account
+        // "Sign in again", as a refused refresh during capture does.
         let tokens = TokenRefreshCoordinator(credentials: credentials,
-                                             transport: PolicyCheckedTokenTransport(policy: .shared))
+                                             transport: PolicyCheckedTokenTransport(policy: .shared),
+                                             onReauthorisationNeeded: ConnectedMailRuntime.reauthorisationHandler)
         return ConnectedMailRuntime.Dependencies(
             store: .shared, fts: .shared, policy: .shared, credentials: credentials, tokens: tokens,
             adapters: { context in try await adapter(context) },

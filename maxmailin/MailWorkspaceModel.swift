@@ -471,8 +471,26 @@ struct MailReconsentRequest: Equatable, Identifiable {
     var mode: MailAccount.Mode?
     var id: String { accountID.uuidString + scope }
 
+    /// Says which mode needs which permission, and what "Not now" does.
     var text: String {
-        String(localized: "This account's sign-in does not yet allow this. Sign in again and allow mailin the extra permission; nothing changes until you do.")
+        switch mode {
+        case .send?:
+            return String(localized: "Send mail needs one more permission: to send email on your behalf. Sign in again and allow it. If you choose Not now, Send mail is switched off again.")
+        case .serverActions?:
+            return String(localized: "Change server mail needs one more permission: to read, label and move your email. Sign in again and allow it. If you choose Not now, Change server mail is switched off again.")
+        case .capture?, nil:
+            return String(localized: "This account's sign-in does not yet allow this. Sign in again and allow mailin the extra permission; nothing changes until you do.")
+        }
+    }
+
+    /// True when the account's granted scopes contain the requested one
+    /// (Graph answers with resource-qualified names, e.g. …/Mail.Send).
+    static func granted(_ scope: String, in scopes: [String]) -> Bool {
+        let wanted = scope.lowercased()
+        return scopes.contains { granted in
+            let g = granted.lowercased()
+            return g == wanted || g.hasSuffix("/" + wanted) || wanted.hasSuffix("/" + g)
+        }
     }
 }
 
@@ -485,6 +503,9 @@ enum MailComposeGate {
         case noRecipients
         case sendingOff
         case attachmentUnavailable(String)
+        /// The account has identities, but the provider never confirmed any
+        /// of them: mailin does not send from a typed-only address.
+        case addressUnconfirmed
     }
 
     /// Why the draft cannot be queued yet (empty = it can).
@@ -492,7 +513,10 @@ enum MailComposeGate {
                          unavailableAttachments: [String]) -> [Problem] {
         var out: [Problem] = []
         if account?.enabledModes.contains(.send) != true { out.append(.sendingOff) }
-        if let chosen = draft.senderIdentityID {
+        let own = identities.filter { $0.accountID == draft.accountID }
+        if !own.isEmpty, !own.contains(where: { $0.permission == .verified }) {
+            out.append(.addressUnconfirmed)
+        } else if let chosen = draft.senderIdentityID {
             if !identities.contains(where: { $0.id == chosen && $0.accountID == draft.accountID && $0.permission == .verified }) {
                 out.append(.identityNotOfAccount)
             }
@@ -511,6 +535,8 @@ enum MailComposeGate {
         case .noRecipients: return String(localized: "Add at least one recipient.")
         case .sendingOff: return String(localized: "Sending is not turned on for this account. Turn on Send mail in the account's settings.")
         case .attachmentUnavailable(let name): return String(localized: "The attachment “\(name)” is not available. Remove it or attach it again.")
+        case .addressUnconfirmed:
+            return String(localized: "The provider has not confirmed this account's email address, so mailin does not send from it.")
         }
     }
 
@@ -555,13 +581,30 @@ struct MailAccountExtrasStore: @unchecked Sendable {
     func remove(_ id: UUID) { defaults.removeObject(forKey: key(id)) }
 
     /// The account's identities; the primary one is created once with a stable id.
-    func identities(for account: MailAccount) -> [SendingIdentity] {
+    /// `addressConfirmed` false (an OAuth address the provider did not state)
+    /// keeps the primary identity `.unverified`: mailin does not send from it.
+    func identities(for account: MailAccount, addressConfirmed: Bool = true) -> [SendingIdentity] {
         var e = extras(account.id)
-        if e.identities.isEmpty, let primary = try? SendingIdentity.primary(for: account) {
+        if e.identities.isEmpty, var primary = try? SendingIdentity.primary(for: account) {
+            if !addressConfirmed { primary.permission = .unverified }
             e.identities = [primary]
             save(e, for: account.id)
         }
         return e.identities
+    }
+
+    /// After the provider stated the account's address (a later sign-in): the
+    /// primary identity becomes that address, verified, keeping its id.
+    func confirmPrimaryIdentity(of account: MailAccount) {
+        guard let address = try? MailAddress(parsing: account.displayIdentity) else { return }
+        var e = extras(account.id)
+        if e.identities.isEmpty {
+            e.identities = [SendingIdentity(accountID: account.id, address: address, permission: .verified)]
+        } else {
+            e.identities[0].address = address
+            e.identities[0].permission = .verified
+        }
+        save(e, for: account.id)
     }
 }
 
@@ -624,12 +667,26 @@ struct MailAccountSnapshot: Identifiable, Equatable {
     var unavailableReason: String?
     var isPaused: Bool
     var lastRunSummary: String?
+    /// A capture of the account is under way right now.
+    var isRunning = false
+    /// When a paused capture (provider throttling or quota) is tried again by itself.
+    var nextRetry: Date? = nil
     var id: UUID { account.id }
+
+    /// "Tries again by itself at 14:05", while an automatic retry is scheduled.
+    var retryText: String? {
+        guard let nextRetry, !isRunning else { return nil }
+        let when = nextRetry.formatted(date: .omitted, time: .shortened)
+        return String(localized: "mailin tries again by itself at \(when).")
+    }
 
     var headline: String {
         if account.connectionState == .needsReauthorisation { return String(localized: "Account needs sign-in; saved mail remains available") }
         if account.connectionState == .removed { return String(localized: "Removed; its saved mail stays in the archive") }
-        if let status { return MailStatusText.headline(status) }
+        if let status {
+            let line = MailStatusText.headline(status)
+            return retryText.map { line + " " + $0 } ?? line
+        }
         return unavailableReason ?? String(localized: "Not saving mail")
     }
 }
@@ -782,6 +839,9 @@ final class MailWorkspaceModel {
     var lastError: String?
     var busy = false
 
+    /// Some account is saving mail right now (Sync now, the launch sync, an automatic retry).
+    var anyRunning: Bool { accounts.contains(where: \.isRunning) }
+
     init(backend: MailWorkspaceBackend) {
         self.backend = backend
     }
@@ -811,15 +871,23 @@ final class MailWorkspaceModel {
 
     // MARK: Loading
 
+    /// Reloads accounts, mailbox, drafts and outbox. A reload never clears
+    /// an error an action just showed (it only reports its own failure).
     func refresh() async {
         guard availability == .ready else { accounts = []; rows = []; return }
-        await run {
-            self.accounts = try await self.backend.accounts().filter { $0.account.connectionState != .removed }
-            for a in self.accounts { self.folders[a.id] = try await self.backend.folders(a.id) }
-        }
+        await refreshAccounts()
         await reloadMailbox()
         await reloadDrafts()
         await reloadOutbox()
+    }
+
+    /// Accounts and their folders only — what a running capture's progress changes.
+    func refreshAccounts() async {
+        guard availability == .ready else { accounts = []; return }
+        await run(clearsError: false) {
+            self.accounts = try await self.backend.accounts().filter { $0.account.connectionState != .removed }
+            for a in self.accounts { self.folders[a.id] = try await self.backend.folders(a.id) }
+        }
     }
 
     var currentQuery: ConnectedMailboxQuery {
@@ -834,7 +902,7 @@ final class MailWorkspaceModel {
 
     func reloadMailbox() async {
         guard availability == .ready else { return }
-        await run {
+        await run(clearsError: false) {
             let page = try await self.backend.mailbox(self.currentQuery, after: nil)
             self.rows = page.rows; self.total = page.total; self.nextCursor = page.next
         }
@@ -843,7 +911,7 @@ final class MailWorkspaceModel {
     /// The next page, on request ("Show more"): no hidden cap.
     func loadMore() async {
         guard let cursor = nextCursor else { return }
-        await run {
+        await run(clearsError: false) {
             let page = try await self.backend.mailbox(self.currentQuery, after: cursor)
             self.rows += page.rows; self.total = page.total; self.nextCursor = page.next
         }
@@ -860,7 +928,7 @@ final class MailWorkspaceModel {
     }
 
     func reloadOutbox() async {
-        await run {
+        await run(clearsError: false) {
             self.outbox = try await self.backend.outbox().sorted { $0.createdAt > $1.createdAt }
         }
         holds = await backend.outboxHolds()
@@ -874,6 +942,8 @@ final class MailWorkspaceModel {
             self.accounts = try await self.backend.accounts().filter { $0.account.connectionState != .removed }
             if enabled, let a = self.account(account)?.account, let scope = MailScopeNeeds.missing(mode, account: a) {
                 self.pendingReconsent = MailReconsentRequest(accountID: account, scope: scope, mode: mode)
+            } else if mode == .capture, enabled {
+                self.message = String(localized: "Preserve mail is on. Saving has started; the account shows its progress.")
             }
         }
     }
@@ -898,7 +968,18 @@ final class MailWorkspaceModel {
         var ok = false
         await run {
             let id = try await self.backend.signIn(choice, address: address, existing: nil, extraScopes: [])
-            self.message = String(localized: "Account added. Nothing is downloaded until you turn on Preserve mail.")
+            var note = String(localized: "Account added. Nothing is downloaded until you turn on Preserve mail.")
+            let typed = address.trimmingCharacters(in: .whitespaces)
+            if let added = try await self.backend.accounts().first(where: { $0.id == id })?.account {
+                if added.displayIdentity.lowercased() != typed.lowercased() {
+                    note += " " + String(localized: "The provider says this account's address is \(added.displayIdentity), so mailin uses that instead of \(typed).")
+                }
+                let identities = await self.backend.identities(id)
+                if !identities.isEmpty, !identities.contains(where: { $0.permission == .verified }) {
+                    note += " " + String(localized: "The provider did not confirm this account's address, so mailin will not send from it.")
+                }
+            }
+            self.message = note
             self.section = .account(id)
             ok = true
         }
@@ -906,8 +987,11 @@ final class MailWorkspaceModel {
         return ok
     }
 
+    /// An account whose capture already runs is left to it (no second run,
+    /// no "did not start" report).
     func syncNow(_ account: UUID? = nil) async {
-        let ids = account.map { [$0] } ?? accounts.filter { $0.account.enabledModes.contains(.capture) }.map(\.id)
+        let ids = (account.map { [$0] } ?? accounts.filter { $0.account.enabledModes.contains(.capture) }.map(\.id))
+            .filter { id in self.account(id)?.isRunning != true }
         busy = true
         for id in ids { await backend.syncNow(id) }
         busy = false
@@ -983,15 +1067,51 @@ final class MailWorkspaceModel {
         return scope
     }
 
-    func reconsent(_ account: UUID, scope: String) async {
+    /// Signs in again asking for `scope`. Says "with the extra permission"
+    /// only when the provider's answer really contains it; otherwise the mode
+    /// that needed it is switched off again and the page says so. Its error
+    /// stays on screen (the reload after it does not clear it).
+    func reconsent(_ account: UUID, scope: String, mode: MailAccount.Mode? = nil) async {
         guard let snapshot = self.account(account) else { return }
         let choice: MailProviderChoice = snapshot.account.provider == .gmail ? .gmail : .outlook
+        pendingReconsent = nil
+        var signedIn = false
         await run {
             _ = try await self.backend.signIn(choice, address: snapshot.account.displayIdentity, existing: account, extraScopes: [scope])
-            self.message = String(localized: "Signed in again with the extra permission.")
-            self.pendingReconsent = nil
+            signedIn = true
+        }
+        let after = try? await backend.accounts().first(where: { $0.id == account })?.account
+        let granted = signedIn && after.map { MailReconsentRequest.granted(scope, in: $0.grantedScopes) } == true
+        if granted {
+            message = mode == nil
+                ? String(localized: "Signed in again.")
+                : String(localized: "Signed in again with the extra permission.")
+        } else if let mode, mode != .capture {
+            await switchOff(mode, account: account)
+            let staysOff = String(localized: "The extra permission was not granted, so \(MailModeText.title(mode)) stays off.")
+            lastError = signedIn ? staysOff : [lastError, staysOff].compactMap { $0 }.joined(separator: " ")
+        } else if signedIn {
+            lastError = String(localized: "The provider did not grant the permission that was asked for.")
         }
         await refresh()
+    }
+
+    /// "Not now" on the extra-permission question: the mode that needed it
+    /// is switched off again, so no account says "Send mail" while it cannot send.
+    func declineReconsent(_ asked: MailReconsentRequest? = nil) async {
+        guard let request = asked ?? pendingReconsent else { return }
+        pendingReconsent = nil
+        guard let mode = request.mode, mode != .capture else { return }
+        await switchOff(mode, account: request.accountID)
+        message = String(localized: "\(MailModeText.title(mode)) stays off until you allow the extra permission.")
+        await refreshAccounts()
+    }
+
+    private func switchOff(_ mode: MailAccount.Mode, account: UUID) async {
+        guard self.account(account)?.account.enabledModes.contains(mode) == true else { return }
+        do { try await backend.setMode(mode, enabled: false, account: account) } catch {
+            lastError = ConnectedMailErrorText.text(for: error)
+        }
     }
 
     // MARK: Outbox
@@ -1003,12 +1123,14 @@ final class MailWorkspaceModel {
 
     // MARK: Helpers
 
-    func run(_ body: @MainActor () async throws -> Void) async {
+    /// Runs one step; a failure shows as a plain sentence (never a raw error).
+    /// `clearsError` false for reloads: they never wipe an action's error.
+    func run(clearsError: Bool = true, _ body: @MainActor () async throws -> Void) async {
         do {
             try await body()
-            lastError = nil
+            if clearsError { lastError = nil }
         } catch {
-            lastError = error.localizedDescription
+            lastError = ConnectedMailErrorText.text(for: error)
         }
     }
 }

@@ -715,6 +715,38 @@ final class GmailAdapterTests: XCTestCase {
     }
 }
 
+// MARK: - Release audit 2026-11-13: the provider-confirmed address, closing
+
+extension GmailAdapterTests {
+    /// After sign-in the account is named by Gmail's own answer
+    /// (users.getProfile emailAddress), asked through the network policy.
+    func testAudit_profileAddress_isGmailsAnswer_andAsksThePolicy() async throws {
+        let sim = GmailAPISimulator()
+        let asks = Box<[NetworkAsk]>([])
+        let adapter = makeAdapter(sim, asks: asks)
+        let address = try await adapter.profileAddress(context: context())
+        XCTAssertEqual(address, "asha@example.com")
+        XCTAssertEqual(asks.value.count, 1, "the profile read asked the policy first")
+        let refused = makeAdapter(sim, refuse: Box(true))
+        do { _ = try await refused.profileAddress(context: context()); XCTFail("a refused policy must send nothing") }
+        catch { XCTAssertTrue(error is GmailAdapterError, "\(error)") }
+    }
+
+    /// Closing the adapter ends its URLSession (a session keeps its delegate
+    /// alive until invalidated, so a replaced adapter would otherwise leak).
+    func testAudit_closeInvalidatesTheURLSessionTransport() async throws {
+        let transport = URLSessionGmailTransport(configuration: .ephemeral)
+        let adapter = GmailAdapter(accountID: UUID(), transport: transport, permission: { _ in })
+        await adapter.close()
+        do {
+            _ = try await transport.send(GmailHTTPRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/profile")!))
+            XCTFail("a closed transport must not send")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .cancelled)
+        }
+    }
+}
+
 // MARK: - URLProtocol stub for the URLSession transport
 
 final class GmailStubURLProtocol: URLProtocol {

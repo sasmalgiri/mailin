@@ -293,7 +293,7 @@ struct MailComposeSheet: View {
             draft = try await model.backend.saveDraft(d)
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = ConnectedMailErrorText.text(for: error)
         }
         await model.reloadDrafts()
     }
@@ -302,7 +302,7 @@ struct MailComposeSheet: View {
         await saveNow()
         for url in urls {
             guard let d = draft else { return }
-            do { draft = try await model.backend.addAttachment(url, to: d) } catch { self.error = error.localizedDescription }
+            do { draft = try await model.backend.addAttachment(url, to: d) } catch { self.error = ConnectedMailErrorText.text(for: error) }
         }
         await checkAttachments()
     }
@@ -320,7 +320,7 @@ struct MailComposeSheet: View {
             model.section = .outbox
             dismiss()
         } catch {
-            self.error = error.localizedDescription
+            self.error = ConnectedMailErrorText.text(for: error)
         }
     }
 }
@@ -376,7 +376,7 @@ struct MailReplySetupView: View {
             }
             .task {
                 if sendAccounts.count == 1 { accountID = sendAccounts[0].id }
-                do { source = try await model.backend.archivedSource(emailID) } catch { self.error = error.localizedDescription }
+                do { source = try await model.backend.archivedSource(emailID) } catch { self.error = ConnectedMailErrorText.text(for: error) }
             }
         }
     }
@@ -412,7 +412,7 @@ struct MailReplySetupView: View {
             await model.reloadDrafts()
             openDraft = draft.id
         } catch {
-            self.error = error.localizedDescription
+            self.error = ConnectedMailErrorText.text(for: error)
         }
     }
 }

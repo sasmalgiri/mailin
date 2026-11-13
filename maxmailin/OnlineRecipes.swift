@@ -260,7 +260,7 @@ final class OnlineRecipeEngine {
         case .completedWithFailures: outcome = .partial
         case .cancelled: outcome = .cancelled
         case .paused, .needsSignIn, .notPermitted: outcome = .partial
-        case .failed, .aborted: outcome = .failed
+        case .failed, .aborted, .alreadyRunning: outcome = .failed
         }
         var facts = RecipeResultFacts(
             report: RecipeJobReport(kind: .importArchive, outcome: outcome,
@@ -455,6 +455,7 @@ final class OnlineRecipeEngine {
         case .cancelled: return "cancelled"
         case .failed(let why): return "failed: \(why)"
         case .aborted: return "stopped"
+        case .alreadyRunning: return "not started: a capture of this account was already running"
         }
     }
 

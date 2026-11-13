@@ -63,6 +63,12 @@ public protocol GraphHTTPTransport: Sendable {
     /// Sends one request. MUST NOT follow redirects (return the 3xx as is)
     /// and MUST NOT add credentials of its own.
     func send(_ request: GraphHTTPRequest) async throws -> GraphHTTPResponse
+    /// Ends the transport's session; nothing is sent afterwards.
+    func invalidate()
+}
+
+extension GraphHTTPTransport {
+    public func invalidate() {}
 }
 
 // MARK: - URLSession
@@ -94,8 +100,15 @@ public final class URLSessionGraphTransport: NSObject, GraphHTTPTransport, URLSe
 
     deinit { session?.invalidateAndCancel() }
 
+    /// Ends the session. A URLSession keeps its delegate (this object) until
+    /// it is invalidated, so without this the transport is never released.
+    public func invalidate() {
+        let ending: URLSession? = lock.withLock { defer { session = nil }; return session }
+        ending?.invalidateAndCancel()
+    }
+
     public func send(_ request: GraphHTTPRequest) async throws -> GraphHTTPResponse {
-        guard let session else { throw MailProviderError.transient("the network session is closed") }
+        guard let session = lock.withLock({ self.session }) else { throw MailProviderError.transient("the network session is closed") }
         var urlRequest = URLRequest(url: request.url)
         urlRequest.httpMethod = request.method
         urlRequest.httpShouldHandleCookies = false

@@ -9460,3 +9460,549 @@ final class MailAddAccountPlacementTests: XCTestCase {
         XCTAssertTrue(source.contains("\"mail.addAccount\""), "the toolbar entry stays")
     }
 }
+
+
+// MARK: - Release audit 2026-11-13: connected mail UX findings
+
+/// A Mail workspace backend for the audit findings: modes, re-consent
+/// answers, identities and Sync now calls, with no network.
+@MainActor
+private final class AuditMailWorkspaceBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var providerInfo: [String: String] = [MailProviderChoice.gmailClientIDKey: "418093572046-k2pq7rnv5x3w9hfsd8a1jc4mty6bzle0.apps.googleusercontent.com"]
+    var snapshots: [MailAccountSnapshot] = []
+    var modeCalls: [String] = []
+    var syncCalls: [UUID] = []
+    var signInError: Error?
+    /// Scopes the provider adds on a re-consent (empty = it granted nothing new).
+    var grantOnSignIn: [String] = []
+    /// The address the provider states for a new account (nil = the typed one).
+    var providerAddress: String?
+    var identityPermission: SendingIdentity.Permission = .verified
+
+    func accounts() async throws -> [MailAccountSnapshot] { snapshots }
+
+    func setMode(_ mode: MailAccount.Mode, enabled: Bool, account: UUID) async throws {
+        modeCalls.append("\(mode.rawValue)=\(enabled)")
+        guard let i = snapshots.firstIndex(where: { $0.id == account }) else { return }
+        if enabled { snapshots[i].account.enabledModes.insert(mode) } else { snapshots[i].account.enabledModes.remove(mode) }
+    }
+
+    func syncNow(_ account: UUID) async { syncCalls.append(account) }
+
+    func signIn(_ choice: MailProviderChoice, address: String, existing: UUID?, extraScopes: [String]) async throws -> UUID {
+        if let signInError { throw signInError }
+        if let existing, let i = snapshots.firstIndex(where: { $0.id == existing }) {
+            snapshots[i].account.grantedScopes += grantOnSignIn
+            return existing
+        }
+        var account = MailOnboarding.newOAuthAccount(id: UUID(), provider: .gmail, issuer: GmailOAuth.issuer, tenant: nil,
+                                                     address: providerAddress ?? address, scopes: [GmailOAuth.readOnlyScope])
+        account.connectionState = .connected
+        snapshots.append(MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil))
+        return account.id
+    }
+
+    func identities(_ account: UUID) async -> [SendingIdentity] {
+        guard let a = snapshots.first(where: { $0.id == account })?.account, var primary = try? SendingIdentity.primary(for: a) else { return [] }
+        primary.permission = identityPermission
+        return [primary]
+    }
+}
+
+/// A one-folder, one-message provider that throttles its first downloads
+/// and counts how often its session was closed.
+actor AuditFlakyProvider: MailProviderAdapter {
+    nonisolated let accountID: UUID
+    nonisolated let provider: MailProviderKind = .gmail
+    nonisolated let mailHost = "mail.fixture.example"
+    nonisolated let authorizationHost: String? = nil
+    nonisolated let tokenAudience: String? = nil
+    private var throttlesLeft: Int
+    private let retryAfter: TimeInterval
+    private(set) var fetches = 0
+    private(set) var closed = 0
+
+    static let bytes = Data(["From: Asha <asha@example.com>", "To: Ravi <ravi@example.org>", "Subject: Audit",
+                             "Date: Mon, 6 Jan 2025 10:00:00 +0530", "Message-ID: <audit-1@fixture.example>", "MIME-Version: 1.0",
+                             "Content-Type: text/plain; charset=utf-8", "", "The audit note.", ""].joined(separator: "\r\n").utf8)
+
+    init(accountID: UUID, throttles: Int = 0, retryAfter: TimeInterval = 30) {
+        self.accountID = accountID; self.throttlesLeft = throttles; self.retryAfter = retryAfter
+    }
+
+    func limits() async -> ProviderLimits { ProviderLimits(maxConcurrentDownloads: 1, pageSize: 10, changeTracking: .none) }
+
+    func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {
+        FolderPage(folders: [RemoteFolderOccurrence(serverID: "INBOX", displayPath: "Inbox", kind: .label)], nextPageToken: nil)
+    }
+
+    func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
+                   context: ProviderRequestContext) async throws -> EnumerationPage {
+        EnumerationPage(items: [RemoteItemRef(identity: .gmail(messageID: "audit-1"), folder: folder)], nextCursor: nil)
+    }
+
+    func fetchRaw(_ item: RemoteItemRef, into sink: RawByteSink, context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+        fetches += 1
+        if throttlesLeft > 0 {
+            throttlesLeft -= 1
+            throw MailProviderError.rateLimited(retryAfter: retryAfter)
+        }
+        try sink.write(Self.bytes)
+        return FetchedItemMetadata(occurrences: [], metadata: ProviderMetadata(representation: .gmailRaw, revision: "1"),
+                                   expectedByteCount: Int64(Self.bytes.count))
+    }
+
+    func changeBoundary(scope: ChangeScope, context: ProviderRequestContext) async throws -> String { "" }
+    func changes(scope: ChangeScope, since token: String, context: ProviderRequestContext) async throws -> ChangePage {
+        ChangePage(changes: [], resume: "", hasMore: false)
+    }
+
+    func close() async { closed += 1 }
+}
+
+/// Things a test collects from @Sendable closures.
+final class AuditBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T
+    init(_ value: T) { stored = value }
+    var value: T { lock.withLock { stored } }
+    func mutate(_ body: (inout T) -> Void) { lock.withLock { body(&stored) } }
+}
+
+/// Sign-in transports that state (or do not state) the mailbox's address.
+@MainActor
+private final class AuditConfirmingTransports: ConnectedMailTransports {
+    var confirmed: String?
+    init(confirmed: String?) { self.confirmed = confirmed }
+    func signIn(_ choice: MailProviderChoice, accountID: UUID, extraScopes: [String], info: [String: String],
+                policy: MailNetworkPolicy) async throws -> (tokens: OAuthTokenSet, issuer: String, tenant: String?) {
+        (OAuthTokenSet(accountID: accountID, issuer: GmailOAuth.issuer, audience: GmailOAuth.audience, accessToken: "a",
+                       refreshToken: "r", expiresAt: Date().addingTimeInterval(3600), scopes: GmailOAuth.captureScopes),
+         GmailOAuth.issuer, nil)
+    }
+    func registerSending(_ account: MailAccount, extras: MailAccountExtras, outbox: Outbox, credentials: any CredentialStore,
+                         tokens: TokenRefreshCoordinator?, permission: @escaping NetworkPermission) async {}
+    func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
+                        permission: @escaping NetworkPermission) throws -> (any RemoteActionExecutor)? { nil }
+    func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                          policy: MailNetworkPolicy) async -> String? { confirmed }
+}
+
+/// The token endpoint refusing the refresh: the grant is gone.
+private struct AuditInvalidGrantTransport: TokenTransport {
+    func postForm(_ url: URL, body: Data) async throws -> (status: Int, body: Data) {
+        (400, Data(#"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#.utf8))
+    }
+}
+
+/// Release audit 2026-11-13 (connected mail): Preserve mail starts a capture;
+/// a long capture shows progress and a second Sync now is a no-op; re-consent
+/// states only what was granted and "Not now" switches the mode off; errors
+/// are sentences; paused captures retry by themselves; a refused refresh
+/// marks the account; the sending identity is the provider's; ⌥⌘D is left to
+/// the Dock; Health names accounts by address; adapters are reused.
+@MainActor
+final class ConnectedMailAuditTests: XCTestCase {
+
+    private struct Env {
+        let root: URL
+        let runtime: ConnectedMailRuntime
+        let credentials: ConnectedFiveJobsCredentials
+    }
+
+    private static let gmailInfo = [MailProviderChoice.gmailClientIDKey: "418093572046-k2pq7rnv5x3w9hfsd8a1jc4mty6bzle0.apps.googleusercontent.com"]
+
+    private func makeEnv(adapters: @escaping ConnectedAdapterFactory, configure: (inout ConnectedMailRuntime.Dependencies) -> Void = { _ in }) -> Env {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AUDIT-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let credentials = ConnectedFiveJobsCredentials()
+        var deps = ConnectedMailRuntime.Dependencies(store: store, fts: fts, policy: policy, credentials: credentials, tokens: nil,
+                                                     adapters: adapters, storage: StorageProbe(reserveBytes: 0))
+        configure(&deps)
+        return Env(root: root, runtime: ConnectedMailRuntime(dependencies: deps), credentials: credentials)
+    }
+
+    private func addAccount(_ env: Env, id: UUID, modes: Set<MailAccount.Mode>) async throws {
+        try await env.runtime.registry.add(MailAccount(id: id, provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                                       grantedScopes: [GmailOAuth.readOnlyScope], enabledModes: modes),
+                                           secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+    }
+
+    private func backend(_ env: Env, transports: ConnectedMailTransports? = nil) throws -> ConnectedMailBackend {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "audit-\(UUID().uuidString)"))
+        return try ConnectedMailBackend(runtime: env.runtime, storeDirectory: env.root.appendingPathComponent("store", isDirectory: true),
+                                        credentials: env.credentials, tokens: nil, transports: transports,
+                                        extras: MailAccountExtrasStore(defaults: defaults), providerInfo: Self.gmailInfo)
+    }
+
+    /// Polls `condition` on the main actor (the runtime's tasks run there).
+    private func waitUntil(_ seconds: Double = 10, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return await condition()
+    }
+
+    private static func plain(_ n: Int) -> Data {
+        Data(["From: Asha <asha@example.com>", "To: Ravi <ravi@example.org>", "Subject: Note \(n)",
+              "Date: Mon, 6 Jan 2025 10:00:00 +0530", "Message-ID: <audit-\(n)@fixture.example>", "MIME-Version: 1.0",
+              "Content-Type: text/plain; charset=utf-8", "", "Body \(n).", ""].joined(separator: "\r\n").utf8)
+    }
+
+    // MARK: 1 — Preserve mail on starts a capture
+
+    func testTurningOnPreserveMailStartsACapture() async throws {
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        for n in 1...3 { await provider.add("m\(n)", bytes: Self.plain(n), folders: ["INBOX"]) }
+        let env = makeEnv(adapters: { _ in provider })
+        try await addAccount(env, id: provider.accountID, modes: [])
+        try await env.runtime.start()
+        XCTAssertNil(env.runtime.lastReports[provider.accountID])
+
+        try await backend(env).setMode(.capture, enabled: true, account: provider.accountID)
+        let ran = await waitUntil { env.runtime.lastReports[provider.accountID] != nil }
+        XCTAssertTrue(ran, "switching Preserve mail on did not start saving")
+        XCTAssertEqual(env.runtime.lastReports[provider.accountID]?.outcome, .completed)
+        let fetches = await provider.fetches
+        XCTAssertEqual(fetches, 3)
+    }
+
+    // MARK: 2 — progress while capturing; Sync now during a run
+
+    func testLongCaptureShowsProgressAndASecondSyncIsANoOp() async throws {
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        for n in 1...4 { await provider.add("m\(n)", bytes: Self.plain(n), folders: ["INBOX"]) }
+        await provider.setFetchDelay(250_000_000)
+        let env = makeEnv(adapters: { _ in provider }, configure: { $0.progressInterval = 0.05 })
+        let id = provider.accountID
+        try await addAccount(env, id: id, modes: [.capture])
+        try await env.runtime.start()
+        let progress = AuditBox(0)
+        let observer = NotificationCenter.default.addObserver(forName: ConnectedMailRuntime.progress, object: env.runtime, queue: nil) { _ in
+            progress.mutate { $0 += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let first = Task { await env.runtime.sync(id) }
+        let started = await waitUntil { env.runtime.running.contains(id) }
+        XCTAssertTrue(started)
+        let snapshot = try await backend(env).accounts().first { $0.id == id }
+        XCTAssertEqual(snapshot?.isRunning, true, "the page can show the account as busy")
+        let second = await env.runtime.sync(id)
+        XCTAssertNil(second, "Sync now during a run starts nothing")
+        let report = await first.value
+        XCTAssertEqual(report?.outcome, .completed)
+        XCTAssertGreaterThanOrEqual(progress.value, 1, "no progress was posted during the run")
+        XCTAssertFalse(env.runtime.running.contains(id))
+        let summary = try XCTUnwrap(env.runtime.lastReports[id].map(ConnectedMailBackend.runSummary))
+        XCTAssertFalse(summary.contains("did not start"), summary)
+
+        // The model never asks for a second run of a busy account.
+        let fake = AuditMailWorkspaceBackend()
+        var busy = MailAccountSnapshot(account: MailAccount(id: id, provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                                            enabledModes: [.capture], connectionState: .connected),
+                                       status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)
+        busy.isRunning = true
+        fake.snapshots = [busy]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        XCTAssertTrue(model.anyRunning)
+        await model.syncNow()
+        await model.syncNow(id)
+        XCTAssertEqual(fake.syncCalls, [])
+    }
+
+    // MARK: 3 — re-consent
+
+    func testReconsentStatesOnlyWhatWasGranted_NotNowSwitchesTheModeOff_errorsStay() async throws {
+        let fake = AuditMailWorkspaceBackend()
+        var account = MailAccount(provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                  grantedScopes: [GmailOAuth.readOnlyScope], enabledModes: [], connectionState: .connected)
+        account.enabledModes = []
+        fake.snapshots = [MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        let id = account.id
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+
+        // (d) the question names the mode and the permission.
+        await model.setMode(.send, enabled: true, account: id)
+        let asked = try XCTUnwrap(model.pendingReconsent)
+        XCTAssertEqual(asked.mode, .send)
+        XCTAssertTrue(asked.text.contains("send email on your behalf"), asked.text)
+        XCTAssertTrue(MailReconsentRequest(accountID: id, scope: ServerActionScopes.gmailModify, mode: .serverActions).text
+            .contains("read, label and move your email"))
+
+        // (c) Not now: Send mail goes back off.
+        await model.declineReconsent(asked)
+        XCTAssertNil(model.pendingReconsent)
+        XCTAssertFalse(model.account(id)?.account.enabledModes.contains(.send) ?? true, "Send mail stayed on without its permission")
+        XCTAssertEqual(fake.modeCalls.last, "send=false")
+
+        // (b) a sign-in that did not grant the scope never says it did.
+        await model.setMode(.send, enabled: true, account: id)
+        let again = try XCTUnwrap(model.pendingReconsent)
+        await model.reconsent(id, scope: again.scope, mode: again.mode)
+        XCTAssertNotEqual(model.message, "Signed in again with the extra permission.")
+        XCTAssertTrue(model.lastError?.contains("stays off") == true, model.lastError ?? "")
+        XCTAssertFalse(model.account(id)?.account.enabledModes.contains(.send) ?? true)
+
+        // (a) the sign-in's own error survives the reload after it.
+        await model.setMode(.send, enabled: true, account: id)
+        fake.signInError = OAuthError.cancelled
+        await model.reconsent(id, scope: MailScopeNeeds.gmailSend, mode: .send)
+        XCTAssertTrue(model.lastError?.contains("Sign-in was cancelled") == true, model.lastError ?? "nil: wiped by the reload")
+        XCTAssertFalse(model.account(id)?.account.enabledModes.contains(.send) ?? true)
+
+        // Granted: then, and only then, the success sentence.
+        fake.signInError = nil
+        fake.grantOnSignIn = [MailScopeNeeds.gmailSend]
+        await model.setMode(.send, enabled: true, account: id)
+        await model.reconsent(id, scope: MailScopeNeeds.gmailSend, mode: .send)
+        XCTAssertEqual(model.message, "Signed in again with the extra permission.")
+        XCTAssertTrue(model.account(id)?.account.enabledModes.contains(.send) == true)
+        XCTAssertTrue(MailReconsentRequest.granted("Mail.Send", in: ["https://graph.microsoft.com/Mail.Send"]))
+        XCTAssertFalse(MailReconsentRequest.granted("Mail.Send", in: ["https://graph.microsoft.com/Mail.Read"]))
+    }
+
+    /// A failed action's error is not wiped by the reload that follows it.
+    func testAnActionErrorSurvivesTheFollowingReload() async {
+        let fake = AuditMailWorkspaceBackend()
+        let model = MailWorkspaceModel(backend: fake)
+        await model.setPaused(true, account: UUID())   // the fake refuses (no pause support)
+        XCTAssertNotNil(model.lastError, "the reload after the action cleared its error")
+    }
+
+    // MARK: 4 — errors are sentences
+
+    func testErrorTextNeverShowsTechnicalDetail() throws {
+        let account = UUID()
+        let errors: [Error] = [
+            OAuthError.cancelled, OAuthError.denied(code: "access_denied", description: "The user denied access"),
+            OAuthError.tokenEndpoint(status: 400, error: "invalid_grant"), OAuthError.tokenEndpoint(status: 429, error: nil),
+            OAuthError.reauthorisationNeeded(account), OAuthError.notRegistered(account), OAuthError.randomGenerationFailed(-50),
+            OAuthError.credentialSaveFailed("The account's sign-in details could not be saved in the Keychain: A required entitlement isn't present. (-34018)."),
+            CredentialStoreError.keychain(operation: "saved", status: errSecMissingEntitlement),
+            CredentialStoreError.keychain(operation: "read", status: errSecInteractionNotAllowed),
+            MailProviderError.permanent("Gmail refused the request (HTTP 403, insufficientPermissions): {\"error\":{}}"),
+            MailProviderError.rateLimited(retryAfter: 30), MailProviderError.quotaExceeded(resetAfter: nil),
+            MailNetworkRefusal.mailOff, MailNetworkRefusal.hostNotAuthorized,
+            URLError(.notConnectedToInternet), URLError(.timedOut), URLError(.cannotFindHost), URLError(.serverCertificateUntrusted),
+            NSError(domain: NSOSStatusErrorDomain, code: -34018), NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet),
+            MailAccountError.unknownAccount(account),
+        ]
+        for error in errors {
+            let text = ConnectedMailErrorText.sentence(for: error)
+            XCTAssertFalse(text.isEmpty)
+            XCTAssertTrue(ConnectedMailErrorText.isPresentable(text), "\(error) → \(text)")
+            for leak in ["-34018", account.uuidString, "HTTP", "invalid_grant", "OSStatus", "{", "rateLimited", "(429"] {
+                XCTAssertFalse(text.contains(leak), "\(error) shows “\(leak)”: \(text)")
+            }
+        }
+        XCTAssertTrue(ConnectedMailErrorText.sentence(for: CredentialStoreError.keychain(operation: "saved", status: errSecMissingEntitlement))
+            .contains("Keychain"))
+        XCTAssertTrue(ConnectedMailErrorText.sentence(for: URLError(.notConnectedToInternet)).contains("offline"))
+        XCTAssertEqual(ConnectedMailErrorText.sentence(for: OAuthError.cancelled), "Sign-in was cancelled. Nothing was changed.")
+        XCTAssertEqual(ConnectedMailErrorText.sentence(for: MailNetworkRefusal.mailOff), MailNetworkRefusal.mailOff.explanation)
+        XCTAssertEqual(MailNetworkRefusal.accountOff.localizedDescription, MailNetworkRefusal.accountOff.explanation,
+                       "a refusal reads as its translated explanation wherever it surfaces")
+        XCTAssertFalse(ConnectedMailErrorText.isPresentable("Account \(account.uuidString) has no sign-in configuration."))
+        XCTAssertTrue(ConnectedMailErrorText.isPresentable("Mail is switched off."))
+    }
+
+    /// The page's error line goes through the presenter.
+    func testModelShowsTheSentenceNotTheRawError() async {
+        let fake = AuditMailWorkspaceBackend()
+        fake.signInError = CredentialStoreError.keychain(operation: "saved", status: errSecMissingEntitlement)
+        let model = MailWorkspaceModel(backend: fake)
+        let ok = await model.signIn(.gmail, address: "asha@example.com")
+        XCTAssertFalse(ok)
+        let error = model.lastError
+        XCTAssertNotNil(error)
+        XCTAssertFalse(error?.contains("-34018") ?? true, error ?? "")
+        XCTAssertFalse(error?.contains("OSStatus") ?? true)
+    }
+
+    // MARK: 5 — automatic retry
+
+    func testRateLimitedCaptureRetriesByItselfAfterTheProvidersWait() async throws {
+        let id = UUID()
+        let provider = AuditFlakyProvider(accountID: id, throttles: 1, retryAfter: 30)
+        let waits = AuditBox<[TimeInterval]>([])
+        let env = makeEnv(adapters: { _ in provider }, configure: {
+            $0.backoff = BackoffPolicy(maximumThrottleWait: 0, jitter: { 0 }, sleep: { _ in })
+            $0.retrySleep = { seconds in waits.mutate { $0.append(seconds) } }
+        })
+        try await addAccount(env, id: id, modes: [.capture])
+        try await env.runtime.start()
+        let first = await env.runtime.sync(id)
+        XCTAssertEqual(first?.outcome, .paused(.rateLimited(retryAfter: 30)))
+        let retried = await waitUntil { env.runtime.lastReports[id]?.outcome == .completed }
+        XCTAssertTrue(retried, "the paused capture did not resume by itself")
+        XCTAssertEqual(waits.value, [30], "the provider's Retry-After was not respected")
+        let fetches = await provider.fetches
+        XCTAssertEqual(fetches, 2)
+        XCTAssertNil(env.runtime.nextRetry[id])
+    }
+
+    func testScheduledRetryIsCancelledWhenTheAccountIsPaused() async throws {
+        let id = UUID()
+        let provider = AuditFlakyProvider(accountID: id, throttles: 1, retryAfter: 30)
+        let env = makeEnv(adapters: { _ in provider }, configure: {
+            $0.backoff = BackoffPolicy(maximumThrottleWait: 0, jitter: { 0 }, sleep: { _ in })
+            $0.retrySleep = { _ in try await Task.sleep(nanoseconds: 2_000_000_000) }
+        })
+        try await addAccount(env, id: id, modes: [.capture])
+        try await env.runtime.start()
+        _ = await env.runtime.sync(id)
+        XCTAssertNotNil(env.runtime.nextRetry[id], "no retry was scheduled after the pause")
+        let snapshot = try await backend(env).accounts().first { $0.id == id }
+        XCTAssertNotNil(snapshot?.retryText, "the page does not say when it tries again")
+        try await env.runtime.setPaused(true, account: id)
+        XCTAssertNil(env.runtime.nextRetry[id])
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        let fetches = await provider.fetches
+        XCTAssertEqual(fetches, 1, "a paused account was retried")
+    }
+
+    // MARK: 6 — a refused refresh outside capture marks the account
+
+    func testRefusedRefreshDuringSendMarksTheAccountNeedsSignIn() async throws {
+        let id = UUID()
+        let env = makeEnv(adapters: { _ in nil })
+        let expired = OAuthTokenSet(accountID: id, issuer: GmailOAuth.issuer, audience: GmailOAuth.audience, accessToken: "old",
+                                    refreshToken: "r", expiresAt: Date().addingTimeInterval(-60), scopes: GmailOAuth.captureScopes)
+        try await env.runtime.registry.add(MailAccount(id: id, provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                                       grantedScopes: GmailOAuth.captureScopes, enabledModes: [.send]),
+                                           secret: try expired.encoded(), kind: .oauthTokenSet)
+        try await env.runtime.start()
+        let runtime = env.runtime
+        let coordinator = TokenRefreshCoordinator(credentials: env.credentials, transport: AuditInvalidGrantTransport(),
+                                                  onReauthorisationNeeded: { account in await runtime.accountNeedsSignIn(account) })
+        await coordinator.register(account: id, configuration: try GmailOAuth.configuration(clientID: Self.gmailInfo[MailProviderChoice.gmailClientIDKey]!))
+        do { _ = try await coordinator.accessToken(for: id, audience: GmailOAuth.audience); XCTFail("the refresh was refused") } catch {}
+        let state = try await env.runtime.registry.account(id).connectionState
+        XCTAssertEqual(state, .needsReauthorisation, "the account does not say Sign in again")
+
+        // Production wires the coordinator to the runtime.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("maxmailin/ConnectedMailRuntime.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("onReauthorisationNeeded: ConnectedMailRuntime.reauthorisationHandler"))
+    }
+
+    // MARK: 7 — the sending identity is the provider's
+
+    func testSignInUsesTheProvidersAddressAndNeverVerifiesATypedOne() async throws {
+        let env = makeEnv(adapters: { _ in nil })
+        try await env.runtime.start()
+        let confirmed = try backend(env, transports: AuditConfirmingTransports(confirmed: "asha.real@example.com"))
+        let id = try await confirmed.signIn(.gmail, address: "asha.typo@example.com", existing: nil, extraScopes: [])
+        let saved = try await env.runtime.registry.account(id)
+        XCTAssertEqual(saved.displayIdentity, "asha.real@example.com", "the typed address was used instead of the provider's")
+        let identities = await confirmed.identities(id)
+        XCTAssertEqual(identities.map(\.address.addrSpec), ["asha.real@example.com"])
+        XCTAssertEqual(identities.map(\.permission), [.verified])
+
+        let unconfirmed = try backend(env, transports: AuditConfirmingTransports(confirmed: nil))
+        let other = try await unconfirmed.signIn(.gmail, address: "ravi@example.com", existing: nil, extraScopes: [])
+        let typedOnly = await unconfirmed.identities(other)
+        XCTAssertEqual(typedOnly.map(\.permission), [.unverified], "a typed-but-unconfirmed address was marked verified")
+        var draft = Draft(accountID: other, to: [try MailAddress(parsing: "bob@example.com")])
+        draft.senderIdentityID = typedOnly.first?.id
+        var account = try await env.runtime.registry.account(other)
+        account.enabledModes = [.send]
+        XCTAssertEqual(MailComposeGate.problems(draft: draft, account: account, identities: typedOnly, unavailableAttachments: []),
+                       [.addressUnconfirmed])
+        XCTAssertFalse(MailComposeGate.text(.addressUnconfirmed).isEmpty)
+
+        // The page says when the provider's address differs, and when it was not confirmed.
+        let fake = AuditMailWorkspaceBackend()
+        fake.providerAddress = "asha.real@example.com"
+        let model = MailWorkspaceModel(backend: fake)
+        let ok = await model.signIn(.gmail, address: "asha.typo@example.com")
+        XCTAssertTrue(ok)
+        XCTAssertTrue(model.message?.contains("asha.real@example.com") == true, model.message ?? "")
+        fake.providerAddress = nil
+        fake.identityPermission = .unverified
+        _ = await model.signIn(.gmail, address: "ravi@example.com")
+        XCTAssertTrue(model.message?.contains("will not send from it") == true, model.message ?? "")
+    }
+
+    // MARK: 8 — no ⌥⌘D
+
+    func testDraftsShortcutLeavesTheDockToggleAlone() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("maxmailin/MailWorkspaceView.swift"), encoding: .utf8)
+        let regex = try NSRegularExpression(pattern: #"keyboardShortcut\("(\w)", modifiers: \[\.command, \.option\]\)"#)
+        let keys = regex.matches(in: source, range: NSRange(source.startIndex..., in: source)).compactMap {
+            Range($0.range(at: 1), in: source).map { String(source[$0]) }
+        }
+        XCTAssertFalse(keys.isEmpty)
+        // macOS's own ⌥⌘ shortcuts: Dock (D), hide others (H), minimise all (M), close all (W).
+        for reserved in ["d", "h", "m", "w"] { XCTAssertFalse(keys.contains(reserved), "⌥⌘\(reserved.uppercased()) is taken by macOS") }
+        XCTAssertEqual(keys.count, Set(keys).count, "two Mail actions share one ⌥⌘ shortcut: \(keys)")
+        XCTAssertTrue(source.contains(#"model.section = .drafts }.keyboardShortcut("e", modifiers: [.command, .option])"#))
+        for kept in ["n", "r", "a", "i", "o", "u", "l", "f"] { XCTAssertTrue(keys.contains(kept), "⌥⌘\(kept.uppercased()) was lost") }
+    }
+
+    // MARK: 9 — Health names accounts by address
+
+    func testHealthLabelsAccountsByAddressNotUUID() throws {
+        let id = UUID()
+        XCTAssertEqual(MailNetworkHealthSection.label(for: id, addresses: [id: "asha@example.com"]), "asha@example.com")
+        let unknown = MailNetworkHealthSection.label(for: id, addresses: [:])
+        XCTAssertFalse(unknown.contains(String(id.uuidString.prefix(8))))
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("maxmailin/MailNetworkHealthSection.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("uuidString.prefix"), "an account is still labelled by its UUID")
+    }
+
+    // MARK: 10 — adapters (and their URLSessions) are reused
+
+    func testReloadReusesTheAdapterAndClosesAReplacedOne() async throws {
+        let id = UUID()
+        let built = AuditBox<[AuditFlakyProvider]>([])
+        let env = makeEnv(adapters: { context in
+            let adapter = AuditFlakyProvider(accountID: context.account.id)
+            built.mutate { $0.append(adapter) }
+            return adapter
+        })
+        try await addAccount(env, id: id, modes: [.capture])
+        try await env.runtime.start()
+        for _ in 0..<3 { try await env.runtime.reloadAccounts() }
+        XCTAssertEqual(built.value.count, 1, "every reload built a new adapter (and URLSession)")
+
+        var account = try await env.runtime.registry.account(id)
+        account.grantedScopes.append(MailScopeNeeds.gmailSend)
+        try await env.runtime.registry.save(account)
+        try await env.runtime.reloadAccounts()
+        XCTAssertEqual(built.value.count, 2, "changed sign-in scopes must build a new adapter")
+        let first = built.value[0]
+        let closedFirst = await waitUntil { await first.closed == 1 }
+        XCTAssertTrue(closedFirst, "the replaced adapter's session was not closed")
+
+        try await env.runtime.removeAccount(id)
+        let second = built.value[1]
+        let closedSecond = await waitUntil { await second.closed == 1 }
+        XCTAssertTrue(closedSecond, "a removed account's adapter session was not closed")
+    }
+
+    // MARK: Add account sheet
+
+    func testAddAccountSheetDoesNotShowAnotherScreensError() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("maxmailin/MailAccountViews.swift"), encoding: .utf8)
+        let sheet = try XCTUnwrap(source.range(of: "struct MailAddAccountView"))
+        let end = try XCTUnwrap(source.range(of: "private var canAdd"))
+        XCTAssertTrue(source[sheet.upperBound..<end.lowerBound].contains("model.lastError = nil"),
+                      "the Add account sheet shows the page's earlier error")
+    }
+}

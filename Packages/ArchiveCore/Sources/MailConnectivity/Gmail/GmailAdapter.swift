@@ -159,6 +159,18 @@ public actor GmailAdapter: MailProviderAdapter {
         return FetchedItemMetadata(occurrences: membership(labelIds).occurrences, metadata: metadata, expectedByteCount: nil)
     }
 
+    /// The mailbox's own address as Gmail states it (users.getProfile
+    /// `emailAddress`), so the account is named by the provider's answer and
+    /// never only by what was typed. Nil when Gmail states none.
+    public func profileAddress(context: ProviderRequestContext) async throws -> String? {
+        let profile: GmailAPI.Profile = try await json(GmailAPI.url("profile"), call: .profile, context: context, operation: .request)
+        let address = profile.emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return address.isEmpty ? nil : address
+    }
+
+    /// Ends the transport's session (the app drops or replaces this adapter).
+    public func close() async { transport.invalidate() }
+
     public func changeBoundary(scope: ChangeScope, context: ProviderRequestContext) async throws -> String {
         guard case .account = scope else { throw MailProviderError.permanent("Gmail history is account-wide.") }
         let profile: GmailAPI.Profile = try await json(GmailAPI.url("profile"), call: .profile, context: context, operation: .request)

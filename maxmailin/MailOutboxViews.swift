@@ -180,7 +180,7 @@ struct MailCleanupView: View {
                     working = true
                     defer { working = false }
                     do { plan = try await model.backend.planCleanup(selection, action: action, account: accountID) } catch {
-                        self.error = error.localizedDescription
+                        self.error = ConnectedMailErrorText.text(for: error)
                     }
                 }
             }
@@ -216,7 +216,7 @@ struct MailCleanupView: View {
                     do {
                         receipt = try await model.backend.runCleanup(plan, confirmation: plan.confirmation())
                         await model.reloadMailbox()
-                    } catch { self.error = error.localizedDescription }
+                    } catch { self.error = ConnectedMailErrorText.text(for: error) }
                 }
             }
             .disabled(!MailCleanupGate.confirms(typed: typed, plan: plan) || working)

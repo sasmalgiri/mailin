@@ -83,6 +83,12 @@ public struct GmailHTTPResponse: Sendable {
 public protocol GmailHTTPTransport: Sendable {
     /// Performs exactly one request; never follows a redirect.
     func send(_ request: GmailHTTPRequest) async throws -> GmailHTTPResponse
+    /// Ends the transport's session; nothing is sent afterwards.
+    func invalidate()
+}
+
+extension GmailHTTPTransport {
+    public func invalidate() {}
 }
 
 // MARK: - URLSession transport (the app's)

@@ -127,7 +127,7 @@ struct OnlineRecipeRunView: View {
 
     private func loadFolders() async {
         guard let runtime, let accountID else { return }
-        do { folders = try await runtime.folderList(accountID) } catch { self.error = error.localizedDescription }
+        do { folders = try await runtime.folderList(accountID) } catch { self.error = ConnectedMailErrorText.text(for: error) }
     }
 
     @ViewBuilder
@@ -191,7 +191,7 @@ struct OnlineRecipeRunView: View {
             preview = try await engine(runtime).previewCapture(account: accountID, filter: filter)
             stage = .preview
         } catch {
-            self.error = error.localizedDescription
+            self.error = ConnectedMailErrorText.text(for: error)
         }
     }
 
@@ -274,7 +274,7 @@ struct OnlineRecipeRunView: View {
                                                captureFailures: OnlineRecipeEngine.captureFailures(outcome))
             stage = .cleanupReview
         } catch {
-            self.error = error.localizedDescription
+            self.error = ConnectedMailErrorText.text(for: error)
         }
     }
 

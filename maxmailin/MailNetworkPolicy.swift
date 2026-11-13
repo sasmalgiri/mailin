@@ -104,7 +104,11 @@ struct MailNetworkRequest: Sendable, Equatable {
     var purpose: MailAccountMode
 }
 
-enum MailNetworkRefusal: String, Error, CaseIterable, Sendable {
+/// A LocalizedError, so wherever a refusal surfaces it reads as its
+/// translated explanation (never "MailNetworkRefusal error 3").
+enum MailNetworkRefusal: String, LocalizedError, CaseIterable, Sendable {
+    var errorDescription: String? { explanation }
+
     case notCompiled
     case mailOff
     case noAccount

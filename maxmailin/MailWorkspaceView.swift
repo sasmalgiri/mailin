@@ -14,8 +14,9 @@ import MailConnectivity
 //  Connected mail off, it offers exactly one control: turning it on.
 //
 //  Keyboard (Mail page only): ⌥⌘N compose · ⌥⌘R sync now · ⌥⌘A add account ·
-//  ⌥⌘I unified inbox · ⌥⌘D drafts · ⌥⌘O outbox · ⌥⌘U unread only ·
+//  ⌥⌘I unified inbox · ⌥⌘E drafts · ⌥⌘O outbox · ⌥⌘U unread only ·
 //  ⌥⌘L flagged only · in a message: ⌘R reply · ⌥⇧⌘R reply all · ⌥⌘F forward.
+//  (Drafts is not ⌥⌘D: macOS uses that to show and hide the Dock.)
 //
 
 import Combine
@@ -39,6 +40,10 @@ struct MailWorkspaceView: View {
         .task { await model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: ConnectedMailRuntime.didChange).receive(on: RunLoop.main)) { _ in
             rebuildIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ConnectedMailRuntime.progress).receive(on: RunLoop.main)) { _ in
+            // A running capture's counts (the runtime posts at most every 2 s).
+            Task { await model.refreshAccounts() }
         }
         .onChange(of: modules.isOn(.connectedMail)) { _, _ in
             // The runtime is created asynchronously after the switch.
@@ -163,11 +168,19 @@ private struct MailWorkspaceReadyView: View {
             Task { await model.reloadMailbox() }
         }
         .alert(String(localized: "Extra permission needed"), isPresented: Binding(
-            get: { model.pendingReconsent != nil }, set: { if !$0 { model.pendingReconsent = nil } })) {
+            get: { model.pendingReconsent != nil },
+            set: { shown in
+                // Cleared after the button's own action has read the request.
+                guard !shown, let asked = model.pendingReconsent else { return }
+                Task { @MainActor in if model.pendingReconsent == asked { model.pendingReconsent = nil } }
+            })) {
             Button(String(localized: "Sign in again")) {
-                if let r = model.pendingReconsent { Task { await model.reconsent(r.accountID, scope: r.scope) } }
+                if let r = model.pendingReconsent { Task { await model.reconsent(r.accountID, scope: r.scope, mode: r.mode) } }
             }
-            Button(String(localized: "Not now"), role: .cancel) { model.pendingReconsent = nil }
+            Button(String(localized: "Not now"), role: .cancel) {
+                // The mode that needed the permission goes back off.
+                if let r = model.pendingReconsent { Task { await model.declineReconsent(r) } }
+            }
         } message: {
             Text(model.pendingReconsent?.text ?? "")
         }
@@ -185,9 +198,14 @@ private struct MailWorkspaceReadyView: View {
             .accessibilityIdentifier("mail.compose")
 
             Button { Task { await model.syncNow() } } label: {
-                Label(String(localized: "Sync now"), systemImage: "arrow.triangle.2.circlepath")
+                if model.busy || model.anyRunning {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel(Text("Saving mail"))
+                } else {
+                    Label(String(localized: "Sync now"), systemImage: "arrow.triangle.2.circlepath")
+                }
             }
-            .disabled(!model.actions.contains(.syncNow) || model.busy)
+            .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
             .help(String(localized: "Save new mail from every account that may preserve mail"))
             .keyboardShortcut("r", modifiers: [.command, .option])
             .accessibilityIdentifier("mail.syncNow")
@@ -260,9 +278,16 @@ private struct MailSidebar: View {
                             .accessibilityIdentifier("mail.sidebar.folder")
                         }
                     } label: {
-                        MailAccountBadge(account: snapshot.account, headline: snapshot.headline)
-                            .accessibilityIdentifier("mail.sidebar.account")
-                            .tag(MailWorkspaceModel.Section.account(snapshot.id))
+                        HStack(spacing: Spacing.xxSmall) {
+                            MailAccountBadge(account: snapshot.account, headline: snapshot.headline)
+                            if snapshot.isRunning {
+                                Spacer(minLength: 0)
+                                ProgressView().controlSize(.mini)
+                                    .accessibilityLabel(Text("Saving mail"))
+                            }
+                        }
+                        .accessibilityIdentifier("mail.sidebar.account")
+                        .tag(MailWorkspaceModel.Section.account(snapshot.id))
                     }
                 }
             }
@@ -301,7 +326,7 @@ private struct MailSidebar: View {
             // Section shortcuts (hidden buttons: they work while the page shows).
             Group {
                 Button("") { model.section = .unifiedInbox }.keyboardShortcut("i", modifiers: [.command, .option])
-                Button("") { model.section = .drafts }.keyboardShortcut("d", modifiers: [.command, .option])
+                Button("") { model.section = .drafts }.keyboardShortcut("e", modifiers: [.command, .option])
                 Button("") { model.section = .outbox }.keyboardShortcut("o", modifiers: [.command, .option])
             }
             .opacity(0)
@@ -512,7 +537,7 @@ private struct MailMessageDetail: View {
             }
         }
         .task {
-            do { email = try await model.backend.email(row.emailID) } catch { loadError = error.localizedDescription }
+            do { email = try await model.backend.email(row.emailID) } catch { loadError = ConnectedMailErrorText.text(for: error) }
             if email == nil, loadError == nil { loadError = String(localized: "The archived message is no longer in the archive.") }
         }
     }

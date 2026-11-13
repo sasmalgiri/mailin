@@ -10,10 +10,13 @@
 
 import SwiftUI
 import Combine
+import MailConnectivity
 
 struct MailNetworkHealthSection: View {
     var policy: MailNetworkPolicy = .shared
     @State private var snapshot: MailNetworkPolicy.Snapshot?
+    /// Each account's address (the policy knows accounts only by their id).
+    @State private var addresses: [UUID: String] = [:]
 
     var body: some View {
         Section("Mail network") {
@@ -34,7 +37,7 @@ struct MailNetworkHealthSection: View {
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     ForEach(s.accounts) { account in
-                        LabeledContent(account.id.uuidString.prefix(8).description) {
+                        LabeledContent(Self.label(for: account.id, addresses: addresses)) {
                             Text(Self.modesText(account))
                         }
                         .accessibilityElement(children: .combine)
@@ -56,11 +59,28 @@ struct MailNetworkHealthSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task { snapshot = policy.snapshot() }
+        .task {
+            snapshot = policy.snapshot()
+            addresses = await Self.accountAddresses()
+        }
         .onReceive(NotificationCenter.default.publisher(for: MailNetworkPolicy.didChange)
             .receive(on: RunLoop.main)) { _ in
             snapshot = policy.snapshot()
+            if snapshot?.accounts.contains(where: { addresses[$0.id] == nil }) == true {
+                Task { addresses = await Self.accountAddresses() }
+            }
         }
+    }
+
+    /// The account's address; never its UUID.
+    static func label(for id: UUID, addresses: [UUID: String]) -> String {
+        addresses[id] ?? String(localized: "A mail account")
+    }
+
+    @MainActor
+    static func accountAddresses() async -> [UUID: String] {
+        guard let accounts = try? await ConnectedMailRuntime.shared?.registry.accounts() else { return [:] }
+        return Dictionary(accounts.map { ($0.id, $0.displayIdentity) }, uniquingKeysWith: { a, _ in a })
     }
 
     static func modesText(_ account: MailAccountNetworkPolicy) -> String {

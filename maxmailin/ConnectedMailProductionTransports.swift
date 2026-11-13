@@ -94,6 +94,36 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
         }
     }
 
+    // MARK: Confirmed address
+
+    /// Gmail states the mailbox's own address (users.getProfile, allowed by
+    /// the read-only scope the sign-in already holds). The read asks the policy
+    /// like every capture request: for its duration the account may read
+    /// (purpose Preserve mail) from the Gmail API host only, then the grant
+    /// is put back as it was. Microsoft Graph states the address only with
+    /// the profile permission User.Read, which mailin does not request: nil.
+    func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                          policy: MailNetworkPolicy) async -> String? {
+        guard choice == .gmail else { return nil }
+        let previous = policy.account(accountID)
+        var grant = previous ?? MailAccountNetworkPolicy(id: accountID)
+        let alreadyAllowed = grant.isEnabled && grant.modes.contains(.preserveMail) && grant.mailHosts.contains(GmailAPI.host)
+        if !alreadyAllowed {
+            grant.isEnabled = true
+            grant.modes.insert(.preserveMail)
+            grant.mailHosts.insert(GmailAPI.host)
+            policy.setAccount(grant)
+        }
+        let transport = URLSessionGmailTransport()
+        let adapter = GmailAdapter(accountID: accountID, transport: transport,
+                                   permission: ConnectedMailRuntime.permission(policy: policy))
+        let address = try? await adapter.profileAddress(context: ProviderRequestContext(accountID: accountID,
+                                                                                         accessToken: tokens.accessToken, attempt: 0))
+        await adapter.close()
+        if !alreadyAllowed { policy.setAccount(previous ?? MailAccountNetworkPolicy(id: accountID)) }
+        return address
+    }
+
     // MARK: Sending
 
     func registerSending(_ account: MailAccount, extras: MailAccountExtras, outbox: Outbox,

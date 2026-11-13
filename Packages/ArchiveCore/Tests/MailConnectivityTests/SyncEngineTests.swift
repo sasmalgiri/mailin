@@ -670,3 +670,87 @@ final class SyncEngineTests: XCTestCase {
         do { try await cancelled.value; XCTFail("a cancelled waiter must not get a slot") } catch is CancellationError {}
     }
 }
+
+// MARK: - Release audit 2026-11-13 (connected mail UX)
+
+extension SyncEngineTests {
+
+    /// A provider error that stops the run reads as a sentence, never as the
+    /// enum's debug form (`permanent("…")`, `folderUnavailable(…)`).
+    func testAudit_runStopReasonIsASentence_notAnEnumDump() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 10)
+        await seed(fake, folders: 1, perFolder: 2)
+        try await register(fake, in: sink)
+        await fake.failNextRequests([.permanent("Gmail refused the request.")])
+        let report = await makeEngine(fake, sink).sync()
+        XCTAssertEqual(report.outcome, .failed("Gmail refused the request."))
+        for error: MailProviderError in [.rateLimited(retryAfter: 5), .quotaExceeded(resetAfter: nil), .transient("HTTP 503"),
+                                         .unauthorized, .reauthorisationRequired, .itemUnavailable, .changeTokenExpired,
+                                         .folderUnavailable("Projects"), .permanent("No.")] {
+            let text = error.localizedDescription
+            XCTAssertFalse(text.contains("MailProviderError") || text.contains("rateLimited(") || text.contains("retryAfter"),
+                           "debug form shown: \(text)")
+            XCTAssertTrue(text.hasSuffix("."), text)
+        }
+    }
+
+    /// Pressing Sync now while a run is under way starts nothing and fails
+    /// nothing: the second call says "already running".
+    func testAudit_secondSyncWhileRunning_isAlreadyRunning_notAFailure() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 10)
+        await seed(fake, folders: 1, perFolder: 4)
+        await fake.setFetchDelay(50_000_000)
+        try await register(fake, in: sink)
+        let engine = makeEngine(fake, sink)
+        let first = Task { await engine.sync() }
+        var waited = 0
+        while !(await engine.isRunning), waited < 200 { try await Task.sleep(nanoseconds: 5_000_000); waited += 1 }
+        let isRunning = await engine.isRunning
+        XCTAssertTrue(isRunning)
+        let second = await engine.sync()
+        XCTAssertEqual(second.outcome, .alreadyRunning)
+        XCTAssertFalse(second.outcome.isCompletion)
+        let firstReport = await first.value
+        XCTAssertEqual(firstReport.outcome, .completed, "the running capture went on undisturbed")
+        let afterwards = await engine.isRunning
+        XCTAssertFalse(afterwards)
+    }
+
+    /// A pause that passes by itself carries how long to wait before the
+    /// account is tried again (the provider's own figure first); a finished
+    /// run or a sign-in stop carries none.
+    func testAudit_pausesThatPassByThemselves_suggestARetry() async throws {
+        let sink = makeSink()
+        let throttled = FakeMailProvider(pageSize: 10)
+        await seed(throttled, folders: 1, perFolder: 3)
+        await throttled.failFetch("f0-1", with: [.rateLimited(retryAfter: 600), .rateLimited(retryAfter: 600)])
+        let quota = FakeMailProvider(pageSize: 10)
+        await seed(quota, folders: 1, perFolder: 3)
+        await quota.failFetch("f0-1", with: [.quotaExceeded(resetAfter: nil)])
+        let flaky = FakeMailProvider(pageSize: 10)
+        await seed(flaky, folders: 1, perFolder: 1)
+        await flaky.failNextRequests(Array(repeating: .transient("HTTP 503"), count: 6))
+        let revoked = FakeMailProvider(pageSize: 10)
+        await seed(revoked, folders: 1, perFolder: 1)
+        await revoked.failNextRequests([.reauthorisationRequired])
+        for fake in [throttled, quota, flaky, revoked] { try await register(fake, in: sink) }
+
+        let r1 = await makeEngine(throttled, sink, backoff: Self.backoff(Box([]), maximumThrottleWait: 1_000)).sync()
+        XCTAssertEqual(r1.outcome, .paused(.rateLimited(retryAfter: 600)))
+        XCTAssertEqual(r1.suggestedRetry, 600, "the provider's Retry-After is respected")
+        let r2 = await makeEngine(quota, sink).sync()
+        XCTAssertEqual(r2.outcome, .paused(.quotaExceeded(resetAfter: nil)))
+        XCTAssertEqual(r2.suggestedRetry ?? 0, 3_600, accuracy: 0.1, "no reset time stated: an hour")
+        let r3 = await makeEngine(flaky, sink).sync()
+        guard case .failed = r3.outcome else { return XCTFail("\(r3.outcome)") }
+        XCTAssertEqual(r3.suggestedRetry, 60, "a server that kept failing: the backoff's longest step")
+        let r4 = await makeEngine(revoked, sink).sync()
+        XCTAssertEqual(r4.outcome, .needsSignIn)
+        XCTAssertNil(r4.suggestedRetry, "sign-in needs the person; never retried on its own")
+        let r5 = await makeEngine(throttled, sink).sync()
+        XCTAssertEqual(r5.outcome, .completed)
+        XCTAssertNil(r5.suggestedRetry)
+    }
+}
