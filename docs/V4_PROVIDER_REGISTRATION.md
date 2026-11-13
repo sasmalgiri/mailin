@@ -38,13 +38,17 @@ mode that needs more access asks for it the first time it is used ("re-consent",
 `GmailOAuth.configuration` refuses any scope outside `https://www.googleapis.com/auth/gmail.*`;
 `GraphOAuth.validateScopes` refuses Exchange-protocol scopes in a Graph configuration.
 
-**Known issue to fix before the real-provider run (found while preparing this packet, not fixed here):** a Gmail
-re-consent asks for `gmail.readonly` + the one new scope only (`ConnectedMailProductionTransports.signIn`, no
-`include_granted_scopes`), and `MailWorkspaceBackend.signIn` then overwrites `grantedScopes` with the returned
-token's scopes. Turning on *Change server mail* after *Send mail* can therefore drop `gmail.send` from the stored
-grant. Fix: request the union of the account's granted scopes and the new one (or send
-`include_granted_scopes=true`). Microsoft returns all consented permissions for the resource, so Graph is
-probably unaffected — confirm in the provider run.
+**Fixed 2026-11-12 (2c7cf45) — re-consent kept only the new scope.** Found while preparing this packet: a Gmail
+re-consent asked for `gmail.readonly` + the one new scope only, and `MailWorkspaceBackend.signIn` then overwrote
+`grantedScopes` with the returned token's scopes, so turning on *Change server mail* after *Send mail* dropped
+`gmail.send`. A re-consent now requests every mail scope the account already holds plus the new one
+(`ConnectedMailBackend.reconsentScopes`; `ReconsentScopeTests` 2/2, fails without the fix — run against a recording
+fake, not Google). Not yet seen on a real provider: confirm on Gmail and Microsoft in the provider run.
+
+**Fixed 2026-11-12 (b37a4aa) — Delete All Data left connected-account sign-in data.** Settings ▸ Delete All Data
+(`ArchiveLifecycleService.eraseAllData`) now also removes every Keychain item of the connected-account service
+(`eraseConnectedMailSecrets`; `EraseConnectedSecretsTests` 1/1 with a fake Keychain, `MailAccountCredentialTests`
+10/10). A failure to delete is reported, not swallowed.
 
 ---
 
@@ -91,6 +95,12 @@ legacy `GmailConnector`; the shipped sign-in uses the reversed client ID above (
   Preserve mail is not a v4 option, so plan for the restricted path.
 - Until verification passes: publishing status **Testing**, up to 100 named test users, and Google limits refresh
   tokens of testing apps to about 7 days — fine for the V4-15 provider runs, not for release.
+- Seen on the first live sign-in (2026-11-13, Debug-Connected build on the owner's Mac): an account that is not
+  on the consent screen's test-user list gets **403 access_denied** from Google; adding it as a test user fixed it.
+  The next attempt reached the token save and failed with **-34018 errSecMissingEntitlement** (no keychain access
+  group in the connected entitlements) — fixed in 0b03bc5 (`ConnectedKeychainEntitlementTests`); the attempt
+  after that added the account. Nothing after "account added" (capture, send, server actions) is recorded as
+  provider-verified yet.
 - Plan §13.8: Gmail-origin content stays local; the AI scaffolding refuses Gmail-origin sources
   (`AISourcePolicy`, `gmailRouteApproved = false`). Do **not** describe any AI use of Gmail data to Google —
   there is none in v4.

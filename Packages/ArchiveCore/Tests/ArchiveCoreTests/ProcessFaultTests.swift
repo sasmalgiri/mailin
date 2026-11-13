@@ -907,3 +907,133 @@ final class DriveRemovalProcessTests: XCTestCase {
         XCTAssertEqual(actual, reportedSHA, "the bytes the receipt vouches for are on the disk after an immediate unplug")
     }
 }
+
+// MARK: - T22 restore leg: the backup's drive is pulled mid-restore
+
+/// Plan v4 T22 (restore leg). Deterministic: the "drive" holding the backup is
+/// a folder that is moved away (as an unmount makes it vanish) right after the
+/// restore has read its first file. The restore must stop naming how far it got,
+/// change nothing in the archive, leave no staging behind, and succeed when the
+/// drive returns. A real force-detached disk image is `DriveRemovalProcessTests`
+/// (MAILIN_SCALE=1); this row needs none.
+final class BackupRestoreDriveRemovalTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("restore-pull-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let root { try? FileManager.default.removeItem(at: root) }
+    }
+
+    private func mail(_ i: Int) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<restore-\(i)-\(UUID().uuidString)@test>", "Subject": "Restore \(i)", "From": "a@test",
+                      "To": "me@test", "Date": "Mon, 2 Nov 2026 10:0\(i % 10):00 +0000"],
+            rawSource: "", messageType: "email", attachments: [], timestamp: "", domains: [],
+            plainBody: "body \(i)", htmlBody: "")
+    }
+
+    /// A backup on the "drive" of 3 messages (one in the blob tier) plus two
+    /// self-contained source copies, so the restore has several files to place.
+    private func makeBackup() async throws -> (drive: URL, backup: URL, big: MBOXParser.RawEmail, inventory: ArchiveBackupInventory) {
+        let source = SQLiteEmailStore(directory: root.appendingPathComponent("source-store", isDirectory: true))
+        var big = mail(2)
+        big.rawSource = "Subject: Big\n\n" + String(repeating: "x", count: BlobStore.inlineThresholdBytes + 1_024)
+        try await source.insertBatch([mail(0), mail(1), big], batchSize: 10)
+        let sources = source.storeDirectory.appendingPathComponent(ArchiveBackup.sourcesFolder, isDirectory: true)
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try Data(repeating: 0x61, count: 4_096).write(to: sources.appendingPathComponent("a.mbox"))
+        try Data(repeating: 0x62, count: 4_096).write(to: sources.appendingPathComponent("b.mbox"))
+        let drive = root.appendingPathComponent("BackupDrive", isDirectory: true)
+        let backup = drive.appendingPathComponent("mailin-backup", isDirectory: true)
+        let inventory = try await ArchiveBackup.create(store: source, to: backup)
+        XCTAssertTrue(inventory.files.contains { $0.kind == "blob" }, "the big message went to the blob tier")
+        XCTAssertEqual(inventory.files.filter { $0.kind == "source" }.count, 2)
+        return (drive, backup, big, inventory)
+    }
+
+    private func pullAfterFirstFile(_ drive: URL, to unplugged: URL) -> (String, Int, Int) -> Void {
+        { _, copied, _ in
+            if copied == 1 { try? FileManager.default.moveItem(at: drive, to: unplugged) }
+        }
+    }
+
+    private func assertInterrupted(_ error: Error, total: Int, file: StaticString = #filePath, line: UInt = #line) {
+        guard case .restoreInterrupted(let copied, let planned, _)? = error as? ArchiveBackupError else {
+            return XCTFail("expected restoreInterrupted, got \(error)", file: file, line: line)
+        }
+        XCTAssertEqual(copied, 1, file: file, line: line)
+        XCTAssertEqual(planned, total, file: file, line: line)
+        let text = error.localizedDescription
+        XCTAssertTrue(text.contains("1 of \(total) files"), "says how far it got: \(text)", file: file, line: line)
+        XCTAssertTrue(text.contains("Nothing in the archive was changed"), text, file: file, line: line)
+    }
+
+    /// Clean profile: before, the database was placed first and the pull then
+    /// failed a blob copy — a restored database without its message files, and
+    /// the retry was refused as "an archive already exists".
+    func testT22_drivePulledDuringCleanProfileRestore_changesNothing_retrySucceeds() async throws {
+        let (drive, backup, big, inventory) = try await makeBackup()
+        let unplugged = root.appendingPathComponent("unplugged", isDirectory: true)
+        let target = root.appendingPathComponent("new-profile/store", isDirectory: true)
+
+        XCTAssertThrowsError(try ArchiveBackup.restore(backup: backup, intoStoreDirectory: target, mode: .cleanProfile,
+                                                       afterEachCopy: pullAfterFirstFile(drive, to: unplugged))) {
+            assertInterrupted($0, total: inventory.files.count)
+        }
+        let fm = FileManager.default
+        XCTAssertFalse(fm.fileExists(atPath: target.appendingPathComponent(ArchiveBackup.databaseName).path), "no database without its files")
+        XCTAssertFalse(fm.fileExists(atPath: target.appendingPathComponent(ArchiveBackup.blobsFolder).path))
+        XCTAssertFalse(fm.fileExists(atPath: target.appendingPathComponent(ArchiveBackup.sourcesFolder).path))
+        XCTAssertFalse(fm.fileExists(atPath: target.appendingPathComponent(ArchiveBackup.restoreStagingFolder).path), "no staging left behind")
+
+        // The drive returns: the same restore runs to the end.
+        try fm.moveItem(at: unplugged, to: drive)
+        let restored = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: target, mode: .cleanProfile)
+        XCTAssertEqual(restored.counts.emails, 3)
+        let store = SQLiteEmailStore(directory: target)
+        let total = try await store.totalCount()
+        XCTAssertEqual(total, 3)
+        let readBack = try await store.fullEmail(id: big.id)
+        XCTAssertEqual(readBack?.rawSource, big.rawSource, "the blob-tier message reads back")
+        XCTAssertFalse(fm.fileExists(atPath: target.appendingPathComponent(ArchiveBackup.restoreStagingFolder).path))
+    }
+
+    /// In place (the app's restore): the running archive keeps its database
+    /// byte for byte and gains no files when the backup vanishes part-way.
+    func testT22_drivePulledDuringInPlaceRestore_keepsTheCurrentArchive() async throws {
+        let (drive, backup, _, inventory) = try await makeBackup()
+        let unplugged = root.appendingPathComponent("unplugged", isDirectory: true)
+        let targetDir = root.appendingPathComponent("current-store", isDirectory: true)
+        let current = SQLiteEmailStore(directory: targetDir)
+        try await current.insertBatch([mail(7)], batchSize: 1)
+        try await current.checkpoint()
+        await current.reopenConnection()   // as the app does before it restores
+        let db = targetDir.appendingPathComponent(ArchiveBackup.databaseName)
+        let before = try ExportInventory.sha256(of: db)
+
+        XCTAssertThrowsError(try ArchiveBackup.restore(backup: backup, intoStoreDirectory: targetDir, mode: .replaceDatabaseKeepFiles,
+                                                       afterEachCopy: pullAfterFirstFile(drive, to: unplugged))) {
+            assertInterrupted($0, total: inventory.files.count)
+        }
+        let fm = FileManager.default
+        XCTAssertEqual(try ExportInventory.sha256(of: db), before, "the current database is untouched")
+        XCTAssertFalse(fm.fileExists(atPath: targetDir.appendingPathComponent(ArchiveBackup.sourcesFolder).path), "no files were added")
+        XCTAssertFalse(fm.fileExists(atPath: targetDir.appendingPathComponent(ArchiveBackup.restoreStagingFolder).path))
+        let still = SQLiteEmailStore(directory: targetDir)
+        let stillCount = try await still.totalCount()
+        XCTAssertEqual(stillCount, 1, "the archive opens with what it had")
+        await still.reopenConnection()
+
+        try fm.moveItem(at: unplugged, to: drive)
+        try ArchiveBackup.restore(backup: backup, intoStoreDirectory: targetDir, mode: .replaceDatabaseKeepFiles)
+        let after = SQLiteEmailStore(directory: targetDir)
+        let afterCount = try await after.totalCount()
+        XCTAssertEqual(afterCount, 3)
+        XCTAssertTrue(fm.fileExists(atPath: targetDir.appendingPathComponent("sources/a.mbox").path))
+    }
+}

@@ -10006,3 +10006,308 @@ final class ConnectedMailAuditTests: XCTestCase {
                       "the Add account sheet shows the page's earlier error")
     }
 }
+
+// MARK: - T02: hostile HTML with Connected mail on and cloud AI off
+
+/// Records every in-process URL load (URLSession, the synchronous HTML
+/// importer used for print / PDF / preview) and answers it with a failure, so
+/// nothing reaches the network while the test looks.
+final class T02RequestRecorder: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var seen: [String] = []
+    static var requests: [String] { lock.withLock { seen } }
+    static func reset() { lock.withLock { seen = [] } }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        guard let scheme = request.url?.scheme?.lowercased() else { return false }
+        return !["data", "about", "file", "cid", "applewebdata", "blob"].contains(scheme)
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.withLock { Self.seen.append(request.url?.absoluteString ?? "?") }
+        client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+    }
+    override func stopLoading() {}
+}
+
+/// A loopback TCP listener: an out-of-process renderer that fetched a remote
+/// reference pointing here would show up as an accepted connection. `nil` when
+/// the test host's sandbox does not allow a listening socket.
+final class T02LoopbackListener {
+    let port: UInt16
+    private let fd: Int32
+
+    init?() {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, listen(fd, 64) == 0 else { close(fd); return nil }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        guard named == 0 else { close(fd); return nil }
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        self.fd = fd
+        self.port = UInt16(bigEndian: addr.sin_port)
+    }
+
+    /// Connections accepted since the last call.
+    func drainConnections() -> Int {
+        var n = 0
+        while true {
+            let client = accept(fd, nil, nil)
+            guard client >= 0 else { break }
+            n += 1
+            close(client)
+        }
+        return n
+    }
+
+    deinit { close(fd) }
+}
+
+/// T02 (plan v4): with Connected mail ON (an account fully granted) and cloud
+/// AI off, (a) rendering hostile HTML mail — remote images, tracking pixels,
+/// CSS url() / @import / image-set, iframes, link prefetch / preconnect, meta
+/// refresh, ping, and the same URLs entity-encoded or CSS-escaped — through the
+/// app's safe HTML path makes zero network requests, and (b) MailNetworkPolicy
+/// refuses every non-mail and AI destination. Either leg regressing fails it.
+@MainActor
+final class T02HostileHTMLZeroNetworkTests: XCTestCase {
+    private let imapHost = "imap.example.org"
+    private let authHost = "login.example.org"
+    private var savedSafeHTML = false
+
+    override func setUp() async throws {
+        MailNetworkPolicy.shared.resetForTesting()
+        savedSafeHTML = SafeHTMLPolicy.isEnabled
+        T02RequestRecorder.reset()
+        URLProtocol.registerClass(T02RequestRecorder.self)
+    }
+
+    override func tearDown() async throws {
+        URLProtocol.unregisterClass(T02RequestRecorder.self)
+        SafeHTMLPolicy.isEnabled = savedSafeHTML
+        MailNetworkPolicy.shared.resetForTesting()
+    }
+
+    /// Every vector names `base` (a URL prefix carrying a per-run token).
+    private func hostileHTML(_ base: String) -> String {
+        let entityHTTPS = "&#104;ttps:" + base.dropFirst(base.hasPrefix("https:") ? 6 : 5)
+        let slashes = base.replacingOccurrences(of: "//", with: "&#x2F;&#x2F;")
+        let cssEscaped = base.replacingOccurrences(of: ":", with: "\\3a ")
+        return """
+            <html><head>
+            <link rel="stylesheet" href="\(base)/a.css"><link rel="prefetch" href="\(base)/prefetch">
+            <link rel=dns-prefetch href=\(base)/dns><link rel=preconnect href="\(base)/preconnect">
+            <meta http-equiv="refresh" content="0;url=\(base)/refresh">
+            <style>@import url(\(base)/import.css); @import '\(base)/import2.css';
+            body { background: url('\(base)/bg.png') } @font-face { font-family: x; src: url(\(base)/font.woff) }</style>
+            <style>.e { background: url(\(cssEscaped)/escaped.png) }</style>
+            </head><body onload="track()">
+            <img src="\(base)/pixel.gif" width="1" height="1"><img src=\(base)/pixel2.gif><img/src="\(base)/slash.gif">
+            <img src="x.png" srcset="x.png 1x, \(base)/second-candidate.png 2x">
+            <img src="\(entityHTTPS)/entity.gif"><img src="\(slashes)/hex-entity.gif">
+            <div style="background:url(&quot;\(base)/quoted.png&quot;)">a</div>
+            <div style="background: image-set('\(base)/image-set.png' 1x)">b</div>
+            <table background="\(base)/table.png"><tr><td>c</td></tr></table>
+            <video poster="\(base)/poster.png"><source src="\(base)/video.mp4"></video><audio src="\(base)/audio.mp3"></audio>
+            <iframe src="\(base)/frame"></iframe><iframe src=\(base)/frame2></iframe>
+            <object data="\(base)/object"></object><embed src="\(base)/embed"><input type=image src="\(base)/input.png">
+            <svg><image href="\(base)/svg.png"/></svg>
+            <script>fetch('\(base)/script')</script>
+            <a href="https://example.com/read" ping="\(base)/ping">Read</a>
+            <img src="cid:logo@mail"><p>Hello T02</p>
+            </body></html>
+            """
+    }
+
+    func testT02_mailOnAIOff_hostileHTMLMakesZeroRequests_andPolicyRefusesNonMailDestinations() async throws {
+        // Connected mail ON, an account with every mode, cloud AI off.
+        let shared = MailNetworkPolicy.shared
+        shared.setMailEnabled(true)
+        let sharedAccount = MailAccountNetworkPolicy(id: UUID(), isEnabled: true, modes: Set(MailAccountMode.allCases),
+                                                     mailHosts: [imapHost], authorizationHosts: [authHost])
+        shared.setAccount(sharedAccount)
+        let policy = MailNetworkPolicy(transportsCompiled: true)   // the connected build's rules
+        policy.setMailEnabled(true)
+        let account = MailAccountNetworkPolicy(id: UUID(), isEnabled: true, modes: Set(MailAccountMode.allCases),
+                                               mailHosts: [imapHost], authorizationHosts: [authHost])
+        policy.setAccount(account)
+        XCTAssertTrue(policy.isMailEnabled)
+        XCTAssertTrue(shared.isMailEnabled)
+        XCTAssertFalse(AIPolicy.shared.isCloudAIEnabled, "connected mail never switches cloud AI on")
+        SafeHTMLPolicy.isEnabled = true   // the shipped default for Safe email display
+
+        // The recorder sees in-process loads at all (else a zero below proves nothing).
+        let probe = try XCTUnwrap(URL(string: "https://t02-probe.invalid/\(UUID().uuidString)"))
+        _ = try? await URLSession.shared.data(from: probe)
+        XCTAssertTrue(T02RequestRecorder.requests.contains(probe.absoluteString), "the request recorder is not in the loading path")
+        T02RequestRecorder.reset()
+
+        let listener = T02LoopbackListener()
+        let token = "t02-\(UUID().uuidString.lowercased())"
+        let trackerHost = listener.map { "127.0.0.1:\($0.port)" } ?? "t02-tracker.example"
+        let base = "http://\(trackerHost)/\(token)"
+        let html = hostileHTML(base)
+
+        // (a) The sanitizer leaves no remote reference in any spelling.
+        let safe = SafeHTMLRenderer.sanitize(html)
+        XCTAssertFalse(safe.html.contains(trackerHost), "a remote reference survived sanitizing:\n\(safe.html)")
+        XCTAssertFalse(safe.html.contains(token), safe.html)
+        XCTAssertTrue(safe.html.contains("cid:logo@mail"))
+        XCTAssertTrue(safe.html.contains("https://example.com/read"), "a link loads nothing until it is clicked")
+        XCTAssertTrue(safe.html.contains("Hello T02"))
+        XCTAssertGreaterThanOrEqual(safe.blockedRemoteItems, 18, "every remote item is counted for the 'not loaded' note")
+        // The WebKit path keeps its fetch-nothing CSP backstop.
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let renderer = try String(contentsOf: repo.appendingPathComponent("maxmailin/SafeHTMLRenderer.swift"), encoding: .utf8)
+        XCTAssertTrue(renderer.contains("default-src 'none'; img-src data: cid:"))
+
+        // Both renderers the app uses: out-of-process WebKit, and the synchronous
+        // importer behind print / PDF / inline preview (sanitized when the switch is on).
+        let rendered = try? await SafeHTMLRenderer.render(html)
+        if let rendered { XCTAssertTrue(rendered.0.string.contains("Hello T02"), rendered.0.string) }
+        let importerInput = try XCTUnwrap(SafeHTMLRenderer.sanitizedIfEnabled(html).data(using: .utf8))
+        let imported = try? NSAttributedString(data: importerInput,
+                                               options: [.documentType: NSAttributedString.DocumentType.html,
+                                                         .characterEncoding: String.Encoding.utf8.rawValue],
+                                               documentAttributes: nil)
+        XCTAssertNotNil(imported)
+        try await Task.sleep(for: .milliseconds(500))   // let any late subresource load start
+
+        let leaked = T02RequestRecorder.requests.filter { $0.contains(token) }
+        XCTAssertEqual(leaked, [], "rendering hostile mail made in-process requests")
+        if let listener {
+            XCTAssertEqual(listener.drainConnections(), 0, "a renderer connected to the loopback tracker")
+        } else {
+            print("T02: the test host's sandbox refused a loopback listener; the out-of-process leg is covered by the sanitizer and CSP checks only")
+        }
+
+        // (b) The policy refuses every non-mail and every AI destination, with Mail on.
+        let aiHosts = ["api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com", "x.ai", "openrouter.ai"]
+        var asked = 0
+        for operation in MailNetworkOperation.allCases {
+            for purpose in MailAccountMode.allCases {
+                func ask(_ host: String, _ destination: MailNetworkDestination, expect: MailNetworkRefusal) {
+                    let request = MailNetworkRequest(accountID: account.id, host: host, destination: destination,
+                                                     operation: operation, purpose: purpose)
+                    XCTAssertThrowsError(try policy.permit(request), "\(host) \(destination) \(operation) \(purpose)") {
+                        XCTAssertEqual($0 as? MailNetworkRefusal, expect, "\(host) \(destination) \(operation) \(purpose)")
+                    }
+                    XCTAssertNotNil(shared.wouldPermit(MailNetworkRequest(accountID: sharedAccount.id, host: host, destination: destination,
+                                                                          operation: operation, purpose: purpose)),
+                                    "shared policy permitted \(host) \(destination)")
+                    asked += 1
+                }
+                for host in [trackerHost, imapHost, authHost] + aiHosts {
+                    ask(host, .aiService, expect: .aiDestination)
+                    ask(host, .remoteContent, expect: aiHosts.contains(host) ? .aiDestination : .remoteContent)
+                }
+                for host in aiHosts {
+                    ask(host, .mailServer, expect: .aiDestination)
+                    ask(host, .authorization, expect: .aiDestination)
+                }
+                // The tracker is not a server this account uses, whatever the caller calls it.
+                ask(trackerHost, .mailServer, expect: .hostNotAuthorized)
+                ask(trackerHost, .authorization, expect: .hostNotAuthorized)
+            }
+        }
+        let snapshot = policy.snapshot()
+        XCTAssertEqual(snapshot.permittedAttempts, 0)
+        XCTAssertEqual(snapshot.refusedAttempts, asked)
+        // Control: the account's own mail server is still allowed, so the zero above is a refusal, not a dead policy.
+        XCTAssertNil(policy.wouldPermit(MailNetworkRequest(accountID: account.id, host: imapHost, destination: .mailServer,
+                                                           operation: .socket, purpose: .preserveMail)))
+        XCTAssertFalse(AIPolicy.shared.isCloudAIEnabled)
+    }
+}
+
+// MARK: - B06: no Debug purchase / entitlement override in the distribution binary
+
+/// B06 (plan v4): the Debug build unlocks every paid tier (`debugUnlocksAllTiers`)
+/// and honours `-mailinSimulateTier` / `-mailinRealStore` / `-mailinShowPaywall`
+/// / `-mailinSimulateLifetime` launch arguments (and `-simulateAppleIntelligenceOff`).
+/// None of it may reach a Release binary. The test target's own `#if DEBUG` is not
+/// evidence about the HOST app, so the checks read the host: its StoreManager's
+/// stored properties (Mirror) and the bytes of its executable.
+final class ReleasePurchaseBypassTests: XCTestCase {
+    static let debugLaunchArguments = ["-mailinSimulateTier", "-mailinRealStore", "-mailinShowPaywall",
+                                       "-mailinSimulateLifetime", "-simulateAppleIntelligenceOff"]
+    static let debugStoreProperties = ["debugUnlocksAllTiers", "simulatedTier"]
+
+    /// The host app's code: its executable plus, in a Debug build, the `.debug.dylib` Xcode splits it into.
+    private func hostImages() throws -> [URL] {
+        let executable = try XCTUnwrap(Bundle.main.executableURL, "no host app")
+        let siblings = (try? FileManager.default.contentsOfDirectory(at: executable.deletingLastPathComponent(),
+                                                                     includingPropertiesForKeys: nil)) ?? []
+        return [executable] + siblings.filter { $0.lastPathComponent.hasSuffix(".debug.dylib") }
+    }
+
+    private func argumentsInHost() throws -> [String] {
+        let images = try hostImages().map { try Data(contentsOf: $0, options: .alwaysMapped) }
+        return Self.debugLaunchArguments.filter { arg in images.contains { $0.range(of: Data(arg.utf8)) != nil } }
+    }
+
+    @MainActor
+    private func debugPropertiesInHost() -> [String] {
+        let labels = Set(Mirror(reflecting: StoreManager(testTier: .free)).children.compactMap(\.label))
+        return Self.debugStoreProperties.filter { labels.contains($0) || labels.contains("_" + $0) }
+    }
+
+    @MainActor
+    func testB06_distributionBinaryHasNoDebugPurchaseOverrides() throws {
+        let properties = debugPropertiesInHost()
+        let arguments = try argumentsInHost()
+        #if DEBUG
+        // The probes find the overrides where they exist, so an empty answer in Release means something.
+        XCTAssertEqual(properties, Self.debugStoreProperties, "the Mirror probe no longer sees the Debug unlock")
+        XCTAssertFalse(arguments.isEmpty, "the binary probe no longer sees the Debug launch arguments")
+        throw XCTSkip("B06 asserts the Release (distribution) binary; this Debug run only checked that the probes work (\(arguments.count) arguments found).")
+        #else
+        XCTAssertEqual(properties, [], "a Debug purchase override is compiled into this Release binary")
+        XCTAssertEqual(arguments, [], "Debug launch-argument overrides are compiled into this Release binary")
+        let free = StoreManager(testTier: .free)
+        XCTAssertEqual(free.effectiveTier, .free)
+        XCTAssertFalse(free.isPremium)
+        #endif
+    }
+
+    /// Source side (runs in every configuration): every use of the overrides
+    /// sits inside `#if DEBUG`, so the compiler drops it from Release.
+    func testB06_everyPurchaseOverrideIsInsideIfDEBUG() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let symbols = Self.debugStoreProperties + Self.debugLaunchArguments + ["applyDebugLaunchOverride"]
+        var outside: [String] = []
+        var seen = 0
+        let files = try FileManager.default.contentsOfDirectory(at: repo.appendingPathComponent("maxmailin"), includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        for file in files {
+            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+            var stack: [Bool] = []   // per open #if: is this branch DEBUG-only?
+            for (number, raw) in lines.enumerated() {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("#if ") { stack.append(line == "#if DEBUG"); continue }
+                if line.hasPrefix("#elseif") || line.hasPrefix("#else") { if !stack.isEmpty { stack[stack.count - 1] = false }; continue }
+                if line.hasPrefix("#endif") { _ = stack.popLast(); continue }
+                if line.hasPrefix("//") { continue }
+                for symbol in symbols where line.contains(symbol) {
+                    seen += 1
+                    if !stack.contains(true) { outside.append("\(file.lastPathComponent):\(number + 1): \(symbol)") }
+                }
+            }
+        }
+        XCTAssertGreaterThanOrEqual(seen, 10, "the scan no longer finds the overrides")
+        XCTAssertEqual(outside, [], "a purchase / entitlement override is compiled outside #if DEBUG")
+    }
+}

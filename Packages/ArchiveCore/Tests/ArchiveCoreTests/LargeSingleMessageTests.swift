@@ -1089,3 +1089,76 @@ private extension Data {
     mutating func le16append(_ v: UInt16) { append(UInt8(v & 0xFF)); append(UInt8(v >> 8)) }
     mutating func le32append(_ v: UInt32) { for k in 0..<4 { append(UInt8((v >> (8 * UInt32(k))) & 0xFF)) } }
 }
+
+// MARK: - CLOSE-01 follow-up: gunzip keeps no window resident
+
+/// CLOSE-01 note "ZIP gunzip may have the same chunk retention" (TARReader kept
+/// every 64 KiB window until the extraction returned: +1.9 GB for a 2 GB member).
+/// `ZIPArchiveReader.gunzip` reads its input with `FileHandle.read(upToCount:)`
+/// in one long loop, so the same autoreleased windows could pile up. An
+/// incompressible payload (the compressed input as large as the output) must
+/// decompress in bounded memory.
+final class GunzipFootprintTests: XCTestCase {
+    private static let mib: Int64 = 1 << 20
+
+    func testCLOSE01_gunzipOfALargeIncompressibleFile_peakFootprintStaysBounded() throws {
+        #if os(macOS)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("gunzip-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let payload = root.appendingPathComponent("payload.bin")
+        let gz = root.appendingPathComponent("payload.bin.gz")
+        let payloadBytes = 192 * Int(Self.mib)
+        // Deterministic incompressible bytes (xorshift), written in 1 MiB slices.
+        FileManager.default.createFile(atPath: payload.path, contents: nil)
+        let writer = try FileHandle(forWritingTo: payload)
+        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
+        var slice = [UInt8](repeating: 0, count: Int(Self.mib))
+        for _ in 0..<(payloadBytes / Int(Self.mib)) {
+            slice.withUnsafeMutableBytes { raw in
+                let words = raw.bindMemory(to: UInt64.self)
+                for i in words.indices {
+                    state ^= state << 13; state ^= state >> 7; state ^= state << 17
+                    words[i] = state
+                }
+            }
+            try autoreleasepool { try writer.write(contentsOf: Data(slice)) }
+        }
+        try writer.close()
+        let gzip = Process()
+        gzip.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        gzip.arguments = ["-1", "-k", payload.path]
+        try gzip.run(); gzip.waitUntilExit()
+        XCTAssertEqual(gzip.terminationStatus, 0)
+        let gzBytes = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: gz.path)[.size] as? NSNumber).int64Value
+        XCTAssertGreaterThan(gzBytes, Int64(payloadBytes) * 9 / 10, "incompressible: the input is as large as the output")
+
+        let out = root.appendingPathComponent("out.bin")
+        let baseline = currentFootprintBytes()
+        let peak = PeakBox(baseline)
+        let done = DispatchSemaphore(value: 0)
+        let sampler = Thread {
+            while done.wait(timeout: .now() + .milliseconds(2)) == .timedOut { peak.observe(currentFootprintBytes()) }
+        }
+        sampler.start()
+        try ZIPArchiveReader.gunzip(gz, to: out)
+        peak.observe(currentFootprintBytes())
+        done.signal()
+        let delta = Int64(peak.value) - Int64(baseline)
+        print("CLOSE-01 gunzip \(gzBytes / Self.mib) MiB → \(payloadBytes / Int(Self.mib)) MiB: peak footprint delta \(delta / Self.mib) MiB")
+        XCTAssertLessThan(delta, 48 * Self.mib, "gunzip kept its windows resident: +\(delta / Self.mib) MiB")
+        let outBytes = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: out.path)[.size] as? NSNumber).int64Value
+        XCTAssertEqual(outBytes, Int64(payloadBytes))
+        #else
+        throw XCTSkip("needs /usr/bin/gzip (macOS)")
+        #endif
+    }
+
+    private final class PeakBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var peak: UInt64
+        init(_ start: UInt64) { peak = start }
+        func observe(_ v: UInt64) { lock.lock(); peak = max(peak, v); lock.unlock() }
+        var value: UInt64 { lock.lock(); defer { lock.unlock() }; return peak }
+    }
+}

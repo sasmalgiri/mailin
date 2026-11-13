@@ -86,6 +86,8 @@ enum ArchiveBackupError: LocalizedError, Equatable {
     case fileMissing(String)
     case hashMismatch(String)
     case copyFailed(String)
+    /// T22: the backup stopped being readable mid-restore (its drive removed).
+    case restoreInterrupted(copied: Int, total: Int, path: String)
 
     var errorDescription: String? {
         switch self {
@@ -95,6 +97,8 @@ enum ArchiveBackupError: LocalizedError, Equatable {
         case .fileMissing(let p): return "The backup is incomplete: \(p) is missing. Nothing was changed."
         case .hashMismatch(let p): return "The backup is damaged: \(p) does not match its recorded SHA-256. Nothing was changed."
         case .copyFailed(let why): return "The backup could not be written: \(why)"
+        case .restoreInterrupted(let copied, let total, let path):
+            return "The backup became unavailable during the restore (was its drive removed?): \(copied) of \(total) files had been read when \(path) could not be. Nothing in the archive was changed. Reconnect the backup and restore again."
         }
     }
 }
@@ -218,12 +222,26 @@ enum ArchiveBackup {
         case replaceDatabaseKeepFiles
     }
 
+    /// Where a restore gathers every file before it changes anything (inside
+    /// the target store folder, so placing them is a rename on one volume).
+    static let restoreStagingFolder = ".mailin-restore-staging"
+
     /// Verifies the whole backup first, then places it. Returns the inventory.
     /// `receiptDirectories` maps `receipts/<name>` back to a destination; files
     /// already there are kept, not overwritten.
+    ///
+    /// T22 (restore leg): every file the restore will place is first copied out
+    /// of the backup into a staging folder beside the target. Only when all of
+    /// them are on the target's volume is anything replaced or added, so a
+    /// backup drive that is pulled (or a backup that changes) mid-restore leaves
+    /// the archive exactly as it was and says "X of Y files" and that nothing
+    /// changed — instead of a database whose message files never arrived (and,
+    /// on a clean profile, a half-placed archive that refused the retry).
+    /// `afterEachCopy(path, copied, total)` is a test seam.
     @discardableResult
     static func restore(backup: URL, intoStoreDirectory target: URL, mode: RestoreMode,
-                        receiptDirectories: [(name: String, url: URL)] = []) throws -> ArchiveBackupInventory {
+                        receiptDirectories: [(name: String, url: URL)] = [],
+                        afterEachCopy: ((_ path: String, _ copied: Int, _ total: Int) -> Void)? = nil) throws -> ArchiveBackupInventory {
         let fm = FileManager.default
         let verification = try verify(backup: backup)
         if let first = verification.problems.first {
@@ -236,48 +254,93 @@ enum ArchiveBackup {
         }
         try fm.createDirectory(at: target, withIntermediateDirectories: true)
 
-        // Database and sidecars: staged beside the target, then swapped in.
+        // What this restore places: the database and sidecars always; blobs,
+        // sources and connected drafts / outbox only where missing (existing
+        // files are left alone); receipts back to their homes, never overwriting.
+        struct Placement {
+            let file: ArchiveBackupInventory.File
+            let destination: URL
+            /// A receipt: one that cannot be copied is skipped (as before), unless the backup is gone.
+            let optional: Bool
+        }
+        var plan: [Placement] = []
         for file in verification.inventory.files where file.kind == "database" || file.kind == "sidecar" {
-            let source = backup.appendingPathComponent(file.path)
-            let destination = target.appendingPathComponent(file.path)
-            let staged = target.appendingPathComponent(file.path + ".restore-staging")
-            try? fm.removeItem(at: staged)
-            do {
-                try fm.copyItem(at: source, to: staged)
-                for suffix in ["-wal", "-shm"] { try? fm.removeItem(at: URL(fileURLWithPath: destination.path + suffix)) }
-                if fm.fileExists(atPath: destination.path) {
-                    _ = try fm.replaceItemAt(destination, withItemAt: staged)
-                } else {
-                    try fm.moveItem(at: staged, to: destination)
-                }
-            } catch {
-                try? fm.removeItem(at: staged)
-                throw ArchiveBackupError.copyFailed(error.localizedDescription)
-            }
+            plan.append(Placement(file: file, destination: target.appendingPathComponent(file.path), optional: false))
         }
-        // V4-12: the backup holds no credential, so on a new device or profile
-        // every connected account must sign in again.
-        if mode == .cleanProfile {
-            try markConnectedAccountsNeedSignIn(databaseAt: dbTarget)
-        }
-        // Blobs, sources and connected drafts / outbox: add what is missing;
-        // existing files are left alone.
         for file in verification.inventory.files where file.kind == "blob" || file.kind == "source" || file.kind == "connected" {
             let destination = target.appendingPathComponent(file.path)
-            guard !fm.fileExists(atPath: destination.path) else { continue }
-            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                   attributes: file.kind == "connected" ? [.posixPermissions: 0o700] : nil)
-            do { try fm.copyItem(at: backup.appendingPathComponent(file.path), to: destination) }
-            catch { throw ArchiveBackupError.copyFailed(error.localizedDescription) }
+            if !fm.fileExists(atPath: destination.path) {
+                plan.append(Placement(file: file, destination: destination, optional: false))
+            }
         }
-        // Receipts back to their homes, never overwriting.
         for receipt in receiptDirectories {
             let prefix = receiptsFolder + "/" + receipt.name + "/"
             for file in verification.inventory.files where file.path.hasPrefix(prefix) {
                 let destination = receipt.url.appendingPathComponent(String(file.path.dropFirst(prefix.count)))
-                guard !fm.fileExists(atPath: destination.path) else { continue }
-                try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? fm.copyItem(at: backup.appendingPathComponent(file.path), to: destination)
+                if !fm.fileExists(atPath: destination.path) {
+                    plan.append(Placement(file: file, destination: destination, optional: true))
+                }
+            }
+        }
+
+        // 1. Copy everything out of the backup. Nothing in the archive changes here.
+        let staging = target.appendingPathComponent(restoreStagingFolder, isDirectory: true)
+        try? fm.removeItem(at: staging)   // a restore that was cut off earlier
+        do { try fm.createDirectory(at: staging, withIntermediateDirectories: true) }
+        catch { throw ArchiveBackupError.copyFailed(error.localizedDescription) }
+        var staged: [(placement: Placement, url: URL)] = []
+        for (index, placement) in plan.enumerated() {
+            let source = backup.appendingPathComponent(placement.file.path)
+            let stagedURL = staging.appendingPathComponent(placement.file.path)
+            do {
+                try fm.createDirectory(at: stagedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.copyItem(at: source, to: stagedURL)
+                let bytes = ((try? fm.attributesOfItem(atPath: stagedURL.path)[.size]) as? NSNumber)?.int64Value
+                guard bytes == placement.file.bytes else {
+                    throw ArchiveBackupError.copyFailed("\(placement.file.path) arrived with \(bytes ?? 0) of \(placement.file.bytes) bytes")
+                }
+                staged.append((placement, stagedURL))
+            } catch {
+                let backupGone = !fm.fileExists(atPath: source.path)
+                    || !fm.fileExists(atPath: backup.appendingPathComponent(ArchiveBackupInventory.filename).path)
+                if placement.optional && !backupGone { continue }
+                try? fm.removeItem(at: staging)
+                if backupGone {
+                    throw ArchiveBackupError.restoreInterrupted(copied: index, total: plan.count, path: placement.file.path)
+                }
+                throw ArchiveBackupError.copyFailed("restoring \(placement.file.path): \(error.localizedDescription). Nothing in the archive was changed")
+            }
+            afterEachCopy?(placement.file.path, index + 1, plan.count)
+        }
+        defer { try? fm.removeItem(at: staging) }
+
+        // V4-12: the backup holds no credential, so on a new device or profile
+        // every connected account must sign in again (marked before it is placed).
+        if mode == .cleanProfile, let database = staged.first(where: { $0.placement.file.path == databaseName }) {
+            try markConnectedAccountsNeedSignIn(databaseAt: database.url)
+        }
+
+        // 2. Every byte is on the target's volume: place it. Nothing below reads the backup.
+        for (placement, stagedURL) in staged {
+            let destination = placement.destination
+            do {
+                switch placement.file.kind {
+                case "database", "sidecar":
+                    for suffix in ["-wal", "-shm"] { try? fm.removeItem(at: URL(fileURLWithPath: destination.path + suffix)) }
+                    if fm.fileExists(atPath: destination.path) {
+                        _ = try fm.replaceItemAt(destination, withItemAt: stagedURL)
+                    } else {
+                        try fm.moveItem(at: stagedURL, to: destination)
+                    }
+                default:
+                    guard !fm.fileExists(atPath: destination.path) else { continue }
+                    try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                           attributes: placement.file.kind == "connected" ? [.posixPermissions: 0o700] : nil)
+                    try fm.moveItem(at: stagedURL, to: destination)
+                }
+            } catch {
+                if placement.optional { continue }
+                throw ArchiveBackupError.copyFailed(error.localizedDescription)
             }
         }
         return verification.inventory
