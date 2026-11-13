@@ -284,6 +284,19 @@ private struct MailSidebar: View {
             }
         }
         .navigationTitle(String(localized: "Mail"))
+        .safeAreaInset(edge: .bottom) {
+            // Where Mail users look for it: always visible under the account list.
+            Button { sheet = .addAccount } label: {
+                Label(String(localized: "Add account"), systemImage: "plus.circle.fill")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.large)
+            .padding(.horizontal, Spacing.small)
+            .padding(.vertical, Spacing.xSmall)
+            .background(.bar)
+            .accessibilityIdentifier("mail.addAccount.sidebar")
+        }
         .background {
             // Section shortcuts (hidden buttons: they work while the page shows).
             Group {
@@ -343,10 +356,23 @@ private struct MailContentColumn: View {
     private var messageList: some View {
         List(selection: $model.selectedMessage) {
             if model.rows.isEmpty {
-                Text(model.accounts.isEmpty
-                     ? String(localized: "No accounts yet. Add one to start.")
-                     : String(localized: "No captured messages here yet."))
-                    .foregroundStyle(.secondary)
+                if model.accounts.isEmpty {
+                    VStack(spacing: Spacing.small) {
+                        Text(String(localized: "No accounts yet. Add one to start."))
+                            .foregroundStyle(.secondary)
+                        Button { sheet = .addAccount } label: {
+                            Label(String(localized: "Add account"), systemImage: "person.crop.circle.badge.plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .accessibilityIdentifier("mail.addAccount.empty")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Spacing.large)
+                } else {
+                    Text(String(localized: "No captured messages here yet."))
+                        .foregroundStyle(.secondary)
+                }
             }
             ForEach(model.rows) { row in
                 MailRowView(row: row, account: model.account(row.accountID)?.account)

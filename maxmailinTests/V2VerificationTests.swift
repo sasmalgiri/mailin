@@ -8382,8 +8382,9 @@ final class MailWorkspaceTests: XCTestCase {
 
     /// The offline build (the test build compiles no mail transport) shows
     /// one honest state and offers no actionable control.
-    func testOfflineBuildShowsHonestStateAndNoActionableControls() async {
-        XCTAssertFalse(ConnectedBuildFeatures.mailTransportsCompiled, "the test build is the offline edition")
+    func testOfflineBuildShowsHonestStateAndNoActionableControls() async throws {
+        // Meaningful only in the offline edition; the connected scheme runs these tests too.
+        try XCTSkipIf(ConnectedBuildFeatures.mailTransportsCompiled, "connected build: the offline state does not apply")
         let backend = ConnectedMailBackend.current()
         XCTAssertEqual(backend.availability, .notInThisEdition)
         let model = MailWorkspaceModel(backend: backend)
@@ -9438,5 +9439,24 @@ final class ConnectedKeychainEntitlementTests: XCTestCase {
         let groups = try XCTUnwrap(connected["keychain-access-groups"] as? [String], "no keychain-access-groups: tokens cannot be saved (-34018)")
         XCTAssertEqual(groups, ["$(AppIdentifierPrefix)com.ecosanskriti.mailin"], "only the app's own group, nothing shared")
         XCTAssertNil(try entitlements("mailin.entitlements")["keychain-access-groups"], "the offline build stays without one")
+    }
+}
+
+/// Owner, 2026-11-13: the only Add account control was a small toolbar icon in the far
+/// corner. It is now also a full-width row at the bottom of the Mail sidebar (always
+/// visible) and a large prominent button while there are no accounts.
+final class MailAddAccountPlacementTests: XCTestCase {
+    func testAddAccountIsInTheSidebarAndTheEmptyState() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("maxmailin/MailWorkspaceView.swift"), encoding: .utf8)
+        let sidebar = try XCTUnwrap(source.range(of: "private struct MailSidebar"))
+        let content = try XCTUnwrap(source.range(of: "private struct MailContentColumn"))
+        let sidebarBody = source[sidebar.upperBound..<content.lowerBound]
+        XCTAssertTrue(sidebarBody.contains("\"mail.addAccount.sidebar\""), "Add account row missing from the sidebar")
+        XCTAssertTrue(sidebarBody.contains("sheet = .addAccount"))
+        let contentBody = source[content.upperBound...]
+        XCTAssertTrue(contentBody.contains("\"mail.addAccount.empty\""), "no prominent Add account in the empty state")
+        XCTAssertTrue(contentBody.contains(".borderedProminent"))
+        XCTAssertTrue(source.contains("\"mail.addAccount\""), "the toolbar entry stays")
     }
 }
