@@ -9421,3 +9421,22 @@ final class EraseConnectedSecretsTests: XCTestCase {
         XCTAssertTrue(source[erase.upperBound...].prefix(2_500).contains("eraseConnectedMailSecrets(KeychainCredentialStore())"))
     }
 }
+
+/// Live Gmail run 2026-11-13: sign-in succeeded but saving the tokens failed with
+/// errSecMissingEntitlement (-34018). `KeychainCredentialStore` uses the data-protection
+/// Keychain, which on macOS needs a keychain access group; the connected entitlements
+/// must declare the app's own group. The offline build stores no account secrets.
+final class ConnectedKeychainEntitlementTests: XCTestCase {
+    private func entitlements(_ name: String) throws -> [String: Any] {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: repo.appendingPathComponent("mailin/\(name)"))
+        return try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    }
+
+    func testConnectedBuildDeclaresItsOwnKeychainGroup() throws {
+        let connected = try entitlements("mailin-connected.entitlements")
+        let groups = try XCTUnwrap(connected["keychain-access-groups"] as? [String], "no keychain-access-groups: tokens cannot be saved (-34018)")
+        XCTAssertEqual(groups, ["$(AppIdentifierPrefix)com.ecosanskriti.mailin"], "only the app's own group, nothing shared")
+        XCTAssertNil(try entitlements("mailin.entitlements")["keychain-access-groups"], "the offline build stays without one")
+    }
+}
