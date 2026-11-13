@@ -2,52 +2,55 @@
 
 Index of the v4.0 rows in [`FIVE_JOBS_TRACKER.md`](../FIVE_JOBS_TRACKER.md) § "v4.0" (plan:
 `Mailin_V4_Online_Mail_Audit_and_Implementation_Plan_2026-11-09-3.md`). The tracker stays the authority for
-state; this file shows the **evidence** for each row in four separate columns, so that
-"implemented" can never be read as "verified":
+state; this file shows the **evidence** for each row in four separate columns, so that "implemented" can never be read as "verified".
 
-- **Implemented**: the code is merged, with the commit.
-- **Automatically verified**: the named deterministic tests have **run and passed** on the Mac (and iOS where relevant).
-- **Provider / device verified**: run against a real provider account or a real device (plan §9).
-- **Candidate Release verified**: run on the signed distribution candidate (offline and connected Release, plan T47).
+## Evidence index (re-written 2026-11-13 from the tracker rows and git history up to 985a8d5 + 01d711d)
 
-A dash means no evidence yet. An empty cell is never "done".
+Columns per plan §11: **Implemented** (commit) · **Automatically verified** (named tests that have run and passed,
+and where) · **Provider / device verified** (a real provider account or a real device — only what actually
+happened) · **Release / UI verified** (a Release-configuration run, the signed candidate, or a UI test that ran).
+Simulator, `FakeMailProvider`, recording fakes and localhost servers are automatic evidence, never provider
+evidence. "Written, not run" is not verified. A dash means no evidence yet.
 
-## Connected mail
+### Connected mail
 
-| ID | Item | Implemented | Automatically verified | Provider / device verified | Candidate Release verified |
+| ID | Item | Implemented | Automatically verified | Provider / device verified | Release / UI verified |
 |---|---|---|---|---|---|
-| V4-00 | Baseline; live-mail branch concepts only | 1e0209f | — (build only) | — | — |
-| V4-01 | Mail / cloud-AI flag split; `MailNetworkPolicy`; `connectedMail` capability; Health; connected entitlements file; owner project checklist (below) | V4-01 commit (code + entitlements file); **project changes pending (owner, below)** | Compiled only: Mac + iOS Simulator `build-for-testing` with the offline flags, Mac `build` with `MAILIN_CONNECTED_MAIL` alone and with `MAILIN_CLOUD_AI` alone. Symbol check: offline binary has 0 IMAPClient/GmailConnector/OutlookConnector/CloudAIManager symbols; mail-only binary has the mail ones and 0 CloudAIManager; AI-only binary has CloudAIManager and 0 mail ones. `MailPolicyTests` (7) **not yet run** — `xcodebuild test` cannot run from the agent sandbox; run with `RunSomeTests` | — | — (needs the Release-Connected configuration) |
-| V4-02 | MailAccount + account-scoped Keychain; native OAuth PKCE + state; single-flight refresh | — | — | — | — |
-| V4-03 | Provider adapter + archive sink contracts; migrations; provenance; FIELD_CONTRACT.md | — | — | — | — |
-| V4-04 | Persistent sync scheduler | — | — | — | — |
-| V4-05 | Gmail RAW MIME capture, labels, history | — | — | — | — |
-| V4-06 | Outlook / M365 Graph MIME capture, folders, delta | — | — | — | — |
-| V4-07 | IMAP byte-correct UID engine | — | — | — | — |
-| V4-08 | Live mail through all five jobs | — | — | — | — |
-| V4-09 | Durable multi-draft editor | — | — | — | — |
-| V4-10 | Sending + durable outbox | — | — | — | — |
-| V4-11 | Journalled server actions | — | — | — | — |
-| V4-12 | Drives, backup/restore, account removal, lifecycle | — | — | — | — |
-| V4-13 | Mail workspace UI, accessibility, 10 languages | — | — | — | — |
-| V4-14 | Google / Entra registrations, privacy, store metadata (owner) | agent part: 9259d4a (packets, drafts, manifest reasons, edition-aware About / privacy summary, T47 check) | `V414ClaimsTests` (5) **not yet run** (run with `RunSomeTests`); `Scripts/check-connected-release.sh` exercised on mock bundles | — (owner: registrations, verification) | — (T47 on the connected candidate) |
-| V4-15 | All gates on one candidate | — | — | — | — |
+| V4-00 | Baseline; live-mail branch concepts only | 1e0209f | — (build only: command-line Release build of the baseline 16e545b) | — | — |
+| V4-01 | Mail / cloud-AI flag split; `MailNetworkPolicy`; `connectedMail` capability; Health; connected configurations | 7d7869c; owner project step 3cda149, a068d3f, 72d1b17; keychain group 0b03bc5 | `MailPolicyTests` 8/8 (app, Mac, Debug, 2026-11-09); mail-gate symbol checks; `ConnectedKeychainEntitlementTests` (0b03bc5). T02 `T02HostileHTMLZeroNetworkTests` written 01d711d, **not yet run** | — | Unsigned Release-Connected build: connected transports compiled, CloudAIManager 0 (a068d3f, 326d626). Signed archives (`codesign` entitlements, A01 / T47): — |
+| V4-02 | MailAccount + account-scoped Keychain; native OAuth PKCE + state; single-flight refresh | 186be4d | `MailAccountCredentialTests` 9/9 (package; T04–T07, T45, T46), 10/10 after b37a4aa | **Gmail only, 2026-11-13:** owner signed in one consent-screen test user on the Debug-Connected build (owner's Mac); after 403 access_denied (not a test user → added) and -34018 on the token save (fixed 0b03bc5) the account was added. Refresh, revocation and Microsoft: — | — |
+| V4-03 | Provider adapter + archive sink contracts; migrations; provenance; FIELD_CONTRACT.md | 7f6e75f | `ConnectedArchiveSinkTests` 6/6 (package; T19, T12), 11 passed in the 2026-11-12 merge run | — | — |
+| V4-04 | Persistent sync scheduler | bd4d58c | `SyncEngineTests` 15/15 (package, `FakeMailProvider`; T08, T16–T20, T23) | — | — |
+| V4-05 | Gmail RAW MIME capture, labels, history | 88b0f07 | `GmailAdapterTests` 13/13 (package, simulated Gmail; T09, T17, T18); MailConnectivityTests 93/93 (2026-11-12) | Sign-in only (V4-02). No capture against Gmail recorded | — |
+| V4-06 | Outlook / M365 Graph MIME capture, folders, delta | 27d742e | `GraphAdapterTests` 9/9 (package, simulated Graph; T10, T17) | — (Entra app registered 2026-11-13, 326d626; no sign-in recorded) | — |
+| V4-07 | IMAP byte-correct UID engine | a1b8291 | `IMAPProtocolTests` 18 + `IMAPAdapterTests` 16 (package, localhost server; T11, T13, T24) | — | — |
+| V4-08 | Live mail through all five jobs | 7938aa9, 2bb01b8 | `ConnectedFiveJobsTests` 10/10 (app, Mac, 2026-11-12; T14/T15, T20, T21, T25, T26, T28, T29), `LineOrientedAttachmentTests` | — | — |
+| V4-09 | Durable multi-draft editor | 1cd0aaf; UI 767631e | `DraftComposeTests` 6/6 (package; T31–T34); `MailWorkspaceTests.testIdentityPickerRequired` (app, Mac, 2026-11-12) | — | — |
+| V4-10 | Sending + durable outbox | c98b555 | `OutboxSendTests` 7/7 (package, localhost SMTP / simulated APIs; T35–T40) | — | — |
+| V4-11 | Journalled server actions | 121334a; UI 767631e; re-consent 2c7cf45 | `ServerActionTests` 12/12 (package; T41–T43); `ReconsentScopeTests` 2/2, `MailWorkspaceTests.testCleanupConfirmationRequiresExactCount` (app, Mac, 2026-11-12) | — | — |
+| V4-12 | Drives, backup/restore, account removal, lifecycle | 67d5fc6; restore staging 01d711d | `LifecycleTests` 10/10 (package; T22 capture leg, T23, T44, T45, T46); `ArchiveDriveImageTests` 2/2 (MAILIN_SCALE=1, disk image, at implementation; skipped in the 2026-11-12 merge run); `BackupRestoreDriveRemovalTests` 2/2 (T22 restore leg, package, this Mac, 2026-11-13) | — | — |
+| V4-13 | Mail workspace UI, accessibility, 10 languages | 767631e, 40bfa45, 9ccd8dd, 985a8d5 | `MailWorkspaceTests` 7/7, `ConnectedFiveJobsTests` 10/10, `MailPolicyTests` 8/8 (app, Mac, Debug, 2026-11-12); `MailAddAccountPlacementTests` (985a8d5: offline 8/8, connected 7 + 1 skipped) | The Add account sheet carried the live Gmail sign-in of 2026-11-13 (V4-02) | Live Gmail UI test (5ce933d) and five-journey Release UI test (01ea12c) written; no completed run recorded |
+| V4-14 | Google / Entra registrations, privacy, store metadata (owner) | 9259d4a, 2c7cf45, b37a4aa, a068d3f, dcebfad, 326d626, 72d1b17, 0b03bc5 | `V414ClaimsTests` 4 passed + 1 skipped (Debug, 2026-11-12); `ReconsentScopeTests` 2/2; `EraseConnectedSecretsTests` 1/1; `Scripts/check-connected-release.sh` on mock bundles | Google project mailin-mail, Gmail API, consent screen in **Testing**, iOS client (dcebfad); Entra app "mailin" (326d626); Gmail sign-in works for a listed test user (2026-11-13). Google verification, Entra publisher verification, domain verification: — | Unsigned Release-Connected build: T47 OAuth lines 3/3 PASS (326d626). Signed connected candidate (T47 entitlement lines): — |
+| V4-15 | All gates on one candidate | — | Release tests written 01d711d: T02 and B06 (DEBUG-override part) **not yet run**; T22 restore leg passed (see V4-12) | — | — |
 
-## Archive closeout, recipes, Advanced Search, AI scaffolding
+### Archive closeout, recipes, Advanced Search, AI scaffolding
 
-| ID | Implemented | Automatically verified | Provider / device verified | Candidate Release verified |
-|---|---|---|---|---|
-| CLOSE-01 | edcc45d | `LargeSingleMessageTests` (Mac, 2026-11-09) | — | — |
-| CLOSE-02 | 8926d1c | `ContainerRecursiveIntakeTests`, `ContainerKillResumeTests` (Mac, 2026-11-09) | — | — |
-| CLOSE-03 | 904cd5a, fd45b97 | `IWork13StreamingUnlockTests`, `InlineAttachmentDecodingTests` | — | — |
-| CLOSE-04 | fd45b97 | `NativeOLMPairFixtureTests` 5/5, preflight 0 unresolved | — | — |
-| CLOSE-05 | — | — | — | — |
-| CLOSE-06 | — | — | — | — (needs ReleaseTesting, below) |
-| REC-01…04 | d351d5b | `RecipeRunTruthTests` RQ01–RQ05 (Mac, 2026-11-09) | — | — |
-| REC-05…08 | — | — | — | — |
-| SEARCH-01…03 | 1e0209f | `testSEARCH01_*`, `testSEARCH02_*`, `testSEARCH03_*` (Mac, 2026-11-09) | — | — |
-| SEARCH-04 | — | — | — | — |
-| SCAF-01…05 | SCAF commit (disabled scaffolding, below) | Package `AIScaffoldContractTests` 14/14 (`swift test`, Mac, 2026-11-12). App `AIScaffoldTests` (5, incl. B01) compiled only — run with `RunSomeTests` | — (no live provider by design) | — |
+| ID | Item | Implemented | Automatically verified | Provider / device verified | Release / UI verified |
+|---|---|---|---|---|---|
+| CLOSE-01 | Large MSG / EMLX by range | edcc45d, 07856a2; gunzip windows 01d711d | `LargeSingleMessageTests` (package, Mac, 2026-11-09; 11/11 at 07856a2); `GunzipFootprintTests` 1/1 (package, 2026-11-13: +193 MiB before the fix, +1 MiB after) | — | — |
+| CLOSE-02 | Recursive mailbox intake inside containers | 8926d1c | `ContainerRecursiveIntakeTests`, `ContainerKillResumeTests` (package, Mac, 2026-11-09) | — | — |
+| CLOSE-03 | Format variants; iWork 2013+ unlock memory; RAR bounds | 904cd5a, fd45b97 | `IWork13StreamingUnlockTests`, `InlineAttachmentDecodingTests` (package) | — | — |
+| CLOSE-04 | Native OLM preflight from the supplied pack | fd45b97 | `NativeOLMPairFixtureTests` 5/5 against the supplied oracle; MAILIN_RELEASE_PREFLIGHT=1: 0 unresolved | — (the pack is a supplied file, not a device run) | — |
+| CLOSE-05 | Tracker / registry / Limits / help reconciled | d8ccbcd, 6f678b1, d4a3ec3 | `RegistryDocumentTableTests` 2/2 (package); Limits / help strings in 10 languages (d4a3ec3) | — | — |
+| CLOSE-06 | Release-config tests; five-journey Mac Release UI test | 01ea12c | `UITestStorageRootTests` 3/3 | — | Offline **Release configuration**, unsigned, `xcodebuild test … -configuration Release ENABLE_TESTABILITY=YES` (2026-11-12, Mac): `CapabilityMatrixTests` 22/22, `V2CutoverTests` 195 passed + 2 skipped, `RecipeRunTruthTests` 7/7. Five-journey UI test: not run ("Timed out while enabling automation mode") |
+| REC-01…04 | Recipe context, real jobs, state machine, save failures | d351d5b | `RecipeRunTruthTests` RQ01–RQ05 (app, Mac, 2026-11-09) | — | Release configuration: `RecipeRunTruthTests` 7/7 (2026-11-12, unsigned, no UI) |
+| REC-05 | Results from receipts | 5b2aa84 | `testREC05_workflowStepFactsAndFieldsComeFromTheReceipt`, `testFrozenScopeIsHonouredByTheExportAndDuplicateTools` (app, Mac, 2026-11-09) | — | — |
+| REC-06 | Five practical recipes | 5b2aa84 | `PracticalRecipeTests` 9/9 (app, Mac, 2026-11-09); strings in 10 languages (catalog check 2026-11-13) | — | — |
+| REC-07 | Online capture recipes | 67cfc6a, e3a7659 | `OnlineRecipeTests` 4/4 (app, `FakeMailProvider`, 2026-11-12) | — | — |
+| REC-08 | Recipe pilot (owner: participants) | — | — | — | — |
+| SEARCH-01…03 | Advanced Search across tiers; one SearchSpec; coverage shown | 1e0209f | `testSEARCH01_*`, `testSEARCH02_*`, `testSEARCH03_*` (app, Mac, 2026-11-09) | — | — |
+| SEARCH-04 | Result browser and saved-query templates | 5b2aa84 | `testTemplatesAreValidSpecs_…` (app, Mac, 2026-11-09) | — | — |
+| SCAF-01…05 | Disabled BYOK AI scaffolding | 32a1cf3 | `AIScaffoldContractTests` 14/14 (package, Mac, 2026-11-12); app `AIScaffoldTests` 5/5 incl. B01–B05 (Mac, 2026-11-12) | — (no live provider by design) | — |
 
 ## V4-01 — what was built
 
@@ -72,14 +75,21 @@ A dash means no evidence yet. An empty cell is never "done".
   page is excluded, so the switch can never be on.
 - **Health**: Settings ▸ Health ▸ "Mail network" shows whether this edition has mail / cloud-AI code,
   Mail on/off, each account's modes, connections allowed / refused (with reasons) and tasks stopped.
-  No account UI yet (V4-02).
+  No account UI yet (V4-02) — *since 767631e the Mail workspace (V4-13) has it.*
 - **Entitlements file**: `mailin/mailin-connected.entitlements` = `mailin/mailin.entitlements`
   (app-sandbox, print, user-selected read-write, app-scope bookmarks) **plus**
-  `com.apple.security.network.client`. Nothing signs with it until the owner does step 2 below.
+  `com.apple.security.network.client`. Nothing signs with it until the owner does step 2 below. *(Done: Release-Connected and
+  Debug-Connected sign with it on macOS since a068d3f / 72d1b17; 0b03bc5 added `keychain-access-groups` = the app's own group.)*
 
 ## Owner checklist — project changes to make in Xcode (rule 12: not applied by the agent)
 
 Do these in Xcode's project editor (not by editing `project.pbxproj` while Xcode is open), then commit.
+
+**Status 2026-11-13:** step 1 and 2 done (a068d3f Release-Connected; 72d1b17 Debug-Connected); step 3 values pasted into
+`Info-Connected.plist` (dcebfad Gmail, 326d626 Entra); step 4 done (3cda149); step 5 not made as a configuration — CLOSE-06
+passes `ENABLE_TESTABILITY=YES` on the `xcodebuild` command line; step 6 done (shared "maxmailin Connected" scheme, a068d3f,
+e4241dd); step 7 open (needs the signed archives); step 8: Google project / consent screen in Testing / iOS client and the
+Entra app exist, verifications, privacy page, App Privacy answers and listing open; 8.6 applied (6fed610).
 
 1. **Add the connected configuration.** Project `maxmailin` ▸ Info ▸ Configurations ▸ **+** ▸
    *Duplicate "Release" Configuration*; name it **`Release-Connected`**. This creates the configuration for
@@ -145,6 +155,8 @@ Do these in Xcode's project editor (not by editing `project.pbxproj` while Xcode
    6. Run `~/mailin-loc-work/keys-v414.py` once the strings are extracted (3 new keys), then `V414ClaimsTests`.
 
 ## New user-facing strings (V4-01) — to translate into the 10 languages
+
+*Done: the policy and Health keys below are in the catalog with all 10 languages (checked at 985a8d5).*
 
 Capability matrix: "Connected mail"; "Lets mail accounts connect to their own mail servers, each only for
 what you allow it: preserve mail, send mail, change server mail. Never connects to an AI service or loads
