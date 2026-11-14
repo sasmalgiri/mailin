@@ -4,6 +4,16 @@ Owner decision 2026-11-14: 4.0 ships the **connected edition** on the existing A
 (`com.ecosanskriti.mailin`): Gmail over IMAP + Google app password, Outlook / Microsoft 365 via Microsoft sign-in,
 iCloud / Fastmail / other IMAP with passwords; no cloud AI. Tick each line on the candidate, in order.
 
+## Status 2026-11-15 (agent part done)
+
+- [x] Five-jobs gate on the candidate: V2CutoverTests + ConnectedFiveJobsTests + ConnectedFiveJobsFixPassTests
+      209 passed, 2 skipped (owner-bound: S/MIME Keychain identity, speech permission), 0 failed.
+- [x] Offline Debug (macOS) and Debug-Connected (iOS Simulator) builds compile.
+- [x] Website for 4.0 (terms, home, support; privacy already 4.0) — merged to `main`; live once GitHub Pages publishes.
+- [x] Tracker updated (`FIVE_JOBS_TRACKER.md` V4-12, V4-13, V4-15).
+- [ ] Owner, in the app: delete the 8 empty test drafts; confirm "Remove and Delete Mail…" for the removed
+      sasmalgiri account; try Change server mail on the Outlook account; look at Live Mail on an iPhone / iPad.
+
 ## 0. Before archiving
 
 - [ ] The release-audit fixes (5 audits, 2026-11-14) that the owner wants in 4.0 are merged on `v3-architecture`
@@ -46,15 +56,40 @@ Scripts/check-connected-release.sh "$APP"
 - [ ] **Privacy Policy URL:** `https://sasmalgiri.github.io/mailin/privacy/` (same URL; now the 4.0 text).
 - [ ] **App Privacy:** answers per `docs/V4_APP_PRIVACY_ANSWERS.md` (owner's choice: "Data Not Collected" or the
       conservative declaration — and `PrivacyInfo.xcprivacy` must say the same).
-- [ ] Export compliance: standard TLS only (answer stays "No non-exempt encryption", per the answers doc).
+- [ ] **Export compliance (owner's declaration).** Facts checked 2026-11-15: every cipher mailin uses is Apple's —
+      TLS through URLSession / Network for mail; CommonCrypto (CCCryptor) for opening password-protected
+      attachments (ODF Blowfish/AES, iWork, RAR, 7-Zip, Office, PDF); Security framework for S/MIME; CryptoKit for
+      hashes. OpenPGP only verifies signatures (no decryption, no secret keys); Argon2 is a hash. No cipher is
+      implemented in mailin's own code. So in App Store Connect choose: *uses encryption* → *only encryption that is
+      exempt / provided by Apple's operating system* ("None of the algorithms mentioned above"). If you want the
+      question to stop appearing on every upload, add `ITSAppUsesNonExemptEncryption = NO` to `Info-Connected.plist`
+      (and `Info.plist`) — the agent did not add it because it is your legal statement.
 - [ ] Screenshots: connected-edition shots per the metadata doc; no "Offline & Private" / "Live Mail is not included".
 - [ ] **App Review Information ▸ Notes:** paste the review notes from `V4_STORE_METADATA_DRAFT.md` (exact steps:
       Settings ▸ Modules ▸ Live Mail on ▸ Features… ▸ Connected mail on ▸ Mail ▸ Add account…), with the Gmail-IMAP
       line: Change server mail is not available for Gmail with an app password in 4.0.
-- [ ] **Demo accounts** in the sign-in fields (never in public text): a Gmail or iCloud address with an **app
-      password** (Gmail: 2-Step Verification on, myaccount.google.com/apppasswords), and an Outlook.com account for
-      the Microsoft sign-in. Check both still sign in the day you submit.
+- [ ] **Demo accounts** in the sign-in fields (never in public text). Make new accounts used only for review —
+      not your personal ones:
+      1. **Outlook:** create a free account at outlook.live.com with a new @outlook.com address (no phone-only
+         sign-in, no passkey: reviewers need a password). Send it 3–4 emails, one with an attachment, and make one
+         folder.
+      2. **iCloud or Gmail with an app password:** e.g. a new Gmail address, turn on 2-Step Verification, create an
+         app password at myaccount.google.com/apppasswords, send it a few emails.
+      3. In App Store Connect ▸ App Review Information: Sign-in required = No (the app works without), and in Notes
+         add "Demo Outlook: <address> / <password>; demo Gmail: <address> / app password <16 letters>".
+      4. On the day you submit, sign in to both once in mailin to check they still work, then remove them.
 - [ ] Attach a small sample `.mbox` for the archive features.
+
+## 3a. Microsoft publisher verification (recommended before or soon after release)
+
+Without it, Microsoft's sign-in page shows mailin as **"unverified"**, and some work / school Microsoft 365
+organisations block unverified apps entirely. Personal Outlook.com accounts still work.
+1. Join the Microsoft AI Cloud Partner Program (free) at partner.microsoft.com with the same organisation as the
+   Entra directory **ECOSANSKRITI**, and note the **Partner (MPN) ID**. It needs a domain email for the organisation
+   (not gmail.com) and Microsoft's business verification, which can take a few days.
+2. Entra admin center ▸ App registrations ▸ **mailin** ▸ Branding & properties ▸ Publisher verification ▸ enter the
+   MPN ID ▸ Verify and save. The publisher domain must be verified first (Branding & properties ▸ Publisher domain).
+3. Sign in again in mailin: the consent page should show a blue "verified" badge.
 
 ## 4. Release
 
