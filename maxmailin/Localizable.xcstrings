@@ -448105,6 +448105,71 @@
           }
         }
       }
+    },
+    "This Microsoft account has no Outlook mailbox — it signs in with another provider's address. Add an Outlook.com address to the account at account.microsoft.com, or connect that other mailbox directly." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Microsoft-Konto hat kein Outlook-Postfach – es meldet sich mit der Adresse eines anderen Anbieters an. Fügen Sie dem Konto unter account.microsoft.com eine Outlook.com-Adresse hinzu oder verbinden Sie das andere Postfach direkt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta de Microsoft no tiene buzón de Outlook: inicia sesión con la dirección de otro proveedor. Añade una dirección de Outlook.com a la cuenta en account.microsoft.com o conecta ese otro buzón directamente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte Microsoft n’a pas de boîte aux lettres Outlook : il se connecte avec l’adresse d’un autre fournisseur. Ajoutez une adresse Outlook.com au compte sur account.microsoft.com, ou connectez directement cette autre boîte aux lettres."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस Microsoft खाते में कोई Outlook मेलबॉक्स नहीं है — यह किसी अन्य प्रदाता के पते से साइन इन करता है। account.microsoft.com पर खाते में एक Outlook.com पता जोड़ें, या उस दूसरे मेलबॉक्स को सीधे कनेक्ट करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo account Microsoft non ha una casella Outlook: accede con l’indirizzo di un altro provider. Aggiungi un indirizzo Outlook.com all’account su account.microsoft.com oppure collega direttamente l’altra casella."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Microsoft アカウントには Outlook のメールボックスがありません。別のプロバイダのアドレスでサインインしています。account.microsoft.com でアカウントに Outlook.com のアドレスを追加するか、そのメールボックスを直接接続してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Microsoft 계정에는 Outlook 사서함이 없습니다. 다른 제공업체의 주소로 로그인합니다. account.microsoft.com에서 계정에 Outlook.com 주소를 추가하거나 그 사서함을 직접 연결하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta Microsoft não tem caixa de correio do Outlook — ela entra com o endereço de outro provedor. Adicione um endereço Outlook.com à conta em account.microsoft.com ou conecte essa outra caixa diretamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Microsoft 帐户没有 Outlook 邮箱——它使用其他提供商的地址登录。请在 account.microsoft.com 为该帐户添加一个 Outlook.com 地址，或直接连接那个邮箱。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Microsoft 帳號沒有 Outlook 信箱——它使用其他提供者的地址登入。請在 account.microsoft.com 為該帳號新增一個 Outlook.com 地址，或直接連接那個信箱。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

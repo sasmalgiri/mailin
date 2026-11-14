@@ -692,4 +692,19 @@ final class GraphAdapterTests: XCTestCase {
         let refused = makeAdapter(sim, refuse: Box(true))
         do { _ = try await refused.profileAddress(context: ctx); XCTFail("a refused policy must send nothing") } catch {}
     }
+
+    /// A Microsoft account that signs in with a Gmail address has no Outlook
+    /// mailbox; Graph answers MailboxNotEnabledForRESTAPI. That is its own reason.
+    func testNoOutlookMailbox_isNamed_notAFolderOrServerError() async throws {
+        let sim = GraphSimulator()
+        await sim.fail("mailFolders", status: 404, code: "MailboxNotEnabledForRESTAPI", times: 5)
+        let adapter = makeAdapter(sim)
+        do {
+            _ = try await adapter.listFolders(pageToken: nil, context: ctx)
+            XCTFail("listing must fail")
+        } catch let MailProviderError.permanent(reason) {
+            XCTAssertTrue(reason.hasPrefix(GraphAdapter.noMailboxPrefix), reason)
+        }
+    }
 }
+

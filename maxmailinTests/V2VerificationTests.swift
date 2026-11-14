@@ -10526,3 +10526,14 @@ final class RemoveAccountSheetFooterTests: XCTestCase {
         XCTAssertTrue(MailRemovalText.removeAndDeleteTitle(some).contains("10"))
     }
 }
+
+/// 2026-11-14: a Microsoft account that signs in with a Gmail address has no
+/// Outlook mailbox; the user is told so and what to do, not "the server refused".
+final class NoOutlookMailboxTextTests: XCTestCase {
+    func testNoOutlookMailboxHasItsOwnSentence() {
+        let text = ConnectedMailErrorText.text(for: MailProviderError.permanent("\(GraphAdapter.noMailboxPrefix): this Microsoft account has no Outlook mailbox (MailboxNotEnabledForRESTAPI)."))
+        XCTAssertTrue(text.contains("account.microsoft.com"), text)
+        XCTAssertFalse(text.contains("MailboxNotEnabledForRESTAPI"), "no technical code on screen")
+        XCTAssertNotEqual(text, ConnectedMailErrorText.text(for: MailProviderError.permanent("something else")))
+    }
+}

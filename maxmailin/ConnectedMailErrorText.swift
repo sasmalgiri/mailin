@@ -167,6 +167,8 @@ enum ConnectedMailErrorText {
             return String(localized: "The server's list of changes expired; the next sync lists the mailbox again.")
         case .folderUnavailable:
             return String(localized: "A folder is no longer on the server.")
+        case .permanent(let reason) where reason.hasPrefix(GraphAdapter.noMailboxPrefix):
+            return String(localized: "This Microsoft account has no Outlook mailbox — it signs in with another provider's address. Add an Outlook.com address to the account at account.microsoft.com, or connect that other mailbox directly.")
         case .permanent:
             return String(localized: "The mail server refused the request.")
         }

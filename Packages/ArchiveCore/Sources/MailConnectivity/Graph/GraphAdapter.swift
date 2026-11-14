@@ -337,6 +337,10 @@ public actor GraphAdapter: MailProviderAdapter {
         }
     }
 
+    static let noMailboxCodes: Set<String> = ["mailboxnotenabledforrestapi", "mailboxnotfound", "errormailboxnotfound"]
+    /// Prefix of the `.permanent` reason for an account without an Outlook mailbox.
+    public static let noMailboxPrefix = "noOutlookMailbox"
+
     static let expiredStateCodes: Set<String> = ["syncstatenotfound", "syncstateinvalid", "resyncrequired", "invalidsyncstate",
                                                  "errorinvalidsyncstatedata", "syncstateexpired"]
 
@@ -347,6 +351,11 @@ public actor GraphAdapter: MailProviderAdapter {
         let code = error?.code ?? ""
         let retryAfter = response.header("retry-after").flatMap { TimeInterval($0.trimmingCharacters(in: .whitespaces)) }
         if Self.expiredStateCodes.contains(code.lowercased()) { return .changeTokenExpired }
+        // A Microsoft account that signs in with another provider's address
+        // (e.g. a Gmail address) has no Outlook mailbox: say so, not "not found".
+        if Self.noMailboxCodes.contains(code.lowercased()) {
+            return .permanent("\(Self.noMailboxPrefix): this Microsoft account has no Outlook mailbox (\(code)).")
+        }
         switch response.status {
         case 401:
             return .unauthorized
