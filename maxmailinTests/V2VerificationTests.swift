@@ -8518,6 +8518,35 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertTrue(host.contains("minWidth: isComposer ? 640"), "the composer window is sized like Mail's")
     }
 
+    /// Live Mail sidebar 2026-11-15: folders in Mail's order with Mail's icons
+    /// (special-use marks first, names only when unmarked), accounts open by default.
+    func testSidebarFolders_mailOrderAndIcons_accountsOpenByDefault() throws {
+        let account = UUID()
+        func f(_ path: String, _ mark: String? = nil, _ kind: RemoteFolderOccurrence.Kind = .folder) -> ConnectedFolderSummary {
+            ConnectedFolderSummary(accountID: account, serverID: path, path: path, kind: kind, specialUse: mark,
+                                   messages: 0, unread: 0, selected: true)
+        }
+        // Outlook as the owner's screenshot listed it (alphabetical), Graph well-known names.
+        let outlook = [f("Archive", "archive"), f("Conversation History"), f("Deleted Items", "deleteditems"), f("Drafts", "drafts"),
+                       f("Inbox", "inbox"), f("Junk Email", "junkemail"), f("Outbox", "outbox"), f("Sent Items", "sentitems")]
+        XCTAssertEqual(MailFolderStyle.ordered(outlook).map(\.path),
+                       ["Inbox", "Drafts", "Sent Items", "Archive", "Junk Email", "Deleted Items", "Outbox", "Conversation History"])
+        // IMAP marks win over names; unmarked names still work; a nested "Inbox" child is the person's folder.
+        XCTAssertEqual(MailFolderStyle.role(f("Gesendet", "\\Sent")), .sent)
+        XCTAssertEqual(MailFolderStyle.role(f("Trash")), .trash)
+        XCTAssertEqual(MailFolderStyle.role(f("Projects/Inbox")), .other)
+        XCTAssertEqual(MailFolderStyle.role(f("Receipts", nil, .label)), .label)
+        XCTAssertEqual(MailFolderStyle.role(f("[Gmail]/All Mail", "\\All", .label)), .archive)
+        XCTAssertEqual(MailFolderStyle.role(f("Inbox", "inbox")).symbol, "tray")
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let view = try String(contentsOf: root.appendingPathComponent("maxmailin/MailWorkspaceView.swift"), encoding: .utf8)
+        XCTAssertTrue(view.contains("DisclosureGroup(isExpanded:"), "the account's folders are open by default")
+        XCTAssertTrue(view.contains("get: { !collapsed.contains(snapshot.id) }"))
+        XCTAssertTrue(view.contains("MailFolderStyle.ordered(model.folders[snapshot.id]"))
+        XCTAssertTrue(view.contains("safeAreaBar(edge: .top)"), "the filter bar is a real bar, not washed out by the scroll edge")
+    }
+
     func testIdentityPickerRequired() throws {
         let me = MailAccount(provider: .imap, host: "imap.new.example", displayIdentity: "me@new.example", enabledModes: [.send])
         let other = MailAccount(provider: .imap, host: "imap.other.example", displayIdentity: "other@other.example", enabledModes: [.send])

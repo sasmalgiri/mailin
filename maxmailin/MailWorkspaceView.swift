@@ -272,6 +272,8 @@ private struct MailWorkspaceReadyView: View {
 private struct MailSidebar: View {
     @Bindable var model: MailWorkspaceModel
     @Binding var sheet: MailSheet?
+    /// Accounts whose folder list the person closed; every account starts open.
+    @State private var collapsed: Set<UUID> = []
 
     var body: some View {
         List(selection: Binding(get: { model.section }, set: { if let s = $0 { model.section = s } })) {
@@ -280,10 +282,12 @@ private struct MailSidebar: View {
                     .tag(MailWorkspaceModel.Section.unifiedInbox)
                     .accessibilityHint(Text("Captured mail of every account, newest first"))
                 ForEach(model.accounts) { snapshot in
-                    DisclosureGroup {
-                        ForEach(model.folders[snapshot.id] ?? []) { folder in
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { !collapsed.contains(snapshot.id) },
+                        set: { open in if open { collapsed.remove(snapshot.id) } else { collapsed.insert(snapshot.id) } })) {
+                        ForEach(MailFolderStyle.ordered(model.folders[snapshot.id] ?? [])) { folder in
                             HStack {
-                                Label(folder.path, systemImage: folder.kind == .label ? "tag" : "folder")
+                                Label(folder.path, systemImage: MailFolderStyle.role(folder).symbol)
                                 Spacer()
                                 if folder.unread > 0 {
                                     Text("\(folder.unread)").font(.caption).foregroundStyle(.secondary)
@@ -352,6 +356,62 @@ private struct MailSidebar: View {
     }
 }
 
+/// Mail's folder order and icons: Inbox, Drafts, Sent, Archive, Junk, Trash,
+/// Outbox, then the person's own folders A–Z, then labels. The provider's
+/// special-use mark decides (IMAP `\Sent`, Graph `sentitems`, Gmail `\Junk`);
+/// the folder's name is used only when the server marks nothing.
+enum MailFolderStyle {
+    enum Role: Int, Comparable {
+        case inbox, drafts, sent, archive, junk, trash, outbox, other, label
+        static func < (a: Role, b: Role) -> Bool { a.rawValue < b.rawValue }
+
+        var symbol: String {
+            switch self {
+            case .inbox: return "tray"
+            case .drafts: return "doc"
+            case .sent: return "paperplane"
+            case .archive: return "archivebox"
+            case .junk: return "xmark.bin"
+            case .trash: return "trash"
+            case .outbox: return "tray.and.arrow.up"
+            case .other: return "folder"
+            case .label: return "tag"
+            }
+        }
+    }
+
+    static func role(_ folder: ConnectedFolderSummary) -> Role {
+        if let mark = folder.specialUse.map(normalised), let role = role(named: mark) { return role }
+        if folder.kind == .label { return .label }
+        let name = normalised(folder.path.split(separator: "/").last.map(String.init) ?? folder.path)
+        return folder.path.contains("/") ? .other : (role(named: name) ?? .other)
+    }
+
+    static func ordered(_ folders: [ConnectedFolderSummary]) -> [ConnectedFolderSummary] {
+        folders.sorted {
+            let (a, b) = (role($0), role($1))
+            return a != b ? a < b : $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+    }
+
+    private static func normalised(_ s: String) -> String {
+        s.lowercased().replacingOccurrences(of: "\\", with: "").replacingOccurrences(of: " ", with: "")
+    }
+
+    private static func role(named s: String) -> Role? {
+        switch s {
+        case "inbox": return .inbox
+        case "drafts": return .drafts
+        case "sent", "sentitems", "sentmail", "sentmessages": return .sent
+        case "archive", "all", "allmail": return .archive
+        case "junk", "junkemail", "spam": return .junk
+        case "trash", "deleteditems", "deletedmessages", "bin": return .trash
+        case "outbox": return .outbox
+        default: return nil
+        }
+    }
+}
+
 /// An account's colour badge and address — the same in the sidebar and in every row.
 struct MailAccountBadge: View {
     let account: MailAccount
@@ -412,8 +472,16 @@ private struct MailContentColumn: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Spacing.large)
                 } else {
-                    Text(String(localized: "No captured messages here yet."))
-                        .foregroundStyle(.secondary)
+                    ContentUnavailableView {
+                        Label(String(localized: "No captured messages here yet."), systemImage: "tray")
+                    } description: {
+                        Text("Mail appears here once Preserve mail has saved it. Sync now checks the server again.")
+                    } actions: {
+                        Button(String(localized: "Sync now")) { Task { await model.syncNow() } }
+                            .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .listRowSeparator(.hidden)
                 }
             }
             ForEach(model.rows) { row in
@@ -425,7 +493,7 @@ private struct MailContentColumn: View {
                     .accessibilityHint(Text(model.showingCountText))
             }
         }
-        .safeAreaInset(edge: .top) {
+        .mailTopBar {
             HStack(spacing: Spacing.xSmall) {
                 Toggle(isOn: $model.unreadOnly) { Label(String(localized: "Unread"), systemImage: "envelope.badge") }
                     .toggleStyle(.button)
@@ -441,12 +509,27 @@ private struct MailContentColumn: View {
             .controlSize(.small)
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
-            .background(.bar)
         }
         .overlay(alignment: .bottom) {
-            Text("Read and flag marks are as they were when each message was saved.")
-                .font(.caption2).foregroundStyle(.secondary)
-                .padding(Spacing.xxSmall)
+            if !model.rows.isEmpty {
+                Text("Read and flag marks are as they were when each message was saved.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(Spacing.xxSmall)
+            }
+        }
+    }
+}
+
+private extension View {
+    /// A bar pinned above a list. On macOS 26 / iOS 26 it is a real bar, so the
+    /// scroll-edge effect sits under it instead of washing it out; earlier
+    /// systems keep the inset with a bar background.
+    @ViewBuilder
+    func mailTopBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+        if #available(macOS 26.0, iOS 26.0, *) {
+            safeAreaBar(edge: .top) { bar() }
+        } else {
+            safeAreaInset(edge: .top) { bar().background(.bar) }
         }
     }
 }
