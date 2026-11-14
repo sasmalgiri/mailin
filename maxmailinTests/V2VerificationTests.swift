@@ -10500,3 +10500,29 @@ final class GmailIMAPServerActionsSwitchTests: XCTestCase {
         XCTAssertNotNil(model.lastError, "the reason is shown")
     }
 }
+
+/// Owner 2026-11-14: the Remove account sheet needs standard footer buttons —
+/// Cancel, Remove (keeps the mail, default) and Remove and Delete Mail… (deletes
+/// the account's archived mail only after the exact count is typed, rule 4).
+final class RemoveAccountSheetFooterTests: XCTestCase {
+    func testFooterHasCancelRemoveAndRemoveAndDelete() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("maxmailin/MailAccountViews.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "struct MailRemoveAccountView"))
+        let end = try XCTUnwrap(source.range(of: "// MARK: - Upgrade inventory"))
+        let sheet = String(source[start.upperBound..<end.lowerBound])
+        XCTAssertTrue(sheet.contains("placement: .cancellationAction"))
+        XCTAssertTrue(sheet.contains("placement: .confirmationAction") && sheet.contains("\"mail.remove.confirm\""), "Remove is a footer button")
+        XCTAssertTrue(sheet.contains("placement: .destructiveAction") && sheet.contains("Remove and Delete Mail…"))
+        XCTAssertTrue(sheet.contains("disabled(!typedMatches"), "deleting waits for the typed count")
+    }
+
+    func testRemoveAndDeleteTitleNamesTheCount() {
+        let none = ConnectedAccountArchiveSummary(accountID: UUID(), records: 0, held: 0, deletable: 0,
+                                                  exclusiveBlobs: 0, exclusiveBytes: 0, sharedBlobs: 0)
+        let some = ConnectedAccountArchiveSummary(accountID: UUID(), records: 12, held: 2, deletable: 10,
+                                                  exclusiveBlobs: 10, exclusiveBytes: 1_000, sharedBlobs: 0)
+        XCTAssertEqual(MailRemovalText.removeAndDeleteTitle(none), String(localized: "Remove"))
+        XCTAssertTrue(MailRemovalText.removeAndDeleteTitle(some).contains("10"))
+    }
+}

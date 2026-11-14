@@ -300,6 +300,15 @@ struct MailRemoveAccountView: View {
     @State private var deletion: ConnectedAccountArchiveSummary?
     @State private var typedCount = ""
     @State private var deleted: ConnectedAccountArchiveDeletion?
+    /// Owner 2026-11-14: "Remove" and "Remove and Delete Mail…" are both footer
+    /// buttons next to Cancel; deleting first shows the exact count to type (rule 4).
+    @State private var alsoDelete = false
+    @State private var working = false
+
+    private var typedMatches: Bool {
+        guard let deletion else { return false }
+        return deletion.deletable == 0 || typedCount.trimmingCharacters(in: .whitespaces) == String(deletion.deletable)
+    }
 
     var body: some View {
         NavigationStack {
@@ -309,22 +318,20 @@ struct MailRemoveAccountView: View {
                         Text(MailRemovalText.report(report))
                             .accessibilityIdentifier("mail.remove.report")
                     }
-                    if let deletion, deletion.deletable > 0, deleted == nil {
+                    if let deleted {
+                        Section { Text("\(deleted.deletedEmailIDs.count) archived messages deleted; \(deleted.heldKept) on hold kept.") }
+                    } else if !alsoDelete, let deletion, deletion.deletable > 0 {
+                        // Removed with mail kept: deleting it later stays possible here.
                         Section {
                             Text(MailRemovalText.deletionDetail(deletion)).font(.callout)
                             TextField(String(localized: "Type the number to confirm"), text: $typedCount)
                             Button(MailRemovalText.deletionTitle(deletion), role: .destructive) {
-                                Task {
-                                    deleted = await model.deleteArchivedMail(accountID, confirmedCount: deletion.deletable)
-                                }
+                                Task { deleted = await model.deleteArchivedMail(accountID, confirmedCount: deletion.deletable) }
                             }
-                            .disabled(typedCount.trimmingCharacters(in: .whitespaces) != String(deletion.deletable))
+                            .disabled(!typedMatches)
                         } header: {
                             Text("Also delete its archived mail? (separate, optional)")
                         }
-                    }
-                    if let deleted {
-                        Section { Text("\(deleted.deletedEmailIDs.count) archived messages deleted; \(deleted.heldKept) on hold kept.") }
                     }
                 } else if let plan {
                     Section {
@@ -332,14 +339,16 @@ struct MailRemoveAccountView: View {
                     } header: {
                         Text("Before removing")
                     }
-                    Section {
-                        Button(MailRemovalText.confirmTitle(plan), role: .destructive) {
-                            Task {
-                                report = await model.remove(accountID)
-                                if report != nil { deletion = try? await model.backend.archiveDeletionPlan(accountID) }
+                    if alsoDelete, let deletion {
+                        Section {
+                            Text(MailRemovalText.deletionDetail(deletion)).font(.callout)
+                            if deletion.deletable > 0 {
+                                TextField(String(localized: "Type the number to confirm"), text: $typedCount)
+                                    .accessibilityIdentifier("mail.remove.typedCount")
                             }
+                        } header: {
+                            Text("Delete its archived mail too")
                         }
-                        .accessibilityIdentifier("mail.remove.confirm")
                     }
                 } else if let error = model.lastError {
                     Text(error).foregroundStyle(.red)
@@ -349,14 +358,55 @@ struct MailRemoveAccountView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(String(localized: "Remove account"))
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(report == nil ? String(localized: "Cancel") : String(localized: "Done"), action: dismiss)
-                        .accessibilityIdentifier("mail.remove.close")
+            .toolbar { footer }
+        }
+        .task {
+            plan = await model.removalPlan(accountID)
+            deletion = try? await model.backend.archiveDeletionPlan(accountID)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var footer: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button(report == nil ? String(localized: "Cancel") : String(localized: "Done"), action: dismiss)
+                .accessibilityIdentifier("mail.remove.close")
+        }
+        if report == nil, let plan {
+            ToolbarItem(placement: .destructiveAction) {
+                if alsoDelete, let deletion {
+                    Button(MailRemovalText.removeAndDeleteTitle(deletion), role: .destructive) { Task { await removeAndDelete() } }
+                        .disabled(!typedMatches || working)
+                        .accessibilityIdentifier("mail.remove.andDelete")
+                } else {
+                    Button(String(localized: "Remove and Delete Mail…"), role: .destructive) { alsoDelete = true; typedCount = "" }
+                        .disabled(deletion == nil || working)
+                        .accessibilityIdentifier("mail.remove.chooseDelete")
                 }
             }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(String(localized: "Remove")) { Task { await removeKeepingMail() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(working)
+                    .help(MailRemovalText.confirmTitle(plan))
+                    .accessibilityIdentifier("mail.remove.confirm")
+            }
         }
-        .task { plan = await model.removalPlan(accountID) }
+    }
+
+    private func removeKeepingMail() async {
+        working = true; defer { working = false }
+        alsoDelete = false
+        report = await model.remove(accountID)
+        if report != nil { deletion = try? await model.backend.archiveDeletionPlan(accountID) }
+    }
+
+    private func removeAndDelete() async {
+        guard let confirmed = deletion?.deletable else { return }
+        working = true; defer { working = false }
+        report = await model.remove(accountID)
+        guard report != nil else { return }
+        if confirmed > 0 { deleted = await model.deleteArchivedMail(accountID, confirmedCount: confirmed) }
     }
 }
 

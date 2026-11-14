@@ -3249,7 +3249,10 @@ final class MailinClickThroughUITests: XCTestCase {
                     snapshotScreen("gmail-remove-counts")
                     detail.append("before: \(summary.joined(separator: " / ")); button “\(confirm.label)”")
                     if !summary.contains(where: { $0.contains("removed from the Keychain") }) { pass = false; detail.append("no Keychain line") }
-                    if lgNumbers(confirm.label).last != saved { pass = false; detail.append("the button does not keep \(saved) archived messages") }
+                    // The footer's Remove keeps the mail; the summary states how many are kept.
+                    if !summary.contains(where: { $0.contains("archived messages are kept") && lgNumbers($0).first == saved }) {
+                        pass = false; detail.append("the sheet does not say \(saved) archived messages are kept")
+                    }
                     confirm.click()
                     let report = fjElement("mail.remove.report")
                     if report.waitForExistence(timeout: 60) {

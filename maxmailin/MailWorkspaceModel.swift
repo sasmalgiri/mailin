@@ -399,6 +399,11 @@ enum MailRemovalText {
     }
 
     /// The separate, counted deletion of the account's archived mail.
+    static func removeAndDeleteTitle(_ s: ConnectedAccountArchiveSummary) -> String {
+        s.deletable == 0 ? String(localized: "Remove")
+                         : String(localized: "Remove and Delete \(s.deletable) Messages")
+    }
+
     static func deletionTitle(_ s: ConnectedAccountArchiveSummary) -> String {
         String(localized: "Delete \(s.deletable) archived messages of this account")
     }
