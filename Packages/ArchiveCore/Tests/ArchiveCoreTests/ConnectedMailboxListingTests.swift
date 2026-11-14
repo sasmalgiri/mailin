@@ -11,6 +11,7 @@
 
 import XCTest
 import Foundation
+import SQLite3
 @testable import ArchiveCore
 
 final class ConnectedMailboxListingTests: XCTestCase {
@@ -103,5 +104,84 @@ final class ConnectedMailboxListingTests: XCTestCase {
         XCTAssertEqual(none.total, 0)
         let other = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [UUID()]))
         XCTAssertEqual(other.total, 0, "another account's mailbox shows none of these")
+    }
+
+    /// Fix pass 2026-11-14 (finding 11): folder counts are one SQL aggregate
+    /// and the unread / flagged filters run in SQL — with each provider's
+    /// flag rules exactly as `ConnectedMessageFlags` (IMAP case-insensitive,
+    /// Graph `isRead` / `flagged`) — paging every match once, and the
+    /// mailbox's indexes exist after the first read.
+    func testFix11_sqlFlagFilters_matchTheProviderRules_pageEveryMatch_andIndexesExist() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir)
+        var accounts: [MailProviderKind: UUID] = [:]
+        for provider in [MailProviderKind.imap, .microsoftGraph] {
+            let id = UUID()
+            accounts[provider] = id
+            try await sink.saveAccount(ConnectedAccountRecord(
+                accountID: id, provider: provider, issuer: "", host: provider == .imap ? "imap.example.com" : nil,
+                displayIdentity: "asha@example.com", grantedScopes: [], enabledModes: [], connectionState: "connected",
+                createdAt: Date(), updatedAt: Date()))
+        }
+        func capture(_ provider: MailProviderKind, _ n: UInt32, flags: [String], folder: String) async throws {
+            let account = accounts[provider]!
+            let run = try await sink.beginRun(accountID: account, selection: "all")
+            let bytes = Data(("Message-ID: <\(provider.rawValue)-\(n)@example.com>\r\nFrom: a@example.com\r\nSubject: \(n)\r\n"
+                              + "Date: Mon, 6 Jan 2025 10:00:00 +0000\r\n\r\nBody\r\n").utf8)
+            let identity: ProviderMessageIdentity = provider == .imap
+                ? .imap(mailbox: folder, uidValidity: 7, uid: n) : .graph(mailbox: "me", immutableID: "g\(n)")
+            _ = try await sink.capture(CaptureItem(accountID: account, identity: identity,
+                                                   occurrences: [RemoteFolderOccurrence(serverID: folder, displayPath: folder)],
+                                                   raw: try stage(sink, bytes),
+                                                   metadata: ProviderMetadata(representation: provider == .imap ? .imapLiteral : .graphMIME,
+                                                                              internalDate: Date(timeIntervalSince1970: 1_736_000_000 + Double(n)),
+                                                                              flags: flags)), runID: run)
+        }
+        try await capture(.imap, 1, flags: ["\\SEEN"], folder: "INBOX")             // read (case-insensitive)
+        try await capture(.imap, 2, flags: [], folder: "INBOX")                     // unread
+        try await capture(.imap, 3, flags: ["\\Flagged", "\\Seen"], folder: "INBOX") // read, flagged
+        try await capture(.imap, 4, flags: ["\\flagged"], folder: "Work")          // unread, flagged
+        try await capture(.microsoftGraph, 5, flags: ["isRead"], folder: "f-inbox")
+        try await capture(.microsoftGraph, 6, flags: ["flagged"], folder: "f-inbox")  // unread, flagged
+
+        let imap = accounts[.imap]!, graph = accounts[.microsoftGraph]!
+        let folders = Dictionary(uniqueKeysWithValues: try await sink.folderSummaries(accountID: imap).map { ($0.serverID, $0) })
+        XCTAssertEqual(folders["INBOX"]?.messages, 3)
+        XCTAssertEqual(folders["INBOX"]?.unread, 1)
+        XCTAssertEqual(folders["Work"]?.unread, 1)
+        let graphFolders = try await sink.folderSummaries(accountID: graph)
+        XCTAssertEqual(graphFolders.first?.messages, 2)
+        XCTAssertEqual(graphFolders.first?.unread, 1)
+
+        func all(_ q: ConnectedMailboxQuery) async throws -> (rows: [ConnectedMailboxRow], total: Int) {
+            var rows: [ConnectedMailboxRow] = []
+            var cursor: ConnectedMailboxCursor?
+            var total = -1
+            repeat {
+                let page = try await sink.mailboxPage(q, after: cursor)
+                total = page.total
+                rows += page.rows
+                cursor = page.next
+            } while cursor != nil
+            return (rows, total)
+        }
+        let unread = try await all(ConnectedMailboxQuery(unreadOnly: true, pageSize: 1))
+        XCTAssertEqual(unread.total, 3)
+        XCTAssertEqual(unread.rows.count, 3, "every unread message once, one per page")
+        XCTAssertTrue(unread.rows.allSatisfy { $0.isRead == false })
+        let flagged = try await all(ConnectedMailboxQuery(flaggedOnly: true, pageSize: 2))
+        XCTAssertEqual(flagged.total, 3)
+        XCTAssertEqual(Set(flagged.rows.map(\.isFlagged)), [true])
+        let both = try await all(ConnectedMailboxQuery(accountIDs: [imap], unreadOnly: true, flaggedOnly: true))
+        XCTAssertEqual(both.total, 1)
+
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(dir.appendingPathComponent("emails.db").path, &handle, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        var stmt: OpaquePointer?
+        sqlite3_prepare_v2(handle, "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_remote_%';", -1, &stmt, nil)
+        var names = Set<String>()
+        while sqlite3_step(stmt) == SQLITE_ROW { names.insert(String(cString: sqlite3_column_text(stmt, 0))) }
+        sqlite3_finalize(stmt)
+        XCTAssertTrue(names.isSuperset(of: ["idx_remote_messages_mailbox", "idx_remote_messages_date", "idx_remote_memberships_folder"]), "\(names)")
     }
 }

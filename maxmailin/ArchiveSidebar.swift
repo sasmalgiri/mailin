@@ -22,7 +22,9 @@ enum ArchiveSidebarSelection: Hashable, Sendable {
     case withAttachments
     case pinned
     case trash
-    case source(String)
+    /// One archive source by id (two sources with similar names, or two
+    /// accounts with one address, are different rows); the name is its title.
+    case source(id: Int64, name: String)
     case label(String)
     /// FOLD-02: one folder of one source — "Inbox" of two archives are two rows.
     case folder(id: Int64, name: String)
@@ -46,8 +48,8 @@ enum ArchiveSidebarSelection: Hashable, Sendable {
         case .trash:
             q.includeTrashed = true
             q.trashedOnly = true
-        case .source(let filename):
-            q.sourceFileName = filename
+        case .source(let id, _):
+            q.sourceID = id
         case .label(let tag):
             q.userTag = tag
         case .folder(let id, _):
@@ -68,7 +70,7 @@ enum ArchiveSidebarSelection: Hashable, Sendable {
         case .withAttachments: return String(localized: "With Attachments")
         case .pinned: return String(localized: "Pinned")
         case .trash: return String(localized: "Trash")
-        case .source(let name): return name
+        case .source(_, let name): return name
         case .label(let tag): return tag
         case .folder(_, let name): return name
         case .saved: return String(localized: "Saved Search")
@@ -166,6 +168,8 @@ final class ArchiveSidebarModel: ObservableObject {
     @Published private(set) var pinnedCount = 0
     @Published private(set) var trashedCount = 0
     @Published private(set) var sources: [SQLiteEmailStore.StoredSource] = []
+    /// Row titles of `sources` (`sourceTitles`).
+    @Published private(set) var sourceTitles: [Int64: String] = [:]
     /// A6: per-source committed vs indexed, so a source still indexing says so.
     @Published private(set) var coverage: [Int64: SQLiteEmailStore.SourceCoverage] = [:]
     @Published private(set) var labels: [AggregateBucket] = []
@@ -203,9 +207,25 @@ final class ArchiveSidebarModel: ObservableObject {
         }
         return bySource.keys.sorted().compactMap { sourceID in
             guard let group = bySource[sourceID], let items = build(group, parent: nil) else { return nil }
-            let title = sources.first { $0.sourceID == sourceID }?.filename ?? String(localized: "Earlier imports")
+            let title = sourceTitles(sources)[sourceID] ?? String(localized: "Earlier imports")
             return FolderTree(sourceID: sourceID, title: title, items: items)
         }
+    }
+
+    /// The title of each source: its name, and for a connected account whose
+    /// address another account shares, the provider too.
+    static func sourceTitles(_ sources: [SQLiteEmailStore.StoredSource]) -> [Int64: String] {
+        let names = ConnectedAccountNaming.distinctNames(sources.map {
+            .init(key: String($0.sourceID), display: $0.filename, provider: ConnectedAccountNaming.provider(parser: $0.parser))
+        })
+        return Dictionary(uniqueKeysWithValues: sources.map { ($0.sourceID, names[String($0.sourceID)] ?? $0.filename) })
+    }
+
+    /// What the sidebar lists: every source except a removed connected
+    /// account with nothing left (its row and its empty server folders).
+    static func visible(sources: [SQLiteEmailStore.StoredSource], nodes: [ArchiveFolderNode],
+                        hidden: Set<Int64>) -> (sources: [SQLiteEmailStore.StoredSource], nodes: [ArchiveFolderNode]) {
+        (sources.filter { !hidden.contains($0.sourceID) }, nodes.filter { !hidden.contains($0.sourceID) })
     }
 
     private let archive: ArchiveDataService
@@ -272,11 +292,15 @@ final class ArchiveSidebarModel: ObservableObject {
         var received = EmailQuery.all; received.messageType = "received"
         sentCount = (try? await archive.count(query: sent)) ?? sentCount
         receivedCount = (try? await archive.count(query: received)) ?? receivedCount
-        sources = (try? await archive.sources()) ?? sources
+        let hidden = (try? await archive.sqliteStore?.hiddenConnectedSourceIDs()) ?? []
+        if let all = try? await archive.sources() {
+            sources = Self.visible(sources: all, nodes: [], hidden: hidden).sources
+            sourceTitles = Self.sourceTitles(sources)
+        }
         coverage = (try? await archive.sourceCoverage()) ?? coverage
         await reloadLabels()
         if completeLabels, let nodes = try? await archive.folderNodes() {
-            folderTrees = Self.trees(from: nodes, sources: sources)
+            folderTrees = Self.trees(from: Self.visible(sources: [], nodes: nodes, hidden: hidden).nodes, sources: sources)
         }
         lastRefresh = Date()
     }
@@ -330,7 +354,7 @@ struct ArchiveSidebarView: View {
                         let cov = model.coverage[source.sourceID]
                         Label {
                             HStack(spacing: 4) {
-                                Text(source.filename)
+                                Text(model.sourceTitles[source.sourceID] ?? source.filename)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                 if let cov, cov.pending > 0 {
@@ -344,7 +368,7 @@ struct ArchiveSidebarView: View {
                         } icon: {
                             Image(systemName: icon(forParser: source.parser))
                         }
-                        .tag(ArchiveSidebarSelection.source(source.filename))
+                        .tag(ArchiveSidebarSelection.source(id: source.sourceID, name: model.sourceTitles[source.sourceID] ?? source.filename))
                         .help(sourceHelp(source, cov))
                         .accessibilityIdentifier("archive.sidebar.source")
                     }

@@ -54,6 +54,37 @@ extension SQLiteEmailStore {
         try scalarInt(try ensureDB(), "SELECT EXISTS(SELECT 1 FROM remote_messages);") != 0
     }
 
+    /// Every record id a connected occurrence points at (provenance sidecars
+    /// of containers filter their manifest by it in one pass).
+    func connectedEmailIDs() throws -> Set<String> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT email_id FROM remote_messages WHERE email_id IS NOT NULL;")
+        defer { sqlite3_finalize(stmt) }
+        var out = Set<String>()
+        while try stepRow(stmt, db) { out.insert(columnText(stmt, 0)) }
+        return out
+    }
+
+    /// The record's OWN raw bytes in the blob tier when they are a capture's
+    /// bytes exactly as acquired (the record's blob is a connected occurrence's
+    /// blob). Nil for anything else — an import keeps its own export path.
+    /// Exports write these bytes as they are instead of re-encoding the text
+    /// the reader decoded from them (an 8-bit Latin-1 message stays byte-identical).
+    func capturedRawBlob(emailID: UUID) throws -> BlobReference? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT b.raw_blob_digest, b.raw_blob_length FROM email_bodies b
+            WHERE b.id = ?1 AND b.raw_blob_digest IS NOT NULL AND b.raw_blob_digest <> ''
+              AND (b.raw IS NULL OR length(b.raw) = 0)
+              AND EXISTS (SELECT 1 FROM remote_messages r WHERE r.email_id = b.id AND r.blob_digest = b.raw_blob_digest);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, emailID.uuidString)
+        guard try stepRow(stmt, db) else { return nil }
+        let blob = BlobReference(digest: columnText(stmt, 0), length: sqlite3_column_int64(stmt, 1))
+        return blobStore.exists(blob) ? blob : nil
+    }
+
     /// Every connected account whose acquisition is incomplete, in account order.
     func connectedAcquisitionGaps() throws -> [ConnectedAcquisitionGap] {
         var out: [ConnectedAcquisitionGap] = []

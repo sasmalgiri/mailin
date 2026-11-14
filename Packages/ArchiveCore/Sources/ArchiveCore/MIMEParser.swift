@@ -228,6 +228,9 @@ public class MIMEParser {
             // is the identity and cost two copies of every text body.
             let encoding = stringEncoding(for: charset)
             if encoding == .utf8 { return trimmed }
+            if let original = latin1DecodedBytes(trimmed), let decoded = String(data: original, encoding: encoding) {
+                return decoded
+            }
             if let data = trimmed.data(using: .utf8),
                let decoded = String(data: data, encoding: encoding) {
                 return decoded
@@ -243,6 +246,19 @@ public class MIMEParser {
             return trimmed
         }
     }
+    /// The message text reaches the parser decoded from its bytes as UTF-8,
+    /// or — when the bytes are not UTF-8 (8-bit mail in a legacy charset) —
+    /// as ISO-8859-1, one character per byte (`rawMIME`, the offset engine,
+    /// connected capture). In that second case the ISO-8859-1 encoding of the
+    /// text IS the part's original bytes, and decoding them with the declared
+    /// charset reads them as written ("café", not "cafÃ©"). Nil when the text
+    /// cannot have come that way (a character above U+00FF, or bytes that are
+    /// UTF-8 — pure ASCII included), so the UTF-8 route below applies.
+    private static func latin1DecodedBytes(_ text: String) -> Data? {
+        guard let bytes = text.data(using: .isoLatin1), String(data: bytes, encoding: .utf8) == nil else { return nil }
+        return bytes
+    }
+
     private static func decodeData(_ data: Data, charset: String) -> String {
         if let s = String(data: data, encoding: stringEncoding(for: charset)) { return s }
         if let s = String(data: data, encoding: .utf8) { return s }

@@ -10537,3 +10537,80 @@ final class NoOutlookMailboxTextTests: XCTestCase {
         XCTAssertNotEqual(text, ConnectedMailErrorText.text(for: MailProviderError.permanent("something else")))
     }
 }
+
+/// Fix pass 2026-11-14 (connected mail × five jobs), app side.
+final class ConnectedFiveJobsFixPassTests: XCTestCase {
+    private func unreadable(_ raw: String) throws -> MBOXParser.RawEmail {
+        var email = try ConnectedArchiveSink.unreadableRecord(occurrences: [], reason: "test")
+        email.rawSource = raw
+        return email
+    }
+
+    /// Finding 3: two captures the reader could not parse, with different
+    /// bytes, are never content-equivalent duplicates (empty fields prove nothing).
+    func testUnreadableCapturesWithDifferentBytes_areCandidates_neverVerified() throws {
+        let a = try unreadable("garbage one \u{1}")
+        let b = try unreadable("garbage two \u{2}")
+        let verdict = DuplicateVerification.verify([a, b])
+        XCTAssertFalse(verdict.isVerified, "\(verdict)")
+        XCTAssertTrue(DuplicateVerification.bulkRemovable(DuplicateVerification.classify([[a, b]]).verified).isEmpty)
+        // The same bytes still prove identity.
+        XCTAssertEqual(DuplicateVerification.verify([a, try unreadable("garbage one \u{1}")]), .byteIdentical)
+        XCTAssertFalse(DuplicateVerification.hasParsedContent(a))
+    }
+
+    /// Finding 4: a Sources row selects its source by id, and its title names
+    /// the provider when two accounts share one address.
+    @MainActor
+    func testSourceRow_selectsByID_andSameAddressAccountsGetDistinctTitles() {
+        let selection = ArchiveSidebarSelection.source(id: 42, name: "asha@example.com · Gmail")
+        let query = selection.baseQuery(savedSearches: [])
+        XCTAssertEqual(query.sourceID, 42)
+        XCTAssertNil(query.sourceFileName, "no file-name substring match")
+        XCTAssertEqual(selection.title, "asha@example.com · Gmail")
+        let sources = [
+            SQLiteEmailStore.StoredSource(sourceID: 1, sha256: "a", filename: "asha@example.com", byteSize: 0, parser: "connected-gmail", importedAt: Date()),
+            SQLiteEmailStore.StoredSource(sourceID: 2, sha256: "b", filename: "asha@example.com", byteSize: 0, parser: "connected-imap", importedAt: Date()),
+            SQLiteEmailStore.StoredSource(sourceID: 3, sha256: "c", filename: "archive.mbox", byteSize: 9, parser: "mbox", importedAt: Date()),
+        ]
+        let titles = ArchiveSidebarModel.sourceTitles(sources)
+        XCTAssertEqual(titles[1], "asha@example.com · Gmail")
+        XCTAssertEqual(titles[2], "asha@example.com · IMAP")
+        XCTAssertEqual(titles[3], "archive.mbox")
+    }
+
+    /// Finding 12: a removed account with nothing left loses its Sources row
+    /// and its (empty) folder tree; other sources stay.
+    @MainActor
+    func testSidebar_hidesSourceAndFoldersOfARemovedEmptyAccount() {
+        let sources = [
+            SQLiteEmailStore.StoredSource(sourceID: 1, sha256: "a", filename: "gone@example.com", byteSize: 0, parser: "connected-gmail", importedAt: Date()),
+            SQLiteEmailStore.StoredSource(sourceID: 2, sha256: "b", filename: "archive.mbox", byteSize: 9, parser: "mbox", importedAt: Date()),
+        ]
+        let nodes = [
+            ArchiveFolderNode(folderID: 10, sourceID: 1, path: "Inbox", name: "Inbox", parentID: nil, declared: true, messageCount: 0),
+            ArchiveFolderNode(folderID: 20, sourceID: 2, path: "Inbox", name: "Inbox", parentID: nil, declared: false, messageCount: 3),
+        ]
+        let visible = ArchiveSidebarModel.visible(sources: sources, nodes: nodes, hidden: [1])
+        XCTAssertEqual(visible.sources.map(\.sourceID), [2])
+        XCTAssertEqual(visible.nodes.map(\.folderID), [20])
+        XCTAssertEqual(ArchiveSidebarModel.trees(from: visible.nodes, sources: visible.sources).map(\.sourceID), [2])
+    }
+
+    /// Finding 13: the Advanced Search account picker leaves out a removed
+    /// account without mail and tells same-address accounts apart by provider.
+    @MainActor
+    func testAccountPicker_hidesRemovedWithoutMail_andNamesSameAddressByProvider() {
+        func record(_ provider: MailProviderKind, _ display: String, _ state: String = "connected") -> ConnectedAccountRecord {
+            ConnectedAccountRecord(accountID: UUID(), provider: provider, issuer: "", displayIdentity: display,
+                                   connectionState: state, createdAt: Date(), updatedAt: Date())
+        }
+        let gmail = record(.gmail, "asha@example.com"), imap = record(.imap, "asha@example.com")
+        let removed = record(.gmail, "old@example.com", "removed")
+        let names = AdvancedSearchView.accountNames([gmail, imap, removed])
+        let choices = AdvancedSearchView.accountChoices(searchable: [gmail, imap], names: names)
+        XCTAssertEqual(choices.map(\.name), ["asha@example.com · Gmail", "asha@example.com · IMAP"])
+        XCTAssertFalse(choices.contains { $0.id == removed.accountID.uuidString })
+        XCTAssertEqual(names[removed.accountID.uuidString], "old@example.com", "saved searches still describe it by name")
+    }
+}

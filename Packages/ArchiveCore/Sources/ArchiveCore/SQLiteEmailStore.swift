@@ -3846,6 +3846,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
             sql.append("EXISTS (SELECT 1 FROM email_folders ef WHERE ef.email_id = e.id AND ef.folder_id = ?)")
             binds.append(.int(folderID))
         }
+        // One archive source by id (the sidebar's Sources row) — never by a
+        // file-name substring, which also matched other sources.
+        if let sourceID = q.sourceID {
+            sql.append("e.source_id = ?")
+            binds.append(.int(sourceID))
+        }
         // FIND-04: the typed search model, compiled as asked, confirmed only.
         if let spec = q.spec, !spec.isEmpty {
             let compiled = specClauses(spec)
@@ -5836,8 +5842,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try deleteReportingHeld(ids: requested)
     }
 
+    /// `recordTombstones` false: no Message-ID tombstone is written (a
+    /// connected account's archive deletion — the same mail imported later is
+    /// stored again rather than silently refused).
     @discardableResult
-    func deleteReportingHeld(ids requested: Set<UUID>) throws -> Set<UUID> {
+    func deleteReportingHeld(ids requested: Set<UUID>, recordTombstones: Bool = true) throws -> Set<UUID> {
         guard !requested.isEmpty else { return [] }
         try StorePolicyGate.enforce(.deleteEmails)
         let db = try ensureDB()
@@ -5854,14 +5863,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
                 // Record a deletion tombstone for each row BEFORE removing it, so
                 // re-importing the same source can't silently resurrect it.
-                let ts = try prepare(db, """
-                    INSERT OR IGNORE INTO deletion_tombstones(dedup_key, message_id, deleted_at)
-                    SELECT dedup_key, message_id, \(now) FROM emails WHERE id IN (\(placeholders));
-                """)
-                for (i, id) in chunk.enumerated() { bindText(ts, Int32(i + 1), id.uuidString) }
-                let tsOK = sqlite3_step(ts) == SQLITE_DONE
-                sqlite3_finalize(ts)
-                guard tsOK else { throw SQLiteStoreError.step(lastError(db)) }
+                if recordTombstones {
+                    let ts = try prepare(db, """
+                        INSERT OR IGNORE INTO deletion_tombstones(dedup_key, message_id, deleted_at)
+                        SELECT dedup_key, message_id, \(now) FROM emails WHERE id IN (\(placeholders));
+                    """)
+                    for (i, id) in chunk.enumerated() { bindText(ts, Int32(i + 1), id.uuidString) }
+                    let tsOK = sqlite3_step(ts) == SQLITE_DONE
+                    sqlite3_finalize(ts)
+                    guard tsOK else { throw SQLiteStoreError.step(lastError(db)) }
+                }
                 // §3-F5: a month that loses a leaf loses its stored root, so
                 // the next refresh recomputes it — otherwise the archive root
                 // would still vouch for the deleted email.

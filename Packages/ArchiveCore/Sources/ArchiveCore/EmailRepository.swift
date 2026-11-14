@@ -92,6 +92,10 @@ struct EmailQuery: Sendable, Equatable, Codable {
     /// sidebar's folder tree. Unlike `userTag`, "Inbox" of two archives are
     /// two different values.
     var folderID: Int64? = nil
+    /// Exactly one archive source (`sources.source_id`) — the sidebar's
+    /// Sources row. Two sources whose names contain one another (or two
+    /// accounts with the same address) are different values.
+    var sourceID: Int64? = nil
     /// FIND-04: the typed search model (groups, conditions, attachment
     /// groups). Compiled into SQL with the other fields; scope stays outside it.
     var spec: SearchSpec? = nil
@@ -151,7 +155,7 @@ struct EmailQuery: Sendable, Equatable, Codable {
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
             || minSenderMessages != nil || newestLimit != nil || !(exclusions ?? []).isEmpty
-            || recovery != nil || folderID != nil || !(spec?.isEmpty ?? true) || snapshotMaxRowID != nil
+            || recovery != nil || folderID != nil || sourceID != nil || !(spec?.isEmpty ?? true) || snapshotMaxRowID != nil
     }
 
     var isEmpty: Bool {
@@ -465,6 +469,7 @@ extension EmailStoreRepository: RankedSearchRepository {
             String(query.includeTrashed), query.sort.rawValue,
             query.newestLimit.map(String.init) ?? "-",
             query.folderID.map(String.init) ?? "-",
+            query.sourceID.map { "src" + String($0) } ?? "-",
             query.spec.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? "-"
         ]
         let listFilters: [String] = [
