@@ -8665,6 +8665,61 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertTrue(model.message?.contains("2 could not be changed") == true, model.message ?? "")
     }
 
+    /// Composer 2026-11-15 (Thunderbird + Apple Mail): formatted text goes out
+    /// as HTML next to the plain part (nothing formatted = plain only, as
+    /// before); the draft's HTML reads back with its formatting; lists are
+    /// text markers added to / removed from every selected line; the action
+    /// bar (attach, signature, save, delete) is inside the window, where a Mac
+    /// sheet shows it; signatures are kept per account.
+    @MainActor
+    func testComposerFormatting_htmlRoundTripListsSignatureAndVisibleActions() throws {
+        typealias S = MailRichText.Style
+        XCTAssertNil(MailRichText.html([("Hello", S())]), "plain text sends no HTML part")
+        let html = try XCTUnwrap(MailRichText.html([
+            ("Hi ", S()), ("bold", S(bold: true)), (" and ", S()), ("red <x>", S(italic: true, color: "#ff0000")),
+            ("\nsite", S(underline: true, link: URL(string: "https://example.com/?a=1&b=2"))),
+        ]))
+        XCTAssertTrue(html.contains("<b>bold</b>"), html)
+        XCTAssertTrue(html.contains("<span style=\"color:#ff0000\"><i>red &lt;x&gt;</i></span>"), html)
+        XCTAssertTrue(html.contains("<a href=\"https://example.com/?a=1&amp;b=2\"><u><br>site</u></a>"), html)
+
+        let back = try XCTUnwrap(MailRichText.runs(fromHTML: html, bodySize: 13))
+        XCTAssertEqual(back.map(\.text).joined(), "Hi bold and red <x>\nsite")
+        XCTAssertEqual(back.first { $0.text == "bold" }?.style.bold, true)
+        let red = try XCTUnwrap(back.first { $0.text == "red <x>" })
+        XCTAssertTrue(red.style.italic)
+        XCTAssertEqual(red.style.color, "#ff0000")
+        XCTAssertEqual(back.first { $0.text.contains("site") }?.style.link?.host, "example.com")
+        XCTAssertNil(back.first { $0.text == "Hi " }?.style.color, "the default black is not a chosen colour")
+
+        // Lists: every selected line gets a marker; a second press removes them.
+        let text = "one\ntwo\nthree"
+        let add = MailRichText.listEdits(text, lower: 0, upper: 7, numbered: true)
+        XCTAssertEqual(add.map(\.offset), [4, 0], "last line first, so earlier offsets stay valid")
+        XCTAssertEqual(add.map(\.marker), ["2. ", "1. "])
+        XCTAssertTrue(add.allSatisfy(\.insert))
+        let numbered = "1. one\n2. two\nthree"
+        let remove = MailRichText.listEdits(numbered, lower: 0, upper: 10, numbered: true)
+        XCTAssertEqual(remove.map(\.marker), ["2. ", "1. "])
+        XCTAssertTrue(remove.allSatisfy { !$0.insert })
+        XCTAssertEqual(MailRichText.listEdits("a\nb", lower: 1, upper: 1, numbered: false).map(\.offset), [0], "a caret marks its own line")
+        XCTAssertEqual(MailRichText.lineStarts(in: "a\nb\nc", lower: 0, upper: 2), [0], "a selection ending at a line break stops there")
+
+        // Signatures per account.
+        let account = UUID()
+        defer { MailSignatureStore.set("", for: account) }
+        XCTAssertNil(MailSignatureStore.signature(for: account))
+        MailSignatureStore.set("  Shrabani\nmailin  ", for: account)
+        XCTAssertEqual(MailSignatureStore.signature(for: account), "Shrabani\nmailin")
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let compose = try String(contentsOf: root.appendingPathComponent("maxmailin/MailComposeViews.swift"), encoding: .utf8)
+        XCTAssertFalse(compose.contains("ToolbarItemGroup(placement: .primaryAction)"), "a Mac sheet hides top-toolbar items")
+        XCTAssertTrue(compose.contains("private func actionBar(") && compose.contains("actionBar(current)"))
+        XCTAssertTrue(compose.contains("MailRichBodyEditor(initialPlain:"))
+        XCTAssertTrue(compose.contains(".dropDestination(for: URL.self)"), "files dropped on the message are attached")
+    }
+
     func testIdentityPickerRequired() throws {
         let me = MailAccount(provider: .imap, host: "imap.new.example", displayIdentity: "me@new.example", enabledModes: [.send])
         let other = MailAccount(provider: .imap, host: "imap.other.example", displayIdentity: "other@other.example", enabledModes: [.send])

@@ -82,6 +82,9 @@ struct MailComposeSheet: View {
     @State private var error: String?
     @AppStorage("mailin.mail.undoSendSeconds") private var undoSeconds = 10
     @FocusState private var focus: Field?
+    @State private var savedAt: Date?
+    @State private var editingSignature = false
+    @State private var signatureText = ""
 
     private enum Field: Hashable { case to, cc, bcc, subject, body }
 
@@ -102,25 +105,6 @@ struct MailComposeSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(String(localized: "Close")) { Task { await saveNow(); dismiss() } }
                         .help(String(localized: "Keeps the draft"))
-                }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button { importing = true } label: {
-                        Label(String(localized: "Attach files…"), systemImage: "paperclip")
-                    }
-                    .help(String(localized: "Attach files…"))
-                    .disabled(draft == nil)
-                    Button(role: .destructive) {
-                        Task {
-                            guard let id = draft?.id else { return }
-                            await model.run { try await model.backend.discardDraft(id) }
-                            await model.reloadDrafts()
-                            dismiss()
-                        }
-                    } label: {
-                        Label(String(localized: "Delete draft"), systemImage: "trash")
-                    }
-                    .help(String(localized: "Delete draft"))
-                    .disabled(draft == nil)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
@@ -269,14 +253,30 @@ struct MailComposeSheet: View {
                 Divider()
             }
 
-            TextEditor(text: Binding(get: { current.plainBody }, set: { s in update { $0.plainBody = s } }))
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .focused($focus, equals: .body)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel(Text("Message text"))
+            actionBar(current)
+            Divider()
+            if #available(macOS 26.0, iOS 26.0, *) {
+                MailRichBodyEditor(initialPlain: current.plainBody, initialHTML: current.htmlBody) { plain, html in
+                    update { $0.plainBody = plain; $0.htmlBody = html }
+                }
+                .id(current.id)
+            } else {
+                TextEditor(text: Binding(get: { current.plainBody }, set: { s in update { $0.plainBody = s } }))
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .focused($focus, equals: .body)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel(Text("Message text"))
+            }
+            if let signature = current.signature {
+                Text("-- \n" + signature.plain)
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.bottom, 8)
+                    .accessibilityLabel(Text("Signature"))
+            }
 
             if let quoted = current.quotedPlain, !quoted.isEmpty {
                 Divider()
@@ -306,6 +306,71 @@ struct MailComposeSheet: View {
         .onChange(of: to) { _, _ in parseRecipients() }
         .onChange(of: cc) { _, _ in parseRecipients() }
         .onChange(of: bcc) { _, _ in parseRecipients() }
+        // Files dropped anywhere on the message are attached (Apple Mail).
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            guard !files.isEmpty else { return false }
+            Task { await attach(files) }
+            return true
+        }
+        .alert(String(localized: "Signature"), isPresented: $editingSignature) {
+            TextField(String(localized: "Signature"), text: $signatureText, axis: .vertical)
+            Button(String(localized: "Save")) {
+                MailSignatureStore.set(signatureText, for: current.accountID)
+                let text = signatureText.trimmingCharacters(in: .whitespacesAndNewlines)
+                update { $0.signature = text.isEmpty ? nil : DraftSignature(plain: text) }
+            }
+            Button(String(localized: "Cancel"), role: .cancel) {}
+        } message: {
+            Text("Added below your message for this account. Kept on this device.")
+        }
+    }
+
+    /// Apple Mail's and Thunderbird's message actions, inside the window
+    /// (a Mac sheet shows no top toolbar, so they were not visible there).
+    private func actionBar(_ current: Draft) -> some View {
+        HStack(spacing: Spacing.small) {
+            Button { importing = true } label: { Label(String(localized: "Attach files…"), systemImage: "paperclip") }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .help(String(localized: "Attach files… You can also drop files on the message."))
+            Menu {
+                Button(String(localized: "No Signature")) { update { $0.signature = nil } }
+                if let saved = MailSignatureStore.signature(for: current.accountID) {
+                    Button(String(localized: "Use Signature")) { update { $0.signature = DraftSignature(plain: saved) } }
+                }
+                Divider()
+                Button(String(localized: "Edit Signature…")) {
+                    signatureText = MailSignatureStore.signature(for: current.accountID) ?? ""
+                    editingSignature = true
+                }
+            } label: {
+                Label(String(localized: "Signature"), systemImage: "signature")
+            }
+            .fixedSize()
+            Spacer(minLength: 0)
+            if let savedAt {
+                Text("Saved \(savedAt.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button { Task { await saveNow(); savedAt = Date() } } label: {
+                Label(String(localized: "Save Draft"), systemImage: "square.and.arrow.down")
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            Button(role: .destructive) {
+                Task {
+                    await model.run { try await model.backend.discardDraft(current.id) }
+                    await model.reloadDrafts()
+                    dismiss()
+                }
+            } label: {
+                Label(String(localized: "Delete draft"), systemImage: "trash")
+            }
+        }
+        .labelStyle(.titleAndIcon)
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 
     private func attachmentChip(_ attachment: DraftAttachment) -> some View {
@@ -403,6 +468,10 @@ struct MailComposeSheet: View {
         bcc = found.bcc.map(\.description).joined(separator: ", ")
         showCcBcc = !cc.isEmpty || !bcc.isEmpty
         draft = found
+        if found.signature == nil, found.plainBody.isEmpty, found.kind == .new,
+           let saved = MailSignatureStore.signature(for: found.accountID) {
+            update { $0.signature = DraftSignature(plain: saved) }
+        }
         // The account's only confirmed address is filled in; several mean a choice.
         if found.senderIdentityID == nil,
            let only = MailComposeGate.defaultIdentity(for: found.accountID, from: all) {
@@ -581,5 +650,22 @@ struct MailReplySetupView: View {
         } catch {
             self.error = ConnectedMailErrorText.text(for: error)
         }
+    }
+}
+
+/// Each account's signature, kept on this device (not a secret, not on the server).
+enum MailSignatureStore {
+    private static let key = "mailin.mail.signatures"
+
+    static func signature(for account: UUID) -> String? {
+        let text = (UserDefaults.standard.dictionary(forKey: key) as? [String: String])?[account.uuidString]
+        return text?.isEmpty == false ? text : nil
+    }
+
+    static func set(_ text: String, for account: UUID) {
+        var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        all[account.uuidString] = trimmed.isEmpty ? nil : trimmed
+        UserDefaults.standard.set(all, forKey: key)
     }
 }
