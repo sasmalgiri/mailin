@@ -50,6 +50,15 @@ public struct ConnectedMailboxRow: Sendable, Equatable, Identifiable {
     public var folderServerIDs: [String]
     /// Keyset cursor component.
     public var identityKey: String
+    /// Live Mail list (2026-11-15): the stored preview, recipients and the
+    /// reference headers, so the list shows a preview and groups conversations.
+    public var preview: String = ""
+    public var to: String = ""
+    public var messageID: String?
+    public var inReplyTo: String?
+    public var references: String?
+    /// The archive's persisted conversation key (`thread_keys`), when derived.
+    public var threadKey: String?
     public var id: UUID { emailID }
 }
 
@@ -60,11 +69,20 @@ public struct ConnectedMailboxQuery: Sendable, Equatable {
     public var folderServerID: String?
     public var unreadOnly: Bool
     public var flaggedOnly: Bool
+    /// Only messages that have attachments.
+    public var attachmentsOnly: Bool = false
+    /// Quick filter: every word must appear in the sender, recipients,
+    /// subject or stored preview (case-insensitive, in SQL — no cap).
+    public var text: String = ""
+    /// Only messages carrying this user tag (`email_user_tags`).
+    public var tag: String?
     public var pageSize: Int
     public init(accountIDs: Set<UUID>? = nil, folderServerID: String? = nil, unreadOnly: Bool = false,
-                flaggedOnly: Bool = false, pageSize: Int = 200) {
+                flaggedOnly: Bool = false, attachmentsOnly: Bool = false, text: String = "", tag: String? = nil,
+                pageSize: Int = 200) {
         self.accountIDs = accountIDs; self.folderServerID = folderServerID; self.unreadOnly = unreadOnly
-        self.flaggedOnly = flaggedOnly; self.pageSize = max(1, pageSize)
+        self.flaggedOnly = flaggedOnly; self.attachmentsOnly = attachmentsOnly; self.text = text; self.tag = tag
+        self.pageSize = max(1, pageSize)
     }
 }
 
@@ -192,6 +210,19 @@ extension SQLiteEmailStore {
         // In SQL, so a page reads only matching rows and the total is a COUNT.
         if q.unreadOnly { clauses.append(Self.unreadSQL) }
         if q.flaggedOnly { clauses.append(Self.flaggedSQL) }
+        if q.attachmentsOnly { clauses.append("e.has_attach != 0") }
+        if let tag = q.tag, !tag.isEmpty {
+            clauses.append("EXISTS (SELECT 1 FROM email_user_tags ut WHERE ut.email_id = r.email_id AND ut.tag = ?)")
+            binds.append(tag)
+        }
+        for word in q.text.split(whereSeparator: \.isWhitespace) {
+            // LIKE with an escape character, so % and _ in the text match themselves.
+            let escaped = String(word).replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
+            clauses.append("(" + ["e.from_addr", "e.to_addr", "e.cc_addr", "e.subject", "e.body_preview"]
+                .map { "COALESCE(\($0), '') LIKE ? ESCAPE '\\'" }.joined(separator: " OR ") + ")")
+            binds += Array(repeating: "%" + escaped + "%", count: 5)
+        }
         return (clauses.joined(separator: " AND "), binds)
     }
 
@@ -202,8 +233,10 @@ extension SQLiteEmailStore {
         var sql = """
             SELECT r.email_id, r.account_id, r.identity_key, r.provider, r.mailbox, r.provider_message_id,
                    r.uid_validity, r.uid, r.flags_json, r.remote_present, \(Self.mailboxDateSQL),
-                   e.subject, e.from_addr, e.has_attach
+                   e.subject, e.from_addr, e.has_attach,
+                   e.body_preview, e.to_addr, e.message_id, e.in_reply_to, e.references_ids, tk.thread_key
             FROM remote_messages r JOIN emails e ON e.id = r.email_id
+            LEFT JOIN thread_keys tk ON tk.email_id = r.email_id
             WHERE \(filter.sql)
         """
         var binds = filter.binds
@@ -245,7 +278,9 @@ extension SQLiteEmailStore {
                 emailID: emailID, accountID: accountID, identity: identity, subject: columnText(stmt, 11),
                 from: columnText(stmt, 12), date: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 10))),
                 hasAttachments: sqlite3_column_int64(stmt, 13) != 0, isRead: read, isFlagged: flagged,
-                onServer: sqlite3_column_int64(stmt, 9) != 0, folderServerIDs: [], identityKey: columnText(stmt, 2)))
+                onServer: sqlite3_column_int64(stmt, 9) != 0, folderServerIDs: [], identityKey: columnText(stmt, 2),
+                preview: columnText(stmt, 14), to: columnText(stmt, 15), messageID: optionalText(stmt, 16),
+                inReplyTo: optionalText(stmt, 17), references: optionalText(stmt, 18), threadKey: optionalText(stmt, 19)))
         }
         // Folder memberships of the page's rows.
         if !rows.isEmpty {
@@ -259,6 +294,10 @@ extension SQLiteEmailStore {
         }
         let next = more ? rows.last.map { ConnectedMailboxCursor(date: $0.date, accountID: $0.accountID, identityKey: $0.identityKey) } : nil
         return ConnectedMailboxPage(rows: rows, total: try connectedMailboxCount(q, db: db), next: next)
+    }
+
+    private func optionalText(_ stmt: OpaquePointer?, _ i: Int32) -> String? {
+        sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : columnText(stmt, i)
     }
 
     private func connectedMailboxCount(_ q: ConnectedMailboxQuery, db: OpaquePointer) throws -> Int {

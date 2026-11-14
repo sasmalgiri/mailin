@@ -544,6 +544,22 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         return try await service.perform(row.identity, request, emailID: row.emailID)
     }
 
+    // MARK: Tags (local, shared with the Archive's tags)
+
+    func tags(_ ids: [UUID]) async -> [UUID: Set<String>] {
+        (try? await runtime.sink.store.userTags(ids: ids)) ?? [:]
+    }
+
+    func setTag(_ tag: String, on ids: [UUID], present: Bool) async throws {
+        if present { try await runtime.sink.store.userTagAdd(tag, ids: ids) }
+        else { try await runtime.sink.store.userTagRemove(tag, ids: ids) }
+    }
+
+    func knownTags() async -> [String] {
+        // Every tag in the archive (the menu lists them all).
+        (try? await runtime.sink.store.distinctUserTags(limit: Int(Int32.max))) ?? []
+    }
+
     /// The IMAP Trash folder the server listed for the account (nil = none).
     private func trashMailbox(_ account: UUID) async -> String? {
         ConnectedMailRuntime.trashMailbox(in: (try? await runtime.sink.folderSummaries(accountID: account)) ?? [])

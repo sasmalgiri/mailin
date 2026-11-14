@@ -178,6 +178,7 @@ private struct MailWorkspaceReadyView: View {
         } detail: {
             MailDetailColumn(model: model, sheet: $sheet)
         }
+        .mailNoTopFade()
         .toolbar { toolbar }
         .safeAreaInset(edge: .bottom) { statusLine }
         .onChange(of: model.section) { _, _ in
@@ -309,6 +310,19 @@ private struct MailSidebar: View {
                         }
                         .accessibilityIdentifier("mail.sidebar.account")
                         .tag(MailWorkspaceModel.Section.account(snapshot.id))
+                    }
+                }
+            }
+            if !model.smartFolders.isEmpty {
+                Section(String(localized: "Smart Folders")) {
+                    ForEach(model.smartFolders) { folder in
+                        Label(folder.name, systemImage: "line.3.horizontal.decrease.circle")
+                            .tag(MailWorkspaceModel.Section.smart(folder.id))
+                            .help(folder.summary)
+                            .contextMenu {
+                                Button(String(localized: "Delete Smart Folder"), role: .destructive) { model.deleteSmartFolder(folder.id) }
+                            }
+                            .accessibilityHint(Text(folder.summary))
                     }
                 }
             }
@@ -451,65 +465,55 @@ private struct MailContentColumn: View {
         case .drafts: MailDraftsList(model: model, sheet: $sheet)
         case .outbox: MailOutboxList(model: model)
         case .accounts: MailAccountsList(model: model, sheet: $sheet)
-        default: messageList
+        default: MailMessageList(model: model, sheet: $sheet)
         }
     }
+}
 
-    private var messageList: some View {
-        List(selection: $model.selectedMessage) {
-            if model.rows.isEmpty {
-                if model.accounts.isEmpty {
-                    VStack(spacing: Spacing.small) {
-                        Text(String(localized: "No accounts yet. Add one to start."))
-                            .foregroundStyle(.secondary)
-                        Button { sheet = .addAccount } label: {
-                            Label(String(localized: "Add account"), systemImage: "person.crop.circle.badge.plus")
+/// Apple Mail's list (sender, subject, two-line preview, hover and swipe
+/// actions) with Thunderbird's quick filter, tags, conversations and
+/// actions on several selected messages.
+private struct MailMessageList: View {
+    @Bindable var model: MailWorkspaceModel
+    @Binding var sheet: MailSheet?
+    @State private var savingSearch = false
+    @State private var searchName = ""
+    @State private var newTagFor: [UUID] = []
+    @State private var newTagName = ""
+    @FocusState private var filterFocused: Bool
+
+    var body: some View {
+        List(selection: $model.selection) {
+            if model.rows.isEmpty { emptyState }
+            if model.groupConversations {
+                ForEach(model.conversations) { conversation in
+                    if conversation.rows.count == 1 {
+                        row(conversation.latest)
+                    } else {
+                        DisclosureGroup(isExpanded: Binding(
+                            get: { model.expandedConversations.contains(conversation.key) },
+                            set: { open in
+                                if open { model.expandedConversations.insert(conversation.key) }
+                                else { model.expandedConversations.remove(conversation.key) }
+                            })) {
+                            ForEach(conversation.rows.dropFirst()) { row($0) }
+                        } label: {
+                            row(conversation.latest, conversationCount: conversation.rows.count)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .accessibilityIdentifier("mail.addAccount.empty")
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, Spacing.large)
-                } else {
-                    ContentUnavailableView {
-                        Label(String(localized: "No captured messages here yet."), systemImage: "tray")
-                    } description: {
-                        Text("Mail appears here once Preserve mail has saved it. Sync now checks the server again.")
-                    } actions: {
-                        Button(String(localized: "Sync now")) { Task { await model.syncNow() } }
-                            .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .listRowSeparator(.hidden)
                 }
-            }
-            ForEach(model.rows) { row in
-                MailRowView(row: row, account: model.account(row.accountID)?.account)
-                    .tag(row.emailID)
+            } else {
+                ForEach(model.rows) { row($0) }
             }
             if model.hasMoreRows {
                 Button(String(localized: "Show more")) { Task { await model.loadMore() } }
                     .accessibilityHint(Text(model.showingCountText))
             }
         }
-        .mailTopBar {
-            HStack(spacing: Spacing.xSmall) {
-                Toggle(isOn: $model.unreadOnly) { Label(String(localized: "Unread"), systemImage: "envelope.badge") }
-                    .toggleStyle(.button)
-                    .keyboardShortcut("u", modifiers: [.command, .option])
-                    .accessibilityHint(Text("Shows only messages that were unread when they were saved"))
-                Toggle(isOn: $model.flaggedOnly) { Label(String(localized: "Flagged"), systemImage: "flag") }
-                    .toggleStyle(.button)
-                    .keyboardShortcut("l", modifiers: [.command, .option])
-                Spacer()
-                Text(model.showingCountText).font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("mail.list.showing")
-            }
-            .controlSize(.small)
-            .padding(.horizontal, Spacing.small)
-            .padding(.vertical, Spacing.xxSmall)
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            selectionMenu(Array(ids))
         }
+        .mailTopBar { quickFilterBar }
         .overlay(alignment: .bottom) {
             if !model.rows.isEmpty {
                 Text("Read and flag marks are as they were when each message was saved.")
@@ -517,68 +521,427 @@ private struct MailContentColumn: View {
                     .padding(Spacing.xxSmall)
             }
         }
+        .alert(String(localized: "Save as Smart Folder"), isPresented: $savingSearch) {
+            TextField(String(localized: "Name"), text: $searchName)
+            Button(String(localized: "Save")) { model.saveSmartFolder(named: searchName); searchName = "" }
+            Button(String(localized: "Cancel"), role: .cancel) { searchName = "" }
+        } message: {
+            Text("The smart folder lists every message that matches this filter, now and after each sync.")
+        }
+        .alert(String(localized: "New Tag"), isPresented: Binding(get: { !newTagFor.isEmpty }, set: { if !$0 { newTagFor = [] } })) {
+            TextField(String(localized: "Name"), text: $newTagName)
+            Button(String(localized: "Add")) {
+                let ids = newTagFor, name = newTagName
+                newTagFor = []; newTagName = ""
+                Task { await model.toggleTag(name, on: ids) }
+            }
+            Button(String(localized: "Cancel"), role: .cancel) { newTagFor = []; newTagName = "" }
+        } message: {
+            Text("Tags stay in mailin; nothing changes on the server.")
+        }
     }
-}
 
-private extension View {
-    /// A bar pinned above a list. On macOS 26 / iOS 26 it is a real bar, so the
-    /// scroll-edge effect sits under it instead of washing it out; earlier
-    /// systems keep the inset with a bar background.
+    private func row(_ row: ConnectedMailboxRow, conversationCount: Int = 1) -> some View {
+        MailRowView(row: row, account: model.account(row.accountID)?.account,
+                    tags: model.tags[row.emailID].map { Array($0).sorted() } ?? [],
+                    conversationCount: conversationCount,
+                    canChange: model.canChangeOnServer(row),
+                    onReply: { sheet = .reply(emailID: row.emailID, kind: .reply) },
+                    canReply: model.accounts.contains { $0.account.enabledModes.contains(.send) },
+                    onServer: { request in Task { await model.changeOnServer(request, row: row) } },
+                    onTrash: { sheet = .cleanup(row.accountID, only: row.emailID) },
+                    tagMenu: { AnyView(tagMenu([row.emailID])) })
+            .tag(row.emailID)
+    }
+
+    // MARK: Empty state
+
     @ViewBuilder
-    func mailTopBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
-        if #available(macOS 26.0, iOS 26.0, *) {
-            safeAreaBar(edge: .top) { bar() }
+    private var emptyState: some View {
+        if model.accounts.isEmpty {
+            VStack(spacing: Spacing.small) {
+                Text(String(localized: "No accounts yet. Add one to start."))
+                    .foregroundStyle(.secondary)
+                Button { sheet = .addAccount } label: {
+                    Label(String(localized: "Add account"), systemImage: "person.crop.circle.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .accessibilityIdentifier("mail.addAccount.empty")
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Spacing.large)
+        } else if model.isQuickFiltered {
+            ContentUnavailableView {
+                Label(String(localized: "No messages match the filter."), systemImage: "line.3.horizontal.decrease.circle")
+            } actions: {
+                Button(String(localized: "Clear filter")) { model.clearQuickFilter() }
+            }
+            .frame(maxWidth: .infinity)
+            .listRowSeparator(.hidden)
         } else {
-            safeAreaInset(edge: .top) { bar().background(.bar) }
+            ContentUnavailableView {
+                Label(String(localized: "No captured messages here yet."), systemImage: "tray")
+            } description: {
+                Text("Mail appears here once Preserve mail has saved it. Sync now checks the server again.")
+            } actions: {
+                Button(String(localized: "Sync now")) { Task { await model.syncNow() } }
+                    .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
+            }
+            .frame(maxWidth: .infinity)
+            .listRowSeparator(.hidden)
+        }
+    }
+
+    // MARK: Quick filter (Thunderbird)
+
+    private var quickFilterBar: some View {
+        VStack(spacing: Spacing.xxSmall) {
+            HStack(spacing: Spacing.xSmall) {
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+                    TextField(String(localized: "Filter these messages"), text: $model.quickText)
+                        .textFieldStyle(.plain)
+                        .focused($filterFocused)
+                        .accessibilityIdentifier("mail.quickFilter")
+                    if !model.quickText.isEmpty {
+                        Button { model.quickText = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .accessibilityLabel(Text("Clear filter"))
+                    }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 7).fill(.quaternary.opacity(0.6)))
+                .help(String(localized: "Matches the sender, recipients, subject and preview of the listed messages"))
+                Menu {
+                    Toggle(String(localized: "Group by Conversation"), isOn: $model.groupConversations)
+                    Divider()
+                    Button(String(localized: "Save as Smart Folder…")) { savingSearch = true }
+                        .disabled(!model.isQuickFiltered)
+                    Button(String(localized: "Clear filter")) { model.clearQuickFilter() }
+                        .disabled(!model.isQuickFiltered)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel(Text("List options"))
+            }
+            HStack(spacing: Spacing.xxSmall) {
+                Toggle(isOn: $model.unreadOnly) { Label(String(localized: "Unread"), systemImage: "envelope.badge") }
+                    .keyboardShortcut("u", modifiers: [.command, .option])
+                    .accessibilityHint(Text("Shows only messages that were unread when they were saved"))
+                Toggle(isOn: $model.flaggedOnly) { Label(String(localized: "Flagged"), systemImage: "flag") }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                Toggle(isOn: $model.attachmentsOnly) { Label(String(localized: "Attachments"), systemImage: "paperclip") }
+                Menu {
+                    Button(String(localized: "Any tag")) { model.tagFilter = nil }
+                    Divider()
+                    ForEach(model.offeredTags, id: \.self) { tag in
+                        Button { model.tagFilter = tag } label: {
+                            Label(tag, systemImage: model.tagFilter == tag ? "checkmark.circle.fill" : "circle.fill")
+                        }
+                        .tint(MailTagPalette.color(for: tag))
+                    }
+                } label: {
+                    Label(model.tagFilter ?? String(localized: "Tags"), systemImage: "tag")
+                }
+                .fixedSize()
+                Spacer(minLength: 0)
+                Text(model.showingCountText).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("mail.list.showing")
+            }
+            .toggleStyle(.button)
+            .labelStyle(.titleAndIcon)
+        }
+        .controlSize(.small)
+        .padding(.horizontal, Spacing.small)
+        .padding(.vertical, Spacing.xxSmall)
+        .background {
+            Button("") { filterFocused = true }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .opacity(0).accessibilityHidden(true)
+        }
+    }
+
+    // MARK: Menus
+
+    @ViewBuilder
+    private func tagMenu(_ ids: [UUID]) -> some View {
+        ForEach(model.offeredTags, id: \.self) { tag in
+            let all = ids.allSatisfy { model.tags[$0]?.contains(tag) == true }
+            Button { Task { await model.toggleTag(tag, on: ids) } } label: {
+                Label(tag, systemImage: all ? "checkmark.circle.fill" : "circle.fill")
+            }
+            .tint(MailTagPalette.color(for: tag))
+        }
+        Divider()
+        Button(String(localized: "New Tag…")) { newTagFor = ids }
+    }
+
+    @ViewBuilder
+    private func selectionMenu(_ ids: [UUID]) -> some View {
+        let chosen = model.rows.filter { ids.contains($0.emailID) }
+        if chosen.count == 1, let only = chosen.first {
+            Button(String(localized: "Reply")) { sheet = .reply(emailID: only.emailID, kind: .reply) }
+            Button(String(localized: "Reply All")) { sheet = .reply(emailID: only.emailID, kind: .replyAll) }
+            Button(String(localized: "Forward")) { sheet = .reply(emailID: only.emailID, kind: .forward) }
+            Divider()
+        }
+        if !chosen.isEmpty {
+            Menu(String(localized: "Tag")) { tagMenu(chosen.map(\.emailID)) }
+            if chosen.contains(where: model.canChangeOnServer) {
+                Menu(String(localized: "On the server")) {
+                    Button(String(localized: "Mark as read on the server")) { Task { await model.changeOnServer(.markRead, rows: chosen) } }
+                    Button(String(localized: "Mark as unread on the server")) { Task { await model.changeOnServer(.markUnread, rows: chosen) } }
+                    Button(String(localized: "Flag on the server")) { Task { await model.changeOnServer(.flag, rows: chosen) } }
+                    Button(String(localized: "Remove flag on the server")) { Task { await model.changeOnServer(.unflag, rows: chosen) } }
+                    if chosen.count == 1, let only = chosen.first {
+                        Divider()
+                        Button(String(localized: "Move to the server's Trash…")) { sheet = .cleanup(only.accountID, only: only.emailID) }
+                    }
+                }
+            }
         }
     }
 }
 
+/// One message in the Apple Mail layout: sender and date, subject, a
+/// two-line preview, then tags and the account. Hover (Mac) and swipe show
+/// the quick actions; server ones only when Change server mail allows them.
 private struct MailRowView: View {
     let row: ConnectedMailboxRow
     let account: MailAccount?
+    let tags: [String]
+    var conversationCount = 1
+    let canChange: Bool
+    let onReply: () -> Void
+    let canReply: Bool
+    let onServer: (RemoteChangeRequest) -> Void
+    let onTrash: () -> Void
+    let tagMenu: () -> AnyView
+    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xSmall) {
             Circle()
-                .fill(account.map { MailAccountBadge.color(for: $0.id) } ?? .gray)
+                .fill(row.isRead == false ? Color.accentColor : .clear)
                 .frame(width: 8, height: 8)
                 .padding(.top, 5)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(row.from.isEmpty ? String(localized: "(no sender)") : row.from)
-                        .fontWeight(row.isRead == false ? .semibold : .regular)
+                HStack(spacing: 4) {
+                    Text(row.from.isEmpty ? String(localized: "(no sender)") : MailOrganize.displayName(row.from))
+                        .fontWeight(row.isRead == false ? .semibold : .medium)
                         .lineLimit(1)
-                    Spacer()
-                    Text(row.date, format: .dateTime.day().month().year())
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Text(row.subject.isEmpty ? String(localized: "(no subject)") : row.subject)
-                    .font(.callout).lineLimit(1)
-                HStack(spacing: Spacing.xxSmall) {
-                    if row.isRead == false { Image(systemName: "circle.fill").font(.caption2).foregroundStyle(.blue) }
-                    if row.isFlagged == true { Image(systemName: "flag.fill").font(.caption2).foregroundStyle(.orange) }
-                    if row.hasAttachments { Image(systemName: "paperclip").font(.caption2) }
-                    if !row.onServer {
-                        Text("Removed from the server; kept here").font(.caption2).foregroundStyle(.secondary)
+                    if conversationCount > 1 {
+                        Text("\(conversationCount)")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(.quaternary))
+                            .accessibilityLabel(Text("\(conversationCount) messages in this conversation"))
                     }
-                    if let account { Text(account.displayIdentity).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                    Spacer(minLength: 4)
+                    if hovering { hoverActions } else {
+                        Text(MailOrganize.listDate(row.date)).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
+                HStack(spacing: 4) {
+                    Text(row.subject.isEmpty ? String(localized: "(no subject)") : row.subject)
+                        .font(.callout).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if row.isFlagged == true { Image(systemName: "flag.fill").font(.caption).foregroundStyle(.orange) }
+                    if row.hasAttachments { Image(systemName: "paperclip").font(.caption).foregroundStyle(.secondary) }
+                }
+                if !row.preview.isEmpty {
+                    Text(MailOrganize.cleanPreview(row.preview))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if !tags.isEmpty || account != nil || !row.onServer {
+                    HStack(spacing: 6) {
+                        ForEach(tags, id: \.self) { tag in
+                            HStack(spacing: 3) {
+                                Circle().fill(MailTagPalette.color(for: tag)).frame(width: 7, height: 7)
+                                Text(tag)
+                            }
+                            .font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(MailTagPalette.color(for: tag).opacity(0.15)))
+                        }
+                        if !row.onServer {
+                            Text("Removed from the server; kept here").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        if let account {
+                            HStack(spacing: 3) {
+                                Circle().fill(MailAccountBadge.color(for: account.id)).frame(width: 6, height: 6)
+                                Text(account.displayIdentity).lineLimit(1)
+                            }
+                            .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if canChange {
+                Button { onServer(row.isRead == false ? .markRead : .markUnread) } label: {
+                    Label(row.isRead == false ? String(localized: "Read") : String(localized: "Unread"),
+                          systemImage: row.isRead == false ? "envelope.open" : "envelope.badge")
+                }
+                .tint(.blue)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if canChange {
+                Button(role: .destructive, action: onTrash) { Label(String(localized: "Trash"), systemImage: "trash") }
+                Button { onServer(row.isFlagged == true ? .unflag : .flag) } label: {
+                    Label(row.isFlagged == true ? String(localized: "Unflag") : String(localized: "Flag"), systemImage: "flag")
+                }
+                .tint(.orange)
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityText))
     }
 
+    /// Mac: quick buttons where the date was while the pointer is over the row.
+    private var hoverActions: some View {
+        HStack(spacing: 6) {
+            Button(action: onReply) { Image(systemName: "arrowshape.turn.up.left") }
+                .disabled(!canReply)
+                .help(String(localized: "Reply"))
+            if canChange {
+                Button { onServer(row.isFlagged == true ? .unflag : .flag) } label: {
+                    Image(systemName: row.isFlagged == true ? "flag.slash" : "flag")
+                }
+                .help(row.isFlagged == true ? String(localized: "Remove flag on the server") : String(localized: "Flag on the server"))
+                Button(action: onTrash) { Image(systemName: "trash") }
+                    .help(String(localized: "Move to the server's Trash…"))
+            }
+            Menu { tagMenu() } label: { Image(systemName: "tag") }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(String(localized: "Tag"))
+        }
+        .buttonStyle(.borderless)
+        .font(.caption)
+    }
+
     private var accessibilityText: String {
         var parts = [row.from, row.subject, row.date.formatted(date: .abbreviated, time: .omitted)]
+        if conversationCount > 1 { parts.append(String(localized: "\(conversationCount) messages in this conversation")) }
         if row.isRead == false { parts.append(String(localized: "Unread")) }
         if row.isFlagged == true { parts.append(String(localized: "Flagged")) }
         if row.hasAttachments { parts.append(String(localized: "Has attachments")) }
+        parts += tags
         if !row.onServer { parts.append(String(localized: "Removed from the server; kept here")) }
         if let account { parts.append(account.displayIdentity) }
         return parts.joined(separator: ", ")
+    }
+}
+
+private extension View {
+    /// A bar pinned above a list, on its own bar background.
+    func mailTopBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+        safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 0) { bar(); Divider() }.background(.bar) }
+    }
+
+    /// The Live Mail page sits below the page strip, not under the window's
+    /// toolbar, yet macOS 26 drew the toolbar's top fade over each column's
+    /// first rows (the first draft and the filter bar looked washed out,
+    /// owner screenshots 2026-11-15). Nothing scrolls under the toolbar here
+    /// (the page is clipped below the strip), so the top fade is switched off.
+    @ViewBuilder
+    func mailNoTopFade() -> some View {
+        if #available(macOS 26.0, iOS 26.0, *) {
+            scrollEdgeEffectHidden(true, for: .top)
+        } else {
+            self
+        }
+    }
+}
+
+// MARK: - Tags and several selected messages
+
+/// Add or remove tags (local) on the given messages; the colour of each tag can be changed.
+struct MailTagMenu: View {
+    let model: MailWorkspaceModel
+    let ids: [UUID]
+    @State private var naming = false
+    @State private var name = ""
+
+    var body: some View {
+        Menu {
+            ForEach(model.offeredTags, id: \.self) { tag in
+                let all = !ids.isEmpty && ids.allSatisfy { model.tags[$0]?.contains(tag) == true }
+                Button { Task { await model.toggleTag(tag, on: ids) } } label: {
+                    Label(tag, systemImage: all ? "checkmark.circle.fill" : "circle.fill")
+                }
+            }
+            Divider()
+            Button(String(localized: "New Tag…")) { naming = true }
+            Menu(String(localized: "Tag Colour")) {
+                ForEach(model.offeredTags, id: \.self) { tag in
+                    Menu(tag) {
+                        ForEach(MailTagPalette.colors.indices, id: \.self) { i in
+                            Button(MailTagPalette.colors[i].name) { MailTagPalette.setColor(i, for: tag); Task { await model.loadTags() } }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label(String(localized: "Tag"), systemImage: "tag")
+        }
+        .fixedSize()
+        .help(String(localized: "Tags stay in mailin; nothing changes on the server."))
+        .alert(String(localized: "New Tag"), isPresented: $naming) {
+            TextField(String(localized: "Name"), text: $name)
+            Button(String(localized: "Add")) { let n = name; name = ""; Task { await model.toggleTag(n, on: ids) } }
+            Button(String(localized: "Cancel"), role: .cancel) { name = "" }
+        }
+    }
+}
+
+/// Several messages selected: what can be done to all of them at once.
+private struct MailSelectionSummary: View {
+    let model: MailWorkspaceModel
+    let rows: [ConnectedMailboxRow]
+
+    var body: some View {
+        VStack(spacing: Spacing.medium) {
+            Image(systemName: "square.stack.3d.up").font(.system(size: 44)).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text("\(rows.count) messages selected").font(.title3.weight(.semibold))
+            HStack(spacing: Spacing.small) {
+                MailTagMenu(model: model, ids: rows.map(\.emailID))
+                if rows.contains(where: model.canChangeOnServer) {
+                    Menu {
+                        Button(String(localized: "Mark as read on the server")) { Task { await model.changeOnServer(.markRead, rows: rows) } }
+                        Button(String(localized: "Mark as unread on the server")) { Task { await model.changeOnServer(.markUnread, rows: rows) } }
+                        Button(String(localized: "Flag on the server")) { Task { await model.changeOnServer(.flag, rows: rows) } }
+                        Button(String(localized: "Remove flag on the server")) { Task { await model.changeOnServer(.unflag, rows: rows) } }
+                    } label: {
+                        Label(String(localized: "On the server"), systemImage: "server.rack")
+                    }
+                    .fixedSize()
+                }
+                Button(String(localized: "Clear Selection")) { model.selection = [] }
+            }
+            .controlSize(.large)
+            if !rows.contains(where: model.canChangeOnServer) {
+                Text("Turn on Change server mail for the account to mark or flag these on the server.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -596,16 +959,18 @@ private struct MailDetailColumn: View {
             } else {
                 Text("Choose an account to see its settings and status.").foregroundStyle(.secondary)
             }
-        case .account(let id) where model.selectedMessage == nil:
+        case .account(let id) where model.selection.isEmpty:
             MailAccountSettingsView(model: model, accountID: id, sheet: $sheet)
         case .drafts, .outbox:
             Text("Choose an item.").foregroundStyle(.secondary)
         default:
-            if let id = model.selectedMessage, let row = model.rows.first(where: { $0.emailID == id }) {
+            if model.selection.count > 1 {
+                MailSelectionSummary(model: model, rows: model.selectedRows)
+            } else if let id = model.selectedMessage, let row = model.rows.first(where: { $0.emailID == id }) {
                 MailMessageDetail(model: model, row: row, sheet: $sheet)
                     .id(id)
             } else {
-                Text("Choose a message.").foregroundStyle(.secondary)
+                ContentUnavailableView(String(localized: "Choose a message."), systemImage: "envelope")
             }
         }
     }
@@ -648,9 +1013,24 @@ private struct MailMessageDetail: View {
                 replyButtons
                     .disabled(!canReply)
                     .help(canReply ? "" : String(localized: "Turn on Send mail for an account to reply or forward"))
+                Divider().frame(height: 18)
+                MailTagMenu(model: model, ids: [row.emailID])
                 if model.canChangeOnServer(row) {
-                    Divider().frame(height: 18)
+                    Button { Task { await model.changeOnServer(row.isFlagged == true ? .unflag : .flag, row: row) } } label: {
+                        Label(row.isFlagged == true ? String(localized: "Unflag") : String(localized: "Flag"),
+                              systemImage: row.isFlagged == true ? "flag.slash" : "flag")
+                    }
+                    .help(row.isFlagged == true ? String(localized: "Remove flag on the server") : String(localized: "Flag on the server"))
                     serverMenu
+                }
+                ForEach(model.tags[row.emailID].map { Array($0).sorted() } ?? [], id: \.self) { tag in
+                    HStack(spacing: 3) {
+                        Circle().fill(MailTagPalette.color(for: tag)).frame(width: 7, height: 7)
+                        Text(tag)
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(MailTagPalette.color(for: tag).opacity(0.15)))
                 }
             }
             .controlSize(.small)

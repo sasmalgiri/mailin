@@ -874,6 +874,10 @@ protocol MailWorkspaceBackend: AnyObject {
     func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage
     func email(_ id: UUID) async throws -> MBOXParser.RawEmail?
     func changeOnServer(_ request: RemoteChangeRequest, row: ConnectedMailboxRow) async throws -> RemoteOperation
+    /// Local user tags (the archive's own `email_user_tags`; nothing on the server).
+    func tags(_ ids: [UUID]) async -> [UUID: Set<String>]
+    func setTag(_ tag: String, on ids: [UUID], present: Bool) async throws
+    func knownTags() async -> [String]
 
     func identities(_ account: UUID) async -> [SendingIdentity]
     func drafts() async -> DraftListing
@@ -931,6 +935,9 @@ extension MailWorkspaceBackend {
         progress(confirmedCount, confirmedCount)
         return result
     }
+    func tags(_ ids: [UUID]) async -> [UUID: Set<String>] { [:] }
+    func setTag(_ tag: String, on ids: [UUID], present: Bool) async throws { throw MailBackendUnavailable() }
+    func knownTags() async -> [String] { [] }
     func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {
         ConnectedMailboxPage(rows: [], total: 0, next: nil)
     }
@@ -981,6 +988,8 @@ final class MailWorkspaceModel {
         case drafts
         case outbox
         case accounts
+        /// A saved search (smart folder), listed in the sidebar.
+        case smart(UUID)
     }
 
     let backend: MailWorkspaceBackend
@@ -992,12 +1001,38 @@ final class MailWorkspaceModel {
     private(set) var removedAccounts: [MailAccountSnapshot] = []
     private(set) var removedArchive: [UUID: ConnectedAccountArchiveSummary] = [:]
     private(set) var folders: [UUID: [ConnectedFolderSummary]] = [:]
-    private(set) var rows: [ConnectedMailboxRow] = []
+    /// Set here and by the organise tools (server marks shown at once, MailOrganize.swift).
+    var rows: [ConnectedMailboxRow] = []
     private(set) var total = 0
     private var nextCursor: ConnectedMailboxCursor?
     var unreadOnly = false { didSet { if oldValue != unreadOnly { Task { await reloadMailbox() } } } }
     var flaggedOnly = false { didSet { if oldValue != flaggedOnly { Task { await reloadMailbox() } } } }
-    var selectedMessage: UUID?
+    var attachmentsOnly = false { didSet { if oldValue != attachmentsOnly { Task { await reloadMailbox() } } } }
+    /// Only messages with this tag (the quick filter's tag menu).
+    var tagFilter: String? { didSet { if oldValue != tagFilter { Task { await reloadMailbox() } } } }
+    /// Quick filter text; the list reloads a moment after the last keystroke.
+    var quickText = "" { didSet { if oldValue != quickText { scheduleQuickReload() } } }
+    /// Group the list by conversation (kept between launches).
+    var groupConversations = UserDefaults.standard.bool(forKey: MailOrganize.groupKey) {
+        didSet { UserDefaults.standard.set(groupConversations, forKey: MailOrganize.groupKey) }
+    }
+    /// Conversations opened in the grouped list.
+    var expandedConversations: Set<String> = []
+    /// The selected messages (several for actions on many at once).
+    var selection: Set<UUID> = []
+    /// The one message shown in the reading pane (nil when none or several are selected).
+    var selectedMessage: UUID? {
+        get { selection.count == 1 ? selection.first : nil }
+        set { selection = newValue.map { [$0] } ?? [] }
+    }
+    /// User tags of the listed messages (shared with the Archive's tags).
+    var tags: [UUID: Set<String>] = [:]
+    var knownTags: [String] = []
+    var smartFolders: [MailSmartFolder] = MailSmartFolderStore.load()
+    /// Read / flag changes made on the server this session, shown at once
+    /// (the saved copy's marks catch up at the next sync).
+    @ObservationIgnored var serverMarks: [UUID: MailOrganize.Marks] = [:]
+    @ObservationIgnored var quickReloadTask: Task<Void, Never>?
     /// The account shown in "Accounts and status".
     var selectedAccount: UUID?
     private(set) var drafts: [Draft] = []
@@ -1096,23 +1131,36 @@ final class MailWorkspaceModel {
     }
 
     var currentQuery: ConnectedMailboxQuery {
+        var q: ConnectedMailboxQuery
         switch section {
-        case .account(let id): return ConnectedMailboxQuery(accountIDs: [id], unreadOnly: unreadOnly, flaggedOnly: flaggedOnly)
-        case .folder(let id, let folder):
-            return ConnectedMailboxQuery(accountIDs: [id], folderServerID: folder, unreadOnly: unreadOnly, flaggedOnly: flaggedOnly)
+        case .account(let id): q = ConnectedMailboxQuery(accountIDs: [id])
+        case .folder(let id, let folder): q = ConnectedMailboxQuery(accountIDs: [id], folderServerID: folder)
+        case .smart(let id):
+            // Every account's mail, then the saved search's own filters.
+            q = ConnectedMailboxQuery(accountIDs: Set(accounts.map(\.id)).union(removedAccounts.map(\.id)))
+            if let saved = smartFolders.first(where: { $0.id == id }) { saved.apply(to: &q) }
         default:
             // Every account's captured mail, removed accounts' kept mail included.
-            return ConnectedMailboxQuery(accountIDs: Set(accounts.map(\.id)).union(removedAccounts.map(\.id)),
-                                         unreadOnly: unreadOnly, flaggedOnly: flaggedOnly)
+            q = ConnectedMailboxQuery(accountIDs: Set(accounts.map(\.id)).union(removedAccounts.map(\.id)))
         }
+        // The quick filter narrows whatever the section lists.
+        q.unreadOnly = q.unreadOnly || unreadOnly
+        q.flaggedOnly = q.flaggedOnly || flaggedOnly
+        q.attachmentsOnly = q.attachmentsOnly || attachmentsOnly
+        let typed = quickText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typed.isEmpty { q.text = q.text.isEmpty ? typed : q.text + " " + typed }
+        if let tagFilter { q.tag = tagFilter }
+        return q
     }
 
     func reloadMailbox() async {
         guard availability == .ready else { return }
         await run(clearsError: false) {
             let page = try await self.backend.mailbox(self.currentQuery, after: nil)
-            self.rows = page.rows; self.total = page.total; self.nextCursor = page.next
+            self.rows = self.applyingServerMarks(page.rows); self.total = page.total; self.nextCursor = page.next
+            self.selection.formIntersection(self.rows.map(\.emailID))
         }
+        await loadTags()
     }
 
     /// The next page, on request ("Show more"): no hidden cap.
@@ -1120,8 +1168,9 @@ final class MailWorkspaceModel {
         guard let cursor = nextCursor else { return }
         await run(clearsError: false) {
             let page = try await self.backend.mailbox(self.currentQuery, after: cursor)
-            self.rows += page.rows; self.total = page.total; self.nextCursor = page.next
+            self.rows += self.applyingServerMarks(page.rows); self.total = page.total; self.nextCursor = page.next
         }
+        await loadTags()
     }
 
     var showingCountText: String {
@@ -1321,6 +1370,7 @@ final class MailWorkspaceModel {
             let op = try await self.backend.changeOnServer(request, row: row)
             self.message = MailServerChangeText.outcome(op.outcome)
             scope = MailServerChangeText.missingScope(op.outcome)
+            if case .applied? = op.outcome { self.noteServerMark(request, on: row.emailID) }
         }
         if let scope { pendingReconsent = MailReconsentRequest(accountID: row.accountID, scope: scope, mode: .serverActions) }
         return scope

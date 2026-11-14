@@ -184,4 +184,46 @@ final class ConnectedMailboxListingTests: XCTestCase {
         sqlite3_finalize(stmt)
         XCTAssertTrue(names.isSuperset(of: ["idx_remote_messages_mailbox", "idx_remote_messages_date", "idx_remote_memberships_folder"]), "\(names)")
     }
+
+    /// Live Mail list 2026-11-15: rows carry the preview, recipients and
+    /// reference headers; the quick filter (words in sender / recipients /
+    /// subject / preview, `%` and `_` literal), attachments-only and a user tag
+    /// filter in SQL, and the total stays the full count.
+    func testQuickFilterTagAndAttachments_rowsCarryPreviewAndReferences() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir)
+        let account = UUID()
+        try await sink.saveAccount(ConnectedAccountRecord(
+            accountID: account, provider: .gmail, issuer: "https://accounts.google.com", displayIdentity: "asha@example.com",
+            grantedScopes: [], enabledModes: [], connectionState: "connected", createdAt: Date(), updatedAt: Date()))
+        try await sink.recordFolders(accountID: account, folders: [RemoteFolderOccurrence(serverID: "INBOX", displayPath: "INBOX", kind: .label)])
+        let run = try await sink.beginRun(accountID: account, selection: "all")
+        for (i, id) in ["m1", "m2", "m3"].enumerated() {
+            _ = try await sink.capture(try item(sink, account: account, id: id, labels: ["INBOX"], flags: [], day: i), runID: run)
+        }
+        _ = try await sink.finishRun(run)
+
+        let all = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [account]), after: nil)
+        XCTAssertEqual(all.total, 3)
+        let m2 = try XCTUnwrap(all.rows.first { $0.subject == "Message m2" })
+        XCTAssertTrue(m2.preview.contains("Body m2"), m2.preview)
+        XCTAssertTrue(m2.to.contains("ravi@example.org"), m2.to)
+        XCTAssertEqual(m2.messageID.map { $0.contains("m2@example.com") }, true)
+
+        let text = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [account], text: "message M2"), after: nil)
+        XCTAssertEqual(text.rows.map(\.subject), ["Message m2"], "every word must match, case-insensitive")
+        XCTAssertEqual(text.total, 1)
+        let byPreview = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [account], text: "body"), after: nil)
+        XCTAssertEqual(byPreview.total, 3)
+        let percent = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [account], text: "m%"), after: nil)
+        XCTAssertEqual(percent.total, 0, "% is matched literally, not as a wildcard")
+
+        let none = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [account], attachmentsOnly: true), after: nil)
+        XCTAssertEqual(none.total, 0)
+
+        try await sink.store.userTagAdd("Work", ids: [m2.emailID])
+        let tagged = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [account], tag: "Work"), after: nil)
+        XCTAssertEqual(tagged.rows.map(\.emailID), [m2.emailID])
+        let both = try await sink.mailboxPage(ConnectedMailboxQuery(accountIDs: [account], text: "m1", tag: "Work"), after: nil)
+        XCTAssertEqual(both.total, 0)
+    }
 }

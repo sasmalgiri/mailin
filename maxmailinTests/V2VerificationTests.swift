@@ -8364,6 +8364,33 @@ private final class FakeMailWorkspaceBackend: MailWorkspaceBackend {
     }
 }
 
+/// Live Mail organise tools (2026-11-15): records the queries the list asks
+/// for, keeps tags in memory, and counts server calls.
+private final class OrganizeFakeBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var providerInfo: [String: String] = [:]
+    var snapshots: [MailAccountSnapshot] = []
+    var listed: [ConnectedMailboxRow] = []
+    var queries: [ConnectedMailboxQuery] = []
+    var tagStore: [UUID: Set<String>] = [:]
+    var serverCalls = 0
+
+    func accounts() async throws -> [MailAccountSnapshot] { snapshots }
+    func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {
+        queries.append(query)
+        return ConnectedMailboxPage(rows: listed, total: listed.count, next: nil)
+    }
+    func changeOnServer(_ request: RemoteChangeRequest, row: ConnectedMailboxRow) async throws -> RemoteOperation {
+        serverCalls += 1
+        throw MailBackendUnavailable()
+    }
+    func tags(_ ids: [UUID]) async -> [UUID: Set<String>] { tagStore.filter { ids.contains($0.key) && !$0.value.isEmpty } }
+    func setTag(_ tag: String, on ids: [UUID], present: Bool) async throws {
+        for id in ids { if present { tagStore[id, default: []].insert(tag) } else { tagStore[id]?.remove(tag) } }
+    }
+    func knownTags() async -> [String] { Array(Set(tagStore.values.flatMap { $0 })).sorted() }
+}
+
 private struct FixedCopyVerifier: ArchivedCopyVerifier {
     func verify(emailID: UUID, accountID: UUID, identity: ProviderMessageIdentity) async -> ArchivedCopyStatus {
         .verified(sha256: String(repeating: "a", count: 64), byteCount: 100)
@@ -8544,7 +8571,98 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertTrue(view.contains("DisclosureGroup(isExpanded:"), "the account's folders are open by default")
         XCTAssertTrue(view.contains("get: { !collapsed.contains(snapshot.id) }"))
         XCTAssertTrue(view.contains("MailFolderStyle.ordered(model.folders[snapshot.id]"))
-        XCTAssertTrue(view.contains("safeAreaBar(edge: .top)"), "the filter bar is a real bar, not washed out by the scroll edge")
+        XCTAssertTrue(view.contains("scrollEdgeEffectHidden(true, for: .top)") && view.contains(".mailNoTopFade()"),
+                      "no toolbar fade over the first rows and the filter bar (the page sits below the strip)")
+    }
+
+    private func organizeRow(_ account: UUID, subject: String, messageID: String? = nil, references: String? = nil,
+                             day: Double = 0) -> ConnectedMailboxRow {
+        ConnectedMailboxRow(emailID: UUID(), accountID: account, identity: .gmail(messageID: UUID().uuidString), subject: subject,
+                            from: "Asha Rao <asha@example.com>", date: Date(timeIntervalSince1970: 1_760_000_000 - day * 86_400),
+                            hasAttachments: false, isRead: false, isFlagged: false, onServer: true, folderServerIDs: [],
+                            identityKey: UUID().uuidString, preview: "Hello\n\n  there", messageID: messageID, references: references)
+    }
+
+    /// Live Mail 2026-11-15 (Apple Mail look + Thunderbird tools): conversations
+    /// from the reference headers, Mail's list dates and names, the quick
+    /// filter narrowing every section, smart folders, local tags (add / remove
+    /// on several messages), server marks shown at once, and several-message
+    /// server changes that name the ones that could not be changed.
+    func testLiveMailOrganize_conversationsFilterSmartFoldersTagsAndBulkActions() async throws {
+        let account = MailAccount(provider: .gmail, displayIdentity: "asha@example.com", enabledModes: [.capture])
+        let first = organizeRow(account.id, subject: "Budget", messageID: "<budget@example.com>", day: 2)
+        let reply = organizeRow(account.id, subject: "Re: Budget", messageID: "<re@example.com>", references: "<budget@example.com>", day: 1)
+        let other = organizeRow(account.id, subject: "Lunch", messageID: "<lunch@example.com>", day: 0)
+        let threads = MailOrganize.conversations([other, reply, first])
+        XCTAssertEqual(threads.map { $0.rows.count }, [1, 2], "the reply and its original are one conversation")
+        XCTAssertEqual(threads[1].latest.emailID, reply.emailID, "a conversation shows its newest message")
+
+        XCTAssertEqual(MailOrganize.displayName("Asha Rao <asha@example.com>"), "Asha Rao")
+        XCTAssertEqual(MailOrganize.displayName("asha@example.com"), "asha@example.com")
+        XCTAssertEqual(MailOrganize.cleanPreview("Hello\n\n  there"), "Hello there")
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_760_000_000)
+        XCTAssertEqual(MailOrganize.listDate(now.addingTimeInterval(-86_400), now: now, calendar: calendar), String(localized: "Yesterday"))
+        XCTAssertFalse(MailOrganize.listDate(now.addingTimeInterval(-30 * 86_400), now: now, calendar: calendar).isEmpty)
+
+        let savedFolders = MailSmartFolderStore.load()
+        defer { MailSmartFolderStore.save(savedFolders) }
+        MailSmartFolderStore.save([])
+        let fake = OrganizeFakeBackend()
+        fake.snapshots = [MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        fake.listed = [other, reply, first]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+
+        // The quick filter narrows a folder.
+        model.section = .folder(account.id, "INBOX")
+        model.quickText = "budget  "
+        model.attachmentsOnly = true
+        model.tagFilter = "Work"
+        var q = model.currentQuery
+        XCTAssertEqual(q.folderServerID, "INBOX")
+        XCTAssertEqual(q.text, "budget")
+        XCTAssertTrue(q.attachmentsOnly)
+        XCTAssertEqual(q.tag, "Work")
+        XCTAssertTrue(model.isQuickFiltered)
+
+        // Saved as a smart folder: listed, opened, the quick filter cleared, its own filter applied.
+        model.saveSmartFolder(named: "Budget mail")
+        XCTAssertEqual(model.smartFolders.map(\.name), ["Budget mail"])
+        guard case .smart(let id)? = Optional(model.section) else { return XCTFail("the smart folder is not open") }
+        XCTAssertFalse(model.isQuickFiltered)
+        q = model.currentQuery
+        XCTAssertNil(q.folderServerID, "a smart folder searches every account's mail")
+        XCTAssertEqual(q.text, "budget"); XCTAssertTrue(q.attachmentsOnly); XCTAssertEqual(q.tag, "Work")
+        XCTAssertEqual(MailSmartFolderStore.load().map(\.id), [id], "kept between launches")
+        model.deleteSmartFolder(id)
+        XCTAssertTrue(model.smartFolders.isEmpty)
+        XCTAssertEqual(model.section, .unifiedInbox)
+
+        // Tags: added to both when one lacks it, removed from both when both have it.
+        model.section = .unifiedInbox
+        await model.reloadMailbox()
+        fake.tagStore[first.emailID] = ["Work"]
+        await model.toggleTag("Work", on: [first.emailID, reply.emailID])
+        XCTAssertEqual(fake.tagStore[reply.emailID], ["Work"])
+        XCTAssertEqual(model.tags[reply.emailID], ["Work"])
+        XCTAssertTrue(model.offeredTags.contains("Work"))
+        await model.toggleTag("Work", on: [first.emailID, reply.emailID])
+        XCTAssertEqual(fake.tagStore[first.emailID], [])
+
+        // A server mark shows at once and survives a reload.
+        model.noteServerMark(.markRead, on: other.emailID)
+        XCTAssertEqual(model.rows.first { $0.emailID == other.emailID }?.isRead, true)
+        await model.reloadMailbox()
+        XCTAssertEqual(model.rows.first { $0.emailID == other.emailID }?.isRead, true)
+
+        // Several messages, Change server mail off: nothing is sent and the count says why.
+        model.selection = [first.emailID, reply.emailID]
+        XCTAssertNil(model.selectedMessage, "two selected: no single message in the reading pane")
+        await model.changeOnServer(.flag, rows: model.selectedRows)
+        XCTAssertEqual(fake.serverCalls, 0)
+        XCTAssertTrue(model.message?.contains("0 of 2") == true, model.message ?? "")
+        XCTAssertTrue(model.message?.contains("2 could not be changed") == true, model.message ?? "")
     }
 
     func testIdentityPickerRequired() throws {
