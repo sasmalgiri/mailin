@@ -26,12 +26,23 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
     public let accountID: UUID
     public let provider: MailProviderKind = .imap
     let adapter: IMAPAdapter
-    /// The account's Trash mailbox (LIST SPECIAL-USE \Trash); nil = none known.
+    /// The account's Trash mailbox as the caller named it; nil = the one the
+    /// server reports (LIST special-use \Trash, `IMAPAdapter.discoverTrashMailbox`).
     public let trashMailbox: String?
     let permission: NetworkPermission
 
-    public init(adapter: IMAPAdapter, trashMailbox: String?, permission: @escaping NetworkPermission) {
+    public init(adapter: IMAPAdapter, trashMailbox: String? = nil, permission: @escaping NetworkPermission) {
         self.adapter = adapter; self.accountID = adapter.accountID; self.trashMailbox = trashMailbox; self.permission = permission
+    }
+
+    /// The Trash to use: the one given, else the server's \Trash (listed on
+    /// first need). nil = the server names none.
+    func trash() async throws -> String? {
+        if let trashMailbox { return trashMailbox }
+        if await adapter.trashMailbox == nil { try ask() }           // a LIST may be needed
+        do { return try await adapter.discoverTrashMailbox() } catch {
+            throw RemoteRequestFailure.refused("the folder list could not be read to find Trash (\(IMAPAdapter.map(error).localizedDescription))")
+        }
     }
 
     public static let noTargetedRemoval =
@@ -54,11 +65,19 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
         return (m, v, u)
     }
 
+    /// Whether the change moves the message (flag changes do not).
+    static func isMove(_ request: RemoteChangeRequest) -> Bool {
+        switch request {
+        case .move, .moveToTrash, .restoreFromTrash: return true
+        default: return false
+        }
+    }
+
     /// The destination of a move-like change; nil for flag changes.
-    func destination(_ request: RemoteChangeRequest) -> String? {
+    func destination(_ request: RemoteChangeRequest) async throws -> String? {
         switch request {
         case .move(_, let to): return to
-        case .moveToTrash: return trashMailbox
+        case .moveToTrash: return try await trash()
         case .restoreFromTrash(let to): return to
         default: return nil
         }
@@ -79,13 +98,13 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
             guard to != from else { throw RemoteRequestFailure.notSent(.unsupported("The message is already in \(to).")) }
         case .moveToTrash(let from):
             guard from == mailbox else { throw RemoteRequestFailure.notSent(.unsupported("The message is in \(mailbox), not \(from).")) }
-            guard let trash = trashMailbox else {
+            guard let trash = try await trash() else {
                 throw RemoteRequestFailure.notSent(.unsupported("This server reports no Trash folder; choose Move and pick the folder."))
             }
             guard trash != mailbox else { throw RemoteRequestFailure.notSent(.unsupported("The message is already in Trash.")) }
         case .restoreFromTrash(let to):
             guard to != nil else { throw RemoteRequestFailure.notSent(.unsupported("Choose the folder to restore the message into.")) }
-            guard let trash = trashMailbox, trash == mailbox else {
+            guard let trash = try await trash(), trash == mailbox else {
                 throw RemoteRequestFailure.notSent(.unsupported("The message is not in this server's Trash folder."))
             }
         default: break
@@ -96,7 +115,7 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
     public func state(of identity: ProviderMessageIdentity) async throws -> RemoteItemState {
         let (mailbox, validity, uid) = try parts(identity)
         try ask()
-        let trash = trashMailbox
+        let trash = try await trash()
         let adapter = self.adapter
         do {
             return try await adapter.withActionSession { s in
@@ -119,7 +138,7 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
     public func apply(_ change: ResolvedChange, to identity: ProviderMessageIdentity, before: RemoteItemState) async throws -> ProviderMessageIdentity? {
         let (mailbox, validity, uid) = try parts(identity)
         try ask()
-        let destination = self.destination(change.request)
+        let destination = try await self.destination(change.request)
         let adapter = self.adapter
         let request = change.request
         do {
@@ -177,7 +196,7 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
 
     public func verify(_ change: ResolvedChange, original: ProviderMessageIdentity,
                        resulting: ProviderMessageIdentity?) async throws -> RemoteVerification {
-        guard destination(change.request) != nil else {
+        guard Self.isMove(change.request) else {
             let after: RemoteItemState
             do { after = try await state(of: original) } catch RemoteRequestFailure.gone { after = .gone }
             return RemoteStateRules.satisfied(change.request, after) ? .reached(after) : .notReached(after)
@@ -196,7 +215,7 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
     }
 
     public func safeToResend(_ change: ResolvedChange) async -> Bool {
-        guard destination(change.request) != nil else { return true }       // flag changes are idempotent
+        guard Self.isMove(change.request) else { return true }       // flag changes are idempotent
         // MOVE is atomic (a source still there was never moved); COPY is not.
         return (try? await adapter.withActionSession { s in await s.capabilities.has("MOVE") }) ?? false
     }

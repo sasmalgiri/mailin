@@ -144,6 +144,8 @@ public actor IMAPSession {
     public private(set) var personalNamespace: IMAPNamespace?
     public private(set) var otherNamespaces: [IMAPNamespace] = []
     public private(set) var isUsable = true
+    /// Why the server refused the sign-in (code + its own words), when it did.
+    public private(set) var signInRefusal: IMAPSignInRefusal?
     private var selected: (wire: [UInt8], status: IMAPMailboxStatus)?
 
     init(transport: any IMAPByteTransport, endpoint: IMAPEndpoint, log: IMAPProtocolLog) {
@@ -156,10 +158,11 @@ public actor IMAPSession {
 
     private func fail() { isUsable = false; transport.close() }
 
-    func nextResponse() async throws -> IMAPResponse {
+    /// `timeout`: how long one read may wait (nil = the transport's own; IDLE waits longer).
+    func nextResponse(timeout: TimeInterval? = nil) async throws -> IMAPResponse {
         while queue.isEmpty {
             let data: Data?
-            do { data = try await transport.receive() } catch { fail(); throw error }
+            do { data = try await transport.receive(timeout: timeout) } catch { fail(); throw error }
             guard let data else { fail(); throw IMAPTransportError.closed }
             if data.isEmpty { continue }
             do {
@@ -290,6 +293,10 @@ public actor IMAPSession {
     // MARK: Error mapping
 
     static func mapped(_ s: IMAPStatusResponse, context: IMAPCommandContext, oauth: Bool = false) -> MailProviderError {
+        // A refused sign-in keeps the server's explanation ([ALERT] text):
+        // IMAP disabled, web login / app password required, too many
+        // connections each get their code; a plain refusal stays sign-in.
+        if context == .authenticate, let coded = IMAPSignInRefusal.classify(s).codedError { return coded }
         let code = s.code?.name ?? ""
         let text = s.text.isEmpty ? s.status.rawValue : s.text
         switch code {
@@ -330,7 +337,10 @@ public actor IMAPSession {
             preauth = s.status == .preauth
             if let code = s.code, code.name == "CAPABILITY" { capabilities = IMAPCapabilities(codeArgument: code.argument) }
         case .untaggedStatus(let s) where s.status == .bye:
-            fail(); throw MailProviderError.transient("the mail server refused the connection: \(s.text)")
+            fail()
+            let refusal = IMAPSignInRefusal.classify(s)
+            if refusal.code == IMAPErrorCode.tooManyConnections { signInRefusal = refusal; throw refusal.codedError! }
+            throw MailProviderError.transient("the mail server refused the connection: \(s.text)")
         default:
             fail(); throw IMAPProtocolError.malformed("no greeting")
         }
@@ -412,7 +422,10 @@ public actor IMAPSession {
                 try await sasl("PLAIN", initial: blob, saslIR: saslIR, failureReply: nil, oauth: false)
             } else if !capabilities.has("LOGINDISABLED") {
                 let r = try await run([.raw("LOGIN"), .string(Array(login.utf8)), .secret(Array(password.utf8))], context: .authenticate)
-                guard r.completion.status == .ok else { throw Self.mapped(r.completion, context: .authenticate) }
+                guard r.completion.status == .ok else {
+                    signInRefusal = IMAPSignInRefusal.classify(r.completion)
+                    throw Self.mapped(r.completion, context: .authenticate)
+                }
             } else {
                 throw MailProviderError.permanent("the mail server offers no password sign-in mailin supports")
             }
@@ -442,7 +455,10 @@ public actor IMAPSession {
             if !sent.take() { return initial }
             return failureReply ?? Array("*".utf8)          // "*" cancels the exchange
         })
-        guard r.completion.status == .ok else { throw Self.mapped(r.completion, context: .authenticate, oauth: oauth) }
+        guard r.completion.status == .ok else {
+            signInRefusal = IMAPSignInRefusal.classify(r.completion)
+            throw Self.mapped(r.completion, context: .authenticate, oauth: oauth)
+        }
     }
 
     // MARK: Mailboxes
@@ -523,7 +539,8 @@ public actor IMAPSession {
         for u in r.untagged {
             switch u {
             case .data("SEARCH", let values):
-                for n in values.compactMap({ $0.number.flatMap { UInt32(exactly: $0) } }) { set.insert(n) }
+                // Sorted and merged once (O(n log n)), not one insert per UID.
+                for range in IMAPUIDSet(values.compactMap({ $0.number.flatMap { UInt32(exactly: $0) } })).ranges { set.insert(range) }
             case .data("ESEARCH", let values):
                 var k = 0
                 while k < values.count {
@@ -602,7 +619,18 @@ public actor IMAPSession {
     func gmailLabel(_ value: IMAPValue) -> String? {
         guard let b = value.bytes, !b.isEmpty else { return nil }
         if b.first == UInt8(ascii: "\\") { return String(decoding: b, as: UTF8.self) }
-        return IMAPMailboxName(wire: b, utf8: utf8Enabled).name
+        return Self.gmailLabelName(b, utf8: utf8Enabled)
+    }
+
+    /// Gmail sends X-GM-LABELS in modified UTF-7 even after ENABLE
+    /// UTF8=ACCEPT (when folder names arrive as UTF-8), and may send raw
+    /// UTF-8 without it: both forms decode to the folder's name. An ASCII
+    /// label holding a valid "&…-" shift is taken as modified UTF-7.
+    nonisolated static func gmailLabelName(_ b: [UInt8], utf8: Bool) -> String {
+        if utf8, b.allSatisfy({ $0 < 0x80 }), b.contains(UInt8(ascii: "&")), let decoded = IMAPModifiedUTF7.decode(b) {
+            return IMAPMailboxName(wire: Array(decoded.utf8), utf8: true).serverID
+        }
+        return IMAPMailboxName(wire: b, utf8: utf8).serverID
     }
 
     /// `UID FETCH set (UID RFC822.SIZE X-GM-MSGID)`: identities and sizes, never bodies.
@@ -657,9 +685,13 @@ public actor IMAPSession {
             if done.fire() { log.append("DONE"); try? await transport.send(Data("DONE\r\n".utf8)) }
         }
         defer { timer.cancel() }
+        // A read during IDLE may wait the whole IDLE period plus the time the
+        // server has to answer DONE (a command-length read timeout would end
+        // every IDLE longer than it as a failure).
+        let wait = max(0, timeout) + endpoint.timeout
         var changed = false
         while true {
-            let r = try await nextResponse()
+            let r = try await nextResponse(timeout: wait)
             switch r {
             case .numbered(_, "EXISTS"), .numbered(_, "EXPUNGE"), .fetch, .data("VANISHED", _):
                 changed = true

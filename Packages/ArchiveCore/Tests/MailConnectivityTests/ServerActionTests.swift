@@ -241,6 +241,38 @@ final class ServerActionTests: XCTestCase {
         XCTAssertEqual(mutatingLines(model).map { String($0.split(separator: " ", maxSplits: 1)[1]) }, ["UID MOVE 2 \"Trash\""])
     }
 
+    /// Audit 2026-11-14 finding 5: with no Trash passed in (as the app does),
+    /// the executor uses the server's special-use \Trash from the folder list
+    /// (before: "This server reports no Trash folder" — every time).
+    func testIMAP_moveToTrash_withoutATrashGiven_usesTheServersSpecialUseTrash() async throws {
+        let server = try await startServer { m in
+            m.postAuthCapabilities.append("MOVE")
+            m.addMailbox("INBOX"); m.addMailbox("Deleted Messages", attributes: ["\\HasNoChildren", "\\Trash"])
+            m.add(Self.message("to-trash"), to: "INBOX")
+        }
+        let model = server.model
+        let (service, adapter) = try imapService(server, journal: try journal(), trash: nil)
+        let op = try await service.perform(.imap(mailbox: "INBOX", uidValidity: validity(model, "INBOX"), uid: 1), .moveToTrash(from: "INBOX"))
+        XCTAssertEqual(op.outcome, .applied(verified: true, alreadyInState: false))
+        XCTAssertEqual(uids(model, "INBOX"), [])
+        XCTAssertEqual(uids(model, "Deleted Messages").count, 1)
+        let trash = await adapter.trashMailbox
+        XCTAssertEqual(trash, "Deleted Messages")
+        let discovered = try await adapter.discoverTrashMailbox()
+        XCTAssertEqual(discovered, "Deleted Messages")
+
+        // A server that names no Trash: refused before anything is sent.
+        let none = try await startServer { m in
+            m.postAuthCapabilities.append("MOVE")
+            m.addMailbox("INBOX"); m.add(Self.message("stays"), to: "INBOX")
+        }
+        let (noTrash, _) = try imapService(none, journal: try journal("n"), trash: nil)
+        let refused = try await noTrash.perform(.imap(mailbox: "INBOX", uidValidity: validity(none.model, "INBOX"), uid: 1),
+                                                .moveToTrash(from: "INBOX"))
+        guard case .rejected? = refused.outcome else { return XCTFail("\(String(describing: refused.outcome))") }
+        XCTAssertEqual(mutatingLines(none.model), [])
+    }
+
     func testT42_IMAP_withoutMOVEorUIDPLUS_refusesTheRemoval_andSendsNoChange() async throws {
         let server = try await startServer { m in
             m.postAuthCapabilities.removeAll { $0 == "UIDPLUS" || $0 == "MOVE" }

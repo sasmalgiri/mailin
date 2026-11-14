@@ -15,6 +15,7 @@
 import XCTest
 import Foundation
 import CryptoKit
+import Network
 @testable import MailConnectivity
 @testable import ArchiveCore
 
@@ -387,5 +388,183 @@ final class IMAPProtocolTests: XCTestCase {
         let s = IMAPSession(transport: t, endpoint: Self.endpoint993, log: IMAPProtocolLog())
         try await s.establish(.password(login: "a", password: "b"))
         do { _ = try await s.examine(Array("INBOX".utf8)); XCTFail("must refuse") } catch MailProviderError.permanent {}
+    }
+
+    // MARK: Audit 2026-11-14
+
+    /// Finding 1: a refused sign-in keeps the server's [ALERT] text and is
+    /// told apart (IMAP disabled / web login / app password / too many
+    /// connections / wrong password). Before: every one was "sign in again".
+    func testSignInRefusals_keepTheServerText_andCarryStableCodes() {
+        func map(_ code: String, _ text: String, oauth: Bool = false) -> MailProviderError {
+            IMAPSession.mapped(IMAPStatusResponse(status: .no, code: IMAPResponseCode(name: code, argument: ""), text: text),
+                               context: .authenticate, oauth: oauth)
+        }
+        let cases: [(String, String, String)] = [
+            ("ALERT", "Your account is not enabled for IMAP use. Please visit your Gmail settings page and enable your account for IMAP access. (Failure)", IMAPErrorCode.imapDisabled),
+            ("ALERT", "IMAP access is disabled for your domain. Please contact your domain administrator for questions about this feature. (Failure)", IMAPErrorCode.imapDisabled),
+            ("ALERT", "Please log in via your web browser: https://support.google.com/mail/accounts/answer/78754 (Failure)", IMAPErrorCode.webLoginRequired),
+            ("WEBALERT", "Web login required.", IMAPErrorCode.webLoginRequired),
+            ("ALERT", "Application-specific password required: https://support.google.com/accounts/answer/185833 (Failure)", IMAPErrorCode.appPasswordRequired),
+        ]
+        for (code, text, expected) in cases {
+            guard case .permanent(let why) = map(code, text) else { XCTFail("\(text) → \(map(code, text))"); continue }
+            XCTAssertEqual(IMAPErrorCode.code(in: why), expected, why)
+            XCTAssertEqual(IMAPErrorCode.detail(in: why), text, "the server's words are kept verbatim")
+            XCTAssertEqual(IMAPErrorCode.code(of: map(code, text, oauth: true)), expected, "OAuth too")
+        }
+        let busy = map("ALERT", "Too many simultaneous connections. (Failure)")
+        guard case .transient(let busyWhy) = busy else { return XCTFail("too many connections is retried: \(busy)") }
+        XCTAssertEqual(IMAPErrorCode.code(in: busyWhy), IMAPErrorCode.tooManyConnections)
+        // A plain refusal stays sign-in (the engine asks for the password / token again).
+        XCTAssertEqual(map("AUTHENTICATIONFAILED", "Invalid credentials (Failure)"), .reauthorisationRequired)
+        XCTAssertEqual(map("AUTHENTICATIONFAILED", "Invalid credentials (Failure)", oauth: true), .unauthorized)
+        let plain = IMAPSignInRefusal.classify(IMAPStatusResponse(status: .no, code: IMAPResponseCode(name: "ALERT", argument: ""),
+                                                                  text: "Invalid credentials (Failure)"))
+        XCTAssertEqual(plain, IMAPSignInRefusal(code: IMAPErrorCode.authenticationFailed, serverText: "Invalid credentials (Failure)", isAlert: true))
+        // Outside sign-in nothing changes.
+        if case .transient(let why) = IMAPSession.mapped(IMAPStatusResponse(status: .no, code: nil, text: "too many connections"), context: .fetch) {
+            XCTAssertNil(IMAPErrorCode.code(in: why))
+        } else { XCTFail("a NO to FETCH stays a plain transient") }
+    }
+
+    func testSignInRefusal_throughTheSession_andBusyGreeting() async throws {
+        let alert = "Your account is not enabled for IMAP use. Please visit your Gmail settings page and enable your account for IMAP access. (Failure)"
+        let t = ScriptedIMAPTransport(packets: [Data("* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN SASL-IR] hi\r\n".utf8)]) { line, _ in
+            [Data("\(line.prefix { $0 != " " }) NO [ALERT] \(alert)\r\n".utf8)]
+        }
+        let s = IMAPSession(transport: t, endpoint: Self.endpoint993, log: IMAPProtocolLog())
+        do {
+            try await s.establish(.password(login: "asha", password: "pa55"))
+            XCTFail("must refuse")
+        } catch MailProviderError.permanent(let why) {
+            XCTAssertEqual(why, "\(IMAPErrorCode.imapDisabled): \(alert)")
+        }
+        let refusal = await s.signInRefusal
+        XCTAssertEqual(refusal, IMAPSignInRefusal(code: IMAPErrorCode.imapDisabled, serverText: alert, isAlert: true))
+
+        let bye = ScriptedIMAPTransport(packets: [Data("* BYE Maximum number of connections from user+IP exceeded (mail_max_userip_connections=10)\r\n".utf8)])
+        let s2 = IMAPSession(transport: bye, endpoint: Self.endpoint993, log: IMAPProtocolLog())
+        do { try await s2.establish(.password(login: "asha", password: "pa55")); XCTFail("must refuse") }
+        catch MailProviderError.transient(let why) { XCTAssertEqual(IMAPErrorCode.code(in: why), IMAPErrorCode.tooManyConnections, why) }
+    }
+
+    /// Finding 2: TLS failures are recognised in Network.framework,
+    /// URLSession and Security errors; a certificate failure maps to a
+    /// permanent coded error naming the host (before: a transient "could not be reached").
+    func testTLSFailures_areRecognised_andCertificateFailuresArePermanent() {
+        XCTAssertEqual(MailTLSFailure.classify(NWError.tls(-9807)), MailTLSFailure.Classified(status: -9807, certificate: true), "errSSLXCertChainInvalid")
+        XCTAssertEqual(MailTLSFailure.classify(NWError.tls(-9843)), MailTLSFailure.Classified(status: -9843, certificate: true), "errSSLHostNameMismatch")
+        XCTAssertEqual(MailTLSFailure.classify(NWError.tls(-67843)), MailTLSFailure.Classified(status: -67843, certificate: true), "errSecNotTrusted")
+        XCTAssertEqual(MailTLSFailure.classify(NWError.tls(-9800)), MailTLSFailure.Classified(status: -9800, certificate: false), "errSSLProtocol")
+        XCTAssertNil(MailTLSFailure.classify(NWError.tls(-9806)), "errSSLClosedAbort is a dropped connection")
+        XCTAssertNil(MailTLSFailure.classify(NWError.posix(.ECONNREFUSED)))
+        XCTAssertNil(MailTLSFailure.classify(URLError(.timedOut)))
+        XCTAssertEqual(MailTLSFailure.classify(NSError(domain: NSURLErrorDomain, code: NSURLErrorServerCertificateHasBadDate))?.certificate, true)
+        let wrapped = NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed,
+                              userInfo: [NSUnderlyingErrorKey: NSError(domain: NSOSStatusErrorDomain, code: -9843)])
+        XCTAssertEqual(MailTLSFailure.classify(wrapped), MailTLSFailure.Classified(status: -9843, certificate: true))
+        XCTAssertEqual(MailTLSFailure.classify(NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed,
+                                                       userInfo: ["_kCFStreamErrorCodeKey": -9813]))?.certificate, true)
+
+        let cert = NWIMAPTransport.failure(.tls(-9807), host: "imap.example.net")
+        XCTAssertEqual(cert as? IMAPTLSError, IMAPTLSError(host: "imap.example.net", status: -9807, isCertificateFailure: true,
+                                                          detail: NWError.tls(-9807).localizedDescription))
+        guard case MailProviderError.permanent(let why) = IMAPAdapter.map(cert) else { return XCTFail("\(IMAPAdapter.map(cert))") }
+        XCTAssertEqual(IMAPErrorCode.code(in: why), IMAPErrorCode.certificateNotTrusted)
+        XCTAssertTrue(why.contains("imap.example.net"), why)
+        guard case MailProviderError.permanent(let why2) = IMAPAdapter.map(NWIMAPTransport.failure(.tls(-9800), host: "h")) else { return XCTFail() }
+        XCTAssertEqual(IMAPErrorCode.code(in: why2), IMAPErrorCode.tlsHandshakeFailed)
+        if case MailProviderError.transient = IMAPAdapter.map(NWIMAPTransport.failure(.posix(.ECONNREFUSED), host: "h")) {} else {
+            XCTFail("a refused connection is still retried")
+        }
+        // Errors after STARTTLS (URLSessionStreamTask) the same way.
+        XCTAssertEqual((StreamTaskIMAPTransport.failure(wrapped, host: "h") as? IMAPTLSError)?.isCertificateFailure, true)
+    }
+
+    /// Finding 4: sparse UID sets of 50,000 UIDs parse, insert and remove in
+    /// near-linear time (before: one O(n) array rebuild per range — minutes).
+    func testUIDSet_50kSparseUIDs_linearTime() {
+        let uids = (0..<50_000).map { UInt32($0 * 2 + 1) }                 // 1,3,5,… no two adjacent
+        let text = uids.map(String.init).joined(separator: ",")
+        let start = Date()
+        let parsed = IMAPUIDSet(sequenceSet: text)
+        XCTAssertEqual(parsed?.count, 50_000)
+        XCTAssertEqual(parsed?.ranges.count, 50_000)
+        XCTAssertEqual(parsed?.sequenceSet, text)
+        var built = IMAPUIDSet()
+        for u in uids.reversed() { built.insert(u) }                       // worst order for an append
+        XCTAssertEqual(built, parsed)
+        XCTAssertTrue(uids.allSatisfy { built.contains($0) })
+        XCTAssertFalse(built.contains(2))
+        let shuffled = IMAPUIDSet(sequenceSet: uids.shuffled().map(String.init).joined(separator: ","))
+        XCTAssertEqual(shuffled, parsed)
+        for u in uids where u % 4 == 1 { built.remove(u) }
+        XCTAssertEqual(built.count, 25_000)
+        XCTAssertEqual(built.ranges.first, 3...3)
+        // Filling the gaps merges everything into one range.
+        for u in stride(from: UInt32(2), through: 100_000, by: 2) { built.insert(u) }
+        for u in uids where u % 4 == 1 { built.insert(u) }
+        XCTAssertEqual(built.ranges, [1...100_000])
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 5, "50k sparse UIDs took \(elapsed) s")
+        // Overlapping and out-of-order ranges still merge correctly.
+        XCTAssertEqual(IMAPUIDSet(sequenceSet: "10:20,1:3,4,15:30,40,32:31")?.sequenceSet, "1:4,10:32,40")
+        var s = IMAPUIDSet(sequenceSet: "1:3,7,9:12")!
+        s.insert(5...8)
+        XCTAssertEqual(s.sequenceSet, "1:3,5:12")
+        s.insert(4294967295)
+        s.remove(4294967295)
+        s.remove(1)
+        XCTAssertEqual(s.sequenceSet, "2:3,5:12")
+    }
+
+    /// Finding 7: two 8-bit folder names that are neither UTF-8 nor modified
+    /// UTF-7 decode to the same lossy text; they stay two folders, keyed on
+    /// their wire bytes, and the exact bytes go back to the server.
+    func testUndecodable8BitFolderNames_areKeyedOnWireBytes_andNeverCollide() async throws {
+        let a: [UInt8] = [0x41, 0xE9], b: [UInt8] = [0x41, 0xEA]           // "Aé" / "Aê" in Latin-1
+        let na = IMAPMailboxName(wire: a, utf8: false), nb = IMAPMailboxName(wire: b, utf8: true)
+        XCTAssertEqual(na.name, nb.name, "the display text is lossy for both")
+        XCTAssertNotEqual(na.serverID, nb.serverID)
+        XCTAssertTrue(na.serverID.hasPrefix(IMAPMailboxName.rawPrefix))
+        XCTAssertEqual(IMAPMailboxName.wireBytes(for: na.serverID, utf8: false), a, "without a LIST: the exact bytes")
+        XCTAssertEqual(IMAPMailboxName.wireBytes(for: nb.serverID, utf8: true), b)
+        XCTAssertEqual(IMAPMailboxName.displayName(forServerID: na.serverID), "A\u{FFFD}")
+        XCTAssertEqual(IMAPMailboxName(wire: Array("Entwürfe".utf8), utf8: false).serverID, "Entwürfe", "raw UTF-8 stays its name")
+        XCTAssertEqual(IMAPMailboxName(wire: Array("Entw&APw-rfe".utf8), utf8: false).serverID, "Entwürfe")
+
+        var listing = Data("* LIST (\\HasNoChildren) \"/\" INBOX\r\n".utf8)
+        for name in [a, b] { listing += Data("* LIST (\\HasNoChildren) \"/\" {2}\r\n".utf8) + Data(name) + Data("\r\n".utf8) }
+        let t = ScriptedIMAPTransport(packets: [Data("* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN SASL-IR] hi\r\n".utf8)]) { line, _ in
+            let tag = String(line.prefix { $0 != " " })
+            if line.contains("AUTHENTICATE") { return [Data("\(tag) OK [CAPABILITY IMAP4rev1] done\r\n".utf8)] }
+            if line.contains(" LIST ") { return [listing + Data("\(tag) OK LIST done\r\n".utf8)] }
+            return [Data("\(tag) BAD unexpected\r\n".utf8)]
+        }
+        let account = UUID()
+        let credentials = InMemoryCredentialStore()
+        try credentials.write(Data("pa55".utf8), kind: .password, account: account)
+        let adapter = IMAPAdapter(accountID: account, configuration: IMAPAccountConfiguration(host: "imap.example.net", login: "asha"),
+                                  credentials: credentials, transportFactory: { _ in t })
+        let folders = try await adapter.listFolders(pageToken: nil, context: ProviderRequestContext(accountID: account, accessToken: nil, attempt: 0)).folders
+        XCTAssertEqual(folders.count, 3, "two distinct 8-bit folders, not one: \(folders.map(\.serverID))")
+        XCTAssertEqual(Set(folders.map(\.serverID)), ["INBOX", na.serverID, nb.serverID])
+        let wireA = await adapter.actionWire(na.serverID, utf8: false)
+        let wireB = await adapter.actionWire(nb.serverID, utf8: false)
+        XCTAssertEqual(wireA, a); XCTAssertEqual(wireB, b)
+    }
+
+    /// Finding 9: Gmail sends X-GM-LABELS in modified UTF-7 even with
+    /// UTF8=ACCEPT on (folder names then arrive as UTF-8): both decode alike.
+    func testGmailLabelNames_modifiedUTF7AndUTF8_decodeToTheFolderName() {
+        let name = "Отчёты/日本"
+        let mutf7 = Array(IMAPModifiedUTF7.encode(name).utf8)
+        XCTAssertEqual(IMAPSession.gmailLabelName(mutf7, utf8: true), name, "modified UTF-7 under UTF8=ACCEPT")
+        XCTAssertEqual(IMAPSession.gmailLabelName(mutf7, utf8: false), name)
+        XCTAssertEqual(IMAPSession.gmailLabelName(Array(name.utf8), utf8: true), name)
+        XCTAssertEqual(IMAPSession.gmailLabelName(Array(name.utf8), utf8: false), name, "raw UTF-8 without UTF8=ACCEPT")
+        XCTAssertEqual(IMAPSession.gmailLabelName(Array("R&D".utf8), utf8: true), "R&D", "a plain '&' is not a shift")
+        XCTAssertEqual(IMAPSession.gmailLabelName(Array("Work".utf8), utf8: true), "Work")
     }
 }

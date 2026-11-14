@@ -86,6 +86,15 @@ enum SMTPFailure: Error {
     case protocolViolation(String)
     case cancelled
     case stopBeforeFinalStep(String)
+    /// The TLS handshake failed (port 465 at the first read, or after
+    /// STARTTLS): `certificate` = the server's certificate was refused.
+    case tls(String, certificate: Bool)
+
+    /// `.io` unless `error` is a TLS failure.
+    static func io(_ stage: String, _ error: Error) -> SMTPFailure {
+        if let c = MailTLSFailure.classify(error) { return .tls("\(stage): \(error.localizedDescription)", certificate: c.certificate) }
+        return .io("\(stage): \(error.localizedDescription)")
+    }
 }
 
 /// Reads and writes SMTP lines over one stream (used by one task at a time).
@@ -106,7 +115,7 @@ final class SMTPWire: @unchecked Sendable {
             throw SMTPFailure.cancelled
         } catch {
             if Task.isCancelled { throw SMTPFailure.cancelled }
-            throw SMTPFailure.io("\(stage): \(error.localizedDescription)")
+            throw SMTPFailure.io(stage, error)
         }
     }
 
@@ -158,7 +167,7 @@ final class SMTPWire: @unchecked Sendable {
                 throw SMTPFailure.cancelled
             } catch {
                 if Task.isCancelled { throw SMTPFailure.cancelled }
-                throw SMTPFailure.io("\(stage): \(error.localizedDescription)")
+                throw SMTPFailure.io(stage, error)
             }
             if piece.isEmpty { throw SMTPFailure.closed(stage) }
             buffer.append(piece)
@@ -206,6 +215,9 @@ public struct SMTPSubmitter: MessageSubmitter {
                 try await connector.connect(host: host, port: port, implicitTLS: implicit)
             }
         } catch {
+            if case .tls = SMTPFailure.io("connect", error) {
+                return .retry(reason: tlsReason(SMTPFailure.io("connect", error)), after: nil, quota: false, automatic: false)
+            }
             return .retry(reason: "could not connect to \(settings.host): \(error.localizedDescription)", after: nil, quota: false, automatic: true)
         }
         let wire = SMTPWire(stream)
@@ -222,6 +234,9 @@ public struct SMTPSubmitter: MessageSubmitter {
                 return .retry(reason: why, after: 0, quota: false, automatic: true)
             case .protocolViolation(let why):
                 return .retry(reason: "the server did not follow the mail protocol: \(why)", after: nil, quota: false, automatic: false)
+            case .tls:
+                // Retrying cannot make a certificate trusted: the user decides.
+                return .retry(reason: tlsReason(failure), after: nil, quota: false, automatic: false)
             default:
                 return .retry(reason: Self.describe(failure), after: nil, quota: false, automatic: true)
             }
@@ -239,7 +254,19 @@ public struct SMTPSubmitter: MessageSubmitter {
         case .protocolViolation(let why): return "protocol error (\(why))"
         case .cancelled: return "sending was stopped"
         case .stopBeforeFinalStep(let why): return why
+        case .tls(let why, let certificate):
+            return certificate ? "the server's certificate is not trusted (\(why))" : "the secure connection failed (\(why))"
         }
+    }
+
+    /// "<code>: …" for a TLS failure (`IMAPErrorCode.smtpCertificateNotTrusted`
+    /// / `.smtpTLSHandshakeFailed`); credentials are never sent before TLS.
+    func tlsReason(_ f: SMTPFailure) -> String {
+        guard case .tls(let why, let certificate) = f else { return Self.describe(f) }
+        let text = certificate
+            ? "the certificate of \(settings.host) is not trusted (\(why)). Your sign-in details were not sent."
+            : "a secure connection to \(settings.host) could not be established (\(why)). Your sign-in details were not sent."
+        return IMAPErrorCode.coded(certificate ? IMAPErrorCode.smtpCertificateNotTrusted : IMAPErrorCode.smtpTLSHandshakeFailed, text)
     }
 
     /// Ends the session politely after a refusal; errors are irrelevant now.
@@ -282,11 +309,15 @@ public struct SMTPSubmitter: MessageSubmitter {
                               after: nil, quota: false, automatic: false)
             }
             do { try await wire.stream.startTLS() } catch {
+                if case .tls = SMTPFailure.io("STARTTLS", error) {
+                    return .retry(reason: tlsReason(SMTPFailure.io("STARTTLS", error)), after: nil, quota: false, automatic: false)
+                }
                 return .retry(reason: "A secure connection to \(settings.host) could not be established (\(error.localizedDescription)). Your sign-in details were not sent.",
                               after: nil, quota: false, automatic: false)
             }
             // Capabilities from before TLS are discarded (RFC 3207 §4.2).
             do { capabilities = try await ehlo(wire) } catch let f as SMTPFailure {
+                if case .tls = f { return .retry(reason: tlsReason(f), after: nil, quota: false, automatic: false) }
                 return .retry(reason: "A secure connection to \(settings.host) could not be established — the certificate may not be valid for this server (\(Self.describe(f))). Your sign-in details were not sent.",
                               after: nil, quota: false, automatic: false)
             }
