@@ -508,4 +508,32 @@ final class MailAccountCredentialTests: XCTestCase {
         XCTAssertFalse(isTransientTokenFailure(URLError(.serverCertificateUntrusted)))
         XCTAssertFalse(isTransientTokenFailure(NSError(domain: "policy", code: 1)))
     }
+
+    /// Live run 2026-11-14 (personal Outlook.com account): Microsoft's answer to a
+    /// `common` sign-in names the account's own tenant as issuer and may add a
+    /// trailing slash to the msauth redirect. Both are the same sign-in, and must
+    /// be accepted; another host or a forged tenant shape is still refused.
+    func testMicrosoftCommonAuthority_acceptsTenantIssuerAndTrailingSlash() async throws {
+        let config = try GraphOAuth.configuration(GraphSignInSettings(
+            clientID: "6731de76-14a6-49ae-97bc-6eba6914391e",
+            redirectURI: URL(string: "msauth.com.ecosanskriti.mailin://auth")!))
+        XCTAssertEqual(config.issuer, "https://login.microsoftonline.com/common/v2.0")
+        let personal = "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0"
+        XCTAssertTrue(OAuthSession.issuerMatches(personal, configured: config.issuer))
+        XCTAssertTrue(OAuthSession.issuerMatches("https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0", configured: config.issuer))
+        XCTAssertFalse(OAuthSession.issuerMatches("https://evil.example/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0", configured: config.issuer))
+        XCTAssertFalse(OAuthSession.issuerMatches("https://login.microsoftonline.com/not-a-tenant/v2.0", configured: config.issuer))
+        XCTAssertFalse(OAuthSession.issuerMatches("https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v1.0", configured: config.issuer))
+        XCTAssertFalse(OAuthSession.issuerMatches("https://accounts.example.com/x", configured: Fixtures.google.issuer), "a single-tenant issuer is exact")
+
+        let endpoint = FakeTokenEndpoint()
+        await endpoint.respond(to: "ms-code", json: Fixtures.tokenJSON(access: "EwB-opaque-consumer-token", refresh: "M.R3"))
+        let session = OAuthSession(accountID: UUID(), configuration: config, transport: endpoint)
+        let authURL = try await session.begin()
+        let state = try XCTUnwrap(query(authURL)["state"])
+        let tokens = try await session.complete(callback: callback(state: state, ["code": "ms-code", "iss": personal],
+                                                                   base: "msauth.com.ecosanskriti.mailin://auth/"))
+        XCTAssertEqual(tokens.accessToken, "EwB-opaque-consumer-token", "a personal account's opaque token is accepted")
+    }
 }
+

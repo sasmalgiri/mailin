@@ -297,6 +297,24 @@ public actor OAuthSession {
         return url
     }
 
+    /// RFC 9207 issuer check. A multi-tenant Microsoft authority (`common`,
+    /// `organizations`, `consumers`) answers with the account's own tenant
+    /// (`https://login.microsoftonline.com/<tenant-id>/v2.0`; personal accounts
+    /// use 9188040d-6c67-4c5b-b112-36a304b66dad): same host and shape, any
+    /// tenant id. Every other issuer must match exactly.
+    static func issuerMatches(_ iss: String, configured: String) -> Bool {
+        if iss == configured { return true }
+        guard let want = URLComponents(string: configured), let got = URLComponents(string: iss),
+              want.scheme == "https", got.scheme == "https",
+              let wantHost = want.host?.lowercased(), got.host?.lowercased() == wantHost else { return false }
+        let wantParts = want.path.split(separator: "/").map(String.init)
+        let gotParts = got.path.split(separator: "/").map(String.init)
+        guard wantParts.count == 2, gotParts.count == 2, wantParts[1] == gotParts[1],
+              ["common", "organizations", "consumers"].contains(wantParts[0].lowercased()) else { return false }
+        let tenant = gotParts[0]
+        return UUID(uuidString: tenant) != nil
+    }
+
     /// The user closed the window, or the app is abandoning the attempt.
     /// A callback arriving afterwards is refused.
     public func cancel() {
@@ -310,16 +328,21 @@ public actor OAuthSession {
     public func complete(callback: URL) async throws -> OAuthTokenSet {
         guard let attempt = pending else { throw OAuthError.noPendingAuthorization }
         let expected = configuration.redirectURI
+        // "x://auth" and "x://auth/" are the same redirect (Microsoft's broker
+        // style adds the slash).
+        func normalisedPath(_ p: String) -> String { p == "/" ? "" : p }
         guard callback.scheme?.lowercased() == expected.scheme?.lowercased(),
               (callback.host ?? "").lowercased() == (expected.host ?? "").lowercased(),
-              callback.path == expected.path else {
+              normalisedPath(callback.path) == normalisedPath(expected.path) else {
             throw OAuthError.callbackMismatch("redirect URI differs")
         }
         let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         // A response for another attempt (or forged) leaves this attempt open.
         guard let state = value("state"), Self.constantTimeEqual(state, attempt.state) else { throw OAuthError.stateMismatch }
-        if let iss = value("iss"), iss != configuration.issuer { throw OAuthError.callbackMismatch("issuer differs") }
+        if let iss = value("iss"), !Self.issuerMatches(iss, configured: configuration.issuer) {
+            throw OAuthError.callbackMismatch("issuer differs")
+        }
         // From here the attempt is consumed: single use.
         pending = nil
         if let error = value("error") {

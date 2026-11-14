@@ -360,6 +360,8 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         do {
             result = try await transports.signIn(choice, accountID: id, extraScopes: requested, info: providerInfo, policy: runtime.policy)
         } catch {
+            // The exact cause for diagnosis (no code, state or token is in it).
+            Self.log.error("sign-in (\(choice.rawValue, privacy: .public)) failed: \(String(describing: error), privacy: .public)")
             if target == nil { runtime.policy.removeAccount(id) }
             try? await runtime.reloadAccounts()
             throw error
