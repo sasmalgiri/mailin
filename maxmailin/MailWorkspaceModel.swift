@@ -1182,7 +1182,7 @@ final class MailWorkspaceModel {
 
     func reloadDrafts() async {
         let listing = await backend.drafts()
-        drafts = listing.drafts.sorted { $0.updatedAt > $1.updatedAt }
+        drafts = MailDraftSettling.listed(listing.drafts, outbox: outbox).sorted { $0.updatedAt > $1.updatedAt }
         unreadableDrafts = listing.unreadable.count
     }
 
@@ -1191,6 +1191,18 @@ final class MailWorkspaceModel {
             self.outbox = try await self.backend.outbox().sorted { $0.createdAt > $1.createdAt }
         }
         holds = await backend.outboxHolds()
+        await settleSentDrafts()
+    }
+
+    /// As Mail: a draft the server accepted unchanged is deleted (the sent
+    /// copy is the record); a draft waiting in the outbox is listed there,
+    /// not in Drafts. A rejected or cancelled send stays a draft.
+    func settleSentDrafts() async {
+        let listing = await backend.drafts()
+        for draft in MailDraftSettling.sent(listing.drafts, outbox: outbox) {
+            try? await backend.discardDraft(draft.id)
+        }
+        drafts = MailDraftSettling.listed((await backend.drafts()).drafts, outbox: outbox).sorted { $0.updatedAt > $1.updatedAt }
     }
 
     // MARK: Accounts

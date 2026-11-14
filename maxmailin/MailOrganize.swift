@@ -83,6 +83,45 @@ struct MailConversation: Identifiable, Equatable {
     var hasUnread: Bool { rows.contains { $0.isRead == false } }
 }
 
+// MARK: - Drafts after sending
+
+/// Which drafts the Drafts list shows once messages go to the outbox.
+enum MailDraftSettling {
+    /// What the outbox says about one frozen draft revision.
+    struct Sending: Equatable {
+        var draftID: UUID
+        var revision: Int
+        var state: OutboxState
+    }
+
+    static func sending(_ outbox: [OutboxOperation]) -> [Sending] {
+        outbox.map { Sending(draftID: $0.draftID, revision: $0.draftRevision, state: $0.state) }
+    }
+
+    /// The send of exactly this draft revision that still counts (not cancelled or rejected).
+    private static func sending(_ draft: Draft, in outbox: [Sending]) -> Sending? {
+        outbox.first { op in
+            guard op.draftID == draft.id, op.revision == draft.revision else { return false }
+            switch op.state {
+            case .cancelledBeforeSubmission, .rejected, .draft: return false
+            default: return true
+            }
+        }
+    }
+
+    /// Drafts the server accepted unchanged: deleted, as Mail does.
+    static func sent(_ drafts: [Draft], outbox: [OutboxOperation]) -> [Draft] { sent(drafts, sending: sending(outbox)) }
+    static func sent(_ drafts: [Draft], sending outbox: [Sending]) -> [Draft] {
+        drafts.filter { sending($0, in: outbox)?.state.isAccepted == true }
+    }
+
+    /// Drafts still to show: not sent and not waiting in the outbox.
+    static func listed(_ drafts: [Draft], outbox: [OutboxOperation]) -> [Draft] { listed(drafts, sending: sending(outbox)) }
+    static func listed(_ drafts: [Draft], sending outbox: [Sending]) -> [Draft] {
+        drafts.filter { sending($0, in: outbox) == nil }
+    }
+}
+
 // MARK: - Tag colours
 
 /// Thunderbird's default tags and colours; any tag can take any colour.

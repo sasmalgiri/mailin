@@ -8728,6 +8728,30 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertTrue(picker.contains("nextCursor = page?.nextCursor") && picker.contains("loadMore()"), "every match can be reached (Show more)")
     }
 
+    /// Drafts after sending (owner 2026-11-15: a sent message stayed in
+    /// Drafts): a draft waiting in the outbox is listed there, not in Drafts;
+    /// once the server accepts it unchanged it is deleted; a cancelled
+    /// (Undo Send) or rejected send stays a draft, and so does a draft
+    /// changed after it was sent.
+    func testDraftsAfterSending_acceptedLeaveDrafts_queuedHidden_cancelledAndRejectedStay() {
+        let account = UUID()
+        let accepted = Draft(accountID: account), queued = Draft(accountID: account), undone = Draft(accountID: account)
+        let rejected = Draft(accountID: account), edited = Draft(accountID: account), untouched = Draft(accountID: account)
+        typealias S = MailDraftSettling.Sending
+        let now = Date()
+        let outbox = [
+            S(draftID: accepted.id, revision: accepted.revision, state: .accepted(at: now, response: "250")),
+            S(draftID: queued.id, revision: queued.revision, state: .queued),
+            S(draftID: undone.id, revision: undone.revision, state: .cancelledBeforeSubmission(at: now)),
+            S(draftID: rejected.id, revision: rejected.revision, state: .rejected(reason: "550", rejectedRecipients: [])),
+            S(draftID: edited.id, revision: edited.revision + 1, state: .accepted(at: now, response: "250")),
+        ]
+        let all = [accepted, queued, undone, rejected, edited, untouched]
+        XCTAssertEqual(MailDraftSettling.sent(all, sending: outbox).map(\.id), [accepted.id])
+        XCTAssertEqual(Set(MailDraftSettling.listed(all, sending: outbox).map(\.id)),
+                       Set([undone.id, rejected.id, edited.id, untouched.id]))
+    }
+
     func testIdentityPickerRequired() throws {
         let me = MailAccount(provider: .imap, host: "imap.new.example", displayIdentity: "me@new.example", enabledModes: [.send])
         let other = MailAccount(provider: .imap, host: "imap.other.example", displayIdentity: "other@other.example", enabledModes: [.send])

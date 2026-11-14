@@ -290,8 +290,12 @@ private struct MailSidebar: View {
                             HStack {
                                 Label(folder.path, systemImage: MailFolderStyle.role(folder).symbol)
                                 Spacer()
+                                // Unread first (as Mail); otherwise how many are saved, so an
+                                // empty folder is visible before it is opened.
                                 if folder.unread > 0 {
-                                    Text("\(folder.unread)").font(.caption).foregroundStyle(.secondary)
+                                    Text("\(folder.unread)").font(.caption.weight(.semibold))
+                                } else if folder.messages > 0 {
+                                    Text("\(folder.messages)").font(.caption).foregroundStyle(.tertiary)
                                 }
                             }
                             .tag(MailWorkspaceModel.Section.folder(snapshot.id, folder.serverID))
@@ -484,7 +488,6 @@ private struct MailMessageList: View {
 
     var body: some View {
         List(selection: $model.selection) {
-            if model.rows.isEmpty { emptyState }
             if model.groupConversations {
                 ForEach(model.conversations) { conversation in
                     if conversation.rows.count == 1 {
@@ -514,6 +517,14 @@ private struct MailMessageList: View {
             selectionMenu(Array(ids))
         }
         .mailTopBar { quickFilterBar }
+        // Over the list, not a row in it: a row does not wrap, and the text was cut off.
+        .overlay {
+            if model.rows.isEmpty {
+                emptyState
+                    .padding(.horizontal, Spacing.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
         .overlay(alignment: .bottom) {
             if !model.rows.isEmpty {
                 Text("Read and flag marks are as they were when each message was saved.")
@@ -578,7 +589,26 @@ private struct MailMessageList: View {
                 Button(String(localized: "Clear filter")) { model.clearQuickFilter() }
             }
             .frame(maxWidth: .infinity)
-            .listRowSeparator(.hidden)
+        } else if let folder = openFolder {
+            // A folder of the server, by name; its Drafts is not mailin's drafts.
+            ContentUnavailableView {
+                Label(String(localized: "No messages in \(folder.path)"), systemImage: MailFolderStyle.role(folder).symbol)
+            } description: {
+                if MailFolderStyle.role(folder) == .drafts {
+                    Text("This is the Drafts folder on the mail server. Messages you write in mailin stay in mailin until they are sent: they are under Sending ▸ Drafts.")
+                } else {
+                    Text("Nothing was saved from this folder on the server. Sync now checks the server again.")
+                }
+            } actions: {
+                VStack(spacing: Spacing.xSmall) {
+                    if MailFolderStyle.role(folder) == .drafts, !model.drafts.isEmpty {
+                        Button(String(localized: "Open mailin Drafts (\(model.drafts.count))")) { model.section = .drafts }
+                    }
+                    Button(String(localized: "Sync now")) { Task { await model.syncNow() } }
+                        .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
+                }
+            }
+            .frame(maxWidth: .infinity)
         } else {
             ContentUnavailableView {
                 Label(String(localized: "No captured messages here yet."), systemImage: "tray")
@@ -589,8 +619,13 @@ private struct MailMessageList: View {
                     .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
             }
             .frame(maxWidth: .infinity)
-            .listRowSeparator(.hidden)
         }
+    }
+
+    /// The server folder the list shows, if a folder is open.
+    private var openFolder: ConnectedFolderSummary? {
+        guard case .folder(let account, let serverID) = model.section else { return nil }
+        return model.folders[account]?.first { $0.serverID == serverID }
     }
 
     // MARK: Quick filter (Thunderbird)
