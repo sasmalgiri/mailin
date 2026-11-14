@@ -450445,6 +450445,1306 @@
           }
         }
       }
+    },
+    "Not sent. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht gesendet. %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No enviado. %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non envoyé. %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नहीं भेजा गया। %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non inviato. %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信されていません。%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보내지 않았습니다. %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não enviado. %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未发送。%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未傳送。%@"
+          }
+        }
+      }
+    },
+    "Not sent yet. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch nicht gesendet. %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no enviado. %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas encore envoyé. %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अभी तक नहीं भेजा गया। %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non ancora inviato. %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだ送信されていません。%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 보내지 않았습니다. %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda não enviado. %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未发送。%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未傳送。%@"
+          }
+        }
+      }
+    },
+    "The provider wants you to sign in once on its website first. Sign in there in a web browser, then try again. Saved mail remains available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Anbieter möchte, dass Sie sich zuerst einmal auf seiner Website anmelden. Melden Sie sich dort in einem Webbrowser an und versuchen Sie es dann erneut. Gespeicherte E-Mails bleiben verfügbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El proveedor quiere que primero inicies sesión una vez en su sitio web. Inicia sesión allí en un navegador web y vuelve a intentarlo. El correo guardado sigue disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le fournisseur souhaite que vous vous connectiez d'abord une fois sur son site web. Connectez-vous-y dans un navigateur web, puis réessayez. Les e-mails enregistrés restent disponibles."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रदाता चाहता है कि आप पहले एक बार उसकी वेबसाइट पर साइन इन करें। वहाँ वेब ब्राउज़र में साइन इन करें, फिर दोबारा कोशिश करें। सहेजे गए ईमेल उपलब्ध रहते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il provider chiede di accedere prima una volta al suo sito web. Accedi lì da un browser web, poi riprova. La posta salvata resta disponibile."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロバイダは、最初に一度その Web サイトでサインインすることを求めています。Web ブラウザでサインインしてから、もう一度お試しください。保存済みのメールは引き続き利用できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제공업체가 먼저 웹사이트에서 한 번 로그인할 것을 요구합니다. 웹 브라우저에서 로그인한 다음 다시 시도하십시오. 저장된 메일은 계속 사용할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O provedor quer que você inicie sessão uma vez no site dele primeiro. Inicie sessão lá em um navegador e tente novamente. O e-mail salvo continua disponível."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提供商要求你先在其网站上登录一次。请在网页浏览器中登录，然后重试。已保存的邮件仍然可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "供應商要求你先在其網站上登入一次。請在網頁瀏覽器中登入，然後再試一次。已儲存的郵件仍然可用。"
+          }
+        }
+      }
+    },
+    "The mail server has too many connections open for this account right now. mailin tries again by itself; closing mail apps on other devices helps." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Mailserver hat für dieses Konto gerade zu viele Verbindungen offen. mailin versucht es selbst erneut; es hilft, Mail-Apps auf anderen Geräten zu schließen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo tiene ahora demasiadas conexiones abiertas para esta cuenta. mailin lo vuelve a intentar por sí solo; cerrar las apps de correo en otros dispositivos ayuda."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de messagerie a actuellement trop de connexions ouvertes pour ce compte. mailin réessaie de lui-même ; fermer les apps de messagerie sur d'autres appareils aide."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सर्वर पर इस समय इस खाते के लिए बहुत अधिक कनेक्शन खुले हैं। mailin अपने आप फिर से कोशिश करता है; दूसरे डिवाइस पर मेल ऐप बंद करने से मदद मिलती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server di posta ha al momento troppe connessioni aperte per questo account. mailin riprova da solo; chiudere le app di posta sugli altri dispositivi aiuta."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールサーバでは現在、このアカウントの接続が多すぎます。mailin は自動的に再試行します。ほかのデバイスのメール App を閉じると改善します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 서버에 현재 이 계정의 연결이 너무 많이 열려 있습니다. mailin이 자동으로 다시 시도합니다. 다른 기기의 메일 앱을 닫으면 도움이 됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de e-mail tem conexões demais abertas para esta conta agora. O mailin tenta novamente sozinho; fechar apps de e-mail em outros dispositivos ajuda."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邮件服务器目前为此账户打开的连接过多。mailin 会自动重试；关闭其他设备上的邮件 App 会有帮助。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "郵件伺服器目前為此帳號開啟的連線過多。mailin 會自動重試；關閉其他裝置上的郵件 App 會有幫助。"
+          }
+        }
+      }
+    },
+    "The mail server has too many connections open for this account right now. Close mail apps on other devices or wait a few minutes, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Mailserver hat für dieses Konto gerade zu viele Verbindungen offen. Schließen Sie Mail-Apps auf anderen Geräten oder warten Sie einige Minuten und versuchen Sie es dann erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo tiene ahora demasiadas conexiones abiertas para esta cuenta. Cierra las apps de correo en otros dispositivos o espera unos minutos y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de messagerie a actuellement trop de connexions ouvertes pour ce compte. Fermez les apps de messagerie sur d'autres appareils ou attendez quelques minutes, puis réessayez."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सर्वर पर इस समय इस खाते के लिए बहुत अधिक कनेक्शन खुले हैं। दूसरे डिवाइस पर मेल ऐप बंद करें या कुछ मिनट प्रतीक्षा करें, फिर दोबारा कोशिश करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server di posta ha al momento troppe connessioni aperte per questo account. Chiudi le app di posta sugli altri dispositivi o attendi qualche minuto, poi riprova."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールサーバでは現在、このアカウントの接続が多すぎます。ほかのデバイスのメール App を閉じるか数分待ってから、もう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 서버에 현재 이 계정의 연결이 너무 많이 열려 있습니다. 다른 기기의 메일 앱을 닫거나 몇 분 기다린 다음 다시 시도하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de e-mail tem conexões demais abertas para esta conta agora. Feche apps de e-mail em outros dispositivos ou aguarde alguns minutos e tente novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邮件服务器目前为此账户打开的连接过多。请关闭其他设备上的邮件 App 或等待几分钟，然后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "郵件伺服器目前為此帳號開啟的連線過多。請關閉其他裝置上的郵件 App 或等待幾分鐘，然後再試一次。"
+          }
+        }
+      }
+    },
+    "IMAP access is turned off for this account. Turn on IMAP in the provider's mail settings; for a work or school account (such as Google Workspace) an administrator must allow IMAP. Saved mail remains available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der IMAP-Zugriff ist für dieses Konto ausgeschaltet. Schalten Sie IMAP in den Mail-Einstellungen des Anbieters ein; bei einem Arbeits- oder Schulkonto (etwa Google Workspace) muss ein Administrator IMAP erlauben. Gespeicherte E-Mails bleiben verfügbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El acceso IMAP está desactivado para esta cuenta. Activa IMAP en los ajustes de correo del proveedor; en una cuenta del trabajo o de un centro educativo (como Google Workspace), un administrador debe permitir IMAP. El correo guardado sigue disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'accès IMAP est désactivé pour ce compte. Activez IMAP dans les réglages de messagerie du fournisseur ; pour un compte professionnel ou scolaire (comme Google Workspace), un administrateur doit autoriser IMAP. Les e-mails enregistrés restent disponibles."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस खाते के लिए IMAP ऐक्सेस बंद है। प्रदाता की मेल सेटिंग्स में IMAP चालू करें; कार्य या स्कूल खाते (जैसे Google Workspace) के लिए किसी व्यवस्थापक को IMAP की अनुमति देनी होगी। सहेजे गए ईमेल उपलब्ध रहते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'accesso IMAP è disattivato per questo account. Attiva IMAP nelle impostazioni di posta del provider; per un account di lavoro o della scuola (come Google Workspace) un amministratore deve consentire IMAP. La posta salvata resta disponibile."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアカウントでは IMAP アクセスがオフになっています。プロバイダのメール設定で IMAP をオンにしてください。職場または学校のアカウント（Google Workspace など）では、管理者が IMAP を許可する必要があります。保存済みのメールは引き続き利用できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정의 IMAP 접근이 꺼져 있습니다. 제공업체의 메일 설정에서 IMAP을 켜십시오. 직장 또는 학교 계정(예: Google Workspace)은 관리자가 IMAP을 허용해야 합니다. 저장된 메일은 계속 사용할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O acesso IMAP está desativado para esta conta. Ative o IMAP nos ajustes de e-mail do provedor; em uma conta de trabalho ou escola (como o Google Workspace), um administrador precisa permitir o IMAP. O e-mail salvo continua disponível."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此账户的 IMAP 访问已关闭。请在提供商的邮件设置中打开 IMAP；对于工作或学校账户（如 Google Workspace），需要由管理员允许 IMAP。已保存的邮件仍然可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此帳號的 IMAP 存取已關閉。請在供應商的郵件設定中開啟 IMAP；若是工作或學校帳號（如 Google Workspace），需要由管理員允許 IMAP。已儲存的郵件仍然可用。"
+          }
+        }
+      }
+    },
+    "The mail server refused the password. Choose Replace password… to enter the current password or app password. Saved mail remains available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Mailserver hat das Passwort abgelehnt. Wählen Sie „Passwort ersetzen …“, um das aktuelle Passwort oder App-Passwort einzugeben. Gespeicherte E-Mails bleiben verfügbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo rechazó la contraseña. Elige Reemplazar contraseña… para introducir la contraseña actual o la contraseña de aplicación. El correo guardado sigue disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de messagerie a refusé le mot de passe. Choisissez Remplacer le mot de passe… pour saisir le mot de passe actuel ou le mot de passe d'app. Les e-mails enregistrés restent disponibles."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सर्वर ने पासवर्ड अस्वीकार कर दिया। मौजूदा पासवर्ड या ऐप पासवर्ड दर्ज करने के लिए पासवर्ड बदलें… चुनें। सहेजे गए ईमेल उपलब्ध रहते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server di posta ha rifiutato la password. Scegli Sostituisci password… per inserire la password attuale o la password per l'app. La posta salvata resta disponibile."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールサーバがパスワードを拒否しました。「パスワードを置き換える…」を選んで、現在のパスワードまたは App パスワードを入力してください。保存済みのメールは引き続き利用できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 서버가 암호를 거부했습니다. 암호 교체…를 선택하여 현재 암호 또는 앱 암호를 입력하십시오. 저장된 메일은 계속 사용할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de e-mail recusou a senha. Escolha Substituir senha… para digitar a senha atual ou a senha de app. O e-mail salvo continua disponível."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邮件服务器拒绝了密码。请选择“替换密码…”输入当前密码或 App 专用密码。已保存的邮件仍然可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "郵件伺服器拒絕了密碼。請選擇「取代密碼⋯」輸入目前的密碼或 App 專用密碼。已儲存的郵件仍然可用。"
+          }
+        }
+      }
+    },
+    "This Google account needs an app password, not the normal password: turn on 2-Step Verification, create an app password at myaccount.google.com/apppasswords and use it as the password in mailin." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Google-Konto braucht ein App-Passwort, nicht das normale Passwort: Schalten Sie die Bestätigung in zwei Schritten ein, erstellen Sie ein App-Passwort unter myaccount.google.com/apppasswords und verwenden Sie es in mailin als Passwort."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta de Google necesita una contraseña de aplicación, no la contraseña normal: activa la verificación en dos pasos, crea una contraseña de aplicación en myaccount.google.com/apppasswords y úsala como contraseña en mailin."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte Google nécessite un mot de passe d'application, pas le mot de passe habituel : activez la validation en deux étapes, créez un mot de passe d'application sur myaccount.google.com/apppasswords et utilisez-le comme mot de passe dans mailin."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस Google खाते को सामान्य पासवर्ड नहीं, ऐप पासवर्ड चाहिए: 2-चरणीय सत्यापन चालू करें, myaccount.google.com/apppasswords पर ऐप पासवर्ड बनाएँ और mailin में उसे पासवर्ड के रूप में उपयोग करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo account Google richiede una password per le app, non la password normale: attiva la verifica in due passaggi, crea una password per le app su myaccount.google.com/apppasswords e usala come password in mailin."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Google アカウントには通常のパスワードではなくアプリ パスワードが必要です。2 段階認証プロセスをオンにし、myaccount.google.com/apppasswords でアプリ パスワードを作成して、mailin のパスワードとして使用してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Google 계정에는 일반 암호가 아니라 앱 비밀번호가 필요합니다. 2단계 인증을 켜고 myaccount.google.com/apppasswords에서 앱 비밀번호를 만든 다음 mailin의 암호로 사용하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta do Google precisa de uma senha de app, não da senha normal: ative a verificação em duas etapas, crie uma senha de app em myaccount.google.com/apppasswords e use-a como senha no mailin."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Google 账户需要应用专用密码，而不是普通密码：请开启两步验证，在 myaccount.google.com/apppasswords 创建应用专用密码，并在 mailin 中将其用作密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Google 帳號需要應用程式密碼，而不是一般密碼：請開啟兩步驟驗證，在 myaccount.google.com/apppasswords 建立應用程式密碼，並在 mailin 中將其用作密碼。"
+          }
+        }
+      }
+    },
+    "This iCloud account needs an app-specific password: create one at account.apple.com under Sign-In and Security ▸ App-Specific Passwords and use it as the password in mailin." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses iCloud-Konto braucht ein app-spezifisches Passwort: Erstellen Sie eines auf account.apple.com unter „Anmeldung und Sicherheit“ ▸ „App-spezifische Passwörter“ und verwenden Sie es in mailin als Passwort."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta de iCloud necesita una contraseña específica para apps: crea una en account.apple.com, en Inicio de sesión y seguridad ▸ Contraseñas específicas para apps, y úsala como contraseña en mailin."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte iCloud nécessite un mot de passe pour app : créez-en un sur account.apple.com, sous Connexion et sécurité ▸ Mots de passe pour app, et utilisez-le comme mot de passe dans mailin."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस iCloud खाते को ऐप-विशिष्ट पासवर्ड चाहिए: account.apple.com पर साइन-इन और सुरक्षा ▸ ऐप-विशिष्ट पासवर्ड में एक पासवर्ड बनाएँ और mailin में उसे पासवर्ड के रूप में उपयोग करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo account iCloud richiede una password specifica per le app: creane una su account.apple.com in Accesso e sicurezza ▸ Password specifiche per le app e usala come password in mailin."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iCloud アカウントには App 用パスワードが必要です。account.apple.com の「サインインとセキュリティ」▸「App 用パスワード」で作成し、mailin のパスワードとして使用してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 iCloud 계정에는 앱 암호가 필요합니다. account.apple.com의 로그인 및 보안 ▸ 앱 암호에서 암호를 만든 다음 mailin의 암호로 사용하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta do iCloud precisa de uma senha específica de app: crie uma em account.apple.com, em Início de Sessão e Segurança ▸ Senhas Específicas de Apps, e use-a como senha no mailin."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 iCloud 账户需要 App 专用密码：请在 account.apple.com 的“登录与安全”▸“App 专用密码”中创建一个，并在 mailin 中将其用作密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 iCloud 帳號需要 App 專用密碼：請在 account.apple.com 的「登入與安全性」▸「App 專用密碼」中建立一個，並在 mailin 中將其用作密碼。"
+          }
+        }
+      }
+    },
+    "This account needs an app password (an app-specific password) instead of the normal password. Create one in the provider's account security settings and use it as the password in mailin." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Konto braucht statt des normalen Passworts ein App-Passwort (app-spezifisches Passwort). Erstellen Sie eines in den Sicherheitseinstellungen Ihres Kontos beim Anbieter und verwenden Sie es in mailin als Passwort."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta necesita una contraseña de aplicación (contraseña específica para apps) en lugar de la contraseña normal. Crea una en los ajustes de seguridad de la cuenta del proveedor y úsala como contraseña en mailin."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte nécessite un mot de passe d'application (mot de passe pour app) au lieu du mot de passe habituel. Créez-en un dans les réglages de sécurité du compte chez le fournisseur et utilisez-le comme mot de passe dans mailin."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस खाते को सामान्य पासवर्ड के बजाय ऐप पासवर्ड (ऐप-विशिष्ट पासवर्ड) चाहिए। प्रदाता की खाता सुरक्षा सेटिंग्स में एक पासवर्ड बनाएँ और mailin में उसे पासवर्ड के रूप में उपयोग करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo account richiede una password per le app (password specifica per le app) invece della password normale. Creane una nelle impostazioni di sicurezza dell'account del provider e usala come password in mailin."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアカウントには通常のパスワードではなく App パスワード（App 用パスワード）が必要です。プロバイダのアカウントのセキュリティ設定で作成し、mailin のパスワードとして使用してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정에는 일반 암호 대신 앱 암호(앱 전용 암호)가 필요합니다. 제공업체의 계정 보안 설정에서 암호를 만든 다음 mailin의 암호로 사용하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta precisa de uma senha de app (senha específica de app) em vez da senha normal. Crie uma nos ajustes de segurança da conta no provedor e use-a como senha no mailin."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此账户需要应用专用密码，而不是普通密码。请在提供商的账户安全设置中创建一个，并在 mailin 中将其用作密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此帳號需要應用程式專用密碼，而不是一般密碼。請在供應商的帳號安全性設定中建立一個，並在 mailin 中將其用作密碼。"
+          }
+        }
+      }
+    },
+    "The mail server's certificate is not trusted for %@, so mailin does not connect to it and no password was sent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Zertifikat des Mailservers ist für %@ nicht vertrauenswürdig. mailin verbindet sich daher nicht und hat kein Passwort gesendet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El certificado del servidor de correo no es de confianza para %@, así que mailin no se conecta a él y no se envió ninguna contraseña."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le certificat du serveur de messagerie n'est pas approuvé pour %@ : mailin ne s'y connecte donc pas et aucun mot de passe n'a été envoyé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सर्वर का प्रमाणपत्र %@ के लिए विश्वसनीय नहीं है, इसलिए mailin उससे कनेक्ट नहीं करता और कोई पासवर्ड नहीं भेजा गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il certificato del server di posta non è attendibile per %@, quindi mailin non si collega e non è stata inviata alcuna password."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールサーバの証明書は %@ に対して信頼されていないため、mailin は接続せず、パスワードも送信されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 서버의 인증서를 %@에 대해 신뢰할 수 없으므로 mailin은 연결하지 않으며 암호도 보내지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O certificado do servidor de e-mail não é confiável para %@, então o mailin não se conecta a ele e nenhuma senha foi enviada."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邮件服务器的证书对 %@ 不受信任，因此 mailin 不会连接到它，也没有发送任何密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "郵件伺服器的憑證對 %@ 不受信任，因此 mailin 不會連線到它，也沒有傳送任何密碼。"
+          }
+        }
+      }
+    },
+    "The mail server's certificate is not trusted, so mailin does not connect to it and no password was sent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Zertifikat des Mailservers ist nicht vertrauenswürdig. mailin verbindet sich daher nicht und hat kein Passwort gesendet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El certificado del servidor de correo no es de confianza, así que mailin no se conecta a él y no se envió ninguna contraseña."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le certificat du serveur de messagerie n'est pas approuvé : mailin ne s'y connecte donc pas et aucun mot de passe n'a été envoyé."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सर्वर का प्रमाणपत्र विश्वसनीय नहीं है, इसलिए mailin उससे कनेक्ट नहीं करता और कोई पासवर्ड नहीं भेजा गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il certificato del server di posta non è attendibile, quindi mailin non si collega e non è stata inviata alcuna password."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールサーバの証明書が信頼されていないため、mailin は接続せず、パスワードも送信されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 서버의 인증서를 신뢰할 수 없으므로 mailin은 연결하지 않으며 암호도 보내지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O certificado do servidor de e-mail não é confiável, então o mailin não se conecta a ele e nenhuma senha foi enviada."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邮件服务器的证书不受信任，因此 mailin 不会连接到它，也没有发送任何密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "郵件伺服器的憑證不受信任，因此 mailin 不會連線到它，也沒有傳送任何密碼。"
+          }
+        }
+      }
+    },
+    "A secure connection to %@ could not be made, so mailin did not connect and no password was sent. Check the server name, port and security setting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine sichere Verbindung zu %@ konnte nicht hergestellt werden. mailin hat sich daher nicht verbunden und kein Passwort gesendet. Prüfen Sie Servername, Port und Sicherheitseinstellung."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo establecer una conexión segura con %@, así que mailin no se conectó y no se envió ninguna contraseña. Comprueba el nombre del servidor, el puerto y el ajuste de seguridad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d'établir une connexion sécurisée avec %@ : mailin ne s'est donc pas connecté et aucun mot de passe n'a été envoyé. Vérifiez le nom du serveur, le port et le réglage de sécurité."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ से सुरक्षित कनेक्शन नहीं बन सका, इसलिए mailin ने कनेक्ट नहीं किया और कोई पासवर्ड नहीं भेजा गया। सर्वर का नाम, पोर्ट और सुरक्षा सेटिंग जाँचें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non è stato possibile stabilire una connessione sicura con %@, quindi mailin non si è collegato e non è stata inviata alcuna password. Controlla il nome del server, la porta e l'impostazione di sicurezza."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ への安全な接続を確立できなかったため、mailin は接続せず、パスワードも送信されていません。サーバ名、ポート、セキュリティ設定を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에 대한 보안 연결을 만들 수 없어 mailin이 연결하지 않았으며 암호도 보내지 않았습니다. 서버 이름, 포트 및 보안 설정을 확인하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível estabelecer uma conexão segura com %@, então o mailin não se conectou e nenhuma senha foi enviada. Verifique o nome do servidor, a porta e o ajuste de segurança."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法与 %@ 建立安全连接，因此 mailin 没有连接，也没有发送任何密码。请检查服务器名称、端口和安全设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法與 %@ 建立安全連線，因此 mailin 沒有連線，也沒有傳送任何密碼。請檢查伺服器名稱、連接埠和安全性設定。"
+          }
+        }
+      }
+    },
+    "A secure connection to the mail server could not be made, so mailin did not connect and no password was sent. Check the server name, port and security setting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine sichere Verbindung zum Mailserver konnte nicht hergestellt werden. mailin hat sich daher nicht verbunden und kein Passwort gesendet. Prüfen Sie Servername, Port und Sicherheitseinstellung."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo establecer una conexión segura con el servidor de correo, así que mailin no se conectó y no se envió ninguna contraseña. Comprueba el nombre del servidor, el puerto y el ajuste de seguridad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d'établir une connexion sécurisée avec le serveur de messagerie : mailin ne s'est donc pas connecté et aucun mot de passe n'a été envoyé. Vérifiez le nom du serveur, le port et le réglage de sécurité."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सर्वर से सुरक्षित कनेक्शन नहीं बन सका, इसलिए mailin ने कनेक्ट नहीं किया और कोई पासवर्ड नहीं भेजा गया। सर्वर का नाम, पोर्ट और सुरक्षा सेटिंग जाँचें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non è stato possibile stabilire una connessione sicura con il server di posta, quindi mailin non si è collegato e non è stata inviata alcuna password. Controlla il nome del server, la porta e l'impostazione di sicurezza."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールサーバへの安全な接続を確立できなかったため、mailin は接続せず、パスワードも送信されていません。サーバ名、ポート、セキュリティ設定を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일 서버에 대한 보안 연결을 만들 수 없어 mailin이 연결하지 않았으며 암호도 보내지 않았습니다. 서버 이름, 포트 및 보안 설정을 확인하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível estabelecer uma conexão segura com o servidor de e-mail, então o mailin não se conectou e nenhuma senha foi enviada. Verifique o nome do servidor, a porta e o ajuste de segurança."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法与邮件服务器建立安全连接，因此 mailin 没有连接，也没有发送任何密码。请检查服务器名称、端口和安全设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法與郵件伺服器建立安全連線，因此 mailin 沒有連線，也沒有傳送任何密碼。請檢查伺服器名稱、連接埠和安全性設定。"
+          }
+        }
+      }
+    },
+    "All Mail is hidden from IMAP in Gmail settings; archived mail without a label cannot be saved. Turn on 'Show in IMAP' for All Mail." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„Alle Nachrichten“ ist in den Gmail-Einstellungen für IMAP ausgeblendet; archivierte E-Mails ohne Label können nicht gespeichert werden. Schalten Sie „In IMAP anzeigen“ für „Alle Nachrichten“ ein."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos está oculto para IMAP en los ajustes de Gmail; el correo archivado sin etiqueta no se puede guardar. Activa 'Mostrar en IMAP' para Todos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tous les messages est masqué pour IMAP dans les paramètres Gmail ; les e-mails archivés sans libellé ne peuvent pas être enregistrés. Activez « Afficher dans IMAP » pour Tous les messages."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail सेटिंग्स में All Mail को IMAP से छिपाया गया है; बिना लेबल वाले संग्रहीत ईमेल सहेजे नहीं जा सकते। All Mail के लिए 'Show in IMAP' चालू करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutti i messaggi è nascosto a IMAP nelle impostazioni di Gmail; la posta archiviata senza etichetta non può essere salvata. Attiva 'Mostra in IMAP' per Tutti i messaggi."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail の設定で「すべてのメール」が IMAP に表示されないようになっているため、ラベルのないアーカイブ済みメールは保存できません。「すべてのメール」の「IMAP で表示」をオンにしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail 설정에서 전체보관함이 IMAP에 숨겨져 있어 라벨이 없는 보관된 메일을 저장할 수 없습니다. 전체보관함의 'IMAP에 표시'를 켜십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os e-mails está oculto do IMAP nas configurações do Gmail; e-mails arquivados sem marcador não podem ser salvos. Ative 'Mostrar no IMAP' para Todos os e-mails."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail 设置中“所有邮件”对 IMAP 隐藏；没有标签的已归档邮件无法保存。请为“所有邮件”打开“在 IMAP 中显示”。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail 設定中「所有郵件」對 IMAP 隱藏；沒有標籤的已封存郵件無法儲存。請為「所有郵件」開啟「在 IMAP 中顯示」。"
+          }
+        }
+      }
+    },
+    "%@ Nothing was saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Rien n'a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 未儲存任何內容。"
+          }
+        }
+      }
+    },
+    "The incoming mail server refused the user name or password. Nothing was saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für eingehende E-Mails hat den Benutzernamen oder das Passwort abgelehnt. Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo entrante rechazó el nombre de usuario o la contraseña. No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de réception a refusé le nom d'utilisateur ou le mot de passe. Rien n'a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इनकमिंग मेल सर्वर ने उपयोगकर्ता नाम या पासवर्ड अस्वीकार कर दिया। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in arrivo ha rifiutato il nome utente o la password. Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信メールサーバがユーザ名またはパスワードを拒否しました。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수신 메일 서버가 사용자 이름 또는 암호를 거부했습니다. 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de entrada recusou o nome de usuário ou a senha. Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件服务器拒绝了用户名或密码。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件伺服器拒絕了使用者名稱或密碼。未儲存任何內容。"
+          }
+        }
+      }
+    },
+    "The outgoing mail server refused the user name or password. Nothing was saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für ausgehende E-Mails hat den Benutzernamen oder das Passwort abgelehnt. Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo saliente rechazó el nombre de usuario o la contraseña. No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur d'envoi a refusé le nom d'utilisateur ou le mot de passe. Rien n'a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आउटगोइंग मेल सर्वर ने उपयोगकर्ता नाम या पासवर्ड अस्वीकार कर दिया। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in uscita ha rifiutato il nome utente o la password. Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信メールサーバがユーザ名またはパスワードを拒否しました。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "발신 메일 서버가 사용자 이름 또는 암호를 거부했습니다. 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de saída recusou o nome de usuário ou a senha. Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发件服务器拒绝了用户名或密码。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄件伺服器拒絕了使用者名稱或密碼。未儲存任何內容。"
+          }
+        }
+      }
+    },
+    "%lld of %lld messages can be deleted; %lld are on hold and stay; %lld are the only copy left after duplicate removal and stay. Files other accounts or imports also use stay. This cannot be undone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld von %2$lld Nachrichten können gelöscht werden; %3$lld stehen unter Aufbewahrungspflicht und bleiben; %4$lld sind nach dem Entfernen von Duplikaten die einzige verbliebene Kopie und bleiben. Dateien, die auch andere Konten oder Importe verwenden, bleiben. Dies kann nicht rückgängig gemacht werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se pueden eliminar %1$lld de %2$lld mensajes; %3$lld están en retención y se conservan; %4$lld son la única copia que queda tras eliminar duplicados y se conservan. Los archivos que también usan otras cuentas o importaciones se conservan. Esta acción no se puede deshacer."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld messages sur %2$lld peuvent être supprimés ; %3$lld sont sous conservation et restent ; %4$lld sont la seule copie restante après la suppression des doublons et restent. Les fichiers également utilisés par d'autres comptes ou imports restent. Cette action est irréversible."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld में से %1$lld संदेश हटाए जा सकते हैं; %3$lld होल्ड पर हैं और रहेंगे; %4$lld डुप्लिकेट हटाने के बाद बची एकमात्र प्रति हैं और रहेंगे। अन्य खाते या इंपोर्ट जिन फ़ाइलों का उपयोग करते हैं, वे भी रहेंगी। इसे पूर्ववत नहीं किया जा सकता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld messaggi su %2$lld possono essere eliminati; %3$lld sono in conservazione e restano; %4$lld sono l'unica copia rimasta dopo la rimozione dei duplicati e restano. I file usati anche da altri account o importazioni restano. L'operazione non può essere annullata."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 件中 %1$lld 件のメッセージを削除できます。%3$lld 件は保留中のため残ります。%4$lld 件は重複の削除後に残った唯一のコピーのため残ります。ほかのアカウントや読み込みでも使われているファイルは残ります。この操作は取り消せません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld개 중 %1$lld개의 메시지를 삭제할 수 있습니다. %3$lld개는 보존 중이라 남고, %4$lld개는 중복 제거 후 남은 유일한 사본이라 남습니다. 다른 계정이나 가져오기에서도 사용하는 파일은 남습니다. 이 작업은 취소할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld de %2$lld mensagens podem ser apagadas; %3$lld estão em retenção e ficam; %4$lld são a única cópia restante após a remoção de duplicatas e ficam. Arquivos também usados por outras contas ou importações ficam. Isso não pode ser desfeito."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 封邮件中有 %1$lld 封可以删除；%3$lld 封处于保留状态，将会保留；%4$lld 封是删除重复项后剩下的唯一副本，将会保留。其他账户或导入也在使用的文件会保留。此操作无法撤销。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 封郵件中有 %1$lld 封可以刪除；%3$lld 封處於保留狀態，將會保留；%4$lld 封是刪除重複項目後剩下的唯一副本，將會保留。其他帳號或匯入也在使用的檔案會保留。此操作無法復原。"
+          }
+        }
+      }
+    },
+    "%lld archived messages deleted; %lld on hold kept; %lld kept as the only copy left after duplicate removal." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld archivierte Nachrichten gelöscht; %2$lld unter Aufbewahrungspflicht behalten; %3$lld als einzige nach dem Entfernen von Duplikaten verbliebene Kopie behalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld mensajes archivados eliminados; %2$lld en retención conservados; %3$lld conservados como la única copia que queda tras eliminar duplicados."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld messages archivés supprimés ; %2$lld sous conservation gardés ; %3$lld gardés comme seule copie restante après la suppression des doublons."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld संग्रहीत संदेश हटाए गए; होल्ड पर मौजूद %2$lld रखे गए; %3$lld डुप्लिकेट हटाने के बाद बची एकमात्र प्रति के रूप में रखे गए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld messaggi archiviati eliminati; %2$lld in conservazione mantenuti; %3$lld mantenuti come unica copia rimasta dopo la rimozione dei duplicati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ済みのメッセージを %1$lld 件削除しました。保留中の %2$lld 件と、重複の削除後に残った唯一のコピーである %3$lld 件は残しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관된 메시지 %1$lld개를 삭제했습니다. 보존 중인 %2$lld개와 중복 제거 후 남은 유일한 사본 %3$lld개는 남겨 두었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld mensagens arquivadas apagadas; %2$lld em retenção mantidas; %3$lld mantidas como a única cópia restante após a remoção de duplicatas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已删除 %1$lld 封已归档邮件；保留了 %2$lld 封处于保留状态的邮件；%3$lld 封作为删除重复项后剩下的唯一副本被保留。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已刪除 %1$lld 封已封存郵件；保留了 %2$lld 封處於保留狀態的郵件；%3$lld 封作為刪除重複項目後剩下的唯一副本被保留。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
