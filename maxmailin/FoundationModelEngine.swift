@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import NaturalLanguage
 
@@ -9,6 +10,7 @@ struct EmailTagResult {
 
 #if canImport(FoundationModels)
 import FoundationModels
+import os
 
 // MARK: - @Generable Structured Output Types
 
@@ -360,6 +362,9 @@ struct AILanguageResult {
 struct SearchEmailsTool: Tool {
     let name = "searchEmails"
     let description = "Search the email archive for emails matching keywords"
+    /// Injectable for tests (disposable storage); the app uses the shared ones.
+    var fts: FTSSearchIndex = .shared
+    var archive: ArchiveDataService = .shared
 
     @Generable
     struct Arguments {
@@ -372,9 +377,9 @@ struct SearchEmailsTool: Tool {
         // or scans the whole archive (was EmailSearchIndex.hybridSearch over an
         // in-memory [RawEmail]).
         let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.query) ?? FTSQueryBuilder.escapeTerm(arguments.query)
-        let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 5)) ?? []
+        let ids = (try? await self.fts.searchRaw(fts, limit: 5)) ?? []
         guard !ids.isEmpty else { return "No emails found for '\(arguments.query)'" }
-        let evidence = (try? await EmailStore.shared.emails(withIDs: ids)) ?? []
+        let evidence = (try? await archive.fullEmails(ids: ids)) ?? []
         guard !evidence.isEmpty else { return "No emails found for '\(arguments.query)'" }
         var output = ""
         for e in evidence {
@@ -392,6 +397,8 @@ struct SearchEmailsTool: Tool {
 struct GetThreadInfoTool: Tool {
     let name = "getThread"
     let description = "Get all emails in a conversation thread by subject keyword"
+    var fts: FTSSearchIndex = .shared
+    var archive: ArchiveDataService = .shared
 
     @Generable
     struct Arguments {
@@ -403,8 +410,8 @@ struct GetThreadInfoTool: Tool {
         // Bounded: FTS5 finds candidate emails by subject, EmailStore hydrates
         // that bounded set, and we group only those — not the whole archive.
         let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.subject) ?? FTSQueryBuilder.escapeTerm(arguments.subject)
-        let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 50)) ?? []
-        let candidates = (try? await EmailStore.shared.emails(withIDs: ids)) ?? []
+        let ids = (try? await self.fts.searchRaw(fts, limit: 50)) ?? []
+        let candidates = (try? await archive.fullEmails(ids: ids)) ?? []
         let threads = ThreadGrouper.group(candidates)
         let lower = arguments.subject.lowercased()
         guard let thread = threads.first(where: { $0.subject.lowercased().contains(lower) }) else {
@@ -750,7 +757,9 @@ struct KnowledgeGraphQueryTool: Tool {
 
     func call(arguments: Arguments) async throws -> String {
         guard let graph = FoundationModelEngine.getKnowledgeGraph(), graph.nodeCount > 0 else {
-            return "Knowledge graph not available. Import emails first to build the graph."
+            // Instruction to the model, not text for the user: the old
+            // "Import emails first" string was repeated verbatim in answers.
+            return "No relationship data is available for this question. Answer from the retrieved emails only and do not mention this tool or a knowledge graph."
         }
 
         let qt = arguments.queryType?.lowercased() ?? "relationships"
@@ -821,24 +830,60 @@ struct FoundationModelEngine {
         case unknown
     }
 
+    /// Asking the system whether the model is available is real work
+    /// (FoundationModels + GenerativeModels lookups, locale setup) and views
+    /// read it from `body`. On iPad, AI Assistant's header asked on every
+    /// render and the app stopped answering touches (found 2026-10-04). The
+    /// answer is cached and re-asked at most every 30 s; status changes
+    /// (Apple Intelligence switched on, model download finished) are seen
+    /// within that window.
+    private static let availabilityCache = AvailabilityCache()
+
     static var availability: ModelAvailability {
-        let model = SystemLanguageModel.default
-        switch model.availability {
-        case .available:
-            return .available
-        case .unavailable(.deviceNotEligible):
-            return .notEligible
-        case .unavailable(.appleIntelligenceNotEnabled):
-            return .notEnabled
-        case .unavailable(.modelNotReady):
-            return .notReady
-        default:
-            return .unknown
+        #if DEBUG
+        // Test hook: behave exactly as if Apple Intelligence were switched off
+        // in System Settings, so the no-model paths can be checked live
+        // without changing the Mac's settings. Debug builds only.
+        if ProcessInfo.processInfo.arguments.contains("-simulateAppleIntelligenceOff") { return .notEnabled }
+        #endif
+        return availabilityCache.value {
+            switch SystemLanguageModel.default.availability {
+            case .available: return .available
+            case .unavailable(.deviceNotEligible): return .notEligible
+            case .unavailable(.appleIntelligenceNotEnabled): return .notEnabled
+            case .unavailable(.modelNotReady): return .notReady
+            default: return .unknown
+            }
         }
     }
 
-    static var isAvailable: Bool {
-        SystemLanguageModel.default.isAvailable
+    static var isAvailable: Bool { availability == .available }
+
+    /// Thread-safe, time-limited cache for the availability answer.
+    final class AvailabilityCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cached: ModelAvailability?
+        private var checkedAt = Date.distantPast
+        static let lifetime: TimeInterval = 30
+
+        func value(_ compute: () -> ModelAvailability) -> ModelAvailability {
+            lock.lock()
+            if let cached, Date().timeIntervalSince(checkedAt) < Self.lifetime {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+            let fresh = compute()
+            lock.lock()
+            cached = fresh
+            checkedAt = Date()
+            lock.unlock()
+            return fresh
+        }
+
+        func invalidate() {
+            lock.lock(); cached = nil; lock.unlock()
+        }
     }
 
     // v4.3.1: Current persona for AI behavior
@@ -862,9 +907,91 @@ struct FoundationModelEngine {
     /// plus the true archive total — never materializes the corpus.
     private static func retrieveContext(query: String, contextLimit: Int = 15) async -> (emails: [MBOXParser.RawEmail], total: Int) {
         var contextEmails = ((try? await ArchiveRetrievalService.shared.retrieve(query, limit: contextLimit)) ?? []).map(\.email)
-        let total = (try? await ArchiveDataService.shared.count()) ?? contextEmails.count
+        // The full-text search needs EVERY word of the question: "Did I book a
+        // train ticket in 2018?" matched nothing, and the answer was built
+        // from the newest 20 emails instead (7 of 12 typed questions answered
+        // "not found" for mail that exists, 2026-10-06). Thin results are
+        // retried on the question's content words, any of them, with a few
+        // everyday synonyms; bm25 ranks the rarest matches first.
         if contextEmails.count < 3 {
-            // Thin retrieval → fall back to a bounded most-recent window.
+            let terms = relaxedSearchTerms(for: query)
+            if !terms.isEmpty {
+                // Bare words: the retrieval layer escapes each one and keeps OR.
+                let orQuery = terms.joined(separator: " OR ")
+                let relaxed = ((try? await ArchiveRetrievalService.shared.retrieve(orQuery, limit: contextLimit * 2)) ?? []).map(\.email)
+                var seen = Set(contextEmails.map(\.id))
+                // Emails containing more of the question's own words first
+                // (synonyms count less), then the search engine's order: a
+                // single common word ("scan") outranked the thread that has
+                // "Bengali", "manga" and "translation".
+                let ownWords = Set(EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() })
+                func coverage(_ email: MBOXParser.RawEmail) -> Int {
+                    let text = ((email.headers["Subject"] ?? "") + " " + email.plainBody.prefix(4000)).lowercased()
+                    return terms.reduce(0) { total, term in
+                        // Singular form, so "interviews" counts "Interview Call".
+                        let stem = term.count > 4 && term.hasSuffix("s") ? String(term.dropLast()) : term
+                        return total + (text.contains(stem) ? (ownWords.contains(term) ? 2 : 1) : 0)
+                    }
+                }
+                let unseen = relaxed.filter { seen.insert($0.id).inserted }
+                var ranked = unseen.enumerated()
+                    .sorted { (coverage($0.element), -$0.offset) > (coverage($1.element), -$1.offset) }
+                    .map(\.element)
+                // A year in the question ("in 2018") puts that year's mail first.
+                if let yearMatch = query.firstMatch(of: /\b(19|20)\d{2}\b/) {
+                    let year = Int(query[yearMatch.range]) ?? 0
+                    let cal = Calendar.current
+                    let inYear = ranked.filter { MBOXParser.parseDate($0.headers["Date"]).map { cal.component(.year, from: $0) == year } ?? false }
+                    let others = ranked.filter { e in !inYear.contains { $0.id == e.id } }
+                    ranked = inYear + others
+                }
+                // At most 20 of the best matches: more pushed ordinary questions
+                // over the multi-expert threshold (50) — slower, and its
+                // pipeline labels leaked into answers.
+                contextEmails += ranked.prefix(min(contextLimit, 20))
+            }
+        }
+        let total = (try? await ArchiveDataService.shared.count()) ?? contextEmails.count
+        // I4: the opt-in semantic index adds messages that say the same thing
+        // in other words. A no-op while the switch is off or nothing is
+        // indexed; bounded by `contextLimit` like the lexical retrieval.
+        let semanticIDs = await SemanticIndexController.shared.neighbors(of: query, limit: contextLimit)
+        if !semanticIDs.isEmpty {
+            var seen = Set(contextEmails.map(\.id))
+            let extra = semanticIDs.filter { !seen.contains($0) }
+            if !extra.isEmpty, let hydrated = try? await ArchiveDataService.shared.fullEmails(ids: Array(extra.prefix(contextLimit))) {
+                for email in hydrated where !seen.contains(email.id) && contextEmails.count < contextLimit * 2 {
+                    contextEmails.append(email); seen.insert(email.id)
+                }
+            }
+        }
+        // "What do I still need to do for my patent?" — what is pending is
+        // decided by the matter's NEWEST emails (kalsmritikosh: situation
+        // resolves conflicts). Keyword ranking returned the 2023 thread, and
+        // the answer listed steps the 2024 grant had settled (2026-10-06).
+        let history = isHistoryQuestion(query)
+        if isPendingQuestion(query) || history {
+            // Every reference the best matches share — a matter often runs
+            // across threads with different numbers in their subjects (a
+            // phone number on the 2023 thread, the application number on the
+            // 2024 ones); reading only one missed the grant.
+            var matter: [MBOXParser.RawEmail] = []
+            var seenIDs = Set<UUID>()
+            for key in matterKeys(in: contextEmails).prefix(3) {
+                for email in ((try? await ArchiveRetrievalService.shared.retrieve(key, limit: 200)) ?? []).map(\.email)
+                where seenIDs.insert(email.id).inserted {
+                    matter.append(email)
+                }
+            }
+            let newestFirst = matter.sorted {
+                (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+            }
+            // A history needs the whole matter, a pending question its newest part.
+            if !newestFirst.isEmpty { contextEmails = Array(newestFirst.prefix(history ? 80 : 15)) }
+        }
+        if contextEmails.isEmpty {
+            // Nothing matched at all → a bounded most-recent window, so the
+            // model can say plainly that nothing relevant was found.
             var seen = Set(contextEmails.map(\.id))
             let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 20)
             if let recent = try? await { () async throws -> [MBOXParser.RawEmail] in
@@ -879,6 +1006,261 @@ struct FoundationModelEngine {
             }
         }
         return (contextEmails, total)
+    }
+
+    /// Trailing chat filler ("Let me know if you'd like further assistance.")
+    /// carries no information; it is removed from the end of an answer.
+    static func withoutFiller(_ text: String) -> String {
+        let filler = #"(?is)\s*(?:let me know[^.!?\n]*|feel free to[^.!?\n]*|if you (?:need|have|would like|want)[^.!?\n]*|i hope (?:this|that) helps[^.!?\n]*|hope (?:this|that) helps[^.!?\n]*)[.!?]?\s*$"#
+        var result = text
+        // Up to two trailing filler sentences.
+        for _ in 0..<2 {
+            guard let range = result.range(of: filler, options: .regularExpression) else { break }
+            let candidate = String(result[..<range.lowerBound])
+            guard candidate.trimmingCharacters(in: .whitespacesAndNewlines).count >= 20 else { break }
+            result = candidate
+        }
+        return result
+    }
+
+    /// "I couldn't find any emails about X. However, here is the email about
+    /// X…": the opener is dropped when the answer goes on to name a retrieved
+    /// email. A prompt rule alone did not stop it (2026-10-07).
+    static func withoutFalseNotFoundOpener(_ text: String, evidence: [EvidenceReference]) -> String {
+        let opener = #"^\s*(?:I (?:couldn['’]t|could not|didn['’]t|did not|was unable to) (?:find|locate|identify)|There (?:are|were) no emails|No emails (?:were|are) found)[^.\n]*[.\n]\s*(?:However,\s*)?"#
+        guard let range = text.range(of: opener, options: [.regularExpression, .caseInsensitive]) else { return text }
+        let rest = String(text[range.upperBound...])
+        let namesEvidence = evidence.contains { ref in
+            let subject = EmailNLPEngine.baseSubject(ref.subject)
+            return subject.count >= 8 && rest.localizedCaseInsensitiveContains(String(subject.prefix(30)))
+        }
+        guard namesEvidence, !rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return text }
+        return rest.prefix(1).uppercased() + rest.dropFirst()
+    }
+
+    /// The answer of last resort for `query`, from freshly retrieved emails —
+    /// used when the model timed out, failed, or returned nothing usable.
+    static func fallbackAnswer(for query: String, reason: String) async -> String {
+        let (emails, _) = await retrieveContext(query: query, contextLimit: 15)
+        return EvidenceFallback.build(query: query, emails: emails, reason: reason)
+    }
+
+    /// Rules every answer path shares, each from a wrong answer on the
+    /// owner's archive (2026-10-06): codes expanded into invented places
+    /// ("HWH (Hyderabad)"), "couldn't find any" followed by the email found,
+    /// and 2023 requests listed as still to do after the 2024 grant.
+    static let answerDiscipline = """
+        Never expand a code, abbreviation or ID (station codes, reference numbers)         unless the email itself spells it out; quote it as written.         If the emails answer the question, say so directly; never open with         "I couldn't find" when you then show a matching email.         For what is still pending or still to do, use the newest emails of that         matter: a later email showing something done (granted, paid, filed,         confirmed) settles earlier requests, so list only what is not shown as         done, each with its date.         Never add up or compute amounts yourself.
+        """
+
+    /// Statements of completion in these emails ("has been granted",
+    /// "confirm the safe receipt of a payment", "successfully filed"), newest
+    /// first, with the newest email's date — appended to a pending question.
+    static func completedFacts(in emails: [MBOXParser.RawEmail]) -> String {
+        let (facts, newestLine) = completedFactList(in: emails)
+        guard let newestLine else { return "" }
+        var out = "\n\nFacts from the emails (already done — the app shows these to the user itself; do not repeat them, and anything they settle is not pending):\n"
+        out += facts.isEmpty ? "- none stated\n" : facts.joined(separator: "\n") + "\n"
+        out += newestLine
+        out += " Answer with one short part only, headed **Still open**: what is open after the newest email, each with its date, or “nothing shown as open”. Anything a fact above covers is settled. Quote years and dates exactly as written (\"3rd year\" is a year of the patent, not a date). Do not calculate."
+        return out
+    }
+
+    /// The completion sentences (newest first, dated) and a line naming the
+    /// newest email; shown to the user verbatim by the app.
+    static func completedFactList(in emails: [MBOXParser.RawEmail]) -> (facts: [String], newestLine: String?) {
+        let done = #"(?i)\b(has been granted|was granted|granted on|confirm(?:ed)? the (?:safe )?receipt|payment (?:has been|was) (?:made|received)|(?:has been |been )?successfully (?:paid|filed)|has been paid|has been filed|has been approved|was approved|completed|has been recorded)\b"#
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let newestFirst = emails.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        var facts: [String] = []
+        var seen = Set<String>()
+        for email in newestFirst {
+            let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+            let text = lines.joined(separator: " ").replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            for sentence in text.components(separatedBy: ". ") where sentence.range(of: done, options: .regularExpression) != nil {
+                // Plain-text emphasis ("*has been successfully paid*") would
+                // garble the quoted markdown.
+                let clean = sentence.replacingOccurrences(of: "*", with: "").trimmingCharacters(in: .whitespaces)
+                let short = clean.count > 170 ? String(clean.prefix(170)) + "…" : clean
+                guard seen.insert(short.lowercased()).inserted else { continue }
+                let when = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                facts.append("- \(when): \(short)")
+                break
+            }
+            if facts.count >= 6 { break }
+        }
+        guard let newest = newestFirst.first else { return ([], nil) }
+        let newestDate = MBOXParser.parseDate(newest.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+        return (facts, "The newest email in this matter is dated \(newestDate): “\(EmailNLPEngine.baseSubject(newest.headers["Subject"] ?? ""))”.")
+    }
+
+    /// The newest sentence in a matter that states a recurring cost or duty
+    /// ("INR 800 per year", "annuity payments every year"), quoted with its
+    /// sender and date. The model listed an already-paid annuity as upcoming.
+    static func recurringObligation(in emails: [MBOXParser.RawEmail]) -> String? {
+        let recurring = #"(?i)\b(per year|every year|each year|annually|per annum|yearly)\b"#
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let newestFirst = emails.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        for email in newestFirst {
+            let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+            let text = lines.joined(separator: " ").replacingOccurrences(of: "*", with: "")
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            if let sentence = text.components(separatedBy: ". ").first(where: { $0.range(of: recurring, options: .regularExpression) != nil }) {
+                let clean = sentence.trimmingCharacters(in: .whitespaces)
+                let short = clean.count > 200 ? String(clean.prefix(200)) + "…" : clean
+                let when = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                return "“\(short)” — \(displayName(from: email.headers["From"] ?? "?")), \(when)"
+            }
+        }
+        return nil
+    }
+
+    /// "The journey of my patent from start to finish", "history of…".
+    static func isHistoryQuestion(_ query: String) -> Bool {
+        query.lowercased().range(of: #"\b(journey|history of|timeline|start to finish|beginning to end|from the (?:start|beginning))\b"#, options: .regularExpression) != nil
+    }
+
+    /// A matter's history built by the app: each conversation with its
+    /// dates, oldest first, then the completion sentences quoted. The model
+    /// told a patent's two-year history as one hearing (2026-10-07).
+    static func matterTimeline(query: String, emails allEmails: [MBOXParser.RawEmail]) -> String {
+        let fmt = DateFormatter(); fmt.dateFormat = "d MMM yyyy"
+        var groups: [String: [MBOXParser.RawEmail]] = [:]
+        for email in allEmails { groups[EmailNLPEngine.conversationKey(email), default: []].append(email) }
+        // Only conversations about the question's subject: a matter key can be
+        // a phone number every signature carries, which pulled a CV and a
+        // food complaint into a patent's history (2026-10-07).
+        let generic: Set<String> = ["journey", "history", "timeline", "start", "finish", "beginning", "summarize", "summary", "tell", "story"]
+        let terms = EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() }
+            .filter { $0.count >= 3 && !generic.contains($0) && !OwnerIdentity.nameWords.contains($0) }
+        if !terms.isEmpty {
+            let relevant = groups.filter { _, conv in
+                conv.contains { email in
+                    let text = ((email.headers["Subject"] ?? "") + " " + String(email.plainBody.prefix(1500))).lowercased()
+                    return terms.contains { text.range(of: "\\b\(NSRegularExpression.escapedPattern(for: $0))", options: .regularExpression) != nil }
+                }
+            }
+            if !relevant.isEmpty { groups = relevant }
+        }
+        let emails = groups.values.flatMap { $0 }
+        let dated = groups.values.map { conv -> (first: Date, last: Date, emails: [MBOXParser.RawEmail]) in
+            let dates = conv.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+            return (dates.min() ?? .distantPast, dates.max() ?? .distantPast, conv)
+        }.sorted { $0.first < $1.first }
+        var out = "**Timeline** — \(emails.count) emails in \(dated.count) conversation\(dated.count == 1 ? "" : "s"), oldest first:\n\n"
+        for conv in dated.suffix(12) {
+            let span = Calendar.current.isDate(conv.first, inSameDayAs: conv.last)
+                ? fmt.string(from: conv.first) : "\(fmt.string(from: conv.first)) – \(fmt.string(from: conv.last))"
+            let subject = EmailNLPEngine.baseSubject(conv.emails.first?.headers["Subject"] ?? "")
+            let people = Set(conv.emails.map { displayName(from: $0.headers["From"] ?? "?") }).sorted().prefix(3).joined(separator: ", ")
+            out += "- **\(span)** — “\(subject.isEmpty ? "(No Subject)" : subject)” (\(conv.emails.count) email\(conv.emails.count == 1 ? "" : "s"); \(people))\n"
+        }
+        if dated.count > 12 { out += "_The \(dated.count - 12) earlier conversations are left out._\n" }
+        let facts = completedFactList(in: emails).facts
+        if !facts.isEmpty {
+            out += "\n**Milestones** (quoted from your emails):\n" + facts.reversed().joined(separator: "\n") + "\n"
+        }
+        return out
+    }
+
+    /// "No emails found", "the search did not return…": a not-found claim
+    /// anywhere in the answer.
+    static func claimsNothingFound(_ text: String) -> Bool {
+        text.range(of: #"(?i)\b(did not|didn['’]t|does not|doesn['’]t|could not|couldn['’]t) (?:return|find|yield|locate|contain|mention|specify)|\bno (?:emails?|results?|information|mention|record)s? (?:were |was )?(?:found|about|regarding|matching|related)|\bthere (?:is|are|were) no (?:emails?|information|mention)"#, options: .regularExpression) != nil
+    }
+
+    /// "Still to do", "pending", "next steps" and the like.
+    static func isPendingQuestion(_ query: String) -> Bool {
+        let lower = query.lowercased()
+        return ["still need", "still have to", "still to do", "pending", "next step", "to do", "todo",
+                "outstanding", "remaining", "left to do", "what's left", "what is left", "need to do", "should i do"]
+            .contains { lower.contains($0) }
+    }
+
+    /// The reference a matter's emails share in their subjects — a long
+    /// number (application, case, policy) or a reference code ("TIN23/2367")
+    /// — the one most of the best matches carry.
+    static func matterKey(in emails: [MBOXParser.RawEmail]) -> String? {
+        matterKeys(in: emails).first
+    }
+
+    /// All shared references, the most frequent (then longest) first. A
+    /// reference counts when it is in two or more subjects, or when it is in
+    /// one subject and the body of another email (a thread that names the
+    /// matter's number only in its text).
+    static func matterKeys(in emails: [MBOXParser.RawEmail]) -> [String] {
+        var counts: [String: Int] = [:]
+        let top = Array(emails.prefix(12))
+        for email in top {
+            let subject = email.headers["Subject"] ?? ""
+            var seen = Set<String>()
+            for match in subject.matches(of: /\b(?:\d{6,}|[A-Z]{2,}\d{2,}\/\d{2,})\b/) {
+                let token = String(subject[match.range])
+                if seen.insert(token).inserted { counts[token, default: 0] += 1 }
+            }
+        }
+        for (token, count) in counts where count == 1 {
+            if top.contains(where: { !($0.headers["Subject"] ?? "").contains(token) && $0.plainBody.contains(token) }) {
+                counts[token] = 2
+            }
+        }
+        // Long reference numbers (9+ digits: application, policy, case) that
+        // two of the top emails carry in their TEXT — the 2023 thread names
+        // the application number only in its body.
+        var inBodies: [String: Int] = [:]
+        for email in top {
+            let body = String(email.plainBody.prefix(6000))
+            var seen = Set<String>()
+            for match in body.matches(of: /\b\d{9,}\b/) {
+                let token = String(body[match.range])
+                if seen.insert(token).inserted { inBodies[token, default: 0] += 1 }
+            }
+        }
+        for (token, count) in inBodies where count >= 2 {
+            counts[token] = max(counts[token] ?? 0, count)
+        }
+        return counts.filter { $0.value >= 2 }
+            .sorted { ($0.value, $0.key.count) > ($1.value, $1.key.count) }
+            .map(\.key)
+    }
+
+    /// Removes the multi-expert pipeline's internal labels from an answer:
+    /// "(from timelineExpert)", "(via sentimentExpert)", "(via Find emails
+    /// involving …)" reached users verbatim (2026-10-06).
+    static func withoutPipelineLabels(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: #"\s*\((?:from|via|by)\s+[A-Za-z]*[Ee]xpert[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\(via (?:Find|Search|Get|List|Analy[sz]e)[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(?:from|via) [a-z]+Expert\b"#, with: "", options: .regularExpression)
+    }
+
+    /// The question's content words plus everyday synonyms, for the relaxed
+    /// (any-word) search. Question words, pronouns and filler are dropped.
+    static func relaxedSearchTerms(for query: String) -> [String] {
+        let synonyms: [String: [String]] = [
+            "train": ["irctc", "railway", "pnr"], "railway": ["irctc", "train"], "ticket": ["booking", "pnr"],
+            "flight": ["airline", "boarding", "pnr"],
+            "job": ["interview", "vacancy", "opening"], "interview": ["interview", "vacancy", "recruitment"],
+            "hospital": ["patient", "claim", "tpa", "medical"], "claim": ["claim", "tpa"],
+            "packers": ["packers", "movers"], "movers": ["packers", "movers"],
+            "salary": ["payslip", "salary"], "bill": ["invoice", "bill"], "invoice": ["invoice", "bill"],
+            "password": ["password", "passcode"],
+        ]
+        let extra: Set<String> = ["book", "booked", "need", "still", "invited", "happened", "total", "pay", "paid", "number"]
+        var terms: [String] = []
+        for word in EmailNLPEngine.extractSearchTerms(from: query) {
+            let lower = word.lowercased().trimmingCharacters(in: .punctuationCharacters)
+            guard lower.count >= 3 || lower.allSatisfy(\.isNumber), !extra.contains(lower) else { continue }
+            terms.append(lower)
+            let singular = lower.count > 4 && lower.hasSuffix("s") ? String(lower.dropLast()) : lower
+            terms += synonyms[lower] ?? synonyms[singular] ?? []
+        }
+        var seen = Set<String>()
+        return terms.filter { seen.insert($0).inserted }
     }
 
     private static func prepareSessionBounded(query: String) async -> (session: LanguageModelSession, prompt: String, evidence: [EvidenceReference]) {
@@ -913,7 +1295,7 @@ struct FoundationModelEngine {
     static func respond(to query: String) async throws -> String {
         guard isAvailable else { return "Apple AI is not available on this device." }
         let prepared = await prepareSessionBounded(query: query)
-        let response = try await prepared.session.respond(to: prepared.prompt)
+        let response = try await prepared.session.loggedRespond(to: prepared.prompt)
         return AIGroundingGate.ground(answer: response.content, evidence: prepared.evidence).answer
     }
 
@@ -926,7 +1308,7 @@ struct FoundationModelEngine {
             return msg
         }
         let prepared = await prepareSessionBounded(query: query)
-        let stream = prepared.session.streamResponse(to: prepared.prompt)
+        let stream = prepared.session.loggedStreamResponse(to: prepared.prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -944,7 +1326,9 @@ struct FoundationModelEngine {
         var acc: [MBOXParser.RawEmail] = []
         let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
         do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= cap { break } } } catch { }
-        return Array(acc.prefix(cap))
+        let bounded = Array(acc.prefix(cap))
+        OwnerIdentity.update(from: bounded)
+        return bounded
     }
 
     // Corpus-free overloads — retrieve a bounded working set from the store
@@ -959,8 +1343,78 @@ struct FoundationModelEngine {
     static func generateInsights(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
         try await generateInsights(await boundedWorkingSet(), onUpdate: onUpdate)
     }
+    /// Thread Story from the AI page, where no thread is open. The whole
+    /// working set used to go to the narrator as if it were one thread; the
+    /// model timed out and a generic thread list answered instead (found
+    /// 2026-10-06). Now one conversation is chosen first and named — the
+    /// story's declared scope (kalsmritikosh H-3) — and only it is narrated.
     static func synthesizeThread(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
-        try await synthesizeThread(await boundedWorkingSet(), onUpdate: onUpdate)
+        let workingSet = await boundedWorkingSet()
+        guard let thread = busiestConversation(in: workingSet) else {
+            let msg = String(localized: "No conversation in this scope has replies from more than one person. To tell the story of a single email's thread, open the email and choose Thread Story.")
+            await onUpdate(msg)
+            return msg
+        }
+        let header = episodeHeader(thread)
+        let story = try await synthesizeThread(thread) { partial in
+            onUpdate(header + partial)
+        }
+        // The next busiest conversations, as questions the assistant answers,
+        // so another thread is one click away from this page.
+        let others = EmailNLPEngine.conversationsByActivity(in: workingSet).dropFirst().prefix(3)
+        var footer = ""
+        if !others.isEmpty {
+            footer = "\n\n" + String(localized: "Other conversations you can ask about:") + "\n"
+            for members in others {
+                let subject = EmailNLPEngine.baseSubject(members.first?.headers["Subject"] ?? "")
+                footer += "- Ask: “Tell the story of \(subject)” (\(members.count) messages)\n"
+            }
+        }
+        let full = header + OwnerIdentity.rewritingOwnerNames(in: story) + footer
+        await onUpdate(full)
+        return full
+    }
+
+    /// The conversation with the most people taking part (then the most
+    /// messages, then the most recent) among those with at least two senders.
+    /// One sender's repeated alerts are not a conversation.
+    static func busiestConversation(in emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail]? {
+        EmailNLPEngine.conversationsByActivity(in: emails).first
+    }
+
+    /// The episode facts, computed rather than generated (kalsmritikosh H-5):
+    /// which thread, who took part, its span, and who had the last word.
+    static func episodeHeader(_ thread: [MBOXParser.RawEmail], isBusiest: Bool = true) -> String {
+        let sorted = thread.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        let subject = sorted.first?.headers["Subject"] ?? String(localized: "(No Subject)")
+        var people: [String] = []
+        for email in sorted {
+            let name = displayName(from: email.headers["From"] ?? "?")
+            if !people.contains(name) { people.append(name) }
+        }
+        let dates = sorted.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        var header = (isBusiest
+            ? String(localized: "**Thread: “\(subject)”** — the busiest conversation in this scope.")
+            : String(localized: "**Thread: “\(subject)”**")) + "\n"
+        header += String(localized: "\(sorted.count) messages between \(people.joined(separator: ", "))")
+        if let first = dates.first, let last = dates.last {
+            header += first == last ? ", \(fmt.string(from: first))" : ", \(fmt.string(from: first)) – \(fmt.string(from: last))"
+        }
+        header += "."
+        if let lastEmail = sorted.last {
+            let when = MBOXParser.parseDate(lastEmail.headers["Date"]).map { fmt.string(from: $0) } ?? "?"
+            header += " " + String(localized: "Last message: \(displayName(from: lastEmail.headers["From"] ?? "?")), \(when).")
+        }
+        if isBusiest {
+            header += "\n" + String(localized: "For another thread, open one of its emails and choose Thread Story.")
+        }
+        header += "\n\n"
+        return header
     }
     static func securityBrief(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
         try await securityBrief(await boundedWorkingSet(), onUpdate: onUpdate)
@@ -1004,6 +1458,7 @@ struct FoundationModelEngine {
         let personaConfig = await PersonaManager.aiConfig(for: personaForCurrentSession)
         let instructions = """
             \(personaConfig.systemInstruction) \
+            \(answerDiscipline) \
             You work in mailin, a privacy-first Mac app. \
             The NLP engine has already retrieved the most relevant emails and computed \
             verified statistics. Your job is to synthesize these into a natural, \
@@ -1029,7 +1484,7 @@ struct FoundationModelEngine {
         )
         let prompt = "User question: \(query)\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1103,6 +1558,7 @@ struct FoundationModelEngine {
         let personaConfig = await PersonaManager.aiConfig(for: personaForCurrentSession)
         let instructions = """
             \(personaConfig.systemInstruction) \
+            \(answerDiscipline) \
             You work in mailin, a privacy-first Mac app. \
             An agentic retrieval pipeline has already: searched with BM25 + semantic vectors, \
             expanded conversation threads for full context, extracted the most relevant \
@@ -1130,7 +1586,7 @@ struct FoundationModelEngine {
         )
         let prompt = "User question: \(query)\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1186,7 +1642,7 @@ struct FoundationModelEngine {
         var expertFindings: [(ExpertRole, AISessionFindings)] = []
         var subFindings: [(String, AISessionFindings)] = []
 
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         var cloudExpertResults: [CloudExpertFinding] = []
         let cloudAIReady = await CloudAIManager.shared.isReady
         let cloudRoles: [CloudAIManager.CloudExpertRole] = cloudAIReady
@@ -1285,7 +1741,7 @@ struct FoundationModelEngine {
             }
         }
 
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         // Integrate cloud expert findings into the unified findings list
         for cloudResult in cloudExpertResults {
             for f in cloudResult.findings {
@@ -1383,7 +1839,7 @@ struct FoundationModelEngine {
 
         synthesisContext = String(synthesisContext.prefix(contextCharBudget))
 
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         // Append cloud expert findings to synthesis context
         if !cloudExpertResults.isEmpty {
             synthesisContext += "\nCLOUD EXPERT FINDINGS (world knowledge + advanced analysis):\n"
@@ -1402,11 +1858,15 @@ struct FoundationModelEngine {
             : ""
         let instructions = """
             \(personaConfig.systemInstruction) \
+            \(answerDiscipline) \
             Synthesize \(allFindings.count) findings (\(highCount) high-relevance) \
             from \(experts.count) experts into one answer. NLP baseline numbers are ground truth. \
             ▲=high ●=medium ▽=low relevance. Cite emails by **Subject** and **sender**. \
             \(kgCitationDirective)\
             Answer the user's exact question first, then add insights. Use bullet points. \
+            Relative dates ("last month", "this week", "recently") are measured from TODAY's \
+            date in the data, not from the newest email. If the asked period has no emails, \
+            say so plainly, give the date of the newest email, and offer that period instead. \
             \(personaConfig.synthesisGuidance)
             """
 
@@ -1415,9 +1875,9 @@ struct FoundationModelEngine {
             ? LanguageModelSession(instructions: instructions)
             : LanguageModelSession(tools: tools, instructions: instructions)
 
-        let prompt = "\(synthesisContext)\n\nAnswer this question: \(query)"
+        let prompt = "\(archiveDateFacts(targetEmails))\(synthesisContext)\n\nAnswer this question: \(query)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1425,7 +1885,7 @@ struct FoundationModelEngine {
         }
 
         // Cloud cross-validation when available and findings are substantial
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         if cloudAIReady && allFindings.count >= 3 {
             let validationEmailCtx = CloudAIManager.buildEmailContext(
                 from: ragRetrievedEmails.isEmpty ? emails : ragRetrievedEmails, maxEmails: 8
@@ -1478,7 +1938,7 @@ struct FoundationModelEngine {
         provenanceBuilder.highRelevanceCount = highCount
         provenanceBuilder.linkedFindings = linkedCount
         var synthesisLayers = layerCount
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         if cloudExpertCount > 0 { synthesisLayers += 1 }
         #endif
         provenanceBuilder.synthesisLayerCount = synthesisLayers
@@ -1533,7 +1993,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(to: "Summarize this email archive:\n\n\(emailContext)")
+        let response = try await session.loggedRespond(to: "Summarize this email archive:\n\n\(emailContext)")
         return response.content
     }
 
@@ -1550,11 +2010,29 @@ struct FoundationModelEngine {
         case all
     }
 
+    /// What the caller's `emails` are (§3-I4).
+    enum GivenEmails {
+        /// The emails the user is asking about (a case, a person, a
+        /// selection, one email) — always kept.
+        case scope
+        /// A capped working window standing in for the whole archive — with
+        /// the 3.0 engine on, replaced by emails chosen from the whole archive.
+        case window
+    }
+
     static func enhanceWithAI(
         scope: AnalysisScope,
         emails: [MBOXParser.RawEmail],
-        context: String = ""
+        context: String = "",
+        given: GivenEmails = .scope
     ) async -> String? {
+        // §3-I4: with the 3.0 engine on, a WINDOW is replaced by emails chosen
+        // from the whole archive (relevance or an even spread). A scope the
+        // user chose is never replaced — that would answer about other emails.
+        let name: String = { if case .security = scope { return "security" } else { return "other" } }()
+        let chosen = await AIContextSelector.context(for: emails, isWindow: given == .window, scopeName: name)
+        let emails = chosen.emails
+        let basedOn = chosen.basedOn
         guard isAvailable, !emails.isEmpty else { return nil }
 
         let roles: [ExpertRole]
@@ -1612,7 +2090,43 @@ struct FoundationModelEngine {
             }
         }
 
+        if let basedOn, !output.isEmpty { output += "\n" + basedOn }
         return output.isEmpty ? nil : output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Shared facts for proactive prompts
+
+    /// The archive owner's own addresses: the senders of mail marked sent
+    /// (or carrying Gmail's "Sent" label), plus the configured sender address.
+    /// Proactive prompts must not treat the owner as one of their contacts.
+    static func ownerAddresses(in emails: [MBOXParser.RawEmail]) -> Set<String> {
+        func address(_ from: String) -> String {
+            if let lt = from.firstIndex(of: "<") {
+                return from[from.index(after: lt)...].prefix { $0 != ">" }.lowercased().trimmingCharacters(in: .whitespaces)
+            }
+            return from.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
+        }
+        var own = Set(emails.filter { email in
+            if email.messageType == "sent" { return true }
+            let labels = (email.headers["X-Gmail-Labels"] ?? email.headers["X-gmail-labels"] ?? "").lowercased()
+            return labels.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == "sent" }
+        }.map { address($0.headers["From"] ?? "") })
+        if let configured = UserDefaults.standard.string(forKey: "defaultSenderEmail"), !configured.isEmpty {
+            own.insert(configured.lowercased())
+        }
+        own.remove("")
+        return own
+    }
+
+    /// "Today is 6 Oct 2026. The archive runs 23 Jul 2007 – 11 Mar 2025; the
+    /// newest email is 574 days old." Without it the model treated an old
+    /// archive's silence as a current gap and old deadlines as urgent.
+    static func archiveDateFacts(_ emails: [MBOXParser.RawEmail], now: Date = Date()) -> String {
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        guard let newest = dates.max(), let oldest = dates.min() else { return "Today is \(fmt.string(from: now)).\n" }
+        let age = Calendar.current.dateComponents([.day], from: newest, to: now).day ?? 0
+        return "Today is \(fmt.string(from: now)). The emails provided here run \(fmt.string(from: oldest)) – \(fmt.string(from: newest)); the newest of them is \(age) days old.\n"
     }
 
     // MARK: - Smart Triage / Priority Inbox
@@ -1636,16 +2150,42 @@ struct FoundationModelEngine {
         let priorityResults = EmailNLPEngine.scoreAllPriorities(emails, replyCountPerSender: replyCountPerSender)
         let topEmails = Array(priorityResults.prefix(10))
 
-        var context = "PRIORITY TRIAGE — Top \(topEmails.count) high-priority emails from \(emails.count) total:\n\n"
+        // Nothing from the last 30 days means nothing to act on now. The model
+        // kept putting year-old deadlines under "Act Now" despite the rules, so
+        // in that case the list is built here, with no urgency tiers.
+        let recentCutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        if let newest = dates.max(), newest < recentCutoff {
+            let fmt = DateFormatter()
+            fmt.dateStyle = .medium
+            fmt.timeStyle = .none
+            var out = String(localized: "**Nothing needs action now.** No email here is from the last 30 days (the newest is from \(fmt.string(from: newest))), so any deadline in them has passed.")
+            out += "\n\n" + String(localized: "**Most important older emails — check each was handled:**") + "\n\n"
+            for result in topEmails {
+                let email = result.email
+                let date = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? String(localized: "undated")
+                out += "- **\(email.headers["Subject"] ?? String(localized: "(No Subject)"))** — \(displayName(from: email.headers["From"] ?? "?")) · \(date)\n"
+                if !result.reasons.isEmpty {
+                    out += "  " + String(localized: "Why it ranked high: \(result.reasons.prefix(2).joined(separator: "; "))") + "\n"
+                }
+            }
+            await onUpdate(out)
+            return out
+        }
+
+        var context = archiveDateFacts(emails)
+        context += "PRIORITY TRIAGE — Top \(topEmails.count) high-priority emails from \(emails.count) total:\n\n"
+        let now = Date()
         for (_, result) in topEmails.enumerated() {
             let email = result.email
             let subj = email.headers["Subject"] ?? "(No Subject)"
+            let ageDays = MBOXParser.parseDate(email.headers["Date"]).flatMap { Calendar.current.dateComponents([.day], from: $0, to: now).day }
             context += """
                 --- \(subj) (score: \(result.score), level: \(result.level.rawValue)) ---
                 From: \(email.headers["From"] ?? "Unknown")
                 To: \(email.headers["To"] ?? "Unknown")
                 Subject: \(subj)
-                Date: \(email.headers["Date"] ?? "")
+                Date: \(email.headers["Date"] ?? "") (\(ageDays.map { "\($0) days ago" } ?? "age unknown"))
                 Priority reasons: \(result.reasons.joined(separator: ", "))
                 Body: \(bodySnippet(for: email, maxLength: 400))
 
@@ -1662,7 +2202,11 @@ struct FoundationModelEngine {
               "Email 1" or "Message 2"
             - For each email, explain WHY it's important in one sentence
             - Suggest a specific action (reply, delegate, schedule, archive)
-            - Group by urgency: "Act Now", "Today", "This Week"
+            - Group by urgency: "Act Now", "Today", "This Week", "Older"
+            - Judge urgency against TODAY's date given in the data. An email more than \
+              30 days old, or a deadline that has already passed, is never "Act Now", \
+              "Today" or "This Week": put it under "Older" with the action "check it was \
+              handled", and say the deadline has passed
             - Use **bold** for names, deadlines, and key terms
             - Be concise and actionable — like a personal assistant briefing
             """
@@ -1670,7 +2214,7 @@ struct FoundationModelEngine {
         let session = LanguageModelSession(instructions: instructions)
         let prompt = "Triage these priority emails and recommend actions:\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1681,92 +2225,140 @@ struct FoundationModelEngine {
 
     // MARK: - Proactive Insights Dashboard
 
-    static func generateInsights(_ emails: [MBOXParser.RawEmail], onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
+    /// `scopeTotal`: how many emails the scope holds, when `emails` is a
+    /// capped part of it — the answer then says what it covers.
+    static func generateInsights(_ emails: [MBOXParser.RawEmail], scopeTotal: Int? = nil, onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
         guard !emails.isEmpty else {
             let msg = "No emails to analyze. Import emails first."
             await onUpdate(msg)
             return msg
         }
-        guard isAvailable else {
-            let msg = "Apple AI is not available on this device."
-            await onUpdate(msg)
-            return msg
-        }
-        let classification = EmailNLPEngine.classifyAll(emails)
-        let sentiment = EmailNLPEngine.averageSentiment(of: emails)
-        let entities = EmailNLPEngine.extractEntities(from: emails, limit: 10)
-        let contacts = EmailNLPEngine.contactInsights(from: emails, limit: 8)
-        let topics = EmailNLPEngine.extractTopics(from: emails, limit: 8)
-
-        // Recent activity patterns
-        let now = Date()
-        let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: now) ?? now
-        let recentEmails = emails.filter { email in
-            guard let dateStr = email.headers["Date"],
-                  let date = MBOXParser.parseDate(dateStr) else { return false }
-            return date > oneWeekAgo
-        }
-        let unansweredReceived = recentEmails.filter { $0.messageType == "received" }
-
-        var context = "INSIGHTS DATA for \(emails.count) emails:\n\n"
-
-        // Category distribution
-        let catStrings = EmailNLPEngine.EmailCategory.allCases.compactMap { cat -> String? in
-            guard let count = classification[cat], count > 0 else { return nil }
-            return "\(cat.rawValue): \(count)"
-        }
-        context += "Categories: \(catStrings.joined(separator: ", "))\n"
-
-        // Sentiment summary
-        context += "Sentiment: \(sentiment.label) (avg \(String(format: "%.2f", sentiment.average))). "
-        context += "Positive: \(sentiment.positive), Neutral: \(sentiment.neutral), Negative: \(sentiment.negative)\n"
-
-        // Top entities
-        if !entities.isEmpty {
-            context += "Top entities: \(entities.map { "\($0.name) (\($0.type), \($0.count)x)" }.joined(separator: ", "))\n"
-        }
-
-        // Contact sentiment insights
-        if !contacts.isEmpty {
-            context += "Contact insights:\n"
-            for contact in contacts {
-                context += "  - \(contact.address): \(contact.emailCount) emails, sentiment: \(contact.sentimentLabel)\n"
+        // Built from the data, not generated (kalsmritikosh: "do not generate
+        // data — extract ledger value"; derived numbers are never model math).
+        // Every model-written version misstated a count, invented a role or
+        // motive, or proposed a follow-up the app cannot run (2026-10-06).
+        // Each insight is a count over these emails plus a question the
+        // assistant answers from the data.
+        let own = ownerAddresses(in: emails)
+        func address(_ from: String) -> String {
+            if let lt = from.firstIndex(of: "<") {
+                return from[from.index(after: lt)...].prefix { $0 != ">" }.lowercased().trimmingCharacters(in: .whitespaces)
             }
+            return from.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        func span(_ group: [MBOXParser.RawEmail]) -> String {
+            let dates = group.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+            guard let first = dates.min(), let last = dates.max() else { return "" }
+            return first == last ? fmt.string(from: first) : "\(fmt.string(from: first)) – \(fmt.string(from: last))"
+        }
+        let automatedMarkers = ["mailer-daemon", "postmaster", "noreply", "no-reply", "donotreply", "do-not-reply", "notification", "alerts@", "alert@"]
+        let bySender = Dictionary(grouping: emails) { address($0.headers["From"] ?? "") }
+            .filter { !$0.key.isEmpty && !own.contains($0.key) }
+        let people = bySender
+            .filter { key, _ in !automatedMarkers.contains { key.contains($0) } }
+            .sorted { ($0.value.count, $1.key) > ($1.value.count, $0.key) }
+            .prefix(3)
+        let conversationCount = Set(emails.map(EmailNLPEngine.conversationKey)).count
+
+        var out = "**\(emails.count) emails in \(conversationCount) conversations**, \(span(emails))"
+        if let scopeTotal, scopeTotal > emails.count {
+            out += " — the newest \(emails.count) of the \(scopeTotal) in this scope"
+        }
+        out += ". Counted from the archive — every number below is a count over these emails.\n\n"
+
+        if !people.isEmpty {
+            out += "**Who you hear from most**\n"
+            for (_, group) in people {
+                let name = displayName(from: group.first?.headers["From"] ?? "?")
+                let threads = Set(group.map(EmailNLPEngine.conversationKey)).count
+                out += "- **\(name)** — \(group.count) emails in \(threads) conversation\(threads == 1 ? "" : "s"), \(span(group))\n"
+            }
+            if let top = people.first.map({ displayName(from: $0.value.first?.headers["From"] ?? "") }) {
+                out += "Ask: “Tell me about emails from \(top)”\n"
+            }
+            out += "\n"
         }
 
-        // Topics
+        // The owner's own name is in every signature: it is not a topic.
+        let ownNameWords = Set(emails
+            .filter {
+                own.contains(address($0.headers["From"] ?? ""))
+                    || $0.messageType == "sent"
+                    || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent")
+            }
+            .prefix(200)
+            // Raw name, not displayName (which says "You" for the owner).
+            .flatMap { AIGroundingGate.senderName($0.headers["From"] ?? "").lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted) }
+            .filter { $0.count >= 3 })
+        let topics = EmailNLPEngine.extractTopicsByConversation(from: emails, limit: 12)
+            .filter { !ownNameWords.contains($0.word) }
+            .prefix(4)
         if !topics.isEmpty {
-            context += "Key topics: \(topics.map { "\($0.word) (\($0.count)x)" }.joined(separator: ", "))\n"
+            out += "**What comes up most** (a conversation counts once)\n"
+            for t in topics {
+                out += "- **\(t.word.capitalized)** — \(t.conversations) conversations, \(t.emails) emails\n"
+            }
+            out += "Ask: “What's discussed about \(topics[topics.startIndex].word)?”\n\n"
         }
 
-        // Recent activity
-        context += "\nRecent activity (last 7 days): \(recentEmails.count) emails, \(unansweredReceived.count) received\n"
-
-        let instructions = """
-            You are a proactive email intelligence analyst in mailin, a privacy-first Mac app. \
-            The NLP engine has computed verified statistics about the user's email archive. \
-            Generate 3-5 actionable insights the user might not have noticed.
-
-            Rules:
-            - Each insight should be specific and data-backed (cite numbers from NLP analysis)
-            - Examples: unanswered emails, sentiment shifts with contacts, category imbalances, \
-              neglected threads, unusual patterns
-            - Use **bold** for names, numbers, and key findings
-            - Be conversational — like a smart assistant noticing patterns
-            - Start each insight with a short descriptive heading
-            - Prioritize actionable findings over obvious observations
-            """
-
-        let session = LanguageModelSession(instructions: instructions)
-        let prompt = "Generate proactive insights from this email analysis:\n\n\(context)"
-
-        let stream = session.streamResponse(to: prompt)
-        var finalContent = ""
-        for try await snapshot in stream {
-            finalContent = snapshot.content
-            await onUpdate(finalContent)
+        let bounces = emails.filter {
+            let from = address($0.headers["From"] ?? "")
+            return from.contains("mailer-daemon") || from.contains("postmaster")
         }
-        return finalContent
+        if !bounces.isEmpty {
+            let name = displayName(from: bounces.first?.headers["From"] ?? "Mail Delivery Subsystem")
+            out += "**Mail that did not arrive**\n"
+            out += bounces.count == 1
+                ? "- **1** delivery-failure notice, \(span(bounces)): a message of yours that did not reach someone.\n"
+                : "- **\(bounces.count)** delivery-failure notices, \(span(bounces)). Each is a message of yours that did not reach someone.\n"
+            out += "Ask: “Tell me about emails from \(name)”\n\n"
+        }
+
+        let deadlineWords = ["deadline", "due date", "due on", "last date", "expiry", "expires", "expiring"]
+        // Counted per conversation, people only: 81 copies of one automated
+        // expiry alert had made "122 emails mention a deadline" (2026-10-06).
+        let withDeadlines = emails.filter { email in
+            let from = address(email.headers["From"] ?? "")
+            guard !automatedMarkers.contains(where: { from.contains($0) }) else { return false }
+            let text = (email.headers["Subject"] ?? "") + " " + String(email.plainBody.prefix(3000))
+            let lower = text.lowercased()
+            return deadlineWords.contains { lower.contains($0) }
+        }
+        let deadlineGroups = Dictionary(grouping: withDeadlines, by: EmailNLPEngine.conversationKey)
+        if !deadlineGroups.isEmpty {
+            let newest = withDeadlines.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.max()
+            let n = deadlineGroups.count
+            out += "**Deadlines mentioned**\n"
+            out += "- **\(n)** conversation\(n == 1 ? "" : "s") (\(withDeadlines.count) emails) mention a deadline, due date or expiry"
+            if let newest {
+                out += "; the newest is from \(fmt.string(from: newest))"
+                if newest < Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date() {
+                    out += ", so all have passed — worth checking each was handled"
+                }
+            }
+            out += ".\nUse Smart Triage to list the most important ones.\n\n"
+        }
+
+        let withFiles = emails.filter { !$0.attachments.isEmpty }
+        if !withFiles.isEmpty {
+            let types = Dictionary(grouping: withFiles.flatMap(\.attachments)) {
+                ($0.filename as NSString).pathExtension.lowercased()
+            }
+            .filter { !$0.key.isEmpty }
+            .sorted { ($0.value.count, $1.key) > ($1.value.count, $0.key) }
+            .prefix(3)
+            .map { ".\($0.key) (\($0.value.count))" }
+            out += "**Files**\n"
+            out += "- **\(withFiles.count)** emails carry attachments"
+            if !types.isEmpty { out += "; most common: \(types.joined(separator: ", "))" }
+            out += ".\nAsk: “Show me emails with photos or documents attached”\n"
+        }
+
+        await onUpdate(out)
+        return out
     }
 
     // MARK: - Thread Narrative Synthesis
@@ -1799,7 +2391,11 @@ struct FoundationModelEngine {
             let subj = email.headers["Subject"] ?? "(No Subject)"
             let sender = displayName(from: email.headers["From"] ?? "someone")
             let when = MBOXParser.parseDate(email.headers["Date"]).map { dateFmt.string(from: $0) } ?? "an unknown date"
-            let snippet = bodySnippet(for: email, maxLength: 500)
+            // Each message is told once (kalsmritikosh H-1): a reply's quote
+            // of the earlier messages ("On 18 Sep, X wrote: …") is cut, or the
+            // story retells the same words under every reply.
+            let snippet = withoutQuotedReply(bodySnippet(for: email, maxLength: 1500))
+                .prefix(500)
                 .replacingOccurrences(of: "\n", with: " ")
             context += "On \(when), \(sender) wrote about “\(subj)”: \(snippet)\n\n"
         }
@@ -1823,7 +2419,7 @@ struct FoundationModelEngine {
         let prompt = "Tell the story of this conversation:\n\n\(context)"
 
         func generate(_ prompt: String) async throws -> String {
-            let stream = session.streamResponse(to: prompt)
+            let stream = session.loggedStreamResponse(to: prompt)
             var finalContent = ""
             for try await snapshot in stream {
                 finalContent = snapshot.content
@@ -1832,7 +2428,16 @@ struct FoundationModelEngine {
             return finalContent
         }
 
-        var narrative = try await generate(prompt)
+        var narrative: String
+        do {
+            narrative = try await generate(prompt)
+        } catch {
+            // §8 #6: a long thread overflows the 4,096-token window; callers
+            // use `try?`, so the story used to come back empty without a word.
+            guard let outline = threadOutlineAfterFailure(error, sorted: sorted) else { throw error }
+            await onUpdate(outline)
+            return outline
+        }
         // Garbage gate: a small model can still parrot structure. Detect the
         // known failure shapes and retry ONCE with a corrective instruction;
         // if it still parrots, return an honest deterministic summary
@@ -1850,7 +2455,56 @@ struct FoundationModelEngine {
             await onUpdate(fallback)
             return fallback
         }
+        narrative = withoutUnwitnessedDates(narrative, thread: sorted)
+        await onUpdate(narrative)
         return narrative
+    }
+
+    /// The text before a reply's quoted history: everything from the first
+    /// "On <date>, <name> wrote:" or "-----Original Message-----" is dropped.
+    /// Forwarded content is kept — in a "Fwd:" it is the substance.
+    static func withoutQuotedReply(_ text: String) -> String {
+        EmailNLPEngine.withoutQuotedReply(text)
+    }
+
+    /// Removes "On 12 Mar, " anchors whose day and month match none of the
+    /// thread's emails — a narrative opened "On 12 Mar" for a thread sent on
+    /// 18–19 Sep (2026-10-07). The sentence stays; only the false date goes.
+    static func withoutUnwitnessedDates(_ text: String, thread: [MBOXParser.RawEmail]) -> String {
+        let cal = Calendar(identifier: .gregorian)
+        let months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        var witnessed = Set<String>()
+        for email in thread {
+            guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
+            let c = cal.dateComponents(in: TimeZone(secondsFromGMT: 0) ?? .current, from: date)
+            // A day either side: time zones move a date across midnight.
+            for delta in -1...1 {
+                if let shifted = cal.date(byAdding: .day, value: delta, to: date) {
+                    let d = cal.dateComponents([.day, .month], from: shifted)
+                    if let day = d.day, let month = d.month { witnessed.insert("\(day)-\(month)") }
+                }
+            }
+            _ = c
+        }
+        guard !witnessed.isEmpty else { return text }
+        let pattern = #"(?i)\b[Oo]n (\d{1,2})(?:st|nd|rd|th)? (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        var result = text
+        let ns = text as NSString
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let day = Int(ns.substring(with: match.range(at: 1))) ?? 0
+            let month = (months.firstIndex(of: ns.substring(with: match.range(at: 2)).lowercased()) ?? -1) + 1
+            guard !witnessed.contains("\(day)-\(month)"), let range = Range(match.range, in: result) else { continue }
+            // Capitalise what follows when the removed anchor began a sentence.
+            let rest = result[range.upperBound...]
+            let startsSentence = range.lowerBound == result.startIndex || result[..<range.lowerBound].hasSuffix(". ") || result[..<range.lowerBound].hasSuffix("\n")
+            result.replaceSubrange(range, with: "")
+            if startsSentence, let first = rest.first {
+                let idx = range.lowerBound
+                if idx < result.endIndex { result.replaceSubrange(idx...idx, with: String(first).uppercased()) }
+            }
+        }
+        return result
     }
 
     /// True when generated text regurgitates input structure instead of
@@ -1865,6 +2519,14 @@ struct FoundationModelEngine {
 
     /// Deterministic, always-correct fallback: who, when, about what — built
     /// from the messages themselves, no model involved.
+    /// For a context overflow: the outline built from the messages, saying
+    /// why it is not a story. Any other error: nil (the caller rethrows).
+    static func threadOutlineAfterFailure(_ error: Error, sorted: [MBOXParser.RawEmail]) -> String? {
+        guard LanguageModelSession.isContextOverflow(error) else { return nil }
+        let note = String(localized: "This thread is too long for the on-device model to read in one go, so here is its outline from the messages themselves. Thread Story (in the email's menu) reads long threads in parts.")
+        return note + "\n\n" + deterministicThreadSummary(sorted)
+    }
+
     static func deterministicThreadSummary(_ sorted: [MBOXParser.RawEmail]) -> String {
         let dateFmt = DateFormatter()
         dateFmt.dateStyle = .medium
@@ -1886,6 +2548,7 @@ struct FoundationModelEngine {
 
     /// "Jane Doe <jane@x.com>" → "Jane Doe"; bare addresses stay as-is.
     static func displayName(from header: String) -> String {
+        if OwnerIdentity.isOwner(header) { return String(localized: "You") }
         if let angle = header.firstIndex(of: "<") {
             let name = header[..<angle].trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
             if !name.isEmpty { return name }
@@ -1959,7 +2622,7 @@ struct FoundationModelEngine {
         let session = LanguageModelSession(instructions: instructions)
         let prompt = "Summarize this email safety review for the user:\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -2016,7 +2679,7 @@ struct FoundationModelEngine {
             Write a \(tone.rawValue.lowercased()) reply:
             """
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -2037,7 +2700,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(to: "Analyze the sentiment of these emails:\n\n\(emailContext)")
+        let response = try await session.loggedRespond(to: "Analyze the sentiment of these emails:\n\n\(emailContext)")
         return response.content
     }
 
@@ -2137,7 +2800,10 @@ struct FoundationModelEngine {
         guard maxLength > 0 else { return "(empty)" }
         let text: String
         if !email.plainBody.isEmpty {
-            text = email.plainBody.components(separatedBy: .newlines)
+            // Each email speaks for its sender only: the quoted earlier
+            // messages ("On 18 Sep, Ann wrote: …") are cut, or the model
+            // attributes them to whoever replied (2026-10-07).
+            text = EmailNLPEngine.withoutQuotedReply(email.plainBody).components(separatedBy: .newlines)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
                 .joined(separator: " ")
         } else if !email.htmlBody.isEmpty {
@@ -2156,7 +2822,7 @@ struct FoundationModelEngine {
         guard maxLength > 0 else { return "(empty)" }
         let rawText: String
         if !email.plainBody.isEmpty {
-            rawText = email.plainBody.components(separatedBy: .newlines)
+            rawText = EmailNLPEngine.withoutQuotedReply(email.plainBody).components(separatedBy: .newlines)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
                 .joined(separator: " ")
         } else if !email.htmlBody.isEmpty {
@@ -2261,7 +2927,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(
+        let response = try await session.loggedRespond(
             to: "Triage these emails:\n\n\(context)",
             generating: EmailTriageResult.self
         )
@@ -2301,7 +2967,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(
+        let response = try await session.loggedRespond(
             to: "Generate insights:\n\n\(context)",
             generating: EmailInsightsResult.self
         )
@@ -2337,7 +3003,7 @@ struct FoundationModelEngine {
         let instructions = "You are an email safety advisor. Produce structured findings about message trustworthiness."
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(
+        let response = try await session.loggedRespond(
             to: "Security brief:\n\n\(context)",
             generating: EmailSecurityBrief.self
         )
@@ -2459,7 +3125,9 @@ struct FoundationModelEngine {
         return AIWorkloadProfile(
             weight: weight,
             batchSize: batchSize,
-            parallelism: parallelism,
+            // Background work: one call at a time, so a question never queues
+            // behind ten of them.
+            parallelism: ModelScheduler.isBackground ? 1 : parallelism,
             maxAICalls: maxAICalls
         )
     }
@@ -2531,7 +3199,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: phishingInstructions)
-            let response = try await session.respond(to: prompt, generating: AIPhishingBatchResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIPhishingBatchResult.self)
             var ids = Set<UUID>()
             for result in response.content.results {
                 guard result.index >= 0, result.index < batch.count else { continue }
@@ -2554,7 +3222,7 @@ struct FoundationModelEngine {
                             let singlePrompt = "Categorize this message:\nSender: \(sanitizeForSafetyFilter(email.headers["From"] ?? "Unknown"))\nTitle: \(sanitizeForSafetyFilter(email.headers["Subject"] ?? "(No Subject)"))\n"
                             do {
                                 let s = LanguageModelSession(instructions: phishingInstructions)
-                                let r = try await s.respond(to: singlePrompt, generating: AIEmailSafetyResult.self)
+                                let r = try await s.loggedRespond(to: singlePrompt, generating: AIEmailSafetyResult.self)
                                 return r.content.verdict == .phishing ? email.id : nil
                             } catch {
                                 return nil
@@ -2690,7 +3358,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: tagInstructions)
-            let response = try await session.respond(to: prompt, generating: AIEmailTagBatchResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIEmailTagBatchResult.self)
             var results: [UUID: EmailTagResult] = [:]
             for tag in response.content.results {
                 guard tag.index >= 0, tag.index < batch.count else { continue }
@@ -2743,7 +3411,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: prompt, generating: AIEntityBatchResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIEntityBatchResult.self)
 
             // Build index-aligned result array so caller can map by position
             var enriched: [EnrichedEntity?] = Array(repeating: nil, count: capped.count)
@@ -2784,7 +3452,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "What language is this text written in?\n\n\(snippet)",
                 generating: AILanguageResult.self
             )
@@ -3096,7 +3764,7 @@ struct FoundationModelEngine {
                 prompt += "\nPrevious question was: \(lastTurn.query)"
             }
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: prompt, generating: AIIntentResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIIntentResult.self)
             let result = response.content
 
             let mapped: QueryIntent
@@ -3130,7 +3798,7 @@ struct FoundationModelEngine {
                 emailQuery: anything about emails, searching, analyzing, filtering, summarizing, or any substantive question.
                 """
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: query, generating: AIConversationalClassification.self)
+            let response = try await session.loggedRespond(to: query, generating: AIConversationalClassification.self)
             return response.content.messageType
         } catch {
             return nil
@@ -3146,7 +3814,7 @@ struct FoundationModelEngine {
                 If asking about emails, set isConversational=false, response empty.
                 """
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: query, generating: AIConversationalResponse.self)
+            let response = try await session.loggedRespond(to: query, generating: AIConversationalResponse.self)
             let result = response.content
             if result.isConversational && !result.response.isEmpty {
                 return result.response
@@ -3487,7 +4155,7 @@ struct FoundationModelEngine {
                 "Rate relevance: high = directly answers the question, medium = useful context, low = tangential."
             )
             let truncatedContext = String(context.prefix(3000))
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(query)\n\nData:\n\(truncatedContext)",
                 generating: AISessionFindings.self
             )
@@ -3818,7 +4486,7 @@ struct FoundationModelEngine {
             tools.append(TopicDrillTool(emails: emails))
         }
 
-        return tools
+        return ArchiveQueryTools.merged(with: tools)
     }
 
     // MARK: - Archive Profile (pre-computed stats over ALL emails)
@@ -4376,7 +5044,7 @@ struct FoundationModelEngine {
                 "topic (themes/subjects), timeline (dates/patterns), security (threats/phishing), or none."
             )
             let prompt = "Question: \(query)\n\nAnswer:\n\(String(answer.prefix(1500)))"
-            let response = try await session.respond(to: prompt, generating: AIAnswerValidation.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIAnswerValidation.self)
             let validation = response.content
 
             if validation.confidence >= 4 || !validation.needsRetry {
@@ -4603,7 +5271,7 @@ struct FoundationModelEngine {
                 "If multi-step, decompose into 2-4 focused sub-queries that each retrieve different data."
             )
             let prompt = "Archive profile:\n\(profile)\n\nQuestion: \(query)"
-            let response = try await session.respond(to: prompt, generating: AIQueryPlan.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIQueryPlan.self)
             return response.content
         } catch {
             return nil
@@ -4655,7 +5323,7 @@ struct FoundationModelEngine {
                 "Refer to emails by **Subject** and **sender**."
             )
             let prompt = "Question: \(subQuery)\n\n\(context)"
-            let response = try await session.respond(to: prompt)
+            let response = try await session.loggedRespond(to: prompt)
             return response.content
         } catch {
             return "Sub-query: \(subQuery)\nFound \(results.count) emails. \(context.prefix(500))"
@@ -4676,7 +5344,7 @@ struct FoundationModelEngine {
         emailCount: Int,
         intent: QueryIntent
     ) -> ModelRoute {
-        #if OFFLINE_MODE
+        #if NO_NETWORK_BUILD || !MAILIN_CLOUD_AI
         return .onDeviceOnly
         #else
         let cloudReady: Bool = {
@@ -4720,7 +5388,7 @@ struct FoundationModelEngine {
         emails: [MBOXParser.RawEmail],
         onUpdate: @MainActor @Sendable @escaping (String) -> Void
     ) async -> String {
-        #if OFFLINE_MODE
+        #if NO_NETWORK_BUILD || !MAILIN_CLOUD_AI
         return onDeviceAnswer
         #else
         switch route {
@@ -4812,8 +5480,57 @@ struct FoundationModelEngine {
             return try await respondSmart(to: query, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
         }
         let evidence = AIGroundingGate.references(for: emails)
-        let raw = try await respondSmart(to: query, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
-        let gated = AIGroundingGate.ground(answer: raw, evidence: evidence).answer
+        if isHistoryQuestion(query) && !isPendingQuestion(query) && emails.count >= 2 {
+            let timeline = AIGroundingGate.ground(answer: matterTimeline(query: query, emails: emails), evidence: evidence).answer
+            await onUpdate(timeline)
+            return timeline
+        }
+        // Pending questions start from the matter's current state: what the
+        // emails say is DONE, with dates, given as facts. The model listed
+        // 2024 hearing steps the later grant had settled (2026-10-06).
+        let pending = isPendingQuestion(query)
+        let asked = pending ? query + completedFacts(in: emails) : query
+        var raw = try await respondSmart(to: asked, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
+        if pending {
+            // "Done" is quoted by the app, not paraphrased: the model read
+            // "till 03rd year" as "till 03 March 2025".
+            let (facts, newestLine) = completedFactList(in: emails)
+            var head = "**Done** (quoted from your emails):\n"
+            head += facts.isEmpty ? "- Nothing is stated as done in these emails.\n" : facts.joined(separator: "\n") + "\n"
+            if let newestLine { head += "_\(newestLine)_\n" }
+            raw = head + "\n" + raw
+            if let recurring = recurringObligation(in: emails) {
+                raw += "\n\n**Coming up** (quoted): \(recurring)"
+            }
+        }
+        // A refusal or an empty answer is not shown: the user gets the
+        // answer of last resort from these same emails instead.
+        if EvidenceFallback.isUnusable(raw) {
+            let fallback = EvidenceFallback.build(query: query, emails: emails, reason: "Apple Intelligence declined or could not answer this one")
+            await onUpdate(fallback)
+            return fallback
+        }
+        var cleaned = withoutFiller(withoutFalseNotFoundOpener(OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence))
+        // "The search did not return any information about your Udemy
+        // purchase" with the Udemy receipt among the emails read: the quoted
+        // answer replaces it (2026-10-07).
+        if !pending, claimsNothingFound(cleaned) {
+            let words = EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() }
+                .filter { $0.count >= 4 && !OwnerIdentity.nameWords.contains($0) }
+            let subjects = emails.prefix(15).map { ($0.headers["Subject"] ?? "").lowercased() }
+            if words.contains(where: { word in subjects.contains { $0.range(of: "\\b\(word)", options: .regularExpression) != nil } }) {
+                let fallback = EvidenceFallback.build(query: query, emails: emails, reason: "Apple Intelligence said nothing matched, but these emails do")
+                await onUpdate(fallback)
+                return fallback
+            }
+        }
+        // Amounts and long numbers the emails don't contain are the model's
+        // own arithmetic or guesses: those sentences are removed.
+        let sources = emails.map { ($0.headers["Subject"] ?? "") + " " + $0.plainBody + " " + ($0.headers["Date"] ?? "") }
+        var allowed: Set<String> = [String(emails.count)]
+        for match in query.matches(of: /\d{3,}/) { allowed.insert(String(query[match.range])) }
+        cleaned = AIGroundingGate.removingUnsupportedFigures(cleaned, sources: sources, allowed: allowed).text
+        let gated = AIGroundingGate.ground(answer: cleaned, evidence: evidence).answer
         await onUpdate(gated)
         return gated
     }
@@ -5517,7 +6234,7 @@ struct FoundationModelEngine {
                 "Each finding must be one specific, evidence-backed sentence. " +
                 "Rate relevance: high = directly answers the question, medium = useful context, low = tangential."
             )
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(query)\n\nData:\n\(enrichedData)",
                 generating: AISessionFindings.self
             )
@@ -5906,7 +6623,7 @@ struct FoundationModelEngine {
             )
             let subBudget = contextBudget(for: intent)
             let truncatedContext = String(context.prefix(subBudget.emailBodyChars + subBudget.headerChars + subBudget.findingsChars + subBudget.ragChars))
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(subQuery)\n\n\(truncatedContext)",
                 generating: AISessionFindings.self
             )
@@ -5960,7 +6677,7 @@ struct FoundationModelEngine {
                 "Remove redundant or tangential findings. " +
                 "Output: merged findings with cross-session patterns noted."
             )
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(query)\n\nFindings to merge:\n\(input)",
                 generating: AIMergedFindings.self
             )
@@ -6032,7 +6749,7 @@ struct FoundationModelEngine {
 
         let prompt = "\(reduceContext)\n\nAnswer this question: \(query)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -6106,7 +6823,7 @@ struct FoundationModelEngine {
 
         let prompt = "User question: \(query)\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -6430,7 +7147,7 @@ struct FoundationModelEngine {
     }
 
     private static func focusedInstructions(for intent: QueryIntent) -> String {
-        let base = "Email analyst in mailin (on-device, private). Cite emails by **Subject** and **sender**. Use tools proactively. "
+        let base = "Email analyst in mailin (on-device, private). Cite emails by **Subject** and **sender**. Use tools proactively. " + answerDiscipline + " "
         switch intent {
         case .search:
             return base + "Search task. Use spotlightSearch + searchEmails. Show matching emails with evidence."
@@ -6567,7 +7284,7 @@ struct FoundationModelEngine {
                 )
                 let focusClause = query.map { "Focus on: \($0). " } ?? ""
                 let prompt = "\(focusClause)Compare these archives:\n\n\(String(context.prefix(3000)))"
-                let stream = session.streamResponse(to: prompt)
+                let stream = session.loggedStreamResponse(to: prompt)
                 for try await snapshot in stream {
                     synthesis = snapshot.content
                     await onUpdate(synthesis)
@@ -6587,6 +7304,190 @@ struct FoundationModelEngine {
             kgComparison: kgComp,
             synthesis: synthesis
         )
+    }
+}
+
+
+// MARK: - Model scheduling: questions before background work
+
+/// The user's questions go first (kalsmritikosh minimum-LLM §14: separate
+/// user-query calls from background calls). Found 2026-10-07 from the model
+/// log: switching AI on restarted the background tagging job, ~40 calls ran
+/// with up to ten in parallel, and the user's first question waited 60 s and
+/// timed out. Background calls are marked with `isBackground`, run one at a
+/// time, and wait while any question is being answered.
+@available(macOS 26, iOS 26, *)
+enum ModelScheduler {
+    @TaskLocal static var isBackground = false
+    private static let interactive = OSAllocatedUnfairLock(initialState: 0)
+
+    /// Per-question budget for the model's helper calls (classify, expert
+    /// passes, checks) — kalsmritikosh LLMCallBudget. The final written
+    /// answer (a stream) is never counted, so it is never starved; a helper
+    /// call over budget is refused, and callers already skip a failed expert.
+    final class CallBudget: @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: Int
+        init(limit: Int) { remaining = limit }
+        func take() -> Bool { lock.lock(); defer { lock.unlock() }; guard remaining > 0 else { return false }; remaining -= 1; return true }
+    }
+    struct BudgetExceeded: Swift.Error {}
+    @TaskLocal static var budget: CallBudget?
+
+    static func beginInteractive() { interactive.withLock { $0 += 1 } }
+    static func endInteractive() { interactive.withLock { $0 = max(0, $0 - 1) } }
+    static var interactiveInFlight: Bool { interactive.withLock { $0 > 0 } }
+
+    /// A background call starts only when no question is in flight.
+    static func waitForTurn() async {
+        guard isBackground else { return }
+        while interactiveInFlight && !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
+
+    /// Runs `work` as background model work.
+    static func background<T: Sendable>(_ work: () async -> T) async -> T {
+        await $isBackground.withValue(true) { await work() }
+    }
+}
+
+// MARK: - Model call log
+
+/// One line per on-device model request — call site, outcome, time, sizes;
+/// never prompt or answer text. Owner, 2026-10-07: "make sure Apple AI is
+/// properly accessed by the app" — this is how a run proves which answers
+/// came from the model. Read with:
+/// `log show --predicate 'subsystem == "com.ecosanskriti.mailin" AND category == "model"'`
+@available(macOS 26, iOS 26, *)
+enum ModelCallLog {
+    static let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "model")
+
+    static func started(_ site: String, inputChars: Int) {
+        logger.notice("MODEL-CALL start site=\(site, privacy: .public) inputChars=\(inputChars)")
+    }
+    static func finished(_ site: String, since start: Date, outputChars: Int) {
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        logger.notice("MODEL-CALL ok site=\(site, privacy: .public) ms=\(ms) outputChars=\(outputChars)")
+    }
+    static func failed(_ site: String, since start: Date, error: Swift.Error) {
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        // The error's type is public; its message stays private (a message
+        // could in principle quote model input).
+        logger.error("MODEL-CALL fail site=\(site, privacy: .public) ms=\(ms) errorType=\(String(describing: type(of: error)), privacy: .public) detail=\(String(describing: error))")
+    }
+}
+
+@available(macOS 26, iOS 26, *)
+extension LanguageModelSession {
+    /// §3-I2: the transcript outgrew the model's context window.
+    static func isContextOverflow(_ error: Swift.Error) -> Bool {
+        if let e = error as? LanguageModelSession.GenerationError, case .exceededContextWindowSize = e { return true }
+        if #available(macOS 27, iOS 27, *), let e = error as? LanguageModelError, case .contextSizeExceeded = e { return true }
+        return false
+    }
+
+    /// §3-I2 (Apple: "Recover from a full context window"): keeps the
+    /// instructions (first entry) and the latest context (last entry) so the
+    /// request can be retried. False when the transcript cannot be condensed
+    /// in place on this OS, or is already that small.
+    func condenseTranscriptForRetry() -> Bool {
+        if #available(macOS 27, iOS 27, *) {
+            let entries = Array(transcript)
+            guard entries.count > 2 else { return false }
+            transcript = Transcript(entries: [entries.first, entries.last].compactMap { $0 })
+            return true
+        }
+        return false
+    }
+
+    func loggedRespond(to prompt: String, file: StaticString = #fileID, line: Int = #line) async throws -> Response<String> {
+        let site = "\(file):\(line)"
+        await ModelScheduler.waitForTurn()
+        if let budget = ModelScheduler.budget, !budget.take() {
+            ModelCallLog.logger.notice("MODEL-CALL skipped site=\(site, privacy: .public) reason=budget")
+            throw ModelScheduler.BudgetExceeded()
+        }
+        let start = Date()
+        ModelCallLog.started(site, inputChars: prompt.count)
+        do {
+            let response = try await respond(to: prompt)
+            ModelCallLog.finished(site, since: start, outputChars: response.content.count)
+            return response
+        } catch where Self.isContextOverflow(error) && condenseTranscriptForRetry() {
+            // §3-I2: condensed to the instructions and the latest context; one retry.
+            ModelCallLog.logger.notice("MODEL-CALL condensed site=\(site, privacy: .public) reason=context")
+            do {
+                let response = try await respond(to: prompt)
+                ModelCallLog.finished(site, since: start, outputChars: response.content.count)
+                return response
+            } catch {
+                ModelCallLog.failed(site, since: start, error: error)
+                throw error
+            }
+        } catch {
+            ModelCallLog.failed(site, since: start, error: error)
+            throw error
+        }
+    }
+
+    func loggedRespond<Content: Generable>(to prompt: String, generating type: Content.Type,
+                                           file: StaticString = #fileID, line: Int = #line) async throws -> Response<Content> {
+        let site = "\(file):\(line)"
+        await ModelScheduler.waitForTurn()
+        if let budget = ModelScheduler.budget, !budget.take() {
+            ModelCallLog.logger.notice("MODEL-CALL skipped site=\(site, privacy: .public) reason=budget")
+            throw ModelScheduler.BudgetExceeded()
+        }
+        let start = Date()
+        ModelCallLog.started(site, inputChars: prompt.count)
+        do {
+            let response = try await respond(to: prompt, generating: type)
+            ModelCallLog.finished(site, since: start, outputChars: String(describing: response.content).count)
+            return response
+        } catch where Self.isContextOverflow(error) && condenseTranscriptForRetry() {
+            // §3-I2: condensed to the instructions and the latest context; one retry.
+            ModelCallLog.logger.notice("MODEL-CALL condensed site=\(site, privacy: .public) reason=context")
+            do {
+                let response = try await respond(to: prompt, generating: type)
+                ModelCallLog.finished(site, since: start, outputChars: String(describing: response.content).count)
+                return response
+            } catch {
+                ModelCallLog.failed(site, since: start, error: error)
+                throw error
+            }
+        } catch {
+            ModelCallLog.failed(site, since: start, error: error)
+            throw error
+        }
+    }
+
+    /// The same snapshots as `streamResponse(to:)`, logged when the stream
+    /// ends (finished, failed or cancelled).
+    func loggedStreamResponse(to prompt: String, file: StaticString = #fileID, line: Int = #line)
+        -> AsyncThrowingStream<LanguageModelSession.ResponseStream<String>.Snapshot, Swift.Error> {
+        let site = "\(file):\(line)"
+        let start = Date()
+        ModelCallLog.started(site, inputChars: prompt.count)
+        // Streams are only used to answer the user, never by background jobs.
+        let upstream = streamResponse(to: prompt)
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                var chars = 0
+                do {
+                    for try await snapshot in upstream {
+                        chars = snapshot.content.count
+                        continuation.yield(snapshot)
+                    }
+                    ModelCallLog.finished(site, since: start, outputChars: chars)
+                    continuation.finish()
+                } catch {
+                    ModelCallLog.failed(site, since: start, error: error)
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 

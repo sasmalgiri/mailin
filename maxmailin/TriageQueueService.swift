@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  TriageQueueService.swift
 //  maxmailin
@@ -21,9 +22,9 @@ enum TriageVerdict: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .confirmedPhishing: return "Confirmed Phishing"
-        case .safe: return "Safe"
-        case .needsInfo: return "Needs Info"
+        case .confirmedPhishing: return String(localized: "Confirmed Phishing")
+        case .safe: return String(localized: "Safe")
+        case .needsInfo: return String(localized: "Needs Info")
         }
     }
 
@@ -95,8 +96,13 @@ final class TriageQueueService: ObservableObject {
     func intake(_ emails: [MBOXParser.RawEmail], from fileName: String) async {
         guard !emails.isEmpty else { return }
         do {
-            try await SQLiteEmailStore.shared.insertBatch(emails)
-            try? await FTSSearchIndex.shared.indexBatch(emails)
+            let result = try await SQLiteEmailStore.shared.insertBatch(
+                emails, sourceFileHash: nil, accountID: nil,
+                sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+                batchSize: 500, progress: nil)
+            // Only what the store wrote: a skipped duplicate indexed under its
+            // fresh UUID is a ghost search hit.
+            try? await FTSSearchIndex.shared.indexBatch(result.inserted(from: emails))
             _ = try? await ArchiveCorpusRevision.shared.bump()
         } catch {
             lastIntakeNote = "Intake failed for \(fileName): \(error.localizedDescription)"

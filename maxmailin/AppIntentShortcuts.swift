@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import AppIntents
 import Foundation
 
@@ -76,13 +77,21 @@ struct SearchEmailsIntent: AppIntent {
     var query: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        // Bounded FTS5-backed retrieval (was the in-RAM EmailSearchIndex).
-        let results = (try? await ArchiveRetrievalService.shared.retrieve(query, limit: 10)) ?? []
-        let count = results.count
-        return .result(value: "Found \(count) emails matching '\(query)'")
+        // S0 (3.1): the exact total comes from the store; only the preview is
+        // bounded. It used to stop at 10 and say "Found 10" (a hidden cap).
+        var q = EmailQuery(); q.text = query
+        let total = (try? await ArchiveDataService.shared.count(query: q)) ?? 0
+        let shown = (try? await ArchiveRetrievalService.shared.retrieve(query, limit: 10))?.count ?? 0
+        return .result(value: SearchEmailsIntent.summary(total: total, shown: shown, query: query))
     }
 
     static var openAppWhenRun: Bool = true
+
+    static func summary(total: Int, shown: Int, query: String) -> String {
+        total > shown
+            ? String(localized: "Found \(total) emails matching “\(query)”; showing the first \(shown).")
+            : String(localized: "Found \(total) emails matching “\(query)”.")
+    }
 }
 
 // MARK: - 4. Get Email Stats Intent

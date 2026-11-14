@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import CryptoKit
 import os.log
@@ -18,7 +19,10 @@ import os.log
 //   ones, labelled with the exporting examiner (E4 merge attribution).
 
 struct CaseBundle: Codable {
-    var formatVersion: Int = 1
+    /// 2 (2026-09-28, recheck R6): `BundledEmail.rawSourceBase64` carries the
+    /// exact bytes of a message read from its original file, so non-UTF-8
+    /// evidence is sealed byte for byte. Version-1 readers ignore the field.
+    var formatVersion: Int = 2
     var caseTitle: String
     var exportedBy: String
     var orgName: String?
@@ -30,8 +34,22 @@ struct CaseBundle: Codable {
     struct BundledEmail: Codable {
         var messageID: String?
         var subject: String
+        /// The message as text. For a message whose exact bytes are in
+        /// `rawSourceBase64` this is a readable VIEW (invalid UTF-8 replaced)
+        /// and is not what `sha256Hex` covers.
         var rawSource: String
+        /// Hex SHA-256 of the evidence bytes: `rawSourceBase64` when present,
+        /// otherwise the UTF-8 of `rawSource`.
         var sha256Hex: String
+        /// Recheck R6: the exact original bytes when the message was read
+        /// from its source file. Nil for messages the archive holds as text.
+        var rawSourceBase64: String? = nil
+
+        /// The bytes `sha256Hex` was computed over.
+        var evidenceBytes: Data {
+            if let rawSourceBase64, let exact = Data(base64Encoded: rawSourceBase64) { return exact }
+            return Data(rawSource.utf8)
+        }
     }
     var emails: [BundledEmail] = []
 
@@ -41,6 +59,11 @@ struct CaseBundle: Codable {
     var actionRegisters: [ActionRegisterModel] = []
     var evidenceDesks: [EvidenceDeskModel] = []
     var reasoningCases: [ReasoningCaseModel] = []
+
+    /// §3-E2: RFC 4998-style evidence record for exactly these emails (JSON
+    /// lines: header + one hash-tree proof per email), sealed with the bundle.
+    /// Optional, so older readers and older bundles are unaffected.
+    var evidenceRecord: String? = nil
 }
 
 /// The on-disk envelope: payload + detached seal over the exact payload bytes.
@@ -59,11 +82,16 @@ enum CaseBundleService {
         case sealFailed(String)
         case notABundle
         case sealBroken(SealedReceipt.VerifyResult)
+        /// Audit F05: a message with no content must never be sealed as if it
+        /// were complete. Named by subject so the examiner knows which one.
+        case contentUnavailable(subject: String, reason: String)
 
         var errorDescription: String? {
             switch self {
             case .sealFailed(let detail):
                 return "Could not seal the case bundle: \(detail)"
+            case .contentUnavailable(let subject, let reason):
+                return "Not sealed: the content of “\(subject)” is not available (\(reason)). A bundle never carries an empty message as evidence."
             case .notABundle:
                 return "This file is not a valid .mailincase bundle."
             case .sealBroken(let result):
@@ -83,8 +111,52 @@ enum CaseBundleService {
 
     // MARK: Export
 
+    /// `export` for messages as the archive hands them back: a message whose
+    /// bytes are LOCATED rather than stored (header-only import above the
+    /// full-parse ceiling) is first read from its source, so the bundle
+    /// carries its real content; one whose content cannot be read refuses the
+    /// whole bundle (F05). This is the entry point the UI uses.
+    static func exportResolvingSources(
+        caseTitle: String,
+        emails: [MBOXParser.RawEmail],
+        note: String = "",
+        archive: ArchiveDataService = .shared,
+        includeEvidenceRecord: Bool = false,
+        to url: URL
+    ) async throws {
+        var resolved: [MBOXParser.RawEmail] = []
+        resolved.reserveCapacity(emails.count)
+        // R6: the exact bytes travel separately from the text view, so a
+        // non-UTF-8 message is sealed as it was, not as Swift re-encodes it.
+        var exactBytes: [UUID: Data] = [:]
+        // F04: one ledger for the bundle — each source file is proven to be
+        // the imported file before its bytes are sealed as evidence.
+        let ledger = SourceVerificationLedger()
+        for var email in emails {
+            if email.rawSource.isEmpty {
+                do {
+                    let bytes = try await archive.rawMessageData(for: email, ledger: ledger)
+                    exactBytes[email.id] = bytes
+                    email.rawSource = String(decoding: bytes, as: UTF8.self)
+                } catch let error as RawMessageError {
+                    if case .contentUnavailable(let subject, let reason) = error {
+                        throw BundleError.contentUnavailable(subject: subject, reason: reason)
+                    }
+                    throw error
+                }
+            }
+            resolved.append(email)
+        }
+        let record = includeEvidenceRecord
+            ? try await EvidenceRecordExporter.record(for: Set(resolved.map(\.id))).text
+            : nil
+        try export(caseTitle: caseTitle, emails: resolved, note: note, exactBytes: exactBytes,
+                   evidenceRecord: record, to: url)
+    }
+
     /// Builds a sealed bundle from a set of emails + all current studio
     /// artifacts (callers can pass filtered artifact lists for a narrower case).
+    /// Every email must carry its raw source; see `exportResolvingSources`.
     static func export(
         caseTitle: String,
         emails: [MBOXParser.RawEmail],
@@ -94,8 +166,17 @@ enum CaseBundleService {
         actionRegisters: [ActionRegisterModel]? = nil,
         evidenceDesks: [EvidenceDeskModel]? = nil,
         reasoningCases: [ReasoningCaseModel]? = nil,
+        exactBytes: [UUID: Data] = [:],
+        evidenceRecord: String? = nil,
         to url: URL
     ) throws {
+        // F05: refuse before anything is written. An empty rawSource would be
+        // hashed and sealed as evidence of a message with no content.
+        if let empty = emails.first(where: { $0.rawSource.isEmpty }) {
+            throw BundleError.contentUnavailable(
+                subject: empty.headers["Subject"] ?? "(no subject)",
+                reason: "no stored content; use exportResolvingSources to read it from the original file")
+        }
         var bundle = CaseBundle(
             caseTitle: caseTitle,
             exportedBy: ManagedConfig.examinerName ?? ForensicManager.shared.examinerName,
@@ -104,12 +185,17 @@ enum CaseBundleService {
             note: note
         )
         bundle.emails = emails.map { email in
-            let digest = SHA256.hash(data: Data(email.rawSource.utf8))
+            // R6: hash the EXACT bytes when the message came from its source;
+            // the text is only a view of them.
+            let exact = exactBytes[email.id]
+            let evidence = exact ?? Data(email.rawSource.utf8)
+            let digest = SHA256.hash(data: evidence)
             return CaseBundle.BundledEmail(
                 messageID: email.headers["Message-ID"] ?? email.headers["Message-Id"],
                 subject: email.headers["Subject"] ?? "",
                 rawSource: email.rawSource,
-                sha256Hex: digest.map { String(format: "%02x", $0) }.joined()
+                sha256Hex: digest.map { String(format: "%02x", $0) }.joined(),
+                rawSourceBase64: exact?.base64EncodedString()
             )
         }
         bundle.achMatrices = achMatrices ?? ACHMatrixStore.shared.matrices
@@ -117,6 +203,7 @@ enum CaseBundleService {
         bundle.actionRegisters = actionRegisters ?? ActionRegisterStore.shared.registers
         bundle.evidenceDesks = evidenceDesks ?? EvidenceDeskStore.shared.desks
         bundle.reasoningCases = reasoningCases ?? ReasoningCaseStore.shared.cases
+        bundle.evidenceRecord = evidenceRecord
 
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]
@@ -136,7 +223,7 @@ enum CaseBundleService {
         envelopeEnc.dateEncodingStrategy = .iso8601
         try envelopeEnc.encode(envelope).write(to: url, options: .atomic)
 
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Case bundle exported",
             detail: "\(caseTitle): \(bundle.emails.count) emails, sealed \(receipt.sha256Hex.prefix(12))…")
     }
@@ -167,8 +254,41 @@ enum CaseBundleService {
     struct MergeReport {
         var artifactsAdded = 0
         var conflictsLabelled = 0
+        /// Artifacts already merged from this sender, unchanged — skipped.
+        /// Without this, re-importing one handoff duplicated everything in it.
+        var alreadyPresent = 0
         var emailsInBundle = 0
         var from = ""
+
+        var summary: String {
+            var parts = ["\(artifactsAdded) added"]
+            if conflictsLabelled > 0 { parts.append("\(conflictsLabelled) conflict(s) kept as labelled copies") }
+            if alreadyPresent > 0 { parts.append("\(alreadyPresent) already present") }
+            return parts.joined(separator: ", ")
+        }
+    }
+
+    /// A merged artifact's identity, derived from where it came from and who
+    /// sent it.
+    ///
+    /// It used to get a random UUID, which made re-importing the same bundle
+    /// duplicate everything: the add path retitled the artifact, so the next
+    /// pass compared a retitled local copy against the unlabelled incoming
+    /// one, saw a difference, and filed another "conflict". Three imports of
+    /// one handoff left four copies. A handoff arriving twice is normal.
+    ///
+    /// Deriving the id instead means the second pass finds the artifact it
+    /// wrote last time and skips it.
+    private static func mergedID(original: UUID, sender: String) -> UUID {
+        let digest = SHA256.hash(data: Data("\(original.uuidString)|\(sender)".utf8))
+        var bytes = Array(digest.prefix(16))
+        // RFC 4122 version 5-ish shaping: not a real name-based UUID, but it
+        // must not collide with a v4 id generated elsewhere.
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+                           bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11],
+                           bytes[12], bytes[13], bytes[14], bytes[15]))
     }
 
     /// Merges a verified bundle's studio artifacts into the local stores.
@@ -189,17 +309,28 @@ enum CaseBundleService {
             retitle: (inout T, String) -> Void
         ) where T.ID == UUID {
             for var item in incoming {
-                if let existing = local.first(where: { $0.id == item.id }) {
-                    if existing == item { continue }         // identical — skip
-                    var relabelled = item                     // conflict — keep both
-                    relabelled = item
-                    retitle(&relabelled, senderLabel)
-                    // Give the copy a fresh id so both versions persist.
-                    relabelled = reassignID(relabelled)
-                    local.insert(relabelled, at: 0)
+                let incomingID = item.id
+                let identity = mergedID(original: incomingID, sender: senderLabel)
+                retitle(&item, senderLabel)
+                item = withID(item, identity)
+
+                if let existing = local.first(where: { $0.id == identity }) {
+                    if existing == item {
+                        // This exact artifact, from this sender, is already
+                        // here — the same handoff arriving again.
+                        report.alreadyPresent += 1
+                        continue
+                    }
+                    // Same origin and sender, but they changed it since. Both
+                    // readings stand, so the newer one takes a fresh id.
+                    local.insert(withID(item, UUID()), at: 0)
+                    report.conflictsLabelled += 1
+                } else if local.contains(where: { $0.id == incomingID }) {
+                    // We hold our own copy of the artifact they worked from.
+                    // Never overwritten: theirs arrives alongside, attributed.
+                    local.insert(item, at: 0)
                     report.conflictsLabelled += 1
                 } else {
-                    retitle(&item, senderLabel)
                     local.insert(item, at: 0)
                     report.artifactsAdded += 1
                 }
@@ -228,19 +359,21 @@ enum CaseBundleService {
 
         ForensicManager.shared.logAction(
             "Case bundle merged",
-            detail: "from \(senderLabel): \(report.artifactsAdded) added, \(report.conflictsLabelled) conflicts kept as labelled copies")
+            detail: "from \(senderLabel): \(report.summary)")
         return report
     }
 
-    /// Fresh identity for a conflict copy so both versions persist side by side.
-    private static func reassignID<T>(_ item: T) -> T {
+    /// Stamps a specific identity onto a studio artifact, so a merged copy can
+    /// be found again on a later merge and a conflict copy can persist beside
+    /// the original.
+    private static func withID<T>(_ item: T, _ id: UUID) -> T {
         var copy = item
         switch copy {
-        case var m as ACHMatrixModel:      m.id = UUID(); copy = m as! T
-        case var m as FactEvidenceModel:   m.id = UUID(); copy = m as! T
-        case var m as ActionRegisterModel: m.id = UUID(); copy = m as! T
-        case var m as EvidenceDeskModel:   m.id = UUID(); copy = m as! T
-        case var m as ReasoningCaseModel:  m.id = UUID(); copy = m as! T
+        case var m as ACHMatrixModel:      m.id = id; copy = (m as? T) ?? copy
+        case var m as FactEvidenceModel:   m.id = id; copy = (m as? T) ?? copy
+        case var m as ActionRegisterModel: m.id = id; copy = (m as? T) ?? copy
+        case var m as EvidenceDeskModel:   m.id = id; copy = (m as? T) ?? copy
+        case var m as ReasoningCaseModel:  m.id = id; copy = (m as? T) ?? copy
         default: break
         }
         return copy

@@ -7,12 +7,54 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		06F74B69F94348368FBB87E7 /* ProfessionalGatingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9337FA5439084EAFBFC9AC16 /* ProfessionalGatingTests.swift */; };
 		1D0190B9A4314C4F1E974268 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C03A43C05B823F769A9169F /* SmokeTests.swift */; };
+		30AD1E2390384BB385818735 /* ArchiveCore in Frameworks */ = {isa = PBXBuildFile; productRef = 04BEBAEB5A464B75A642E516 /* ArchiveCore */; };
+		33AF4556AF7E44BA8A8DE23A /* LargeMessageBlobTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAC124E5B7340F79FCD9199 /* LargeMessageBlobTests.swift */; };
+		39476346CD2E4AE39624CC99 /* EnterpriseDeploymentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */; };
+		86A7BC7AEC2649109C6ED099 /* FormatMatrixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30251AA72DEA429D850E9BF5 /* FormatMatrixTests.swift */; };
+		9E22DA26BC42426D9554D677 /* HandoffRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* V2DerivedStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* V2DerivedStateTests.swift */; };
 		AB12CD34EF5601789ABCDE02 /* V2ExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF5601789ABCDE01 /* V2ExportTests.swift */; };
 		AB12CD34EF5601789ABCDE04 /* V2SecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF5601789ABCDE03 /* V2SecurityTests.swift */; };
+		AC2C43A0B60149C6AC364F18 /* ArchiveRelocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54BC4D4E1CDE48DD8D0E0F20 /* ArchiveRelocationTests.swift */; };
+		B49075B9307A0ACE00D67076 /* V3FoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49075B8307A0ACE00D67076 /* V3FoundationTests.swift */; };
+		B49075BB307A26B600D67076 /* V3CompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49075BA307A26B600D67076 /* V3CompatibilityTests.swift */; };
+		B49075BD307A277500D67076 /* V3LintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49075BC307A277500D67076 /* V3LintTests.swift */; };
+		B49075C4307A2A0B00D67076 /* V3GoldenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49075C3307A2A0B00D67076 /* V3GoldenTests.swift */; };
+		B49075C6307A2ADE00D67076 /* V3ScaleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49075C5307A2ADE00D67076 /* V3ScaleTests.swift */; };
+		B49075C8307A2B3D00D67076 /* V3ParserFuzzTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49075C7307A2B3D00D67076 /* V3ParserFuzzTests.swift */; };
 		B4EE09033025C63B003F6F45 /* V2SearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4EE09023025C63B003F6F45 /* V2SearchTests.swift */; };
+		B4F63B0A306419C2008C7D92 /* ModuleGatingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B09306419C2008C7D92 /* ModuleGatingTests.swift */; };
+		B4F63B1830641E20008C7D92 /* FixtureImportMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B1730641E20008C7D92 /* FixtureImportMeasurementTests.swift */; };
+		B4F63B2430642102008C7D92 /* IdleShardEvictionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B2330642102008C7D92 /* IdleShardEvictionTests.swift */; };
+		B4F63B5030643A2A008C7D92 /* ImportVerdictTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B4F30643A2A008C7D92 /* ImportVerdictTests.swift */; };
+		B4F63B6030648B96008C7D92 /* PageRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B5F30648B96008C7D92 /* PageRouterTests.swift */; };
+		B4F63B643064A09C008C7D92 /* AdaptiveBatchControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B633064A09C008C7D92 /* AdaptiveBatchControllerTests.swift */; };
+		B4F63B763064B0A7008C7D92 /* ImportMemoryBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B753064B0A7008C7D92 /* ImportMemoryBudgetTests.swift */; };
+		B4F63B783064B119008C7D92 /* ImportMemoryAttributionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B773064B119008C7D92 /* ImportMemoryAttributionTests.swift */; };
+		B4F63B7C3064EA45008C7D92 /* ArchivePageCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B7B3064EA45008C7D92 /* ArchivePageCapabilityTests.swift */; };
+		B4F63B803064EE61008C7D92 /* SourceFormatClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B7F3064EE61008C7D92 /* SourceFormatClassifierTests.swift */; };
+		B4F63B8A3064FFF2008C7D92 /* IndexCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B893064FFF2008C7D92 /* IndexCoverageTests.swift */; };
+		B4F63B9430650A4D008C7D92 /* SourceSizePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9330650A4D008C7D92 /* SourceSizePolicyTests.swift */; };
+		B4F63B9830650D45008C7D92 /* StoragePlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9730650D45008C7D92 /* StoragePlannerTests.swift */; };
+		B4F63B9C30651380008C7D92 /* BlobStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9B30651380008C7D92 /* BlobStoreTests.swift */; };
+		B4F63BA030652DB1008C7D92 /* GoldCaseClosureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9F30652DB1008C7D92 /* GoldCaseClosureTests.swift */; };
+		B4F63BA2306530D8008C7D92 /* StudioBehaviourTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BA1306530D8008C7D92 /* StudioBehaviourTests.swift */; };
+		B4F63BA430653798008C7D92 /* BlobTierWiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BA330653798008C7D92 /* BlobTierWiringTests.swift */; };
+		B4F63BC2306543C7008C7D92 /* CapabilityMatrixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BC1306543C7008C7D92 /* CapabilityMatrixTests.swift */; };
+		B4F63BC430654436008C7D92 /* OffsetParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BC330654436008C7D92 /* OffsetParserTests.swift */; };
+		B4F63BCC30655AC5008C7D92 /* ActivationMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */; };
+		B4F63BDC3065756A008C7D92 /* TestPreconditions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */; };
+		B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */; };
+		B4F63BEC3065C16D008C7D92 /* ImportSurfaceWiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */; };
+		B4F63BEE3065C8C5008C7D92 /* RealMailboxEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */; };
+		B4F63BF23065D2A1008C7D92 /* SearchMatchFieldsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */; };
+		B8D50BE236064FD8AA3D5297 /* OverflowSegmentStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BBD9A10512F4BF88E01DFB0 /* OverflowSegmentStoreTests.swift */; };
 		C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */; };
+		CCBC602369234D07AA0FB6B8 /* DiskImageFaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE5DC25F8324CD0840B7429 /* DiskImageFaultTests.swift */; };
+		D536570AD81C49C8BC8ADF9B /* ArchiveCore in Frameworks */ = {isa = PBXBuildFile; productRef = 335CFD75651B418DA7921C37 /* ArchiveCore */; };
+		E796FDC4B9BA48C98C4995A3 /* LegacyLibraryMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22D0E31030BC48C3933DA8D7 /* LegacyLibraryMigrationTests.swift */; };
 		FE90CA2542E92965622E2D37 /* V2VerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B137BCFD52463D2F34C4DAE4 /* V2VerificationTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -46,15 +88,55 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0BBD9A10512F4BF88E01DFB0 /* OverflowSegmentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverflowSegmentStoreTests.swift; sourceTree = "<group>"; };
+		10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnterpriseDeploymentTests.swift; sourceTree = "<group>"; };
+		22D0E31030BC48C3933DA8D7 /* LegacyLibraryMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyLibraryMigrationTests.swift; sourceTree = "<group>"; };
+		30251AA72DEA429D850E9BF5 /* FormatMatrixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormatMatrixTests.swift; sourceTree = "<group>"; };
+		54BC4D4E1CDE48DD8D0E0F20 /* ArchiveRelocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveRelocationTests.swift; sourceTree = "<group>"; };
 		5904199535DD4B29D57E7CA6 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		6BAC124E5B7340F79FCD9199 /* LargeMessageBlobTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeMessageBlobTests.swift; sourceTree = "<group>"; };
 		6C03A43C05B823F769A9169F /* SmokeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
+		8FE5DC25F8324CD0840B7429 /* DiskImageFaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskImageFaultTests.swift; sourceTree = "<group>"; };
+		9337FA5439084EAFBFC9AC16 /* ProfessionalGatingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfessionalGatingTests.swift; sourceTree = "<group>"; };
 		9CF2C7D0B60FDC821DB65ADF /* maxmailinTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = maxmailinTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F60718293A4B5D /* V2DerivedStateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2DerivedStateTests.swift; sourceTree = "<group>"; };
 		AB12CD34EF5601789ABCDE01 /* V2ExportTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2ExportTests.swift; sourceTree = "<group>"; };
 		AB12CD34EF5601789ABCDE03 /* V2SecurityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2SecurityTests.swift; sourceTree = "<group>"; };
 		B137BCFD52463D2F34C4DAE4 /* V2VerificationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2VerificationTests.swift; sourceTree = "<group>"; };
+		B49075B8307A0ACE00D67076 /* V3FoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V3FoundationTests.swift; sourceTree = "<group>"; };
+		B49075BA307A26B600D67076 /* V3CompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V3CompatibilityTests.swift; sourceTree = "<group>"; };
+		B49075BC307A277500D67076 /* V3LintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V3LintTests.swift; sourceTree = "<group>"; };
+		B49075C3307A2A0B00D67076 /* V3GoldenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V3GoldenTests.swift; sourceTree = "<group>"; };
+		B49075C5307A2ADE00D67076 /* V3ScaleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V3ScaleTests.swift; sourceTree = "<group>"; };
+		B49075C7307A2B3D00D67076 /* V3ParserFuzzTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V3ParserFuzzTests.swift; sourceTree = "<group>"; };
 		B4EE09023025C63B003F6F45 /* V2SearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V2SearchTests.swift; sourceTree = "<group>"; };
+		B4F63B09306419C2008C7D92 /* ModuleGatingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModuleGatingTests.swift; sourceTree = "<group>"; };
+		B4F63B1730641E20008C7D92 /* FixtureImportMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureImportMeasurementTests.swift; sourceTree = "<group>"; };
+		B4F63B2330642102008C7D92 /* IdleShardEvictionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdleShardEvictionTests.swift; sourceTree = "<group>"; };
+		B4F63B4F30643A2A008C7D92 /* ImportVerdictTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportVerdictTests.swift; sourceTree = "<group>"; };
+		B4F63B5F30648B96008C7D92 /* PageRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageRouterTests.swift; sourceTree = "<group>"; };
+		B4F63B633064A09C008C7D92 /* AdaptiveBatchControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveBatchControllerTests.swift; sourceTree = "<group>"; };
+		B4F63B753064B0A7008C7D92 /* ImportMemoryBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportMemoryBudgetTests.swift; sourceTree = "<group>"; };
+		B4F63B773064B119008C7D92 /* ImportMemoryAttributionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportMemoryAttributionTests.swift; sourceTree = "<group>"; };
+		B4F63B7B3064EA45008C7D92 /* ArchivePageCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivePageCapabilityTests.swift; sourceTree = "<group>"; };
+		B4F63B7F3064EE61008C7D92 /* SourceFormatClassifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceFormatClassifierTests.swift; sourceTree = "<group>"; };
+		B4F63B893064FFF2008C7D92 /* IndexCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexCoverageTests.swift; sourceTree = "<group>"; };
+		B4F63B9330650A4D008C7D92 /* SourceSizePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceSizePolicyTests.swift; sourceTree = "<group>"; };
+		B4F63B9730650D45008C7D92 /* StoragePlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoragePlannerTests.swift; sourceTree = "<group>"; };
+		B4F63B9B30651380008C7D92 /* BlobStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlobStoreTests.swift; sourceTree = "<group>"; };
+		B4F63B9F30652DB1008C7D92 /* GoldCaseClosureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoldCaseClosureTests.swift; sourceTree = "<group>"; };
+		B4F63BA1306530D8008C7D92 /* StudioBehaviourTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioBehaviourTests.swift; sourceTree = "<group>"; };
+		B4F63BA330653798008C7D92 /* BlobTierWiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlobTierWiringTests.swift; sourceTree = "<group>"; };
+		B4F63BC1306543C7008C7D92 /* CapabilityMatrixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapabilityMatrixTests.swift; sourceTree = "<group>"; };
+		B4F63BC330654436008C7D92 /* OffsetParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffsetParserTests.swift; sourceTree = "<group>"; };
+		B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivationMeasurementTests.swift; sourceTree = "<group>"; };
+		B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPreconditions.swift; sourceTree = "<group>"; };
+		B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMIMEGoldCaseTests.swift; sourceTree = "<group>"; };
+		B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSurfaceWiringTests.swift; sourceTree = "<group>"; };
+		B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealMailboxEngineTests.swift; sourceTree = "<group>"; };
+		B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchMatchFieldsTests.swift; sourceTree = "<group>"; };
 		C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2CutoverTests.swift; sourceTree = "<group>"; };
+		C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffRoundTripTests.swift; sourceTree = "<group>"; };
 		C3B67A602E2FE445009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3B687F12E2F3CE7009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3B6F5B12E2F3AD2009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
@@ -81,6 +163,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				30AD1E2390384BB385818735 /* ArchiveCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -88,6 +171,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D536570AD81C49C8BC8ADF9B /* ArchiveCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -121,8 +205,19 @@
 			isa = PBXGroup;
 			children = (
 				FACE7E570000000000000001 /* maxmailinUITests */,
+				C3B67A602E2FE445009C208C /* ModelRunner.xcodeproj */,
+				C3B6F5B12E2F3AD2009C208C /* ModelRunner.xcodeproj */,
+				C3F7A7222E2ED24F00351625 /* ModelRunner.xcodeproj */,
+				C3B687F12E2F3CE7009C208C /* ModelRunner.xcodeproj */,
 			);
 			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		B49075C0307A28EB00D67076 /* maxmailinUITests 2 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = "maxmailinUITests 2";
 			sourceTree = "<group>";
 		};
 		BE24C855A58BA09F68BE5BCE /* maxmailinTests */ = {
@@ -135,6 +230,46 @@
 				C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */,
 				AB12CD34EF5601789ABCDE03 /* V2SecurityTests.swift */,
 				B4EE09023025C63B003F6F45 /* V2SearchTests.swift */,
+				B4F63B09306419C2008C7D92 /* ModuleGatingTests.swift */,
+				B4F63B1730641E20008C7D92 /* FixtureImportMeasurementTests.swift */,
+				B4F63B2330642102008C7D92 /* IdleShardEvictionTests.swift */,
+				B4F63B4F30643A2A008C7D92 /* ImportVerdictTests.swift */,
+				B4F63B5F30648B96008C7D92 /* PageRouterTests.swift */,
+				B4F63B633064A09C008C7D92 /* AdaptiveBatchControllerTests.swift */,
+				B4F63B753064B0A7008C7D92 /* ImportMemoryBudgetTests.swift */,
+				B4F63B773064B119008C7D92 /* ImportMemoryAttributionTests.swift */,
+				B4F63B7B3064EA45008C7D92 /* ArchivePageCapabilityTests.swift */,
+				B4F63B7F3064EE61008C7D92 /* SourceFormatClassifierTests.swift */,
+				B4F63B893064FFF2008C7D92 /* IndexCoverageTests.swift */,
+				B4F63B9330650A4D008C7D92 /* SourceSizePolicyTests.swift */,
+				B4F63B9730650D45008C7D92 /* StoragePlannerTests.swift */,
+				B4F63B9B30651380008C7D92 /* BlobStoreTests.swift */,
+				B4F63B9F30652DB1008C7D92 /* GoldCaseClosureTests.swift */,
+				B4F63BA1306530D8008C7D92 /* StudioBehaviourTests.swift */,
+				B4F63BA330653798008C7D92 /* BlobTierWiringTests.swift */,
+				B4F63BC1306543C7008C7D92 /* CapabilityMatrixTests.swift */,
+				B4F63BC330654436008C7D92 /* OffsetParserTests.swift */,
+				B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */,
+				B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */,
+				B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */,
+				B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */,
+				B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */,
+				10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */,
+				22D0E31030BC48C3933DA8D7 /* LegacyLibraryMigrationTests.swift */,
+				0BBD9A10512F4BF88E01DFB0 /* OverflowSegmentStoreTests.swift */,
+				9337FA5439084EAFBFC9AC16 /* ProfessionalGatingTests.swift */,
+				C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */,
+				54BC4D4E1CDE48DD8D0E0F20 /* ArchiveRelocationTests.swift */,
+				8FE5DC25F8324CD0840B7429 /* DiskImageFaultTests.swift */,
+				6BAC124E5B7340F79FCD9199 /* LargeMessageBlobTests.swift */,
+				30251AA72DEA429D850E9BF5 /* FormatMatrixTests.swift */,
+				B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */,
+				B49075B8307A0ACE00D67076 /* V3FoundationTests.swift */,
+				B49075BA307A26B600D67076 /* V3CompatibilityTests.swift */,
+				B49075BC307A277500D67076 /* V3LintTests.swift */,
+				B49075C3307A2A0B00D67076 /* V3GoldenTests.swift */,
+				B49075C5307A2ADE00D67076 /* V3ScaleTests.swift */,
+				B49075C7307A2B3D00D67076 /* V3ParserFuzzTests.swift */,
 			);
 			path = maxmailinTests;
 			sourceTree = SOURCE_ROOT;
@@ -168,6 +303,7 @@
 				1DB56D68AE982DF73D8746ED /* Frameworks */,
 				BE24C855A58BA09F68BE5BCE /* maxmailinTests */,
 				B41DA8C330271EB900768F2E /* Recovered References */,
+				B49075C0307A28EB00D67076 /* maxmailinUITests 2 */,
 			);
 			sourceTree = "<group>";
 		};
@@ -205,6 +341,9 @@
 				02E424FF6E02B13969904DF2 /* PBXTargetDependency */,
 			);
 			name = maxmailinTests;
+			packageProductDependencies = (
+				335CFD75651B418DA7921C37 /* ArchiveCore */,
+			);
 			productName = maxmailinTests;
 			productReference = 9CF2C7D0B60FDC821DB65ADF /* maxmailinTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -226,6 +365,9 @@
 				C3F77F722E21F62600351625 /* maxmailin */,
 			);
 			name = maxmailin;
+			packageProductDependencies = (
+				04BEBAEB5A464B75A642E516 /* ArchiveCore */,
+			);
 			productName = mailin;
 			productReference = C3F77F702E21F62600351625 /* maxmailin.app */;
 			productType = "com.apple.product-type.application";
@@ -284,6 +426,9 @@
 			);
 			mainGroup = C3F77F672E21F62600351625;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				58C1F312886D4B778BCD529E /* XCLocalSwiftPackageReference "Packages/ArchiveCore" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C3F77F712E21F62600351625 /* Products */;
 			projectDirPath = "";
@@ -336,12 +481,52 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B4F63BEE3065C8C5008C7D92 /* RealMailboxEngineTests.swift in Sources */,
+				39476346CD2E4AE39624CC99 /* EnterpriseDeploymentTests.swift in Sources */,
+				E796FDC4B9BA48C98C4995A3 /* LegacyLibraryMigrationTests.swift in Sources */,
+				B8D50BE236064FD8AA3D5297 /* OverflowSegmentStoreTests.swift in Sources */,
+				06F74B69F94348368FBB87E7 /* ProfessionalGatingTests.swift in Sources */,
+				9E22DA26BC42426D9554D677 /* HandoffRoundTripTests.swift in Sources */,
+				AC2C43A0B60149C6AC364F18 /* ArchiveRelocationTests.swift in Sources */,
+				B49075C6307A2ADE00D67076 /* V3ScaleTests.swift in Sources */,
+				CCBC602369234D07AA0FB6B8 /* DiskImageFaultTests.swift in Sources */,
+				33AF4556AF7E44BA8A8DE23A /* LargeMessageBlobTests.swift in Sources */,
+				86A7BC7AEC2649109C6ED099 /* FormatMatrixTests.swift in Sources */,
+				B4F63BF23065D2A1008C7D92 /* SearchMatchFieldsTests.swift in Sources */,
+				B4F63B9830650D45008C7D92 /* StoragePlannerTests.swift in Sources */,
+				B4F63B763064B0A7008C7D92 /* ImportMemoryBudgetTests.swift in Sources */,
+				B4F63BC2306543C7008C7D92 /* CapabilityMatrixTests.swift in Sources */,
+				B4F63BA430653798008C7D92 /* BlobTierWiringTests.swift in Sources */,
+				B49075B9307A0ACE00D67076 /* V3FoundationTests.swift in Sources */,
+				B4F63B1830641E20008C7D92 /* FixtureImportMeasurementTests.swift in Sources */,
+				B4F63B803064EE61008C7D92 /* SourceFormatClassifierTests.swift in Sources */,
+				B4F63BEC3065C16D008C7D92 /* ImportSurfaceWiringTests.swift in Sources */,
+				B49075C8307A2B3D00D67076 /* V3ParserFuzzTests.swift in Sources */,
+				B49075BD307A277500D67076 /* V3LintTests.swift in Sources */,
+				B4F63B6030648B96008C7D92 /* PageRouterTests.swift in Sources */,
 				1D0190B9A4314C4F1E974268 /* SmokeTests.swift in Sources */,
+				B4F63BA2306530D8008C7D92 /* StudioBehaviourTests.swift in Sources */,
 				FE90CA2542E92965622E2D37 /* V2VerificationTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* V2DerivedStateTests.swift in Sources */,
+				B4F63B9430650A4D008C7D92 /* SourceSizePolicyTests.swift in Sources */,
+				B4F63B5030643A2A008C7D92 /* ImportVerdictTests.swift in Sources */,
+				B4F63B783064B119008C7D92 /* ImportMemoryAttributionTests.swift in Sources */,
+				B49075BB307A26B600D67076 /* V3CompatibilityTests.swift in Sources */,
+				B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */,
 				AB12CD34EF5601789ABCDE02 /* V2ExportTests.swift in Sources */,
+				B4F63BDC3065756A008C7D92 /* TestPreconditions.swift in Sources */,
+				B4F63B8A3064FFF2008C7D92 /* IndexCoverageTests.swift in Sources */,
+				B4F63B643064A09C008C7D92 /* AdaptiveBatchControllerTests.swift in Sources */,
 				C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */,
+				B4F63BA030652DB1008C7D92 /* GoldCaseClosureTests.swift in Sources */,
+				B4F63BC430654436008C7D92 /* OffsetParserTests.swift in Sources */,
+				B4F63B0A306419C2008C7D92 /* ModuleGatingTests.swift in Sources */,
+				B4F63B9C30651380008C7D92 /* BlobStoreTests.swift in Sources */,
+				B49075C4307A2A0B00D67076 /* V3GoldenTests.swift in Sources */,
+				B4F63B2430642102008C7D92 /* IdleShardEvictionTests.swift in Sources */,
 				AB12CD34EF5601789ABCDE04 /* V2SecurityTests.swift in Sources */,
+				B4F63B7C3064EA45008C7D92 /* ArchivePageCapabilityTests.swift in Sources */,
+				B4F63BCC30655AC5008C7D92 /* ActivationMeasurementTests.swift in Sources */,
 				B4EE09033025C63B003F6F45 /* V2SearchTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -395,6 +580,311 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/maxmailin.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/maxmailin";
 			};
 			name = Debug;
+		};
+		B4DC4BEE30A6103A001DF859 /* Release-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 6TPTCJD42Q;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
+				LOCALIZED_STRING_SWIFTUI_SUPPORT = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = "Release-Connected";
+		};
+		B4DC4BEF30A6103A001DF859 /* Release-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "mailin/mailin-connected.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = mailin/mailin_iOS.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1000;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 6TPTCJD42Q;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info-Connected.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = mailin;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "mailin accesses your Desktop to open email archive files you select for import and to save exported results. For example, opening an .eml file saved on your Desktop, or exporting a forensic report as CSV. Only files you explicitly choose are accessed.";
+				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "mailin accesses your Documents folder to open email archive files you select for import and to save exported results. For example, opening a Gmail Takeout .mbox file stored in Documents, or saving a PDF export of analyzed emails. Only files you explicitly choose are accessed.";
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025-2026 mailin. All rights reserved.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mailin recognises the speech in audio and video attachments on this device, so a recording's words can be searched like a document. For example, finding the voice memo in which a contract term was discussed. Nothing is sent anywhere; recognition runs only when the switch in Settings ▸ Modules is on.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.mailin;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "MAILIN_CONNECTED_MAIL $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = "Release-Connected";
+		};
+		B4DC4BF030A6103A001DF859 /* Release-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/maxmailin.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/maxmailin";
+			};
+			name = "Release-Connected";
+		};
+		B4DC4BF130A6103A001DF859 /* Release-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = maxmailin;
+			};
+			name = "Release-Connected";
+		};
+		B4DC4C0630A6FFAA001DF859 /* Debug-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 6TPTCJD42Q;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
+				LOCALIZED_STRING_SWIFTUI_SUPPORT = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = "Debug-Connected";
+		};
+		B4DC4C0730A6FFAA001DF859 /* Debug-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "mailin/mailin-connected.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = mailin/mailin_iOS.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1000;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 6TPTCJD42Q;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info-Connected.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = mailin;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "mailin accesses your Desktop to open email archive files you select for import and to save exported results. For example, opening an .eml file saved on your Desktop, or exporting a forensic report as CSV. Only files you explicitly choose are accessed.";
+				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "mailin accesses your Documents folder to open email archive files you select for import and to save exported results. For example, opening a Gmail Takeout .mbox file stored in Documents, or saving a PDF export of analyzed emails. Only files you explicitly choose are accessed.";
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025-2026 mailin. All rights reserved.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mailin recognises the speech in audio and video attachments on this device, so a recording's words can be searched like a document. For example, finding the voice memo in which a contract term was discussed. Nothing is sent anywhere; recognition runs only when the switch in Settings ▸ Modules is on.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.mailin;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "MAILIN_CONNECTED_MAIL $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = "Debug-Connected";
+		};
+		B4DC4C0830A6FFAA001DF859 /* Debug-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/maxmailin.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/maxmailin";
+			};
+			name = "Debug-Connected";
+		};
+		B4DC4C0930A6FFAA001DF859 /* Debug-Connected */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = maxmailin;
+			};
+			name = "Debug-Connected";
 		};
 		C3F77F7A2E21F62800351625 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -534,13 +1024,13 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 211;
+				CURRENT_PROJECT_VERSION = 1000;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6TPTCJD42Q;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = info.plist;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = mailin;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -550,6 +1040,7 @@
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025-2026 mailin. All rights reserved.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mailin recognises the speech in audio and video attachments on this device, so a recording's words can be searched like a document. For example, finding the voice memo in which a contract term was discussed. Nothing is sent anywhere; recognition runs only when the switch in Settings ▸ Modules is on.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
@@ -559,9 +1050,9 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
-				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.mailin;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -569,8 +1060,8 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG OFFLINE_MODE $(inherited)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "NO_NETWORK_BUILD $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -586,13 +1077,13 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 211;
+				CURRENT_PROJECT_VERSION = 1000;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6TPTCJD42Q;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = info.plist;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = mailin;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -602,6 +1093,7 @@
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025-2026 mailin. All rights reserved.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mailin recognises the speech in audio and video attachments on this device, so a recording's words can be searched like a document. For example, finding the voice memo in which a contract term was discussed. Nothing is sent anywhere; recognition runs only when the switch in Settings ▸ Modules is on.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
@@ -611,9 +1103,9 @@
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
-				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.mailin;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -621,8 +1113,8 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = OFFLINE_MODE;
-				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "NO_NETWORK_BUILD $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -687,7 +1179,9 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C3F77F7A2E21F62800351625 /* Debug */,
+				B4DC4C0630A6FFAA001DF859 /* Debug-Connected */,
 				C3F77F7B2E21F62800351625 /* Release */,
+				B4DC4BEE30A6103A001DF859 /* Release-Connected */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -696,7 +1190,9 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C3F77F7D2E21F62800351625 /* Debug */,
+				B4DC4C0730A6FFAA001DF859 /* Debug-Connected */,
 				C3F77F7E2E21F62800351625 /* Release */,
+				B4DC4BEF30A6103A001DF859 /* Release-Connected */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -705,7 +1201,9 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E206DC789E04CD49BB728C5E /* Release */,
+				B4DC4BF030A6103A001DF859 /* Release-Connected */,
 				83E229A7FCC2C94E4EBCDAF1 /* Debug */,
+				B4DC4C0830A6FFAA001DF859 /* Debug-Connected */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -714,12 +1212,32 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				FACE7E570000000000000005 /* Debug */,
+				B4DC4C0930A6FFAA001DF859 /* Debug-Connected */,
 				FACE7E570000000000000006 /* Release */,
+				B4DC4BF130A6103A001DF859 /* Release-Connected */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		58C1F312886D4B778BCD529E /* XCLocalSwiftPackageReference "Packages/ArchiveCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ArchiveCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		04BEBAEB5A464B75A642E516 /* ArchiveCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ArchiveCore;
+		};
+		335CFD75651B418DA7921C37 /* ArchiveCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ArchiveCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = C3F77F682E21F62600351625 /* Project object */;
 }

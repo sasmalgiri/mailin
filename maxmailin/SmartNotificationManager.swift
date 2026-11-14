@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  SmartNotificationManager.swift
 //  mailin
@@ -168,7 +169,7 @@ final class SmartNotificationManager: ObservableObject {
             alerts.append(SmartAlert(
                 type: .phishingDetected,
                 severity: .high,
-                title: "High-Risk Phishing Detected",
+                title: String(localized: "High-Risk Phishing Detected"),
                 message: "\(highIDs.count) email\(highIDs.count == 1 ? "" : "s") flagged as high-risk phishing. Review immediately.",
                 emailIDs: highIDs
             ))
@@ -178,7 +179,7 @@ final class SmartNotificationManager: ObservableObject {
             alerts.append(SmartAlert(
                 type: .phishingDetected,
                 severity: .medium,
-                title: "Suspicious Emails Detected",
+                title: String(localized: "Suspicious Emails Detected"),
                 message: "\(mediumIDs.count) email\(mediumIDs.count == 1 ? "" : "s") flagged as medium-risk. Manual review recommended.",
                 emailIDs: mediumIDs
             ))
@@ -188,7 +189,7 @@ final class SmartNotificationManager: ObservableObject {
             alerts.append(SmartAlert(
                 type: .phishingDetected,
                 severity: .low,
-                title: "Low-Risk Phishing Indicators",
+                title: String(localized: "Low-Risk Phishing Indicators"),
                 message: "\(lowIDs.count) email\(lowIDs.count == 1 ? "" : "s") have minor phishing indicators.",
                 emailIDs: lowIDs
             ))
@@ -238,7 +239,7 @@ final class SmartNotificationManager: ObservableObject {
                 alerts.append(SmartAlert(
                     type: .unusualVolume,
                     severity: severity,
-                    title: "Unusual Email Volume",
+                    title: String(localized: "Unusual Email Volume"),
                     message: "\(lastDayData.count) emails on \(lastDay) -- \(String(format: "%.1f", ratio))x the 30-day average of \(String(format: "%.1f", baselineAverage)).",
                     emailIDs: lastDayData.ids
                 ))
@@ -311,7 +312,7 @@ final class SmartNotificationManager: ObservableObject {
         return [SmartAlert(
             type: .piiExposure,
             severity: severity,
-            title: "Potential PII Exposure",
+            title: String(localized: "Potential PII Exposure"),
             message: "Found \(details.joined(separator: ", ")) across \(flaggedIDs.count) email\(flaggedIDs.count == 1 ? "" : "s").",
             emailIDs: flaggedIDs
         )]
@@ -358,7 +359,7 @@ final class SmartNotificationManager: ObservableObject {
                 alerts.append(SmartAlert(
                     type: .newSenderBurst,
                     severity: severity,
-                    title: "New Sender Burst",
+                    title: String(localized: "New Sender Burst"),
                     message: "\(ids.count) emails from new sender \(sender) within the last 24 hours.",
                     emailIDs: ids
                 ))
@@ -407,7 +408,7 @@ final class SmartNotificationManager: ObservableObject {
         return [SmartAlert(
             type: .sentimentShift,
             severity: severity,
-            title: "Sentiment Decline Detected",
+            title: String(localized: "Sentiment Decline Detected"),
             message: "Average sentiment shifted from \(String(format: "%.2f", priorSentiment.average)) (\(priorSentiment.label)) to \(String(format: "%.2f", recentSentiment.average)) (\(recentSentiment.label)) in the recent period.",
             emailIDs: recentIDs
         )]
@@ -440,5 +441,170 @@ final class SmartNotificationManager: ObservableObject {
             return trimmed
         }
         return ""
+    }
+}
+
+// MARK: - §3-A1 whole-archive alerts (switch: `v3AlertsAnomalies`)
+//
+// The same five detectors over EVERY email in scope, in one pass oldest
+// first (the order the date-sensitive detectors sort into). Rules,
+// thresholds and wording are the ones above. Resident state: per-day counts
+// with their ids, distinct senders, and the ids each alert lists — never
+// bodies. Kept in this file because it shares the private helpers.
+
+extension SmartNotificationManager {
+    private struct Progress: Codable, Sendable { var emails = 0 }
+
+    func analyzeForAlertsWholeArchive(query: EmailQuery = .all) async throws -> (alerts: [SmartAlert], receipt: ScopeJobReceipt) {
+        let data = ArchiveDataService.shared
+        let total = try await data.count(query: query)
+        // Latest date first: the new-sender window is the 24 h before it.
+        var latest: Date?
+        if let newest = try await data.page(query: query, cursor: nil, limit: 1).summaries.first {
+            latest = (try await data.fullEmails(ids: [newest.id]).first).flatMap { MBOXParser.parseDate($0.headers["Date"]) }
+        }
+        let cutoff = latest.flatMap { Calendar.current.date(byAdding: .hour, value: -24, to: $0) }
+
+        var high: [UUID] = [], medium: [UUID] = [], low: [UUID] = []
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "yyyy-MM-dd"
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        var daily: [String: (count: Int, ids: [UUID])] = [:]
+        let ssn = try? NSRegularExpression(pattern: #"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b"#)
+        let cc = try? NSRegularExpression(pattern: #"\b(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#)
+        let phone = try? NSRegularExpression(pattern: #"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"#)
+        var piiIDs: [UUID] = [], ssnCount = 0, ccCount = 0, phoneCount = 0
+        var historicalSenders = Set<String>()
+        var recentSenders: [String: [UUID]] = [:]
+        let midpoint = total / 2
+        var position = 0
+        var priorSum = 0.0, priorN = 0, recentSum = 0.0, recentN = 0
+        var recentIDs: [UUID] = []
+
+        var q = query
+        q.sort = .dateAsc
+        let result = try await ScopeJob.run(
+            key: "alerts.whole", title: String(localized: "Smart alerts"),
+            capability: .v3AlertsAnomalies, query: q, resumable: false, initialState: Progress()
+        ) { state, batch in
+            for flag in EmailNLPEngine.detectPhishing(in: batch) {
+                switch flag.riskLevel {
+                case .high: high.append(flag.email.id)
+                case .medium: medium.append(flag.email.id)
+                case .low: low.append(flag.email.id)
+                }
+            }
+            let scores = Dictionary(EmailNLPEngine.analyzeSentiment(of: batch).map { ($0.email.id, $0.score) },
+                                    uniquingKeysWith: { a, _ in a })
+            for email in batch {
+                let date = MBOXParser.parseDate(email.headers["Date"])
+                if let date {
+                    let key = dayFormatter.string(from: date)
+                    daily[key, default: (0, [])].count += 1
+                    daily[key, default: (0, [])].ids.append(email.id)
+                }
+
+                let body = emailBodyText(for: email)
+                if !body.isEmpty {
+                    let range = NSRange(location: 0, length: (body as NSString).length)
+                    var hasPII = false
+                    if let n = ssn?.numberOfMatches(in: body, range: range), n > 0 { ssnCount += n; hasPII = true }
+                    if let n = cc?.numberOfMatches(in: body, range: range), n > 0 { ccCount += n; hasPII = true }
+                    if let n = phone?.numberOfMatches(in: body, range: range), n > 0 {
+                        phoneCount += n
+                        if n >= 3 || ssnCount > 0 || ccCount > 0 { hasPII = true }
+                    }
+                    if hasPII { piiIDs.append(email.id) }
+                }
+
+                let sender = extractEmailAddress(from: email.headers["From"] ?? "").lowercased()
+                if !sender.isEmpty, let cutoff {
+                    if (date ?? .distantPast) < cutoff { historicalSenders.insert(sender) }
+                    else { recentSenders[sender, default: []].append(email.id) }
+                }
+
+                if position < midpoint {
+                    if let s = scores[email.id] { priorSum += s; priorN += 1 }
+                } else {
+                    recentIDs.append(email.id)
+                    if let s = scores[email.id] { recentSum += s; recentN += 1 }
+                }
+                position += 1
+            }
+            state.emails += batch.count
+        }
+
+        var alerts: [SmartAlert] = []
+        // Phishing
+        if !high.isEmpty {
+            alerts.append(SmartAlert(type: .phishingDetected, severity: .high,
+                title: String(localized: "High-Risk Phishing Detected"),
+                message: "\(high.count) email\(high.count == 1 ? "" : "s") flagged as high-risk phishing. Review immediately.", emailIDs: high))
+        }
+        if !medium.isEmpty {
+            alerts.append(SmartAlert(type: .phishingDetected, severity: .medium,
+                title: String(localized: "Suspicious Emails Detected"),
+                message: "\(medium.count) email\(medium.count == 1 ? "" : "s") flagged as medium-risk. Manual review recommended.", emailIDs: medium))
+        }
+        if !low.isEmpty {
+            alerts.append(SmartAlert(type: .phishingDetected, severity: .low,
+                title: String(localized: "Low-Risk Phishing Indicators"),
+                message: "\(low.count) email\(low.count == 1 ? "" : "s") have minor phishing indicators.", emailIDs: low))
+        }
+        // Volume (same baseline rule as the in-memory detector)
+        if total >= 7, daily.count >= 2 {
+            let days = daily.keys.sorted()
+            let counts = days.map { daily[$0]?.count ?? 0 }
+            let baselineCount = min(counts.count - 1, 30)
+            if baselineCount >= 1 {
+                let avg = Double(counts.prefix(baselineCount).reduce(0, +)) / Double(baselineCount)
+                if avg > 0, let lastDay = days.last, let last = daily[lastDay] {
+                    let ratio = Double(last.count) / avg
+                    if ratio > 2.0 {
+                        let severity: SmartAlertSeverity = ratio > 5.0 ? .high : (ratio > 3.0 ? .medium : .low)
+                        alerts.append(SmartAlert(type: .unusualVolume, severity: severity,
+                            title: String(localized: "Unusual Email Volume"),
+                            message: "\(last.count) emails on \(lastDay) -- \(String(format: "%.1f", ratio))x the 30-day average of \(String(format: "%.1f", avg)).",
+                            emailIDs: last.ids))
+                    }
+                }
+            }
+        }
+        // PII
+        if !piiIDs.isEmpty {
+            var details: [String] = []
+            if ssnCount > 0 { details.append("\(ssnCount) SSN-like pattern\(ssnCount == 1 ? "" : "s")") }
+            if ccCount > 0 { details.append("\(ccCount) credit card-like pattern\(ccCount == 1 ? "" : "s")") }
+            if phoneCount > 0 { details.append("\(phoneCount) phone number\(phoneCount == 1 ? "" : "s")") }
+            alerts.append(SmartAlert(type: .piiExposure, severity: (ssnCount > 0 || ccCount > 0) ? .high : .medium,
+                title: String(localized: "Potential PII Exposure"),
+                message: "Found \(details.joined(separator: ", ")) across \(piiIDs.count) email\(piiIDs.count == 1 ? "" : "s").",
+                emailIDs: piiIDs))
+        }
+        // New sender burst
+        if total >= 5 {
+            for (sender, ids) in recentSenders where !historicalSenders.contains(sender) && ids.count > 5 {
+                let severity: SmartAlertSeverity = ids.count > 20 ? .high : (ids.count > 10 ? .medium : .low)
+                alerts.append(SmartAlert(type: .newSenderBurst, severity: severity,
+                    title: String(localized: "New Sender Burst"),
+                    message: "\(ids.count) emails from new sender \(sender) within the last 24 hours.", emailIDs: ids))
+            }
+        }
+        // Sentiment shift (same labels as EmailNLPEngine.averageSentiment)
+        if total >= 10 {
+            func label(_ avg: Double) -> String { avg > 0.4 ? "Positive" : avg < -0.4 ? "Negative" : "Neutral" }
+            let prior = priorN > 0 ? priorSum / Double(priorN) : 0
+            let recent = recentN > 0 ? recentSum / Double(recentN) : 0
+            let shift = recent - prior
+            if shift < -0.4 {
+                alerts.append(SmartAlert(type: .sentimentShift, severity: shift < -0.6 ? .high : .medium,
+                    title: String(localized: "Sentiment Decline Detected"),
+                    message: "Average sentiment shifted from \(String(format: "%.2f", prior)) (\(label(prior))) to \(String(format: "%.2f", recent)) (\(label(recent))) in the recent period.",
+                    emailIDs: recentIDs))
+            }
+        }
+        alerts.sort { $0.severity > $1.severity }
+        self.alerts = alerts
+        return (alerts, result.receipt)
     }
 }

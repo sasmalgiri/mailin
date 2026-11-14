@@ -1,0 +1,490 @@
+//
+//  ArchiveBackup.swift
+//  ArchiveCore
+//
+//  Five jobs LIFE-02: one backup of a consistent archive state that restores
+//  on a clean device or user profile without the old machine's paths.
+//
+//  What a backup holds (all under one folder the user chooses):
+//    emails.db                     the database — folders, memberships, user
+//                                  tags, annotations, holds, review state,
+//                                  import checkpoints, chunk index — written
+//                                  with VACUUM INTO (consistent while the app
+//                                  is running, no -wal to lose)
+//    attachment-coverage.sqlite    per-attachment text states   (sidecars,
+//    attachment-ocr.sqlite         OCR pass state                 if present)
+//    blobs/**                      raw messages above the inline size
+//    sources/**                    self-contained copies of imported files
+//    receipts/<name>/**            import / export receipts (verification records)
+//    mailin-backup-inventory.json  every file with its bytes and SHA-256,
+//                                  the schema version, the counts, the list
+//                                  of what was omitted and why, and the
+//                                  linked-source inventory (originals the
+//                                  archive still points at outside itself)
+//
+//  Omitted on purpose: the FTS5 year shards (rebuildable — Settings ▸ Health
+//  ▸ Rebuild search index; the chunk index inside emails.db is included).
+//
+//  Restore verifies every hash BEFORE it touches the target. A clean-profile
+//  restore needs an empty store directory; the in-place variant replaces the
+//  database and sidecars only after the caller has snapshotted the current
+//  database and closed its connection, and it never deletes blob or source
+//  files that are already there.
+//
+
+import CryptoKit
+import Foundation
+import SQLite3
+
+struct ArchiveBackupInventory: Codable, Sendable, Equatable {
+    static let filename = "mailin-backup-inventory.json"
+    static let currentVersion = 1
+
+    struct File: Codable, Sendable, Equatable {
+        /// Path relative to the backup folder, "/"-separated.
+        let path: String
+        let bytes: Int64
+        let sha256: String
+        /// database / sidecar / blob / source / receipt
+        let kind: String
+    }
+
+    struct Counts: Codable, Sendable, Equatable {
+        var emails = 0
+        var attachments = 0
+        var folders = 0
+        var folderMemberships = 0
+        var userTags = 0
+        var annotations = 0
+        var legalHolds = 0
+        var sources = 0
+        var locatorBacked = 0
+    }
+
+    /// An original file the archive still reads from outside itself (linked mode).
+    struct LinkedSource: Codable, Sendable, Equatable {
+        let path: String
+        let sha256: String?
+        let messages: Int
+    }
+
+    var version = ArchiveBackupInventory.currentVersion
+    var createdAt: Date
+    var schemaVersion: Int
+    var counts: Counts
+    var files: [File]
+    var omitted: [String]
+    var linkedSources: [LinkedSource]
+
+    var totalBytes: Int64 { files.reduce(0) { $0 + $1.bytes } }
+}
+
+enum ArchiveBackupError: LocalizedError, Equatable {
+    case destinationNotEmpty(String)
+    case targetNotClean(String)
+    case inventoryMissing
+    case fileMissing(String)
+    case hashMismatch(String)
+    case copyFailed(String)
+    /// T22: the backup stopped being readable mid-restore (its drive removed).
+    case restoreInterrupted(copied: Int, total: Int, path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .destinationNotEmpty(let p): return "The backup folder \(p) is not empty. Choose an empty folder; nothing was written."
+        case .targetNotClean(let p): return "An archive already exists at \(p). A clean-profile restore needs an empty store folder; nothing was changed."
+        case .inventoryMissing: return "This folder has no mailin backup inventory, so it cannot be verified. Nothing was changed."
+        case .fileMissing(let p): return "The backup is incomplete: \(p) is missing. Nothing was changed."
+        case .hashMismatch(let p): return "The backup is damaged: \(p) does not match its recorded SHA-256. Nothing was changed."
+        case .copyFailed(let why): return "The backup could not be written: \(why)"
+        case .restoreInterrupted(let copied, let total, let path):
+            return "The backup became unavailable during the restore (was its drive removed?): \(copied) of \(total) files had been read when \(path) could not be. Nothing in the archive was changed. Reconnect the backup and restore again."
+        }
+    }
+}
+
+enum ArchiveBackup {
+    static let databaseName = "emails.db"
+    static let sidecarNames = ["attachment-coverage.sqlite", "attachment-ocr.sqlite"]
+    static let blobsFolder = "blobs"
+    static let sourcesFolder = "sources"
+    static let receiptsFolder = "receipts"
+    /// V4-12: connected-mail drafts, outbox and lifecycle ledger (MailConnectivity
+    /// writes them under the store folder). They hold message content and
+    /// account UUIDs, never a credential; restored as "add what is missing".
+    static let connectedFolders = ["ConnectedDrafts", "ConnectedOutbox", "ConnectedLifecycle"]
+
+    // MARK: Create
+
+    /// Writes a backup of `store` into `destination` (must be empty or absent).
+    /// `receiptDirectories` are copied under `receipts/<name>/` when present.
+    static func create(store: SQLiteEmailStore, to destination: URL,
+                       receiptDirectories: [(name: String, url: URL)] = [],
+                       progress: (@Sendable (String) -> Void)? = nil) async throws -> ArchiveBackupInventory {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path),
+           let existing = try? fm.contentsOfDirectory(atPath: destination.path), !existing.isEmpty {
+            throw ArchiveBackupError.destinationNotEmpty(destination.path)
+        }
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        // LIFE-04: a backup is the whole archive in one folder — owner-only
+        // on macOS (0700), protected until first unlock on iOS, like the store.
+        ArtifactProtection.applyBackgroundReadable(to: destination)
+        var files: [ArchiveBackupInventory.File] = []
+
+        // 1. The database, consistent.
+        progress?("database")
+        let dbTarget = destination.appendingPathComponent(databaseName)
+        try await store.backupDatabase(to: dbTarget)
+        files.append(try entry(for: dbTarget, relative: databaseName, kind: "database"))
+
+        // 2. Sidecars, each through its own read connection.
+        let storeDirectory = store.storeDirectory
+        for name in sidecarNames {
+            let source = storeDirectory.appendingPathComponent(name)
+            guard fm.fileExists(atPath: source.path) else { continue }
+            progress?(name)
+            let target = destination.appendingPathComponent(name)
+            try vacuumCopy(from: source, to: target)
+            files.append(try entry(for: target, relative: name, kind: "sidecar"))
+        }
+
+        // 3. Blobs and self-contained source copies: immutable, content-addressed files.
+        for (folder, kind) in [(blobsFolder, "blob"), (sourcesFolder, "source")] {
+            let root = storeDirectory.appendingPathComponent(folder, isDirectory: true)
+            guard fm.fileExists(atPath: root.path) else { continue }
+            progress?(folder)
+            files.append(contentsOf: try copyTree(from: root, to: destination.appendingPathComponent(folder, isDirectory: true),
+                                                  relativePrefix: folder, kind: kind))
+        }
+
+        // 3b. V4-12: connected drafts / outbox / lifecycle ledger (no credentials
+        //     exist in them; secrets live only in the Keychain).
+        for folder in connectedFolders {
+            let root = storeDirectory.appendingPathComponent(folder, isDirectory: true)
+            guard fm.fileExists(atPath: root.path) else { continue }
+            progress?(folder)
+            files.append(contentsOf: try copyTree(from: root, to: destination.appendingPathComponent(folder, isDirectory: true),
+                                                  relativePrefix: folder, kind: "connected"))
+        }
+
+        // 4. Receipts — the verification records.
+        for receipt in receiptDirectories where fm.fileExists(atPath: receipt.url.path) {
+            progress?("receipts")
+            let prefix = receiptsFolder + "/" + receipt.name
+            files.append(contentsOf: try copyTree(from: receipt.url, to: destination.appendingPathComponent(prefix, isDirectory: true),
+                                                  relativePrefix: prefix, kind: "receipt"))
+        }
+
+        // 5. The inventory.
+        let counts = try await store.backupCounts()
+        let inventory = ArchiveBackupInventory(
+            createdAt: Date(),
+            schemaVersion: try await store.schemaVersion(),
+            counts: counts,
+            files: files,
+            omitted: ["fts5 search shards — rebuildable from the database (Settings ▸ Health ▸ Rebuild search index); the in-database chunk index is included",
+                      "connected-account credentials — never backed up (they stay in this device's Keychain); restored accounts ask to sign in again",
+                      "connected-staging — downloads not yet preserved; they are fetched again after a restore"],
+            linkedSources: try await store.linkedSourceInventory())
+        try write(inventory, to: destination)
+        return inventory
+    }
+
+    // MARK: Verify
+
+    struct Verification: Sendable, Equatable {
+        var inventory: ArchiveBackupInventory
+        var problems: [String]
+        var isClean: Bool { problems.isEmpty }
+    }
+
+    /// Re-hashes every listed file (full, never sampled).
+    static func verify(backup: URL) throws -> Verification {
+        let inventory = try load(from: backup)
+        var problems: [String] = []
+        for file in inventory.files {
+            let url = backup.appendingPathComponent(file.path)
+            guard FileManager.default.fileExists(atPath: url.path) else { problems.append("missing: \(file.path)"); continue }
+            if try ExportInventory.sha256(of: url) != file.sha256 { problems.append("changed: \(file.path)") }
+        }
+        return Verification(inventory: inventory, problems: problems)
+    }
+
+    // MARK: Restore
+
+    enum RestoreMode: Sendable, Equatable {
+        /// The target store directory holds no archive (new device / profile).
+        case cleanProfile
+        /// Replace the database and sidecars of an existing store; add blob
+        /// and source files that are missing; never delete anything. The
+        /// caller has snapshotted the current database and closed its connection.
+        case replaceDatabaseKeepFiles
+    }
+
+    /// Where a restore gathers every file before it changes anything (inside
+    /// the target store folder, so placing them is a rename on one volume).
+    static let restoreStagingFolder = ".mailin-restore-staging"
+
+    /// Verifies the whole backup first, then places it. Returns the inventory.
+    /// `receiptDirectories` maps `receipts/<name>` back to a destination; files
+    /// already there are kept, not overwritten.
+    ///
+    /// T22 (restore leg): every file the restore will place is first copied out
+    /// of the backup into a staging folder beside the target. Only when all of
+    /// them are on the target's volume is anything replaced or added, so a
+    /// backup drive that is pulled (or a backup that changes) mid-restore leaves
+    /// the archive exactly as it was and says "X of Y files" and that nothing
+    /// changed — instead of a database whose message files never arrived (and,
+    /// on a clean profile, a half-placed archive that refused the retry).
+    /// `afterEachCopy(path, copied, total)` is a test seam.
+    @discardableResult
+    static func restore(backup: URL, intoStoreDirectory target: URL, mode: RestoreMode,
+                        receiptDirectories: [(name: String, url: URL)] = [],
+                        afterEachCopy: ((_ path: String, _ copied: Int, _ total: Int) -> Void)? = nil) throws -> ArchiveBackupInventory {
+        let fm = FileManager.default
+        let verification = try verify(backup: backup)
+        if let first = verification.problems.first {
+            if first.hasPrefix("missing") { throw ArchiveBackupError.fileMissing(String(first.dropFirst("missing: ".count))) }
+            throw ArchiveBackupError.hashMismatch(String(first.dropFirst("changed: ".count)))
+        }
+        let dbTarget = target.appendingPathComponent(databaseName)
+        if mode == .cleanProfile, fm.fileExists(atPath: dbTarget.path) {
+            throw ArchiveBackupError.targetNotClean(target.path)
+        }
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+
+        // What this restore places: the database and sidecars always; blobs,
+        // sources and connected drafts / outbox only where missing (existing
+        // files are left alone); receipts back to their homes, never overwriting.
+        struct Placement {
+            let file: ArchiveBackupInventory.File
+            let destination: URL
+            /// A receipt: one that cannot be copied is skipped (as before), unless the backup is gone.
+            let optional: Bool
+        }
+        var plan: [Placement] = []
+        for file in verification.inventory.files where file.kind == "database" || file.kind == "sidecar" {
+            plan.append(Placement(file: file, destination: target.appendingPathComponent(file.path), optional: false))
+        }
+        for file in verification.inventory.files where file.kind == "blob" || file.kind == "source" || file.kind == "connected" {
+            let destination = target.appendingPathComponent(file.path)
+            if !fm.fileExists(atPath: destination.path) {
+                plan.append(Placement(file: file, destination: destination, optional: false))
+            }
+        }
+        for receipt in receiptDirectories {
+            let prefix = receiptsFolder + "/" + receipt.name + "/"
+            for file in verification.inventory.files where file.path.hasPrefix(prefix) {
+                let destination = receipt.url.appendingPathComponent(String(file.path.dropFirst(prefix.count)))
+                if !fm.fileExists(atPath: destination.path) {
+                    plan.append(Placement(file: file, destination: destination, optional: true))
+                }
+            }
+        }
+
+        // 1. Copy everything out of the backup. Nothing in the archive changes here.
+        let staging = target.appendingPathComponent(restoreStagingFolder, isDirectory: true)
+        try? fm.removeItem(at: staging)   // a restore that was cut off earlier
+        do { try fm.createDirectory(at: staging, withIntermediateDirectories: true) }
+        catch { throw ArchiveBackupError.copyFailed(error.localizedDescription) }
+        var staged: [(placement: Placement, url: URL)] = []
+        for (index, placement) in plan.enumerated() {
+            let source = backup.appendingPathComponent(placement.file.path)
+            let stagedURL = staging.appendingPathComponent(placement.file.path)
+            do {
+                try fm.createDirectory(at: stagedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.copyItem(at: source, to: stagedURL)
+                let bytes = ((try? fm.attributesOfItem(atPath: stagedURL.path)[.size]) as? NSNumber)?.int64Value
+                guard bytes == placement.file.bytes else {
+                    throw ArchiveBackupError.copyFailed("\(placement.file.path) arrived with \(bytes ?? 0) of \(placement.file.bytes) bytes")
+                }
+                staged.append((placement, stagedURL))
+            } catch {
+                let backupGone = !fm.fileExists(atPath: source.path)
+                    || !fm.fileExists(atPath: backup.appendingPathComponent(ArchiveBackupInventory.filename).path)
+                if placement.optional && !backupGone { continue }
+                try? fm.removeItem(at: staging)
+                if backupGone {
+                    throw ArchiveBackupError.restoreInterrupted(copied: index, total: plan.count, path: placement.file.path)
+                }
+                throw ArchiveBackupError.copyFailed("restoring \(placement.file.path): \(error.localizedDescription). Nothing in the archive was changed")
+            }
+            afterEachCopy?(placement.file.path, index + 1, plan.count)
+        }
+        defer { try? fm.removeItem(at: staging) }
+
+        // V4-12: the backup holds no credential, so on a new device or profile
+        // every connected account must sign in again (marked before it is placed).
+        if mode == .cleanProfile, let database = staged.first(where: { $0.placement.file.path == databaseName }) {
+            try markConnectedAccountsNeedSignIn(databaseAt: database.url)
+        }
+
+        // 2. Every byte is on the target's volume: place it. Nothing below reads the backup.
+        for (placement, stagedURL) in staged {
+            let destination = placement.destination
+            do {
+                switch placement.file.kind {
+                case "database", "sidecar":
+                    for suffix in ["-wal", "-shm"] { try? fm.removeItem(at: URL(fileURLWithPath: destination.path + suffix)) }
+                    if fm.fileExists(atPath: destination.path) {
+                        _ = try fm.replaceItemAt(destination, withItemAt: stagedURL)
+                    } else {
+                        try fm.moveItem(at: stagedURL, to: destination)
+                    }
+                default:
+                    guard !fm.fileExists(atPath: destination.path) else { continue }
+                    try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                           attributes: placement.file.kind == "connected" ? [.posixPermissions: 0o700] : nil)
+                    try fm.moveItem(at: stagedURL, to: destination)
+                }
+            } catch {
+                if placement.optional { continue }
+                throw ArchiveBackupError.copyFailed(error.localizedDescription)
+            }
+        }
+        return verification.inventory
+    }
+
+    // MARK: Helpers
+
+    static func load(from backup: URL) throws -> ArchiveBackupInventory {
+        let url = backup.appendingPathComponent(ArchiveBackupInventory.filename)
+        guard let data = try? Data(contentsOf: url) else { throw ArchiveBackupError.inventoryMissing }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(ArchiveBackupInventory.self, from: data)
+    }
+
+    private static func write(_ inventory: ArchiveBackupInventory, to destination: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(inventory).write(to: destination.appendingPathComponent(ArchiveBackupInventory.filename), options: .atomic)
+    }
+
+    private static func entry(for url: URL, relative: String, kind: String) throws -> ArchiveBackupInventory.File {
+        ArtifactProtection.applyBackgroundReadable(to: url)
+        let bytes = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        return ArchiveBackupInventory.File(path: relative, bytes: bytes, sha256: try ExportInventory.sha256(of: url), kind: kind)
+    }
+
+    /// Copies every regular file under `root` (hidden files skipped), hashing each.
+    private static func copyTree(from root: URL, to destination: URL, relativePrefix: String, kind: String) throws -> [ArchiveBackupInventory.File] {
+        let fm = FileManager.default
+        var out: [ArchiveBackupInventory.File] = []
+        guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return out }
+        let base = root.standardizedFileURL.path
+        for case let url as URL in walker {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let relative = String(url.standardizedFileURL.path.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let target = destination.appendingPathComponent(relative)
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do { try fm.copyItem(at: url, to: target) } catch { throw ArchiveBackupError.copyFailed(error.localizedDescription) }
+            out.append(try entry(for: target, relative: relativePrefix + "/" + relative, kind: kind))
+        }
+        return out.sorted { $0.path < $1.path }
+    }
+
+    /// A consistent copy of any SQLite file through its own read connection.
+    static func vacuumCopy(from source: URL, to target: URL) throws {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(source.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let handle else {
+            throw ArchiveBackupError.copyFailed("\(source.lastPathComponent) could not be opened")
+        }
+        defer { sqlite3_close(handle) }
+        let escaped = target.path.replacingOccurrences(of: "'", with: "''")
+        if sqlite3_exec(handle, "VACUUM INTO '\(escaped)';", nil, nil, nil) != SQLITE_OK {
+            try? FileManager.default.removeItem(at: target)
+            throw ArchiveBackupError.copyFailed("\(source.lastPathComponent): \(String(cString: sqlite3_errmsg(handle)))")
+        }
+    }
+}
+
+extension SQLiteEmailStore {
+    /// A consistent copy of the live database at `url` (VACUUM INTO).
+    func backupDatabase(to url: URL) throws {
+        let handle = try ensureDB()
+        let escaped = url.path.replacingOccurrences(of: "'", with: "''")
+        do { try exec(handle, "VACUUM INTO '\(escaped)';") }
+        catch {
+            try? FileManager.default.removeItem(at: url)
+            throw ArchiveBackupError.copyFailed(error.localizedDescription)
+        }
+    }
+
+    func backupCounts() throws -> ArchiveBackupInventory.Counts {
+        let db = try ensureDB()
+        var counts = ArchiveBackupInventory.Counts()
+        counts.emails = try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+        counts.attachments = try scalarInt(db, "SELECT COUNT(*) FROM attachments;")
+        counts.folders = try scalarInt(db, "SELECT COUNT(*) FROM folders;")
+        counts.folderMemberships = try scalarInt(db, "SELECT COUNT(*) FROM email_folders;")
+        counts.userTags = try scalarInt(db, "SELECT COUNT(*) FROM email_user_tags;")
+        counts.annotations = try scalarInt(db, "SELECT COUNT(*) FROM email_annotations;")
+        counts.legalHolds = try scalarInt(db, "SELECT COUNT(*) FROM legal_holds;")
+        counts.sources = try scalarInt(db, "SELECT COUNT(*) FROM sources;")
+        counts.locatorBacked = try scalarInt(db, "SELECT COUNT(*) FROM message_locators;")
+        return counts
+    }
+
+    /// After a restore on another machine or into another folder, locators of
+    /// self-contained copies still name the OLD store's `sources/…` path.
+    /// Every such path whose file now exists under this store's `sources/` is
+    /// rewritten to it. Returns how many locator rows were moved. Linked
+    /// originals outside the archive are left for Relink (LIFE-01).
+    @discardableResult
+    func relocateSelfContainedLocators() throws -> Int {
+        let db = try ensureDB()
+        let sourcesDir = storeDirectory.appendingPathComponent(ArchiveBackup.sourcesFolder, isDirectory: true).standardizedFileURL
+        let marker = "/" + ArchiveBackup.sourcesFolder + "/"
+        var moves: [(old: String, new: String)] = []
+        do {
+            guard let stmt = try prepare(db, "SELECT DISTINCT source_path FROM message_locators WHERE instr(source_path, ?) > 0;") else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, marker)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let old = columnText(stmt, 0)
+                guard !URL(fileURLWithPath: old).standardizedFileURL.path.hasPrefix(sourcesDir.path),
+                      let range = old.range(of: marker, options: .backwards) else { continue }
+                let candidate = sourcesDir.appendingPathComponent(String(old[range.upperBound...])).path
+                if FileManager.default.fileExists(atPath: candidate) { moves.append((old, candidate)) }
+            }
+        }
+        guard !moves.isEmpty else { return 0 }
+        var moved = 0
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let update = try prepare(db, "UPDATE message_locators SET source_path = ? WHERE source_path = ?;")
+            defer { sqlite3_finalize(update) }
+            for move in moves {
+                sqlite3_reset(update); sqlite3_clear_bindings(update)
+                bindText(update, 1, move.new)
+                bindText(update, 2, move.old)
+                guard sqlite3_step(update) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                moved += Int(sqlite3_changes(db))
+            }
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+        return moved
+    }
+
+    /// Originals the archive still reads from outside its own folder, with how many messages depend on each.
+    func linkedSourceInventory() throws -> [ArchiveBackupInventory.LinkedSource] {
+        let db = try ensureDB()
+        let inside = storeDirectory.appendingPathComponent(ArchiveBackup.sourcesFolder, isDirectory: true).standardizedFileURL.path
+        guard let stmt = try prepare(db, "SELECT source_path, source_digest, COUNT(*) FROM message_locators GROUP BY source_path, source_digest ORDER BY source_path;") else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        var out: [ArchiveBackupInventory.LinkedSource] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let path = columnText(stmt, 0)
+            guard !URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(inside) else { continue }
+            let digest = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : columnText(stmt, 1)
+            out.append(.init(path: path, sha256: digest, messages: Int(sqlite3_column_int64(stmt, 2))))
+        }
+        return out
+    }
+}

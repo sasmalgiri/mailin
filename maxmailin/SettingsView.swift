@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  SettingsView.swift
 //  mailin
@@ -38,13 +39,11 @@ struct SettingsView: View {
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
     @ObservedObject private var collabManager = CollaborationManager.shared
-    #if !OFFLINE_MODE
-    @ObservedObject private var iCloudSync = iCloudSyncManager.shared
-    #endif
     @AppStorage("defaultSenderEmail") private var defaultSenderEmail = ""
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+    @Environment(ModuleRegistry.self) private var modules
     @AppStorage("emailListDensity") private var emailListDensity = "comfortable"
     // Simple (true) = clean ArchiveListView; Advanced (false) = full-filter
     // toolkit list. Both are bounded + repository-backed (Part S).
@@ -63,6 +62,20 @@ struct SettingsView: View {
     @State private var showClearConfirmation = false
     @State private var fidelityHealRunning = false
     @State private var fidelityHealReport: String?
+    @State private var showSourceVerifyPicker = false
+    @State private var sourceVerifyResult: (passed: Bool, detail: String)?
+
+    /// Re-hash a picked original file and compare it to the values recorded at
+    /// import. The verdict goes to the audit log either way — a failed
+    /// integrity check is exactly the kind of event the log exists for.
+    private func verifyPickedSourceFile(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        let verdict = forensicManager.verifySourceFile(at: url)
+        sourceVerifyResult = verdict
+        forensicManager.logAction(
+            verdict.passed ? "Source File Verified" : "Source File Verification FAILED",
+            detail: verdict.detail)
+    }
 
     /// Full Fidelity Restore: pick original archive files, re-parse, and
     /// heal matching rows in place (SQLiteEmailStore.healFidelity).
@@ -123,7 +136,7 @@ struct SettingsView: View {
     @State private var showDeleteAllConfirmation = false
     @State private var allDataDeleted = false
     @ObservedObject private var compliance = LegalComplianceManager.shared
-    #if !OFFLINE_MODE
+    #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
     @ObservedObject private var cloudAI = CloudAIManager.shared
     #endif
     @State private var openAIKeyInput = ""
@@ -139,6 +152,51 @@ struct SettingsView: View {
     @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
     var body: some View {
         TabView {
+            // v3.0 §3.3: the one switchboard for the four pages. First tab so
+            // "what is on, what is running" is the first thing Settings shows.
+            ModulesSettingsView()
+                .tabItem {
+                    Label("Modules", systemImage: "square.grid.2x2")
+                }
+
+            // §3-S7: is the archive healthy and recoverable?
+            ArchiveHealthView()
+                .tabItem {
+                    Label("Health", systemImage: "heart.text.square")
+                }
+
+            // 3.1 R10: deleted-email recovery (only while the switch is on).
+            if modules.isOn(.v31Recovery) {
+                TierGate(feature: .recovery) { NavigationStack { RecoveryCenterView() } }
+                    .tabItem {
+                        Label("Recovery", systemImage: "arrow.counterclockwise.circle")
+                    }
+            }
+
+            // 3.1 T0: Review Pack (send a scope for review, merge responses).
+            if modules.isOn(.v31ReviewPack) {
+                NavigationStack { ReviewPackView() }
+                    .tabItem {
+                        Label("Review Pack", systemImage: "shippingbox")
+                    }
+            }
+
+            // 3.1 S6: mailin Scripts.
+            if modules.isOn(.v31Scripts) {
+                TierGate(feature: .scripts) { ScriptsView() }
+                    .tabItem {
+                        Label("Scripts", systemImage: "curlybraces")
+                    }
+            }
+
+            // 3.1/3.2 T1+: team review on a shared case folder.
+            if modules.isOn(.v31TeamCase) {
+                NavigationStack { TeamCaseView() }
+                    .tabItem {
+                        Label("Team", systemImage: "person.3")
+                    }
+            }
+
             profileSettings
                 .tabItem {
                     Label("Profile", systemImage: personaManager.selectedPersona.icon)
@@ -174,13 +232,6 @@ struct SettingsView: View {
                     Label("Forensic", systemImage: "shield.checkered")
                 }
 
-            #if !OFFLINE_MODE
-            iCloudSyncSettings
-                .tabItem {
-                    Label("Sync", systemImage: "icloud")
-                }
-            #endif
-
             collaborationSettings
                 .tabItem {
                     Label("Collaboration", systemImage: "person.2")
@@ -195,8 +246,14 @@ struct SettingsView: View {
         #if os(macOS)
         .frame(minWidth: 400, idealWidth: 540, minHeight: 380, idealHeight: 520)
         #endif
+        // Settings is its own window on macOS and its own sheet on iOS: it
+        // hosts its own paywall, so Upgrade works here without returning to
+        // the main window's current page.
+        .purchasePresenter(target: .settings)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Settings"))
     }
-    
+
     // MARK: - Profile / Persona Settings
     private var profileSettings: some View {
         Form {
@@ -261,14 +318,14 @@ struct SettingsView: View {
                 HStack {
                     Text("Forensic Mode")
                     Spacer()
-                    Text(personaManager.config.showForensicByDefault ? "Auto-enabled" : "Manual")
+                    Text(personaManager.config.showForensicByDefault ? String(localized: "Auto-enabled") : String(localized: "Manual"))
                         .foregroundColor(.secondary)
                 }
 
                 HStack {
                     Text("AI Features")
                     Spacer()
-                    Text(personaManager.config.enableAIByDefault ? "Enabled" : "On Request")
+                    Text(personaManager.config.enableAIByDefault ? String(localized: "Enabled") : String(localized: "On Request"))
                         .foregroundColor(.secondary)
                 }
             } header: {
@@ -278,6 +335,41 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    // MARK: - Interface language
+
+    /// The language the interface is actually showing, named in that language
+    /// (e.g. "Deutsch"). `Bundle.main.preferredLocalizations` is the OS's
+    /// pick from the app's 11 localizations after the system and per-app
+    /// language settings are applied, so it is the truth, not a guess.
+    static var interfaceLanguageName: String {
+        let identifier = Bundle.main.preferredLocalizations.first ?? "en"
+        let name = Locale(identifier: identifier).localizedString(forIdentifier: identifier) ?? identifier
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
+    /// Opens the system setting that chooses mailin's language: the app's own
+    /// page in the Settings app on iOS (which carries the Language row), the
+    /// Language & Region pane on macOS.
+    static func openSystemLanguageSettings() {
+        #if os(iOS)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #else
+        // Language & Region first; if that pane cannot be opened on this
+        // system, the General pane it lives under; if even that fails, the
+        // System Settings app itself.
+        let candidates = [
+            "x-apple.systempreferences:com.apple.Localization-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.general",
+            "x-apple.systempreferences:"
+        ].compactMap(URL.init(string:))
+        for url in candidates where NSWorkspace.shared.open(url) {
+            return
+        }
+        #endif
     }
 
     // MARK: - General Settings
@@ -360,6 +452,39 @@ struct SettingsView: View {
                 tombstoneCount = (try? await SQLiteEmailStore.shared.tombstoneCount()) ?? 0
             }
 
+            // Interface language: the app follows the system (or per-app)
+            // language the OS picks from its 11 localizations. There is no
+            // in-app picker by design; this row names the language in use and
+            // takes the user straight to the system setting that changes it.
+            Section {
+                HStack {
+                    Text("Interface language")
+                    Spacer()
+                    Text(Self.interfaceLanguageName)
+                        .foregroundColor(.secondary)
+                        .accessibilityLabel(Text("Interface language: \(Self.interfaceLanguageName)"))
+                }
+                Button {
+                    Self.openSystemLanguageSettings()
+                } label: {
+                    Label("Change Language…", systemImage: "globe")
+                }
+                .help("Opens the system setting where mailin's language is chosen")
+            } header: {
+                Text("Language")
+                    .font(.headline)
+            } footer: {
+                #if os(iOS)
+                Text("mailin follows your system language and is available in 11 languages. To use a different language for mailin only, open Settings ▸ mailin ▸ Language. The change applies the next time mailin opens.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                #else
+                Text("mailin follows your system language and is available in 11 languages. To use a different language for mailin only, add mailin under System Settings ▸ General ▸ Language & Region ▸ Applications. The change applies the next time mailin opens.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                #endif
+            }
+
             #if os(macOS)
             Section {
                 Toggle("Menu Bar Quick Search", isOn: $menuBarSearchEnabled)
@@ -389,7 +514,7 @@ struct SettingsView: View {
                 Text("Weekly Digest")
                     .font(.headline)
             } footer: {
-                Text("One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your Mac.")
+                Text("One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your device.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -427,36 +552,9 @@ struct SettingsView: View {
             }
             #endif
 
-            Section {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    Text(storeManager.currentTier.displayName)
-                        .foregroundColor(storeManager.isPremium ? .green : AppColors.secondary)
-                        .fontWeight(.semibold)
-                }
-
-                if storeManager.currentTier < .professional {
-                    Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
-                        storeManager.showPaywall = true
-                    }
-                }
-
-                if storeManager.isPremium && !storeManager.isLifetimePurchase {
-                    Button("Manage Subscription") {
-                        Task { await storeManager.manageSubscriptions() }
-                    }
-                }
-
-                #if !ENTERPRISE_EDITION
-                Button("Restore Purchases") {
-                    Task { await storeManager.restorePurchases() }
-                }
-                #endif
-            } header: {
-                Text("Purchase")
-                    .font(.headline)
-            }
+            // Plan & Purchases: the one purchase section in Settings (it used
+            // to be duplicated here and under Advanced with no restore result).
+            PlanAndPurchasesSection()
 
         }
         .formStyle(.grouped)
@@ -469,10 +567,10 @@ struct SettingsView: View {
     #if os(iOS)
     private var notificationStatusLabel: String {
         switch notificationStatus {
-        case .authorized, .provisional, .ephemeral: return "Enabled"
-        case .denied: return "Blocked in System Settings"
-        case .notDetermined: return "Not Enabled"
-        @unknown default: return "Unknown"
+        case .authorized, .provisional, .ephemeral: return String(localized: "Enabled")
+        case .denied: return String(localized: "Blocked in System Settings")
+        case .notDetermined: return String(localized: "Not Enabled")
+        @unknown default: return String(localized: "Unknown")
         }
     }
 
@@ -550,52 +648,10 @@ struct SettingsView: View {
     private var advancedSettings: some View {
         Form {
             Section {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    if storeManager.isPremium {
-                        Label(storeManager.currentTier.displayName, systemImage: "crown.fill")
-                            .foregroundColor(.orange)
-                            .fontWeight(.semibold)
-                    } else {
-                        Text("Free")
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                if storeManager.currentTier < .professional {
-                    Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
-                        storeManager.showPaywall = true
-                    }
-                }
-
-                if storeManager.isPremium && !storeManager.isLifetimePurchase {
-                    Button("Manage Subscription") {
-                        Task { await storeManager.manageSubscriptions() }
-                    }
-                    .accessibilityLabel("Manage or cancel subscription")
-                }
-
-                #if !ENTERPRISE_EDITION
-                Button("Restore Purchases") {
-                    Task { await storeManager.restorePurchases() }
-                }
-                .accessibilityLabel("Restore purchases")
-                #endif
-            } header: {
-                Text("Purchase")
-                    .font(.headline)
-            } footer: {
-                Text("Lifetime option available — buy once, own forever. Monthly and yearly subscriptions also offered.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section {
                 // Full Fidelity Restore — heals archives migrated from v1
                 // (labels/attachments/raw source restored IN PLACE from the
                 // original files; no duplicates, review state untouched).
-                Button(fidelityHealRunning ? "Restoring…" : "Restore Full Fidelity from Original Files…") {
+                Button(fidelityHealRunning ? String(localized: "Restoring…") : String(localized: "Restore Full Fidelity from Original Files…")) {
                     runFidelityHeal()
                 }
                 .disabled(fidelityHealRunning)
@@ -777,9 +833,9 @@ struct SettingsView: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
-                    helpCard(icon: "1.circle.fill", title: "Import an Archive", description: "Use File > Open (⌘O) or drag-and-drop an .mbox, .eml, .msg, or .pst file into the window.", color: .blue)
-                    helpCard(icon: "2.circle.fill", title: "Browse & Filter", description: "Use the filter bar to narrow results by tag, date, sender, or attachment type. Toggle AI and Pro for more filters.", color: .purple)
-                    helpCard(icon: "3.circle.fill", title: "Analyze & Export", description: "Click any email to view details. Use the Analysis and Export menus for advanced tools.", color: .green)
+                    helpCard(icon: "1.circle.fill", title: String(localized: "Import an Archive"), description: String(localized: "Use File > Open (⌘O) or drag-and-drop an .mbox, .eml, .msg, or .pst file into the window."), color: .blue)
+                    helpCard(icon: "2.circle.fill", title: String(localized: "Browse & Filter"), description: String(localized: "Use the filter bar to narrow results by tag, date, sender, or attachment type. Toggle AI and Pro for more filters."), color: .purple)
+                    helpCard(icon: "3.circle.fill", title: String(localized: "Analyze & Export"), description: String(localized: "Click any email to view details. Use the Analysis and Export menus for advanced tools."), color: .green)
                 }
             } header: {
                 Label("Quick Start", systemImage: "play.circle")
@@ -787,11 +843,11 @@ struct SettingsView: View {
             }
 
             Section {
-                helpRow(icon: "brain", title: "AI Button", description: "Enables AI-powered tags: sentiment, priority, phishing detection, and email classification.", color: .purple)
-                helpRow(icon: "gearshape", title: "Pro Button", description: "Shows forensic, legal, and evidence features: Bates numbering, legal hold, chain of custody.", color: .orange)
-                helpRow(icon: "tag", title: "Tag Pills", description: "Click any tag on an email to see all applicable tags. Set manual tags to override AI suggestions.", color: .teal)
-                helpRow(icon: "line.3.horizontal.decrease.circle", title: "Filter Chips", description: "Add filter chips from the + menu. Active chips narrow the visible email list. Click × to remove.", color: .blue)
-                helpRow(icon: "magnifyingglass", title: "Search Syntax", description: "Use AND, OR, NOT for boolean search. Wrap regex in /slashes/. Use \"word1\" NEAR/5 \"word2\" for proximity.", color: .green)
+                helpRow(icon: "brain", title: String(localized: "AI Button"), description: String(localized: "Enables AI-powered tags: sentiment, priority, phishing detection, and email classification."), color: .purple)
+                helpRow(icon: "gearshape", title: String(localized: "Pro Button"), description: String(localized: "Shows forensic, legal, and evidence features: Bates numbering, legal hold, chain of custody."), color: .orange)
+                helpRow(icon: "tag", title: String(localized: "Tag Pills"), description: String(localized: "Click any tag on an email to see all applicable tags. Set manual tags to override AI suggestions."), color: .teal)
+                helpRow(icon: "line.3.horizontal.decrease.circle", title: String(localized: "Filter Chips"), description: String(localized: "Add filter chips from the + menu. Active chips narrow the visible email list. Click × to remove."), color: .blue)
+                helpRow(icon: "magnifyingglass", title: String(localized: "Search Syntax"), description: String(localized: "Use AND, OR, NOT for boolean search. Wrap regex in /slashes/. Use \"word1\" NEAR/5 \"word2\" for proximity."), color: .green)
             } header: {
                 Label("Feature Guide", systemImage: "lightbulb")
                     .font(.headline)
@@ -901,18 +957,35 @@ struct SettingsView: View {
     private var aiSettings: some View {
         Form {
             Section {
-                Toggle("Enable AI features", isOn: $enableAIFeatures)
-                    .help("Show AI assistant and analysis features")
+                // One switch for AI (owner, 2026-10-07): this toggle used to
+                // drive only the 2.x "enableAIFeatures" flag (tags, one menu
+                // item) while the AI Insights page kept working; turning AI
+                // "off" here did not stop the assistant. It now turns the AI
+                // Insights page on or off, and keeps the old flag in step.
+                Toggle("Enable AI features", isOn: Binding(
+                    get: { modules.isEnabled(.aiInsights) },
+                    set: { on in
+                        if on { try? modules.enable(.aiInsights) } else if OrgPolicy.confirmAllowed(.manageModules) { modules.disable(.aiInsights) }
+                        enableAIFeatures = modules.isEnabled(.aiInsights)
+                    }
+                ))
+                    .help("Turns on the AI Insights page and AI analysis")
+                    .accessibilityIdentifier("settings.ai.enable")
+                #if canImport(FoundationModels)
+                if #available(macOS 26, iOS 26, *) {
+                    AppleIntelligenceStatusRow()
+                }
+                #endif
             } header: {
                 Text("On-Device AI")
                     .font(.headline)
             } footer: {
-                Text("Uses Apple Intelligence (FoundationModels) when available. All processing stays on your device.")
+                Text("Uses Apple Intelligence (FoundationModels) when available. All processing stays on your device. The same switch is the AI Insights page in Settings ▸ Modules.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
-            #if !OFFLINE_MODE
+            #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
             Section {
                 Toggle("Enable Cloud AI", isOn: Binding(
                     get: { cloudAI.isEnabled },
@@ -1075,7 +1148,7 @@ struct SettingsView: View {
         .padding()
     }
 
-    #if !OFFLINE_MODE
+    #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
     private func testAPIKey() {
         isTestingAPIKey = true
         apiKeyTestResult = ""
@@ -1111,7 +1184,7 @@ struct SettingsView: View {
                         }
                     }
                 ))
-                    .help("Activates evidence integrity features: hash verification, audit logging, evidence tagging, and disables cloud AI")
+                    .help("Activates evidence integrity features: hash verification, audit logging and evidence tagging")
                     .accessibilityLabel("Forensic mode")
 
                 Toggle("Auto-advance after tagging", isOn: $autoAdvanceAfterTag)
@@ -1122,7 +1195,7 @@ struct SettingsView: View {
                     HStack(spacing: Spacing.xSmall) {
                         Image(systemName: "checkmark.shield.fill")
                             .foregroundColor(.green)
-                        Text("Active — All analysis on-device. Cloud AI disabled.")
+                        Text("Active — hash checks, the audit log and evidence tags are on.")
                             .font(Typography.caption1)
                             .foregroundColor(.green)
                     }
@@ -1132,7 +1205,7 @@ struct SettingsView: View {
                     .font(.headline)
             } footer: {
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                    Text("Forensic mode enables hash verification of source files, a full audit log, evidence tagging, and blocks cloud AI to maintain chain of custody.")
+                    Text("Forensic mode enables hash verification of source files, a full audit log and evidence tagging, to maintain the chain of custody. All analysis runs on this device, as always.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Text("Disclaimer: Forensic features are analytical tools and have NOT been independently validated for court admissibility. Verify all outputs independently before use in legal proceedings.")
@@ -1184,6 +1257,20 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    Button("Check a Source File Against Its Hash…") { showSourceVerifyPicker = true }
+                        .controlSize(.small)
+                        .fileImporter(isPresented: $showSourceVerifyPicker,
+                                      allowedContentTypes: [.data],
+                                      allowsMultipleSelection: false) { result in
+                            verifyPickedSourceFile(result)
+                        }
+                    if let sourceVerifyResult {
+                        Label(sourceVerifyResult.detail, systemImage: sourceVerifyResult.passed
+                              ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                            .font(Typography.caption1)
+                            .foregroundColor(sourceVerifyResult.passed ? .green : .red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text("No source files imported yet.")
                         .font(Typography.caption1)
@@ -1192,6 +1279,15 @@ struct SettingsView: View {
             } header: {
                 Text("Source File Integrity (MD5 + SHA-1 + SHA-256)")
                     .font(.headline)
+            } footer: {
+                // The eDiscovery preservation checklist tells the examiner to
+                // "Verify source file integrity". `verifySourceFile` has always
+                // been able to do it — nothing called it, so the instruction
+                // had no button behind it. Matched by filename, so the file can
+                // have been moved since the import.
+                Text("Pick an original file to re-hash it and compare against the values recorded at import. Matched by filename.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section {
@@ -1455,114 +1551,6 @@ struct SettingsView: View {
         #endif
     }
 
-    // MARK: - iCloud Sync Settings
-
-    #if !OFFLINE_MODE
-    private var iCloudSyncSettings: some View {
-        Form {
-            Section {
-                if !storeManager.isProfessional {
-                    HStack(spacing: Spacing.xSmall) {
-                        Image(systemName: "lock.fill")
-                            .foregroundColor(.purple)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Professional Feature")
-                                .font(Typography.headline)
-                            Text("iCloud Sync requires the Professional tier.")
-                                .font(Typography.caption1)
-                                .foregroundColor(AppColors.secondary)
-                        }
-                        Spacer()
-                        Button("Upgrade") {
-                            storeManager.showPaywall = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                    .padding(.vertical, Spacing.xxSmall)
-                } else {
-                    Toggle("Enable iCloud Sync", isOn: $iCloudSync.isEnabled)
-                        .help("Sync forensic metadata (evidence tags, annotations, case info) across your devices via iCloud")
-
-                    if iCloudSync.isEnabled {
-                        HStack {
-                            Image(systemName: iCloudSync.syncStatus.icon)
-                                .foregroundColor(iCloudSync.syncStatus.color)
-                            Text(iCloudSync.syncStatus.label)
-                                .font(Typography.caption1)
-                                .foregroundColor(AppColors.secondary)
-                            Spacer()
-                            if let lastSync = iCloudSync.lastSyncDate {
-                                Text(lastSync.formatted(date: .omitted, time: .shortened))
-                                    .font(Typography.caption2)
-                                    .foregroundColor(AppColors.secondary)
-                            }
-                        }
-
-                        if !iCloudSync.isAvailable {
-                            HStack(spacing: Spacing.xSmall) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                Text("Sign in to iCloud in System Settings to enable sync.")
-                                    .font(Typography.caption1)
-                                    .foregroundColor(.orange)
-                            }
-                        }
-
-                        Button("Sync Now") {
-                            iCloudSync.forceSyncNow()
-                        }
-                        .disabled(!iCloudSync.isAvailable)
-                    }
-                }
-            } header: {
-                Text("iCloud Sync")
-                    .font(.headline)
-            } footer: {
-                Text("Syncs evidence tags, annotations, and case information across your devices. Email content is never uploaded — only forensic metadata is synced.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            if storeManager.isProfessional && iCloudSync.isEnabled {
-                Section {
-                    HStack {
-                        Text("Synced Data")
-                        Spacer()
-                        Text("Evidence tags, annotations, case info")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    }
-                    HStack {
-                        Text("Sync Interval")
-                        Spacer()
-                        Text("Every 60 seconds")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    }
-                    HStack {
-                        Text("Email Content")
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Image(systemName: "lock.shield.fill")
-                                .foregroundColor(.green)
-                                .font(.caption)
-                            Text("Never uploaded")
-                                .font(Typography.caption1)
-                                .foregroundColor(.green)
-                        }
-                    }
-                } header: {
-                    Text("Sync Details")
-                        .font(.headline)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-    #endif
-
     private func chooseSharedFolder() {
         #if os(macOS)
         let panel = NSOpenPanel()
@@ -1616,7 +1604,7 @@ struct SettingsView: View {
         autoAdvanceAfterTag = true
         hasConsentedToCloudAI = false
         KeychainHelper.delete(key: "apiKey")
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         cloudAI.clearAPIKey(for: .openAI)
         cloudAI.clearAPIKey(for: .anthropic)
         cloudAI.isEnabled = false
@@ -1629,3 +1617,92 @@ struct SettingsView: View {
     SettingsView()
         .environmentObject(StoreManager())
 }
+
+#if canImport(FoundationModels)
+/// Whether this device's Apple Intelligence can answer right now, in plain
+/// words, with the way to fix it when it cannot.
+@available(macOS 26, iOS 26, *)
+private struct AppleIntelligenceStatusRow: View {
+    @State private var status = FoundationModelEngine.availability
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.small) {
+            Image(systemName: icon)
+                .foregroundColor(color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Typography.callout)
+                Text(detail)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // One readable element for VoiceOver (and the UI test): combining
+            // the whole row left its label empty on macOS.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: "\(title). \(detail)"))   // both parts already localized
+            .accessibilityIdentifier("settings.ai.appleIntelligenceStatus")
+            Spacer()
+            if status == .notEnabled {
+                Button("Open System Settings") {
+                    #if os(macOS)
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension") {
+                        PlatformURLOpener.open(url)
+                    }
+                    #else
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        PlatformURLOpener.open(url)
+                    }
+                    #endif
+                }
+                .controlSize(.small)
+            }
+        }
+        .task {
+            // Re-read while the window is open: turning Apple Intelligence on
+            // in System Settings, or the model finishing its download, shows
+            // up here without reopening Settings.
+            while !Task.isCancelled {
+                status = FoundationModelEngine.availability
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private var title: String {
+        switch status {
+        case .available: return String(localized: "Apple Intelligence is ready")
+        case .notEnabled: return String(localized: "Apple Intelligence is turned off")
+        case .notReady: return String(localized: "Apple Intelligence is downloading")
+        case .notEligible: return String(localized: "Apple Intelligence isn't available on this device")
+        case .unknown: return String(localized: "Apple Intelligence status unknown")
+        }
+    }
+
+    private var detail: String {
+        switch status {
+        case .available: return String(localized: "Answers that need writing or summarizing use the on-device model.")
+        case .notEnabled: return String(localized: "Turn it on in System Settings ▸ Apple Intelligence & Siri. Until then, answers use on-device analysis only.")
+        case .notReady: return String(localized: "The on-device model is still being set up. Answers use on-device analysis until it is ready.")
+        case .notEligible: return String(localized: "Answers use on-device analysis only — counts, search and lists still work.")
+        case .unknown: return String(localized: "Answers use on-device analysis until the model reports it is ready.")
+        }
+    }
+
+    private var icon: String {
+        switch status {
+        case .available: return "checkmark.circle.fill"
+        case .notReady: return "arrow.down.circle"
+        default: return "exclamationmark.circle"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .available: return .green
+        case .notReady: return .blue
+        default: return .orange
+        }
+    }
+}
+#endif

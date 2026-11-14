@@ -1,0 +1,653 @@
+import Foundation
+import os
+
+struct ParserFactory {
+    static func parse(
+        fileURL: URL,
+        senderEmail: String,
+        onProgress: ((Double) -> Void)? = nil,
+        nestedContainerAllowed: Bool = true
+    ) throws -> [MBOXParser.RawEmail] {
+        let classification = SourceFormatClassifier.classify(url: fileURL)
+        guard classification.isSupported else {
+            throw ExtractionError.unsupportedFormat(
+                reason: [classification.summary, classification.format.advice]
+                    .compactMap { $0 }.joined(separator: " "))
+        }
+
+        // Apple Mail packages and Maildirs are directories: the messages live
+        // in files inside them, so the parser must be pointed at those files.
+        // Handing the directory itself to MBOXParser failed to open.
+        if SourceFormatClassifier.isDirectoryForm(classification.format) {
+            let members = SourceFormatClassifier.expand(fileURL, format: classification.format)
+            guard !members.isEmpty else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No message files were found inside it.")
+            }
+            var all: [MBOXParser.RawEmail] = []
+            for (index, member) in members.enumerated() {
+                // FOLD-02: the mailbox this member belongs to, from the layout (as the streaming path does).
+                let folder = SourceFormatClassifier.folderPath(member: member, root: fileURL, format: classification.format)
+                if classification.format == .appleMailLibrary {
+                    all += stamp(try EMLXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
+                        onProgress?((Double(index) + fraction) / Double(members.count))
+                    }, folder: folder)
+                    continue
+                }
+                all += stamp(try MBOXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
+                    onProgress?((Double(index) + fraction) / Double(members.count))
+                }, folder: folder)
+            }
+            return all
+        }
+
+        // Containers (ZIP, gzip, tar, 7z, RAR) — CLOSE-02: every level, one
+        // member at a time to a scratch file, classified on its own bytes,
+        // parsed or descended into, deleted (`ContainerMailboxWalk`). The array
+        // path has no report to count refusals in, so they are logged.
+        if classification.format.isContainer {
+            let walk = try ContainerMailboxWalk(root: fileURL, format: classification.format)
+            defer { walk.close() }
+            var all: [MBOXParser.RawEmail] = []
+            while let event = try walk.next() {
+                guard case .mailbox(let url, let folder, _, _) = event else { continue }
+                let base = walk.topLevelFraction
+                all += stamp(try parse(fileURL: url, senderEmail: senderEmail, onProgress: { fraction in
+                    onProgress?(base + fraction / Double(max(1, walk.topLevelCount)))
+                }, nestedContainerAllowed: false), folder: folder)
+            }
+            guard walk.sawMail else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No mailbox files were found inside it (\(walk.topLevelCount) member\(walk.topLevelCount == 1 ? "" : "s") examined).")
+            }
+            return all
+        }
+
+        let ext = classification.format.parserToken
+        switch ext {
+        case "mbox", "eml", "":
+            // Extensionless files are treated as MBOX (Google Takeout ships
+            // extensionless mbox payloads) — a deliberate, documented mapping
+            // (V2_FORMAT_MATRIX.md), not a silent fallthrough.
+            return try MBOXParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        case "emlx":
+            return try EMLXParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        case "msg":
+            return try MSGParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        case "pst", "ost":
+            return try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        case "nsf":
+            // GAP-NSF seam: the Notes ODS reader (preview) when its switch is on, else the old heuristic.
+            if NotesODSPolicy.isEnabled {
+                return try NSFODSParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            }
+            return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        case "olm":
+            return try OLMParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        default:
+            // §7.4: an unknown extension is an explicit error — never a
+            // silent MBOX fallthrough that mis-parses binary data.
+            throw ExtractionError.unsupportedFormat(
+                reason: "Unsupported file type '.\(ext)'. Supported formats: \(allSupportedExtensions.map { ".\($0)" }.joined(separator: ", ")).")
+        }
+    }
+
+    static let allSupportedExtensions: [String] = [
+        "mbox", "eml", "emlx", "msg", "oft", "pst", "ost", "nsf", "zip", "gz", "olm", "tar", "tgz", "7z", "rar"
+    ]
+
+    // MARK: - Containers (ZIP / gzip) — v2.1 backlog #1
+
+    /// One extractable member of a container. `extract` streams it to the
+    /// given scratch URL, verifying size and checksum, or throws.
+    struct ContainerStep {
+        let name: String
+        let extract: (URL) throws -> Void
+    }
+
+    enum ContainerMemberDisposition {
+        case mail
+        case notMail
+        case nestedContainer
+        case refused
+    }
+
+    private static let containerLog = Logger(subsystem: "com.ecosanskriti.mailin", category: "ContainerImport")
+
+    /// The members worth extracting, in archive order. Directory entries and
+    /// OS junk (`__MACOSX/`, `.DS_Store`, …) are dropped here; everything else
+    /// is extracted and judged on its bytes.
+    static func containerSteps(_ url: URL, format: SourceFormat) throws -> [ContainerStep] {
+        try containerListing(url, format: format).steps
+    }
+
+    /// IPAD-01: a container's extractable members and the names of its
+    /// directory entries. The members are extracted one at a time to a flat
+    /// scratch file, so their names (and the directory entries, which carry an
+    /// empty mailbox package) are the only record of the folder layout.
+    struct ContainerListing {
+        var steps: [ContainerStep]
+        var directories: [String] = []
+
+        /// The single top-level folder the members sit in (see `SourceFormatClassifier.containerWrapper`).
+        var wrapper: String? {
+            SourceFormatClassifier.containerWrapper(files: steps.map(\.name), directories: directories)
+        }
+        /// The mailbox packages the names declare, empty ones included.
+        func declaredFolders(wrapper: String?) -> [String] {
+            SourceFormatClassifier.containerDeclaredFolders(files: steps.map(\.name), directories: directories, wrapper: wrapper)
+        }
+    }
+
+    static func containerListing(_ url: URL, format: SourceFormat) throws -> ContainerListing {
+        switch format {
+        case .gzip:
+            // gzip carries a single payload and no reliable member name; use
+            // the archive's own name minus the ".gz".
+            let name = url.pathExtension.lowercased() == "gz" || url.pathExtension.lowercased() == "gzip"
+                ? url.deletingPathExtension().lastPathComponent
+                : url.lastPathComponent
+            return ContainerListing(steps: [ContainerStep(name: name) { dest in try ZIPArchiveReader.gunzip(url, to: dest) }])
+        case .zip:
+            // Directive §6: a volume of a spanned set is read with the
+            // other volumes in the same folder; a member on a missing
+            // volume is refused and counted (SplitVolumeError), the rest import.
+            let set = SplitVolumeSet.zipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
+            let all = try ZIPArchiveReader.members(source: source)
+            return ContainerListing(steps: all
+                .filter { !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) }
+                .map { member in
+                    ContainerStep(name: member.name) { dest in
+                        if let set, set.isDiskMissing(member.diskNumberStart) || set.diskBase(member.diskNumberStart) == nil {
+                            throw SplitVolumeError.volumeMissing(member.diskNumberStart + 1,
+                                                                 expectedName: member.diskNumberStart < set.volumes.count ? set.volumes[member.diskNumberStart].expectedName : "volume \(member.diskNumberStart + 1)")
+                        }
+                        try ZIPArchiveReader.extract(member, source: source, to: dest)
+                    }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk }.map(\.name))
+        case .sevenZip:
+            // One reader per archive: a solid folder is decoded once, in order.
+            let set = SplitVolumeSet.sevenZipSet(primary: url, primaryName: url.lastPathComponent, siblings: SplitVolumeSet.directorySiblings(of: url))
+            let source: RandomAccessSource = try set ?? FileRandomAccessSource(url: url)
+            let reader = try SevenZipReader(source: source)
+            let all = reader.members
+            return ContainerListing(steps: all
+                .filter { !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) && !$0.isAnti }
+                .map { member in
+                    ContainerStep(name: member.name) { dest in
+                        if member.isSymlink { throw SevenZipReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
+                        try reader.extract(member, to: dest)
+                    }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk && !$0.isAnti }.map(\.name))
+        case .rar:
+            // GAP-RAR: stored and compressed members (RAR 2.9–4.x, RAR 5.0,
+            // solid included) are imported; a volume of a set is read with
+            // the other volumes in the same folder. Encrypted members, the
+            // compressions the vendored decoder does not open and members on a
+            // missing volume are refused by name and counted.
+            let extractor = try RARReader.Extractor(url: url, logicalName: url.lastPathComponent,
+                                                    siblings: SplitVolumeSet.directorySiblings(of: url))
+            let all = extractor.archive.members
+            return ContainerListing(steps: all
+                .filter { !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) }
+                .map { member in
+                    ContainerStep(name: member.name) { dest in
+                        if member.isSymlink { throw RARReader.ReadError.unsafePath(member: member.name, reason: "symbolic link") }
+                        try extractor.extract(member, to: dest)
+                    }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk }.map(\.name))
+        case .tar:
+            // TYPE-06: regular files only; directories, links and OS junk
+            // carry no mail and are not extracted.
+            let all = try TARReader.members(of: url)
+            return ContainerListing(steps: all
+                .filter { $0.isRegularFile && !$0.isDirectory && (!$0.isJunk || isUnsafeMemberName($0.name)) }
+                .map { member in
+                    ContainerStep(name: member.name) { dest in
+                        try TARReader.extract(member, from: url, to: dest)
+                    }
+                },
+                directories: all.filter { $0.isDirectory && !$0.isJunk }.map(\.name))
+        default:
+            return ContainerListing(steps: [])
+        }
+    }
+
+    static func containerScratchDirectory() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-container-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// CLOSE-02: an absolute, drive-letter or `..` name. Such a member is kept
+    /// in the listing even when its name also looks like OS junk (`../x`
+    /// starts with a dot), so the walk refuses and counts it rather than
+    /// dropping it unseen.
+    static func isUnsafeMemberName(_ name: String) -> Bool {
+        SevenZipReader.unsafePathReason(name) != nil
+    }
+
+    /// A member name flattened to one path component, so a crafted archive
+    /// path can never escape the scratch directory (zip-slip).
+    static func safeMemberFileName(_ name: String) -> String {
+        let base = (name as NSString).lastPathComponent
+            .replacingOccurrences(of: "..", with: "_")
+        return base.isEmpty ? "member" : base
+    }
+
+    /// Extracts one member and decides what it is. A refusal (encrypted,
+    /// damaged, would not fit on disk) is logged and does not stop the other
+    /// members; the scratch file is removed on anything but `.mail`.
+    /// `nestedContainerAllowed` reports an archive as `.mail` (to be opened by
+    /// the caller); otherwise it is `.nestedContainer`. The import walk itself
+    /// is `ContainerMailboxWalk` (CLOSE-02, every level).
+    static func containerMemberDisposition(_ step: ContainerStep, extractingTo dest: URL,
+                                           nestedContainerAllowed: Bool = false) throws -> ContainerMemberDisposition {
+        switch try extractAndClassify(step, to: dest) {
+        case .refused(_, let detail):
+            containerLog.error("container member refused: \(detail, privacy: .private)")
+            return .refused
+        case .notMail: return .notMail
+        case .mail: return .mail
+        case .container:
+            if nestedContainerAllowed { return .mail }
+            try? FileManager.default.removeItem(at: dest)
+            return .nestedContainer
+        }
+    }
+
+    /// Stable parser identity (type + version) for a file extension. Used to
+    /// bind resume checkpoints and import receipts to the exact parser that
+    /// produced them (Part B5/C): a parser upgrade invalidates mid-file
+    /// checkpoints instead of silently resuming against a different message
+    /// ordering.
+    /// Identity of the parser that will actually run for `url`, from its
+    /// detected format. Prefer this over the extension-based overload: a
+    /// receipt must name the parser that ran, not the one the filename implied.
+    static func parserIdentity(for url: URL) -> (name: String, version: Int) {
+        parserIdentity(forExtension: SourceFormatClassifier.classify(url: url).format.parserToken)
+    }
+
+    /// Identity of the OFFSET engine for a line-structured source.
+    ///
+    /// A distinct name, and that is load-bearing rather than cosmetic. Resume
+    /// checkpoints match on `(sha256, size, parser, parserVersion)` precisely
+    /// so a parser change cannot resume mid-file against a different message
+    /// ordering. The offset engine and the streaming parser **do** disagree on
+    /// ordering: the streaming parser DROPS a message over
+    /// `MBOXParser.maxMessageBytes` (it never reaches a batch), while the
+    /// offset engine IMPORTS it. One oversized message therefore shifts every
+    /// subsequent ordinal between the two engines.
+    ///
+    /// With both reporting `("mbox", 1)`, a half-finished streaming import
+    /// would resume under the offset engine and "skip the first N" would skip
+    /// a DIFFERENT N messages — some imported twice, some never, in an
+    /// evidence archive. Giving the engine its own name makes the checkpoint
+    /// fail to match, so the file restarts from scratch, which is the correct
+    /// and safe outcome.
+    static func offsetParserIdentity() -> (name: String, version: Int) {
+        ("mbox-offset", OffsetImportEngine.engineVersion)
+    }
+
+    /// The identity of the engine that will ACTUALLY run, given the caller's
+    /// engine choice. Prefer this over the format-only overloads anywhere a
+    /// checkpoint or a source record is written.
+    static func parserIdentity(for url: URL,
+                               useOffsetEngine: Bool) -> (name: String, version: Int) {
+        let classification = SourceFormatClassifier.classify(url: url)
+        let token = classification.format.parserToken
+        let offsetEligible = useOffsetEngine
+            && streamableExtensions.contains(token)
+            && !SourceFormatClassifier.isDirectoryForm(classification.format)
+        return offsetEligible ? offsetParserIdentity() : parserIdentity(forExtension: token)
+    }
+
+    static func parserIdentity(forExtension ext: String) -> (name: String, version: Int) {
+        switch ext.lowercased() {
+        case "mbox", "eml", "":
+            return ("mbox", MBOXParser.parserVersion)
+        case "emlx":
+            return ("emlx", EMLXParser.parserVersion)
+        case "msg", "oft":
+            return ("msg", MSGParser.parserVersion)
+        case "pst", "ost":
+            return ("pst", PSTParser.parserVersion)
+        case "nsf":
+            // A different reader is a different identity: old checkpoints never resume into it.
+            return NotesODSPolicy.isEnabled ? ("nsf-ods", NSFODSReader.parserVersion) : ("nsf", NSFParser.parserVersion)
+        case "zip", "gzip":
+            // The container's own identity; each member is still parsed by
+            // its own format's parser once extracted.
+            return ("container", ZIPArchiveReader.version)
+        case "tar":
+            return ("container-tar", TARReader.version)
+        case "7z":
+            return ("container-7z", SevenZipReader.version)
+        case "rar":
+            return ("container-rar", RARReader.version)
+        case "olm":
+            return ("olm", OLMParser.parserVersion)
+        default:
+            return ("unsupported", 0)
+        }
+    }
+
+    /// Streaming-capable formats: parser can drain messages in batches
+    /// without holding the entire file in memory. Used by the bulk import
+    /// coordinator to decide between callback-based (bounded memory) and
+    /// array-based ingest.
+    static let streamableExtensions: Set<String> = ["mbox", "eml", ""]
+
+    /// Streaming parse for formats that support it. Calls `onBatch` for each
+    /// chunk of `batchSize` parsed messages and immediately drops them, so
+    /// peak memory is bounded by `batchSize` rather than file size. For
+    /// formats that cannot stream (PST, NSF, MSG) the array parser runs and
+    /// the result is drained through `onBatch` in bounded chunks.
+    ///
+    /// Returns the SOURCE-SCOPED recovery report (§7.7 — no global mutable
+    /// report; concurrent imports cannot race).
+    @discardableResult
+    /// - Parameter envelopeProvider: P3.1 adaptive batching. Honoured by the
+    ///   streaming MBOX/EML path today. The non-streaming formats (PST/OST,
+    ///   NSF, MSG, EMLX) still drain in fixed `batchSize` chunks - wiring them
+    ///   is tracked as P3.2, and until then their memory profile is unchanged.
+    static func parseStreamingCallback(
+        fileURL: URL,
+        senderEmail: String,
+        batchSize: Int = 200,
+        envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
+        retainAttachmentBytes: Bool = true,
+        materializeAttachments: Bool = true,
+        onProgress: ((Double) -> Void)? = nil,
+        nestedContainerAllowed: Bool = true,
+        containerResume: ContainerWalkCursor? = nil,
+        onContainerMemberFinished: ((ContainerWalkCursor) async throws -> Void)? = nil,
+        largeMessages: LargeMessageRoute? = nil,
+        onBatch: ([MBOXParser.RawEmail]) async throws -> Void
+    ) async throws -> MBOXParser.ParseRecoveryReport {
+        // Content decides which parser runs. Routing on the extension alone
+        // sent a PST or ZIP named ".mbox" to the MBOX parser, which has no
+        // signature check and would manufacture junk messages from binary —
+        // and rejected a valid mbox named ".txt".
+        let classification = SourceFormatClassifier.classify(url: fileURL)
+        guard classification.isSupported else {
+            throw ExtractionError.unsupportedFormat(
+                reason: [classification.summary, classification.format.advice]
+                    .compactMap { $0 }.joined(separator: " "))
+        }
+
+        // Containers stream member-by-member too, at every level (CLOSE-02,
+        // `ContainerMailboxWalk`): one member is extracted to its level's
+        // scratch, drained through `onBatch` or descended into, and deleted
+        // before the next is touched, so peak memory AND scratch disk stay
+        // bounded by one member per open level. Refused / non-mail / skipped
+        // members are counted in the report's categories (not as failed
+        // messages — they are not messages). A `containerResume` cursor starts
+        // the walk after the last finished member; the walk reports each
+        // finished member through `onContainerMemberFinished`.
+        if classification.format.isContainer {
+            let walk = try ContainerMailboxWalk(root: fileURL, format: classification.format, resume: containerResume)
+            defer { walk.close() }
+            var emitted = containerResume?.messagesEmitted ?? 0
+            var total = containerResume?.totalMessages ?? 0
+            var parsed = containerResume?.parsed ?? 0
+            var failed = containerResume?.failed ?? 0
+            var quietSinceReport = 0
+            func cursor(_ path: [Int], _ names: [String]) -> ContainerWalkCursor {
+                ContainerWalkCursor(memberPath: path, memberNames: names, messagesEmitted: emitted,
+                                    totalMessages: total, parsed: parsed, failed: failed,
+                                    categories: walk.categories, declaredFolders: walk.declaredFolders.sorted(),
+                                    sawMail: walk.sawMail)
+            }
+            while let event = try walk.next() {
+                try Task.checkCancellation()
+                switch event {
+                case .finished(let path, let names, let nestedArchive):
+                    // A cursor behind the truth is always safe (the ordinal
+                    // checkpoint skips what is committed), so members without
+                    // messages are reported in groups; archives always.
+                    quietSinceReport += 1
+                    if nestedArchive || quietSinceReport >= 256 {
+                        quietSinceReport = 0
+                        try await onContainerMemberFinished?(cursor(path, names))
+                    }
+                case .mailbox(let url, let folder, let path, let names):
+                    let base = walk.topLevelFraction
+                    let count = Double(max(1, walk.topLevelCount))
+                    // CLOSE-01 follow-up: a large .emlx/.msg member is imported
+                    // from its scratch file by range, kept in the archive.
+                    if let route = largeMessages, let kind = route.kind(of: url) {
+                        let report = try await route.importMessage(
+                            url, kind: kind, transient: true, keepIn: route.memberDirectory(path: path),
+                            senderEmail: senderEmail, folder: folder,
+                            onProgress: { fraction in onProgress?(base + fraction / count) })
+                        emitted += report.successfullyParsed
+                        total += report.totalMessages
+                        parsed += report.successfullyParsed
+                        failed += report.failed
+                        quietSinceReport = 0
+                        try await onContainerMemberFinished?(cursor(path, names))
+                        continue
+                    }
+                    let report: MBOXParser.ParseRecoveryReport
+                    do {
+                      report = try await parseStreamingCallback(
+                        fileURL: url,
+                        senderEmail: senderEmail,
+                        batchSize: batchSize,
+                        envelopeProvider: envelopeProvider,
+                        retainAttachmentBytes: retainAttachmentBytes,
+                        materializeAttachments: materializeAttachments,
+                        onProgress: { fraction in onProgress?(base + fraction / count) },
+                        nestedContainerAllowed: false,
+                        onBatch: { batch in
+                            emitted += batch.count
+                            try await onBatch(Self.stamp(batch, folder: folder))
+                        }
+                      )
+                    } catch let refusal as WholeMessageReadRefusal {
+                        // The previous engine's ceiling: a refused member with its reason, not a failed import.
+                        walk.refuseMember(names.last ?? "", reason: WholeMessageReadLimit.memberReason,
+                                          detail: refusal.localizedDescription)
+                        quietSinceReport = 0
+                        try await onContainerMemberFinished?(cursor(path, names))
+                        continue
+                    }
+                    total += report.totalMessages
+                    parsed += report.successfullyParsed
+                    failed += report.failed
+                    for (key, count) in report.errorCategories { walk.categories[key, default: 0] += count }
+                    walk.declaredFolders.formUnion(report.declaredFolders)
+                    quietSinceReport = 0
+                    try await onContainerMemberFinished?(cursor(path, names))
+                }
+            }
+            guard walk.sawMail else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No mailbox files were found inside it (\(walk.topLevelCount) member\(walk.topLevelCount == 1 ? "" : "s") examined).")
+            }
+            var report = MBOXParser.ParseRecoveryReport(
+                totalMessages: total, successfullyParsed: parsed,
+                failed: failed, errorCategories: walk.categories)
+            report.declaredFolders = walk.declaredFolders.sorted()
+            return report
+        }
+
+        // Directory forms stream member-by-member: each file is drained
+        // through `onBatch` before the next is opened, so peak memory stays
+        // bounded by one member's batch rather than the whole mailbox.
+        if SourceFormatClassifier.isDirectoryForm(classification.format) {
+            let expansion = SourceFormatClassifier.expandDirectory(fileURL, format: classification.format)
+            let members = expansion.members
+            guard !members.isEmpty else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No message files were found inside it.")
+            }
+            var total = 0, parsed = 0, failed = 0
+            var categories: [String: Int] = [:]
+            // FOLD-02: every mailbox the layout declares, empty ones too (Maildir++ sub-mailboxes).
+            var declaredFolders = Set(expansion.declaredFolders)
+            // Maildir tmp/ members: deliveries in progress, not messages — skipped and counted.
+            if !expansion.skipped.isEmpty { categories["maildir_tmp_skipped"] = expansion.skipped.count }
+            for (index, member) in members.enumerated() {
+                // FOLD-02: the mailbox this member belongs to, from the layout.
+                let folder = SourceFormatClassifier.folderPath(member: member, root: fileURL, format: classification.format)
+                if let folder { declaredFolders.insert(folder) }
+                if classification.format == .appleMailLibrary, let route = largeMessages {
+                    // CLOSE-01 follow-up: message by message, a large one by range.
+                    let counts = try await parseLibraryMailbox(
+                        member, root: fileURL, folder: folder, senderEmail: senderEmail, batchSize: batchSize,
+                        route: route, onProgress: { fraction in onProgress?((Double(index) + fraction) / Double(members.count)) },
+                        onBatch: onBatch)
+                    total += counts.total
+                    parsed += counts.parsed
+                    failed += counts.failed
+                    for (key, count) in counts.categories { categories[key, default: 0] += count }
+                    continue
+                }
+                if classification.format == .appleMailLibrary {
+                    // One mailbox folder at a time, in batches.
+                    try Task.checkCancellation()
+                    let result = try EMLXParser.parseWithReport(fileURL: member, senderEmail: senderEmail) { fraction in
+                        onProgress?((Double(index) + fraction) / Double(members.count))
+                    }
+                    total += result.totalFiles
+                    parsed += result.emails.count
+                    failed += result.failedFiles
+                    if result.failedFiles > 0 { categories["emlx_damaged", default: 0] += result.failedFiles }
+                    if result.refusedTooLarge > 0 { categories[WholeMessageReadLimit.category, default: 0] += result.refusedTooLarge }
+                    for start in stride(from: 0, to: result.emails.count, by: max(1, batchSize)) {
+                        try await onBatch(Self.stamp(Array(result.emails[start..<min(start + max(1, batchSize), result.emails.count)]), folder: folder))
+                    }
+                    continue
+                }
+                let report = try await MBOXParser.parseStreamingCallback(
+                    fileURL: member,
+                    senderEmail: senderEmail,
+                    batchSize: batchSize,
+                    envelopeProvider: envelopeProvider,
+                    retainAttachmentBytes: retainAttachmentBytes,
+                    materializeAttachments: materializeAttachments,
+                    onProgress: { fraction in
+                        onProgress?((Double(index) + fraction) / Double(members.count))
+                    },
+                    onBatch: { batch in try await onBatch(Self.stamp(batch, folder: folder)) }
+                )
+                total += report.totalMessages
+                parsed += report.successfullyParsed
+                failed += report.failed
+                for (key, count) in report.errorCategories { categories[key, default: 0] += count }
+            }
+            var report = MBOXParser.ParseRecoveryReport(
+                totalMessages: total, successfullyParsed: parsed,
+                failed: failed, errorCategories: categories)
+            report.declaredFolders = declaredFolders.sorted()
+            return report
+        }
+
+        let ext = classification.format.parserToken
+        switch ext {
+        case "mbox", "eml", "":
+            return try await MBOXParser.parseStreamingCallback(
+                fileURL: fileURL,
+                senderEmail: senderEmail,
+                batchSize: batchSize,
+                envelopeProvider: envelopeProvider,
+                retainAttachmentBytes: retainAttachmentBytes,
+                materializeAttachments: materializeAttachments,
+                onProgress: onProgress,
+                onBatch: onBatch
+            )
+        default:
+            // Five jobs OPEN-02: PST/OST stream from the node tree in batches
+            // when the switch is on — memory follows the batch, not the file.
+            if ext == "pst" || ext == "ost", StreamingParserPolicy.binaryStreaming {
+                let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+                let result = try await PSTParser.parseStreaming(
+                    fileURL: fileURL, senderEmail: senderEmail,
+                    batchSize: max(1, min(batchSize, chunkLimit)),
+                    onProgress: onProgress, onBatch: onBatch)
+                var report = MBOXParser.ParseRecoveryReport(
+                    totalMessages: result.count, successfullyParsed: result.count, failed: 0, errorCategories: [:])
+                report.declaredFolders = result.declaredFolders
+                return report
+            }
+            if ext == "olm" {
+                // TYPE-06: records stream one at a time out of the ZIP; the
+                // non-mail object counts and the folder list ride the report.
+                let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+                let outcome = try await OLMParser.parseStreaming(
+                    fileURL: fileURL, senderEmail: senderEmail,
+                    batchSize: max(1, min(batchSize, chunkLimit)),
+                    onProgress: onProgress, onBatch: onBatch)
+                var report = MBOXParser.ParseRecoveryReport(
+                    totalMessages: outcome.total, successfullyParsed: outcome.parsed,
+                    failed: outcome.failed, errorCategories: outcome.categories)
+                report.declaredFolders = outcome.declaredFolders
+                return report
+            }
+            if ext == "nsf", NotesODSPolicy.isEnabled {
+                // GAP-NSF: the ODS reader always goes note by note; mail notes it
+                // could not rebuild are failures in the report, never dropped.
+                let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+                let streamed = try await NSFODSParser.parseStreamingWithInventory(
+                    fileURL: fileURL, senderEmail: senderEmail,
+                    batchSize: max(1, min(batchSize, chunkLimit)),
+                    onProgress: onProgress, onBatch: onBatch)
+                return NSFODSParser.report(streamed)
+            }
+            if ext == "nsf", StreamingParserPolicy.binaryStreaming {
+                let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+                let total = try await NSFParser.parseStreaming(
+                    fileURL: fileURL, senderEmail: senderEmail,
+                    batchSize: max(1, min(batchSize, chunkLimit)),
+                    onProgress: onProgress, onBatch: onBatch)
+                return MBOXParser.ParseRecoveryReport(
+                    totalMessages: total, successfullyParsed: total, failed: 0, errorCategories: [:])
+            }
+            // Non-streamable format: the array parser runs (rejecting
+            // unsupported extensions) and the result drains in bounded
+            // chunks. These parsers throw on damage rather than recover,
+            // so a successful parse reports zero failures.
+            let parsed = try parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            // P3.2 placeholder: the message bound is honoured, the byte bound
+            // is not, because these parsers materialise before draining.
+            let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+            for chunk in parsed.chunked(into: chunkLimit) {
+                try await onBatch(chunk)
+            }
+            var report = MBOXParser.ParseRecoveryReport(
+                totalMessages: parsed.count, successfullyParsed: parsed.count,
+                failed: 0, errorCategories: [:])
+            // FOLD-02: a PST lists its folders itself, empty ones included.
+            if ext == "pst" || ext == "ost" { report.declaredFolders = PSTParser.declaredFolders(fileURL: fileURL) }
+            return report
+        }
+    }
+
+    /// FOLD-02: give every message of a directory member the mailbox the
+    /// directory layout says it is in, unless its parser already did.
+    static func stamp(_ batch: [MBOXParser.RawEmail], folder: String?) -> [MBOXParser.RawEmail] {
+        guard let folder, !folder.isEmpty else { return batch }
+        return batch.map { email in
+            guard email.folderPath == nil else { return email }
+            var stamped = email
+            stamped.folderPath = folder
+            return stamped
+        }
+    }
+}
+
+private extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [self] }
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
+        }
+    }
+}

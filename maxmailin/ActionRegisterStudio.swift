@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import os.log
 
@@ -306,7 +307,7 @@ struct ActionRegisterEditorView: View {
                 Text(action.wrappedValue.action)
                     .font(Typography.caption1.weight(.semibold))
                 Spacer()
-                Text(action.wrappedValue.status.rawValue)
+                Text(LocalizedStringKey(action.wrappedValue.status.rawValue))
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(action.wrappedValue.status.color.opacity(0.15))
@@ -371,7 +372,7 @@ struct ActionRegisterEditorView: View {
                     if isPosting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label(model.postedDocumentNumber == nil ? "Post numbered register document" : "Post revision", systemImage: "number.square")
+                        Label(model.postedDocumentNumber == nil ? String(localized: "Post numbered register document") : String(localized: "Post revision"), systemImage: "number.square")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -390,7 +391,7 @@ struct ActionRegisterEditorView: View {
         defer { isPosting = false }
 
         var sections: [CapturedDocument.Section] = []
-        sections.append(.init(name: "Method", fields: [
+        sections.append(.init(name: String(localized: "Method"), fields: [
             .init(key: "Technique", value: "CAPA register — every action links a cause; closure requires a named human verifier; 'effective' requires an evidence note."),
         ]))
         for a in model.actions {
@@ -471,6 +472,8 @@ private struct EffectivenessReviewSheet: View {
             }
         }
         .padding()
+        #if os(macOS)
         .frame(minWidth: 420)
+        #endif
     }
 }

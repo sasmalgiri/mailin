@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import CryptoKit
 import SwiftUI
@@ -29,7 +30,33 @@ class ForensicManager: ObservableObject {
     @Published var evidenceTags: [UUID: EvidenceTag] = [:]
     @Published var tagTimestamps: [UUID: Date] = [:]
     @Published var annotations: [UUID: Annotation] = [:]
-    @Published var perEmailHashes: [UUID: EmailHash] = [:]
+    /// Not @Published: whole-scope jobs replace this cache once per batch,
+    /// and a change notice per batch redrew every screen observing the
+    /// forensic manager (verify & seal: 317 s on 100k emails, nearly all of
+    /// it main-thread redraws). Changes notify at most once a second, with a
+    /// trailing notice so the screens always show the final state.
+    var perEmailHashes: [UUID: EmailHash] = [:] {
+        willSet { noteHashCacheChange() }
+    }
+    private var lastHashNotice = Date.distantPast
+    private var hashNoticePending = false
+
+    private func noteHashCacheChange() {
+        let now = Date()
+        if now.timeIntervalSince(lastHashNotice) >= 1 {
+            lastHashNotice = now
+            objectWillChange.send()
+        } else if !hashNoticePending {
+            hashNoticePending = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                self.hashNoticePending = false
+                self.lastHashNotice = Date()
+                self.objectWillChange.send()
+            }
+        }
+    }
     @Published var integrityStatus: IntegrityStatus = .unknown
 
     static let auditDisplayLimit = 500
@@ -266,10 +293,13 @@ class ForensicManager: ObservableObject {
             chainReady = true
             drainPendingActions()
             // Bounded tag/annotation hydration (display cache; SQL is exact).
-            var tagOffset = 0
+            // Keyset cursors (v2.1 backlog #10): a tag added or removed while
+            // this runs cannot shift a later page.
+            var tagsLoaded = 0
+            var tagCursor: UUID? = nil
             evidenceTags = [:]; tagTimestamps = [:]
-            while tagOffset < Self.tagHydrationCap {
-                let page = try await store.forensicTagsPage(limit: 2_000, offset: tagOffset)
+            while tagsLoaded < Self.tagHydrationCap {
+                let page = try await store.forensicTagsPage(after: tagCursor, limit: 2_000)
                 if page.isEmpty { break }
                 for row in page {
                     if let tag = EvidenceTag(rawValue: row.tag) {
@@ -277,18 +307,21 @@ class ForensicManager: ObservableObject {
                         tagTimestamps[row.id] = row.taggedAt
                     }
                 }
-                tagOffset += page.count
+                tagsLoaded += page.count
+                tagCursor = page.last?.id
                 if page.count < 2_000 { break }
             }
-            var noteOffset = 0
+            var notesLoaded = 0
+            var noteCursor: UUID? = nil
             annotations = [:]
-            while noteOffset < Self.tagHydrationCap {
-                let page = try await store.forensicAnnotationsPage(limit: 2_000, offset: noteOffset)
+            while notesLoaded < Self.tagHydrationCap {
+                let page = try await store.forensicAnnotationsPage(after: noteCursor, limit: 2_000)
                 if page.isEmpty { break }
                 for row in page {
                     annotations[row.id] = Annotation(text: row.note, examiner: row.examiner, timestamp: row.createdAt)
                 }
-                noteOffset += page.count
+                notesLoaded += page.count
+                noteCursor = page.last?.id
                 if page.count < 2_000 { break }
             }
         } catch {
@@ -314,33 +347,61 @@ class ForensicManager: ObservableObject {
     func prefetchForensicWindow(ids: [UUID]) async {
         guard !ids.isEmpty else { return }
         do {
+            // Each @Published dictionary is updated in ONE assignment: a
+            // per-entry subscript write copies the whole cache and notifies
+            // every view (verify & seal took 326 s on 100k emails).
             let hashes = try await store.forensicHashes(ids: ids)
+            var hashCache = perEmailHashes
             for (id, h) in hashes {
-                perEmailHashes[id] = EmailHash(md5: h.md5, sha1: h.sha1, sha256: h.sha256, byteCount: h.byteCount)
+                hashCache[id] = EmailHash(md5: h.md5, sha1: h.sha1, sha256: h.sha256, byteCount: h.byteCount)
             }
-            trimHashWindow(keeping: ids)
+            Self.trimWindow(&hashCache, keeping: ids, cap: Self.hashWindowCap)
+            perEmailHashes = hashCache
             let tags = try await store.forensicTags(ids: ids)
-            for (id, t) in tags {
-                if let tag = EvidenceTag(rawValue: t.tag) {
-                    evidenceTags[id] = tag
-                    tagTimestamps[id] = t.taggedAt
+            if !tags.isEmpty {
+                var tagCache = evidenceTags, stamps = tagTimestamps
+                for (id, t) in tags {
+                    if let tag = EvidenceTag(rawValue: t.tag) {
+                        tagCache[id] = tag
+                        stamps[id] = t.taggedAt
+                    }
                 }
+                evidenceTags = tagCache
+                tagTimestamps = stamps
             }
             let notes = try await store.forensicAnnotations(ids: ids)
-            for (id, n) in notes {
-                annotations[id] = Annotation(text: n.note, examiner: n.examiner, timestamp: n.createdAt)
+            if !notes.isEmpty {
+                var noteCache = annotations
+                for (id, n) in notes {
+                    noteCache[id] = Annotation(text: n.note, examiner: n.examiner, timestamp: n.createdAt)
+                }
+                annotations = noteCache
             }
+            // v2.1 backlog #11: the tag/annotation display caches used to grow
+            // for the whole session in a heavily-tagged archive. Same rule as
+            // the hashes — the bootstrap hydration cap is the ceiling, and the
+            // current window is always kept. SQL remains the exact source.
+            // Only when over the cap: passing a @Published property `inout`
+            // writes it back — and redraws every observing screen — even
+            // when nothing is removed (three redraws per verify batch).
+            let cap = Self.tagHydrationCap
+            if evidenceTags.count > cap { Self.trimWindow(&evidenceTags, keeping: ids, cap: cap) }
+            if tagTimestamps.count > cap { Self.trimWindow(&tagTimestamps, keeping: ids, cap: cap) }
+            if annotations.count > cap { Self.trimWindow(&annotations, keeping: ids, cap: cap) }
         } catch {
             forensicLog.error("forensic window prefetch failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func trimHashWindow(keeping recent: [UUID]) {
-        guard perEmailHashes.count > Self.hashWindowCap else { return }
+    /// Evicts entries outside `recent` until the cache is back under `cap`.
+    /// Entries in the window are never evicted, so a window larger than the
+    /// cap is kept whole rather than half-dropped.
+    static func trimWindow<V>(_ cache: inout [UUID: V], keeping recent: [UUID], cap: Int) {
+        guard cache.count > cap else { return }
         let keep = Set(recent)
-        for key in perEmailHashes.keys where !keep.contains(key) {
-            perEmailHashes.removeValue(forKey: key)
-            if perEmailHashes.count <= Self.hashWindowCap { break }
+        for key in cache.keys where !keep.contains(key) {
+            cache.removeValue(forKey: key)
+            if cache.count <= cap { break }
         }
     }
 
@@ -443,7 +504,9 @@ class ForensicManager: ObservableObject {
         }
         let sequence = auditSequence
         let previousHash = lastAuditHash
-        let examiner = examinerName.isEmpty ? "Unknown" : examinerName
+        let examinerOnly = examinerName.isEmpty ? "Unknown" : examinerName
+        // Enterprise: the authority the action was taken with (OrgPolicy).
+        let examiner = ManagedConfig.isManaged ? "\(examinerOnly) (\(OrgPolicy.role.rawValue))" : examinerOnly
         let timestamp = Date()
 
         let entryHash = computeEntryHash(
@@ -666,13 +729,15 @@ class ForensicManager: ObservableObject {
 
     func storeEmailHashes(_ emails: [MBOXParser.RawEmail]) {
         var batch: [UUID: SQLiteEmailStore.ForensicEmailHashRow] = [:]
+        var cache = perEmailHashes   // one @Published write per batch, not per email
         for email in emails {
-            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
-            perEmailHashes[email.id] = hash
+            let hash = cache[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+            cache[email.id] = hash
             batch[email.id] = SQLiteEmailStore.ForensicEmailHashRow(
                 md5: hash.md5, sha1: hash.sha1, sha256: hash.sha256, byteCount: hash.byteCount)
         }
-        trimHashWindow(keeping: emails.map(\.id))
+        Self.trimWindow(&cache, keeping: emails.map(\.id), cap: Self.hashWindowCap)
+        perEmailHashes = cache
         persistToStore("email hashes") { [store, batch] in try await store.forensicHashUpsert(batch) }
     }
 
@@ -1046,6 +1111,14 @@ class ForensicManager: ObservableObject {
         if auth.spf == "fail" { score += 15; factors.append("SPF authentication failed") }
         if auth.dkim == "fail" { score += 15; factors.append("DKIM reported fail (per receiving server)") }
         if auth.dmarc == "fail" { score += 15; factors.append("DMARC policy failed") }
+        // 3.1 F2/F4 (switch v31ForensicTimestamps): missing DKIM and tampering signals.
+        if ForensicSignalsPolicy.isEnabled && TierAccess.allows(.forensicSignals) {
+            let date = email.headers["Date"].flatMap(RFC5322Date.parse)
+            if let why = DKIMExpectations.missingSignature(headers: email.headers, rawSource: email.rawSource, date: date) { score += 15; factors.append(why) }
+            for why in TamperingSignals.find(headers: email.headers, rawSource: email.rawSource, attachmentCount: email.attachments.count) {
+                score += 10; factors.append(why)
+            }
+        }
 
         let piiFindings = EmailNLPEngine.detectPII(in: [email])
         let ssnCount = piiFindings.filter { $0.type == .ssnPattern }.count
@@ -1198,6 +1271,62 @@ class ForensicManager: ObservableObject {
         return total
     }
 
+    /// Enterprise B-3: the full audit log as JSON Lines for a SIEM or records
+    /// system. Line 1 is a header (format, organisation, case, entry count,
+    /// chain status and the chain head); every further line is one entry with
+    /// its HMAC and the previous hash, so a gap or edit shows after ingestion.
+    /// Streamed in pages, like the text export.
+    func exportAuditLogJSONLines(to url: URL) async throws -> Int {
+        let iso = ISO8601DateFormatter()
+        let total = try await store.forensicAuditCount()
+        let integrity = await verifyAuditLogIntegrityStreamed()
+        let chain: String
+        switch integrity {
+        case .verified: chain = "verified"
+        case .tampered(let details): chain = "failed: \(details)"
+        case .noData: chain = "empty"
+        case .unknown: chain = "not checked"
+        }
+        func line(_ object: [String: Any]) throws -> Data {
+            var d = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            d.append(0x0A)
+            return d
+        }
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        var head = ""
+        var seq = 0
+        var body = Data()
+        // Entries first into the file after a placeholder-free header: the
+        // chain head is known only at the end, so the header carries the
+        // verification result and the trailer line carries the head.
+        try handle.write(contentsOf: try line([
+            "type": "header", "format": "mailin-audit/1",
+            "organization": ManagedConfig.orgName ?? organization,
+            "case": caseNumber, "examiner": examinerName,
+            "exportedAt": iso.string(from: Date()), "entries": total, "chain": chain,
+        ]))
+        while true {
+            let page = try await store.forensicAuditPage(fromSeq: seq, limit: 1_000)
+            if page.isEmpty { break }
+            body.removeAll(keepingCapacity: true)
+            for entry in page {
+                body.append(try line([
+                    "type": "entry", "seq": entry.seq, "timestamp": iso.string(from: entry.timestamp),
+                    "action": entry.action, "detail": entry.detail, "examiner": entry.examiner,
+                    "hmac": entry.entryHash, "previous": entry.previousHash,
+                ]))
+                head = entry.entryHash
+                seq = entry.seq + 1
+            }
+            try handle.write(contentsOf: body)
+            if page.count < 1_000 { break }
+        }
+        try handle.write(contentsOf: try line(["type": "trailer", "chainHead": head, "entries": total]))
+        return total
+    }
+
     static let forensicCSVHeader = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk,Risk Score,Risk Level\n"
 
     private static func forensicCSVEscape(_ s: String) -> String {
@@ -1306,7 +1435,12 @@ class ForensicManager: ObservableObject {
         log += "Date: \(displayFormatter.string(from: Date()))\n"
         log += "Total Privileged Documents: \(privileged.count)\n\n"
 
-        log += String(format: "%-8s %-12s %-30s %-30s %s\n", "No.", "Date", "From", "To", "Subject")
+        // §8 #1: `%s` reads a C pointer, not a Swift String (garbage or a
+        // crash). Columns are padded in Swift instead, same widths.
+        func col(_ s: String, _ width: Int) -> String {
+            s.count >= width ? s + " " : s + String(repeating: " ", count: width - s.count) + " "
+        }
+        log += col("No.", 8) + col("Date", 12) + col("From", 30) + col("To", 30) + "Subject\n"
         log += String(repeating: "-", count: 120) + "\n"
 
         for (i, email) in privileged.enumerated() {
@@ -1315,12 +1449,7 @@ class ForensicManager: ObservableObject {
             let to = String((email.headers["To"] ?? "N/A").prefix(28))
             let subject = String((email.headers["Subject"] ?? "N/A").prefix(50))
 
-            log += String(format: "%-8d %-12s %-30s %-30s %s\n",
-                          i + 1,
-                          String(date),
-                          from,
-                          to,
-                          subject)
+            log += col(String(i + 1), 8) + col(date, 12) + col(from, 30) + col(to, 30) + subject + "\n"
 
             if let annotation = annotations[email.id] {
                 log += "         Basis: \(annotation.text)\n"

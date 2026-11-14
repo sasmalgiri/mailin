@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ArchiveEmailPickerView.swift
 //  maxmailin
@@ -108,7 +109,9 @@ struct ArchiveEmailPickerView: View {
             }
             .padding(Spacing.medium)
         }
+        #if os(macOS)
         .frame(minWidth: 540, minHeight: 460)
+        #endif
         .task { await load() }
         .onChange(of: searchText) { _, _ in scheduleSearch(immediate: false) }
     }

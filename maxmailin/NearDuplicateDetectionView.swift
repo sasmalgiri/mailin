@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct NearDuplicateDetectionView: View {
@@ -21,6 +22,11 @@ struct NearDuplicateDetectionView: View {
     @State private var persistedGroupCount = 0
     @State private var loadedGroupCount = 0
     @Environment(\.dismiss) private var envDismiss
+    // §3-A4: whole-archive near-duplicates when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @State private var v3Note: String?
+    private var v3: Bool { modules?.isOn(.v3NearDuplicates) ?? false }
+    private var activeAlgoVersion: Int { v3 ? NearDuplicatesEngine.algoVersion : Self.algoVersion }
 
     private var visibleGroups: [EmailNLPEngine.NearDuplicateGroup] {
         groups.filter { !removedGroupIDs.contains($0.id) }
@@ -34,7 +40,8 @@ struct NearDuplicateDetectionView: View {
             if isAnalyzing {
                 VStack {
                     Spacer()
-                    ProgressView("Analyzing \(min(emails.count, 10_000)) emails for near-duplicates...")
+                    ProgressView(v3 ? String(localized: "Comparing the whole archive for near-duplicates…")
+                                 : "Analyzing \(min(emails.count, 10_000)) emails for near-duplicates...")
                         .font(Typography.callout)
                     Spacer()
                 }
@@ -43,8 +50,8 @@ struct NearDuplicateDetectionView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "doc.on.doc",
-                        title: "No Near-Duplicates Found",
-                        message: "Adjust the similarity threshold and run the analysis to find emails with similar content."
+                        title: String(localized: "No Near-Duplicates Found"),
+                        message: String(localized: "Adjust the similarity threshold and run the analysis to find emails with similar content.")
                     )
                     thresholdControl
                         .padding(.top, Spacing.medium)
@@ -59,8 +66,8 @@ struct NearDuplicateDetectionView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "checkmark.circle",
-                        title: "All Duplicates Removed",
-                        message: "All duplicate groups have been dismissed from view."
+                        title: String(localized: "All Duplicates Removed"),
+                        message: String(localized: "All duplicate groups have been dismissed from view.")
                     )
                     Button("Reset View") {
                         removedGroupIDs.removeAll()
@@ -137,6 +144,9 @@ struct NearDuplicateDetectionView: View {
                 .foregroundColor(AppColors.primary)
             Text("Near-Duplicate Detection")
                 .font(Typography.headline)
+            if let v3Note {
+                Text(v3Note).font(Typography.caption2).foregroundColor(AppColors.secondary).lineLimit(2)
+            }
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
             if isPresented != nil {
@@ -268,17 +278,20 @@ struct NearDuplicateDetectionView: View {
                         .cornerRadius(CornerRadius.small)
                 }
 
-                // Remove button
+                // Near-duplicates differ in content, so nothing is deleted
+                // here — the group is only hidden from this list (Reset View
+                // brings it back). Exact duplicates are removed in Duplicates.
                 Button {
                     let _ = withAnimation {
                         removedGroupIDs.insert(group.id)
                     }
                 } label: {
-                    Label("Remove All Duplicates", systemImage: "trash")
+                    Label("Hide This Group", systemImage: "eye.slash")
                         .font(Typography.caption1)
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .controlSize(.small)
+                .help("Hide this group from the list. Nothing is deleted — Reset View shows it again.")
                 .padding(.top, Spacing.xxSmall)
             }
         } label: {
@@ -305,7 +318,7 @@ struct NearDuplicateDetectionView: View {
                         .padding(.vertical, 2)
                         .background(similarityColor(group.similarityScore).opacity(0.12))
                         .cornerRadius(CornerRadius.small)
-                        .help(group.similarityScore >= 0.9 ? "Near-identical content — safe to remove duplicates" : "Significant overlap — review differences before removing")
+                        .help(group.similarityScore >= 0.9 ? String(localized: "Near-identical content — safe to remove duplicates") : String(localized: "Significant overlap — review differences before removing"))
 
                     Text("\(group.duplicates.count) duplicate\(group.duplicates.count == 1 ? "" : "s")")
                         .font(Typography.caption2)
@@ -361,7 +374,7 @@ struct NearDuplicateDetectionView: View {
             let revision = (try? await ArchiveCorpusRevision.shared.reconciled()) ?? 0
             let meta = (try? await store.nearDuplicateMeta()) ?? (algoVersion: 0, corpusRevision: 0)
             let count = (try? await store.nearDuplicateGroupCount()) ?? 0
-            guard count > 0, meta.algoVersion == Self.algoVersion, meta.corpusRevision == revision else {
+            guard count > 0, meta.algoVersion == activeAlgoVersion, meta.corpusRevision == revision else {
                 analyze()
                 return
             }
@@ -401,7 +414,34 @@ struct NearDuplicateDetectionView: View {
         loadedGroupCount += keys.count
     }
 
-    private func analyze() {
+    /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func analyze(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
+            isAnalyzing = true
+            removedGroupIDs.removeAll()
+            let currentThreshold = threshold
+            Task { @MainActor in
+                defer { isAnalyzing = false }
+                do {
+                    let r = try await NearDuplicatesEngine.run(threshold: currentThreshold)
+                    v3Note = String(localized: "\(r.groups) groups from \(r.verifiedPairs) verified pairs; \(r.indexed) of \(r.total) emails indexed and compared.")
+                    groups = []
+                    loadedGroupCount = 0
+                    persistedGroupCount = r.groups
+                    await loadNextPersistedPage()
+                    await DocumentRegistry.captureStructured(.report,
+                        summary: "Near-duplicates — \(r.groups) groups",
+                        document: CapturedDocument(title: String(localized: "Near-Duplicate Detection"), sections: [
+                            .init(name: String(localized: "Method and coverage"), fields: r.receiptFields)]))
+                } catch is CancellationError {
+                    v3Note = nil
+                } catch {
+                    v3Note = EngineGuard.fellBack(.v3NearDuplicates, error: error)
+                    analyze(previousEngine: true)
+                }
+            }
+            return
+        }
         isAnalyzing = true
         removedGroupIDs.removeAll()
         let emailsCopy = emails

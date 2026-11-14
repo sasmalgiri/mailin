@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct BackgroundFindingsView: View {
@@ -120,7 +121,7 @@ struct BackgroundFindingsView: View {
             summaryBar
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.xSmall) {
-                    categoryChip(label: "All", category: nil, count: manager.lastRunFindings.count)
+                    categoryChip(label: String(localized: "All"), category: nil, count: manager.lastRunFindings.count)
                     ForEach(categories, id: \.self) { cat in
                         let count = manager.lastRunFindings.filter { $0.category == cat }.count
                         categoryChip(label: displayName(for: cat), category: cat, count: count)
@@ -248,9 +249,9 @@ struct BackgroundFindingsView: View {
         switch cat {
         case "anomaly": return "Anomalies"
         case "phishing": return "Phishing"
-        case "pii": return "PII Exposure"
+        case "pii": return String(localized: "PII Exposure")
         case "sentiment": return "Sentiment"
-        case "domain_burst": return "Domain Burst"
+        case "domain_burst": return String(localized: "Domain Burst")
         default: return cat.capitalized
         }
     }

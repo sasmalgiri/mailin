@@ -8,6 +8,28 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 ![iOS](https://img.shields.io/badge/iOS-17.6+-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
 ![License](https://img.shields.io/badge/license-Proprietary-green)
+![Version](https://img.shields.io/badge/version-3.0-blue)
+
+---
+
+## What's New in 3.0
+
+- Three-pane archive shell (mailboxes, sources and labels; list; message), keyboard-first
+- Import queue: pause, resume, stop one file, reorder; duplicate policy and attachment indexing chosen in the import sheet; every import ends in a signed receipt
+- Export pre-flight and resume; every export ends in a receipt with its hash; mbox, EML, PDF, TIFF, MSG, CSV, Word, Markdown, JSON, portable HTML
+- Move the archive to another disk as a verified copy; the copy on this Mac stays usable when the disk is away
+- Search results say where they matched and how much of the archive the index covered
+- Import from and export to Apple Mail and Thunderbird with a read-back check
+- AI Insights and Professional Workflows are separate optional pages, off until switched on
+- Single messages over 100 MB are archived by byte range and read from the original file instead of being reported as damaged; ZIP archives import directly
+- Outlook PST and OST files read by Microsoft's published format (every folder, message, recipient and attachment); Apple Mail's own library folder imports directly
+- Each of the following is off until switched on in Settings ▸ Modules:
+  - Deleted-email recovery: deleted mail still in the file is marked, with how it was found. Deep recovery carves unlisted messages from PST free space and damaged files
+  - mailin Scripts: your own JavaScript on the device, with no network access and a dry run before anything changes; recipes without code
+  - Shortcuts actions: find, tag, hold, number, export and verify
+  - Review Packs: send emails out for coding and merge the answers. Team cases: shared folders with signed logs, roles, second-level review and a Verify audit button
+  - Hidden timestamps and signature checks: Gmail and GUID time values, ARC chains and DKIM against sourced provider dates
+- Details: `RELEASE_NOTES_3_0.md`; what was executed: `RELEASE_READINESS.md`, `SCALE_RESULTS.md`, `Verification/`
 
 ---
 
@@ -32,7 +54,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Full RFC 822 & MIME compliant parser with multipart, base64, quoted-printable support
 - Drag-and-drop or file browser import
 - Conversation threading via Message-ID / In-Reply-To / References headers
-- Streaming parser for large archives (100MB+) with memory-safe batch mode
+- Streaming import for mbox/eml in bounded batches (verified on 1.5 GB in one file); resumable checkpoints; messages over 100 MB kept by byte range
 - Robust handling of malformed emails with anomaly detection
 
 ### Search
@@ -77,7 +99,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Tamper-evident HMAC-chained audit log and chain-of-custody artifacts
 - Evidence tagging and examiner annotations
 - Server-reported SPF, DKIM and DMARC authentication status, with header analysis
-- S/MIME verification for opaque signatures (trusted/untrusted chains distinguished); detached signatures and encryption are detected and reported honestly as unverifiable
+- S/MIME verification for opaque and detached (`multipart/signed`) signatures, trusted/untrusted chains distinguished, tampering reported as invalid; encrypted messages are detected and reported honestly as unverifiable
 - Spoofing and phishing detection
 - MIME tree inspection and received chain analysis
 - Bates numbering and custodian management
@@ -92,7 +114,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Spotlight search integration
 - Command palette (Cmd+Shift+P)
 - Duplicate detection and removal
-- Available in 11 languages
+- Interface in 11 languages (English, German, Spanish, French, Hindi, Italian, Japanese, Korean, Brazilian Portuguese, Simplified and Traditional Chinese), with email content analysis in the same 11 languages
 
 ---
 
@@ -147,14 +169,19 @@ Requires iOS 17.6+ / macOS 14.6+. Free tier included, no signup.
 
 | | Free | Personal | Professional |
 |---|---|---|---|
-| Emails | 500 | Unlimited | Unlimited |
+| Emails | First 500 results of any list or search | Unlimited | Unlimited |
 | AI Queries | 5/day | Unlimited | Unlimited |
 | Search & Filter | Full | Full | Full |
 | Analytics | Basic | Full | Full |
 | Export | EML, CSV (limited) | All formats | All formats |
 | Forensic Mode | — | — | Full |
 | Audit Trail | — | — | Full |
-| | Free | $4.99/mo or $49.99 lifetime | $9.99/mo or $149.99 lifetime |
+| Deleted-email recovery | — | Full | Full |
+| Deep recovery and carving | — | — | Full |
+| mailin Scripts, Shortcuts actions | — | — | Full |
+| Hidden timestamps and signature checks | — | — | Full |
+| Review Packs and team cases | Review a pack you received; join a case | Review a pack you received; join a case | Send packs, merge responses, lead a case |
+| | Free | $4.99/mo, $44.99/yr or $99.99 lifetime | $9.99/mo, $79.99/yr or $249.99 lifetime |
 
 ---
 

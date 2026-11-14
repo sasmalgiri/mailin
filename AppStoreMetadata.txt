@@ -13,14 +13,35 @@ PRICE: Free (with In-App Purchases)
 IN-APP PURCHASES:
   Personal Tier:
   - Personal Monthly: $4.99/month (auto-renewable subscription)
-  - Personal Yearly: $29.99/year (auto-renewable subscription) — Save 40%
-  - Personal Lifetime: $49.99 (one-time purchase)
+  - Personal Yearly: $44.99/year (auto-renewable subscription) — Save 25%
+  - Personal Lifetime: $99.99 (one-time purchase)
   Professional Tier:
   - Professional Monthly: $9.99/month (auto-renewable subscription)
-  - Professional Yearly: $79.99/year (auto-renewable subscription) — Save 40%
-  - Professional Lifetime: $149.99 (one-time purchase) — Best Value
+  - Professional Yearly: $79.99/year (auto-renewable subscription) — Save 33%
+  - Professional Lifetime: $249.99 (one-time purchase) — Best Value
 
 BUNDLE ID: com.ecosanskriti.mailin
+VERSION: 3.0 (build 300)
+
+NOTE (2026-09-29): the description of record for 3.0 is STORE_LISTING_3_0.md
+(written against what the code does and what was executed). The DESCRIPTION
+below is the 2.x copy kept for reference; use the 3.0 file for App Store Connect.
+
+------------------------------------
+WHAT'S NEW IN 3.0
+------------------------------------
+
+- Three-pane archive shell; open an archive and you are in it.
+- Import queue with pause, resume, stop-this-file and reorder; the import sheet lets you choose the
+  duplicate policy and whether attachment contents are indexed.
+- Export pre-flight and resume. Every export ends in a receipt.
+- Move the archive to another disk as a verified copy.
+- Search results say where they matched and what the index covered.
+- Import from and export to Apple Mail and Thunderbird, with the exact steps and a read-back check.
+- AI Insights and Professional Workflows are separate pages you switch on; nothing they need
+  runs until you do.
+- Offset import engine is now the default: single messages over 100 MB are archived instead of
+  reported as damaged.
 
 ------------------------------------
 DESCRIPTION
@@ -88,9 +109,9 @@ FORENSIC & LEGAL TOOLS
 - Review batching for systematic document review
 - Deduplication and near-duplicate detection
 
-AVAILABLE IN 11 LANGUAGES
-- English, German, Spanish, French, Hindi, Italian, Japanese, Korean, Portuguese (Brazil), Chinese Simplified, Chinese Traditional
-- Interface automatically adapts to your system language
+11 LANGUAGES
+- Interface available in 11 languages: English, German, Spanish, French, Hindi, Italian, Japanese, Korean, Portuguese (Brazil), Chinese Simplified, Chinese Traditional — follows your system language
+- Detects and analyzes email content in the same 11 languages
 
 MULTI-PLATFORM
 - Native app for Mac, iPhone, and iPad
@@ -112,10 +133,10 @@ BUILT FOR PRIVACY
 - Zero data collection — no analytics, no tracking, no telemetry
 - All processing happens on-device using Apple frameworks
 - App Sandbox with minimal permissions
-- AI runs on-device by default — your email data stays on your device unless you enable the optional, opt-in Cloud AI
+- AI runs on-device only — your email data stays on your device; there is no cloud AI and no network entitlement
 
 FLEXIBLE PLANS
-- Free tier: browse up to 500 emails with basic filtering and NLP
+- Free tier: import up to 100 MB of archives, browse the first 500 results of any list or search, with basic filtering and NLP
 - Personal: unlimited emails, AI assistant, analytics, and exports
 - Professional: all Personal features plus audit trail, chain of custody, Bates numbering, batch processing, predictive coding, and priority support
 - Subscribe monthly or yearly, or buy once for lifetime access
@@ -131,7 +152,7 @@ VERIFIABLE PRIVACY
 - Zero analytics, zero third-party SDKs, zero cloud calls in offline mode
 - Apple App Sandbox enforced — Apple's own runtime verifies the privacy claim
 - Privacy Manifest declares: no tracking, no data collection
-- AI runs on-device by default using Apple NaturalLanguage and Foundation Models (optional Cloud AI is opt-in)
+- AI runs on-device only, using Apple NaturalLanguage and Foundation Models
 - File Protection (Complete class) on persistent storage — files unreadable when device locked
 - Ed25519 cryptographic signatures on exports (forensic chain anchor)
 
@@ -172,9 +193,9 @@ mailin v1.0 — the first forensic-grade email archive analyzer native to iPhone
 
 ✓ 7 archive formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf
 ✓ HMAC chain of custody, Bates numbering, IOC extraction
-✓ On-device Apple Intelligence by default — no tracking; optional Cloud AI is opt-in
+✓ On-device Apple Intelligence only — no tracking, no cloud AI, no network
 ✓ Sub-second full-text search
-✓ 11 languages
+✓ Interface and email content analysis in 11 languages
 ✓ Universal Purchase across all your Apple devices
 
 Free to try. Subscribe monthly, yearly, or buy once for lifetime access.
@@ -183,7 +204,7 @@ Free to try. Subscribe monthly, yearly, or buy once for lifetime access.
 PROMOTIONAL TEXT (170 characters max)
 ------------------------------------
 
-Forensic-grade email archive analyzer. Open .mbox, .pst, .nsf, .msg on iPhone, iPad & Mac. On-device AI by default. Bates, IOC, custody. No tracking; optional Cloud AI opt-in. Free to try.
+Forensic-grade email archive analyzer. Open .mbox, .pst, .nsf, .msg on iPhone, iPad & Mac. On-device AI only. Bates, IOC, custody. No tracking, no cloud. Free to try.
 
 ------------------------------------
 SUPPORT URL

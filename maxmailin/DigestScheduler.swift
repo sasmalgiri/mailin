@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  DigestScheduler.swift
 //  maxmailin
@@ -35,6 +36,7 @@ final class DigestScheduler {
     /// Launch hook: at most one digest per 7 days; a no-op when disabled,
     /// when no saved searches exist, or when nothing new matched.
     func checkAndDeliver() {
+        guard SafeMode.shared.allowsBackgroundWork else { return }   // §3-S6
         guard defaults.bool(forKey: Self.enabledKey) else { return }
         let last = defaults.object(forKey: Self.lastDigestKey) as? Date ?? .distantPast
         guard Date().timeIntervalSince(last) >= 7 * 24 * 3600 else { return }
@@ -58,6 +60,8 @@ final class DigestScheduler {
         var lines: [DigestLine] = []
         for search in searches.prefix(20) {   // bounded: 20 searches per digest
             var query = ArchiveQueryCompiler.compile(search.query)
+            // SEARCH-02: the saved Advanced Search counts too, not only the words.
+            if let spec = search.spec, !spec.isEmpty { query.spec = spec }
             query.afterDate = max(query.afterDate ?? .distantPast, since)
             let count = (try? await ArchiveDataService.shared.count(query: query)) ?? 0
             if count > 0 { lines.append(DigestLine(searchName: search.name, newMatches: count)) }

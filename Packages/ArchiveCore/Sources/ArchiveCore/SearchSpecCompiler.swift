@@ -1,0 +1,401 @@
+//
+//  SearchSpecCompiler.swift
+//  ArchiveCore
+//
+//  Five jobs FIND-04/06 (plan §5.3.4): `SearchSpec` → SQL WHERE fragments
+//  with bound values. Structure comes from this file's allowlist; every user
+//  value is a bind; text that reaches FTS5 MATCH is quoted as a literal
+//  token so no input can change the query's shape. The email row is `e`.
+//
+//  Three-valued evaluation (plan rules 8–10): a text condition can only be
+//  answered where the relevant document is indexed. `clauses(_:)` compiles
+//  the spec as asked and, when it holds an exclusion or an OR over text,
+//  adds "AND the relevant documents are evaluable" so a row is CONFIRMED,
+//  never admitted because evidence is missing. `unresolvedClauses(_:)` is
+//  the complement: rows that pass the positive part but whose relevant
+//  documents are not evaluable — counted and shown separately.
+//
+
+import Foundation
+
+extension SQLiteEmailStore {
+
+    // MARK: Entry points
+
+    /// The spec as the person asked it, confirmed only.
+    static func specClauses(_ spec: SearchSpec) -> (sql: [String], binds: [QueryBind]) {
+        var sql: [String] = []
+        var binds: [QueryBind] = []
+        for group in spec.liveGroups {
+            let (groupSQL, groupBinds) = groupClause(group)
+            sql.append(groupSQL)
+            binds.append(contentsOf: groupBinds)
+        }
+        if spec.hasUncertainTextConditions {
+            sql.append("NOT (\(unknownSQL(spec)))")
+        }
+        return (sql, binds)
+    }
+
+    /// Rows that pass the positive part but cannot be confirmed because
+    /// relevant text is not evaluable yet.
+    static func unresolvedClauses(_ spec: SearchSpec) -> (sql: [String], binds: [QueryBind])? {
+        guard spec.hasUncertainTextConditions else { return nil }
+        var sql: [String] = []
+        var binds: [QueryBind] = []
+        for group in spec.positivePart.liveGroups where group.kind == .all {
+            let (groupSQL, groupBinds) = groupClause(group)
+            sql.append(groupSQL)
+            binds.append(contentsOf: groupBinds)
+        }
+        sql.append(unknownSQL(spec))
+        return (sql, binds)
+    }
+
+    // MARK: Groups
+
+    /// R01: an "any" group is an OR over its branches, each branch an AND of
+    /// its conditions; a negated condition is wrapped in NOT. No expansion —
+    /// the Boolean shape is compiled as written.
+    private static func groupClause(_ group: SearchGroup) -> (String, [QueryBind]) {
+        var binds: [QueryBind] = []
+        func clause(_ condition: SearchCondition) -> String {
+            let (sql, b) = conditionClause(condition); binds.append(contentsOf: b)
+            return condition.isNegated ? "NOT \(sql)" : sql
+        }
+        func clause(_ attachment: AttachmentConditionGroup) -> String {
+            let (sql, b) = attachmentGroupClause(attachment); binds.append(contentsOf: b)
+            return attachment.isNegated ? "NOT \(sql)" : sql
+        }
+        switch group.kind {
+        case .all:
+            let parts = group.liveConditions.map(clause) + group.liveAttachmentGroups.map(clause)
+            return ("(" + parts.joined(separator: " AND ") + ")", binds)
+        case .any:
+            let alternatives = group.branches.map { branch -> String in
+                let parts = branch.conditions.map(clause) + branch.attachmentGroups.map(clause)
+                return parts.count == 1 ? parts[0] : "(" + parts.joined(separator: " AND ") + ")"
+            }
+            return ("(" + alternatives.joined(separator: " OR ") + ")", binds)
+        case .exclude:
+            // Inside an exclusion every condition is already a "not"; a negated
+            // flag there would be a double negative and is read as plain.
+            var plain: [String] = []
+            for condition in group.liveConditions { let (sql, b) = conditionClause(condition); binds.append(contentsOf: b); plain.append(sql) }
+            for attachment in group.liveAttachmentGroups { let (sql, b) = attachmentGroupClause(attachment); binds.append(contentsOf: b); plain.append(sql) }
+            return ("NOT (" + plain.joined(separator: " OR ") + ")", binds)
+        }
+    }
+
+    /// The relevant documents are not evaluable: body (or any-text) for text
+    /// conditions on the message; every attachment's text for attachment
+    /// content conditions.
+    private static func unknownSQL(_ spec: SearchSpec) -> String {
+        var parts: [String] = []
+        if spec.uncertainBodyText {
+            parts.append("NOT EXISTS (SELECT 1 FROM search_docs ub WHERE ub.email_id = e.id AND ub.kind = 'body' AND ub.state IN ('complete','noText'))")
+        }
+        if spec.uncertainAttachmentText {
+            parts.append("""
+                EXISTS (SELECT 1 FROM attachments ua WHERE ua.email_id = e.id
+                        AND NOT EXISTS (SELECT 1 FROM search_docs ud WHERE ud.email_id = e.id
+                                        AND ud.kind IN (\(SearchDocKind.attachmentContentSQL)) AND ud.ordinal = ua.position
+                                        AND ud.state IN ('complete','noText')))
+                """)
+        }
+        return parts.isEmpty ? "0" : "(" + parts.joined(separator: " OR ") + ")"
+    }
+
+    // MARK: Conditions
+
+    private static func conditionClause(_ c: SearchCondition) -> (String, [QueryBind]) {
+        let value = c.trimmedValue
+        switch c.field {
+        case .sender:
+            if c.match == .equals {
+                return ("EXISTS (SELECT 1 FROM email_participants sp WHERE sp.email_id = e.id AND sp.role = 'FROM' AND sp.normalized_address = lower(?))", [.text(value)])
+            }
+            return ("instr(lower(e.from_addr), lower(?)) > 0", [.text(value)])
+        case .recipient, .recipientTo, .recipientCc, .recipientBcc:
+            let roles: String
+            switch c.field {
+            case .recipientTo: roles = "'TO'"
+            case .recipientCc: roles = "'CC'"
+            case .recipientBcc: roles = "'BCC'"
+            default: roles = "'TO','CC','BCC'"
+            }
+            let test = c.match == .equals ? "rp.normalized_address = lower(?)"
+                : "(instr(rp.normalized_address, lower(?)) > 0 OR instr(lower(coalesce(rp.display_name, '')), lower(?)) > 0)"
+            let binds: [QueryBind] = c.match == .equals ? [.text(value)] : [.text(value), .text(value)]
+            return ("EXISTS (SELECT 1 FROM email_participants rp WHERE rp.email_id = e.id AND rp.role IN (\(roles)) AND \(test))", binds)
+        case .subject:
+            switch c.match {
+            case .contains, .phrase, .equals:
+                if c.match == .equals { return ("lower(e.subject) = lower(?)", [.text(value)]) }
+                return ("instr(lower(e.subject), lower(?)) > 0", [.text(value)])
+            case .allWords, .anyWords:
+                return textClause(kinds: [.subject], match: c.match, value: value)
+            }
+        case .body:
+            return textClause(kinds: [.body], match: c.match, value: value)
+        case .anyText:
+            return textClause(kinds: SearchDocKind.anyText, match: c.match, value: value)
+        case .attachmentName:
+            return ("EXISTS (SELECT 1 FROM attachments an WHERE an.email_id = e.id AND instr(lower(an.filename), lower(?)) > 0)", [.text(value)])
+        case .hasAttachments:
+            return ("e.has_attach = \(value.lowercased() == "yes" ? 1 : 0)", [])
+        case .dateOnOrAfter:
+            guard let day = SearchSpec.parseDay(value, timeZone: c.timeZone) else { return ("0", []) }
+            return ("e.date >= ?", [.int(Int64(day.start.timeIntervalSince1970.rounded()))])
+        case .dateOnOrBefore:
+            guard let day = SearchSpec.parseDay(value, timeZone: c.timeZone) else { return ("0", []) }
+            return ("e.date < ?", [.int(Int64(day.nextDayStart.timeIntervalSince1970.rounded()))])
+        case .tag:
+            return ("""
+                (EXISTS (SELECT 1 FROM email_user_tags tu WHERE tu.email_id = e.id AND tu.tag = ?)
+                 OR EXISTS (SELECT 1 FROM email_tags tp WHERE tp.email_id = e.id AND tp.tag = ?))
+                """, [.text(value), .text(value)])
+        case .folder:
+            return ("EXISTS (SELECT 1 FROM email_folders cf WHERE cf.email_id = e.id AND cf.folder_id = ?)", [.int(Int64(value) ?? -1)])
+        case .source:
+            return ("e.source_id = ?", [.int(Int64(value) ?? -1)])
+        case .messageType:
+            return ("e.message_type = ?", [.text(value)])
+        case .account:
+            // V4-08: the account's captured copies (provider identity → record).
+            return ("EXISTS (SELECT 1 FROM remote_messages ra WHERE ra.email_id = e.id AND ra.account_id = ?)",
+                    [.text(UUID(uuidString: value)?.uuidString ?? value)])
+        case .sourceKind:
+            let connected = "EXISTS (SELECT 1 FROM remote_messages rk WHERE rk.email_id = e.id)"
+            switch value {
+            case "connected": return (connected, [])
+            case "file": return ("NOT " + connected, [])
+            default: return ("0", [])
+            }
+        case .captureState:
+            switch value {
+            case "onServer":
+                return ("EXISTS (SELECT 1 FROM remote_messages rs WHERE rs.email_id = e.id AND rs.remote_present = 1)", [])
+            case "removedOnServer":
+                return ("EXISTS (SELECT 1 FROM remote_messages rs WHERE rs.email_id = e.id AND rs.remote_present = 0)", [])
+            default:
+                return ("0", [])
+            }
+        }
+    }
+
+    /// Text over the chunk index. Audit 2026-11-06 A02: the words of one
+    /// condition may sit in different chunks of the same text, so:
+    ///  - anyWords: some chunk of these kinds holds some word.
+    ///  - allWords: every word is somewhere in the message's text of these
+    ///    kinds — the message is the unit (one body document; "anywhere"
+    ///    means any field), each word its own FTS lookup, intersected.
+    ///  - contains / phrase / equals up to the chunk overlap: FTS prefilter,
+    ///    then the literal verified on one chunk's text (the overlap makes a
+    ///    boundary-crossing literal whole), so punctuation the tokeniser
+    ///    drops ("C++", "PO-4471") still has to be there.
+    ///  - a longer literal (up to a chunk): verified on one chunk or on two
+    ///    adjacent chunks joined with the overlap removed — the exact text,
+    ///    not "all the words".
+    ///  - a literal longer than a chunk: all its words in the message (the
+    ///    describer says so; `SearchSpec.phraseWholeTextLimit`).
+    private static func textClause(kinds: [SearchDocKind], match: SearchCondition.Match, value: String) -> (String, [QueryBind]) {
+        let kindList = kinds.map { "'\($0.rawValue)'" }.joined(separator: ",")
+        let words = SearchTextTokens.words(in: value)
+        let prefix = match == .contains
+        if words.isEmpty {
+            // No indexable word at all ("++"): the literal alone, on any chunk of these kinds.
+            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND mailin_phrase(sc.text, ?))",
+                    [.text(SearchTextTokens.collapsed(value))])
+        }
+        switch match {
+        case .anyWords:
+            return ("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND search_chunks MATCH ?)",
+                    [.text(words.map(SearchTextTokens.quoted).joined(separator: " OR "))])
+        case .allWords:
+            // Each word somewhere in the message's text of these kinds.
+            var parts: [String] = []
+            var binds: [QueryBind] = []
+            for word in words {
+                parts.append("e.id IN (SELECT sc.email_id FROM search_chunks sc WHERE sc.kind IN (\(kindList)) AND search_chunks MATCH ?)")
+                binds.append(.text(SearchTextTokens.quoted(word)))
+            }
+            return ("(" + parts.joined(separator: " AND ") + ")", binds)
+        case .contains, .phrase, .equals:
+            return literalClause(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(value),
+                                 sameDocument: "c1.email_id = e.id", mayExceedChunk: value.count > SearchChunker.chunkCharacters)
+        }
+    }
+
+    /// R02: a literal verified on the stored text, whatever its length.
+    /// Chunks are contiguous, so the text IS the chunks joined in order:
+    ///  - within one chunk (FTS prefilter: every word in that chunk);
+    ///  - across two adjacent chunks joined (first word in the first, last
+    ///    word in the second);
+    ///  - longer than a chunk: the document from the first word's chunk
+    ///    onward, joined in chunk order (SQLite ≥ 3.44 orders inside
+    ///    group_concat) — exact, and only compiled when the literal is that long.
+    /// The table-valued form `search_chunks(?)` carries the FTS query;
+    /// `sameDocument` correlates `c1` with the outer row. Nothing ever falls
+    /// back to "all the words".
+    /// FIND-08: the literal is verified by `mailin_phrase` (SectionBoundary):
+    /// any whitespace run in the text equals one space (a line wrap, a double
+    /// space left by removed HTML), and a cell / row / slide / page boundary
+    /// (U+001E) is never crossed — the same on one chunk and on the join.
+    static func literalClause(kindList: String, words: [String], prefix: Bool, literal: String,
+                              sameDocument: String, mayExceedChunk: Bool) -> (String, [QueryBind]) {
+        func token(_ word: String) -> String { SearchTextTokens.quoted(word) + (prefix ? "*" : "") }
+        let all = words.map(token).joined(separator: " AND ")
+        let first = token(words[0]), last = token(words[words.count - 1])
+        let single = "EXISTS (SELECT 1 FROM search_chunks(?) c1 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
+            + " AND mailin_phrase(c1.text, ?))"
+        let pair = "EXISTS (SELECT 1 FROM search_chunks(?) c1, search_chunks(?) c2 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
+            + " AND c2.email_id = c1.email_id AND c2.kind = c1.kind AND c2.ordinal = c1.ordinal AND c2.chunk = c1.chunk + 1"
+            + " AND mailin_phrase(c1.text || c2.text, ?))"
+        var parts = [single, pair]
+        var binds: [QueryBind] = [.text(all), .text(literal), .text(first), .text(last), .text(literal)]
+        if mayExceedChunk {
+            parts.append("EXISTS (SELECT 1 FROM search_chunks(?) c1 WHERE \(sameDocument) AND c1.kind IN (\(kindList))"
+                + " AND mailin_phrase((SELECT group_concat(c.text, '' ORDER BY c.chunk) FROM search_chunks c"
+                + " WHERE c.email_id = c1.email_id AND c.kind = c1.kind AND c.ordinal = c1.ordinal AND c.chunk >= c1.chunk), ?))")
+            binds.append(contentsOf: [.text(first), .text(literal)])
+        }
+        return ("(" + parts.joined(separator: " OR ") + ")", binds)
+    }
+
+    // MARK: Attachments — one file must satisfy everything in the group
+
+    /// Plan v4 §13.3 (7): the group holds for ONE file — a top-level
+    /// attachment, or one file inside an attachment (`attachment_children`
+    /// with its own `childText` document). Type, name and content are tested
+    /// on the same row either way, so a DOCX named "minutes" containing
+    /// "quorum" inside a ZIP is found, and a sibling PDF's words never count.
+    private static func attachmentGroupClause(_ g: AttachmentConditionGroup) -> (String, [QueryBind]) {
+        let (top, topBinds) = attachmentGroupTests(g, alias: "ag", nameColumn: "ag.filename", mimeColumn: "ag.mime_type",
+                                                   ordinalExpr: "ag.position", kindList: SearchDocKind.attachmentContentSQL)
+        // A child's name and type are its own OR its containing attachment's
+        // ("a ZIP that contains 'treasure'" names the archive, not the text
+        // file); its content is only ever its own.
+        let (child, childBinds) = attachmentGroupTests(g, alias: "ch", nameColumn: "ch.path", mimeColumn: "ch.kind",
+                                                       parent: (name: "pa.filename", mime: "pa.mime_type"),
+                                                       ordinalExpr: "(ch.position * \(SearchDocKind.childOrdinalBase) + ch.child_index)", kindList: "'childText'")
+        guard let top, let child else { return ("1", []) }
+        return ("(EXISTS (SELECT 1 FROM attachments ag WHERE ag.email_id = e.id AND \(top))"
+                + " OR EXISTS (SELECT 1 FROM attachment_children ch JOIN attachments pa ON pa.email_id = ch.email_id AND pa.position = ch.position"
+                + " WHERE ch.email_id = e.id AND \(child)))", topBinds + childBinds)
+    }
+
+    /// The group's tests against one file row (`alias`), with its text in
+    /// the chunk documents whose ordinal is `ordinalExpr`. Nil when the
+    /// group has no live condition.
+    private static func attachmentGroupTests(_ g: AttachmentConditionGroup, alias: String, nameColumn: String, mimeColumn: String,
+                                             parent: (name: String, mime: String)? = nil,
+                                             ordinalExpr: String, kindList: String) -> (String?, [QueryBind]) {
+        var tests: [String] = []
+        var binds: [QueryBind] = []
+        if let name = g.nameContains?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            if let parent {
+                tests.append("(instr(lower(\(nameColumn)), lower(?)) > 0 OR instr(lower(\(parent.name)), lower(?)) > 0)")
+                binds.append(.text(name)); binds.append(.text(name))
+            } else {
+                tests.append("instr(lower(\(nameColumn)), lower(?)) > 0")
+                binds.append(.text(name))
+            }
+        }
+        if let type = g.type?.trimmingCharacters(in: .whitespaces), !type.isEmpty {
+            let (sql, b) = attachmentTypePredicate(type, nameColumn: nameColumn, mimeColumn: mimeColumn)
+            if let parent {
+                let (parentSQL, parentBinds) = attachmentTypePredicate(type, nameColumn: parent.name, mimeColumn: parent.mime)
+                tests.append("(\(sql) OR \(parentSQL))"); binds.append(contentsOf: b); binds.append(contentsOf: parentBinds)
+            } else {
+                tests.append(sql); binds.append(contentsOf: b)
+            }
+        }
+        if let content = g.content?.trimmingCharacters(in: .whitespaces), !content.isEmpty {
+            // Same file throughout (audit A02 forms), correlated on this row's document.
+            let words = SearchTextTokens.words(in: content)
+            let prefix = g.contentMatch == .contains
+            let inDocs = "(\(alias).email_id, \(ordinalExpr)) IN (SELECT ac.email_id, ac.ordinal FROM search_chunks ac WHERE ac.kind IN (\(kindList)) AND "
+            if words.isEmpty {
+                tests.append(inDocs + "mailin_phrase(ac.text, ?))")
+                binds.append(.text(SearchTextTokens.collapsed(content)))
+            } else {
+                switch g.contentMatch {
+                case .anyWords:
+                    tests.append(inDocs + "search_chunks MATCH ?)")
+                    binds.append(.text(words.map(SearchTextTokens.quoted).joined(separator: " OR ")))
+                case .allWords:
+                    for word in words {
+                        tests.append(inDocs + "search_chunks MATCH ?)")
+                        binds.append(.text(SearchTextTokens.quoted(word)))
+                    }
+                case .contains, .phrase, .equals:
+                    let (sql, b) = literalClause(kindList: kindList, words: words, prefix: prefix, literal: SearchTextTokens.collapsed(content),
+                                                 sameDocument: "c1.email_id = \(alias).email_id AND c1.ordinal = \(ordinalExpr)",
+                                                 mayExceedChunk: content.count > SearchChunker.chunkCharacters)
+                    tests.append(sql); binds.append(contentsOf: b)
+                }
+            }
+        }
+        guard !tests.isEmpty else { return (nil, []) }
+        return (tests.joined(separator: " AND "), binds)
+    }
+
+    /// A declared family, or a bare extension. The extension is supporting
+    /// metadata: the family test also reads the declared MIME type.
+    private static func attachmentTypePredicate(_ type: String, nameColumn: String, mimeColumn: String) -> (String, [QueryBind]) {
+        func ext(_ list: [String]) -> String {
+            "(" + list.map { _ in "lower(\(nameColumn)) LIKE ?" }.joined(separator: " OR ") + ")"
+        }
+        switch type.lowercased() {
+        case "pdf":
+            return ("(lower(\(mimeColumn)) LIKE '%pdf%' OR lower(\(nameColumn)) LIKE '%.pdf')", [])
+        case "images", "image":
+            let exts = ["png", "jpg", "jpeg", "gif", "heic", "tiff", "tif", "bmp", "webp"]
+            return ("(lower(\(mimeColumn)) LIKE 'image/%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
+        case "office documents", "office", "documents":
+            let exts = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf"]
+            return ("(lower(\(mimeColumn)) LIKE '%officedocument%' OR lower(\(mimeColumn)) LIKE '%msword%' OR lower(\(mimeColumn)) LIKE '%ms-excel%' OR lower(\(mimeColumn)) LIKE '%ms-powerpoint%' OR lower(\(mimeColumn)) LIKE '%opendocument%' OR \(ext(exts)))",
+                    exts.map { .text("%.\($0)") })
+        case "archives", "archive", "zip":
+            let exts = ["zip", "gz", "tgz", "7z", "rar", "tar"]
+            return ("(lower(\(mimeColumn)) LIKE '%zip%' OR lower(\(mimeColumn)) LIKE '%compressed%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
+        case "text":
+            let exts = ["txt", "csv", "md", "log", "json", "xml", "html", "htm"]
+            return ("(lower(\(mimeColumn)) LIKE 'text/%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
+        default:
+            // A bare extension such as "docx".
+            let clean = type.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            return ("lower(\(nameColumn)) LIKE ?", [.text("%.\(clean)")])
+        }
+    }
+}
+
+/// Words as the unicode61 tokeniser sees them, and their FTS5 literal form.
+enum SearchTextTokens {
+    /// Runs of letters and digits; everything else separates words — the
+    /// same rule as unicode61, so a MATCH never carries operator syntax.
+    static func words(in value: String) -> [String] {
+        var out: [String] = []
+        var current = ""
+        for scalar in value.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                current.unicodeScalars.append(scalar)
+            } else if !current.isEmpty {
+                out.append(current); current = ""
+            }
+        }
+        if !current.isEmpty { out.append(current) }
+        return out
+    }
+
+    /// A single FTS5 string token: quoted, inner quotes doubled.
+    static func quoted(_ word: String) -> String {
+        "\"" + word.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    /// Whitespace runs collapsed to one space, for literal comparison.
+    static func collapsed(_ value: String) -> String {
+        value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+}

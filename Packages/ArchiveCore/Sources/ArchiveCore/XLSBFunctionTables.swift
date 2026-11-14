@@ -1,0 +1,170 @@
+//
+//  XLSBFunctionTables.swift
+//  ArchiveCore
+//
+//  The built-in function tables a formula token names a function through
+//  ([MS-XLSB] 2.5.98.10 Ftab for PtgFunc / PtgFuncVar, 2.5.98.5 Cetab for a
+//  PtgFuncVar whose fCeFunc bit is set — the Excel 4 macro-sheet commands).
+//  Generated from the published tables (learn.microsoft.com, 2026-11-09):
+//  every documented id has its name. Three rows keep the values the decoder
+//  already carried, because the published table is wrong or silent there:
+//  0x0075 EXACT (the spec row repeats RIGHT's one-or-two-argument grammar;
+//  EXACT takes two), 0x00D3 LENB (the row repeats MIDB's three-argument
+//  grammar; LENB takes one) and 0x01D4 CONVERT (missing from the published
+//  table; Excel writes it, Apache POI and calamine name it).
+//  Id 0x00FF is not a function: it is the user-defined / future-function
+//  call whose name is its first operand (see XLSBFormulaDecoder).
+//
+
+enum XLSBFunctionTable {
+    struct Entry { let name: String; let fixedArguments: Int? }
+
+    static func entry(_ id: Int) -> Entry? {
+        guard let (name, count) = table[id] else { return nil }
+        return Entry(name: name, fixedArguments: count < 0 ? nil : count)
+    }
+
+    /// Cetab: a macro-sheet command id → its name.
+    static func command(_ id: Int) -> String? { commands[id] }
+
+    static var functionCount: Int { table.count }
+    static var commandCount: Int { commands.count }
+
+    /// Ftab: id → (name, fixed argument count for PtgFunc; -1 = variable, PtgFuncVar only).
+    private static let table: [Int: (String, Int)] = [
+        0: ("COUNT", -1), 1: ("IF", -1), 2: ("ISNA", 1), 3: ("ISERROR", 1), 4: ("SUM", -1), 5: ("AVERAGE", -1),
+        6: ("MIN", -1), 7: ("MAX", -1), 8: ("ROW", -1), 9: ("COLUMN", -1), 10: ("NA", 0), 11: ("NPV", -1),
+        12: ("STDEV", -1), 13: ("DOLLAR", -1), 14: ("FIXED", -1), 15: ("SIN", 1), 16: ("COS", 1), 17: ("TAN", 1),
+        18: ("ATAN", 1), 19: ("PI", 0), 20: ("SQRT", 1), 21: ("EXP", 1), 22: ("LN", 1), 23: ("LOG10", 1),
+        24: ("ABS", 1), 25: ("INT", 1), 26: ("SIGN", 1), 27: ("ROUND", 2), 28: ("LOOKUP", -1), 29: ("INDEX", -1),
+        30: ("REPT", 2), 31: ("MID", 3), 32: ("LEN", 1), 33: ("VALUE", 1), 34: ("TRUE", 0), 35: ("FALSE", 0),
+        36: ("AND", -1), 37: ("OR", -1), 38: ("NOT", 1), 39: ("MOD", 2), 40: ("DCOUNT", 3), 41: ("DSUM", 3),
+        42: ("DAVERAGE", 3), 43: ("DMIN", 3), 44: ("DMAX", 3), 45: ("DSTDEV", 3), 46: ("VAR", -1), 47: ("DVAR", 3),
+        48: ("TEXT", 2), 49: ("LINEST", -1), 50: ("TREND", -1), 51: ("LOGEST", -1), 52: ("GROWTH", -1), 53: ("GOTO", 1),
+        54: ("HALT", -1), 55: ("RETURN", -1), 56: ("PV", -1), 57: ("FV", -1), 58: ("NPER", -1), 59: ("PMT", -1),
+        60: ("RATE", -1), 61: ("MIRR", 3), 62: ("IRR", -1), 63: ("RAND", 0), 64: ("MATCH", -1), 65: ("DATE", 3),
+        66: ("TIME", 3), 67: ("DAY", 1), 68: ("MONTH", 1), 69: ("YEAR", 1), 70: ("WEEKDAY", -1), 71: ("HOUR", 1),
+        72: ("MINUTE", 1), 73: ("SECOND", 1), 74: ("NOW", 0), 75: ("AREAS", 1), 76: ("ROWS", 1), 77: ("COLUMNS", 1),
+        78: ("OFFSET", -1), 79: ("ABSREF", 2), 80: ("RELREF", 2), 81: ("ARGUMENT", -1), 82: ("SEARCH", -1), 83: ("TRANSPOSE", 1),
+        84: ("ERROR", -1), 85: ("STEP", 0), 86: ("TYPE", 1), 87: ("ECHO", -1), 88: ("SET.NAME", -1), 89: ("CALLER", 0),
+        90: ("DEREF", 1), 91: ("WINDOWS", -1), 93: ("DOCUMENTS", -1), 94: ("ACTIVE.CELL", 0), 95: ("SELECTION", 0), 96: ("RESULT", -1),
+        97: ("ATAN2", 2), 98: ("ASIN", 1), 99: ("ACOS", 1), 100: ("CHOOSE", -1), 101: ("HLOOKUP", -1), 102: ("VLOOKUP", -1),
+        103: ("LINKS", -1), 104: ("INPUT", -1), 105: ("ISREF", 1), 106: ("GET.FORMULA", 1), 107: ("GET.NAME", -1), 108: ("SET.VALUE", 2),
+        109: ("LOG", -1), 110: ("EXEC", -1), 111: ("CHAR", 1), 112: ("LOWER", 1), 113: ("UPPER", 1), 114: ("PROPER", 1),
+        115: ("LEFT", -1), 116: ("RIGHT", -1), 117: ("EXACT", 2), 118: ("TRIM", 1), 119: ("REPLACE", 4), 120: ("SUBSTITUTE", -1),
+        121: ("CODE", 1), 122: ("NAMES", -1), 123: ("DIRECTORY", -1), 124: ("FIND", -1), 125: ("CELL", -1), 126: ("ISERR", 1),
+        127: ("ISTEXT", 1), 128: ("ISNUMBER", 1), 129: ("ISBLANK", 1), 130: ("T", 1), 131: ("N", 1), 132: ("FOPEN", -1),
+        133: ("FCLOSE", 1), 134: ("FSIZE", 1), 135: ("FREADLN", 1), 136: ("FREAD", 2), 137: ("FWRITELN", 2), 138: ("FWRITE", 2),
+        139: ("FPOS", -1), 140: ("DATEVALUE", 1), 141: ("TIMEVALUE", 1), 142: ("SLN", 3), 143: ("SYD", 4), 144: ("DDB", -1),
+        145: ("GET.DEF", -1), 146: ("REFTEXT", -1), 147: ("TEXTREF", -1), 148: ("INDIRECT", -1), 149: ("REGISTER", -1), 150: ("CALL", -1),
+        151: ("ADD.BAR", -1), 152: ("ADD.MENU", -1), 153: ("ADD.COMMAND", -1), 154: ("ENABLE.COMMAND", -1), 155: ("CHECK.COMMAND", -1), 156: ("RENAME.COMMAND", -1),
+        157: ("SHOW.BAR", -1), 158: ("DELETE.MENU", -1), 159: ("DELETE.COMMAND", -1), 160: ("GET.CHART.ITEM", -1), 161: ("DIALOG.BOX", 1), 162: ("CLEAN", 1),
+        163: ("MDETERM", 1), 164: ("MINVERSE", 1), 165: ("MMULT", 2), 166: ("FILES", -1), 167: ("IPMT", -1), 168: ("PPMT", -1),
+        169: ("COUNTA", -1), 170: ("CANCEL.KEY", -1), 171: ("FOR", -1), 172: ("WHILE", 1), 173: ("BREAK", 0), 174: ("NEXT", 0),
+        175: ("INITIATE", 2), 176: ("REQUEST", 2), 177: ("POKE", 3), 178: ("EXECUTE", 2), 179: ("TERMINATE", 1), 180: ("RESTART", -1),
+        181: ("HELP", -1), 182: ("GET.BAR", -1), 183: ("PRODUCT", -1), 184: ("FACT", 1), 185: ("GET.CELL", -1), 186: ("GET.WORKSPACE", 1),
+        187: ("GET.WINDOW", -1), 188: ("GET.DOCUMENT", -1), 189: ("DPRODUCT", 3), 190: ("ISNONTEXT", 1), 191: ("GET.NOTE", -1), 192: ("NOTE", -1),
+        193: ("STDEVP", -1), 194: ("VARP", -1), 195: ("DSTDEVP", 3), 196: ("DVARP", 3), 197: ("TRUNC", -1), 198: ("ISLOGICAL", 1),
+        199: ("DCOUNTA", 3), 200: ("DELETE.BAR", 1), 201: ("UNREGISTER", 1), 204: ("USDOLLAR", -1), 205: ("FINDB", -1), 206: ("SEARCHB", -1),
+        207: ("REPLACEB", 4), 208: ("LEFTB", -1), 209: ("RIGHTB", -1), 210: ("MIDB", 3), 211: ("LENB", 1), 212: ("ROUNDUP", 2),
+        213: ("ROUNDDOWN", 2), 214: ("ASC", 1), 215: ("DBCS", 1), 216: ("RANK", -1), 219: ("ADDRESS", -1), 220: ("DAYS360", -1),
+        221: ("TODAY", 0), 222: ("VDB", -1), 223: ("ELSE", 0), 224: ("ELSE.IF", 1), 225: ("END.IF", 0), 226: ("FOR.CELL", -1),
+        227: ("MEDIAN", -1), 228: ("SUMPRODUCT", -1), 229: ("SINH", 1), 230: ("COSH", 1), 231: ("TANH", 1), 232: ("ASINH", 1),
+        233: ("ACOSH", 1), 234: ("ATANH", 1), 235: ("DGET", 3), 236: ("CREATE.OBJECT", -1), 237: ("VOLATILE", -1), 238: ("LAST.ERROR", 0),
+        239: ("CUSTOM.UNDO", -1), 240: ("CUSTOM.REPEAT", -1), 241: ("FORMULA.CONVERT", -1), 242: ("GET.LINK.INFO", -1), 243: ("TEXT.BOX", -1), 244: ("INFO", 1),
+        245: ("GROUP", 0), 246: ("GET.OBJECT", -1), 247: ("DB", -1), 248: ("PAUSE", -1), 251: ("RESUME", -1), 252: ("FREQUENCY", 2),
+        253: ("ADD.TOOLBAR", -1), 254: ("DELETE.TOOLBAR", 1), 256: ("RESET.TOOLBAR", 1), 257: ("EVALUATE", 1), 258: ("GET.TOOLBAR", -1), 259: ("GET.TOOL", -1),
+        260: ("SPELLING.CHECK", -1), 261: ("ERROR.TYPE", 1), 262: ("APP.TITLE", -1), 263: ("WINDOW.TITLE", -1), 264: ("SAVE.TOOLBAR", -1), 265: ("ENABLE.TOOL", 3),
+        266: ("PRESS.TOOL", 3), 267: ("REGISTER.ID", -1), 268: ("GET.WORKBOOK", -1), 269: ("AVEDEV", -1), 270: ("BETADIST", -1), 271: ("GAMMALN", 1),
+        272: ("BETAINV", -1), 273: ("BINOMDIST", 4), 274: ("CHIDIST", 2), 275: ("CHIINV", 2), 276: ("COMBIN", 2), 277: ("CONFIDENCE", 3),
+        278: ("CRITBINOM", 3), 279: ("EVEN", 1), 280: ("EXPONDIST", 3), 281: ("FDIST", 3), 282: ("FINV", 3), 283: ("FISHER", 1),
+        284: ("FISHERINV", 1), 285: ("FLOOR", 2), 286: ("GAMMADIST", 4), 287: ("GAMMAINV", 3), 288: ("CEILING", 2), 289: ("HYPGEOMDIST", 4),
+        290: ("LOGNORMDIST", 3), 291: ("LOGINV", 3), 292: ("NEGBINOMDIST", 3), 293: ("NORMDIST", 4), 294: ("NORMSDIST", 1), 295: ("NORMINV", 3),
+        296: ("NORMSINV", 1), 297: ("STANDARDIZE", 3), 298: ("ODD", 1), 299: ("PERMUT", 2), 300: ("POISSON", 3), 301: ("TDIST", 3),
+        302: ("WEIBULL", 4), 303: ("SUMXMY2", 2), 304: ("SUMX2MY2", 2), 305: ("SUMX2PY2", 2), 306: ("CHITEST", 2), 307: ("CORREL", 2),
+        308: ("COVAR", 2), 309: ("FORECAST", 3), 310: ("FTEST", 2), 311: ("INTERCEPT", 2), 312: ("PEARSON", 2), 313: ("RSQ", 2),
+        314: ("STEYX", 2), 315: ("SLOPE", 2), 316: ("TTEST", 4), 317: ("PROB", -1), 318: ("DEVSQ", -1), 319: ("GEOMEAN", -1),
+        320: ("HARMEAN", -1), 321: ("SUMSQ", -1), 322: ("KURT", -1), 323: ("SKEW", -1), 324: ("ZTEST", -1), 325: ("LARGE", 2),
+        326: ("SMALL", 2), 327: ("QUARTILE", 2), 328: ("PERCENTILE", 2), 329: ("PERCENTRANK", -1), 330: ("MODE", -1), 331: ("TRIMMEAN", 2),
+        332: ("TINV", 2), 334: ("MOVIE.COMMAND", -1), 335: ("GET.MOVIE", -1), 336: ("CONCATENATE", -1), 337: ("POWER", 2), 338: ("PIVOT.ADD.DATA", -1),
+        339: ("GET.PIVOT.TABLE", -1), 340: ("GET.PIVOT.FIELD", -1), 341: ("GET.PIVOT.ITEM", -1), 342: ("RADIANS", 1), 343: ("DEGREES", 1), 344: ("SUBTOTAL", -1),
+        345: ("SUMIF", -1), 346: ("COUNTIF", 2), 347: ("COUNTBLANK", 1), 348: ("SCENARIO.GET", -1), 349: ("OPTIONS.LISTS.GET", 1), 350: ("ISPMT", 4),
+        351: ("DATEDIF", 3), 352: ("DATESTRING", 1), 353: ("NUMBERSTRING", 2), 354: ("ROMAN", -1), 355: ("OPEN.DIALOG", -1), 356: ("SAVE.DIALOG", -1),
+        357: ("VIEW.GET", -1), 358: ("GETPIVOTDATA", -1), 359: ("HYPERLINK", -1), 360: ("PHONETIC", 1), 361: ("AVERAGEA", -1), 362: ("MAXA", -1),
+        363: ("MINA", -1), 364: ("STDEVPA", -1), 365: ("VARPA", -1), 366: ("STDEVA", -1), 367: ("VARA", -1), 368: ("BAHTTEXT", 1),
+        369: ("THAIDAYOFWEEK", 1), 370: ("THAIDIGIT", 1), 371: ("THAIMONTHOFYEAR", 1), 372: ("THAINUMSOUND", 1), 373: ("THAINUMSTRING", 1), 374: ("THAISTRINGLENGTH", 1),
+        375: ("ISTHAIDIGIT", 1), 376: ("ROUNDBAHTDOWN", 1), 377: ("ROUNDBAHTUP", 1), 378: ("THAIYEAR", 1), 379: ("RTD", -1), 380: ("CUBEVALUE", -1),
+        381: ("CUBEMEMBER", -1), 382: ("CUBEMEMBERPROPERTY", 3), 383: ("CUBERANKEDMEMBER", -1), 384: ("HEX2BIN", -1), 385: ("HEX2DEC", 1), 386: ("HEX2OCT", -1),
+        387: ("DEC2BIN", -1), 388: ("DEC2HEX", -1), 389: ("DEC2OCT", -1), 390: ("OCT2BIN", -1), 391: ("OCT2HEX", -1), 392: ("OCT2DEC", 1),
+        393: ("BIN2DEC", 1), 394: ("BIN2OCT", -1), 395: ("BIN2HEX", -1), 396: ("IMSUB", 2), 397: ("IMDIV", 2), 398: ("IMPOWER", 2),
+        399: ("IMABS", 1), 400: ("IMSQRT", 1), 401: ("IMLN", 1), 402: ("IMLOG2", 1), 403: ("IMLOG10", 1), 404: ("IMSIN", 1),
+        405: ("IMCOS", 1), 406: ("IMEXP", 1), 407: ("IMARGUMENT", 1), 408: ("IMCONJUGATE", 1), 409: ("IMAGINARY", 1), 410: ("IMREAL", 1),
+        411: ("COMPLEX", -1), 412: ("IMSUM", -1), 413: ("IMPRODUCT", -1), 414: ("SERIESSUM", 4), 415: ("FACTDOUBLE", 1), 416: ("SQRTPI", 1),
+        417: ("QUOTIENT", 2), 418: ("DELTA", -1), 419: ("GESTEP", -1), 420: ("ISEVEN", 1), 421: ("ISODD", 1), 422: ("MROUND", 2),
+        423: ("ERF", -1), 424: ("ERFC", 1), 425: ("BESSELJ", 2), 426: ("BESSELK", 2), 427: ("BESSELY", 2), 428: ("BESSELI", 2),
+        429: ("XIRR", -1), 430: ("XNPV", 3), 431: ("PRICEMAT", -1), 432: ("YIELDMAT", -1), 433: ("INTRATE", -1), 434: ("RECEIVED", -1),
+        435: ("DISC", -1), 436: ("PRICEDISC", -1), 437: ("YIELDDISC", -1), 438: ("TBILLEQ", 3), 439: ("TBILLPRICE", 3), 440: ("TBILLYIELD", 3),
+        441: ("PRICE", -1), 442: ("YIELD", -1), 443: ("DOLLARDE", 2), 444: ("DOLLARFR", 2), 445: ("NOMINAL", 2), 446: ("EFFECT", 2),
+        447: ("CUMPRINC", 6), 448: ("CUMIPMT", 6), 449: ("EDATE", 2), 450: ("EOMONTH", 2), 451: ("YEARFRAC", -1), 452: ("COUPDAYBS", -1),
+        453: ("COUPDAYS", -1), 454: ("COUPDAYSNC", -1), 455: ("COUPNCD", -1), 456: ("COUPNUM", -1), 457: ("COUPPCD", -1), 458: ("DURATION", -1),
+        459: ("MDURATION", -1), 460: ("ODDLPRICE", -1), 461: ("ODDLYIELD", -1), 462: ("ODDFPRICE", -1), 463: ("ODDFYIELD", -1), 464: ("RANDBETWEEN", 2),
+        465: ("WEEKNUM", -1), 466: ("AMORDEGRC", -1), 467: ("AMORLINC", -1), 468: ("CONVERT", 3), 469: ("ACCRINT", -1), 470: ("ACCRINTM", -1),
+        471: ("WORKDAY", -1), 472: ("NETWORKDAYS", -1), 473: ("GCD", -1), 474: ("MULTINOMIAL", -1), 475: ("LCM", -1), 476: ("FVSCHEDULE", 2),
+        477: ("CUBEKPIMEMBER", -1), 478: ("CUBESET", -1), 479: ("CUBESETCOUNT", 1), 480: ("IFERROR", 2), 481: ("COUNTIFS", -1), 482: ("SUMIFS", -1),
+        483: ("AVERAGEIF", -1), 484: ("AVERAGEIFS", -1),
+    ]
+
+    /// Cetab: id → command name.
+    private static let commands: [Int: String] = [
+        0: "BEEP", 1: "OPEN", 2: "OPEN.LINKS", 3: "CLOSE.ALL", 4: "SAVE", 5: "SAVE.AS", 6: "FILE.DELETE", 7: "PAGE.SETUP",
+        8: "PRINT", 9: "PRINTER.SETUP", 10: "QUIT", 11: "NEW.WINDOW", 12: "ARRANGE.ALL", 13: "WINDOW.SIZE", 14: "WINDOW.MOVE", 15: "FULL",
+        16: "CLOSE", 17: "RUN", 22: "SET.PRINT.AREA", 23: "SET.PRINT.TITLES", 24: "SET.PAGE.BREAK", 25: "REMOVE.PAGE.BREAK", 26: "FONT", 27: "DISPLAY",
+        28: "PROTECT.DOCUMENT", 29: "PRECISION", 30: "A1.R1C1", 31: "CALCULATE.NOW", 32: "CALCULATION", 34: "DATA.FIND", 35: "EXTRACT", 36: "DATA.DELETE",
+        37: "SET.DATABASE", 38: "SET.CRITERIA", 39: "SORT", 40: "DATA.SERIES", 41: "TABLE", 42: "FORMAT.NUMBER", 43: "ALIGNMENT", 44: "STYLE",
+        45: "BORDER", 46: "CELL.PROTECTION", 47: "COLUMN.WIDTH", 48: "UNDO", 49: "CUT", 50: "COPY", 51: "PASTE", 52: "CLEAR",
+        53: "PASTE.SPECIAL", 54: "EDIT.DELETE", 55: "INSERT", 56: "FILL.RIGHT", 57: "FILL.DOWN", 61: "DEFINE.NAME", 62: "CREATE.NAMES", 63: "FORMULA.GOTO",
+        64: "FORMULA.FIND", 65: "SELECT.LAST.CELL", 66: "SHOW.ACTIVE.CELL", 67: "GALLERY.AREA", 68: "GALLERY.BAR", 69: "GALLERY.COLUMN", 70: "GALLERY.LINE", 71: "GALLERY.PIE",
+        72: "GALLERY.SCATTER", 73: "COMBINATION", 74: "PREFERRED", 75: "ADD.OVERLAY", 76: "GRIDLINES", 77: "SET.PREFERRED", 78: "AXES", 79: "LEGEND",
+        80: "ATTACH.TEXT", 81: "ADD.ARROW", 82: "SELECT.CHART", 83: "SELECT.PLOT.AREA", 84: "PATTERNS", 85: "MAIN.CHART", 86: "OVERLAY", 87: "SCALE",
+        88: "FORMAT.LEGEND", 89: "FORMAT.TEXT", 90: "EDIT.REPEAT", 91: "PARSE", 92: "JUSTIFY", 93: "HIDE", 94: "UNHIDE", 95: "WORKSPACE",
+        96: "FORMULA", 97: "FORMULA.FILL", 98: "FORMULA.ARRAY", 99: "DATA.FIND.NEXT", 100: "DATA.FIND.PREV", 101: "FORMULA.FIND.NEXT", 102: "FORMULA.FIND.PREV", 103: "ACTIVATE",
+        104: "ACTIVATE.NEXT", 105: "ACTIVATE.PREV", 106: "UNLOCKED.NEXT", 107: "UNLOCKED.PREV", 108: "COPY.PICTURE", 109: "SELECT", 110: "DELETE.NAME", 111: "DELETE.FORMAT",
+        112: "VLINE", 113: "HLINE", 114: "VPAGE", 115: "HPAGE", 116: "VSCROLL", 117: "HSCROLL", 118: "ALERT", 119: "NEW",
+        120: "CANCEL.COPY", 121: "SHOW.CLIPBOARD", 122: "MESSAGE", 124: "PASTE.LINK", 125: "APP.ACTIVATE", 126: "DELETE.ARROW", 127: "ROW.HEIGHT", 128: "FORMAT.MOVE",
+        129: "FORMAT.SIZE", 130: "FORMULA.REPLACE", 131: "SEND.KEYS", 132: "SELECT.SPECIAL", 133: "APPLY.NAMES", 134: "REPLACE.FONT", 135: "FREEZE.PANES", 136: "SHOW.INFO",
+        137: "SPLIT", 138: "ON.WINDOW", 139: "ON.DATA", 140: "DISABLE.INPUT", 142: "OUTLINE", 143: "LIST.NAMES", 144: "FILE.CLOSE", 145: "SAVE.WORKBOOK",
+        146: "DATA.FORM", 147: "COPY.CHART", 148: "ON.TIME", 149: "WAIT", 150: "FORMAT.FONT", 151: "FILL.UP", 152: "FILL.LEFT", 153: "DELETE.OVERLAY",
+        155: "SHORT.MENUS", 159: "SET.UPDATE.STATUS", 161: "COLOR.PALETTE", 162: "DELETE.STYLE", 163: "WINDOW.RESTORE", 164: "WINDOW.MAXIMIZE", 166: "CHANGE.LINK", 167: "CALCULATE.DOCUMENT",
+        168: "ON.KEY", 169: "APP.RESTORE", 170: "APP.MOVE", 171: "APP.SIZE", 172: "APP.MINIMIZE", 173: "APP.MAXIMIZE", 174: "BRING.TO.FRONT", 175: "SEND.TO.BACK",
+        185: "MAIN.CHART.TYPE", 186: "OVERLAY.CHART.TYPE", 187: "SELECT.END", 188: "OPEN.MAIL", 189: "SEND.MAIL", 190: "STANDARD.FONT", 191: "CONSOLIDATE", 192: "SORT.SPECIAL",
+        193: "GALLERY.3D.AREA", 194: "GALLERY.3D.COLUMN", 195: "GALLERY.3D.LINE", 196: "GALLERY.3D.PIE", 197: "VIEW.3D", 198: "GOAL.SEEK", 199: "WORKGROUP", 200: "FILL.GROUP",
+        201: "UPDATE.LINK", 202: "PROMOTE", 203: "DEMOTE", 204: "SHOW.DETAIL", 206: "UNGROUP", 207: "OBJECT.PROPERTIES", 208: "SAVE.NEW.OBJECT", 209: "SHARE",
+        210: "SHARE.NAME", 211: "DUPLICATE", 212: "APPLY.STYLE", 213: "ASSIGN.TO.OBJECT", 214: "OBJECT.PROTECTION", 215: "HIDE.OBJECT", 216: "SET.EXTRACT", 217: "CREATE.PUBLISHER",
+        218: "SUBSCRIBE.TO", 219: "ATTRIBUTES", 220: "SHOW.TOOLBAR", 222: "PRINT.PREVIEW", 223: "EDIT.COLOR", 224: "SHOW.LEVELS", 225: "FORMAT.MAIN", 226: "FORMAT.OVERLAY",
+        227: "ON.RECALC", 228: "EDIT.SERIES", 229: "DEFINE.STYLE", 240: "LINE.PRINT", 243: "ENTER.DATA", 249: "GALLERY.RADAR", 250: "MERGE.STYLES", 251: "EDITION.OPTIONS",
+        252: "PASTE.PICTURE", 253: "PASTE.PICTURE.LINK", 254: "SPELLING", 256: "ZOOM", 259: "INSERT.OBJECT", 260: "WINDOW.MINIMIZE", 265: "SOUND.NOTE", 266: "SOUND.PLAY",
+        267: "FORMAT.SHAPE", 268: "EXTEND.POLYGON", 269: "FORMAT.AUTO", 272: "GALLERY.3D.BAR", 273: "GALLERY.3D.SURFACE", 274: "FILL.AUTO", 276: "CUSTOMIZE.TOOLBAR", 277: "ADD.TOOL",
+        278: "EDIT.OBJECT", 279: "ON.DOUBLECLICK", 280: "ON.ENTRY", 281: "WORKBOOK.ADD", 282: "WORKBOOK.MOVE", 283: "WORKBOOK.COPY", 284: "WORKBOOK.OPTIONS", 285: "SAVE.WORKSPACE",
+        288: "CHART.WIZARD", 289: "DELETE.TOOL", 290: "MOVE.TOOL", 291: "WORKBOOK.SELECT", 292: "WORKBOOK.ACTIVATE", 293: "ASSIGN.TO.TOOL", 295: "COPY.TOOL", 296: "RESET.TOOL",
+        297: "CONSTRAIN.NUMERIC", 298: "PASTE.TOOL", 302: "WORKBOOK.NEW", 305: "SCENARIO.CELLS", 306: "SCENARIO.DELETE", 307: "SCENARIO.ADD", 308: "SCENARIO.EDIT", 309: "SCENARIO.SHOW",
+        310: "SCENARIO.SHOW.NEXT", 311: "SCENARIO.SUMMARY", 312: "PIVOT.TABLE.WIZARD", 313: "PIVOT.FIELD.PROPERTIES", 314: "PIVOT.FIELD", 315: "PIVOT.ITEM", 316: "PIVOT.ADD.FIELDS", 318: "OPTIONS.CALCULATION",
+        319: "OPTIONS.EDIT", 320: "OPTIONS.VIEW", 321: "ADDIN.MANAGER", 322: "MENU.EDITOR", 323: "ATTACH.TOOLBARS", 324: "VBAActivate", 325: "OPTIONS.CHART", 328: "VBA.INSERT.FILE",
+        330: "VBA.PROCEDURE.DEFINITION", 336: "ROUTING.SLIP", 338: "ROUTE.DOCUMENT", 339: "MAIL.LOGON", 342: "INSERT.PICTURE", 343: "EDIT.TOOL", 344: "GALLERY.DOUGHNUT", 350: "CHART.TREND",
+        352: "PIVOT.ITEM.PROPERTIES", 354: "WORKBOOK.INSERT", 355: "OPTIONS.TRANSITION", 356: "OPTIONS.GENERAL", 370: "FILTER.ADVANCED", 373: "MAIL.ADD.MAILER", 374: "MAIL.DELETE.MAILER", 375: "MAIL.REPLY",
+        376: "MAIL.REPLY.ALL", 377: "MAIL.FORWARD", 378: "MAIL.NEXT.LETTER", 379: "DATA.LABEL", 380: "INSERT.TITLE", 381: "FONT.PROPERTIES", 382: "MACRO.OPTIONS", 383: "WORKBOOK.HIDE",
+        384: "WORKBOOK.UNHIDE", 385: "WORKBOOK.DELETE", 386: "WORKBOOK.NAME", 388: "GALLERY.CUSTOM", 390: "ADD.CHART.AUTOFORMAT", 391: "DELETE.CHART.AUTOFORMAT", 392: "CHART.ADD.DATA", 393: "AUTO.OUTLINE",
+        394: "TAB.ORDER", 395: "SHOW.DIALOG", 396: "SELECT.ALL", 397: "UNGROUP.SHEETS", 398: "SUBTOTAL.CREATE", 399: "SUBTOTAL.REMOVE", 400: "RENAME.OBJECT", 412: "WORKBOOK.SCROLL",
+        413: "WORKBOOK.NEXT", 414: "WORKBOOK.PREV", 415: "WORKBOOK.TAB.SPLIT", 416: "FULL.SCREEN", 417: "WORKBOOK.PROTECT", 420: "SCROLLBAR.PROPERTIES", 421: "PIVOT.SHOW.PAGES", 422: "TEXT.TO.COLUMNS",
+        423: "FORMAT.CHARTTYPE", 424: "LINK.FORMAT", 425: "TRACER.DISPLAY", 430: "TRACER.NAVIGATE", 431: "TRACER.CLEAR", 432: "TRACER.ERROR", 433: "PIVOT.FIELD.GROUP", 434: "PIVOT.FIELD.UNGROUP",
+        435: "CHECKBOX.PROPERTIES", 436: "LABEL.PROPERTIES", 437: "LISTBOX.PROPERTIES", 438: "EDITBOX.PROPERTIES", 439: "PIVOT.REFRESH", 440: "LINK.COMBO", 441: "OPEN.TEXT", 442: "HIDE.DIALOG",
+        443: "SET.DIALOG.FOCUS", 444: "ENABLE.OBJECT", 445: "PUSHBUTTON.PROPERTIES", 446: "SET.DIALOG.DEFAULT", 447: "FILTER", 448: "FILTER.SHOW.ALL", 449: "CLEAR.OUTLINE", 450: "FUNCTION.WIZARD",
+        451: "ADD.LIST.ITEM", 452: "SET.LIST.ITEM", 453: "REMOVE.LIST.ITEM", 454: "SELECT.LIST.ITEM", 455: "SET.CONTROL.VALUE", 456: "SAVE.COPY.AS", 458: "OPTIONS.LISTS.ADD", 459: "OPTIONS.LISTS.DELETE",
+        460: "SERIES.AXES", 461: "SERIES.X", 462: "SERIES.Y", 463: "ERRORBAR.X", 464: "ERRORBAR.Y", 465: "FORMAT.CHART", 466: "SERIES.ORDER", 467: "MAIL.LOGOFF",
+        468: "CLEAR.ROUTING.SLIP", 469: "APP.ACTIVATE.MICROSOFT", 470: "MAIL.EDIT.MAILER", 471: "ON.SHEET", 472: "STANDARD.WIDTH", 473: "SCENARIO.MERGE", 474: "SUMMARY.INFO", 475: "FIND.FILE",
+        476: "ACTIVE.CELL.FONT", 477: "ENABLE.TIPWIZARD", 478: "VBA.MAKE.ADDIN", 480: "INSERTDATATABLE", 481: "WORKGROUP.OPTIONS", 482: "MAIL.SEND.MAILER", 485: "AUTOCORRECT", 489: "POST.DOCUMENT",
+        491: "PICKLIST", 493: "VIEW.SHOW", 494: "VIEW.DEFINE", 495: "VIEW.DELETE", 509: "SHEET.BACKGROUND", 510: "INSERT.MAP.OBJECT", 511: "OPTIONS.MENONO", 517: "MSOCHECKS",
+        518: "NORMAL", 519: "LAYOUT", 520: "RM.PRINT.AREA", 521: "CLEAR.PRINT.AREA", 522: "ADD.PRINT.AREA", 523: "MOVE.BRK", 545: "HIDECURR.NOTE", 546: "HIDEALL.NOTES",
+        547: "DELETE.NOTE", 548: "TRAVERSE.NOTES", 549: "ACTIVATE.NOTES", 620: "PROTECT.REVISIONS", 621: "UNPROTECT.REVISIONS", 647: "OPTIONS.ME", 653: "WEB.PUBLISH", 667: "NEWWEBQUERY",
+        673: "PIVOT.TABLE.CHART", 753: "OPTIONS.SAVE", 755: "OPTIONS.SPELL", 808: "HIDEALL.INKANNOTS",
+    ]
+}

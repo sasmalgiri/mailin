@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import SwiftUI
 // Combine stays ONLY for the ObservableObject objectWillChange forwarder in
@@ -54,7 +55,6 @@ class ParsedEmailListViewModel: ObservableObject {
         regexMatchIDs = nil
     }
 
-    #if DEBUG
     /// Test-only: retains the most recent FTS search Task so a wiring test can
     /// await it deterministically (`await lastFTSSearchTask?.value`) instead of
     /// polling a timeout.
@@ -70,7 +70,6 @@ class ParsedEmailListViewModel: ObservableObject {
             emailCount = newValue.count
         }
     }
-    #endif
 
     // MARK: - UI State
     @Published var isParsed = false
@@ -87,7 +86,7 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var selectedFromEmails: [String] = []
     @Published var selectedToEmails: [String] = []
     @Published var selectedTags: [String] = []
-    @Published var sortBy: SortOption = .dateDesc
+    @Published var sortBy: SortOption = .dateDesc { didSet { rememberFilters() } }
     @Published var searchText: String = ""
     @Published var isSearchFocused: Bool = false
     @Published var selectedEvidenceTag: ForensicManager.EvidenceTag? = nil
@@ -118,7 +117,7 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var nlIntent: NLSearchIntent? = nil
     @Published var isInterpretingNL: Bool = false
     private var nlInterpretTask: Task<Void, Never>? = nil
-    @Published var hasAttachmentFilter: Bool = false
+    @Published var hasAttachmentFilter: Bool = false { didSet { rememberFilters() } }
 
     // Topic cluster filter
     @Published var clusterFilterIDs: Set<UUID>? {
@@ -264,6 +263,9 @@ class ParsedEmailListViewModel: ObservableObject {
         let id: UUID
         let name: String
         let query: String
+        /// SEARCH-02: the Advanced Search saved with it in the archive shell
+        /// (same defaults key). Kept so re-saving from this list never strips it.
+        var spec: SearchSpec? = nil
     }
 
     func saveCurrentSearch(name: String) {
@@ -309,9 +311,59 @@ class ParsedEmailListViewModel: ObservableObject {
     /// `pager.maxRetained` (a few hundred), never the corpus.
     @Published private(set) var residentEmails: [MBOXParser.RawEmail] = []
 
+    // MARK: Window memory budget
+    //
+    // The window holds up to 500 full emails. Their raw sources include every
+    // attachment, so a window of large messages could reach gigabytes (fatal
+    // on iPhone). Raw sources are kept up to a byte budget; past it — and for
+    // any message over the blob-tier threshold — the raw source is dropped
+    // from memory and read from the archive when the email is opened
+    // (EmailDetailView) or its source is shown. Bodies and headers stay.
+
+    #if os(iOS)
+    nonisolated static let windowRawBudgetBytes = 96 * 1_048_576
+    #else
+    nonisolated static let windowRawBudgetBytes = 512 * 1_048_576
+    #endif
+    nonisolated static let largeRawBytes = 8 * 1_048_576
+
+    /// True byte counts of window emails whose raw source is not in memory.
+    private(set) var deferredRawBytes: [UUID: Int] = [:]
+
+    /// The email's raw size, whether or not its raw source is in memory.
+    func rawByteCount(_ email: MBOXParser.RawEmail) -> Int {
+        deferredRawBytes[email.id] ?? email.rawSource.utf8.count
+    }
+
+    nonisolated static func applyMemoryBudget(_ emails: [MBOXParser.RawEmail],
+                                              budget: Int = windowRawBudgetBytes,
+                                              large: Int = largeRawBytes) -> (emails: [MBOXParser.RawEmail], deferred: [UUID: Int]) {
+        var used = 0
+        var deferred: [UUID: Int] = [:]
+        let kept = emails.map { email -> MBOXParser.RawEmail in
+            let size = email.rawSource.utf8.count
+            if size <= large && used + size <= budget {
+                used += size
+                return email
+            }
+            var light = email
+            light.rawSource = ""
+            light.mimeRoot = nil
+            deferred[email.id] = size
+            return light
+        }
+        return (kept, deferred)
+    }
+
     /// The resident window after in-window refinements (review state, smart
     /// tags, operators, quick pickers) and sorting. What the list renders.
     @Published private(set) var visibleEmails: [MBOXParser.RawEmail] = []
+    /// The search the listed emails were paged for. `searchText` changes on
+    /// the keystroke while the old page is still listed; rows mark their
+    /// matched fields from this instead, so the old list never shows the new
+    /// search's chips (2026-10-22: every row read "Body" for a second).
+    @Published private(set) var windowSearchText: String = ""
+    private var pagedSearchText: String = ""
 
     /// Ordered ids of the visible window — detail-view navigation order.
     var visibleOrderedIDs: [UUID] { visibleEmails.map(\.id) }
@@ -347,19 +399,43 @@ class ParsedEmailListViewModel: ObservableObject {
     /// exactly what the user sees.
     var displayedEmailCount: Int {
         visibleEmails.count == residentEmails.count
-            ? max(queryTotalCount, visibleEmails.count)
+            ? max(pager.accessLimit == nil ? queryTotalCount : pager.accessibleCount, visibleEmails.count)
             : visibleEmails.count
     }
+
+    /// Free plan: the archive's total for the current query when the plan reaches fewer
+    /// ("500 of 526"); nil when everything is reachable.
+    var accessLimitedTotal: Int? { pager.isAccessLimited ? pager.totalCount : nil }
 
     /// §13.1: the current filter state compiled onto the full archive query —
     /// operator syntax (from:/to:/has:attachment/…) via ArchiveQueryCompiler
     /// plus the structured UI filter state. This is the same mapping the AI
     /// assistant scope uses (Part D precedent); feature views stream their own
     /// bounded working sets for this query instead of receiving email arrays.
-    var currentArchiveQuery: EmailQuery {
+    /// The browse state this list shares with the Simple list (v2.1 backlog
+    /// #6): search text, date bounds, the attachment toggle and the sort.
+    var browseState: ArchiveBrowseState {
+        ArchiveBrowseState(
+            searchText: searchText,
+            afterDate: startDate > .distantPast ? startDate : nil,
+            beforeDate: endDate < .distantFuture ? endDate : nil,
+            hasAttachments: hasAttachmentFilter ? true : nil,
+            includeTrashed: false,
+            sort: {
+                switch sortBy {
+                case .dateDesc: return .dateDesc
+                case .dateAsc: return .dateAsc
+                case .subjectAsc: return .subjectAZ
+                case .sizeDesc: return .sizeDesc
+                case .priorityDesc: return .priorityDesc
+                }
+            }())
+    }
+
+    /// This list's OWN predicates — sidebar selections, quick chips, review
+    /// flags — which the shared state is layered on top of.
+    private var surfaceBaseQuery: EmailQuery {
         var base = EmailQuery.all
-        if startDate > .distantPast { base.afterDate = startDate }
-        if endDate < .distantFuture { base.beforeDate = endDate }
         // v1 parity: EVERY sidebar checkbox selection compiles to SQL, so the
         // filters apply to the whole archive — not just the resident window.
         base.senders = selectedFromEmails
@@ -368,7 +444,6 @@ class ParsedEmailListViewModel: ObservableObject {
         base.subjects = selectedSubjects
         base.tags = selectedTags
         if let evidence = selectedEvidenceTag, evidence != .none { base.evidenceTag = evidence.rawValue }
-        if hasAttachmentFilter { base.hasAttachments = true }
         if let quickType = quickTypeFilter { base.messageType = quickType }
         if minReplyCount > 0 { base.minSenderMessages = minReplyCount }
         if let minPriority = quickMinPriority { base.minPriority = minPriority }
@@ -376,21 +451,111 @@ class ParsedEmailListViewModel: ObservableObject {
         if quickNegativeOnly { base.sentimentBelow = -0.4 }
         if quickNewsletterOnly { base.classifications = ["newsletter", "promotional"] }
         if showPinnedOnly { base.pinnedOnly = true }
-        switch sortBy {
-        case .dateDesc: base.sort = .dateDesc
-        case .dateAsc: base.sort = .dateAsc
-        case .subjectAsc: base.sort = .subjectAZ
-        case .sizeDesc: base.sort = .sizeDesc
-        case .priorityDesc: base.sort = .priorityDesc
+        // IPAD-02: a source folder chosen in the folder list — the same
+        // `folderID` the Mac sidebar's folder row compiles to.
+        if let folder = selectedSourceFolder { base.folderID = folder.id }
+        // IPAD-05: the Trash view pages trashed rows from the store. The
+        // in-window filter alone could only re-show rows that were already
+        // resident, so after any reload (a duplicate removal, a relaunch)
+        // the Trash looked empty while it held mail.
+        if reviewStateFilter == .trashed {
+            base.includeTrashed = true
+            base.trashedOnly = true
         }
+        return base
+    }
+
+    /// IPAD-02: one folder of one source (FOLD-02), chosen in the folder list.
+    struct SourceFolderSelection: Equatable {
+        let id: Int64
+        let name: String
+    }
+
+    @Published var selectedSourceFolder: SourceFolderSelection? = nil {
+        didSet { if !isResettingFilters, oldValue != selectedSourceFolder { applyFilters() } }
+    }
+
+    /// IPAD-05: restore from the Trash and wait until the store has it, then
+    /// re-page and tell every count surface — the awaitable path the iPad's
+    /// Restore uses, so the list and the counts agree when it returns.
+    func restoreFromTrashNow(_ ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        review.restoreFromTrash(ids)
+        await review.waitForWrites()
+        NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
+        await refreshFromStoreNow()
+    }
+
+    /// After a Move to Trash / Restore lands in the store, the sidebars and
+    /// the list's total re-read their counts.
+    private func announceTrashChange() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.review.waitForWrites()
+            NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
+        }
+    }
+
+    var currentArchiveQuery: EmailQuery {
+        let state = browseState
         if isNaturalLanguageMode {
             // The raw sentence is NOT an FTS/operator query — the interpreted
             // intent is. While interpretation is in flight (or yielded
             // nothing) show the unnarrowed base rather than garbage matches.
+            var base = ArchiveBrowseState(searchText: "", afterDate: state.afterDate, beforeDate: state.beforeDate,
+                                          hasAttachments: state.hasAttachments, includeTrashed: state.includeTrashed,
+                                          sort: state.sort).query(base: surfaceBaseQuery)
+            base.text = nil
             return nlIntent?.apply(to: base) ?? base
         }
-        return ArchiveQueryCompiler.compile(
-            searchText.trimmingCharacters(in: .whitespacesAndNewlines), base: base)
+        // IPAD-03 / CAP-01: with the search model on, the typed words run on
+        // the model (subject, body, names, attachment text and the files
+        // inside attachments) — the same engine, coverage and evidence as the
+        // three-pane shell and Advanced Search. Otherwise the previous path.
+        return state.query(base: surfaceBaseQuery, plainTextOnModel: typedSearchRunsOnModel)
+    }
+
+    /// IPAD-03: true when the typed words are answered by the search model.
+    /// Regex and proximity have no model form and keep the previous path; so
+    /// does natural-language mode (its interpreted intent is the query).
+    var typedSearchRunsOnModel: Bool {
+        guard SearchChunkPolicy.isEnabled, !isNaturalLanguageMode else { return false }
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let parsed = parseSearchQuery(trimmed)
+        if parsed.isRegexQuery || parsed.isProximityQuery { return false }
+        let onModel = browseState.query(plainTextOnModel: true)
+        return onModel.text == nil && !(onModel.spec?.isEmpty ?? true)
+    }
+
+    /// FIND-05 on this list: with the search model answering, each row asks
+    /// the index why it is listed (the chips name the attachment, or the file
+    /// inside it); nil = the previous heuristic chips.
+    var searchEvidenceProvider: ((EmailID) async -> [MatchEvidence])? {
+        guard typedSearchRunsOnModel else { return nil }
+        let spec = currentArchiveQuery.spec
+        let archive = archive
+        return { id in (try? await archive.matchEvidence(emailID: id, spec: spec, freeText: nil)) ?? [] }
+    }
+
+    /// FIND-05: a chip that names an attachment opens it (or the file inside it).
+    @Published var evidenceOpenFailure: String?
+
+    func openEvidenceAttachment(_ id: EmailID, _ ordinal: Int, _ childPath: String?) {
+        let archive = archive
+        Task { @MainActor [weak self] in
+            self?.evidenceOpenFailure = await EvidenceAttachmentOpener.open(emailID: id, ordinal: ordinal, childPath: childPath,
+                                                                           archive: archive)?.message
+        }
+    }
+
+    /// IPAD-03: the no-match notice for a search the model answered with no
+    /// rows (set by the reload, shown through `searchNotice`).
+    private var modelSearchNotice: String?
+
+    private func refreshModelSearchNotice() async {
+        guard typedSearchRunsOnModel, pager.totalCount == 0 else { modelSearchNotice = nil; return }
+        modelSearchNotice = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: archive, scope: currentArchiveQuery))
     }
     @Published var aiPinnedIDs: Set<UUID>? = nil
     @Published var emailThreads: [EmailThread] = []
@@ -406,10 +571,31 @@ class ParsedEmailListViewModel: ObservableObject {
 
     @Published var showPinnedOnly = false { didSet { if !isResettingFilters { applyFilters() } } }
 
+    /// Which review state the list is showing. Trash and Archive are both
+    /// REVERSIBLE flags, and the UI says so in three places — "restorable from
+    /// the Trash view", "Trash is always restorable", "find it again with the
+    /// Archived filter". None of that was true: `applyFilters` hid both states
+    /// unconditionally and no surface showed either, so both were one-way
+    /// doors and `undeleteEmail`/`unarchiveEmail` had no caller. This is the
+    /// Trash view and the Archived filter those strings promise.
+    enum ReviewStateFilter: String, CaseIterable {
+        /// Normal browsing: neither trashed nor archived rows.
+        case active
+        /// The Trash view — trashed rows only, whatever else is set on them.
+        case trashed
+        /// Archived rows only, excluding anything also trashed (trash wins,
+        /// so a row can never be restorable from two places at once).
+        case archived
+    }
+
+    @Published var reviewStateFilter: ReviewStateFilter = .active {
+        didSet { if !isResettingFilters { applyFilters() } }
+    }
+
     /// Quick-chip type filter (Sent/Received) — compiles to SQL messageType
     /// so the chips filter the WHOLE archive, including header-recovered
     /// rows that have flags but no re-parsable metadata.
-    @Published var quickTypeFilter: String? = nil
+    @Published var quickTypeFilter: String? = nil { didSet { rememberFilters() } }
     /// AI-chip filters — compile to SQL over the persisted `derived` table
     /// (archive-wide). Unanalyzed rows don't match; the coverage notice says
     /// so honestly and the background analysis is kicked to close the gap.
@@ -430,8 +616,8 @@ class ParsedEmailListViewModel: ObservableObject {
 
     /// §19.1: "delete" is Move to Trash — a soft, restorable flag. Permanent
     /// destruction is a separate explicit operation on ReviewStateService.
-    func deleteEmail(_ emailID: UUID) { review.moveToTrash([emailID]); applyFilters() }
-    func undeleteEmail(_ emailID: UUID) { review.restoreFromTrash([emailID]); applyFilters() }
+    func deleteEmail(_ emailID: UUID) { review.moveToTrash([emailID]); applyFilters(); announceTrashChange() }
+    func undeleteEmail(_ emailID: UUID) { review.restoreFromTrash([emailID]); applyFilters(); announceTrashChange() }
     func isDeleted(_ emailID: UUID) -> Bool { review.isTrashed(emailID) }
 
     func archiveEmail(_ emailID: UUID) { review.setFlag(.archived, ids: [emailID], value: true); applyFilters() }
@@ -456,6 +642,22 @@ class ParsedEmailListViewModel: ObservableObject {
         self.archive = archive
         self.pager = ArchiveListViewModel(archive: archive, pageSize: pageSize, maxRetained: maxRetained)
         loadSavedSearches()
+        // v2.1 backlog #15: the last filter set used under the current persona
+        // comes back on launch, and switching persona swaps it.
+        restoreFilters(for: PersonaManager.shared.selectedPersona.rawValue)
+        personaObserver = NotificationCenter.default.publisher(for: .personaDidChange)
+            .compactMap { $0.object as? String }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] persona in self?.restoreFilters(for: persona) }
+        // The plan's reach changed (purchase, expiry, restore — or settled at launch before any
+        // view observed the plan): re-page, so the counts and the "first 500 of N" notice agree
+        // with the rows the data layer returns.
+        accessScopeObserver = NotificationCenter.default.publisher(for: .accessScopeChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isParsed else { return }
+                self.refreshFromStore()
+            }
         // Views observe this VM — forward review-state changes (pin/read/tag
         // badges) so rows re-render without observing the service directly.
         reviewChangeForwarder = review.objectWillChange.sink { [weak self] _ in
@@ -481,6 +683,8 @@ class ParsedEmailListViewModel: ObservableObject {
     /// the honest notice. Cache clears when the index job reports new data.
     private var attachmentSearchCache: [String: Set<UUID>] = [:]
     private var attachmentIndexProgress: (attempted: Int, pending: Int)?
+    /// FIND-03: per-attachment coverage, so "no attachments matched" says what was not searchable.
+    private var attachmentCoverage: AttachmentCoverageSummary?
     /// Test-visible: awaitable handle for the async attachment lookup.
     var lastAttachmentSearchTask: Task<Void, Never>?
     private var attachmentIndexObserver: NSObjectProtocol?
@@ -555,8 +759,15 @@ class ParsedEmailListViewModel: ObservableObject {
         await refreshSenderAggregates()
         let compiled = pagerQuery
         lastPagedQuery = compiled
+        pagedSearchText = searchText
+        // The plan's depth limit (Free = newest 500), so this list's counts and its "first 500 of
+        // N" notice agree with the rows the data layer returns. Read on every reload, so a
+        // purchase, expiry or restore takes effect at the next refresh.
+        pager.accessLimit = archive.accessLimit
         await pager.setQuery(compiled)
         forwardPagesLoaded = 1
+        guard revision == windowRevision else { return }
+        await refreshModelSearchNotice()
         guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
         isLoadingPage = false
@@ -581,8 +792,11 @@ class ParsedEmailListViewModel: ObservableObject {
         await refreshDerivedCoverageNotice()
         let compiled = pagerQuery
         lastPagedQuery = compiled
+        pagedSearchText = searchText
         await pager.setQuery(compiled)
         forwardPagesLoaded = 1
+        guard revision == windowRevision else { return }
+        await refreshModelSearchNotice()
         guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
         isLoadingPage = false
@@ -650,7 +864,10 @@ class ParsedEmailListViewModel: ObservableObject {
         var byID: [UUID: MBOXParser.RawEmail] = [:]
         byID.reserveCapacity(fetched.count)
         for email in fetched { byID[email.id] = email }
-        residentEmails = ids.compactMap { byID[$0] }
+        let budgeted = Self.applyMemoryBudget(ids.compactMap { byID[$0] })
+        deferredRawBytes = budgeted.deferred
+        residentEmails = budgeted.emails
+        windowSearchText = pagedSearchText
         emailCount = residentEmails.count
         queryTotalCount = pager.totalCount
         // §19: review state for exactly this window (bounded read).
@@ -772,6 +989,10 @@ class ParsedEmailListViewModel: ObservableObject {
         selectedSmartTags.removeAll()
         selectedEvidenceTag = nil
         clusterFilterIDs = nil
+        // Trash and Archived are filters, so clearing filters leaves them —
+        // otherwise "Clear" would strand the user in the Trash view.
+        reviewStateFilter = .active
+        selectedSourceFolder = nil
         isResettingFilters = false
         reloadPagesForQueryChange()
     }
@@ -796,6 +1017,13 @@ class ParsedEmailListViewModel: ObservableObject {
         var proximityTerm1: String = ""
         var proximityTerm2: String = ""
         var proximityDistance: Int = 5
+    }
+
+    /// A `key:value` token that `ArchiveQueryCompiler` turns into a SQL filter
+    /// rather than search text.
+    static func isCompiledOperator(_ token: String) -> Bool {
+        guard token.contains(":") else { return false }
+        return ArchiveQueryCompiler.compile(token, exclusions: true).text == nil
     }
 
     private func parseSearchQuery(_ raw: String) -> ParsedSearch {
@@ -842,6 +1070,11 @@ class ParsedEmailListViewModel: ObservableObject {
                 parsed.tagOperator = unquoted(String(part.dropFirst(4)))
             } else if lower.hasPrefix("source:") {
                 parsed.sourceOperator = unquoted(String(part.dropFirst(7)))
+            } else if Self.isCompiledOperator(part) {
+                // Already applied by the SQL query (`is:recovered`, `domain:`,
+                // `-tag:` …); as free text it would match nothing and empty the list.
+            } else if lower == "not", i + 1 < parts.count, Self.isCompiledOperator(parts[i + 1]) {
+                i += 1   // "NOT before:2024-01-01": the compiler negated it
             } else {
                 freeWords.append(part)
             }
@@ -895,7 +1128,103 @@ class ParsedEmailListViewModel: ObservableObject {
     /// resident window. Free-text/Boolean matches are verified through FTS5
     /// (`matchingSubset` over the window ids); regex uses BoundedRegexSearch;
     /// proximity compiles to a native FTS5 NEAR — no in-RAM corpus engine.
+    // MARK: - Filter memory per persona (v2.1 backlog #15)
+
+    /// The filter choices worth carrying between sessions and between
+    /// personas: the ones a persona sets once and expects to stay. Sidebar
+    /// multi-selections and free text are deliberately NOT remembered — they
+    /// describe a moment's search, not a way of working.
+    struct FilterMemory: Codable, Equatable {
+        var sortBy: String
+        var hasAttachmentFilter: Bool
+        var reviewStateFilter: String
+        var quickTypeFilter: String?
+        var showPinnedOnly: Bool
+        var groupByThread: Bool
+    }
+
+    private var personaObserver: AnyCancellable?
+    private var accessScopeObserver: AnyCancellable?
+    private var isRestoringFilters = false
+    private var rememberedPersona: String?
+
+    static func filterMemoryKey(for persona: String) -> String { "mailin.filterMemory.\(persona)" }
+
+    nonisolated static var isRunningUnderXCTest: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
+    /// Memory is ON in the app and OFF under XCTest unless a test opts in.
+    /// The test host IS the app, and every view model in a test process would
+    /// otherwise inherit whatever filter the previous test set — which is the
+    /// feature working as designed, and exactly wrong for isolated tests (it
+    /// emptied the list-paging tests on this machine until this switch).
+    nonisolated(unsafe) static var filterMemoryEnabled: Bool = !isRunningUnderXCTest
+
+    /// Where the memory lives. Production: the app's defaults. Under XCTest:
+    /// a throwaway suite, emptied at process start.
+    nonisolated(unsafe) static var filterMemoryDefaults: UserDefaults = {
+        if isRunningUnderXCTest {
+            // Start every test process with an EMPTY suite: whatever a
+            // previous run left behind must not shape this one's lists.
+            let suite = "com.ecosanskriti.mailin.filterMemory.tests"
+            let defaults = UserDefaults(suiteName: suite) ?? .standard
+            defaults.removePersistentDomain(forName: suite)
+            return defaults
+        }
+        return .standard
+    }()
+
+    var currentFilterMemory: FilterMemory {
+        FilterMemory(sortBy: sortBy.rawValue,
+                     hasAttachmentFilter: hasAttachmentFilter,
+                     reviewStateFilter: reviewStateFilter.rawValue,
+                     quickTypeFilter: quickTypeFilter,
+                     showPinnedOnly: showPinnedOnly,
+                     groupByThread: groupByThread)
+    }
+
+    /// Saves the current memory under the persona it belongs to. Cheap: a
+    /// small JSON blob, written only when it changed.
+    private func rememberFilters() {
+        guard Self.filterMemoryEnabled, !isRestoringFilters, !isResettingFilters else { return }
+        let persona = rememberedPersona ?? PersonaManager.shared.selectedPersona.rawValue
+        let key = Self.filterMemoryKey(for: persona)
+        guard let data = try? JSONEncoder().encode(currentFilterMemory) else { return }
+        let defaults = Self.filterMemoryDefaults
+        if defaults.data(forKey: key) != data {
+            defaults.set(data, forKey: key)
+        }
+    }
+
+    /// Applies the memory saved for `persona`, if any. Absent memory leaves
+    /// the current filters alone — a persona used for the first time inherits
+    /// what is on screen rather than being reset.
+    func restoreFilters(for persona: String) {
+        rememberedPersona = persona
+        guard Self.filterMemoryEnabled, let data = Self.filterMemoryDefaults.data(forKey: Self.filterMemoryKey(for: persona)),
+              let memory = try? JSONDecoder().decode(FilterMemory.self, from: data) else { return }
+        Self.apply(memory, to: self)
+    }
+
+    /// Pure application step, separated so it can be tested without defaults.
+    static func apply(_ memory: FilterMemory, to vm: ParsedEmailListViewModel) {
+        vm.isRestoringFilters = true
+        vm.isResettingFilters = true
+        if let sort = SortOption(rawValue: memory.sortBy) { vm.sortBy = sort }
+        vm.hasAttachmentFilter = memory.hasAttachmentFilter
+        if let review = ReviewStateFilter(rawValue: memory.reviewStateFilter) { vm.reviewStateFilter = review }
+        vm.quickTypeFilter = memory.quickTypeFilter
+        vm.showPinnedOnly = memory.showPinnedOnly
+        vm.groupByThread = memory.groupByThread
+        vm.isResettingFilters = false
+        vm.isRestoringFilters = false
+        vm.applyFilters()
+    }
+
     func applyFilters() {
+        rememberFilters()
         // Part U: sidebar selections / sort COMPILE into the pager query —
         // when it changed, kick an archive re-page AND still refine the
         // current residents below for instant feedback (the reload re-runs
@@ -906,6 +1235,10 @@ class ParsedEmailListViewModel: ObservableObject {
         if let lastPaged = lastPagedQuery, compiled != lastPaged {
             lastPagedQuery = compiled
             reloadPagesForQueryChange()
+        } else {
+            // Same pages (e.g. a regex refined in-window, or a never-paged
+            // VM): the listed emails already answer this search.
+            windowSearchText = searchText
         }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = parseSearchQuery(query)
@@ -940,7 +1273,12 @@ class ParsedEmailListViewModel: ObservableObject {
         // Proximity always routes through FTS (partial-during-import is the real
         // index, not an in-memory answer presented as authoritative). Free-text/
         // Boolean route through FTS only once the index isn't mid-build.
-        let useFTS = (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
+        // IPAD-03: with the search model answering, the pages ARE the
+        // matches — no in-window refinement by the previous FTS index, the
+        // old attachment table or a substring scan (each would drop rows the
+        // model found inside an attachment).
+        let onModel = typedSearchRunsOnModel
+        let useFTS = !onModel && (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
         if let ftsQuery, useFTS {
             // Bounded on purpose: ask FTS which WINDOW ids match
             // (`matchingSubset`) instead of materializing an archive-wide id
@@ -963,9 +1301,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     self.ftsMatchKey = cacheKey
                     self.applyFilters()
                 }
-                #if DEBUG
                 lastFTSSearchTask = searchTask
-                #endif
             }
             if ftsMatchKey == cacheKey, let ids = ftsMatchIDs {
                 advancedMatchIDs = ids
@@ -994,9 +1330,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     self.regexMatchKey = cacheKey
                     self.applyFilters()
                 }
-                #if DEBUG
                 lastFTSSearchTask = searchTask
-                #endif
             }
             advancedMatchIDs = (regexMatchKey == cacheKey ? regexMatchIDs : nil) ?? []
         } else {
@@ -1006,12 +1340,14 @@ class ParsedEmailListViewModel: ObservableObject {
                 // Proximity matches within the loaded page window (NEAR has no
                 // repository paging form) — surfaced, never silent.
                 searchNotice = "Proximity search matches loaded pages — scroll or Load More to search further."
+            } else if onModel {
+                searchNotice = modelSearchNotice
             } else if searchNotice != nil {
                 searchNotice = nil
             }
         }
 
-        if parsed.searchInAttachments && !parsed.freeText.isEmpty {
+        if !onModel && parsed.searchInAttachments && !parsed.freeText.isEmpty {
             // Attachment-CONTENT search: filenames AND extracted text (PDF,
             // text families) via the persisted attachment_search FTS table.
             // Results are cached per query; a cache miss dispatches one
@@ -1026,7 +1362,12 @@ class ParsedEmailListViewModel: ObservableObject {
                 if let progress = attachmentIndexProgress, progress.pending > 0 {
                     searchNotice = "Searching attachment names + contents — \(progress.pending) email(s) still being indexed."
                 } else if searchNotice == nil && cached.isEmpty {
-                    searchNotice = "No attachments matched. Contents of PDF and text files are searched; other binary formats match by filename."
+                    // FIND-03: name what could not be searched, never imply every attachment was.
+                    if let coverage = attachmentCoverage, coverage.total > 0 {
+                        searchNotice = AttachmentTextIndexJob.noMatchNotice(coverage)
+                    } else {
+                        searchNotice = "No attachments matched. Contents of PDF and text files are searched; other binary formats match by filename."
+                    }
                 }
             } else {
                 advancedMatchIDs = advancedMatchIDs ?? []   // empty until the lookup lands
@@ -1037,14 +1378,26 @@ class ParsedEmailListViewModel: ObservableObject {
                     let ids = (try? await SQLiteEmailStore.shared.attachmentTextSearch(ftsQuery)) ?? []
                     self.attachmentSearchCache[cacheKey] = ids
                     self.attachmentIndexProgress = try? await SQLiteEmailStore.shared.attachmentTextProgress()
+                    self.attachmentCoverage = await AttachmentTextIndexJob.coverageSummary(store: SQLiteEmailStore.shared)
                     self.applyFilters()
                 }
             }
         }
 
+        // IPAD-05: `in:trash` asks for trashed rows too, as on the Mac (the
+        // store already pages them in); hiding them here ignored the operator.
+        let trashRequested = compiled.includeTrashed
         var result = residentEmails.filter { email in
-            if review.isTrashed(email.id) { return false }
-            if review.isArchived(email.id) { return false }
+            switch reviewStateFilter {
+            case .active:
+                if review.isTrashed(email.id) && !trashRequested { return false }
+                if review.isArchived(email.id) { return false }
+            case .trashed:
+                if !review.isTrashed(email.id) { return false }
+            case .archived:
+                if review.isTrashed(email.id) { return false }
+                if !review.isArchived(email.id) { return false }
+            }
             if showPinnedOnly && !review.isPinned(email.id) { return false }
             if let clusterIDs = clusterFilterIDs {
                 if !clusterIDs.contains(email.id) { return false }
@@ -1059,7 +1412,7 @@ class ParsedEmailListViewModel: ObservableObject {
 
             if let matchIDs = advancedMatchIDs {
                 if !matchIDs.contains(email.id) { return false }
-            } else {
+            } else if !onModel {
                 let freeText = parsed.freeText
                 let matchesFreeText = freeText.isEmpty || email.fullText.localizedCaseInsensitiveContains(freeText)
                 if !matchesFreeText { return false }
@@ -1192,11 +1545,11 @@ class ParsedEmailListViewModel: ObservableObject {
         case sizeDesc = "Size ↓"
         var label: String {
             switch self {
-            case .dateAsc: return "Date (Oldest)"
-            case .dateDesc: return "Date (Newest)"
-            case .subjectAsc: return "Subject A-Z"
-            case .priorityDesc: return "Priority"
-            case .sizeDesc: return "Size (Largest)"
+            case .dateAsc: return String(localized: "Date (Oldest)")
+            case .dateDesc: return String(localized: "Date (Newest)")
+            case .subjectAsc: return String(localized: "Subject A-Z")
+            case .priorityDesc: return String(localized: "Priority")
+            case .sizeDesc: return String(localized: "Size (Largest)")
             }
         }
     }

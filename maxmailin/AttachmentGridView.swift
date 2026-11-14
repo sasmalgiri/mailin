@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import ImageIO
 import QuickLook
@@ -57,7 +58,29 @@ struct AttachmentGridView: View {
 
     private var totalSize: Int { filteredItems.reduce(0) { $0 + $1.attachment.size } }
 
+    // §3-A7: the whole archive's attachments when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+
+    /// §3-M3: the whole-archive list failed; the previous view is shown.
+    @State private var wholeFailed: String?
+
     var body: some View {
+        if v3Modules?.isOn(.v3AnalysisQueries) ?? false, wholeFailed == nil {
+            ArchiveAttachmentIndexView(onFailure: { error in
+                wholeFailed = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            })
+        } else {
+            VStack(spacing: 0) {
+                if let wholeFailed {
+                    Text(wholeFailed).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(Spacing.xSmall)
+                }
+                windowBody
+            }
+        }
+    }
+
+    private var windowBody: some View {
         VStack(spacing: 0) {
             headerBar
             Divider()
@@ -104,7 +127,7 @@ struct AttachmentGridView: View {
                 TutorialHelpButton(showTutorial: $showTutorial)
                 Picker("Sort", selection: $sortOrder) {
                     ForEach(SortOrder.allCases, id: \.self) { order in
-                        Text(order.rawValue).tag(order)
+                        Text(LocalizedStringKey(order.rawValue)).tag(order)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -119,8 +142,8 @@ struct AttachmentGridView: View {
     private var emptyState: some View {
         EmptyStateView(
             icon: "paperclip",
-            title: searchText.isEmpty ? "No Attachments" : "No Matching Attachments",
-            message: searchText.isEmpty ? "Parsed emails contain no attachments." : "Try a different search term."
+            title: searchText.isEmpty ? String(localized: "No Attachments") : String(localized: "No Matching Attachments"),
+            message: searchText.isEmpty ? String(localized: "Parsed emails contain no attachments.") : String(localized: "Try a different search term.")
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

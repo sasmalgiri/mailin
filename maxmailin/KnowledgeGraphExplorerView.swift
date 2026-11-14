@@ -1,7 +1,9 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct KnowledgeGraphExplorerView: View {
     let emails: [MBOXParser.RawEmail]
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
 
     @State private var graph = KnowledgeGraph()
     @State private var isBuilding = false
@@ -60,7 +62,7 @@ struct KnowledgeGraphExplorerView: View {
                 }
                 .buttonStyle(.bordered)
             }
-            SaveToDocumentsButton(title: "Knowledge Graph") {
+            SaveToDocumentsButton(title: String(localized: "Knowledge Graph")) {
                 [.init(key: "Emails", value: "\(emails.count)")]
             }
             TutorialHelpButton(showTutorial: $showTutorial)
@@ -119,7 +121,7 @@ struct KnowledgeGraphExplorerView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
                     } label: {
-                        Text(tab.rawValue)
+                        Text(LocalizedStringKey(tab.rawValue))
                             .font(.system(size: 12, weight: selectedTab == tab ? .semibold : .medium))
                             .foregroundColor(selectedTab == tab ? .white : .primary)
                             .padding(.horizontal, 12)
@@ -227,7 +229,7 @@ struct KnowledgeGraphExplorerView: View {
                         .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     Spacer()
-                    Text(edge.type.rawValue)
+                    Text(LocalizedStringKey(edge.type.rawValue))
                         .font(.system(size: 9)).foregroundColor(.secondary)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(.purple.opacity(0.1)))
@@ -282,6 +284,8 @@ struct KnowledgeGraphExplorerView: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("Clear search")
+                .accessibilityLabel("Clear search")
             }
         }
         .padding(Spacing.small)
@@ -458,6 +462,28 @@ struct KnowledgeGraphExplorerView: View {
     private func rebuildGraph() async {
         isBuilding = true
         let newGraph = KnowledgeGraph()
+        // §3-A15: build from every email when the 3.0 engine is on.
+        if v3Modules?.isOn(.v3Graphs) ?? false {
+            let token = EngineGuard.begin(.v3Graphs)
+            defer { EngineGuard.end(token) }
+            do {
+                for try await batch in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 500) {
+                    await Task.detached(priority: .userInitiated) { KnowledgeGraphBuilder.build(from: batch, into: newGraph) }.value
+                }
+                newGraph.save()
+                graph = newGraph
+                hasBuilt = true
+                isBuilding = false
+                return
+            } catch is CancellationError {
+                isBuilding = false
+                return
+            } catch {
+                // §3-M3 (was `catch {}`, which saved a partial graph as whole):
+                // the previous engine builds from the loaded emails below.
+                _ = EngineGuard.fellBack(.v3Graphs, error: error)
+            }
+        }
         let emailsCopy = emails
         await Task.detached(priority: .userInitiated) {
             KnowledgeGraphBuilder.build(from: emailsCopy, into: newGraph)

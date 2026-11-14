@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import UniformTypeIdentifiers
 import TipKit
@@ -6,11 +7,16 @@ struct ParsedEmailListView: View {
     @ObservedObject var model: ParsedEmailListViewModel
     @Binding var selectedEmailIDs: Set<UUID>
     @EnvironmentObject var storeManager: StoreManager
+    @Environment(AppStateManager.self) private var appState
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
     @ObservedObject private var predictiveEngine = PredictiveCodingEngine.shared
     @ObservedObject private var custodianManager = CustodianManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+    /// §3.3 R1: the AI labels toggle, the AI window, the Pro toggle and the
+    /// PII report belong to Pages 2 and 3; the Archive list shows them only
+    /// when those pages are on (owner, 2026-09-28).
+    @Environment(ModuleRegistry.self) private var modules
     @FocusState private var isSearchFieldFocused: Bool
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -20,6 +26,21 @@ struct ParsedEmailListView: View {
     /// The raw-source display text. Migrated archives may have NO stored raw
     /// MIME — never show a silent blank panel: reconstruct a readable RFC-822
     /// view from the saved headers + body and say so (`reconstructed`).
+    /// Shows an email's source. A window email may not hold its raw source
+    /// (memory budget): it is read from the archive first, so the real source
+    /// is shown rather than a reconstruction.
+    private func showRawSource(_ email: MBOXParser.RawEmail) {
+        Task { @MainActor in
+            var source = email
+            if email.rawSource.isEmpty,
+               let full = try? await ArchiveDataService.shared.fullEmails(ids: [email.id]).first {
+                source = full
+            }
+            let display = rawSourceDisplay(for: source)
+            activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+        }
+    }
+
     private func rawSourceDisplay(for email: MBOXParser.RawEmail) -> (text: String, reconstructed: Bool) {
         let rawData = email.rawSource.data(using: .utf8) ?? Data()
         let kit = SwiftEmailMessage(rawSource: rawData)
@@ -106,7 +127,8 @@ struct ParsedEmailListView: View {
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("personaFiltersInitialized") private var personaFiltersInitialized = false
     @State private var showAIPaywall = false
-    private static let freeAIFilterLimit = 5
+    /// AI smart filters a day on the Free plan (listed in Settings ▸ Health ▸ Limits).
+    static let freeAIFilterLimit = 5
     @AppStorage("freeAIFilterUsageCount") private var aiFilterUsageCount: Int = 0
     @State private var listExportError: String?
     #if os(iOS)
@@ -129,7 +151,7 @@ struct ParsedEmailListView: View {
                 if tag != .none { return false }
             }
             if quickFilterLargeEmails {
-                let size = email.rawSource.utf8.count
+                let size = model.rawByteCount(email)
                 if size < 100_000 { return false }
             }
             if quickFilterPrivileged {
@@ -221,6 +243,10 @@ struct ParsedEmailListView: View {
         iOSBody
         #else
         macOSBody
+            // Named here, on the list's own container: a label on the pane
+            // outside did not reach it (accessibility audit, 2026-10-13).
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Email list"))
         #endif
     }
 
@@ -249,7 +275,12 @@ struct ParsedEmailListView: View {
         .sheet(isPresented: $showAnalyticsSheet) {
             EmailAnalyticsView(query: model.currentArchiveQuery)
         }
-        #if !DEBUG
+        // ⋯ ▸ PII Report set this flag, but this iPhone layout had no sheet for it.
+        .sheet(isPresented: $showPIIReport) {
+            PIIReportView(query: model.currentArchiveQuery)
+                .presentationDetents([.large])
+        }
+        #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $showAIPaywall) {
             PaywallView()
                 .environmentObject(storeManager)
@@ -263,6 +294,12 @@ struct ParsedEmailListView: View {
         } message: {
             Text(listExportError ?? "An unknown error occurred.")
         }
+        .alert(String(localized: "Could not open the attachment"),
+               isPresented: Binding(get: { model.evidenceOpenFailure != nil }, set: { if !$0 { model.evidenceOpenFailure = nil } })) {
+            Button("OK", role: .cancel) { model.evidenceOpenFailure = nil }
+        } message: {
+            Text(model.evidenceOpenFailure ?? "")
+        }
     }
 
     private var iOSSearchBar: some View {
@@ -272,7 +309,7 @@ struct ParsedEmailListView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                TextField(model.isNaturalLanguageMode ? "Ask naturally..." : "Search emails...", text: $model.searchText)
+                TextField(model.isNaturalLanguageMode ? String(localized: "Ask naturally...") : String(localized: "Search emails..."), text: $model.searchText)
                     .font(.subheadline)
                     .focused($isSearchFieldFocused)
                     .onChange(of: model.searchText) { _, newValue in
@@ -286,6 +323,9 @@ struct ParsedEmailListView: View {
                             isSearchFieldFocused = true
                             model.isSearchFocused = false
                         }
+                    }
+                    .onChange(of: modules.isEnabled(.aiInsights), initial: true) { _, aiOn in
+                        if !aiOn && model.isNaturalLanguageMode { model.isNaturalLanguageMode = false }
                     }
                 if !model.searchText.isEmpty {
                     Button {
@@ -310,13 +350,19 @@ struct ParsedEmailListView: View {
                     .font(.title3)
                     .foregroundColor(hasAnyQuickFilterActive ? .accentColor : .secondary)
             }
+            .accessibilityLabel(String(localized: "Filters"))
+            .accessibilityValue(hasAnyQuickFilterActive ? String(localized: "On") : String(localized: "Off"))
 
             Menu {
-                Button { model.isNaturalLanguageMode.toggle() } label: {
-                    Label(model.isNaturalLanguageMode ? "Keyword Search" : "Natural Language", systemImage: model.isNaturalLanguageMode ? "text.magnifyingglass" : "brain")
+                // Natural-language search is an AI Insights feature; the
+                // Archive-only page keeps keyword search.
+                if modules.isEnabled(.aiInsights) {
+                    Button { model.isNaturalLanguageMode.toggle() } label: {
+                        Label(model.isNaturalLanguageMode ? "Keyword Search" : "Natural Language", systemImage: model.isNaturalLanguageMode ? "text.magnifyingglass" : "brain")
+                    }
                 }
                 Button { model.groupByThread.toggle() } label: {
-                    Label(model.groupByThread ? "Ungroup Threads" : "Group by Thread", systemImage: "bubble.left.and.bubble.right")
+                    Label(model.groupByThread ? String(localized: "Ungroup Threads") : String(localized: "Group by Thread"), systemImage: "bubble.left.and.bubble.right")
                 }
                 Divider()
                 ForEach(ParsedEmailListViewModel.SortOption.allCases, id: \.self) { option in
@@ -344,8 +390,10 @@ struct ParsedEmailListView: View {
                         Label("Export…", systemImage: "square.and.arrow.up")
                     }
                 }
-                Button { showAnalyticsSheet = true } label: {
-                    Label("Analytics", systemImage: "chart.bar.xaxis")
+                if modules.isEnabled(.aiInsights) {
+                    Button { showAnalyticsSheet = true } label: {
+                        Label("Analytics", systemImage: "chart.bar.xaxis")
+                    }
                 }
                 Button { showPIIReport = true } label: {
                     Label("PII Report", systemImage: "person.text.rectangle")
@@ -355,6 +403,9 @@ struct ParsedEmailListView: View {
                     .font(.title3)
                     .foregroundColor(.secondary)
             }
+            // Read aloud as what it holds, not as "ellipsis circle".
+            .accessibilityLabel(String(localized: "List actions"))
+            .accessibilityHint(String(localized: "Sort, group, export and reports for the emails in the list."))
         }
 
         // Part P: user-visible search caveats — never silently truncated.
@@ -364,6 +415,11 @@ struct ParsedEmailListView: View {
                 .foregroundColor(.orange)
                 .accessibilityLabel("Search notice: \(notice)")
         }
+
+        // S0: index coverage is a different caveat from `searchNotice` (which
+        // is about the QUERY). This one is about the CORPUS: some messages are
+        // indexed only in part, so a miss is not proof of absence.
+        SearchCoverageBadge(isQueryActive: !model.searchText.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -406,10 +462,12 @@ struct ParsedEmailListView: View {
                             .accessibilityLabel("Export filtered emails")
                         }
 
+                        // §3.3 R1: Email Analytics (sentiment + NLP) is a Page 2 tool.
+                        if modules.isEnabled(.aiInsights) {
                         Button {
                             showAnalyticsSheet = true
                         } label: {
-                            Label(personaManager.config.showAnalyticsProminent ? "Discover Patterns" : "Analytics",
+                            Label(personaManager.config.showAnalyticsProminent ? String(localized: "Discover Patterns") : String(localized: "Analytics"),
                                   systemImage: personaManager.config.showAnalyticsProminent ? "sparkle.magnifyingglass" : "chart.bar.xaxis")
                                 .font(personaManager.config.showAnalyticsProminent ? .footnote : .caption)
                                 .fontWeight(.semibold)
@@ -427,18 +485,21 @@ struct ParsedEmailListView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Email analytics")
-
-                        Button {
-                            showPIIReport = true
-                        } label: {
-                            Label("PII", systemImage: "person.text.rectangle")
-                                .font(Typography.caption1)
                         }
-                        .controlSize(.small)
-                        .help("Scan the current filter for personally identifiable information — emails, phones, cards, SSNs, IPs — with a CSV export")
-                        .accessibilityLabel("PII report")
 
-                        if enableAIFeatures {
+                        if modules.isEnabled(.professional) {
+                            Button {
+                                showPIIReport = true
+                            } label: {
+                                Label("PII", systemImage: "person.text.rectangle")
+                                    .font(Typography.caption1)
+                            }
+                            .controlSize(.small)
+                            .help("Scan the current filter for personally identifiable information — emails, phones, cards, SSNs, IPs — with a CSV export")
+                            .accessibilityLabel("PII report")
+                        }
+
+                        if enableAIFeatures, modules.isEnabled(.aiInsights) {
                             AIWindowButton(model: model)
                                 .environmentObject(storeManager)
                         }
@@ -480,7 +541,7 @@ struct ParsedEmailListView: View {
                 .presentationDetents([.large])
         }
         #endif
-        #if !DEBUG
+        #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $showAIPaywall) {
             PaywallView()
                 .environmentObject(storeManager)
@@ -500,6 +561,12 @@ struct ParsedEmailListView: View {
             Button("OK") { listExportError = nil }
         } message: {
             Text(listExportError ?? "An unknown error occurred.")
+        }
+        .alert(String(localized: "Could not open the attachment"),
+               isPresented: Binding(get: { model.evidenceOpenFailure != nil }, set: { if !$0 { model.evidenceOpenFailure = nil } })) {
+            Button("OK", role: .cancel) { model.evidenceOpenFailure = nil }
+        } message: {
+            Text(model.evidenceOpenFailure ?? "")
         }
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
@@ -589,6 +656,28 @@ struct ParsedEmailListView: View {
                 .accessibilityLabel("Sort order: \(model.sortBy.label)")
             }
 
+            // Free plan: the reachable and total counts apart, with the upgrade right there (the
+            // same notice and strings as the three-pane list). Rows past the limit stay in the
+            // archive; a purchase unlocks them.
+            if let total = model.accessLimitedTotal {
+                Button {
+                    storeManager.requestPurchase(
+                        .personal,
+                        feature: String(localized: "Full Archive"),
+                        reason: "The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive: \(model.displayedEmailCount) of these \(total) emails are among them. Personal and Professional include all of them.",
+                        target: .main)
+                } label: {
+                    Label("\(model.displayedEmailCount) of \(total) emails in the Free plan · Unlock Full Archive",
+                          systemImage: "lock.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help("The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive. Personal and Professional include the whole archive.")
+                .accessibilityIdentifier("classic.list.accessLimit")
+            }
+
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "magnifyingglass")
                     .font(.footnote)
@@ -596,13 +685,13 @@ struct ParsedEmailListView: View {
                     .foregroundColor(AppColors.secondary)
                 TextField(model.isNaturalLanguageMode ? {
                     #if os(iOS)
-                    return "Ask naturally..."
+                    return String(localized: "Ask naturally...")
                     #else
                     return "Ask naturally, e.g. \"John's emails from last week with attachments\""
                     #endif
                 }() : {
                     #if os(iOS)
-                    return "Search emails..."
+                    return String(localized: "Search emails...")
                     #else
                     return "Search — try from:name, AND/OR/NOT, \"exact phrase\", or /regex/"
                     #endif
@@ -613,8 +702,8 @@ struct ParsedEmailListView: View {
                     .help(model.isNaturalLanguageMode
                           ? "Ask in plain words — e.g. “invoices from Priya last March” — mailin turns it into a search"
                           : "Searches subjects, senders and full text across the whole archive. Power operators: from: to: subject: tag: type:sent has:attachment in:attachments before:2024-01-01 — quotes for exact phrases")
-                    .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language search" : "Search emails")
-                    .accessibilityHint(model.isNaturalLanguageMode ? "Type a natural language query to filter emails" : "Supports operators: from:, to:, subject:, has:attachment, before:, after:")
+                    .accessibilityLabel(model.isNaturalLanguageMode ? String(localized: "Natural language search") : String(localized: "Search emails"))
+                    .accessibilityHint(model.isNaturalLanguageMode ? String(localized: "Type a natural language query to filter emails") : String(localized: "Supports operators: from:, to:, subject:, has:attachment, before:, after:"))
                     .onChange(of: model.searchText) { _, newValue in
                         model.searchTextDidChange()
                         if !newValue.isEmpty {
@@ -627,7 +716,14 @@ struct ParsedEmailListView: View {
                             model.isSearchFocused = false
                         }
                     }
+                    // Natural-language mode belongs to AI Insights: when that
+                    // page is off the switch is hidden and the mode cannot stay
+                    // on (owner, 2026-09-28 — "NL" showed on Archive-only).
+                    .onChange(of: modules.isEnabled(.aiInsights), initial: true) { _, aiOn in
+                        if !aiOn && model.isNaturalLanguageMode { model.isNaturalLanguageMode = false }
+                    }
 
+                if modules.isEnabled(.aiInsights) {
                 Button {
                     model.isNaturalLanguageMode.toggle()
                     if !model.searchText.isEmpty {
@@ -649,9 +745,10 @@ struct ParsedEmailListView: View {
                 }
                 .buttonStyle(.plain)
                 #if os(macOS)
-                .help(model.isNaturalLanguageMode ? "Switch to keyword search" : "Switch to natural language search")
+                .help(model.isNaturalLanguageMode ? String(localized: "Switch to keyword search") : String(localized: "Switch to natural language search"))
                 #endif
-                .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language mode active" : "Enable natural language mode")
+                .accessibilityLabel(model.isNaturalLanguageMode ? String(localized: "Natural language mode active") : String(localized: "Enable natural language mode"))
+                }
 
                 if !model.searchText.isEmpty {
                     Button {
@@ -679,7 +776,10 @@ struct ParsedEmailListView: View {
 
                 if !model.savedSearches.isEmpty {
                     Menu {
-                        ForEach(model.savedSearches) { search in
+                        // SEARCH-02: a search saved with Advanced Search
+                        // conditions runs from the archive sidebar, where the
+                        // conditions apply; this box would run only its words.
+                        ForEach(model.savedSearches.filter { $0.spec?.isEmpty ?? true }) { search in
                             Button {
                                 model.searchText = search.query
                             } label: {
@@ -709,6 +809,12 @@ struct ParsedEmailListView: View {
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
             .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
+
+            // S0: an absent search hit must never be indistinguishable from
+            // "that phrase is not in the archive". Renders nothing when
+            // coverage is complete, which is the normal case.
+            SearchCoverageBadge(isQueryActive: !model.searchText.isEmpty)
+                .padding(.horizontal, Spacing.small)
 
             // NL mode: echo what the AI understood so the user can verify
             // the interpretation (and see that filtering is in progress).
@@ -834,7 +940,7 @@ struct ParsedEmailListView: View {
                 HStack(spacing: Spacing.xSmall) {
                     ForEach(activeFilterChips, id: \.key) { chip in
                         let isAIChip = Self.aiFilterKeys.contains(chip.key)
-                        if !isAIChip || aiTagsApplied {
+                        if !isAIChip || (aiTagsApplied && modules.isEnabled(.aiInsights)) {
                             DismissableFilterChip(
                                 label: chip.label,
                                 icon: chip.icon,
@@ -897,6 +1003,7 @@ struct ParsedEmailListView: View {
                     .frame(width: 300)
                 }
 
+                if modules.isEnabled(.aiInsights) {
                 Button {
                     aiTagsApplied.toggle()
                     Task { await AIToggleTip.filtersUsed.donate() }
@@ -904,7 +1011,7 @@ struct ParsedEmailListView: View {
                     HStack(spacing: 2) {
                         Image(systemName: aiTagsApplied ? "brain.fill" : "brain")
                             .font(.system(size: 10))
-                        Text(aiTagsApplied ? "AI On" : "AI")
+                        Text(aiTagsApplied ? String(localized: "AI On") : "AI")
                             .font(.system(size: 9, weight: .medium))
                     }
                     .foregroundColor(aiTagsApplied ? .white : AppColors.primary)
@@ -929,7 +1036,9 @@ struct ParsedEmailListView: View {
                       ? "AI labels are ON — every email shows what the AI thinks it is (category, mood, priority, phishing). Click to show plain facts only."
                       : "Turn ON AI labels — the on-device AI marks each email's category, mood, priority and phishing risk. Analysis is saved on this Mac; nothing goes online.")
                 #endif
+                }
 
+                if modules.isEnabled(.professional) {
                 Button {
                     showAdvancedFeatures.toggle()
                     Task { await ProToggleTip.filtersUsed.donate() }
@@ -937,7 +1046,7 @@ struct ParsedEmailListView: View {
                     HStack(spacing: 2) {
                         Image(systemName: showAdvancedFeatures ? "gearshape.fill" : "gearshape")
                             .font(.system(size: 10))
-                        Text(showAdvancedFeatures ? "Pro" : "Pro")
+                        Text(showAdvancedFeatures ? String(localized: "Pro") : String(localized: "Pro"))
                             .font(.system(size: 9, weight: .medium))
                     }
                     .foregroundColor(showAdvancedFeatures ? .white : AppColors.secondary)
@@ -949,8 +1058,9 @@ struct ParsedEmailListView: View {
                 .buttonStyle(.plain)
                 .popoverTip(ProToggleTip(), arrowEdge: .bottom)
                 #if os(macOS)
-                .help(showAdvancedFeatures ? "Advanced features visible — click to simplify" : "Show forensic, legal & advanced features")
+                .help(showAdvancedFeatures ? String(localized: "Advanced features visible — click to simplify") : String(localized: "Show forensic, legal & advanced features"))
                 #endif
+                }
 
                 addFilterMenu
 
@@ -1051,37 +1161,43 @@ struct ParsedEmailListView: View {
     }
 
     private static let allFilterChips: [FilterChipInfo] = [
-        FilterChipInfo(key: "sent", label: "Sent", icon: "arrow.up.right", color: .blue, section: "Type"),
-        FilterChipInfo(key: "received", label: "Received", icon: "arrow.down.left", color: .teal, section: "Type"),
-        FilterChipInfo(key: "attachments", label: "Attachments", icon: "paperclip", color: .brown, section: "Type"),
-        FilterChipInfo(key: "hasLinks", label: "Has Links", icon: "link", color: .indigo, section: "Type"),
-        FilterChipInfo(key: "largeEmails", label: "Large Emails", icon: "arrow.up.circle", color: .orange, section: "Type"),
+        FilterChipInfo(key: "sent", label: String(localized: "Sent"), icon: "arrow.up.right", color: .blue, section: "Type"),
+        FilterChipInfo(key: "received", label: String(localized: "Received"), icon: "arrow.down.left", color: .teal, section: "Type"),
+        FilterChipInfo(key: "attachments", label: String(localized: "Attachments"), icon: "paperclip", color: .brown, section: "Type"),
+        FilterChipInfo(key: "hasLinks", label: String(localized: "Has Links"), icon: "link", color: .indigo, section: "Type"),
+        FilterChipInfo(key: "largeEmails", label: String(localized: "Large Emails"), icon: "arrow.up.circle", color: .orange, section: "Type"),
 
-        FilterChipInfo(key: "personal", label: "Personal", icon: "person.fill", color: .cyan, section: "Category"),
-        FilterChipInfo(key: "transactional", label: "Transactional", icon: "creditcard", color: .indigo, section: "Category"),
-        FilterChipInfo(key: "newsletter", label: "Newsletters", icon: "newspaper.fill", color: .mint, section: "Category"),
-        FilterChipInfo(key: "promotional", label: "Promotional", icon: "megaphone", color: .pink, section: "Category"),
-        FilterChipInfo(key: "automated", label: "Automated", icon: "gearshape", color: .gray, section: "Category"),
+        FilterChipInfo(key: "personal", label: String(localized: "Personal"), icon: "person.fill", color: .cyan, section: "Category"),
+        FilterChipInfo(key: "transactional", label: String(localized: "Transactional"), icon: "creditcard", color: .indigo, section: "Category"),
+        FilterChipInfo(key: "newsletter", label: String(localized: "Newsletters"), icon: "newspaper.fill", color: .mint, section: "Category"),
+        FilterChipInfo(key: "promotional", label: String(localized: "Promotional"), icon: "megaphone", color: .pink, section: "Category"),
+        FilterChipInfo(key: "automated", label: String(localized: "Automated"), icon: "gearshape", color: .gray, section: "Category"),
 
-        FilterChipInfo(key: "relevant", label: "Relevant", icon: "checkmark.seal.fill", color: .green, section: "Evidence"),
-        FilterChipInfo(key: "privileged", label: "Privileged", icon: "lock.shield.fill", color: .orange, section: "Evidence"),
-        FilterChipInfo(key: "irrelevant", label: "Irrelevant", icon: "xmark.circle", color: .gray, section: "Evidence"),
-        FilterChipInfo(key: "flagged", label: "Flagged", icon: "flag.fill", color: .red, section: "Evidence"),
-        FilterChipInfo(key: "suspicious", label: "Suspicious", icon: "exclamationmark.triangle.fill", color: .purple, section: "Evidence"),
+        FilterChipInfo(key: "relevant", label: String(localized: "Relevant"), icon: "checkmark.seal.fill", color: .green, section: "Evidence"),
+        FilterChipInfo(key: "privileged", label: String(localized: "Privileged"), icon: "lock.shield.fill", color: .orange, section: "Evidence"),
+        FilterChipInfo(key: "irrelevant", label: String(localized: "Irrelevant"), icon: "xmark.circle", color: .gray, section: "Evidence"),
+        FilterChipInfo(key: "flagged", label: String(localized: "Flagged"), icon: "flag.fill", color: .red, section: "Evidence"),
+        FilterChipInfo(key: "suspicious", label: String(localized: "Suspicious"), icon: "exclamationmark.triangle.fill", color: .purple, section: "Evidence"),
 
-        FilterChipInfo(key: "positive", label: "Positive", icon: "face.smiling", color: .green, section: "Sentiment"),
-        FilterChipInfo(key: "negative", label: "Negative", icon: "face.dashed", color: .red, section: "Sentiment"),
-        FilterChipInfo(key: "neutral", label: "Neutral", icon: "minus.circle", color: .gray, section: "Sentiment"),
+        FilterChipInfo(key: "positive", label: String(localized: "Positive"), icon: "face.smiling", color: .green, section: "Sentiment"),
+        FilterChipInfo(key: "negative", label: String(localized: "Negative"), icon: "face.dashed", color: .red, section: "Sentiment"),
+        FilterChipInfo(key: "neutral", label: String(localized: "Neutral"), icon: "minus.circle", color: .gray, section: "Sentiment"),
 
-        FilterChipInfo(key: "highPriority", label: "High Priority", icon: "exclamationmark.triangle.fill", color: .red, section: "Priority"),
-        FilterChipInfo(key: "mediumPriority", label: "Medium Priority", icon: "exclamationmark.circle", color: .orange, section: "Priority"),
-        FilterChipInfo(key: "important", label: "Important", icon: "bolt.fill", color: .purple, section: "Priority"),
+        FilterChipInfo(key: "highPriority", label: String(localized: "High Priority"), icon: "exclamationmark.triangle.fill", color: .red, section: "Priority"),
+        FilterChipInfo(key: "mediumPriority", label: String(localized: "Medium Priority"), icon: "exclamationmark.circle", color: .orange, section: "Priority"),
+        FilterChipInfo(key: "important", label: String(localized: "Important"), icon: "bolt.fill", color: .purple, section: "Priority"),
 
-        FilterChipInfo(key: "phishing", label: "Phishing", icon: "shield.slash", color: .red, section: "Security"),
-        FilterChipInfo(key: "aiSuspicious", label: "AI Suspicious", icon: "exclamationmark.shield.fill", color: .purple, section: "Security"),
+        FilterChipInfo(key: "phishing", label: String(localized: "Phishing"), icon: "shield.slash", color: .red, section: "Security"),
+        FilterChipInfo(key: "aiSuspicious", label: String(localized: "AI Suspicious"), icon: "exclamationmark.shield.fill", color: .purple, section: "Security"),
 
-        FilterChipInfo(key: "unreviewed", label: "Unreviewed", icon: "eye.slash", color: .secondary, section: "Review"),
-        FilterChipInfo(key: "cleanup", label: "Cleanup", icon: "trash.circle", color: .secondary, section: "Review"),
+        FilterChipInfo(key: "unreviewed", label: String(localized: "Unreviewed"), icon: "eye.slash", color: .secondary, section: "Review"),
+        FilterChipInfo(key: "cleanup", label: String(localized: "Cleanup"), icon: "trash.circle", color: .secondary, section: "Review"),
+        // The Trash view and the Archived filter the UI has always promised.
+        // Mutually exclusive — see `filterBinding(for:)`. Their own section,
+        // NOT "Review": that one only appears with advanced features on, and
+        // getting a deleted email back is not an advanced feature.
+        FilterChipInfo(key: "trash", label: String(localized: "Trash"), icon: "trash", color: .red, section: "Review State"),
+        FilterChipInfo(key: "archived", label: String(localized: "Archived"), icon: "archivebox", color: .brown, section: "Review State"),
     ]
 
     private var activeFilterChips: [FilterChipInfo] {
@@ -1108,6 +1224,16 @@ struct ParsedEmailListView: View {
             set: { quickFilterHighPriority = $0; syncQuickFiltersToQuery() })
         case "hasLinks": return $quickFilterHasLinks
         case "cleanup": return $showCleanupMode
+        // Both map onto one enum, so switching one off returns to normal
+        // browsing and switching one on cannot leave the other engaged.
+        case "trash": return Binding(
+            get: { model.reviewStateFilter == .trashed },
+            set: { model.reviewStateFilter = $0 ? .trashed : .active
+                   if $0 { activeFilterTags.remove("archived") } })
+        case "archived": return Binding(
+            get: { model.reviewStateFilter == .archived },
+            set: { model.reviewStateFilter = $0 ? .archived : .active
+                   if $0 { activeFilterTags.remove("trash") } })
         case "important": return Binding(
             get: { quickFilterAIImportant },
             set: { quickFilterAIImportant = $0; syncQuickFiltersToQuery() })
@@ -1169,7 +1295,7 @@ struct ParsedEmailListView: View {
             }
 
             let sections = Dictionary(grouping: Self.allFilterChips, by: \.section)
-            let basicSections = ["Type"]
+            let basicSections = ["Type", "Review State"]
             let aiSections = ["Category", "Sentiment", "Priority", "Security"]
             let advancedSections = ["Evidence", "Review"]
 
@@ -1183,7 +1309,9 @@ struct ParsedEmailListView: View {
                 }
             }
 
-            if aiTagsApplied {
+            // Owner, 2026-09-30: AI filter sections and the hint that offers
+            // them exist only while the AI Insights page is on.
+            if aiTagsApplied, modules.isEnabled(.aiInsights) {
                 ForEach(aiSections, id: \.self) { section in
                     if let chips = sections[section] {
                         Section("\(section) (AI)") {
@@ -1193,7 +1321,7 @@ struct ParsedEmailListView: View {
                         }
                     }
                 }
-            } else {
+            } else if modules.isEnabled(.aiInsights) {
                 Section {
                     Label("Turn on AI to see Category, Sentiment & Priority filters", systemImage: "brain")
                         .font(.caption)
@@ -1367,7 +1495,7 @@ struct ParsedEmailListView: View {
                 VStack(spacing: Spacing.medium) {
                     EmptyStateView(
                         icon: "line.3.horizontal.decrease.circle",
-                        title: "No matching emails",
+                        title: String(localized: "No matching emails"),
                         message: hasAnyQuickFilterActive
                             ? "Active filter chips are hiding all emails. Clear them to see your \(model.visibleEmails.count) emails."
                             : "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count."
@@ -1412,10 +1540,67 @@ struct ParsedEmailListView: View {
                         }
                         pageWindowFooter
                     }
+                    .accessibilityLabel(String(localized: "Emails"))
+                    // Keyboard-first browsing (v2.1 backlog #15): J/K move the
+                    // selection, Return opens the selection in its own window,
+                    // "/" focuses search, and typing a letter starts a search
+                    // with that letter — no mouse trip to the search field.
+                    .onKeyPress(.init("j")) { moveSelection(by: 1, in: emails); return .handled }
+                    .onKeyPress(.init("k")) { moveSelection(by: -1, in: emails); return .handled }
+                    .onKeyPress(.return) { openSelectionInWindow(in: emails); return .handled }
+                    .onKeyPress(.init("/")) { isSearchFieldFocused = true; return .handled }
+                    .onKeyPress(characters: .alphanumerics, phases: .down) { press in
+                        // Letters used above are navigation, not search.
+                        guard !["j", "k"].contains(press.characters.lowercased()) else { return .ignored }
+                        beginTypeToFilter(press.characters)
+                        return .handled
+                    }
                 }
                 #endif
             }
         }
+    }
+
+    // MARK: - Keyboard-first browsing (v2.1 backlog #15)
+
+    /// J/K: step the single selection through the visible order; with no
+    /// selection, J selects the first row and K the last.
+    private func moveSelection(by delta: Int, in emails: [MBOXParser.RawEmail]) {
+        guard !emails.isEmpty else { return }
+        let ids = emails.map(\.id)
+        let currentIndex = selectedEmailIDs.count == 1 ? ids.firstIndex(of: selectedEmailIDs.first!) : nil
+        let next: Int
+        if let currentIndex {
+            next = min(max(currentIndex + delta, 0), ids.count - 1)
+        } else {
+            next = delta > 0 ? 0 : ids.count - 1
+        }
+        selectedEmailIDs = [ids[next]]
+        if next >= ids.count - 5 { model.loadMoreIfNeeded(currentID: ids[next]) }
+    }
+
+    /// Return: the selected email in its own window (macOS), so the list stays
+    /// where it is. With several selected, nothing happens — opening N windows
+    /// from one keypress would be a surprise, not a shortcut.
+    private func openSelectionInWindow(in emails: [MBOXParser.RawEmail]) {
+        guard selectedEmailIDs.count == 1, let id = selectedEmailIDs.first,
+              let email = emails.first(where: { $0.id == id }) else { return }
+        #if os(macOS)
+        let title = (email.headers["Subject"]?.isEmpty == false ? email.headers["Subject"]! : "(No Subject)")
+        ToolWindowPresenter.shared.open(title: title, size: CGSize(width: 900, height: 720)) {
+            AnyView(EmailDetailView(email: email).toolWindowFrame())
+        }
+        #endif
+    }
+
+    /// Typing while the list has focus starts a search with what was typed.
+    private func beginTypeToFilter(_ characters: String) {
+        if model.isNaturalLanguageMode == false {
+            model.searchText = characters
+        } else {
+            model.searchText += characters
+        }
+        isSearchFieldFocused = true
     }
 
     // MARK: - Page window affordances (Part S — bounded window paging)
@@ -1550,6 +1735,7 @@ struct ParsedEmailListView: View {
                 forensicTableRow(for: email)
                     .tag(email.id)
             }
+            .accessibilityLabel(String(localized: "Emails"))
             .listStyle(.plain)
             .environment(\.defaultMinListRowHeight, 28)
             .onKeyPress(.init("1")) { tagAndAdvance(.relevant, in: sorted); return .handled }
@@ -1597,12 +1783,12 @@ struct ParsedEmailListView: View {
             HStack(spacing: 5) {
                 Image(systemName: "keyboard").font(.system(size: 9)).foregroundColor(.secondary)
                 Text("Quick Tag:").font(.system(size: 8)).foregroundColor(.secondary)
-                inboxKeyBadge("1", label: "Relevant", color: .green)
-                inboxKeyBadge("2", label: "Privileged", color: .orange)
-                inboxKeyBadge("3", label: "Irrelevant", color: .gray)
-                inboxKeyBadge("4", label: "Flagged", color: .red)
-                inboxKeyBadge("5", label: "Suspicious", color: .purple)
-                inboxKeyBadge("0", label: "Clear", color: .secondary)
+                inboxKeyBadge("1", label: String(localized: "Relevant"), color: .green)
+                inboxKeyBadge("2", label: String(localized: "Privileged"), color: .orange)
+                inboxKeyBadge("3", label: String(localized: "Irrelevant"), color: .gray)
+                inboxKeyBadge("4", label: String(localized: "Flagged"), color: .red)
+                inboxKeyBadge("5", label: String(localized: "Suspicious"), color: .purple)
+                inboxKeyBadge("0", label: String(localized: "Clear"), color: .secondary)
             }
             .help("Select an email, then press a number key to quickly tag it as evidence")
 
@@ -1638,11 +1824,12 @@ struct ParsedEmailListView: View {
             .help("Select a random 10% of the current list for quality-control re-review — standard e-discovery practice")
 
             Button {
-                forensicManager.runPrivilegeScan(on: emails)
                 // Surface the results immediately: the Privileged quick
                 // filter shows exactly the rows the scan flagged.
-                quickFilterPrivileged = true
-                model.applyFilters()
+                PrivilegeScanEngine.run(modules: modules, query: model.currentArchiveQuery, loaded: emails) {
+                    quickFilterPrivileged = true
+                    model.applyFilters()
+                }
             } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "lock.shield")
@@ -1776,7 +1963,7 @@ struct ParsedEmailListView: View {
 
         return HStack(spacing: 0) {
             if tag != .none {
-                Text(tag.rawValue)
+                Text(LocalizedStringKey(tag.rawValue))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(tag.color)
                     .padding(.horizontal, 3)
@@ -1894,8 +2081,7 @@ struct ParsedEmailListView: View {
         }
         .contextMenu {
             Button {
-                let display = rawSourceDisplay(for: email)
-                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                showRawSource(email)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
@@ -1940,6 +2126,29 @@ struct ParsedEmailListView: View {
             } label: {
                 Label("Copy Sender", systemImage: "person.crop.circle")
             }
+
+            // Restore. Without this the Trash and Archived filters would only
+            // let the user LOOK at what they removed — which is not what
+            // "restorable" means.
+            if model.isDeleted(email.id) || model.isArchived(email.id) {
+                Divider()
+
+                if model.isDeleted(email.id) {
+                    Button {
+                        model.undeleteEmail(email.id)
+                    } label: {
+                        Label("Restore from Trash", systemImage: "arrow.uturn.backward")
+                    }
+                }
+
+                if model.isArchived(email.id) {
+                    Button {
+                        model.unarchiveEmail(email.id)
+                    } label: {
+                        Label("Move Back to Inbox", systemImage: "tray.and.arrow.up")
+                    }
+                }
+            }
         }
     }
 
@@ -1970,9 +2179,9 @@ struct ParsedEmailListView: View {
                 Divider().frame(height: 12)
 
                 HStack(spacing: 5) {
-                    inboxStatusDot(.green, count: relevant, label: "Relevant")
-                    inboxStatusDot(.orange, count: privileged, label: "Privileged")
-                    inboxStatusDot(.red, count: flagged, label: "Flagged")
+                    inboxStatusDot(.green, count: relevant, label: String(localized: "Relevant"))
+                    inboxStatusDot(.orange, count: privileged, label: String(localized: "Privileged"))
+                    inboxStatusDot(.red, count: flagged, label: String(localized: "Flagged"))
                 }
                 .help("Distribution of your evidence tags across emails")
 
@@ -2059,7 +2268,7 @@ struct ParsedEmailListView: View {
                     Image(systemName: tag.icon)
                         .foregroundColor(tag.color)
                         .frame(width: 16)
-                    Text(tag.rawValue)
+                    Text(LocalizedStringKey(tag.rawValue))
                         .foregroundColor(.secondary)
                     Spacer()
                     Text("\(count)")
@@ -2209,6 +2418,7 @@ struct ParsedEmailListView: View {
         List(selection: $selectedEmailIDs) {
             threadedListContent
         }
+        .accessibilityLabel(String(localized: "Emails"))
         #endif
     }
 
@@ -2287,13 +2497,14 @@ struct ParsedEmailListView: View {
 
     #if os(iOS)
     private func iOSEmailRow(for email: MBOXParser.RawEmail) -> some View {
-        EmailRowView(email: email, searchText: model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+        EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal,
+                     evidenceProvider: model.searchEvidenceProvider,
+                     onOpenAttachment: { id, ordinal, child in model.openEvidenceAttachment(id, ordinal, child) })
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
                 Button {
-                        let display = rawSourceDisplay(for: email)
-                    activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                        showRawSource(email)
                 } label: {
                     Label("View Raw Source", systemImage: "doc.plaintext")
                 }
@@ -2310,11 +2521,13 @@ struct ParsedEmailListView: View {
                     Label("Copy Sender", systemImage: "person.crop.circle")
                 }
 
-                Button {
-                    let summary = EmailNLPEngine.summarizeEmail(email)
-                    PlatformClipboard.copyString(summary)
-                } label: {
-                    Label("Summarize", systemImage: "sparkles")
+                if modules.isEnabled(.aiInsights) {
+                    Button {
+                        let summary = EmailNLPEngine.summarizeEmail(email)
+                        PlatformClipboard.copyString(summary)
+                    } label: {
+                        Label("Summarize (copy to clipboard)", systemImage: "sparkles")
+                    }
                 }
 
                 if !email.attachments.isEmpty {
@@ -2355,7 +2568,7 @@ struct ParsedEmailListView: View {
             if forensicManager.isEnabled {
                 let tag = forensicManager.tagForEmail(email.id)
                 if tag != .none {
-                    Text(tag.rawValue)
+                    Text(LocalizedStringKey(tag.rawValue))
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(tag.color)
                         .padding(.horizontal, 4)
@@ -2401,7 +2614,9 @@ struct ParsedEmailListView: View {
                     .help("Medium priority")
             }
 
-            EmailRowView(email: email, searchText: model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+            EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.windowSearchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal,
+                     evidenceProvider: model.searchEvidenceProvider,
+                     onOpenAttachment: { id, ordinal, child in model.openEvidenceAttachment(id, ordinal, child) })
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let label = predictiveEngine.predictionLabel(for: email.id) {
@@ -2428,8 +2643,7 @@ struct ParsedEmailListView: View {
             emailTagPills(for: email)
 
             Button {
-                let display = rawSourceDisplay(for: email)
-                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                showRawSource(email)
             } label: {
                 Image(systemName: "doc.plaintext")
                     .foregroundColor(AppColors.secondary)
@@ -2439,7 +2653,7 @@ struct ParsedEmailListView: View {
             .accessibilityLabel("View raw source")
 
             if !email.attachments.isEmpty {
-                AttachmentsPopoverButton(attachments: email.attachments)
+                AttachmentsPopoverButton(attachments: email.attachments, ownerEmail: email)
             }
         }
         .padding(.horizontal, Spacing.xSmall)
@@ -2467,8 +2681,7 @@ struct ParsedEmailListView: View {
             #endif
 
             Button {
-                let display = rawSourceDisplay(for: email)
-                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                showRawSource(email)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
@@ -2489,11 +2702,13 @@ struct ParsedEmailListView: View {
 
             Divider()
 
-            Button {
-                let summary = EmailNLPEngine.summarizeEmail(email)
-                PlatformClipboard.copyString(summary)
-            } label: {
-                Label("Summarize (copy to clipboard)", systemImage: "sparkles")
+            if modules.isEnabled(.aiInsights) {
+                Button {
+                    let summary = EmailNLPEngine.summarizeEmail(email)
+                    PlatformClipboard.copyString(summary)
+                } label: {
+                    Label("Summarize (copy to clipboard)", systemImage: "sparkles")
+                }
             }
 
             if !email.attachments.isEmpty {
@@ -2746,7 +2961,7 @@ struct ParsedEmailListView: View {
     private func activeTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
         let hidden = suppressedAITags[email.id] ?? []
         var all: [EmailQuickTag] = []
-        if enableAIFeatures && aiTagsApplied {
+        if enableAIFeatures && aiTagsApplied && modules.isEnabled(.aiInsights) {
             all.append(contentsOf: factsVisible(aiTags(for: email)).filter { !hidden.contains($0) })
         } else {
             all.append(contentsOf: factsVisible(basicTags(for: email)))
@@ -2797,7 +3012,7 @@ struct ParsedEmailListView: View {
             tagBadge(badge, color: badgeColor)
             Image(systemName: primary.icon)
                 .font(.system(size: 9))
-            Text(primary.rawValue)
+            Text(LocalizedStringKey(primary.rawValue))
                 .font(.system(size: 9, weight: .medium))
                 .lineLimit(1)
             if extra > 0 {
@@ -2823,7 +3038,7 @@ struct ParsedEmailListView: View {
         let manualTags = manualTagsOnly(for: email)
 
         HStack(spacing: 3) {
-            if enableAIFeatures && aiTagsApplied && !autoTags.isEmpty {
+            if enableAIFeatures && aiTagsApplied && modules.isEnabled(.aiInsights) && !autoTags.isEmpty {
                 Menu {
                     Section("AI Tags — click one to remove it") {
                         ForEach(autoTags, id: \.self) { tag in
@@ -2863,7 +3078,7 @@ struct ParsedEmailListView: View {
                             Label(tag.rawValue, systemImage: tag.icon)
                         }
                     }
-                    if enableAIFeatures {
+                    if enableAIFeatures, modules.isEnabled(.aiInsights) {
                         Section {
                             Button {
                                 aiTagsApplied = true
@@ -3003,6 +3218,23 @@ struct ParsedEmailListView: View {
     }
 
     private func saveAttachmentsForEmail(_ email: MBOXParser.RawEmail) {
+        // Ask BEFORE the folder panel whether anything can actually be
+        // recovered. `AttachmentHydrator.canRead` exists for exactly this —
+        // its doc says so — and had no caller, so the user picked a
+        // destination, waited, and was then told "0 saved, N failed". Most
+        // often that means the message's source volume is not mounted, which
+        // is worth saying rather than counting.
+        let cache = AttachmentHydrator.Cache()
+        let readable = email.attachments.enumerated().filter {
+            AttachmentHydrator.canRead($0.element, index: $0.offset, email: email, cache: cache)
+        }
+        guard !readable.isEmpty else {
+            listExportError = email.attachments.isEmpty
+                ? "This message has no attachments."
+                : "None of the \(email.attachments.count) attachment(s) can be read. The original file may not be available — check that the source volume is mounted."
+            return
+        }
+
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -3014,9 +3246,24 @@ struct ParsedEmailListView: View {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attachments", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         #endif
-        var failedCount = 0
-        for att in email.attachments {
-            guard let source = att.fileURL else { continue }
+        // Pre-counted above: anything unreadable is reported as skipped
+        // rather than attempted, so a failure here is a genuine write error.
+        var failedCount = email.attachments.count - readable.count
+        // A stored email has no live temp file; re-extract from raw MIME so
+        // "Save attachments" works on an archived message, not only on one
+        // parsed this session.
+        for (index, att) in readable {
+            guard let data = AttachmentHydrator.data(for: att, index: index,
+                                                     email: email, cache: cache) else {
+                failedCount += 1
+                continue
+            }
+            let source = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "_" + att.filename)
+            guard (try? data.write(to: source, options: .atomic)) != nil else {
+                failedCount += 1
+                continue
+            }
             do {
                 let safeName = att.filename
                     .replacingOccurrences(of: "/", with: "_")
@@ -3028,7 +3275,16 @@ struct ParsedEmailListView: View {
             }
         }
         if failedCount > 0 {
-            listExportError = "Failed to save \(failedCount) attachment(s)."
+            // Separate "could not be read" from "could not be written": the
+            // first is a missing source, the second a destination problem, and
+            // they need different actions from the user.
+            let unreadable = email.attachments.count - readable.count
+            let writeFailures = failedCount - unreadable
+            var parts: [String] = []
+            if unreadable > 0 { parts.append("\(unreadable) could not be read from this message") }
+            if writeFailures > 0 { parts.append("\(writeFailures) could not be written to that folder") }
+            listExportError = "Saved \(readable.count - writeFailures) of \(email.attachments.count): "
+                + parts.joined(separator: "; ") + "."
         }
         #if os(iOS)
         if failedCount == 0 {
@@ -3041,7 +3297,7 @@ struct ParsedEmailListView: View {
     private var totalAttachments: Int {
         model.visibleEmails.map { $0.attachments.count }.reduce(0, +)
     }
-    private static let freeAttachmentLimit = 10
+    private static let freeAttachmentLimit = StoreManager.freeAttachmentDownloadsPerDay
     @AppStorage("freeAttachmentDownloadCount") private var freeAttachmentDownloadCount: Int = 0
 
     private func downloadAllAttachments() {
@@ -3063,8 +3319,10 @@ struct ParsedEmailListView: View {
             // array is never the source; premium is unlimited via streaming,
             // not via an Int.max whole-array walk.
             let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
-            let cap: Int? = storeManager.isPremium ? nil : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
-            ExportRunCenter.shared.run(title: "Saving attachments") {
+            // LIFE-06: saving your own attachments is reading — unlimited once a plan was held.
+            let cap: Int? = storeManager.accessPolicy.attachmentDownloadLimit(usedToday: freeAttachmentDownloadCount,
+                                                                             freeAllowance: Self.freeAttachmentLimit)
+            ExportRunCenter.shared.run(title: String(localized: "Saving attachments")) {
                 do {
                     let outcome = try await ArchiveExportService.shared.exportAttachments(
                         scope: scope, to: folderURL, maxAttachments: cap,
@@ -3073,8 +3331,9 @@ struct ParsedEmailListView: View {
                         freeAttachmentDownloadCount += outcome.saved
                     }
                     if outcome.capped {
-                        storeManager.showPaywall = true
-                        listExportError = "Free limit: saved \(outcome.saved) attachments. Upgrade to Pro for unlimited."
+                        storeManager.requestPurchase(.personal, feature: String(localized: "Attachment Downloads"),
+                                                     reason: String(localized: "The Free plan saves 10 attachments a day. Personal and Professional have no daily limit."))
+                        listExportError = "Free limit: saved \(outcome.saved) attachments today. Personal and Professional have no daily limit."
                     }
                     #if os(iOS)
                     if outcome.saved > 0 { iOSShareFile(at: folderURL) }
@@ -3089,11 +3348,11 @@ struct ParsedEmailListView: View {
 
     private var personaListTitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Evidence"
-        case .legal: return "Documents"
-        case .itAdmin: return "Messages"
-        case .researcher: return "Corpus"
-        case .journalist, .personal, .general: return "Emails"
+        case .forensic: return String(localized: "Evidence")
+        case .legal: return String(localized: "Documents")
+        case .itAdmin: return String(localized: "Messages")
+        case .researcher: return String(localized: "Corpus")
+        case .journalist, .personal, .general: return String(localized: "Emails")
         }
     }
 
@@ -3110,6 +3369,7 @@ struct ParsedEmailListView: View {
                 iOSShareFile(at: url)
                 #endif
             },
+            exportPST: { appState.triggerExportPST = true },
             errorMessage: $listExportError
         )
         .environmentObject(storeManager)
@@ -3122,7 +3382,17 @@ struct EmailRowView: View {
     let email: MBOXParser.RawEmail
     var searchText: String = ""
     var showRiskIndicator: Bool = false
+    /// IPAD-03 / FIND-05: with the search model answering, the strip shows the
+    /// evidence the index returned for this row (the attachment, or the file
+    /// inside it) instead of the heuristic attribution.
+    var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
+    /// FIND-05: opens the attachment (or the file inside it) a chip names.
+    var onOpenAttachment: ((EmailID, Int, String?) -> Void)? = nil
+    @State private var evidence: [MatchEvidence] = []
     @Environment(\.windowSizeClass) private var sizeClass
+    /// `.increased` when the row is drawn on the open-email fill (iPad list):
+    /// every line then turns white instead of keeping its usual dark colours.
+    @Environment(\.backgroundProminence) private var prominence
     @AppStorage("emailListDensity") private var density = "comfortable"
     @AppStorage("showEmailPreviews") private var showPreviews = true
 
@@ -3146,28 +3416,74 @@ struct EmailRowView: View {
         showRiskIndicator ? ForensicManager.assessRisk(for: email).score : 0
     }
 
-    var body: some View {
-        #if os(iOS)
-        iOSRow
-        #else
-        macOSRow
-        #endif
+    private var riskTint: Color {
+        riskScore >= 75 ? .red : riskScore >= 55 ? .orange : .yellow
     }
 
+    /// A7: the search read through the one compiler, so highlighting and the
+    /// matched-field strip attribute `from:alice report` the way the store
+    /// executed it — not by looking for the literal whole string.
+    private var matchTerms: SearchMatchTerms {
+        SearchMatchTerms(searchText: searchText)
+    }
+
+    private var matchedFields: [SearchMatchField] {
+        matchTerms.matchedFields(in: email)
+    }
+
+    var body: some View {
+        Group {
+            #if os(iOS)
+            iOSRow
+            #else
+            macOSRow
+            #endif
+        }
+        .task(id: "\(email.id.uuidString)#\(searchText)#\(evidenceProvider != nil)") {
+            guard let evidenceProvider else { evidence = []; return }
+            evidence = await evidenceProvider(email.id)
+        }
+    }
+
+    /// The matched-in strip: the index's evidence on the search model, the
+    /// heuristic field chips otherwise.
+    @ViewBuilder
+    private var matchStrip: some View {
+        if evidenceProvider != nil {
+            MatchEvidenceChips(evidence: evidence, emailID: email.id,
+                               onOpenAttachment: onOpenAttachment.map { open in { ordinal, childPath in open(email.id, ordinal, childPath) } })
+        } else {
+            SearchMatchFieldChips(fields: matchedFields)
+        }
+    }
+
+    /// The open email's row on iPad. Deeper than the system blue so white text
+    /// passes 4.5:1 (5.8:1; the preview line at 90 % white about 4.8:1), where
+    /// white on #0088FF is only 3.5:1. Outside `#if os(iOS)` so the Mac test
+    /// target can check the contrast.
+    static let openRowFill = Color(red: 0, green: 0x62 / 255, blue: 0xCC / 255)
+
     #if os(iOS)
+    private var onFill: Bool { prominence == .increased }
+    private var primaryText: Color { onFill ? .white : .primary }
+    private var secondaryText: Color { onFill ? .white.opacity(0.9) : .secondary }
+
     private var iOSRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Row 1: Sender
             Text(senderName)
                 .font(.body)
                 .fontWeight(.semibold)
+                .foregroundColor(primaryText)
                 .lineLimit(1)
 
             // Row 2: Subject
             Text(email.headers["Subject"] ?? "(No Subject)")
                 .font(.subheadline)
-                .foregroundColor(.primary)
+                .foregroundColor(primaryText)
                 .lineLimit(2)
+
+            matchStrip
 
             // Row 3: Preview
             if showPreviews {
@@ -3176,7 +3492,7 @@ struct EmailRowView: View {
                 if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
                     Text(preview)
                         .font(.footnote)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(secondaryText)
                         .lineLimit(2)
                 }
             }
@@ -3185,7 +3501,7 @@ struct EmailRowView: View {
             HStack(spacing: 8) {
                 Text(parseDate(email.headers["Date"]))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(secondaryText)
 
                 if !email.attachments.isEmpty {
                     HStack(spacing: 2) {
@@ -3194,7 +3510,7 @@ struct EmailRowView: View {
                         Text("\(email.attachments.count)")
                             .font(.caption2)
                     }
-                    .foregroundColor(.secondary)
+                    .foregroundColor(secondaryText)
                 }
 
                 if email.messageType == "sent" {
@@ -3204,14 +3520,12 @@ struct EmailRowView: View {
                         Text("Sent")
                             .font(.caption2)
                     }
-                    .foregroundColor(.blue)
+                    .foregroundColor(onFill ? .white : .blue)
                 }
 
                 Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundColor(Color(.tertiaryLabel))
+                // No chevron here: the iPhone list's NavigationLink draws one,
+                // and the iPad list selects in place (two chevrons, found in V9).
             }
         }
         .padding(.vertical, 10)
@@ -3226,7 +3540,7 @@ struct EmailRowView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(highlightedText(senderName))
+                    Text(highlightedText(senderName, field: .sender))
                         .font(.footnote)
                         .fontWeight(.semibold)
                         .lineLimit(1)
@@ -3237,30 +3551,38 @@ struct EmailRowView: View {
                             Text("\(riskScore)")
                                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                         }
-                        .foregroundColor(riskScore >= 75 ? .red : riskScore >= 55 ? .orange : .yellow)
+                        // Coloured text (yellow, orange, red) fails contrast on a
+                        // light row: the colour lives in the badge's fill and
+                        // border, the number and icon stay full strength.
+                        .foregroundColor(.primary)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
-                        .background((riskScore >= 75 ? Color.red : riskScore >= 55 ? Color.orange : Color.yellow).opacity(0.1))
-                        .cornerRadius(3)
+                        .background(riskTint.opacity(0.3), in: RoundedRectangle(cornerRadius: 3))
+                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(riskTint, lineWidth: 1))
                     }
                     Spacer()
                     Text(parseDate(email.headers["Date"]))
                         .font(.caption)
-                        .foregroundColor(AppColors.secondary)
+                        // The audit judges the row as one element by its
+                        // faintest text; system secondary grey fell just below
+                        // 4.5:1 on some rows. Still lighter than the subject.
+                        .foregroundColor(Color.primary.opacity(0.75))
                 }
 
-                Text(highlightedText(email.headers["Subject"] ?? "(No Subject)"))
+                Text(highlightedText(email.headers["Subject"] ?? "(No Subject)", field: .subject))
                     .font(.footnote)
-                    .foregroundColor(.primary.opacity(0.85))
+                    .foregroundColor(.primary)
                     .lineLimit(1)
+
+                matchStrip
 
                 if showPreviews && sizeClass != .compact {
                     let previewSource = email.isBodyCompacted ? email.bodyPreview : String(email.plainBody.prefix(100))
                     let preview = previewSource.replacingOccurrences(of: "\n", with: " ")
                     if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text(highlightedText(preview))
+                        Text(highlightedText(preview, field: .body))
                             .font(.caption)
-                            .foregroundColor(AppColors.secondary)
+                            .foregroundColor(Color.primary.opacity(0.75))
                             .lineLimit(1)
                     }
                 }
@@ -3271,21 +3593,24 @@ struct EmailRowView: View {
         .accessibilityLabel("\(email.headers["Subject"] ?? "No Subject"), from \(senderName)")
     }
 
-    private func highlightedText(_ text: String) -> AttributedString {
+    /// Highlights every term the search asks of `field` (its operator value
+    /// plus the free-text terms). Case-insensitive, non-overlapping per term.
+    private func highlightedText(_ text: String, field: SearchMatchField) -> AttributedString {
         var result = AttributedString(text)
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return result }
+        let terms = matchTerms.highlightTerms(for: field)
+        guard !terms.isEmpty else { return result }
         let lowered = text.lowercased()
-        let queryLowered = query.lowercased()
-        var searchStart = lowered.startIndex
-        while let range = lowered.range(of: queryLowered, range: searchStart..<lowered.endIndex) {
-            let attrStart = AttributedString.Index(range.lowerBound, within: result)
-            let attrEnd = AttributedString.Index(range.upperBound, within: result)
-            if let attrStart, let attrEnd {
-                result[attrStart..<attrEnd].backgroundColor = .yellow.opacity(0.4)
-                result[attrStart..<attrEnd].foregroundColor = .primary
+        for term in terms where !term.isEmpty {
+            var searchStart = lowered.startIndex
+            while let range = lowered.range(of: term, range: searchStart..<lowered.endIndex) {
+                let attrStart = AttributedString.Index(range.lowerBound, within: result)
+                let attrEnd = AttributedString.Index(range.upperBound, within: result)
+                if let attrStart, let attrEnd {
+                    result[attrStart..<attrEnd].backgroundColor = .yellow.opacity(0.4)
+                    result[attrStart..<attrEnd].foregroundColor = .primary
+                }
+                searchStart = range.upperBound
             }
-            searchStart = range.upperBound
         }
         return result
     }
@@ -3453,6 +3778,9 @@ struct AttachmentsPopoverButton: View {
     #endif
     @State private var saveError: String?
     let attachments: [AttachmentMetadata]
+    /// The owning message: an archived email keeps its attachment bytes in the
+    /// raw MIME, so saving needs the message, not just the metadata.
+    var ownerEmail: MBOXParser.RawEmail? = nil
     @State private var showPopover = false
 
     var body: some View {
@@ -3557,9 +3885,24 @@ struct AttachmentsPopoverButton: View {
     }
 
     private func saveAttachment(_ att: AttachmentMetadata) {
-        guard let sourceURL = att.fileURL else { return }
+        // Same reason as the bulk path: an archived message carries its
+        // attachment bytes inside the raw MIME, not in a temp file.
+        let sourceURL: URL
+        if let live = att.fileURL, FileManager.default.fileExists(atPath: live.path) {
+            sourceURL = live
+        } else if let email = ownerEmail,
+                  let index = email.attachments.firstIndex(where: { $0.filename == att.filename }),
+                  let data = AttachmentHydrator.data(for: att, index: index, email: email),
+                  case let staged = FileManager.default.temporaryDirectory
+                      .appendingPathComponent(UUID().uuidString + "_" + att.filename),
+                  (try? data.write(to: staged, options: .atomic)) != nil {
+            sourceURL = staged
+        } else {
+            saveError = "The bytes for \(att.filename) could not be recovered from this message."
+            return
+        }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = att.filename
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let dest = panel.url {

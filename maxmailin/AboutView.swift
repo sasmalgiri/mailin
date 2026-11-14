@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  AboutView.swift
 //  mailin
@@ -55,12 +56,26 @@ struct AboutView: View {
                             .font(Typography.caption2)
                             .foregroundColor(AppColors.secondary)
                     }
+                    EnterpriseLicenseSection()
                 }
                 #endif
+
+                if ManagedConfig.isManaged {
+                    ManagedPolicySection()
+                }
 
                 // maxmailin SwiftData status — confirms the v2 storage layer
                 // is wired and reachable from the UI.
                 swiftDataStatusBadge
+                // A11: Release-safe import measurement — the only way to get
+                // Release-configuration throughput numbers for a real file.
+                NavigationLink(destination: ImportMeasurementView()) {
+                    Label("Measure an import…", systemImage: "gauge.with.dots.needle.33percent")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help("Import a file of your choosing into a temporary archive and read throughput, memory and on-disk numbers")
+                .accessibilityIdentifier("about.measureImport")
             }
             .padding(.top, Spacing.xLarge)
             .padding(.bottom, Spacing.large)
@@ -72,38 +87,52 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     featureRow(
                         icon: "gift.fill",
-                        title: "Free to Try, Flexible Upgrade",
-                        description: "Monthly or yearly — choose the plan that works for you."
+                        title: String(localized: "Free to Try, Flexible Upgrade"),
+                        description: String(localized: "Monthly, yearly or a one-time lifetime purchase — choose what works for you.")
                     )
                     featureRow(
                         icon: "lock.shield.fill",
-                        title: "Privacy First",
-                        description: "Zero data collection. On-device by default. Cloud AI is optional and user-controlled."
+                        title: String(localized: "Privacy First"),
+                        description: String(localized: "Zero data collection. Everything runs on your device; there is no cloud AI.")
                     )
                     featureRow(
                         icon: "swift",
-                        title: "Native Apple Technology",
-                        description: "Built with SwiftUI and on-device AI. Fast, fluid, and truly native."
+                        title: String(localized: "Native Apple Technology"),
+                        description: String(localized: "Built with SwiftUI and on-device AI. Fast, fluid, and truly native.")
                     )
                     featureRow(
                         icon: "brain.head.profile",
-                        title: "Hybrid AI — On-Device + Cloud",
-                        description: "MoE expert pipeline with Apple Intelligence, NLP, and optional OpenAI/Anthropic cloud AI."
+                        title: String(localized: "On-Device AI"),
+                        description: String(localized: "Apple Intelligence and Apple's language frameworks on your device. Every answer lists the emails it came from.")
                     )
                     featureRow(
                         icon: "envelope.open.fill",
-                        title: "7 Format Support",
-                        description: "MBOX, EML, EMLX, MSG, PST, OST, NSF — Gmail, Outlook, Thunderbird, Apple Mail, Lotus Notes."
+                        title: String(localized: "7 Format Support"),
+                        description: String(localized: "MBOX, EML, EMLX, MSG, PST, OST, NSF — Gmail, Outlook, Thunderbird, Apple Mail, Lotus Notes.")
                     )
+                    // V4-14 (A17): "no mail servers" is true only of the offline
+                    // edition; the connected edition says what it really does.
+                    let privacyClaim = EditionPrivacyClaim.current()
                     featureRow(
                         icon: "lock.shield.fill",
-                        title: "Offline & Private",
-                        description: "No account, no mail servers, no data collection. Your archive stays on your device by default — optional Cloud AI is opt-in."
+                        title: privacyClaim.title,
+                        description: privacyClaim.detail
+                    )
+                    // D1: state what the PLATFORM enforces for this build, read
+                    // from its own signed entitlements — not what the app
+                    // intends. The line above is a description; this one is
+                    // evidence, and it says so plainly when the sandbox is not
+                    // what is doing the enforcing.
+                    featureRow(
+                        icon: NoNetworkAttestation.verdict().networkIsStructurallyImpossible
+                            ? "checkmark.seal.fill" : "info.circle",
+                        title: String(localized: "Verified for this build"),
+                        description: NoNetworkAttestation.verdict().summary
                     )
                     featureRow(
                         icon: "chart.bar.fill",
-                        title: "Analytics Dashboard",
-                        description: "Volume timelines, top contacts, heatmaps, network graphs, and exportable reports."
+                        title: String(localized: "Analytics Dashboard"),
+                        description: String(localized: "Volume timelines, top contacts, heatmaps, network graphs, and exportable reports.")
                     )
                 }
                 .padding(.horizontal, Spacing.large)
@@ -162,7 +191,7 @@ struct AboutView: View {
                 .buttonStyle(.borderless)
                 #endif
 
-                Text("\u{00A9} 2025-2026 EcoSanskriti Innovation Pvt Ltd. All rights reserved.")
+                Text("\u{00A9} 2025-2026 Shrabani Sasmal. All rights reserved.")
                     .font(Typography.caption2)
                     .foregroundColor(AppColors.secondary)
             }
@@ -203,17 +232,18 @@ struct AboutView: View {
 
     private func titleForSheet(_ sheet: LegalSheet) -> String {
         switch sheet {
-        case .privacy: return "Privacy Policy"
-        case .terms: return "Terms of Use"
-        case .licenses: return "Third-Party Notices"
-        case .forensic: return "Forensic Disclaimer"
+        case .privacy: return String(localized: "Privacy Policy")
+        case .terms: return String(localized: "Terms of Use")
+        case .licenses: return String(localized: "Third-Party Notices")
+        case .forensic: return String(localized: "Forensic Disclaimer")
         case .accessibility: return "Accessibility"
         }
     }
 
     private func textForSheet(_ sheet: LegalSheet) -> String {
         switch sheet {
-        case .privacy: return LegalComplianceManager.privacyPolicySummary
+        // V4-14: the connected edition's summary describes its mail connections.
+        case .privacy: return LegalComplianceManager.privacyPolicyText()
         case .terms: return LegalComplianceManager.termsOfUseSummary
         case .licenses: return LegalComplianceManager.thirdPartyNotices
         case .forensic: return LegalComplianceManager.forensicDisclaimer
@@ -291,14 +321,14 @@ struct AboutView: View {
 
     private var statusText: String {
         switch migration.status {
-        case .idle: return "SwiftData v2: ready"
-        case .checking: return "SwiftData v2: checking…"
+        case .idle: return String(localized: "SwiftData v2: ready")
+        case .checking: return String(localized: "SwiftData v2: checking…")
         case .migrating:
             let pct = Int(migration.progressFraction * 100)
             return "Migrating \(migration.migratedCount)/\(migration.totalCount) (\(pct)%)"
-        case .completed: return "SwiftData v2: active"
-        case .skipped: return "SwiftData v2: active"
-        case .failed: return "SwiftData v2: migration error"
+        case .completed: return String(localized: "SwiftData v2: active")
+        case .skipped: return String(localized: "SwiftData v2: active")
+        case .failed: return String(localized: "SwiftData v2: migration error")
         }
     }
 
@@ -345,6 +375,93 @@ struct AboutView: View {
         }
     }
 }
+
+/// Enterprise (ENTERPRISE_TODO.md A-2, V-1): the role this device runs with,
+/// what it allows, the organisation's data-loss rules, and any problem in the
+/// configuration the MDM pushed.
+private struct ManagedPolicySection: View {
+    var body: some View {
+        let role = OrgPolicy.role
+        VStack(alignment: .leading, spacing: 4) {
+            Text(ManagedConfig.orgName.map { String(localized: "Managed by \($0)") }
+                 ?? String(localized: "Managed by your organization"))
+                .font(Typography.caption1.weight(.semibold))
+            Text("Your role: \(role.displayName) — \(role.summary)")
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+            if !ManagedConfig.allowExport {
+                Text("Exporting and sharing are turned off by your organization.")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+            if !ManagedConfig.allowPrint {
+                Text("Printing is turned off by your organization.")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+            ForEach(ManagedConfig.validationIssues, id: \.self) { issue in
+                Label(issue, systemImage: "exclamationmark.triangle")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+        }
+        .frame(maxWidth: 360, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("about.managedPolicy")
+    }
+}
+
+#if ENTERPRISE_EDITION
+/// The organization's license: what is in force, and a place to paste a key
+/// when the organization does not push one through MDM.
+private struct EnterpriseLicenseSection: View {
+    @EnvironmentObject private var store: StoreManager
+    @State private var entering = false
+    @State private var key = ""
+    @State private var note: String?
+
+    var body: some View {
+        VStack(spacing: Spacing.xxSmall) {
+            Text(store.license.summary)
+                .font(Typography.caption1)
+                .foregroundColor(store.license.tier == .professional ? AppColors.secondary : .orange)
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("about.license")
+            if ManagedConfig.licenseKey == nil {
+                if entering {
+                    TextField(String(localized: "License key"), text: $key)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        .frame(maxWidth: 320)
+                        .onSubmit(apply)
+                    HStack {
+                        Button(String(localized: "Cancel")) { entering = false; key = "" }
+                        Button(String(localized: "Use this key"), action: apply)
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .controlSize(.small)
+                } else {
+                    Button(String(localized: "Enter license key…")) { entering = true }
+                        .controlSize(.small)
+                }
+            }
+            if let note { Text(note).font(Typography.caption2).foregroundColor(AppColors.secondary) }
+        }
+        .padding(.top, Spacing.xxSmall)
+    }
+
+    private func apply() {
+        if let why = OrgPolicy.denial(.manageLicense) { note = why; return }   // enterprise role
+        let result = store.enterLicenseKey(key)
+        if case .invalid(let why) = result.status {
+            note = why
+        } else {
+            note = nil
+            entering = false
+            key = ""
+            ForensicManager.shared.logAction("Enterprise license key entered", detail: result.summary)
+        }
+    }
+}
+#endif
 
 #Preview {
     AboutView()

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import Charts
 #if os(macOS)
@@ -14,9 +15,19 @@ struct EmailAnalyticsView: View {
     /// ArchiveFullAnalyticsService (exact tallies + NLP over a capped set).
     var query: EmailQuery = .all
     @Environment(\.dismiss) private var dismiss
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// iPhone width: the header's buttons show icons only, so the title stays on one line.
+    private var compactHeader: Bool { horizontalSizeClass == .compact }
+    #else
+    private let compactHeader = false
+    #endif
     @State private var analyticsData: AnalyticsData?
     @State private var isComputing = false
     @State private var computeStage: String = ""
+    // §3-A13: NLP figures over the whole scope when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var v3Note: String?
     @State private var exportError: String?
     @State private var aiEnhanced = false
     @State private var isLoadingAI = false
@@ -97,9 +108,16 @@ struct EmailAnalyticsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Email Analytics")
                         .font(Typography.headline)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Text("\(analyticsData?.totalCount ?? 0) emails analyzed")
                         .font(Typography.caption1)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(AppColors.secondary)
+                    if let v3Note {
+                        Text(v3Note).font(Typography.caption2).foregroundColor(AppColors.secondary)
+                    }
                 }
             }
             Spacer()
@@ -108,7 +126,11 @@ struct EmailAnalyticsView: View {
                 Button {
                     exportAnalyticsReport()
                 } label: {
-                    Label("Export Report", systemImage: "square.and.arrow.up")
+                    if compactHeader {
+                        Label("Export Report", systemImage: "square.and.arrow.up").labelStyle(.iconOnly)
+                    } else {
+                        Label("Export Report", systemImage: "square.and.arrow.up")
+                    }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -119,7 +141,7 @@ struct EmailAnalyticsView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
-            SaveToDocumentsButton(title: "Email Analytics") {
+            SaveToDocumentsButton(title: String(localized: "Email Analytics")) {
                 [.init(key: "Emails analyzed", value: "\(analyticsData?.totalCount ?? 0)")]
             }
 
@@ -151,19 +173,19 @@ struct EmailAnalyticsView: View {
 
                 #if os(iOS)
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.xSmall) {
-                    ComputeStageIndicator(label: "Sentiment", isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Timeline", isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Contacts", isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Sentiment"), isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Timeline"), isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Contacts"), isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
                     ComputeStageIndicator(label: "NLP", isActive: computeStage.contains("Language") || computeStage.contains("Topic"), isDone: computeStage.contains("Compliance") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Compliance", isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Compliance"), isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
                 }
                 #else
                 HStack(spacing: Spacing.small) {
-                    ComputeStageIndicator(label: "Sentiment", isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Timeline", isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Contacts", isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Sentiment"), isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Timeline"), isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Contacts"), isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
                     ComputeStageIndicator(label: "NLP", isActive: computeStage.contains("Language") || computeStage.contains("Topic"), isDone: computeStage.contains("Compliance") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Compliance", isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Compliance"), isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
                 }
                 #endif
             }
@@ -183,14 +205,14 @@ struct EmailAnalyticsView: View {
     private func overviewCards(data: AnalyticsData) -> some View {
         VStack(spacing: Spacing.small) {
             LazyVGrid(columns: adaptiveStatColumns, spacing: Spacing.small) {
-                StatCard(title: "Total", value: "\(data.totalCount)", icon: "envelope.fill", color: .blue)
-                StatCard(title: "Sent", value: "\(data.sentCount)", icon: "arrow.up.circle.fill", color: AppColors.sentEmail)
-                StatCard(title: "Received", value: "\(data.receivedCount)", icon: "arrow.down.circle.fill", color: AppColors.receivedEmail)
-                StatCard(title: "Sentiment", value: data.sentimentLabel, icon: data.sentimentIcon, color: data.sentimentColor)
-                StatCard(title: "High Priority", value: "\(data.highPriorityCount)", icon: "exclamationmark.triangle.fill", color: .red)
-                StatCard(title: "Med Priority", value: "\(data.mediumPriorityCount)", icon: "exclamationmark.circle.fill", color: .orange)
-                StatCard(title: "Attachments", value: "\(data.totalAttachments)", icon: "paperclip", color: .purple)
-                StatCard(title: "Storage", value: String(format: "%.1f MB", data.totalStorageMB), icon: "internaldrive", color: .teal)
+                StatCard(title: String(localized: "Total"), value: "\(data.totalCount)", icon: "envelope.fill", color: .blue)
+                StatCard(title: String(localized: "Sent"), value: "\(data.sentCount)", icon: "arrow.up.circle.fill", color: AppColors.sentEmail)
+                StatCard(title: String(localized: "Received"), value: "\(data.receivedCount)", icon: "arrow.down.circle.fill", color: AppColors.receivedEmail)
+                StatCard(title: String(localized: "Sentiment"), value: data.sentimentLabel, icon: data.sentimentIcon, color: data.sentimentColor)
+                StatCard(title: String(localized: "High Priority"), value: "\(data.highPriorityCount)", icon: "exclamationmark.triangle.fill", color: .red)
+                StatCard(title: String(localized: "Med Priority"), value: "\(data.mediumPriorityCount)", icon: "exclamationmark.circle.fill", color: .orange)
+                StatCard(title: String(localized: "Attachments"), value: "\(data.totalAttachments)", icon: "paperclip", color: .purple)
+                StatCard(title: String(localized: "Storage"), value: String(format: "%.1f MB", data.totalStorageMB), icon: "internaldrive", color: .teal)
             }
 
             Label {
@@ -275,49 +297,56 @@ struct EmailAnalyticsView: View {
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             } else {
+                // .monotone never overshoots (catmullRom dipped below zero between buckets); each
+                // series is named and unstacked (unnamed areas were stacked on each other), and the
+                // automatic legend is hidden because the dots below already label the colours.
                 Chart {
                     ForEach(data.timelineBuckets, id: \.date) { bucket in
                         AreaMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Sent", bucket.sent)
+                            y: .value("Emails", bucket.sent),
+                            series: .value("Kind", "Sent"),
+                            stacking: .unstacked
                         )
                         .foregroundStyle(AppColors.sentEmail.opacity(0.4))
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
 
                         LineMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Sent", bucket.sent)
+                            y: .value("Emails", bucket.sent),
+                            series: .value("Kind", "Sent")
                         )
                         .foregroundStyle(AppColors.sentEmail)
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
                         .lineStyle(StrokeStyle(lineWidth: 2))
 
                         AreaMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Received", bucket.received)
+                            y: .value("Emails", bucket.received),
+                            series: .value("Kind", "Received"),
+                            stacking: .unstacked
                         )
                         .foregroundStyle(AppColors.receivedEmail.opacity(0.3))
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
 
                         LineMark(
                             x: .value("Date", bucket.date),
-                            y: .value("Received", bucket.received)
+                            y: .value("Emails", bucket.received),
+                            series: .value("Kind", "Received")
                         )
                         .foregroundStyle(AppColors.receivedEmail)
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                     }
                 }
                 .chartYAxisLabel("Emails")
-                .chartForegroundStyleScale([
-                    "Sent": AppColors.sentEmail,
-                    "Received": AppColors.receivedEmail
-                ])
+                .chartYScale(domain: .automatic(includesZero: true))
+                .chartLegend(.hidden)
                 .frame(height: 220)
 
                 HStack(spacing: Spacing.medium) {
-                    ChartLegendDot(color: AppColors.sentEmail, label: "Sent")
-                    ChartLegendDot(color: AppColors.receivedEmail, label: "Received")
+                    ChartLegendDot(color: AppColors.sentEmail, label: String(localized: "Sent"))
+                    ChartLegendDot(color: AppColors.receivedEmail, label: String(localized: "Received"))
                 }
                 .font(Typography.caption1)
             }
@@ -590,7 +619,7 @@ struct EmailAnalyticsView: View {
         }
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "mailin_analytics_report.txt"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -811,7 +840,7 @@ struct EmailAnalyticsView: View {
                                         .font(Typography.caption1)
                                         .foregroundColor(.orange)
                                         .frame(width: 16)
-                                    Text(type.rawValue)
+                                    Text(LocalizedStringKey(type.rawValue))
                                         .font(Typography.caption1)
                                     Spacer()
                                     Text("\(count)")
@@ -920,7 +949,10 @@ struct EmailAnalyticsView: View {
                 insights = await FoundationModelEngine.enhanceWithAI(
                     scope: .digest,
                     emails: emailsForAI,
-                    context: "Analyze this email archive for key patterns, trends, and notable findings"
+                    context: "Analyze this email archive for key patterns, trends, and notable findings",
+                    // The whole archive's window may be replaced by an even
+                    // spread (§3-I4); a filtered view is the user's scope.
+                    given: scopeQuery == .all ? .window : .scope
                 )
             }
             #endif
@@ -937,6 +969,22 @@ struct EmailAnalyticsView: View {
     private func computeAnalytics() async {
         isComputing = true
         computeStage = "Analyzing..."
+        if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
+            do {
+                let r = try await ArchiveFullAnalyticsService.shared.computeWholeArchive(scope: query)
+                v3Note = r.note.total > r.note.sampled
+                    ? String(localized: "Sentiment, PII and priority cover all \(r.note.total) emails; languages and topics use \(r.note.sampled) emails spread across them.")
+                    : nil
+                withAnimation(AnimationTiming.normal) { analyticsData = r.data; isComputing = false }
+                return
+            } catch is CancellationError {
+                isComputing = false
+                return
+            } catch {
+                // §3-M3: the previous engine runs for this call (below).
+                v3Note = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            }
+        }
         // Bounded streaming over the injected scope from the activated store.
         let data = (try? await ArchiveFullAnalyticsService.shared.compute(scope: query)) ?? AnalyticsData()
         withAnimation(AnimationTiming.normal) {

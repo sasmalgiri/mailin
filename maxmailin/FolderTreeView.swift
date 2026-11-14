@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct FolderNode: Identifiable {
@@ -22,12 +23,16 @@ struct FolderTreeView: View {
     @State private var typeCounts: [String: Int] = [:]
     @State private var attachmentTotal = 0
     @State private var labelBuckets: [AggregateBucket] = []
+    /// CAP-03: every label is reachable — the total is shown and the list
+    /// grows a page at a time; nothing is cut at a constant.
+    @State private var labelTotal = 0
     @State private var sourceBuckets: [AggregateBucket] = []
+    /// 3.1 R2: recovered mail by kind (empty when recovery is off or nothing was found).
+    @State private var recovery = RecoveryCounts()
     @State private var isLoaded = false
 
-    /// Bounded label subtree, matching v1's most-used-first ordering.
-    static let maxLabels = 30
-    static let maxSourceFiles = 50
+    /// Labels load this many at a time, busiest first (a page size, not a cap).
+    static let labelPage = 200
 
     /// Operator-safe value: multiword labels/filenames must be quoted or the
     /// search parser splits them ("tag:Boxbe Waiting List" → tag:Boxbe + text).
@@ -110,6 +115,19 @@ struct FolderTreeView: View {
                         .accessibilityLabel("\(row.node.name), \(row.node.emailCount) emails")
                         .accessibilityAddTraits(selectedFolder == row.node.filterValue ? .isSelected : [])
                     }
+                    if labelBuckets.count < labelTotal {
+                        Button {
+                            Task { @MainActor in await loadMoreLabels() }
+                        } label: {
+                            Label("Show more (\(labelBuckets.count) of \(labelTotal) labels)", systemImage: "ellipsis.circle")
+                                .font(Typography.caption1)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 16 + Spacing.small)
+                        .padding(.vertical, Spacing.xxSmall)
+                        .help("Lists the next \(Self.labelPage) labels, busiest first. Every label in the archive can be reached this way.")
+                        .accessibilityIdentifier("folderTree.moreLabels")
+                    }
                 }
             }
         }
@@ -127,16 +145,40 @@ struct FolderTreeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .parsingFinished)) { _ in
             Task { @MainActor in await reload() }
         }
+        // IPAD-05: a Move to Trash / Restore (duplicate removal included)
+        // changes every count here; without this they stayed at the old total.
+        .onReceive(NotificationCenter.default.publisher(for: .archiveTrashChanged)) { _ in
+            Task { @MainActor in await reload() }
+        }
     }
 
     @MainActor
     private func reload() async {
-        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        let archive = ArchiveDataService.shared
+        archiveTotal = (try? await archive.count()) ?? 0
         let store = SQLiteEmailStore.shared
-        typeCounts = (try? await store.messageTypeCounts()) ?? [:]
-        attachmentTotal = (try? await store.attachmentCount()) ?? 0
-        labelBuckets = (try? await store.parserTagCounts(limit: Self.maxLabels)) ?? []
-        sourceBuckets = (try? await store.sourceFileCounts(limit: Self.maxSourceFiles)) ?? []
+        // IPAD-05: the same trash-excluding counts as the list header — the
+        // per-type GROUP BY and the attachment count read every stored row, so
+        // a duplicate moved to the Trash left "Inbox 51" beside "50 Emails".
+        var received = EmailQuery.all; received.messageType = "received"
+        var sent = EmailQuery.all; sent.messageType = "sent"
+        var withAttachments = EmailQuery.all; withAttachments.hasAttachments = true
+        typeCounts = ["received": (try? await archive.count(query: received)) ?? 0,
+                      "sent": (try? await archive.count(query: sent)) ?? 0]
+        attachmentTotal = (try? await archive.count(query: withAttachments)) ?? 0
+        // CAP-03: the total is always known; the list keeps what was expanded.
+        labelTotal = (try? await store.parserTagTotal()) ?? 0
+        labelBuckets = (try? await store.parserTagCounts(matching: nil, offset: 0, limit: max(Self.labelPage, labelBuckets.count))) ?? []
+        // One bucket per imported file: bounded by the import history, never by a constant.
+        sourceBuckets = (try? await store.sourceFileCounts(limit: Int(Int32.max))) ?? []
+        recovery = RecoveryPolicy.isEnabled && TierAccess.allows(.recovery)
+            ? ((try? await store.recoveryCounts()) ?? RecoveryCounts()) : RecoveryCounts()
+    }
+
+    @MainActor
+    private func loadMoreLabels() async {
+        let next = (try? await SQLiteEmailStore.shared.parserTagCounts(matching: nil, offset: labelBuckets.count, limit: Self.labelPage)) ?? []
+        labelBuckets.append(contentsOf: next)
     }
 
     private func flattenTree(_ nodes: [FolderNode], depth: Int = 0) -> [FlatRow] {
@@ -167,14 +209,14 @@ struct FolderTreeView: View {
         let received = typeCounts["received"] ?? 0
         let sent = typeCounts["sent"] ?? 0
         if received > 0 {
-            nodes.append(FolderNode(name: "Inbox", icon: "tray.fill", children: [], emailCount: received, filterValue: "type:received"))
+            nodes.append(FolderNode(name: String(localized: "Inbox"), icon: "tray.fill", children: [], emailCount: received, filterValue: "type:received"))
         }
         if sent > 0 {
-            nodes.append(FolderNode(name: "Sent", icon: "paperplane.fill", children: [], emailCount: sent, filterValue: "type:sent"))
+            nodes.append(FolderNode(name: String(localized: "Sent"), icon: "paperplane.fill", children: [], emailCount: sent, filterValue: "type:sent"))
         }
 
         if attachmentTotal > 0 {
-            nodes.append(FolderNode(name: "Has Attachments", icon: "paperclip", children: [], emailCount: attachmentTotal, filterValue: "has:attachment"))
+            nodes.append(FolderNode(name: String(localized: "Has Attachments"), icon: "paperclip", children: [], emailCount: attachmentTotal, filterValue: "has:attachment"))
         }
 
         if !labelBuckets.isEmpty {
@@ -183,15 +225,35 @@ struct FolderTreeView: View {
             }
             // v1 showed the label-application total on the parent row
             // (labels overlap, so this can exceed the email count).
-            nodes.append(FolderNode(name: "Labels", icon: "tag.fill", children: labelChildren,
+            nodes.append(FolderNode(name: String(localized: "Labels (\(labelTotal))"), icon: "tag.fill", children: labelChildren,
                                     emailCount: labelChildren.reduce(0) { $0 + $1.emailCount }, filterValue: ""))
+        }
+
+        // 3.1 R2: Recovered ▸ one row per kind, like Intella's <RECOVERED> /
+        // <ORPHAN ITEMS>, but by how each email was found.
+        if recovery.recovered > 0 {
+            let kinds: [(RecoveryState, String, String)] = [
+                (.deletedFolder, String(localized: "In deleted folders"), "trash"),
+                (.flaggedDeleted, String(localized: "Flagged deleted"), "flag.slash"),
+                (.unpurged, String(localized: "Unpurged"), "arrow.uturn.backward.circle"),
+                (.orphan, String(localized: "Orphaned"), "questionmark.folder"),
+                (.carved, String(localized: "Carved"), "scissors"),
+                (.deletionStub, String(localized: "Deletion stubs"), "doc.badge.ellipsis"),
+            ]
+            let children = kinds.compactMap { kind -> FolderNode? in
+                let n = recovery[kind.0]
+                return n > 0 ? FolderNode(name: kind.1, icon: kind.2, children: [], emailCount: n,
+                                          filterValue: "recovery:\(kind.0.rawValue)") : nil
+            }
+            nodes.append(FolderNode(name: String(localized: "Recovered"), icon: "arrow.counterclockwise.circle",
+                                    children: children, emailCount: recovery.recovered, filterValue: "is:recovered"))
         }
 
         if sourceBuckets.count > 1 {
             let sourceChildren = sourceBuckets.map {
                 FolderNode(name: $0.value, icon: "doc.fill", children: [], emailCount: $0.count, filterValue: "source:\(Self.operatorValue($0.value))")
             }
-            nodes.append(FolderNode(name: "Source Files", icon: "folder.fill", children: sourceChildren,
+            nodes.append(FolderNode(name: String(localized: "Source Files"), icon: "folder.fill", children: sourceChildren,
                                     emailCount: archiveTotal, filterValue: ""))
         }
 

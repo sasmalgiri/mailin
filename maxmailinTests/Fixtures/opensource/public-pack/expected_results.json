@@ -1,0 +1,448 @@
+{
+  "checked_date": "2026-11-07",
+  "scope": "Fixture structure and independent-reader verification. Not a Mailin application test.",
+  "outlook": {
+    "path": "01_outlook/Set_Up_Mobile_Thru_Admin.oft",
+    "bytes": 960512,
+    "sha256": "ca98181d4b7a77d5cc7cd6dc941003dde8128ec48a6ca1c0cb93d27a7c0dbe1c",
+    "message_class": "IPM.Note",
+    "subject": "Set up Office on all your devices",
+    "attachment_count": 22,
+    "attachments": [
+      {
+        "filename": "image001.jpg",
+        "content_id": "image001.jpg@01CFB211.01359270",
+        "mime": "image/jpeg",
+        "bytes": 642194,
+        "sha256": "85714ca1a8261c4463125ea9e904be196251c38b801a9fa7f3efc5e2bd81073f"
+      },
+      {
+        "filename": "image003.jpg",
+        "content_id": "image003.jpg@01CFB211.01359270",
+        "mime": "image/jpeg",
+        "bytes": 1132,
+        "sha256": "9254f2fe107b527f80d8ae20e35d42ef6d9cf29758b11f974cabacd847a41b09"
+      },
+      {
+        "filename": "image006.png",
+        "content_id": "image006.png@01CFB211.01359270",
+        "mime": "image/png",
+        "bytes": 29046,
+        "sha256": "2d9d4d30d506e750ac6c4b6ec81e56534248520a43aec32b47ef39cc78ceaee8"
+      },
+      {
+        "filename": "image008.png",
+        "content_id": "image008.png@01CFB211.01359270",
+        "mime": "image/png",
+        "bytes": 30015,
+        "sha256": "67e1f92326c9a0f8553a3fdd5558a0f66121742a8a739d8bc2c346329fa60e29"
+      },
+      {
+        "filename": "image010.png",
+        "content_id": "image010.png@01CFB211.01359270",
+        "mime": "image/png",
+        "bytes": 39828,
+        "sha256": "e2015d6766b8799408249a6dd30bff406308f9d739dd68aeb9a9372ccddc98d3"
+      },
+      {
+        "filename": "image012.png",
+        "content_id": "image012.png@01CFB211.01359270",
+        "mime": "image/png",
+        "bytes": 24707,
+        "sha256": "60f1d889aaeca79438ae20d13d4d42a39ae6112b2a1bdafa360e840c6dc72cf7"
+      },
+      {
+        "filename": "image014.png",
+        "content_id": "image014.png@01CFB211.01359270",
+        "mime": "image/png",
+        "bytes": 1594,
+        "sha256": "343b34690823549811c6631d5ae31ac8a856d6a291c83479e812fa8629005a9e"
+      },
+      {
+        "filename": "image015.png",
+        "content_id": "image015.png@01CFB211.01359270",
+        "mime": "image/png",
+        "bytes": 1336,
+        "sha256": "b1e2b79e2813c4552676a13f4a51265ceb897dcd00fa76d94bf45ff07915793c"
+      },
+      {
+        "filename": "image016.jpg",
+        "content_id": "image016.jpg@01CFB211.01359270",
+        "mime": "image/jpeg",
+        "bytes": 7148,
+        "sha256": "1a43b5dac88899b678e6fe28776ea710b228213bb921edafcf9d23bbd0cc91d1"
+      },
+      {
+        "filename": "image018.jpg",
+        "content_id": "image018.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 56212,
+        "sha256": "01e62377bd5e613136a2ae188a34f98f03a20c9e750987215468818d5f9e5d3e"
+      },
+      {
+        "filename": "image019.jpg",
+        "content_id": "image019.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 350,
+        "sha256": "4fdc5f7972c3d662aa67600a24bb2838f3fc0b2c4389944c61be99af4c647da6"
+      },
+      {
+        "filename": "image020.jpg",
+        "content_id": "image020.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 335,
+        "sha256": "25c71d96960eb76f1939e53858654da3aa2921bcf3578ca40e931c9a69546a6a"
+      },
+      {
+        "filename": "image021.jpg",
+        "content_id": "image021.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 344,
+        "sha256": "a94a31c3efca6a9543d3328f19b5117379d0a5cec7b0adb1b9d7e5c15500451f"
+      },
+      {
+        "filename": "image022.jpg",
+        "content_id": "image022.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 4172,
+        "sha256": "930bc2368d483363cbfbb13f406e8b4c11022a0b8327c93ca042cb8b124add85"
+      },
+      {
+        "filename": "image023.jpg",
+        "content_id": "image023.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 4816,
+        "sha256": "47ae96c9e266e901d94925c1698de13eb5aecd7d4bc452959c512cd8aa49c24b"
+      },
+      {
+        "filename": "image024.jpg",
+        "content_id": "image024.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 4428,
+        "sha256": "c20787db88734cc8f86b90f17c820af1aeed6de26fcad7bc93bccdccd035d8eb"
+      },
+      {
+        "filename": "image025.jpg",
+        "content_id": "image025.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 3977,
+        "sha256": "fe9ad0b257bd2373171f5fe6e0d36ec06f561dc35f104c7f6755fbb7404585cb"
+      },
+      {
+        "filename": "image026.jpg",
+        "content_id": "image026.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 757,
+        "sha256": "9084ab4986c4ba45fe2e7b9d20a80e94f299c83547c73a0b1ba8357aba1a98a3"
+      },
+      {
+        "filename": "image027.png",
+        "content_id": "image027.png@01CFBD1B.7615F1B0",
+        "mime": "image/png",
+        "bytes": 907,
+        "sha256": "ae1b65d00b380b03a1b58d0b7d705580db80f17646dd6e20bcea3bf7ae630965"
+      },
+      {
+        "filename": "image028.jpg",
+        "content_id": "image028.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 335,
+        "sha256": "076da929ef8c263f9035845dd709bb29d857489d3e9f71e3e52062c3b6512323"
+      },
+      {
+        "filename": "image029.jpg",
+        "content_id": "image029.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 350,
+        "sha256": "bb0258310766d6628390550b0ffe4191cc46d4e6b3233f130bbb6fd4a966cb07"
+      },
+      {
+        "filename": "image030.jpg",
+        "content_id": "image030.jpg@01CFBD1B.7615F1B0",
+        "mime": "image/jpeg",
+        "bytes": 1830,
+        "sha256": "c0a089f301ea16f634a7cbceb44221fa3bc7835b2133531a6253877810f82a36"
+      }
+    ],
+    "source_page": "https://www.microsoft.com/en-us/download/details.aspx?id=44066",
+    "provenance": "Official Microsoft Outlook template download; exact producing Outlook build is not published."
+  },
+  "word": [
+    {
+      "path": "03_word/W01_baseline.docx",
+      "bytes": 14059,
+      "sha256": "1d8d0487161bd34dacb8773e74adb5ffc3381e2b36e65ddb9413913e411b501c",
+      "zip_crc_check": "pass",
+      "revisions": []
+    },
+    {
+      "path": "03_word/W05_tracked_retained.docx",
+      "bytes": 15100,
+      "sha256": "395614e777bdd348376c739104ade830649977bea877e9144e90b86c245e31b7",
+      "zip_crc_check": "pass",
+      "revisions": [
+        {
+          "kind": "ins",
+          "text": "red",
+          "id": "1",
+          "author": "Thabang Kubheka",
+          "date": "2026-09-28T20:59:00Z"
+        },
+        {
+          "kind": "ins",
+          "text": " ",
+          "id": "2",
+          "author": "Thabang Kubheka",
+          "date": "2026-09-28T21:01:00Z"
+        },
+        {
+          "kind": "del",
+          "text": "brown ",
+          "id": "0",
+          "author": "Thabang Kubheka",
+          "date": "2026-09-28T20:59:00Z"
+        }
+      ]
+    },
+    {
+      "path": "03_word/W06_tracked_accepted.docx",
+      "bytes": 14187,
+      "sha256": "bf63e63aad5d417c1390c7f83f8bce836e5ef5609c288f086f67ae58fc17d942",
+      "zip_crc_check": "pass",
+      "revisions": []
+    },
+    {
+      "path": "03_word/W07_tracked_rejected.docx",
+      "bytes": 14155,
+      "sha256": "08bf09d3e46e7eb47474e5d9e213bd676c741aa8786fc12cd3d525680e56fcfa",
+      "zip_crc_check": "pass",
+      "revisions": []
+    }
+  ],
+  "archives": [
+    {
+      "path": "02_archives/7zip_generated/7zip_AES256.zip",
+      "bytes": 12547,
+      "sha256": "57b0c377e4eb1721b049e18781bc2c34c7580252ebd722bdbb6b4608324829a7",
+      "password": "mailin-fixture-2026",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "README.txt",
+          "bytes": 215,
+          "sha256": "1b0b3ecbb389891ca9079fff9047e24a272bb831894ff601ec953cfd867099ae"
+        },
+        {
+          "path": "nested/W05_tracked_retained.docx",
+          "bytes": 15100,
+          "sha256": "395614e777bdd348376c739104ade830649977bea877e9144e90b86c245e31b7"
+        }
+      ],
+      "additional_python_reader_verified": true,
+      "producer_provenance": "Created here with official 7-Zip 26.05"
+    },
+    {
+      "path": "02_archives/7zip_generated/7zip_AES256_header_encrypted.7z",
+      "bytes": 12367,
+      "sha256": "3476741a33be8198bba549bb6182a90fb397bc559f7886f245b0e522518b21ce",
+      "password": "mailin-fixture-2026",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "README.txt",
+          "bytes": 215,
+          "sha256": "1b0b3ecbb389891ca9079fff9047e24a272bb831894ff601ec953cfd867099ae"
+        },
+        {
+          "path": "nested/W05_tracked_retained.docx",
+          "bytes": 15100,
+          "sha256": "395614e777bdd348376c739104ade830649977bea877e9144e90b86c245e31b7"
+        }
+      ],
+      "additional_python_reader_verified": false,
+      "producer_provenance": "Created here with official 7-Zip 26.05"
+    },
+    {
+      "path": "02_archives/7zip_generated/7zip_ZipCrypto.zip",
+      "bytes": 12471,
+      "sha256": "0bbdc9a8fd0170228e640dce5b382091d40365efafe3391fe39e9dfea528dbe4",
+      "password": "mailin-fixture-2026",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "README.txt",
+          "bytes": 215,
+          "sha256": "1b0b3ecbb389891ca9079fff9047e24a272bb831894ff601ec953cfd867099ae"
+        },
+        {
+          "path": "nested/W05_tracked_retained.docx",
+          "bytes": 15100,
+          "sha256": "395614e777bdd348376c739104ade830649977bea877e9144e90b86c245e31b7"
+        }
+      ],
+      "additional_python_reader_verified": true,
+      "producer_provenance": "Created here with official 7-Zip 26.05"
+    },
+    {
+      "path": "02_archives/public/test_read_format_7zip_encryption.7z",
+      "bytes": 145,
+      "sha256": "91f5427859ad1391c9fb877c98e4b55213c479f39fd012882f7d112388842076",
+      "password": "12345678",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "bar.txt",
+          "bytes": 4,
+          "sha256": "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
+        }
+      ],
+      "additional_python_reader_verified": false,
+      "producer_provenance": "Upstream libarchive regression corpus; original producer/version not established."
+    },
+    {
+      "path": "02_archives/public/test_read_format_7zip_encryption_header.7z",
+      "bytes": 198,
+      "sha256": "6d91af6a1632666d014ea44736074b77a6722c820c8400d14e036f3b6f4538ac",
+      "password": "12345678",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "bar.txt",
+          "bytes": 4,
+          "sha256": "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
+        }
+      ],
+      "additional_python_reader_verified": false,
+      "producer_provenance": "Upstream libarchive regression corpus; original producer/version not established."
+    },
+    {
+      "path": "02_archives/public/test_read_format_7zip_encryption_partially.7z",
+      "bytes": 222,
+      "sha256": "7dfdfacca7d6c77cf1ddb1bf90990d13f181cf3e74b02631d47819875254e592",
+      "password": "12345678",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "bar_encrypted.txt",
+          "bytes": 4,
+          "sha256": "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
+        },
+        {
+          "path": "bar_unencrypted.txt",
+          "bytes": 4,
+          "sha256": "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
+        }
+      ],
+      "additional_python_reader_verified": false,
+      "producer_provenance": "Upstream libarchive regression corpus; original producer/version not established."
+    },
+    {
+      "path": "02_archives/public/test_read_format_zip_winzip_aes128.zip",
+      "bytes": 2821,
+      "sha256": "4cb263afa9f999074643978598f4450e7f408f482dd3adb1a00a7aff6f30e0ac",
+      "password": "password",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "README",
+          "bytes": 6818,
+          "sha256": "3c4bccfd3465ff9c3a37da7523a7ae092b7259980f78d3e226531cc19e2034d9"
+        }
+      ],
+      "additional_python_reader_verified": true,
+      "producer_provenance": "Upstream libarchive regression corpus; original producer/version not established."
+    },
+    {
+      "path": "02_archives/public/test_read_format_zip_winzip_aes256.zip",
+      "bytes": 2829,
+      "sha256": "447342e5b3b20d05d087e3bc3b89727879fb74734cd84556abc6c5126528dd9e",
+      "password": "password",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "README",
+          "bytes": 6818,
+          "sha256": "3c4bccfd3465ff9c3a37da7523a7ae092b7259980f78d3e226531cc19e2034d9"
+        }
+      ],
+      "additional_python_reader_verified": true,
+      "producer_provenance": "Upstream libarchive regression corpus; original producer/version not established."
+    },
+    {
+      "path": "02_archives/public/test_read_format_zip_winzip_aes256_stored.zip",
+      "bytes": 6978,
+      "sha256": "ab0101c368b2dac4a652b09338fd53d95d9598d7c39d2195ff063b25d0a3eb39",
+      "password": "password",
+      "7zip_correct_password_exit": 0,
+      "7zip_wrong_password_exit": 2,
+      "members": [
+        {
+          "path": "README",
+          "bytes": 6818,
+          "sha256": "3c4bccfd3465ff9c3a37da7523a7ae092b7259980f78d3e226531cc19e2034d9"
+        }
+      ],
+      "additional_python_reader_verified": true,
+      "producer_provenance": "Upstream libarchive regression corpus; original producer/version not established."
+    }
+  ],
+  "eml_wrappers": [
+    {
+      "path": "04_import_ready_eml/01_Set_Up_Mobile_Thru_Admin.eml",
+      "sha256": "af15fc1e19cd9c18ad2fd881fc875a41599d3d46a82482ea627503d6e29c4f37",
+      "original_attachment_path": "01_outlook/Set_Up_Mobile_Thru_Admin.oft",
+      "attachment_sha256": "ca98181d4b7a77d5cc7cd6dc941003dde8128ec48a6ca1c0cb93d27a7c0dbe1c",
+      "origin": "Synthetic transport envelope created for this handoff; original attachment is unchanged."
+    },
+    {
+      "path": "04_import_ready_eml/02_W01_baseline.eml",
+      "sha256": "bd00a1aea3730ae2e33ae2c6739a30dd1059bc595591f0d9b9c350613805fcf1",
+      "original_attachment_path": "03_word/W01_baseline.docx",
+      "attachment_sha256": "1d8d0487161bd34dacb8773e74adb5ffc3381e2b36e65ddb9413913e411b501c",
+      "origin": "Synthetic transport envelope created for this handoff; original attachment is unchanged."
+    },
+    {
+      "path": "04_import_ready_eml/03_W05_tracked_retained.eml",
+      "sha256": "083efbe33c0983330074a1fc25cc7d1d72b4f6827bb02f596e24a821431687d4",
+      "original_attachment_path": "03_word/W05_tracked_retained.docx",
+      "attachment_sha256": "395614e777bdd348376c739104ade830649977bea877e9144e90b86c245e31b7",
+      "origin": "Synthetic transport envelope created for this handoff; original attachment is unchanged."
+    },
+    {
+      "path": "04_import_ready_eml/04_W06_tracked_accepted.eml",
+      "sha256": "04810d2f78f832a34390e7d8de11a9feea0c861ff477d511cb8b652b6e80e2db",
+      "original_attachment_path": "03_word/W06_tracked_accepted.docx",
+      "attachment_sha256": "bf63e63aad5d417c1390c7f83f8bce836e5ef5609c288f086f67ae58fc17d942",
+      "origin": "Synthetic transport envelope created for this handoff; original attachment is unchanged."
+    },
+    {
+      "path": "04_import_ready_eml/05_W07_tracked_rejected.eml",
+      "sha256": "1789e1f19c23aaf11a591d30e2b9c8cb3f1c483a6b001a3bca5e29bdd0fdf5fc",
+      "original_attachment_path": "03_word/W07_tracked_rejected.docx",
+      "attachment_sha256": "08bf09d3e46e7eb47474e5d9e213bd676c741aa8786fc12cd3d525680e56fcfa",
+      "origin": "Synthetic transport envelope created for this handoff; original attachment is unchanged."
+    },
+    {
+      "path": "04_import_ready_eml/06_test_read_format_zip_winzip_aes256.eml",
+      "sha256": "4c6d14832a4692e0c435271bf7cadb428498f5a1650449a0156295963dc6979a",
+      "original_attachment_path": "02_archives/public/test_read_format_zip_winzip_aes256.zip",
+      "attachment_sha256": "447342e5b3b20d05d087e3bc3b89727879fb74734cd84556abc6c5126528dd9e",
+      "origin": "Synthetic transport envelope created for this handoff; original attachment is unchanged."
+    },
+    {
+      "path": "04_import_ready_eml/07_7zip_AES256.eml",
+      "sha256": "a392305eddc91b84326f61d3e0d6273984c6df0b5fdd8cd334d60b97ce489a75",
+      "original_attachment_path": "02_archives/7zip_generated/7zip_AES256.zip",
+      "attachment_sha256": "57b0c377e4eb1721b049e18781bc2c34c7580252ebd722bdbb6b4608324829a7",
+      "origin": "Synthetic transport envelope created for this handoff; original attachment is unchanged."
+    }
+  ]
+}

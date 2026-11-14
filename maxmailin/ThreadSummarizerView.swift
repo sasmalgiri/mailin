@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ThreadSummarizerView.swift
 //  mailin
@@ -326,6 +327,9 @@ struct ThreadSummarizerView: View {
     @State private var checkedActionItems: Set<Int> = []
     @State private var isEmailListExpanded = false
     @State private var showTutorial = false
+    // §3-A6: complete threads when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var completeCount: Int?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -333,16 +337,16 @@ struct ThreadSummarizerView: View {
             Divider()
 
             if isComputing {
-                LoadingView(message: "Analyzing thread...")
+                LoadingView(message: String(localized: "Analyzing thread..."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let summary = summary {
                 summaryContent(summary)
             } else {
                 EmptyStateView(
                     icon: "bubble.left.and.text.bubble.right",
-                    title: "Thread Summary",
+                    title: String(localized: "Thread Summary"),
                     message: "Analyze \(threadEmails.count) email\(threadEmails.count == 1 ? "" : "s") in this thread to extract key insights.",
-                    actionTitle: "Summarize Thread"
+                    actionTitle: String(localized: "Summarize Thread")
                 ) {
                     computeSummary()
                 }
@@ -364,7 +368,7 @@ struct ThreadSummarizerView: View {
             VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                 Label("Thread Summary", systemImage: "text.bubble")
                     .font(Typography.title2)
-                Text("\(threadEmails.count) message\(threadEmails.count == 1 ? "" : "s") in thread")
+                Text("\(completeCount ?? threadEmails.count) message\((completeCount ?? threadEmails.count) == 1 ? "" : "s") in thread")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             }
@@ -386,7 +390,7 @@ struct ThreadSummarizerView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
-            SaveToDocumentsButton(title: "Thread Summarizer") {
+            SaveToDocumentsButton(title: String(localized: "Thread Summarizer")) {
                 [.init(key: "Messages in thread", value: "\(threadEmails.count)")]
             }
 
@@ -749,6 +753,26 @@ struct ThreadSummarizerView: View {
     private func computeSummary() {
         isComputing = true
         checkedActionItems = []
+        if v3Modules?.isOn(.v3Threads) ?? false {
+            let input = threadEmails
+            Task { @MainActor in
+                let emails: [MBOXParser.RawEmail]
+                do {
+                    emails = try await ThreadStoryEngine.completeThreads(for: input) ?? input
+                } catch {
+                    // §3-M3: the previous engine summarises the emails given.
+                    if !(error is CancellationError) { _ = EngineGuard.fellBack(.v3Threads, error: error) }
+                    emails = input
+                }
+                completeCount = emails.count
+                let result = await Task.detached(priority: .userInitiated) { ThreadSummarizer.summarizeThread(emails: emails) }.value
+                withAnimation(AnimationTiming.normal) {
+                    summary = result
+                    isComputing = false
+                }
+            }
+            return
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             let result = ThreadSummarizer.summarizeThread(emails: threadEmails)

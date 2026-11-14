@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import NaturalLanguage
 
@@ -245,7 +246,7 @@ struct ArchiveInsightsFeatures {
         return TrendAnalysis(
             id: "topic_shift",
             trendType: .topicShift,
-            title: "Topic Evolution Detected",
+            title: String(localized: "Topic Evolution Detected"),
             detail: detail,
             direction: shiftMagnitude > 0.4 ? .volatile : .stable,
             magnitude: shiftMagnitude,
@@ -337,7 +338,7 @@ struct ArchiveInsightsFeatures {
         return TrendAnalysis(
             id: "activity_pattern",
             trendType: .activityPattern,
-            title: "Activity Distribution",
+            title: String(localized: "Activity Distribution"),
             detail: pattern,
             direction: direction,
             magnitude: businessPct,
@@ -389,20 +390,20 @@ struct ArchiveInsightsFeatures {
         var qualityScore: Double = 0.5
 
         let diversityScore = min(1.0, Double(senders.count) / Double(max(1, emails.count / 5)))
-        qualityFactors.append(.init(name: "Sender Diversity", score: diversityScore, detail: "\(senders.count) unique senders across \(emails.count) emails"))
+        qualityFactors.append(.init(name: String(localized: "Sender Diversity"), score: diversityScore, detail: "\(senders.count) unique senders across \(emails.count) emails"))
         qualityScore += diversityScore * 0.15
 
         let completeness: Double
         let datedRatio = Double(dates.count) / Double(max(1, emails.count))
         completeness = datedRatio
-        qualityFactors.append(.init(name: "Date Completeness", score: completeness, detail: "\(Int(datedRatio * 100))% of emails have parseable dates"))
+        qualityFactors.append(.init(name: String(localized: "Date Completeness"), score: completeness, detail: "\(Int(datedRatio * 100))% of emails have parseable dates"))
         qualityScore += completeness * 0.15
 
         let bodyScore: Double = avgLength > 50 ? min(1.0, Double(avgLength) / 500.0) : 0.2
-        qualityFactors.append(.init(name: "Content Richness", score: bodyScore, detail: "Average email length: \(avgLength) characters"))
+        qualityFactors.append(.init(name: String(localized: "Content Richness"), score: bodyScore, detail: "Average email length: \(avgLength) characters"))
         qualityScore += bodyScore * 0.1
 
-        qualityFactors.append(.init(name: "Thread Depth", score: threadRate, detail: "\(Int(threadRate * 100))% of emails are threaded"))
+        qualityFactors.append(.init(name: String(localized: "Thread Depth"), score: threadRate, detail: "\(Int(threadRate * 100))% of emails are threaded"))
         qualityScore += threadRate * 0.1
 
         let sortedDates = dates.sorted()
@@ -651,6 +652,83 @@ struct ArchiveInsightsFeatures {
         return (to + "," + cc).components(separatedBy: ",").compactMap { part in
             let addr = extractEmailAddress(from: part)
             return addr.contains("@") ? addr : nil
+        }
+    }
+}
+
+
+// MARK: - §3-A11 exact composition over the whole archive
+//
+// `analyzeComposition` over a stream: the same counts, rates and quality
+// factors, fed batch by batch (distinct senders/domains are kept as sets of
+// strings — the result itself). Languages come from a sample, as before
+// (the previous version read the first 200 emails it was given).
+
+extension ArchiveInsightsFeatures {
+    struct CompositionAccumulator {
+        private var total = 0
+        private var senders: Set<String> = []
+        private var domains: Set<String> = []
+        private var first: Date?, last: Date?
+        private var dated = 0
+        private var bodyLength = 0
+        private var withAttachments = 0
+        private(set) var attachmentCount = 0
+        private var withReplyTo = 0
+        private var classification: [EmailNLPEngine.EmailCategory: Int] = [:]
+        private let formatter: DateFormatter = {
+            let f = DateFormatter(); f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"; return f
+        }()
+
+        init() {}
+
+        mutating func add(_ emails: [MBOXParser.RawEmail]) {
+            total += emails.count
+            for email in emails {
+                let from = email.headers["From"] ?? ""
+                senders.insert(ArchiveInsightsFeatures.extractEmailAddress(from: from))
+                if let d = ArchiveInsightsFeatures.extractDomain(from: from) { domains.insert(d) }
+                if let s = email.headers["Date"], let date = formatter.date(from: s) {
+                    dated += 1
+                    first = min(first ?? date, date)
+                    last = max(last ?? date, date)
+                }
+                bodyLength += (email.plainBody.isEmpty ? email.htmlBody : email.plainBody).count
+                if !email.attachments.isEmpty { withAttachments += 1 }
+                attachmentCount += email.attachments.count
+                if email.headers["In-Reply-To"] != nil || email.inReplyTo != nil { withReplyTo += 1 }
+            }
+            for (k, v) in EmailNLPEngine.classifyAll(emails) { classification[k, default: 0] += v }
+        }
+
+        var uniqueFromDomains: Int { domains.count }
+
+        func finish(languageSample: [MBOXParser.RawEmail]) -> ArchiveComposition {
+            let categories = classification.sorted { $0.value > $1.value }.map { cat -> (String, Int, Double) in
+                (cat.key.rawValue, cat.value, Double(cat.value) / Double(max(1, total)) * 100)
+            }
+            let languages = EmailNLPEngine.detectLanguages(in: Array(languageSample.prefix(200)))
+            let avgLength = total == 0 ? 0 : bodyLength / total
+            let attachmentRate = total == 0 ? 0 : Double(withAttachments) / Double(total)
+            let threadRate = total == 0 ? 0 : Double(withReplyTo) / Double(total)
+            var factors: [ArchiveComposition.QualityFactor] = []
+            var quality = 0.5
+            let diversity = min(1.0, Double(senders.count) / Double(max(1, total / 5)))
+            factors.append(.init(name: String(localized: "Sender Diversity"), score: diversity, detail: "\(senders.count) unique senders across \(total) emails"))
+            quality += diversity * 0.15
+            let datedRatio = Double(dated) / Double(max(1, total))
+            factors.append(.init(name: String(localized: "Date Completeness"), score: datedRatio, detail: "\(Int(datedRatio * 100))% of emails have parseable dates"))
+            quality += datedRatio * 0.15
+            let bodyScore: Double = avgLength > 50 ? min(1.0, Double(avgLength) / 500.0) : 0.2
+            factors.append(.init(name: String(localized: "Content Richness"), score: bodyScore, detail: "Average email length: \(avgLength) characters"))
+            quality += bodyScore * 0.1
+            factors.append(.init(name: String(localized: "Thread Depth"), score: threadRate, detail: "\(Int(threadRate * 100))% of emails are threaded"))
+            quality += threadRate * 0.1
+            return ArchiveComposition(
+                totalEmails: total, dateRange: (first, last), uniqueSenders: senders.count, uniqueDomains: domains.count,
+                categories: categories, languageBreakdown: languages.map { ($0.language, $0.percentage) },
+                avgEmailLength: avgLength, attachmentRate: attachmentRate, threadRate: threadRate,
+                qualityScore: min(1.0, quality), qualityFactors: factors)
         }
     }
 }

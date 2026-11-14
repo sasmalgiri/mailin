@@ -45,6 +45,17 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		B49C6CED3083843F00E3CC31 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				C3B67A602E2FE445009C208C /* ModelRunner.xcodeproj */,
+				C3B6F5B12E2F3AD2009C208C /* ModelRunner.xcodeproj */,
+				C3F7A7222E2ED24F00351625 /* ModelRunner.xcodeproj */,
+				C3B687F12E2F3CE7009C208C /* ModelRunner.xcodeproj */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		C3B67D182E2FE445009C208C /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -71,6 +82,7 @@
 			children = (
 				C3F77F722E21F62600351625 /* mailin */,
 				C3F77F712E21F62600351625 /* Products */,
+				B49C6CED3083843F00E3CC31 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};

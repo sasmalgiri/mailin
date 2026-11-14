@@ -1,0 +1,1022 @@
+{
+ "store": "SampleOstFile.ost",
+ "tool": "readpst (libpst, Homebrew) -D -e / -D -S",
+ "folders": {
+  "": [],
+  "Sent Items": [
+   {
+    "n": 1,
+    "kind": "eml",
+    "subject": "first email",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA294026002@ex2010.ex2010.local>",
+    "date": "Sat, 19 Mar 2011 11:19:03 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 2,
+    "kind": "eml",
+    "subject": "first email to saqib",
+    "messageID": "",
+    "date": "Thu, 28 Apr 2011 11:39:15 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 3,
+    "kind": "eml",
+    "subject": "test",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA29402480E0892@ex2010.ex2010.local>",
+    "date": "Fri, 08 Jul 2011 07:28:41 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 4,
+    "kind": "eml",
+    "subject": "xx",
+    "messageID": "",
+    "date": "Mon, 19 Sep 2011 20:54:09 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 5,
+    "kind": "eml",
+    "subject": "newsletter copy",
+    "messageID": "",
+    "date": "Tue, 20 Sep 2011 10:27:26 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": [
+     {
+      "name": "image001.jpg",
+      "size": 20833,
+      "sha256": "0f4ff85802be13ad86f82b7e6e886e5a9a6a77ddb84995bc5a7657a3d40c8f9a"
+     },
+     {
+      "name": "image002.png",
+      "size": 16852,
+      "sha256": "3ace56a1e4ba546c172f009b8dc6eb8fd9164014eb6ef9a6ac9fdc031697f5cd"
+     },
+     {
+      "name": "image003.png",
+      "size": 28825,
+      "sha256": "611994801ccd0673a43f8f331e3459544b33eca59cebfd6d1451153aeeb82e14"
+     },
+     {
+      "name": "image004.png",
+      "size": 6588,
+      "sha256": "e969cab2df07e8eeaee929e42328d83efbc9a5314622abec4feca0e4ae15584f"
+     },
+     {
+      "name": "image005.png",
+      "size": 7352,
+      "sha256": "c3aecc45da1dc28e361750bbbcc83cd85e52ced2a33baa6e662fddd2213a0354"
+     },
+     {
+      "name": "image006.png",
+      "size": 20959,
+      "sha256": "7b8747e216189c615f9ec6fc1a5723edcfb080d388cecf313780a526b10087bd"
+     },
+     {
+      "name": "image007.png",
+      "size": 2582,
+      "sha256": "14723ba00e90a18e83a415c4dbb79513ba23e8040440ac49f27dc78b0dde6c73"
+     },
+     {
+      "name": "image008.png",
+      "size": 3710,
+      "sha256": "e73c18dc36500c2990b3f1c82af7106c9c15ebbd5c12d2a41591cfd7229067c3"
+     },
+     {
+      "name": "image009.png",
+      "size": 4070,
+      "sha256": "e8df17cda3b5dee4bce3c827b384d4539c8758cf34d47957de7fcc4e2258c78d"
+     },
+     {
+      "name": "image010.png",
+      "size": 3237,
+      "sha256": "2a09bb8213954afb35e9ea340377d7a42c46996ceb5b5187a314268a78441127"
+     },
+     {
+      "name": "image011.png",
+      "size": 3877,
+      "sha256": "6e270a13a64c8cbbefb27aeb8aa0533a51cf732036c38e8ada595021dfed8d10"
+     }
+    ]
+   },
+   {
+    "n": 6,
+    "kind": "eml",
+    "subject": "RTF newsletter copy",
+    "messageID": "",
+    "date": "Tue, 20 Sep 2011 10:29:14 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": [
+     {
+      "name": "attach2",
+      "size": 21504,
+      "sha256": "4a492f2a729d02d038cb04eccbea0b10249d81044b4e16791ec27878e6c51a06"
+     },
+     {
+      "name": "attach3",
+      "size": 21504,
+      "sha256": "405575166726a4e30ccb7a7a2d6db79aa0814dba71c6965251025d13b8163f26"
+     },
+     {
+      "name": "attach4",
+      "size": 21504,
+      "sha256": "915a3f3e8af01c1b7a3db426a32a91e643f1b0916e6ed12173858de0930aaf6d"
+     },
+     {
+      "name": "attach5",
+      "size": 21504,
+      "sha256": "5550778763fb55ad7d533ef39dd8a9e42b36cd18a6b4c237f38d6bd29782711f"
+     },
+     {
+      "name": "attach6",
+      "size": 21504,
+      "sha256": "a22e9d3b338d90093760c0a23b4c65e5baa1a7f97e4dd9cb10321f62f30056a8"
+     },
+     {
+      "name": "attach7",
+      "size": 260096,
+      "sha256": "7b6ee72a5da9aefdc0fe7a4356bd33e6b53239792cf612279c82fd473a9c864e"
+     }
+    ]
+   }
+  ],
+  "Calendar": [
+   {
+    "n": 1,
+    "kind": "ics",
+    "attachments": []
+   }
+  ],
+  "Inbox": [
+   {
+    "n": 3,
+    "kind": "eml",
+    "subject": "first email to saqib",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA2940219825C42@ex2010.ex2010.local>",
+    "date": "Thu, 28 Apr 2011 16:39:15 +0500",
+    "from": "Saqib Razzaq <saqib.razzaq@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 4,
+    "kind": "eml",
+    "subject": "new added",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA29402198FA5CB@ex2010.ex2010.local>",
+    "date": "Thu, 28 Apr 2011 18:29:44 +0500",
+    "from": "from@domain.com",
+    "attachments": []
+   },
+   {
+    "n": 5,
+    "kind": "eml",
+    "subject": "test",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA29402480E0892@ex2010.ex2010.local>",
+    "date": "Fri, 08 Jul 2011 12:28:41 +0500",
+    "from": "Saqib Razzaq <saqib.razzaq@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 6,
+    "kind": "eml",
+    "subject": "hello to saqib",
+    "messageID": "<F234A8ED5A189145B286E74F980998A529E230F3@ex2010.ex2010.local>",
+    "date": "Fri, 08 Jul 2011 11:46:50 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 7,
+    "kind": "eml",
+    "subject": "Undeliverable: 05 - test email - single meeting request",
+    "messageID": "<06aa84e0-a536-4b5a-89b2-440628880ac7@ex2010.ex2010.local>",
+    "date": "Wed, 11 May 2011 16:19:27 +0500",
+    "from": "Microsoft Outlook <MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 8,
+    "kind": "eml",
+    "subject": "test",
+    "messageID": "<F234A8ED5A189145B286E74F980998A548109A4C@ex2010.ex2010.local>",
+    "date": "Fri, 08 Jul 2011 12:31:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 9,
+    "kind": "eml",
+    "subject": "message 0",
+    "messageID": "<F234A8ED5A189145B286E74F980998A54C17AF6D@ex2010.ex2010.local>",
+    "date": "Thu, 14 Jul 2011 15:59:02 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 10,
+    "kind": "eml",
+    "subject": "Bonusspelet",
+    "messageID": "<DBDADA6ED0044419868CED5A2DC8C219@userDator>",
+    "date": "Mon, 20 Jun 2011 17:01:58 +0200",
+    "from": "Rolf Petersson <rolf.petersson@telia.com>",
+    "attachments": []
+   },
+   {
+    "n": 11,
+    "kind": "eml",
+    "subject": "hello",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5599CF9A8@ex2010.ex2010.local>",
+    "date": "Thu, 04 Aug 2011 04:52:14 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 12,
+    "kind": "eml",
+    "subject": "05 - test email - single meeting request",
+    "messageID": "<F234A8ED5A189145B286E74F980998A578008FA9@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 02:10:51 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": [
+     {
+      "name": "Invitation.pdf",
+      "size": 10642,
+      "sha256": "6821f4ed901cc71760fda4444c875c7f2c53866139d1e4eec7a277bd9545b141"
+     }
+    ]
+   },
+   {
+    "n": 13,
+    "kind": "eml",
+    "subject": "newsletter copy",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA2940278576002@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 15:27:26 +0500",
+    "from": "Saqib Razzaq <saqib.razzaq@ex2010.local>",
+    "attachments": [
+     {
+      "name": "image001.jpg",
+      "size": 20833,
+      "sha256": "0f4ff85802be13ad86f82b7e6e886e5a9a6a77ddb84995bc5a7657a3d40c8f9a"
+     },
+     {
+      "name": "image002.png",
+      "size": 16852,
+      "sha256": "3ace56a1e4ba546c172f009b8dc6eb8fd9164014eb6ef9a6ac9fdc031697f5cd"
+     },
+     {
+      "name": "image003.png",
+      "size": 28825,
+      "sha256": "611994801ccd0673a43f8f331e3459544b33eca59cebfd6d1451153aeeb82e14"
+     },
+     {
+      "name": "image004.png",
+      "size": 6588,
+      "sha256": "e969cab2df07e8eeaee929e42328d83efbc9a5314622abec4feca0e4ae15584f"
+     },
+     {
+      "name": "image005.png",
+      "size": 7352,
+      "sha256": "c3aecc45da1dc28e361750bbbcc83cd85e52ced2a33baa6e662fddd2213a0354"
+     },
+     {
+      "name": "image006.png",
+      "size": 20959,
+      "sha256": "7b8747e216189c615f9ec6fc1a5723edcfb080d388cecf313780a526b10087bd"
+     },
+     {
+      "name": "image007.png",
+      "size": 2582,
+      "sha256": "14723ba00e90a18e83a415c4dbb79513ba23e8040440ac49f27dc78b0dde6c73"
+     },
+     {
+      "name": "image008.png",
+      "size": 3710,
+      "sha256": "e73c18dc36500c2990b3f1c82af7106c9c15ebbd5c12d2a41591cfd7229067c3"
+     },
+     {
+      "name": "image009.png",
+      "size": 4070,
+      "sha256": "e8df17cda3b5dee4bce3c827b384d4539c8758cf34d47957de7fcc4e2258c78d"
+     },
+     {
+      "name": "image010.png",
+      "size": 3237,
+      "sha256": "2a09bb8213954afb35e9ea340377d7a42c46996ceb5b5187a314268a78441127"
+     },
+     {
+      "name": "image011.png",
+      "size": 3877,
+      "sha256": "6e270a13a64c8cbbefb27aeb8aa0533a51cf732036c38e8ada595021dfed8d10"
+     }
+    ]
+   },
+   {
+    "n": 14,
+    "kind": "eml",
+    "subject": "RTF newsletter copy",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA2940278577FD3@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 15:29:14 +0500",
+    "from": "Saqib Razzaq <saqib.razzaq@ex2010.local>",
+    "attachments": [
+     {
+      "name": "ATT00580",
+      "size": 21504,
+      "sha256": "bbe041961f45abdd4f9a54afcdf466ee8bf98434e2419ad765244b63096736fe"
+     },
+     {
+      "name": "ATT03825",
+      "size": 21504,
+      "sha256": "a947b0b8e88410eaf7041f1430a64efef8a2c7ebc2d6eacbe2d272b6642db172"
+     },
+     {
+      "name": "ATT30864",
+      "size": 21504,
+      "sha256": "c92565091f791f7f189f60df3bc10c2a2ea7902afbb91d2d296fb9fa40ce0302"
+     },
+     {
+      "name": "ATT47502",
+      "size": 21504,
+      "sha256": "fdb1ffe8a5ae51e77b6677c8bbd2fdbc436a66afc038fb76fa4d97330e7f27dd"
+     },
+     {
+      "name": "ATT51928",
+      "size": 260096,
+      "sha256": "649be6c7a31bd636537cc122ae5d9cbf6d8e0031d8bd11f77b85a94bdc9a436d"
+     },
+     {
+      "name": "ATT63152",
+      "size": 21504,
+      "sha256": "a46c3cb0a8769706e3c03828918e652fcee36b5ee10f7863b7fb9c19a892c1f2"
+     }
+    ]
+   }
+  ],
+  "Inbox/sub1": [
+   {
+    "n": 1,
+    "kind": "eml",
+    "subject": "message 1999",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F65E6@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 2,
+    "kind": "eml",
+    "subject": "message 1998",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F65D9@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 3,
+    "kind": "eml",
+    "subject": "message 1997",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F65C8@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 4,
+    "kind": "eml",
+    "subject": "message 1996",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F65BB@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 5,
+    "kind": "eml",
+    "subject": "message 1995",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F65B2@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 6,
+    "kind": "eml",
+    "subject": "message 1994",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F65A9@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 7,
+    "kind": "eml",
+    "subject": "message 1993",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F65A0@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 8,
+    "kind": "eml",
+    "subject": "message 1992",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6597@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 9,
+    "kind": "eml",
+    "subject": "message 1991",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F658E@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 10,
+    "kind": "eml",
+    "subject": "message 1990",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6581@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 11,
+    "kind": "eml",
+    "subject": "message 1989",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6578@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 12,
+    "kind": "eml",
+    "subject": "message 1988",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F656F@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 13,
+    "kind": "eml",
+    "subject": "message 1987",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6566@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 14,
+    "kind": "eml",
+    "subject": "message 1986",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6561@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:54 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 15,
+    "kind": "eml",
+    "subject": "message 1985",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F655C@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 16,
+    "kind": "eml",
+    "subject": "message 1984",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6557@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 17,
+    "kind": "eml",
+    "subject": "message 1983",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6552@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 18,
+    "kind": "eml",
+    "subject": "message 1982",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F654D@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 19,
+    "kind": "eml",
+    "subject": "message 1981",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6548@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 20,
+    "kind": "eml",
+    "subject": "message 1980",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6543@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 21,
+    "kind": "eml",
+    "subject": "message 1979",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F653E@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 22,
+    "kind": "eml",
+    "subject": "message 1978",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6539@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 23,
+    "kind": "eml",
+    "subject": "message 1977",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F652C@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 24,
+    "kind": "eml",
+    "subject": "message 1976",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6523@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 25,
+    "kind": "eml",
+    "subject": "message 1975",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F651A@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   }
+  ],
+  "Inbox/sub2": [
+   {
+    "n": 1,
+    "kind": "eml",
+    "subject": "message 1974",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F650D@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 2,
+    "kind": "eml",
+    "subject": "message 1973",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6508@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 3,
+    "kind": "eml",
+    "subject": "message 1972",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64FB@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 4,
+    "kind": "eml",
+    "subject": "message 1971",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64F2@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 5,
+    "kind": "eml",
+    "subject": "message 1970",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64E9@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 6,
+    "kind": "eml",
+    "subject": "message 1969",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64DC@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 7,
+    "kind": "eml",
+    "subject": "message 1968",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64D3@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 8,
+    "kind": "eml",
+    "subject": "message 1967",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64CA@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 9,
+    "kind": "eml",
+    "subject": "message 1966",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64C1@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 10,
+    "kind": "eml",
+    "subject": "message 1965",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64B8@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 11,
+    "kind": "eml",
+    "subject": "message 1964",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64AB@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 12,
+    "kind": "eml",
+    "subject": "message 1963",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F64A2@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 13,
+    "kind": "eml",
+    "subject": "message 1962",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6499@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 14,
+    "kind": "eml",
+    "subject": "message 1961",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6490@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 15,
+    "kind": "eml",
+    "subject": "message 1960",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6487@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 16,
+    "kind": "eml",
+    "subject": "message 1959",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F647E@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 17,
+    "kind": "eml",
+    "subject": "message 1958",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6479@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:53 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 18,
+    "kind": "eml",
+    "subject": "message 1957",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6474@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 19,
+    "kind": "eml",
+    "subject": "message 1956",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F646F@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 20,
+    "kind": "eml",
+    "subject": "message 1955",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6466@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 21,
+    "kind": "eml",
+    "subject": "message 1954",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6459@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 22,
+    "kind": "eml",
+    "subject": "message 1953",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6454@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 23,
+    "kind": "eml",
+    "subject": "message 1952",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6447@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 24,
+    "kind": "eml",
+    "subject": "message 1951",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F643A@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 25,
+    "kind": "eml",
+    "subject": "message 1950",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6435@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 26,
+    "kind": "eml",
+    "subject": "message 1949",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F642C@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 27,
+    "kind": "eml",
+    "subject": "message 1948",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6423@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 28,
+    "kind": "eml",
+    "subject": "message 1947",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F6416@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 29,
+    "kind": "eml",
+    "subject": "message 1946",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5022F640D@ex2010.ex2010.local>",
+    "date": "Tue, 22 Mar 2011 23:27:52 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   }
+  ],
+  "Contacts": [],
+  "Deleted Items": [
+   {
+    "n": 1,
+    "kind": "eml",
+    "subject": "xx",
+    "messageID": "<6AA62D7A1B3AC5449D53431FBEA2940277F5A4B7@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 01:54:09 +0500",
+    "from": "Saqib Razzaq <saqib.razzaq@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 2,
+    "kind": "ics",
+    "attachments": []
+   },
+   {
+    "n": 3,
+    "kind": "eml",
+    "subject": "05 - test email - single meeting request",
+    "messageID": "<F234A8ED5A189145B286E74F980998A577FA18A6@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 01:54:28 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 4,
+    "kind": "ics",
+    "attachments": []
+   },
+   {
+    "n": 5,
+    "kind": "eml",
+    "subject": "05 - test email - single meeting request",
+    "messageID": "<F234A8ED5A189145B286E74F980998A577FA18B9@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 01:55:14 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 6,
+    "kind": "ics",
+    "attachments": []
+   },
+   {
+    "n": 7,
+    "kind": "ics",
+    "attachments": []
+   },
+   {
+    "n": 8,
+    "kind": "eml",
+    "subject": "05 - test email - single meeting request",
+    "messageID": "<F234A8ED5A189145B286E74F980998A577FA18E5@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 01:57:10 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": [
+     {
+      "name": "Invitation.pdf",
+      "size": 10642,
+      "sha256": "6821f4ed901cc71760fda4444c875c7f2c53866139d1e4eec7a277bd9545b141"
+     }
+    ]
+   },
+   {
+    "n": 9,
+    "kind": "eml",
+    "subject": "05 - test email - single meeting request",
+    "messageID": "<F234A8ED5A189145B286E74F980998A577FA18CC@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 01:57:09 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   },
+   {
+    "n": 10,
+    "kind": "eml",
+    "subject": "05 - test email - single meeting request",
+    "messageID": "<F234A8ED5A189145B286E74F980998A5780067CE@ex2010.ex2010.local>",
+    "date": "Tue, 20 Sep 2011 02:10:49 +0500",
+    "from": "Administrator <Administrator@ex2010.local>",
+    "attachments": []
+   }
+  ],
+  "Sync Issues": [
+   {
+    "n": 4,
+    "kind": "eml",
+    "subject": "Synchronization Log: ",
+    "messageID": "",
+    "date": "Thu, 28 Apr 2011 11:37:47 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 5,
+    "kind": "eml",
+    "subject": "Synchronization Log: ",
+    "messageID": "",
+    "date": "Thu, 28 Apr 2011 11:38:27 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 6,
+    "kind": "eml",
+    "subject": "Synchronization Log: ",
+    "messageID": "",
+    "date": "Thu, 28 Apr 2011 11:40:47 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 7,
+    "kind": "eml",
+    "subject": "Synchronization Log: ",
+    "messageID": "",
+    "date": "Thu, 28 Apr 2011 11:55:51 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 8,
+    "kind": "eml",
+    "subject": "Synchronization Log: ",
+    "messageID": "",
+    "date": "Thu, 28 Apr 2011 11:56:42 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 9,
+    "kind": "eml",
+    "subject": "Synchronization Log: ",
+    "messageID": "",
+    "date": "Thu, 28 Apr 2011 17:06:50 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 10,
+    "kind": "eml",
+    "subject": "Synchronization Log: ",
+    "messageID": "",
+    "date": "Mon, 19 Sep 2011 20:55:00 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 11,
+    "kind": "eml",
+    "subject": "Modification Resolution",
+    "messageID": "",
+    "date": "Mon, 19 Sep 2011 20:55:22 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   },
+   {
+    "n": 12,
+    "kind": "eml",
+    "subject": "Modification Resolution",
+    "messageID": "",
+    "date": "Mon, 19 Sep 2011 21:12:14 +0530",
+    "from": "Saqib Razzaq <MAILER-DAEMON>",
+    "attachments": []
+   }
+  ]
+ },
+ "totals": {
+  "items": 92,
+  "mail": 87,
+  "nonMail": 5,
+  "attachmentPayloads": 36
+ }
+}

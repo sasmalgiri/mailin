@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import NaturalLanguage
 
@@ -11,6 +12,10 @@ struct TopicClustersView: View {
     @Binding var selectedClusterFilter: String?
     @Binding var clusterFilterIDs: Set<UUID>?
     @State private var showTutorial = false
+    // §3-A5: whole-archive topics when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var v3Note: String?
+    private var v3: Bool { v3Modules?.isOn(.v3TopicClusters) ?? false }
 
     enum TopicSortOrder: String, CaseIterable {
         case emailsDesc = "Emails (Most)"
@@ -186,7 +191,7 @@ struct TopicClustersView: View {
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "number")
                     .foregroundColor(AppColors.primary)
-                Text("\(clusters.count) topics · \(emails.count) emails")
+                Text(v3Note ?? "\(clusters.count) topics · \(emails.count) emails")
                     .font(Typography.caption1)
                     .fontWeight(.medium)
             }
@@ -217,7 +222,7 @@ struct TopicClustersView: View {
                         sortOrder = order
                     } label: {
                         HStack {
-                            Text(order.rawValue)
+                            Text(LocalizedStringKey(order.rawValue))
                             if sortOrder == order {
                                 Image(systemName: "checkmark")
                             }
@@ -242,7 +247,7 @@ struct TopicClustersView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
-            SaveToDocumentsButton(title: "Topic Clusters") {
+            SaveToDocumentsButton(title: String(localized: "Topic Clusters")) {
                 [.init(key: "Clusters", value: "\(clusters.count)"), .init(key: "Emails", value: "\(emails.count)")]
             }
 
@@ -367,7 +372,7 @@ struct TopicClustersView: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(cluster.label), \(cluster.emailIDs.count) emails")
-        .accessibilityHint(isSelected ? "Double tap to deselect" : "Double tap to filter by this topic")
+        .accessibilityHint(isSelected ? String(localized: "Double tap to deselect") : String(localized: "Double tap to filter by this topic"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -396,7 +401,34 @@ struct TopicClustersView: View {
     // `maxClusteringEmails` (10 000) inside kMeansPlusPlusClustering. Only
     // compact features (sentence vectors + term counts) are derived per email;
     // bodies are never retained beyond the working set already resident.
-    private func computeClusters() {
+    /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func computeClusters(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
+            isComputing = true
+            Task { @MainActor in
+                defer { isComputing = false }
+                do {
+                    let r = try await TopicClustersEngine.run()
+                    clusters = r.clusters
+                    silhouetteScore = r.silhouette
+                    v3Note = String(localized: "\(r.clusters.count) topics · \(r.assigned) emails assigned (topics learned from \(r.sampled) emails spread across the archive)")
+                        + (r.unassigned > 0 ? " · " + String(localized: "\(r.unassigned) without readable text") : "")
+                    let snapshot = r.clusters.map { cluster in
+                        TopicClusterCache.PersistedCluster(
+                            label: cluster.label, keywords: cluster.keywords, emailIDs: cluster.emailIDs,
+                            colorIndex: Self.clusterColors.firstIndex(of: cluster.color) ?? 0, coherence: cluster.coherence)
+                    }
+                    let revision = (try? await ArchiveCorpusRevision.shared.current()) ?? 0
+                    TopicClusterCache.save(clusters: snapshot, silhouette: r.silhouette, corpusRevision: revision)
+                } catch is CancellationError {
+                    v3Note = nil
+                } catch {
+                    v3Note = EngineGuard.fellBack(.v3TopicClusters, error: error)
+                    computeClusters(previousEngine: true)
+                }
+            }
+            return
+        }
         isComputing = true
         let allEmails = emails
 

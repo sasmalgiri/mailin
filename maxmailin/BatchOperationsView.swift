@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  BatchOperationsView.swift
 //  mailin
@@ -13,7 +14,6 @@ struct BatchOperationsView: View {
     @Binding var selectedIDs: Set<UUID>
 
     var onTagApplied: (String, [UUID]) -> Void
-    var onExportRequested: ([MBOXParser.RawEmail], String) -> Void
 
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
@@ -58,6 +58,15 @@ struct BatchOperationsView: View {
     @State private var deletedIDs: Set<UUID> = []
     @State private var showTutorial = false
 
+    // §3-L11: tag / classify every email in scope when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var wholeScope = false
+    @State private var scopeTotal: Int?
+    @State private var scopeConfirm: ScopeConfirmationRequest?
+    private var v3: Bool { modules?.isOn(.v3BatchOperations) ?? false }
+    private var v3Whole: Bool { v3 && wholeScope }
+
     // MARK: - Computed Helpers
 
     private var selectedEmails: [MBOXParser.RawEmail] {
@@ -76,7 +85,15 @@ struct BatchOperationsView: View {
             header
             Divider()
 
-            if selectedIDs.isEmpty {
+            if v3 {
+                Toggle(isOn: $wholeScope) {
+                    Text("Apply tags and classification to every email in scope (\(scopeTotal ?? 0)), not only the selected ones")
+                        .font(Typography.callout)
+                }
+                .padding(.horizontal, Spacing.medium)
+                .padding(.top, Spacing.small)
+            }
+            if selectedIDs.isEmpty && !v3Whole {
                 emptyState
             } else {
                 ScrollView {
@@ -112,11 +129,45 @@ struct BatchOperationsView: View {
             "Remove Selected Emails",
             isPresented: $showDeleteConfirmation,
             message: "This will remove \(selectedIDs.count) email(s) from the current view. The source file is not modified.",
-            actionTitle: "Remove"
+            actionTitle: String(localized: "Remove")
         ) {
             performBulkDelete()
         }
         .featureTutorial(.batchOperations, key: "batch_operations_tutorial_seen", isPresented: $showTutorial)
+        .scopeConfirmation($scopeConfirm)
+        .task(id: v3) { if v3 { scopeTotal = await scope.resolvedTotal() } }
+    }
+
+    // MARK: - 3.0 whole scope
+
+    /// `previous`: the pre-3.0 operation on the selected emails, run if the
+    /// 3.0 engine throws (§3-M3).
+    private func runWholeScope(_ ops: [BatchOperationsEngine.Operation], title: String, verb: String,
+                               previous: @escaping @MainActor () -> Void,
+                               done: @escaping (Int) -> String) {
+        Task { @MainActor in
+            scopeConfirm = await ScopeConfirm.request(scope, title: title, verb: verb) {
+                isProcessing = true
+                resultMessage = nil
+                defer { isProcessing = false }
+                do {
+                    var count = 0
+                    for op in ops {
+                        let r = try await BatchOperationsEngine.apply(op, scope: scope, loaded: emails.map(\.id))
+                        count = r.count
+                        await ScopeJob.recordReceipt(r.receipt, registry: modules)
+                    }
+                    withAnimation(AnimationTiming.fast) { resultMessage = done(count) }
+                    clearResultAfterDelay()
+                } catch is CancellationError {
+                    resultMessage = nil
+                } catch {
+                    let note = EngineGuard.fellBack(.v3BatchOperations, error: error)
+                    previous()
+                    resultMessage = note
+                }
+            }
+        }
     }
 
     // MARK: - Header
@@ -155,8 +206,8 @@ struct BatchOperationsView: View {
     private var emptyState: some View {
         EmptyStateView(
             icon: "checklist.unchecked",
-            title: "No Emails Selected",
-            message: "Select one or more emails from the list, then return here to perform bulk operations."
+            title: String(localized: "No Emails Selected"),
+            message: String(localized: "Select one or more emails from the list, then return here to perform bulk operations.")
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -295,7 +346,7 @@ struct BatchOperationsView: View {
             VStack(spacing: Spacing.xSmall) {
                 Picker("Category:", selection: $selectedCategory) {
                     ForEach(BulkCategory.allCases) { category in
-                        Text(category.rawValue).tag(category)
+                        Text(LocalizedStringKey(category.rawValue)).tag(category)
                     }
                 }
                 .pickerStyle(.menu)
@@ -313,7 +364,7 @@ struct BatchOperationsView: View {
             HStack(spacing: Spacing.xSmall) {
                 Picker("Category:", selection: $selectedCategory) {
                     ForEach(BulkCategory.allCases) { category in
-                        Text(category.rawValue).tag(category)
+                        Text(LocalizedStringKey(category.rawValue)).tag(category)
                     }
                 }
                 .pickerStyle(.menu)
@@ -356,7 +407,7 @@ struct BatchOperationsView: View {
             VStack(spacing: Spacing.xSmall) {
                 Picker("Format:", selection: $exportFormat) {
                     ForEach(ExportFormat.allCases) { format in
-                        Text(format.rawValue).tag(format)
+                        Text(LocalizedStringKey(format.rawValue)).tag(format)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -374,7 +425,7 @@ struct BatchOperationsView: View {
             HStack(spacing: Spacing.xSmall) {
                 Picker("Format:", selection: $exportFormat) {
                     ForEach(ExportFormat.allCases) { format in
-                        Text(format.rawValue).tag(format)
+                        Text(LocalizedStringKey(format.rawValue)).tag(format)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -428,6 +479,15 @@ struct BatchOperationsView: View {
     private func performApplyTag() {
         let tag = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !tag.isEmpty else { return }
+        if v3Whole {
+            newTagName = ""
+            let selected = Array(selectedIDs)
+            runWholeScope([.add(tag)], title: String(localized: "Apply Tag"), verb: String(localized: "Tag"),
+                          previous: { onTagApplied(tag, selected) }) {
+                String(localized: "Tagged \($0) emails")
+            }
+            return
+        }
 
         isProcessing = true
         progressValue = 0
@@ -462,6 +522,16 @@ struct BatchOperationsView: View {
 
     private func performRemoveTag() {
         guard !removeTagSelection.isEmpty else { return }
+        if v3Whole {
+            let tag = removeTagSelection
+            removeTagSelection = ""
+            let selected = Array(selectedIDs)
+            runWholeScope([.remove(tag)], title: String(localized: "Remove Tag"), verb: String(localized: "Remove"),
+                          previous: { ReviewStateService.shared.removeTag(tag, from: selected) }) {
+                String(localized: "Removed “\(tag)” from \($0) emails")
+            }
+            return
+        }
 
         isProcessing = true
         progressValue = 0
@@ -478,7 +548,9 @@ struct BatchOperationsView: View {
             }
             progressValue = 1.0
 
-            onTagApplied("", ids) // Empty tag signals removal
+            // §8 #5: remove only the chosen tag. `onTagApplied("")` cleared
+            // every tag on the emails, so "Remove tag X" removed all of them.
+            ReviewStateService.shared.removeTag(tag, from: ids)
 
             ForensicManager.shared.logAction(
                 "Bulk Tag Removed",
@@ -496,6 +568,15 @@ struct BatchOperationsView: View {
     }
 
     private func performBulkClassification() {
+        if v3Whole {
+            let tag = selectedCategory.rawValue
+            let selected = Array(selectedIDs)
+            runWholeScope([.add(tag)], title: String(localized: "Classify"), verb: String(localized: "Classify"),
+                          previous: { onTagApplied(tag, selected) }) {
+                String(localized: "Classified \($0) emails as \(tag)")
+            }
+            return
+        }
         isProcessing = true
         progressValue = 0
         resultMessage = nil
@@ -528,6 +609,16 @@ struct BatchOperationsView: View {
     }
 
     private func performClearClassification() {
+        if v3Whole {
+            // Removes the classification tags only — other tags stay.
+            let selected = Array(selectedIDs)
+            runWholeScope(BulkCategory.allCases.map { .remove($0.rawValue) },
+                          title: String(localized: "Clear Classification"), verb: String(localized: "Clear"),
+                          previous: { for c in BulkCategory.allCases { ReviewStateService.shared.removeTag(c.rawValue, from: selected) } }) {
+                String(localized: "Cleared classification from \($0) emails")
+            }
+            return
+        }
         isProcessing = true
         progressValue = 0
         resultMessage = nil
@@ -542,7 +633,8 @@ struct BatchOperationsView: View {
             }
             progressValue = 1.0
 
-            onTagApplied("", ids) // Empty tag signals removal
+            // §8 #5: remove only the classification tags, not every tag.
+            for category in BulkCategory.allCases { ReviewStateService.shared.removeTag(category.rawValue, from: ids) }
 
             ForensicManager.shared.logAction(
                 "Bulk Classification Cleared",
@@ -558,43 +650,86 @@ struct BatchOperationsView: View {
         }
     }
 
+    /// Exports exactly the selected emails in the chosen format through the
+    /// streamed export service (MBOX archive, signed forensic CSV, or one PDF
+    /// per email). The audit entry and document are written only after the
+    /// export has actually completed.
     private func performBulkExport() {
+        let ids = Set(selectedEmails.map(\.id))
+        guard !ids.isEmpty else { return }
+        let format = exportFormat
+        #if os(macOS)
+        let destination: URL
+        if format == .pdf {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.canCreateDirectories = true
+            panel.prompt = String(localized: "Export Here")
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            destination = url
+        } else {
+            let name = format == .mbox ? "selected_emails.mbox" : "selected_emails.csv"
+            guard let url = PlatformFileSaver.savePanel(suggestedName: name) else { return }
+            destination = url
+        }
+        #else
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("batch_export_\(UUID().uuidString)")
+        let destination = format == .pdf ? base
+            : base.appendingPathExtension(format == .mbox ? "mbox" : "csv")
+        if format == .pdf {
+            try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        }
+        #endif
+
         isProcessing = true
         progressValue = 0
         resultMessage = nil
-
-        let toExport = selectedEmails
-        let format = exportFormat.rawValue
-
+        let scope = ArchiveSelectionScope.explicit(ids)
         Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 50000000)
-            let total = Double(toExport.count)
-            for (index, _) in toExport.enumerated() {
-                progressValue = Double(index + 1) / total
+            let service = ArchiveExportService.shared
+            let progress: @MainActor @Sendable (Int, Int) -> Void = { done, total in
+                progressValue = total > 0 ? Double(done) / Double(total) : 0
+            }
+            var message: String
+            do {
+                let result: ArchiveExportResult
+                switch format {
+                case .mbox: result = try await service.exportMBOXArchive(scope: scope, to: destination, onProgress: progress)
+                case .csv: result = try await service.exportForensicCSV(scope: scope, to: destination, onProgress: progress)
+                case .pdf: result = try await service.exportPDFFiles(scope: scope, to: destination, onProgress: progress)
+                }
+                if result.cancelled {
+                    message = String(localized: "Export cancelled after \(result.recordsWritten) of \(ids.count) emails.")
+                } else {
+                    let written = result.recordsWritten
+                    ForensicManager.shared.logAction(
+                        "Bulk Export",
+                        detail: "Exported \(written) of \(ids.count) selected email(s) as \(format.rawValue) → \(destination.lastPathComponent)")
+                    await DocumentRegistry.captureStructured(.export,
+                        summary: "Bulk export — \(written) emails as \(format.rawValue)",
+                        document: CapturedDocument(title: String(localized: "Bulk Export"), sections: [
+                          .init(name: String(localized: "Bulk Export"), fields: [
+                            .init(key: "Emails selected", value: "\(ids.count)"),
+                            .init(key: "Emails exported", value: "\(written)"),
+                            .init(key: "Format", value: format.rawValue),
+                            .init(key: "Destination", value: destination.lastPathComponent)])]),
+                        refs: destination.lastPathComponent)
+                    message = written == ids.count
+                        ? String(localized: "Exported \(written) emails as \(format.rawValue) — \(destination.lastPathComponent)")
+                        : String(localized: "Exported \(written) of \(ids.count) emails as \(format.rawValue) — the rest could not be read from the archive.")
+                    #if os(iOS)
+                    if case .failed(let why) = PlatformExport.share(destination) { message += " " + why }
+                    #endif
+                }
+            } catch {
+                message = String(localized: "Export failed: \(error.localizedDescription)")
             }
             progressValue = 1.0
-
-            onExportRequested(toExport, format)
-
-            ForensicManager.shared.logAction(
-                "Bulk Export",
-                detail: "Exported \(toExport.count) email(s) as \(format)"
-            )
-            // Record a numbered document of this bulk export.
-            let exportCount = toExport.count
-            let exportFormat = "\(format)"
-            Task { await DocumentRegistry.captureStructured(.export,
-                summary: "Bulk export — \(exportCount) emails as \(exportFormat)",
-                document: CapturedDocument(title: "Bulk Export", sections: [
-                  .init(name: "Bulk Export", fields: [
-                    .init(key: "Emails", value: "\(exportCount)"),
-                    .init(key: "Format", value: exportFormat)])])) }
-
             withAnimation(AnimationTiming.fast) {
-                resultMessage = "Exported \(toExport.count) email\(toExport.count == 1 ? "" : "s") as \(format)"
+                resultMessage = message
                 isProcessing = false
             }
-
             clearResultAfterDelay()
         }
     }

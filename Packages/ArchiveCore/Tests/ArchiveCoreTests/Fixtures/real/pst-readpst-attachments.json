@@ -1,0 +1,191 @@
+{
+ "Outlook_4483F2012G4_ladministrator.pst": {
+  "bytes": 21871,
+  "count": 11,
+  "names": [
+   "1.jpg",
+   "10.jpg",
+   "12.jpg",
+   "2.jpg",
+   "3.jpg",
+   "4.jpg",
+   "5.jpg",
+   "6.jpg",
+   "7.jpg",
+   "8.jpg",
+   "9.jpg"
+  ]
+ },
+ "Outlook_4483F2012G5_Administrator.pst": {
+  "bytes": 21871,
+  "count": 11,
+  "names": [
+   "1.jpg",
+   "10.jpg",
+   "12.jpg",
+   "2.jpg",
+   "3.jpg",
+   "4.jpg",
+   "5.jpg",
+   "6.jpg",
+   "7.jpg",
+   "8.jpg",
+   "9.jpg"
+  ]
+ },
+ "Outlook_4483F2012G5_Administrator_Outlookimap.gmail.com-00000002.pst": {
+  "bytes": 12006,
+  "count": 1,
+  "names": [
+   "OurExplicitPhoto.jpg"
+  ]
+ },
+ "Outlook_4483S2009G3_ladministrator.pst": {
+  "bytes": 28249,
+  "count": 3,
+  "names": [
+   "35D.gif",
+   "B0C.gif",
+   "PLAN.doc"
+  ]
+ },
+ "Outlook_4483S2009G3_ladministrator_outlamurphy.sbp_gmail.pst": {
+  "bytes": 0,
+  "count": 0,
+  "names": []
+ },
+ "Outlook_4483S2009G5_ladministrator.pst": {
+  "bytes": 1817447,
+  "count": 5,
+  "names": [
+   "NewCarCCInfo.bmp",
+   "Prices for Credit Cards.doc",
+   "Prices for Credit Cards.doc",
+   "PutCC#.zip",
+   "details.txt"
+  ]
+ },
+ "Outlook_4483S2009G5_xerox.pst": {
+  "bytes": 1817447,
+  "count": 5,
+  "names": [
+   "NewCarCCInfo.bmp",
+   "Prices for Credit Cards.doc",
+   "Prices for Credit Cards.doc",
+   "PutCC#.zip",
+   "details.txt"
+  ]
+ },
+ "Outlook_4483S2010G5_Administrator.pst": {
+  "bytes": 0,
+  "count": 0,
+  "names": []
+ },
+ "Outlook_4483S2010G5_Administrator_Outlstealin.your.cars@gmail.com.pst": {
+  "bytes": 0,
+  "count": 0,
+  "names": []
+ },
+ "Outlook_4483S2010G5_Administrator_backup.pst": {
+  "bytes": 8004768,
+  "count": 15,
+  "names": [
+   "Amy.jpg",
+   "Brenda.jpg",
+   "Carla.jpg",
+   "Carla.jpg",
+   "Eleanor.jpg",
+   "Helga.jpg",
+   "Jill.jpg",
+   "Jill.jpg",
+   "Sally.jpg",
+   "Tracy.jpg",
+   "cars.zip",
+   "lindsey.jpg",
+   "list.docx",
+   "list[1].docx",
+   "melissa.jpg"
+  ]
+ },
+ "Outlook_4483S2011G1_bill.jobs.pst": {
+  "bytes": 0,
+  "count": 0,
+  "names": []
+ },
+ "Outlook_4483S2011G1_bill.jobs_billjobs0@gmail.com.pst": {
+  "bytes": 4472936,
+  "count": 27,
+  "names": [
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "1.gif",
+   "2.gif",
+   "2.gif",
+   "Lauren.docx",
+   "Lauren.docx",
+   "Lauren.docx",
+   "Lauren.docx",
+   "Missing Person report.doc",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif",
+   "logo.gif"
+  ]
+ },
+ "Outlook_4483S2011G2_johnblair68@hotmail.com.pst": {
+  "bytes": 3000054,
+  "count": 1,
+  "names": [
+   "CompanySoftballpic.bmp"
+  ]
+ },
+ "Outlook_M57_Jean_Jean.pst": {
+  "bytes": 315224,
+  "count": 9,
+  "names": [
+   "exchange.gif",
+   "icons.gif",
+   "ie.gif",
+   "m57biz.xls",
+   "netmeeting.gif",
+   "office.gif",
+   "olicon.GIF",
+   "wmt.gif",
+   "yellowbg.gif"
+  ]
+ },
+ "Outlook_M57_Jean_admin.pst": {
+  "bytes": 23384,
+  "count": 8,
+  "names": [
+   "exchange.gif",
+   "icons.gif",
+   "ie.gif",
+   "netmeeting.gif",
+   "office.gif",
+   "olicon.GIF",
+   "wmt.gif",
+   "yellowbg.gif"
+  ]
+ },
+ "_note": {
+  "bytes": 0,
+  "count": 0,
+  "names": [
+   "readpst -te -S -D; rtf-body.rtf files and attachments of readpst placeholder items (From <MAILER-DAEMON>, empty subject) excluded; embedded messages are not written by readpst"
+  ]
+ }
+}

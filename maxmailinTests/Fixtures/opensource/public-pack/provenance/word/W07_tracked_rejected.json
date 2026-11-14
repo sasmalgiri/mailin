@@ -1,0 +1,29 @@
+{
+  "sample_id": "W07_tracked_rejected",
+  "file": "samples/word_native/W07_tracked_rejected.docx",
+  "corpus": "word_native",
+  "status": "pre-registered - confirm every step was followed exactly; record any deviation in 'deliberate_deviations'",
+  "derived_from": "W05_tracked_retained.docx",
+  "transformation": "reject all tracked changes",
+  "creation_method": "Byte-identical copy of W05; all tracked changes rejected",
+  "controlled_actions": [
+    "In File Explorer copy W05_tracked_retained.docx and rename the copy W07_tracked_rejected.docx",
+    "Open it in Word; Review > Reject > Reject All Changes",
+    "Ctrl+S, close Word"
+  ],
+  "deliberate_deviations": [
+    "Tracked revisions rejected; visible text returns to the baseline sentence"
+  ],
+  "known_final_text": "The quick brown fox jumps over the dog.",
+  "expected_selected_evidence": {
+    "retained_insertions": 0,
+    "retained_deletions": 0,
+    "modified_timestamp_later_than_baseline": true,
+    "classification": "multiple-RSID-pattern evidence",
+    "rsid_expectation": "No claim; a mismatch here shows how rejection can erase the editing trail."
+  },
+  "research_limitations": [
+    "Word-native sample. RSID values are produced by Microsoft Word and are recorded as observed, not predicted.",
+    "Labelled by known history (an editing session occurred). If the tool reports metadata-only, that is a documented limit of final-file analysis, not an extraction error."
+  ]
+}

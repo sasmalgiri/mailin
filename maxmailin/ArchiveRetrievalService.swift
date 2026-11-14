@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ArchiveRetrievalService.swift
 //  maxmailin
@@ -37,8 +38,22 @@ final class ArchiveRetrievalService {
     func retrieve(_ query: String, limit: Int = 15) async throws -> [EmailNLPEngine.SearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, limit > 0 else { return [] }
-        let ids = try await fts.search(trimmed, limit: limit)
+        var ids = try await fts.search(trimmed, limit: limit)
+        // §3-Q2 (switch: `v3SemanticSearch`): fuse meaning-based neighbours
+        // from the on-device embedding index (reciprocal-rank fusion). With
+        // the switch off, or the index empty, this is keyword search as before.
+        if Self.semanticFusionEnabled {
+            let semantic = await SemanticIndexController.shared.neighbors(of: trimmed, limit: limit)
+            if !semantic.isEmpty { ids = Self.reciprocalRankFusion([ids, semantic], limit: limit) }
+        }
         guard !ids.isEmpty else { return [] }
+        // Purchase-tier scope: FTS ranks the whole index; keep only hits the
+        // tier may read (ArchiveDataService applies the newest-N rule).
+        if data.accessLimit != nil {
+            let allowed = try await data.matchingIDs(among: ids, query: .all)
+            ids = ids.filter { allowed.contains($0) }
+            guard !ids.isEmpty else { return [] }
+        }
         let emails = try await data.fullEmails(ids: ids)
         let byID = Dictionary(emails.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var results: [EmailNLPEngine.SearchResult] = []
@@ -50,6 +65,18 @@ final class ArchiveRetrievalService {
             results.append(EmailNLPEngine.SearchResult(email: email, score: score, matchContext: Self.snippet(email)))
         }
         return results
+    }
+
+    nonisolated(unsafe) static var semanticFusionEnabled = false
+
+    /// Reciprocal-rank fusion (k = 60): ids ranked by Σ 1 / (60 + rank).
+    nonisolated static func reciprocalRankFusion(_ lists: [[UUID]], limit: Int) -> [UUID] {
+        var score: [UUID: Double] = [:]
+        for list in lists {
+            for (rank, id) in list.enumerated() { score[id, default: 0] += 1.0 / (60.0 + Double(rank + 1)) }
+        }
+        return score.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key.uuidString < $1.key.uuidString }
+            .prefix(limit).map(\.key)
     }
 
     /// Convenience for callers that already tokenized into terms.

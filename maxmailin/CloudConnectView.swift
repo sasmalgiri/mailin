@@ -1,4 +1,5 @@
-#if !OFFLINE_MODE
+@testable import ArchiveCore
+#if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
 import SwiftUI
 
 struct GmailConnectView: View {

@@ -1,10 +1,42 @@
+@testable import ArchiveCore
 //
 //  AIMetrics.swift
 //  mailin
 //
-//  Lightweight per-query instrumentation for the hybrid AI pipeline.
-//  Lets us prove (or disprove) that each architectural change actually
-//  improves quality, latency, or citation density.
+//  Lightweight per-query instrumentation for the hybrid AI pipeline, so a
+//  claim about its latency, citation density or failure rate can be checked
+//  against recorded queries instead of asserted.
+//
+//  Recorded by `AIAssistantView.askAI()`: every engine branch (appleAIMoE,
+//  appleAI, hybrid, cloudAI, nlp) and every early-return path (greeting,
+//  acknowledgment, smart-query shortcut) begins a record and finalizes it.
+//  A fallback to the NLP baseline is recorded as `fallbackUsed`. A CANCELLED
+//  query is not recorded at all: it has no answer to measure, and counting it
+//  as a failure would be false.
+//
+//  What each engine reports beyond identity/timing/output:
+//    hybrid  — findings (from HybridExpertResult), retrieval time
+//    cloudAI — compression (context size, one synthesis layer), retrieval time
+//    appleAI / appleAIMoE — retrieval time only; their expert pipeline runs
+//              inside a call this view cannot inspect
+//    nlp     — nothing further
+//  Routing (expertsRun / subQueryCount / toolsUsed) and knowledge-graph
+//  citations are reported by no engine yet, and `summary` says so.
+//
+//  Read by `AIMetricsView` (AI Assistant header ▸ chart button), which calls
+//  `loadPersisted()` so the window covers earlier launches, not only the
+//  queries made since this one started.
+//
+//  HOW A ZERO STAYS HONEST. Engines see different things — the NLP path knows
+//  its findings counts; the streaming Apple AI path does not, and its expert
+//  pipeline runs inside a call this view cannot inspect. So each record
+//  carries `reported`: the field groups its engine actually measured.
+//  `summary(lastN:)` averages each metric only over the records that reported
+//  its group and returns the size of that subset, so an unmeasured metric
+//  reads as "not measured" rather than as 0.0. Filling every field with
+//  whatever was to hand would have produced numbers that look complete and
+//  are not — which is worse than none, and is the thing this file exists to
+//  prevent.
 //
 //  Stays 100% on-device. Stored in Application Support, never transmitted.
 //
@@ -64,6 +96,37 @@ final class AIMetrics: ObservableObject {
         // Optional user feedback collected later
         var userRating: Int? = nil
 
+        /// Which field GROUPS the recording path actually measured.
+        ///
+        /// Not decoration — it is what keeps a zero honest. Engines differ in
+        /// what they can see: the NLP path knows its findings counts, the
+        /// streaming Apple AI path does not, and its expert pipeline runs
+        /// inside a call this view cannot inspect. Averaging `totalFindings`
+        /// across every record would dilute the engines that do measure it
+        /// with zeros from the engines that cannot, and report the result as
+        /// a measurement. `summary(lastN:)` averages each metric only over the
+        /// records that reported its group, and says how many those were.
+        ///
+        /// A field outside these groups is UNMEASURED, not zero.
+        var reported: Set<String> = []
+
+        enum Group {
+            /// query, intent, persona, archiveEmailCount — always present.
+            static let identity = "identity"
+            /// totalElapsedMs, and retrieval/experts/synthesis when known.
+            static let timing = "timing"
+            /// answerCharCount, citedEmailCount.
+            static let output = "output"
+            /// totalFindings, highRelevanceCount, findingsLinkedToEmails.
+            static let findings = "findings"
+            /// kgNodesCited.
+            static let knowledgeGraph = "knowledgeGraph"
+            /// expertsRun, subQueryCount, toolsUsed.
+            static let routing = "routing"
+            /// synthesisLayerCount, contextChars.
+            static let compression = "compression"
+        }
+
         init(query: String, intent: String, persona: String, archiveEmailCount: Int) {
             self.id = UUID()
             self.timestamp = Date()
@@ -99,7 +162,9 @@ final class AIMetrics: ObservableObject {
 
     // MARK: - Persistence
 
-    private var storeURL: URL? {
+    /// Where records are appended, one JSON object per line. Internal so the
+    /// reading surface can reveal the file; nothing outside this class writes it.
+    var storeURL: URL? {
         guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
             return nil
         }
@@ -128,33 +193,118 @@ final class AIMetrics: ObservableObject {
         }
     }
 
+    // MARK: - Loading earlier launches
+
+    /// True once the on-disk history has been merged into `recent`. Until
+    /// then an empty `recent` means "not read yet", not "no queries".
+    @Published private(set) var hasLoadedPersisted = false
+    private var loadRequested = false
+
+    /// Merges the records persisted by earlier launches into `recent`.
+    ///
+    /// `recent` alone would show only the queries made since this launch and
+    /// read as "no queries yet" after a restart — a false statement about a
+    /// file that may hold hundreds. Reading happens off the main actor; the
+    /// merge dedupes by id (a record finalized this launch is also on disk),
+    /// keeps newest first and respects `maxRetained`.
+    func loadPersisted() {
+        guard !loadRequested else { return }
+        loadRequested = true
+        guard let url = storeURL else { hasLoadedPersisted = true; return }
+        let cap = maxRetained
+        queue.async { [weak self] in
+            let data = (try? Data(contentsOf: url)) ?? Data()
+            let persisted = Self.decodeRecords(from: data)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.recent = Self.merge(persisted: persisted, inMemory: self.recent, cap: cap)
+                self.hasLoadedPersisted = true
+            }
+        }
+    }
+
+    /// One record per line; a line that does not decode is skipped rather than
+    /// discarding the whole file. Pure so it can be tested without touching
+    /// Application Support.
+    nonisolated static func decodeRecords(from data: Data) -> [QueryRecord] {
+        let decoder = JSONDecoder()
+        return data.split(separator: UInt8(ascii: "\n")).compactMap { line in
+            try? decoder.decode(QueryRecord.self, from: Data(line))
+        }
+    }
+
+    /// Newest first, deduped by id, capped. Pure for the same reason.
+    nonisolated static func merge(persisted: [QueryRecord],
+                                  inMemory: [QueryRecord],
+                                  cap: Int) -> [QueryRecord] {
+        var seen = Set<UUID>()
+        let combined = (inMemory + persisted).filter { seen.insert($0.id).inserted }
+        return Array(combined.sorted { $0.timestamp > $1.timestamp }.prefix(cap))
+    }
+
     // MARK: - Aggregate views
 
-    /// Returns the rolling average over the last N records.
+    /// Rolling averages over the last N records.
+    ///
+    /// Each metric is averaged ONLY over the records whose engine reported
+    /// that field group, and carries the size of that subset. A metric with
+    /// `samples == 0` was not measured; it is not a value of zero.
     func summary(lastN: Int = 50) -> Summary {
-        let slice = Array(recent.prefix(lastN))
+        Self.summarize(Array(recent.prefix(lastN)))
+    }
+
+    /// The averaging itself, pure so it can be tested without `finalize` —
+    /// which persists to the user's real Application Support file.
+    nonisolated static func summarize(_ slice: [QueryRecord]) -> Summary {
         guard !slice.isEmpty else { return Summary() }
+
+        func average(_ group: String, _ value: (QueryRecord) -> Double) -> Measured {
+            let reporting = slice.filter { $0.reported.contains(group) }
+            guard !reporting.isEmpty else { return Measured() }
+            return Measured(
+                value: reporting.map(value).reduce(0, +) / Double(reporting.count),
+                samples: reporting.count)
+        }
+
         let count = Double(slice.count)
         return Summary(
             sampleSize: slice.count,
-            avgElapsedMs: Int(slice.map { Double($0.totalElapsedMs) }.reduce(0, +) / count),
-            avgFindings: slice.map { Double($0.totalFindings) }.reduce(0, +) / count,
-            avgHighRelevance: slice.map { Double($0.highRelevanceCount) }.reduce(0, +) / count,
-            avgCitedEmails: slice.map { Double($0.citedEmailCount) }.reduce(0, +) / count,
-            avgKGNodes: slice.map { Double($0.kgNodesCited) }.reduce(0, +) / count,
+            elapsedMs: average(QueryRecord.Group.timing) { Double($0.totalElapsedMs) },
+            findings: average(QueryRecord.Group.findings) { Double($0.totalFindings) },
+            highRelevance: average(QueryRecord.Group.findings) { Double($0.highRelevanceCount) },
+            citedEmails: average(QueryRecord.Group.output) { Double($0.citedEmailCount) },
+            kgNodes: average(QueryRecord.Group.knowledgeGraph) { Double($0.kgNodesCited) },
+            // Failure and fallback are recorded by every path, so these are
+            // over the whole slice.
             fallbackRate: Double(slice.filter { $0.fallbackUsed }.count) / count,
-            failureRate: Double(slice.filter { $0.didFail }.count) / count
+            failureRate: Double(slice.filter { $0.didFail }.count) / count,
+            byEngine: Dictionary(grouping: slice, by: \.intent).mapValues(\.count)
         )
+    }
+
+    /// An average and the number of records it came from. `samples == 0` means
+    /// no engine in the window measured it.
+    struct Measured: Equatable {
+        var value: Double = 0
+        var samples: Int = 0
+        var isMeasured: Bool { samples > 0 }
+        /// For display: the value, or an explicit "not measured".
+        func description(_ format: String = "%.1f") -> String {
+            isMeasured ? String(format: format, value) + " (n=\(samples))" : "not measured"
+        }
     }
 
     struct Summary {
         var sampleSize: Int = 0
-        var avgElapsedMs: Int = 0
-        var avgFindings: Double = 0
-        var avgHighRelevance: Double = 0
-        var avgCitedEmails: Double = 0
-        var avgKGNodes: Double = 0
+        var elapsedMs: Measured = Measured()
+        var findings: Measured = Measured()
+        var highRelevance: Measured = Measured()
+        var citedEmails: Measured = Measured()
+        var kgNodes: Measured = Measured()
         var fallbackRate: Double = 0
         var failureRate: Double = 0
+        /// Query count per engine, so a summary is never read as if one engine
+        /// produced all of it.
+        var byEngine: [String: Int] = [:]
     }
 }

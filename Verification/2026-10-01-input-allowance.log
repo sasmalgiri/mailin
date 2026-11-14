@@ -1,0 +1,33 @@
+# Free input allowance (100 MB, cumulative) — 2026-10-01, macOS, Debug test build
+# Command: xcodebuild test -scheme maxmailin -destination platform=macOS
+#   -only-testing ImportAllowanceTests, PurchaseGateTests, PurchasePresentationTests, ModuleGatingTests, V2CutoverTests
+✔ Suite "Free input allowance (100 MB)" passed (4 tests: per-tier limit, cumulative evaluate, denial message, on-disk measurement incl. folders and symlinks)
+✔ Suite "Purchase gates (Free / Personal / Professional)" passed
+✔ Suite "Purchase presentation coordinator" passed
+✔ Suite "Module gating (v3.0 §3.3)" passed
+V2CutoverTests: Executed 63 tests, 0 failures
+** TEST SUCCEEDED **
+
+# Builds of the same tree
+macOS Release: BUILD SUCCEEDED
+iOS Simulator: BUILD SUCCEEDED
+
+# Enforcement points
+1. ContentView.startImport(choices)  — UI funnel for every entry point (picker, drop, Shortcut, open-with, Add Files):
+   measures the files (folders recursively, symlinks ignored), reads the archive's ingested bytes from the sources
+   table, refuses the whole import if the total would pass 100 MB, shows the "Import refused" alert and raises a
+   purchase request on Personal with the figures.
+2. ContentViewModel.parseSelectedFiles(..., inputByteLimit:) — service boundary, same check, so no caller that skips
+   the funnel can ingest past the limit; a refused run imports nothing and reports the reason in the status line and
+   the import queue.
+3. GuidedImportSheet — "Free plan input allowance" section ahead of the Start button (allowance, already imported,
+   this import adds, after this import); Start disabled while measuring or when over; "Unlock with Personal…".
+   Paid tiers: no section, no limit.
+
+# Runtime evidence (Debug app, -mailinSimulateTier free, owner's archive already holding 94.9 MB)
+9-import-allowance-1.png   6 KB mbox: section shows 94.9 MB imported, 6 KB added, 5.1 MB left; Start enabled
+10-import-denied-1.png     10 MB mbox: over the allowance, Start disabled, reason + Unlock with Personal
+
+# Not performed
+A real Free-account import past the limit on a Release/TestFlight build (same owner-bound StoreKit caveat as the
+purchase work). The Free per-run cap of 500 emails (maxEmails) is unchanged and applies in addition.

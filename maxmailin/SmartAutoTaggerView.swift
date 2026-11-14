@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  SmartAutoTaggerView.swift
 //  mailin
@@ -10,6 +11,14 @@ import SwiftUI
 struct SmartAutoTaggerView: View {
     // v2: bounded most-recent working set from the store (no injected corpus).
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
+    // §3-A10: whole-archive tags (persisted) when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var wholeTags: KeyCounter?
+    @State private var wholeNote: String?
+    /// Rule 4: tagging every email shows the count first.
+    @State private var scopeConfirm: ScopeConfirmationRequest?
+    private var v3: Bool { v3Modules?.isOn(.v3AnalysisQueries) ?? false }
     var isPresented: Binding<Bool>?
     @StateObject private var tagger = SmartAutoTagger()
     @State private var selectedTag: String?
@@ -72,8 +81,8 @@ struct SmartAutoTaggerView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "tag",
-                        title: "No Tags Generated",
-                        message: "Import an email archive to generate smart tag suggestions."
+                        title: String(localized: "No Tags Generated"),
+                        message: String(localized: "Import an email archive to generate smart tag suggestions.")
                     )
                     Button("Generate Tags") { startTagging() }
                         .buttonStyle(PrimaryButtonStyle())
@@ -82,6 +91,19 @@ struct SmartAutoTaggerView: View {
                 }
             } else {
                 VStack(spacing: 0) {
+                    // §3-A10: saving tags on every email is the user's choice,
+                    // with the count shown first — never on opening the tool.
+                    if v3 && wholeTags == nil {
+                        Button(String(localized: "Save tags to every email…")) {
+                            Task { @MainActor in
+                                scopeConfirm = await ScopeConfirm.request(
+                                    .wholeArchive, title: String(localized: "Tag every email"), verb: String(localized: "Tag")
+                                ) { await saveWholeArchiveTags() }
+                            }
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .padding(.top, Spacing.small)
+                    }
                     // Tag cloud summary
                     tagCloudSection
                         .padding(Spacing.medium)
@@ -97,6 +119,8 @@ struct SmartAutoTaggerView: View {
                 }
             }
         }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .scopeConfirmation($scopeConfirm)
         .onAppear { startTagging() }
         #if os(macOS)
         .toolWindowFrame()
@@ -112,9 +136,19 @@ struct SmartAutoTaggerView: View {
     private var tagCloudSection: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
             HStack {
-                Text("\(allUniqueTags.count) unique tags across \(tagger.suggestedTags.count) emails")
-                    .font(Typography.subheadline)
-                    .fontWeight(.semibold)
+                if let wholeTags {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(wholeTags.distinct) unique tags across the whole archive")
+                            .font(Typography.subheadline).fontWeight(.semibold)
+                        Text(wholeTags.top(8).entries.map { "\($0.key) \($0.count)" }.joined(separator: " · "))
+                            .font(Typography.caption2).foregroundColor(AppColors.secondary).lineLimit(2)
+                        if let wholeNote { Text(wholeNote).font(Typography.caption2).foregroundColor(AppColors.secondary) }
+                    }
+                } else {
+                    Text("\(allUniqueTags.count) unique tags across \(tagger.suggestedTags.count) emails")
+                        .font(Typography.subheadline)
+                        .fontWeight(.semibold)
+                }
                 Spacer()
                 if selectedTag != nil {
                     Button("Clear Filter") { selectedTag = nil }
@@ -250,8 +284,24 @@ struct SmartAutoTaggerView: View {
                 let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
                 do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
                 workingSet = Array(acc.prefix(2000))
+                archiveTotal = (try? await ArchiveDataService.shared.count()) ?? workingSet.count
             }
             await tagger.generateTags(for: workingSet)
+        }
+    }
+
+    /// Saves tags on every email in the archive (§3-A10), after the count was
+    /// confirmed. Opening the tool only suggests tags for the loaded emails.
+    private func saveWholeArchiveTags() async {
+        guard v3 else { return }
+        do {
+            let r = try await tagger.generateTagsWholeArchive()
+            wholeTags = r.tags
+            wholeNote = String(localized: "Tags saved for every email — \(r.receipt.coverageLine) The list below shows the newest emails, with Apple Intelligence suggestions.")
+        } catch is CancellationError {
+        } catch {
+            // §3-M3: the previous engine's suggestions (above) stay on screen.
+            wholeNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
         }
     }
 }

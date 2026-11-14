@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ArchiveListView.swift
 //  maxmailin
@@ -10,6 +11,10 @@
 //
 //  No `RawEmail` is required to render a row; a full email is fetched only when
 //  a row is opened.
+//
+//  A2: the list itself is `ArchiveListPane`, shared by this two-pane view
+//  (iPhone, compact hosts) and by `ArchiveThreePaneView` (sidebar / list /
+//  detail), so both page the same rows with the same keys.
 //
 
 import SwiftUI
@@ -37,6 +42,12 @@ struct ArchiveListView: View {
     @State private var searchText = ""
     @State private var scope: ArchiveDateScope = .all
     @State private var searchTask: Task<Void, Never>?
+    // SEARCH-01: the same Advanced Search builder as the three-pane shell —
+    // every plan, on the data the plan may access.
+    @State private var spec: SearchSpec?
+    @State private var unresolved = 0
+    @State private var showAdvancedSearch = false
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     init(archive: ArchiveDataService = .shared) {
         _model = StateObject(wrappedValue: ArchiveListViewModel(archive: archive, pageSize: 100, maxRetained: 500))
@@ -45,10 +56,37 @@ struct ArchiveListView: View {
 
     var body: some View {
         NavigationSplitView {
-            listPane
+            VStack(spacing: 0) {
+                if let spec, !spec.isEmpty {
+                    ActiveFiltersBar(spec: spec, scopeDescription: scopeDescription, unresolved: unresolved,
+                                     onChange: { newSpec in self.spec = newSpec; scheduleQuery(immediately: true) },
+                                     onEdit: { showAdvancedSearch = true })
+                    Divider()
+                }
+                ArchiveListPane(model: model,
+                                detail: detail,
+                                selectedID: $selectedID,
+                                matchTerms: SearchMatchTerms(searchText: searchText),
+                                evidenceProvider: evidenceProvider,
+                                isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty || !(spec?.isEmpty ?? true))
+            }
                 .navigationTitle("Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
+                .sheet(isPresented: $showAdvancedSearch) {
+                    AdvancedSearchView(applied: spec, scopeDescription: scopeDescription,
+                                       onApply: { newSpec in spec = newSpec; showAdvancedSearch = false; scheduleQuery(immediately: true) },
+                                       onCancel: { showAdvancedSearch = false })
+                }
                 .toolbar {
+                    if modules?.isOn(.searchQueryModel) ?? true {
+                        ToolbarItem {
+                            Button { showAdvancedSearch = true } label: {
+                                Label("Advanced Search", systemImage: "line.3.horizontal.decrease.circle")
+                            }
+                            .help("Build a search from conditions: all / any / exclude, dates, attachments")
+                            .accessibilityIdentifier("archive.list.advancedSearch")
+                        }
+                    }
                     ToolbarItem {
                         Menu {
                             Picker("Date", selection: $scope) {
@@ -68,6 +106,9 @@ struct ArchiveListView: View {
             )
         }
         .task {
+            // The plan's data scope (Free: the newest N) is the data service's;
+            // the list states it ("X of Y in the Free plan") from the same number.
+            model.accessLimit = model.archive.accessLimit
             if model.summaries.isEmpty && model.error == nil { await model.loadInitial() }
         }
         .onChange(of: selectedID) { _, id in
@@ -77,71 +118,171 @@ struct ArchiveListView: View {
         .onChange(of: scope) { _, _ in scheduleQuery() }
     }
 
+    /// FIND-05: evidence from the index per row while the model answers the search.
+    private var evidenceProvider: ((EmailID) async -> [MatchEvidence])? {
+        guard let spec = model.query.spec, !spec.isEmpty else { return nil }
+        let archive = model.archive
+        return { id in (try? await archive.matchEvidence(emailID: id, spec: spec, freeText: nil)) ?? [] }
+    }
+
     /// Debounced query update. The model's queryRevision guard makes this safe
     /// even under rapid typing — debounce just avoids redundant fetches.
-    private func scheduleQuery() {
+    private func scheduleQuery(immediately: Bool = false) {
         searchTask?.cancel()
         let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let after = scope.after
+        let applied = spec
         searchTask = Task {
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            if !immediately { try? await Task.sleep(nanoseconds: 250_000_000) }
             if Task.isCancelled { return }
-            let query = EmailQuery(text: text.isEmpty ? nil : text, beforeDate: nil, afterDate: after)
+            // v2.1 backlog #6: the same compile step as the full list, so
+            // `from:alice` or `filename:pdf` means the same thing here.
+            // IPAD-03 / CAP-01: on the search model when it is on (the policy is
+            // the `searchQueryModel` switch), as the three-pane shell and the full list.
+            let query = ArchiveBrowseState(searchText: text, afterDate: after, spec: applied).query(plainTextOnModel: true)
             await model.setQuery(query)
+            if let s = query.spec, !s.isEmpty {
+                unresolved = (try? await model.archive.unresolvedCount(query: query)) ?? 0
+            } else {
+                unresolved = 0
+            }
         }
     }
 
-    @ViewBuilder
-    private var listPane: some View {
-        if model.isLoading && model.summaries.isEmpty {
-            ProgressView("Loading archive…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityIdentifier("archive.list.initialLoading")
-        } else if let error = model.error, model.summaries.isEmpty {
-            ArchiveLoadFailureView(message: error.localizedDescription) {
-                Task { await model.reload() }
+    /// SEARCH-03: what the list searches, in words (date range, Free window).
+    private var scopeDescription: String {
+        ArchiveThreePaneView.describeScope(title: String(localized: "All Mail"), dateScope: scope, accessLimit: model.accessLimit)
+    }
+}
+
+// MARK: - List pane (shared by the two- and three-pane shells)
+
+struct ArchiveListPane: View {
+    @ObservedObject var model: ArchiveListViewModel
+    @ObservedObject var detail: ArchiveDetailViewModel
+    @Binding var selectedID: EmailID?
+    /// A7: built once per search string and shared by every row, so the
+    /// matched-field strip never re-tokenizes the query per row.
+    var matchTerms: SearchMatchTerms? = nil
+    /// FIND-05: evidence from the index per row (the search model on); nil = heuristic chips.
+    var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
+    /// FIND-05 / §13.3 (9): a chip naming an attachment opens it (email id, attachment ordinal, file inside it).
+    var onOpenAttachment: ((EmailID, Int, String?) -> Void)? = nil
+    /// True while a search string is active — decides which empty state shows.
+    var isSearching: Bool = false
+
+    @StateObject private var coverage = SearchCoverageModel()
+
+    var body: some View {
+        Group {
+            if model.isLoading && model.summaries.isEmpty {
+                ProgressView("Loading archive…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("archive.list.initialLoading")
+            } else if let error = model.error, model.summaries.isEmpty {
+                ArchiveLoadFailureView(message: error.localizedDescription) {
+                    Task { await model.reload() }
+                }
+            } else if model.summaries.isEmpty {
+                if isSearching || !model.query.isEmpty {
+                    // A6: a search with no hits never reads as a bare zero — it
+                    // says what the index covered when it answered.
+                    ArchiveNoResultsState(coverage: coverage.snapshot, onRetry: { Task { await coverage.refresh(scope: model.query) } },
+                                          scopeNote: ArchiveNoResultsState.scopeNote(accessLimit: model.accessLimit,
+                                                                                     totalCount: model.totalCount,
+                                                                                     accessibleCount: model.accessibleCount))
+                        .task { await coverage.refresh(scope: model.query) }
+                } else {
+                    ArchiveEmptyState()
+                }
+            } else {
+                list
             }
-        } else if model.summaries.isEmpty {
-            ArchiveEmptyState()
-        } else {
-            List(selection: $selectedID) {
-                if model.hasPrevious {
-                    Button {
-                        Task { await model.loadPreviousPage() }
-                    } label: {
-                        Label("Load earlier", systemImage: "chevron.up")
+        }
+    }
+
+    private var list: some View {
+        List(selection: $selectedID) {
+            if isSearching, let snapshot = coverage.snapshot, snapshot.needsNotice {
+                SearchCoverageLine(coverage: snapshot, onRetry: { Task { await coverage.refresh(scope: model.query) } })
+                    .listRowSeparator(.hidden)
+            }
+            if model.hasPrevious {
+                Button {
+                    Task { await model.loadPreviousPage() }
+                } label: {
+                    Label("Load earlier", systemImage: "chevron.up")
+                }
+                .accessibilityIdentifier("archive.list.loadPrevious")
+            }
+
+            ForEach(model.summaries) { summary in
+                ArchiveSummaryRow(summary: summary, matchTerms: matchTerms, evidenceProvider: evidenceProvider,
+                                  onOpenAttachment: onOpenAttachment)
+                    .tag(summary.id)
+                    .onAppear {
+                        if summary.id == model.summaries.last?.id && model.hasMore {
+                            Task { await model.loadNextPage() }
+                        }
                     }
-                    .accessibilityIdentifier("archive.list.loadPrevious")
-                }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
+                        } label: { Label("Move to Trash", systemImage: "trash") }
 
-                ForEach(model.summaries) { summary in
-                    ArchiveSummaryRow(summary: summary)
-                        .tag(summary.id)
-                        .onAppear {
-                            if summary.id == model.summaries.last?.id && model.hasMore {
-                                Task { await model.loadNextPage() }
-                            }
+                        // Offered only on a trash-inclusive query (`in:trash`
+                        // or the Trash mailbox), because that is the only way
+                        // a trashed row reaches this list — elsewhere nothing
+                        // here is restorable, and an always-present Restore
+                        // would be a no-op that looked like an action.
+                        if model.query.includeTrashed || model.query.trashedOnly {
+                            Button {
+                                Task { await model.restore([summary.id]); detail.invalidate(summary.id) }
+                            } label: { Label("Restore from Trash", systemImage: "arrow.uturn.backward") }
                         }
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
-                            } label: { Label("Move to Trash", systemImage: "trash") }
-                        }
-                        #if os(iOS)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
-                            } label: { Label("Move to Trash", systemImage: "trash") }
-                        }
-                        #endif
-                }
-
-                if model.hasMore {
-                    ArchiveListLoadingFooter()
-                }
+                    }
+                    #if os(iOS)
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
+                        } label: { Label("Move to Trash", systemImage: "trash") }
+                    }
+                    #endif
             }
-            .accessibilityIdentifier("archive.list")
-            .overlay(alignment: .bottom) {
+
+            if model.hasMore {
+                ArchiveListLoadingFooter()
+            }
+        }
+        .accessibilityIdentifier("archive.list")
+        // Keyboard-first browsing (v2.1 backlog #15), same keys as the
+        // full list: J/K step the selection, Return opens the selected
+        // message in its own window.
+        .onKeyPress(.init("j")) { moveSelection(by: 1); return .handled }
+        .onKeyPress(.init("k")) { moveSelection(by: -1); return .handled }
+        .onKeyPress(.return) { openSelectionInWindow(); return .handled }
+        .overlay(alignment: .bottom) {
+            // Accessible and total counts are shown apart when the tier limits
+            // depth, with the upgrade action right there. Nothing is deleted:
+            // the rows past the limit stay in the archive, unlocked by purchase.
+            if model.isAccessLimited {
+                Button {
+                    StoreManager.live?.requestPurchase(
+                        .personal,
+                        feature: String(localized: "Full Archive"),
+                        reason: "The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive: \(model.accessibleCount) of these \(model.totalCount) emails are among them. Personal and Professional include all of them.",
+                        target: .main)
+                } label: {
+                    Label("\(model.accessibleCount) of \(model.totalCount) emails in the Free plan · Unlock Full Archive",
+                          systemImage: "lock.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(6)
+                .help("The Free plan works with the newest \(StoreManager.freeEmailLimit) emails of your archive. Personal and Professional include the whole archive.")
+                .accessibilityIdentifier("archive.list.count")
+            } else {
                 Text("\(model.totalCount) emails")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -149,6 +290,35 @@ struct ArchiveListView: View {
                     .accessibilityIdentifier("archive.list.count")
             }
         }
+        .task(id: isSearching) {
+            if isSearching { await coverage.refresh(scope: model.query) }
+        }
+    }
+
+    private func moveSelection(by delta: Int) {
+        let ids = model.visibleOrderedIDs
+        guard !ids.isEmpty else { return }
+        let next: Int
+        if let selectedID, let current = ids.firstIndex(of: selectedID) {
+            next = min(max(current + delta, 0), ids.count - 1)
+        } else {
+            next = delta > 0 ? 0 : ids.count - 1
+        }
+        selectedID = ids[next]
+        if next >= ids.count - 5, model.hasMore { Task { await model.loadNextPage() } }
+    }
+
+    private func openSelectionInWindow() {
+        #if os(macOS)
+        guard let selectedID else { return }
+        Task { @MainActor in
+            guard let email = try? await ArchiveDataService.shared.fullEmails(ids: [selectedID]).first else { return }
+            let title = (email.headers["Subject"]?.isEmpty == false ? email.headers["Subject"]! : "(No Subject)")
+            ToolWindowPresenter.shared.open(title: title, size: CGSize(width: 900, height: 720)) {
+                AnyView(EmailDetailView(email: email).toolWindowFrame())
+            }
+        }
+        #endif
     }
 }
 
@@ -156,6 +326,19 @@ struct ArchiveListView: View {
 
 struct ArchiveSummaryRow: View {
     let summary: EmailSummary
+    /// The active search, read through the one compiler; nil or empty shows
+    /// no matched-field strip.
+    var matchTerms: SearchMatchTerms? = nil
+    /// FIND-05: when set, the strip shows evidence the index returned for
+    /// this row instead of the heuristic attribution.
+    var evidenceProvider: ((EmailID) async -> [MatchEvidence])? = nil
+    /// FIND-05: opens the attachment (or the file inside it) a chip names.
+    var onOpenAttachment: ((EmailID, Int, String?) -> Void)? = nil
+    @State private var evidence: [MatchEvidence] = []
+
+    private var matchedFields: [SearchMatchField] {
+        matchTerms?.matchedFields(in: summary) ?? []
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -172,13 +355,23 @@ struct ArchiveSummaryRow: View {
             }
             Text(summary.subject.isEmpty ? "(No Subject)" : summary.subject)
                 .font(.subheadline).lineLimit(1)
-            if !summary.bodyPreview.isEmpty {
+            if evidenceProvider != nil {
+                MatchEvidenceChips(evidence: evidence, emailID: summary.id,
+                                   onOpenAttachment: onOpenAttachment.map { open in { ordinal, childPath in open(summary.id, ordinal, childPath) } })
+            } else {
+                SearchMatchFieldChips(fields: matchedFields)
+            }
+            if !summary.bodyPreview.isEmpty, evidence.compactMap(\.excerpt).isEmpty {
                 Text(summary.bodyPreview)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
         }
         .padding(.vertical, 2)
         .accessibilityIdentifier("archive.row.\(summary.id.uuidString)")
+        .task(id: summary.id) {
+            guard let evidenceProvider else { return }
+            evidence = await evidenceProvider(summary.id)
+        }
     }
 }
 
@@ -219,6 +412,58 @@ struct ArchiveEmptyState: View {
             description: Text("Import an archive to get started.")
         )
         .accessibilityIdentifier("archive.list.empty")
+    }
+}
+
+/// A6: the no-results state for an active query. Never a bare "0": it says
+/// how much of the archive the index covered when it answered.
+struct ArchiveNoResultsState: View {
+    var coverage: SearchCoverageSnapshot?
+    var onRetry: (() -> Void)? = nil
+    /// SEARCH-03: what the plan's data scope left out (Free: the newest N), nil = whole archive.
+    var scopeNote: String? = nil
+
+    /// SEARCH-03: a Free search says it searched the newest N emails, and how
+    /// many matches lie outside them — "no matching emails" would be false
+    /// when the archive holds matches the plan does not reach.
+    static func scopeNote(accessLimit: Int?, totalCount: Int, accessibleCount: Int) -> String? {
+        guard let accessLimit else { return nil }
+        let outside = max(0, totalCount - accessibleCount)
+        if outside > 0 {
+            return String(localized: "\(outside) matching emails are outside the newest \(accessLimit) emails the Free plan works with.")
+        }
+        return String(localized: "Searched the newest \(accessLimit) emails of your archive (Free plan).")
+    }
+
+    private var symbol: String {
+        switch ModelSearchNotice.noMatchCase(coverage) {
+        case .unknown: return "exclamationmark.triangle"
+        case .indexing, .textPending: return "hourglass"
+        case .unreadableFiles: return "lock.doc"
+        case .complete: return "magnifyingglass"
+        }
+    }
+
+    var body: some View {
+        ContentUnavailableView {
+            // FIND-03 / SEARCH-03: five different empty states, never one bare
+            // zero — the same words as the full list's notice.
+            Label(ModelSearchNotice.headline(coverage), systemImage: symbol)
+        } description: {
+            VStack(spacing: 6) {
+                Text(ModelSearchNotice.detail(coverage))
+                if let scopeNote {
+                    Text(scopeNote)
+                        .accessibilityIdentifier("archive.list.noResults.scope")
+                }
+            }
+        } actions: {
+            if let coverage, coverage.isUnavailable, let onRetry {
+                Button(String(localized: "Retry"), action: onRetry)
+                    .accessibilityIdentifier("archive.list.noResults.retry")
+            }
+        }
+        .accessibilityIdentifier("archive.list.noResults")
     }
 }
 

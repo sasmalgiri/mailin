@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -32,6 +33,14 @@ class ContentViewModel: ObservableObject {
     // ArchiveDataService. `totalParsedCount` is the store-backed archive
     // count (committed truth), never an array count.
     @Published var totalParsedCount: Int = 0
+
+    /// The capability matrix, injected by the shell. Import reads it here
+    /// because `BulkImportCoordinator` is not main-actor and must not hold the
+    /// registry. Nil in previews and tests, where every capability reads as
+    /// off — which is the conservative direction: a test gets the proven
+    /// streaming engine unless it asks otherwise.
+    var isCapabilityOn: (@MainActor (Capability) -> Bool)?
+
     private(set) var metadata: [String: Any] = [:]
     private var isParsing = false
     private var memoryMonitorTask: Task<Void, Never>?
@@ -137,142 +146,16 @@ class ContentViewModel: ObservableObject {
         subjectList.removeAll()
     }
 
-    // MARK: - Zip Import Support (sandbox-safe, no Process)
+    // MARK: - Zip import
+    //
+    // v2.1 backlog #1: ZIP and gzip archives are containers to the import
+    // funnel like any other source. `ParserFactory` extracts one member at a
+    // time to scratch through `ZIPArchiveReader` (streamed, size- and
+    // CRC-checked, deleted after parsing), so the whole-archive-in-memory
+    // extractor that used to live here — with its 500 MB "safety cap" and no
+    // checksum — is gone. Skipped and refused members are counted in the
+    // import report's categories.
 
-    /// Supported zip members that could not be written to the temp dir —
-    /// accumulated here so the next import surfaces them instead of silently
-    /// dropping evidence (Part B3).
-    private var pendingZipDroppedMembers = 0
-
-    /// Synchronous extraction. Records the temp dir for later cleanup.
-    func extractMailFilesFromZip(at zipURL: URL) -> [URL] {
-        let (files, tempDir, dropped) = Self.extractZipCore(at: zipURL)
-        pendingTempDirs.append(tempDir)
-        pendingZipDroppedMembers += dropped
-        return files
-    }
-
-    /// Off-main extraction — runs the heavy parse/inflate on a background
-    /// executor so a large zip doesn't block (beachball) the main thread.
-    func extractMailFilesFromZipAsync(at zipURL: URL) async -> [URL] {
-        let (files, tempDir, dropped) = await Task.detached { Self.extractZipCore(at: zipURL) }.value
-        pendingTempDirs.append(tempDir)
-        pendingZipDroppedMembers += dropped
-        return files
-    }
-
-    /// Drain the dropped-member tally as user-facing error strings.
-    private func drainZipExtractionErrors() -> [String] {
-        defer { pendingZipDroppedMembers = 0 }
-        guard pendingZipDroppedMembers > 0 else { return [] }
-        return ["\(pendingZipDroppedMembers) archive member(s) could not be extracted from the zip and were NOT imported."]
-    }
-
-    /// Pure, nonisolated extraction core so it can run off the main actor.
-    /// Returns the extracted files, the temp dir they were written to, and
-    /// how many supported members failed extraction (counted, not swallowed).
-    nonisolated static func extractZipCore(at zipURL: URL) -> (files: [URL], tempDir: URL, droppedMembers: Int) {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_zip_\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-
-        guard let archive = try? Data(contentsOf: zipURL) else { return ([], tempDir, 0) }
-
-        var mailFiles: [URL] = []
-        var droppedMembers = 0
-        var offset = 0
-        let bytes = [UInt8](archive)
-
-        while offset + 30 <= bytes.count {
-            let sig = UInt32(bytes[offset]) | UInt32(bytes[offset+1]) << 8 | UInt32(bytes[offset+2]) << 16 | UInt32(bytes[offset+3]) << 24
-            guard sig == 0x04034b50 else { break }
-
-            let method = UInt16(bytes[offset+8]) | UInt16(bytes[offset+9]) << 8
-            let compressedSize = Int(UInt32(bytes[offset+18]) | UInt32(bytes[offset+19]) << 8 | UInt32(bytes[offset+20]) << 16 | UInt32(bytes[offset+21]) << 24)
-            let uncompressedSize = Int(UInt32(bytes[offset+22]) | UInt32(bytes[offset+23]) << 8 | UInt32(bytes[offset+24]) << 16 | UInt32(bytes[offset+25]) << 24)
-            let nameLen = Int(UInt16(bytes[offset+26]) | UInt16(bytes[offset+27]) << 8)
-            let extraLen = Int(UInt16(bytes[offset+28]) | UInt16(bytes[offset+29]) << 8)
-
-            let nameStart = offset + 30
-            guard nameStart + nameLen <= bytes.count else { break }
-            let nameData = Data(bytes[nameStart..<nameStart+nameLen])
-            let name = String(data: nameData, encoding: .utf8) ?? ""
-
-            let dataStart = nameStart + nameLen + extraLen
-            guard dataStart >= nameStart, dataStart + compressedSize <= bytes.count else { break }
-
-            let ext = (name as NSString).pathExtension.lowercased()
-            // Extract every archive format the app can parse — not just
-            // mbox/eml (the landing page advertises PST/OST/NSF/MSG too).
-            let supported: Set<String> = ["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf"]
-            if supported.contains(ext) && !name.hasSuffix("/") {
-                let compressedData = Data(bytes[dataStart..<dataStart+compressedSize])
-                var fileData: Data?
-
-                if method == 0 {
-                    fileData = compressedData
-                } else if method == 8 {
-                    fileData = Self.decompressDeflate(compressedData, uncompressedSize: uncompressedSize)
-                }
-
-                if let data = fileData {
-                    // Flatten to the base filename, then verify the resolved
-                    // path stays inside tempDir (zip-slip defense).
-                    let safeName = (name as NSString).lastPathComponent
-                        .replacingOccurrences(of: "/", with: "_")
-                        .replacingOccurrences(of: "..", with: "_")
-                    let destURL = tempDir.appendingPathComponent(safeName)
-                    let resolved = destURL.standardizedFileURL.path
-                    if resolved.hasPrefix(tempDir.standardizedFileURL.path + "/") {
-                        do {
-                            try data.write(to: destURL)
-                            mailFiles.append(destURL)
-                        } catch {
-                            // A supported member failed to land on disk —
-                            // count it so the import surfaces the drop (B3).
-                            droppedMembers += 1
-                        }
-                    } else {
-                        droppedMembers += 1
-                    }
-                } else {
-                    // Supported member with undecodable payload — dropped.
-                    droppedMembers += 1
-                }
-            }
-
-            offset = dataStart + compressedSize
-        }
-
-        return (mailFiles, tempDir, droppedMembers)
-    }
-
-    nonisolated private static func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
-        guard !data.isEmpty else { return nil }
-        let maxDecompressedSize = 500_000_000 // 500MB safety cap
-        guard uncompressedSize >= 0 && uncompressedSize <= maxDecompressedSize else { return nil }
-        let bufferSize = max(uncompressedSize, 65536)
-        var decompressed = Data(count: bufferSize)
-        let result = data.withUnsafeBytes { srcPtr -> Data? in
-            decompressed.withUnsafeMutableBytes { dstPtr -> Data? in
-                guard let srcBase = srcPtr.bindMemory(to: UInt8.self).baseAddress,
-                      let dstBase = dstPtr.bindMemory(to: UInt8.self).baseAddress else { return nil }
-                var stream = z_stream()
-                stream.next_in = UnsafeMutablePointer<UInt8>(mutating: srcBase)
-                stream.avail_in = UInt32(data.count)
-                stream.next_out = dstBase
-                stream.avail_out = UInt32(bufferSize)
-
-                guard inflateInit2_(&stream, -15, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
-                defer { inflateEnd(&stream) }
-
-                let status = inflate(&stream, Z_FINISH)
-                guard status == Z_STREAM_END || status == Z_OK else { return nil }
-
-                return Data(dstPtr.prefix(Int(stream.total_out)))
-            }
-        }
-        return result
-    }
 
 // MARK: - Import (delegates to BulkImportCoordinator — the sole production engine)
 
@@ -289,8 +172,73 @@ class ContentViewModel: ObservableObject {
     /// only UI side effects: progress publishing, forensic bookkeeping,
     /// widget/notification updates and temp-dir cleanup. No email preview is
     /// accumulated in RAM — list surfaces page the store after completion.
-    func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
+    ///
+    /// **Invariant: call this only from `ContentView.startImport`.** That is
+    /// the single place that decides whether the pre-import sheet is shown
+    /// (`Capability.guidedImport`) and what is enqueued
+    /// (`Capability.importQueue`). The doc comment above says every entry
+    /// point "converges here", and for a while that was untrue: the
+    /// Thunderbird button called a wrapper that came straight to this method,
+    /// so it got no sheet and never appeared in the queue while Apple Mail
+    /// import — the adjacent button — behaved correctly. The wrapper is gone
+    /// and this now has exactly one production caller; keep it that way, or
+    /// the capability switches stop meaning anything for the new route.
+    func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil,
+                            copiesOriginals: Bool = true) {
+        parseSelectedFiles(urls, dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
+                           maxEmails: maxEmails, copiesOriginals: copiesOriginals)
+    }
+
+    /// The import options, built from the user's choices and the capability
+    /// switches. Pure and static so the wiring is testable without a run:
+    /// audit F18 found the sheet's dedup choice collapsed to a Boolean on the
+    /// way here, and F02 found locator recording tied to a READ switch.
+    nonisolated static func importOptions(dedupPolicy: DedupPolicy,
+                                          copiesOriginals: Bool,
+                                          maxEmails: Int?,
+                                          senderEmail: String,
+                                          useOffsetEngine: Bool) -> BulkImportCoordinator.Options {
+        BulkImportCoordinator.Options(
+            batchSize: 500,
+            senderEmail: senderEmail,
+            maxEmails: maxEmails,
+            dedupPolicy: dedupPolicy,
+            copiesOriginals: copiesOriginals,
+            useOffsetEngine: useOffsetEngine,
+            // Locators are the only content a message above the full-parse
+            // ceiling has, so they are recorded whenever the offset engine
+            // runs. The `locatorReads` switch gates READS only (audit F02).
+            recordLocators: useOffsetEngine
+        )
+    }
+
+    /// `inputByteLimit`: the tier's cumulative input allowance (nil =
+    /// unlimited). Checked here, at the service boundary, as well as by the
+    /// UI funnel, so a caller that skipped the sheet still cannot ingest past
+    /// it. A denied run imports nothing and reports the reason.
+
+    /// What runs on each committed import batch: forensic hashes (forensic
+    /// mode) and collect-to-preserve holds + seals (§3-E7) — each on its own
+    /// switch; nil when neither is on.
+    static func committedBatchWork(forensic: Bool, preserve: Bool,
+                                   hash: @escaping @MainActor ([MBOXParser.RawEmail]) -> Void,
+                                   hold: @escaping @MainActor ([MBOXParser.RawEmail]) -> Void)
+        -> (@MainActor ([MBOXParser.RawEmail]) -> Void)? {
+        guard forensic || preserve else { return nil }
+        return { batch in
+            if forensic { hash(batch) }
+            if preserve { hold(batch) }
+        }
+    }
+    func parseSelectedFiles(_ urls: [URL], dedupPolicy: DedupPolicy, maxEmails: Int? = nil,
+                            copiesOriginals: Bool = true, inputByteLimit: Int? = nil) {
         guard !isParsing else { return }
+        // Service boundary: no caller imports past the person's role.
+        if let why = OrgPolicy.denial(.importMail) {
+            statusMessage = why
+            statusColor = .orange
+            return
+        }
 
         statusMessage = "Parsing files..."
         statusColor = .blue
@@ -307,6 +255,18 @@ class ContentViewModel: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
 
+            if let denial = await ImportAllowance.check(urls: urls, limitBytes: inputByteLimit).denial {
+                self.isParsing = false
+                self.stopMemoryMonitoring()
+                self.parseErrors = [denial.message]
+                self.statusMessage = "Import refused: Free plan input limit."
+                self.statusColor = .orange
+                self.loadingProgress = 0.0
+                self.loadingText = ""
+                for url in urls { ImportQueue.shared.markFailed(path: url.path, reason: String(localized: "Free plan input limit")) }
+                return
+            }
+
             // Chain-of-custody hashes of each source file (legacy parity).
             var fileHashes: [ForensicManager.SourceFileHash] = []
             if forensicEnabled {
@@ -321,7 +281,10 @@ class ContentViewModel: ObservableObject {
                 let totalFiles = Double(max(1, count))
                 self.loadingProgress = (Double(idx) + prog) / totalFiles
                 self.loadingText = "Importing \(name): \(Int(prog * 100))%"
-                let sizeBytes = idx < urls.count ? self.fileSize(at: urls[idx]) : 0
+                // A4: the run may take files out of order (queue reordering),
+                // so the file is found by name, not by position.
+                let fileURL = urls.first { $0.lastPathComponent == name }
+                let sizeBytes = fileURL.map { self.fileSize(at: $0) } ?? 0
                 ImportProgressNotifier.shared.updateProgress(
                     filename: name,
                     current: idx + 1,
@@ -329,28 +292,47 @@ class ContentViewModel: ObservableObject {
                     bytesProcessed: Int64(prog * Double(sizeBytes)),
                     totalBytes: sizeBytes
                 )
-            }
-            // (C1) Forensic email hashes over every COMMITTED batch, so hash
-            // coverage matches the persisted corpus, not just the preview.
-            if forensicEnabled {
-                callbacks.onCommittedBatch = { batch in
-                    ForensicManager.shared.storeEmailHashes(batch)
+                // A4: advance the session queue. Without this the queue only
+                // ever received `enqueue`, so every import sat at "Waiting"
+                // forever — including after it had finished — while the
+                // capability described "pending, running and finished imports,
+                // each with its verdict". Keyed by path because the queue may
+                // hold several entries with the same filename.
+                if let fileURL {
+                    ImportQueue.shared.markRunning(path: fileURL.path, fraction: prog)
                 }
             }
+            // A4: the queue's order is the run's order for files not yet started.
+            callbacks.nextSource = { remaining in ImportQueue.shared.preferredNext(among: remaining) }
+            // (C1) Forensic email hashes over every COMMITTED batch, so hash
+            // coverage matches the persisted corpus, not just the preview.
+            // §3-E7: collect-to-preserve — the matter holds and seals each
+            // committed batch as it lands (3.0 legal-data engine). It used to
+            // run only with forensic mode on, so the toggle (shown whenever
+            // the legal-data engine is on) silently did nothing without it.
+            callbacks.onCommittedBatch = Self.committedBatchWork(
+                forensic: forensicEnabled, preserve: CollectToPreserve.isOn,
+                hash: { ForensicManager.shared.storeEmailHashes($0) },
+                hold: { CustodianManager.shared.placeLegalHoldBatched($0) })
 
-            let options = BulkImportCoordinator.Options(
-                batchSize: 500,
-                senderEmail: self.senderEmail,
-                maxEmails: maxEmails,
-                dedupPolicy: removeDuplicates ? .messageID : .preserveAll
-            )
+            // S4: the engine choice is the matrix switch, read here because
+            // the coordinator is not main-actor (on by default in 3.0).
+            let useOffsetEngine = self.isCapabilityOn?(.offsetParser) ?? false
+            let options = Self.importOptions(dedupPolicy: dedupPolicy,
+                                             copiesOriginals: copiesOriginals,
+                                             maxEmails: maxEmails,
+                                             senderEmail: self.senderEmail,
+                                             useOffsetEngine: useOffsetEngine)
 
             do {
                 let summary = try await self.importCoordinator.runImport(
                     urls: urls, options: options, callbacks: callbacks
                 )
                 self.finishImport(urls: urls, summary: summary, fileHashes: fileHashes)
+                // v4.0 REC-02: a recipe step waiting on an import verifies it from this receipt.
+                RecipeJobBroker.shared.reportImport(receipt: summary.receipt, receiptURL: summary.receiptURL)
             } catch is CancellationError {
+                RecipeJobBroker.shared.reportImport(receipt: nil, receiptURL: nil, cancelled: true)
                 self.isParsing = false
                 self.stopMemoryMonitoring()
                 self.statusMessage = "Import cancelled."
@@ -359,11 +341,10 @@ class ContentViewModel: ObservableObject {
                 self.loadingText = ""
                 ImportProgressNotifier.shared.cancelProgress()
             } catch {
+                RecipeJobBroker.shared.reportImport(receipt: nil, receiptURL: nil, error: error.localizedDescription)
                 self.isParsing = false
                 self.stopMemoryMonitoring()
-                var errors = self.drainZipExtractionErrors()
-                errors.append(error.localizedDescription)
-                self.parseErrors = errors
+                self.parseErrors = [error.localizedDescription]
                 self.statusMessage = "Import failed: \(error.localizedDescription)"
                 self.statusColor = .red
                 self.isParsed = false
@@ -386,6 +367,45 @@ class ContentViewModel: ObservableObject {
         isParsing = false
         stopMemoryMonitoring()
 
+        // A4: close out the session queue with the SAME verdict the receipt
+        // carries, derived from the same reconciliation — a queue that said
+        // "done" beside a receipt that said "partial" would be worse than no
+        // queue. Per-file granularity is not available here (the summary is
+        // run-scoped), so a file that failed outright is marked failed by name
+        // and everything else takes the run verdict. That is stated in the
+        // queue UI rather than implied.
+        let failedNames = Set(summary.fileErrors.map(\.filename))
+        let stoppedByUser = Dictionary(summary.stoppedByUser.map { ($0.filename, $0.messagesCommitted) },
+                                       uniquingKeysWith: { first, _ in first })
+        let runVerdict = summary.receipt.map(ImportReconciler.verdict(for:))
+        for url in urls {
+            if failedNames.contains(url.lastPathComponent) {
+                let reason = summary.fileErrors
+                    .first { $0.filename == url.lastPathComponent }?.message
+                    ?? "This file could not be imported."
+                ImportQueue.shared.markFailed(path: url.path, reason: reason)
+            } else if let committed = stoppedByUser[url.lastPathComponent] {
+                // A4: stopped by the user — not a failure, checkpoint kept.
+                ImportQueue.shared.markStopped(path: url.path, messages: committed)
+            } else if let runVerdict {
+                ImportQueue.shared.markFinished(path: url.path, verdict: runVerdict,
+                                                messages: summary.persistAttempted)
+            } else {
+                // No receipt means no verdict was computed — say so rather
+                // than inventing "Complete".
+                ImportQueue.shared.markFailed(
+                    path: url.path,
+                    reason: String(localized: "Import finished but no receipt was written, so its outcome could not be verified."))
+            }
+        }
+        // Anything still pending after the run ended never started.
+        ImportQueue.shared.markRemainingCancelled()
+
+        // A3: the sheet's indexing choice takes effect now, not at next launch.
+        if ImportChoices.indexAttachmentTextDefault() {
+            AttachmentTextIndexJob.shared.kickIfNeeded()
+        }
+
         // Post the import document: the run's number for custody logs and
         // intake references (IMP-2026-0001).
         let fileNames = urls.map(\.lastPathComponent).joined(separator: ", ")
@@ -402,7 +422,6 @@ class ContentViewModel: ObservableObject {
             errors.append("\(summary.persistFailed) email(s) could not be saved to the archive and were not imported. Please retry; if this persists, free up disk space and check the log.")
             Self.importLogger.error("Import completed with \(summary.persistFailed, privacy: .public) unpersisted email(s)")
         }
-        errors.append(contentsOf: drainZipExtractionErrors())
         errors.append(contentsOf: summary.warnings)
         parseErrors = errors
 
@@ -417,10 +436,10 @@ class ContentViewModel: ObservableObject {
             let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
             if summary.fileErrors.isEmpty {
                 let extensions = urls.map { $0.pathExtension.lowercased() }
-                let supported = Set(["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip"])
+                let supported = Set(ParserFactory.allSupportedExtensions)
                 let unsupported = extensions.filter { !supported.contains($0) && !$0.isEmpty }
                 if !unsupported.isEmpty {
-                    statusMessage = "Unsupported format: .\(unsupported.first ?? "unknown"). Supported: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip"
+                    statusMessage = "Unsupported format: .\(unsupported.first ?? "unknown"). Supported: \(ParserFactory.allSupportedExtensions.map { ".\($0)" }.joined(separator: ", "))"
                 } else {
                     statusMessage = "No emails found in \(fileNames). The file may be empty or contain no recognizable email messages."
                 }
@@ -447,7 +466,7 @@ class ContentViewModel: ObservableObject {
         totalParsedCount = committed
         isParsed = true
         Task { @MainActor [weak self] in
-            if let total = try? await ArchiveDataService.shared.count(), total > 0 {
+            if let total = try? await ArchiveDataService.shared.unscopedCount(), total > 0 {
                 self?.totalParsedCount = total
             }
         }
@@ -457,6 +476,8 @@ class ContentViewModel: ObservableObject {
         removedDuplicates = []
 
         ForensicManager.shared.logAction("Import Complete", detail: "Imported \(committed) emails from \(urls.count) file(s) into SQLite + FTS5.")
+        // IPAD-06: on iPad the receipt is offered where the import finishes ("View receipt").
+        if summary.receiptPersisted { ImportReceiptPresenter.shared.importFinished() }
 
         var notes: [String] = []
         if summary.damaged > 0 { notes.append("\(summary.damaged) unparseable skipped") }
@@ -551,9 +572,18 @@ class ContentViewModel: ObservableObject {
         #endif
     }
 
-    func importThunderbirdProfile(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
-        parseSelectedFiles(urls, removeDuplicates: removeDuplicates, maxEmails: maxEmails)
-    }
+    // `importThunderbirdProfile` is deliberately GONE rather than deprecated.
+    //
+    // It did nothing but forward to `parseSelectedFiles`, which meant the
+    // Thunderbird button skipped the shared import funnel in `ContentView`
+    // (`beginImport`): no pre-import sheet for a user who had switched one on,
+    // and no entry in the import queue, so the import was invisible there.
+    // Apple Mail import, right next to it in the UI, went through the funnel
+    // correctly — two routes, different behaviour, nothing to tell them apart.
+    //
+    // Leaving a deprecated forwarder would leave the bypass available. Callers
+    // use `handleMultipleFiles`, which is the one place that decides whether
+    // to show the sheet and what to enqueue.
 
     // MARK: - Apple Mail Auto-Import
 
@@ -709,7 +739,7 @@ class ContentViewModel: ObservableObject {
             _ = try? await ArchiveCorpusRevision.shared.bump()
             duplicatesRemoved += removed.count
             removedDuplicates.append(contentsOf: removed.map { DuplicateFinding(from: $0, reason: "removed") })
-            totalParsedCount = (try? await ArchiveDataService.shared.count()) ?? max(0, totalParsedCount - ids.count)
+            totalParsedCount = (try? await ArchiveDataService.shared.unscopedCount()) ?? max(0, totalParsedCount - ids.count)
             return true
         } catch {
             Self.importLogger.error("Delete failed: \(error.localizedDescription, privacy: .public)")
@@ -721,10 +751,15 @@ class ContentViewModel: ObservableObject {
 
     // MARK: - Direct email ingestion (sample data / cloud fetch)
 
-    /// Persist already-parsed emails (bundled sample data, cloud/IMAP fetches)
-    /// into the SQLite authority + FTS index — the same substrate file imports
-    /// land in. Nothing is retained in RAM; callers refresh their paged
-    /// surfaces via `.parsingFinished`.
+    /// Persist already-parsed emails (bundled sample data) into the SQLite
+    /// authority + FTS index — the same substrate file imports land in.
+    /// Nothing is retained in RAM; callers refresh their paged surfaces via
+    /// `.parsingFinished`.
+    ///
+    /// V4-08 (plan §3 A08): NEVER for online mail. This path has no account,
+    /// no source, no provider identity and deduplicates by Message-ID; online
+    /// mail enters only through `ConnectedArchiveSink` (`ConnectedMailRuntime`).
+    /// `ConnectedFiveJobsTests` holds the call sites to sample data.
     func ingestEmails(_ emails: [MBOXParser.RawEmail], sourceLabel: String) async {
         guard !emails.isEmpty else { return }
         do {
@@ -732,7 +767,9 @@ class ContentViewModel: ObservableObject {
                 emails, sourceFileHash: nil, accountID: nil,
                 sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
                 batchSize: 200, progress: nil)
-            try await FTSSearchIndex.shared.indexBatch(emails)
+            // Only what the store wrote: loading the sample twice used to index
+            // the 8 skipped duplicates again (16 index rows over 8 emails).
+            try await FTSSearchIndex.shared.indexBatch(result.inserted(from: emails))
             _ = try? await ArchiveCorpusRevision.shared.bump()
             totalParsedCount = (try? await ArchiveDataService.shared.count()) ?? totalParsedCount
             isParsed = totalParsedCount > 0
@@ -897,6 +934,8 @@ class ContentViewModel: ObservableObject {
     @discardableResult
     func exportFilteredEmailsAsEML(to folder: URL, emails: [MBOXParser.RawEmail]) -> Int {
         var usedNames = Set<String>()
+        // T4: one source-verification ledger per export operation.
+        let sourceLedger = SourceVerificationLedger()
         var failedCount = 0
         for (index, email) in emails.enumerated() {
             let rawSubject = email.headers["Subject"] ?? "(no-subject)"
@@ -912,9 +951,19 @@ class ContentViewModel: ObservableObject {
             }
             usedNames.insert(filename)
             let fileURL = folder.appendingPathComponent(filename)
-            let emlContent = exportEmailAsEML(email)
             do {
-                try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                // F05: a located message streams from its source; one with
+                // neither content nor a reachable source counts as failed,
+                // never as a headers-only stub.
+                if email.rawSource.isEmpty {
+                    guard let locator = RawMessageFile.locator(for: email) else {
+                        throw RawMessageError.contentUnavailable(subject: rawSubject, reason: String(localized: "no stored content and no reachable original file"))
+                    }
+                    try RawMessageFile.write(located: locator, to: fileURL, verifying: sourceLedger)
+                } else {
+                    let emlContent = exportEmailAsEML(email)
+                    try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                }
             } catch {
                 failedCount += 1
                 FileUtilsAudit.logError(error, context: "EML Export", path: fileURL.path)

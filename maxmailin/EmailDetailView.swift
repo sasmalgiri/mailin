@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import CryptoKit
 import PDFKit
@@ -11,7 +12,24 @@ import UIKit
 #endif
 
 struct EmailDetailView: View {
+    /// Previous / Next email buttons: a full touch target on iPhone and iPad
+    /// (Apple's 44 pt minimum), compact on the Mac.
+    #if os(iOS)
+    static let stepButtonSize: CGFloat = 44
+    #else
+    static let stepButtonSize: CGFloat = 24
+    #endif
+    /// One re-extraction per message, shared by all its attachments.
+    private let attachmentCache = AttachmentHydrator.Cache()
+
     let email: MBOXParser.RawEmail
+    /// The list window may hold an email without its raw source (it keeps a
+    /// memory budget); the full email is read from the archive when opened.
+    @State private var fullEmail: MBOXParser.RawEmail?
+    private var shown: MBOXParser.RawEmail {
+        if let full = fullEmail, full.id == email.id { return full }
+        return email
+    }
     /// Part G: prev/next navigation needs only the ORDERED VISIBLE IDS of the
     /// current filtered list (the list's loaded page state), never the corpus.
     /// The caller hydrates the neighbor by id when `onNavigate` fires.
@@ -26,6 +44,9 @@ struct EmailDetailView: View {
     @ObservedObject private var personaManager = PersonaManager.shared
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
+    /// Owner, 2026-09-30: AI surfaces in the detail view (the on-device reply
+    /// draft) belong to the AI Insights page and hide while it is off.
+    @Environment(ModuleRegistry.self) private var modules
     @State private var showCleanView = true
     @State private var safeHTML: String = ""
     @State private var isHTMLReady = false
@@ -45,6 +66,8 @@ struct EmailDetailView: View {
     @State private var shareItems: [Any] = []
     #endif
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
+    /// IPAD-04: today's Free attachment saves (shared with the list's save-all).
+    @AppStorage(AttachmentDownloadGate.usedTodayKey) private var freeAttachmentDownloadCount = 0
 
     // AI Reply Suggestion
     @State private var showReplySheet = false
@@ -54,14 +77,14 @@ struct EmailDetailView: View {
     @State private var selectedReplyTone: Int = 0
 
     // Compose / Reply / Forward
-    #if !OFFLINE_MODE
+    #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
     #endif
 
     // Translation
     @State private var showTranslation = false
 
     private var currentIndex: Int? {
-        orderedIDs.firstIndex(of: email.id)
+        orderedIDs.firstIndex(of: shown.id)
     }
     private var hasPrev: Bool {
         guard let idx = currentIndex else { return false }
@@ -88,6 +111,17 @@ struct EmailDetailView: View {
 
 
     var body: some View {
+        detailBody
+            .task(id: email.id) {
+                guard email.rawSource.isEmpty else { return }
+                if let full = try? await ArchiveDataService.shared.fullEmails(ids: [email.id]).first, !full.rawSource.isEmpty {
+                    fullEmail = full
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var detailBody: some View {
         VStack(spacing: 0) {
             topBar
             Divider()
@@ -95,6 +129,8 @@ struct EmailDetailView: View {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     subjectView
                     riskScoreBadge
+                    RecoveryBadgeView(emailID: shown.id)
+                    ReconstructedSourceNotice(rawSource: shown.rawSource)
                     if forensicManager.isEnabled || personaManager.selectedPersona == .legal || (showAdvancedFeatures && personaManager.selectedPersona == .forensic) {
                         evidenceTagBar
                     }
@@ -102,6 +138,7 @@ struct EmailDetailView: View {
                     if personaManager.config.showTechnicalHeaders || (showAdvancedFeatures && forensicManager.isEnabled) {
                         forensicHeaderSection
                     }
+                    ForensicSignalsView(email: shown)
                     Divider()
                     cleanToggle
                     emailBodyView
@@ -121,12 +158,12 @@ struct EmailDetailView: View {
         .navigationTitle("Email Detail")
         .onAppear {
             // Compute HTML sanitization and mark ready for rendering
-            safeHTML = sanitizedHTMLBody(from: email)
+            safeHTML = sanitizedHTMLBody(from: shown)
             isHTMLReady = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .tagCurrentEmail)) { notification in
             if let tag = notification.object as? ForensicManager.EvidenceTag {
-                forensicManager.tag(email.id, as: tag)
+                forensicManager.tag(shown.id, as: tag)
                 if autoAdvanceAfterTag && tag != .none {
                     advanceToNextUnreviewed()
                 }
@@ -137,13 +174,13 @@ struct EmailDetailView: View {
         }
         .animation(AnimationTiming.normal, value: showCleanView)
         .sheet(isPresented: $showThreadStory) {
-            ThreadStoryView(email: email) { id in
+            ThreadStoryView(email: shown) { id in
                 onNavigate?(id)
             }
         }
         #if os(iOS)
         .sheet(isPresented: $showHistory) {
-            EmailHistoryView(email: email)
+            EmailHistoryView(email: shown)
                 .presentationDetents([.large])
         }
         #endif
@@ -165,12 +202,12 @@ struct EmailDetailView: View {
                 mailActionGroup(
                     actions: [
                         ("trash", "Trash",
-                         "Move to Trash — restorable from the Trash view, never a permanent delete", {
-                            NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id)
+                         "Move to Trash — get it back with the Trash filter, never a permanent delete", {
+                            NotificationCenter.default.post(name: .deleteCurrentEmail, object: shown.id)
                         }),
                         ("archivebox", "Archive",
                          "Archive — hides it from the main list; find it again with the Archived filter", {
-                            NotificationCenter.default.post(name: .archiveCurrentEmail, object: email.id)
+                            NotificationCenter.default.post(name: .archiveCurrentEmail, object: shown.id)
                         }),
                     ]
                 )
@@ -181,52 +218,52 @@ struct EmailDetailView: View {
                     actions: [
                         ("envelope.badge.fill", "Read",
                          "Toggle read/unread — unread emails show with a highlighted row", {
-                            NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: email.id)
+                            NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: shown.id)
                         }),
                         ("flag.fill", "Pin",
                          "Pin/flag this email — pinned emails surface with the Pinned filter and stay marked across restarts", {
-                            NotificationCenter.default.post(name: .togglePinEmail, object: email.id)
+                            NotificationCenter.default.post(name: .togglePinEmail, object: shown.id)
                         }),
                     ]
                 )
 
-                HelpDot(text: "Trash is always restorable. Archive hides an email from the main list. Read/unread and Pin mark emails and stick across restarts — hover any button for details.")
+                HelpDot(text: "Trash is always restorable — add the Trash filter, then right-click to restore. Archive hides an email from the main list; the Archived filter brings it back. Read/unread and Pin mark emails and stick across restarts — hover any button for details.")
 
                 mailActionDivider
 
                 HStack(spacing: 2) {
                     #if canImport(FoundationModels)
                     if #available(macOS 26, iOS 26, *) {
-                        if FoundationModelEngine.isAvailable {
-                            mailIconButton(icon: "sparkles", tooltip: "Draft a reply with on-device AI — pick a tone, edit before sending; nothing leaves your Mac", color: .purple) {
+                        if modules.isEnabled(.aiInsights), FoundationModelEngine.isAvailable {
+                            mailIconButton(icon: "sparkles", tooltip: String(localized: "Draft a reply with on-device AI — pick a tone, edit before sending; nothing leaves your Mac"), color: .purple) {
                                 showReplySheet = true
                             }
                         }
                     }
                     #endif
-                    mailIconButton(icon: "text.bubble", tooltip: "Thread Story — the whole conversation as a timeline", color: AppColors.primary) {
+                    mailIconButton(icon: "text.bubble", tooltip: String(localized: "Thread Story — the whole conversation as a timeline"), color: AppColors.primary) {
                         showThreadStory = true
                     }
-                    mailIconButton(icon: "clock.arrow.circlepath", tooltip: "History — everything that happened to this email: when it arrived, from which file, every action taken, and its current labels and holds", color: AppColors.primary) {
+                    mailIconButton(icon: "clock.arrow.circlepath", tooltip: String(localized: "History — everything that happened to this email: when it arrived, from which file, every action taken, and its current labels and holds"), color: AppColors.primary) {
                         #if os(macOS)
-                        let historyEmail = email
-                        ToolWindowPresenter.shared.open(title: "Email History") {
+                        let historyEmail = shown
+                        ToolWindowPresenter.shared.open(title: String(localized: "Email History")) {
                             AnyView(EmailHistoryView(
                                 email: historyEmail,
-                                onClose: { ToolWindowPresenter.shared.close(title: "Email History") }))
+                                onClose: { ToolWindowPresenter.shared.close(title: String(localized: "Email History")) }))
                         }
                         #else
                         showHistory = true
                         #endif
                     }
-                    mailIconButton(icon: "translate", tooltip: "Translate this email using the system translator — fully offline once a language is downloaded", color: AppColors.secondary) {
+                    mailIconButton(icon: "translate", tooltip: String(localized: "Translate this email using the system translator — fully offline once a language is downloaded"), color: AppColors.secondary) {
                         showTranslation = true
                     }
                     .translationPresentation(
                         isPresented: $showTranslation,
-                        text: !email.plainBody.isEmpty ? email.plainBody : email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                        text: !shown.plainBody.isEmpty ? shown.plainBody : shown.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
                     )
-                    mailIconButton(icon: "printer", tooltip: "Print this email with its headers (⌘P)", color: AppColors.secondary) {
+                    mailIconButton(icon: "printer", tooltip: String(localized: "Print this email with its headers (⌘P)"), color: AppColors.secondary) {
                         printEmail()
                     }
                     .keyboardShortcut("p", modifiers: .command)
@@ -235,16 +272,16 @@ struct EmailDetailView: View {
                 Spacer()
 
                 Menu {
-                    Button { NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: shown.id) } label: {
                         Label("Mark Read/Unread", systemImage: "envelope.badge.fill")
                     }
-                    Button { NotificationCenter.default.post(name: .togglePinEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .togglePinEmail, object: shown.id) } label: {
                         Label("Flag", systemImage: "flag.fill")
                     }
-                    Button { NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .deleteCurrentEmail, object: shown.id) } label: {
                         Label("Delete", systemImage: "trash")
                     }
-                    Button { NotificationCenter.default.post(name: .archiveCurrentEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .archiveCurrentEmail, object: shown.id) } label: {
                         Label("Archive", systemImage: "archivebox")
                     }
                     Divider()
@@ -278,11 +315,13 @@ struct EmailDetailView: View {
                         } label: {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 11, weight: .semibold))
-                                .frame(width: 24, height: 22)
+                                .frame(width: Self.stepButtonSize, height: Self.stepButtonSize)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasPrev)
                         .help("Open the previous email in the current filtered list (↑ or K)")
+                        .accessibilityLabel(String(localized: "Previous email"))
                         .keyboardShortcut(.upArrow, modifiers: [.command])
 
                         if let idx = currentIndex {
@@ -298,11 +337,13 @@ struct EmailDetailView: View {
                         } label: {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 11, weight: .semibold))
-                                .frame(width: 24, height: 22)
+                                .frame(width: Self.stepButtonSize, height: Self.stepButtonSize)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasNext)
                         .help("Open the next email in the current filtered list (↓ or J)")
+                        .accessibilityLabel(String(localized: "Next email"))
                         .keyboardShortcut(.downArrow, modifiers: [.command])
                     }
                     .padding(.horizontal, 6)
@@ -312,7 +353,7 @@ struct EmailDetailView: View {
                 }
 
                 #if os(macOS)
-                mailIconButton(icon: "xmark", tooltip: "Close this email and return to the list (Esc)", color: AppColors.secondary) {
+                mailIconButton(icon: "xmark", tooltip: String(localized: "Close this email and return to the list (Esc)"), color: AppColors.secondary) {
                     onClose?()
                 }
                 .padding(.leading, 6)
@@ -388,8 +429,12 @@ struct EmailDetailView: View {
     private var cleanToggle: some View {
         HStack(spacing: Spacing.small) {
             Toggle(isOn: $showCleanView) {
-                Label("Clean Quote View", systemImage: "text.quote")
-                    .font(Typography.callout)
+                Label {
+                    Text("Clean Quote View")
+                } icon: {
+                    Image(systemName: "text.quote").accessibilityHidden(true)
+                }
+                .font(Typography.callout)
             }
             .toggleStyle(SwitchToggleStyle())
             .help("Hide quoted reply text (lines starting with >) for easier reading")
@@ -429,11 +474,11 @@ struct EmailDetailView: View {
                 #endif
                 .emailBoxStyle()
             }
-        } else if email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        } else if shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             EmptyStateView(
                 icon: "doc.text",
-                title: "No Email Body",
-                message: "This email has no text or HTML content to display."
+                title: String(localized: "No Email Body"),
+                message: String(localized: "This email has no text or HTML content to display.")
             )
             .frame(maxWidth: .infinity)
             .padding(.vertical, Spacing.large)
@@ -441,7 +486,7 @@ struct EmailDetailView: View {
     }
     @ViewBuilder
     private var htmlBodyView: some View {
-        let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedHTML = shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.xSmall) {
                 Label("HTML View", systemImage: "globe")
@@ -460,7 +505,7 @@ struct EmailDetailView: View {
                     .padding(.leading, Spacing.xSmall)
                     .accessibilityLabel("HTML view height")
 
-                    EmailHTMLView(html: trimmedHTML, minHeight: htmlMinHeight, attachments: email.attachments)
+                    EmailHTMLView(html: trimmedHTML, minHeight: htmlMinHeight, attachments: shown.attachments)
                         .padding(Spacing.small)
                         .frame(maxWidth: .infinity, minHeight: htmlMinHeight)
                         .emailBoxStyle()
@@ -481,7 +526,7 @@ struct EmailDetailView: View {
 
     @ViewBuilder
     private var rtfBodyView: some View {
-        if let rtfPart = email.attachments.first(where: {
+        if let rtfPart = shown.attachments.first(where: {
             $0.mimeType.lowercased().contains("rtf") || $0.filename.lowercased().hasSuffix(".rtf")
         }), let data = attachmentData(for: rtfPart),
            let attributed = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) {
@@ -511,7 +556,7 @@ struct EmailDetailView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(Array(email.tags), id: \.self) { tag in
+                    ForEach(Array(shown.tags), id: \.self) { tag in
                         Text(tag)
                             .font(.caption)
                             .padding(.horizontal, 8)
@@ -526,7 +571,7 @@ struct EmailDetailView: View {
                             .onSubmit {
                                 let tag = newTagText.trimmingCharacters(in: .whitespaces)
                                 if !tag.isEmpty {
-                                    NotificationCenter.default.post(name: .addTagToEmail, object: (email.id, tag))
+                                    NotificationCenter.default.post(name: .addTagToEmail, object: (shown.id, tag))
                                     newTagText = ""
                                 }
                             }
@@ -543,7 +588,7 @@ struct EmailDetailView: View {
     private var hexViewerSection: some View {
         Divider()
         DisclosureGroup(isExpanded: $showHexViewer) {
-            HexViewerView(rawSource: email.rawSource.isEmpty ? email.plainBody : email.rawSource)
+            HexViewerView(rawSource: shown.rawSource.isEmpty ? shown.plainBody : shown.rawSource)
                 .frame(minHeight: 200, maxHeight: 400)
         } label: {
             Label("Hex Viewer", systemImage: "rectangle.and.text.magnifyingglass")
@@ -554,9 +599,9 @@ struct EmailDetailView: View {
     // MARK: - Attachments Section
     private var attachmentsSection: some View {
         Group {
-            if !email.attachments.isEmpty {
+            if !shown.attachments.isEmpty {
                 Divider()
-                Label("Attachments (\(email.attachments.count))", systemImage: "paperclip")
+                Label("Attachments (\(shown.attachments.count))", systemImage: "paperclip")
                     .font(Typography.headline)
 
                 Button {
@@ -564,14 +609,36 @@ struct EmailDetailView: View {
                         downloadAllAttachments()
                     }
                 } label: {
-                    Label(storeManager.isPremium ? "Download All Attachments" : "Download All (Pro)", systemImage: "arrow.down.circle.fill")
+                    Label(storeManager.isPremium ? String(localized: "Download All Attachments") : String(localized: "Download All (Pro)"), systemImage: "arrow.down.circle.fill")
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .padding(.vertical, Spacing.xxSmall)
-                .accessibilityLabel("Download all \(email.attachments.count) attachments")
+                .accessibilityLabel("Download all \(shown.attachments.count) attachments")
                 .accessibilityHint("Save all attachments to a folder")
 
-                ForEach(Array(email.attachments.enumerated()), id: \.offset) { _, att in
+                // IPAD-04: what the plan allows for single saves, said once above the list.
+                if let note = downloadDecision.note {
+                    HStack(spacing: Spacing.xSmall) {
+                        Image(systemName: downloadDecision.isEnabled ? "info.circle" : "lock.fill")
+                            .foregroundColor(AppColors.secondary)
+                        Text(note)
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if downloadDecision.offersUpgrade {
+                            Button(String(localized: "Upgrade")) {
+                                storeManager.requestPurchase(.personal, feature: String(localized: "Attachment Downloads"),
+                                                             reason: String(localized: "The Free plan saves 10 attachments a day. Personal and Professional have no daily limit."))
+                            }
+                            .font(Typography.caption1)
+                            .accessibilityIdentifier("attachment.download.upgrade")
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("attachment.download.note")
+                }
+
+                ForEach(Array(shown.attachments.enumerated()), id: \.offset) { index, att in
                     VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: attachmentIcon(for: att.mimeType))
@@ -598,24 +665,36 @@ struct EmailDetailView: View {
                                 .accessibilityLabel("Preview \(att.filename)")
                             }
                             Button {
-                                if let fileURL = att.fileURL {
-                                    saveAttachmentToUserFolder(fileURL: fileURL, suggestedName: att.filename)
-                                }
+                                downloadAttachment(at: index)
                             } label: {
                                 Label("Download", systemImage: "arrow.down.circle")
                                     .font(Typography.caption1)
                             }
                             .buttonStyle(SecondaryButtonStyle())
                             .help("Save this attachment to a folder you choose")
-                            .disabled(att.fileURL == nil)
+                            // IPAD-04: the plan decides (Free: a daily allowance), not whether a
+                            // parse-time temp file still exists — the bytes come from the stored message.
+                            .disabled(!downloadDecision.isEnabled)
                             .accessibilityLabel("Download \(att.filename.isEmpty ? "attachment" : att.filename)")
                         }
 
                         attachmentPreview(for: att)
                             .padding(.leading, Spacing.large)
+                        // §13.3 (9): the files inside an archive or attached message, with their states.
+                        AttachmentChildrenList(emailID: shown.id, position: index)
+                            .padding(.leading, Spacing.large)
+                        // §13.8 step 5: a locked attachment offers Unlock… (one password, once).
+                        AttachmentUnlockView(emailID: shown.id, position: index, filename: att.filename)
+                            .padding(.leading, Spacing.large)
+                        // §13.3 (9): what search reads for this attachment, with Open original.
+                        AttachmentTextButton(emailID: shown.id, ordinal: index, filename: att.filename)
+                            .padding(.leading, Spacing.large)
+                        // A10 / §13.3 (10): reading stopped at a per-run limit → Resume….
+                        AttachmentResumeView(emailID: shown.id, position: index, filename: att.filename)
+                            .padding(.leading, Spacing.large)
                     }
                     .padding(.vertical, Spacing.xxSmall)
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(children: .contain)
                 }
             }
         }
@@ -642,7 +721,7 @@ struct EmailDetailView: View {
                 // unified formats over THIS email (the persona buttons above
                 // already provide single-email Word/CSV/PDF/TIFF/plain text).
                 UnifiedExportSections(
-                    scope: { .explicit([email.id]) },
+                    scope: { .explicit([shown.id]) },
                     gate: { storeManager.requirePremium() },
                     omit: [.word, .csv, .pdfFiles, .tiffFiles, .printText],
                     emailCount: 1,
@@ -655,8 +734,19 @@ struct EmailDetailView: View {
                     errorMessage: $exportError
                 )
                 .environmentObject(storeManager)
+
+                // E2: a link DEVONthink, Notes or any app can keep; it opens this email in mailin.
+                if DEVONthinkHandOff.isEnabled {
+                    Divider()
+                    Button {
+                        EmailLink.copy(emailID: shown.id, subject: shown.headers["Subject"] ?? "")
+                    } label: {
+                        Label("Copy Link to Email", systemImage: "link")
+                    }
+                    .help("Copies a mailin:// link that opens this email in mailin")
+                }
             } label: {
-                Label(storeManager.isPremium ? "Export Email" : "Export Email (Pro)", systemImage: "square.and.arrow.up")
+                Label(storeManager.isPremium ? String(localized: "Export Email") : String(localized: "Export Email (Pro)"), systemImage: "square.and.arrow.up")
             }
             #if os(macOS)
             .menuStyle(.borderedButton)
@@ -689,11 +779,11 @@ struct EmailDetailView: View {
             }
         case .word:
             Button { if storeManager.requirePremium() { exportAsWord() } } label: {
-                Label("Word Document (.doc)", systemImage: "doc.badge.ellipsis")
+                Label("Word-compatible Document (.doc)", systemImage: "doc.badge.ellipsis")
             }
         case .batesPDF:
             Button { if storeManager.requireProfessional() { exportBatesStampedPDF() } } label: {
-                Label(storeManager.isProfessional ? "Bates-Stamped PDF" : "Bates-Stamped PDF (Pro)", systemImage: "number.square")
+                Label(storeManager.isProfessional ? String(localized: "Bates-Stamped PDF") : String(localized: "Bates-Stamped PDF (Pro)"), systemImage: "number.square")
             }
         case .forensicReport:
             Button { if storeManager.requireProfessional() { exportForensicReport() } } label: {
@@ -719,7 +809,7 @@ struct EmailDetailView: View {
 
             ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                 Button {
-                    forensicManager.tag(email.id, as: tag)
+                    forensicManager.tag(shown.id, as: tag)
                     if autoAdvanceAfterTag && tag != .none {
                         advanceToNextUnreviewed()
                     }
@@ -727,17 +817,17 @@ struct EmailDetailView: View {
                     HStack(spacing: 3) {
                         Image(systemName: tag.icon)
                             .font(.caption)
-                        Text(tag.rawValue)
+                        Text(LocalizedStringKey(tag.rawValue))
                             .font(.caption).fontWeight(.medium)
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(forensicManager.tagForEmail(email.id) == tag ? tag.color.opacity(0.2) : Color.clear)
-                    .foregroundColor(forensicManager.tagForEmail(email.id) == tag ? tag.color : .secondary)
+                    .background(forensicManager.tagForEmail(shown.id) == tag ? tag.color.opacity(0.2) : Color.clear)
+                    .foregroundColor(forensicManager.tagForEmail(shown.id) == tag ? tag.color : .secondary)
                     .cornerRadius(CornerRadius.small)
                     .overlay(
                         RoundedRectangle(cornerRadius: CornerRadius.small)
-                            .stroke(forensicManager.tagForEmail(email.id) == tag ? tag.color.opacity(0.5) : Color.clear, lineWidth: 1)
+                            .stroke(forensicManager.tagForEmail(shown.id) == tag ? tag.color.opacity(0.5) : Color.clear, lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
@@ -754,7 +844,7 @@ struct EmailDetailView: View {
     // MARK: - Risk Score Badge
     @ViewBuilder
     private var riskScoreBadge: some View {
-        let risk = ForensicManager.assessRisk(for: email)
+        let risk = ForensicManager.assessRisk(for: shown)
         if risk.score > 0 {
             HStack(spacing: Spacing.small) {
                 Image(systemName: risk.level.icon)
@@ -839,7 +929,7 @@ struct EmailDetailView: View {
 
     @ViewBuilder
     private var spoofBadge: some View {
-        let indicators = ForensicManager.detectSpoofingIndicators(email)
+        let indicators = ForensicManager.detectSpoofingIndicators(shown)
         let highCount = indicators.filter { $0.severity == .high }.count
         if highCount > 0 {
             HStack(spacing: 2) {
@@ -865,7 +955,7 @@ struct EmailDetailView: View {
     }
 
     private var spoofIndicatorsView: some View {
-        let indicators = ForensicManager.detectSpoofingIndicators(email)
+        let indicators = ForensicManager.detectSpoofingIndicators(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("Spoofing Analysis")
                 .font(Typography.callout)
@@ -889,7 +979,7 @@ struct EmailDetailView: View {
                             .frame(width: 14)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
-                                Text(indicator.severity.rawValue)
+                                Text(LocalizedStringKey(indicator.severity.rawValue))
                                     .font(.caption2).fontWeight(.bold)
                                     .foregroundColor(indicator.severity.color)
                                     .padding(.horizontal, 3)
@@ -911,7 +1001,7 @@ struct EmailDetailView: View {
     }
 
     private var mimeTreeView: some View {
-        let tree = ForensicManager.buildMIMETree(email)
+        let tree = ForensicManager.buildMIMETree(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("MIME Structure")
                 .font(Typography.callout)
@@ -962,7 +1052,7 @@ struct EmailDetailView: View {
                 .font(Typography.callout)
                 .fontWeight(.semibold)
 
-            if let existing = forensicManager.annotationFor(email.id) {
+            if let existing = forensicManager.annotationFor(shown.id) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(existing.text)
                         .font(Typography.caption1)
@@ -982,7 +1072,7 @@ struct EmailDetailView: View {
                     .font(Typography.caption1)
                 Button("Save") {
                     guard !annotationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                    forensicManager.annotate(email.id, text: annotationText)
+                    forensicManager.annotate(shown.id, text: annotationText)
                     annotationText = ""
                 }
                 .buttonStyle(.bordered)
@@ -992,12 +1082,12 @@ struct EmailDetailView: View {
             }
         }
         .onAppear {
-            annotationText = forensicManager.annotationFor(email.id)?.text ?? ""
+            annotationText = forensicManager.annotationFor(shown.id)?.text ?? ""
         }
     }
 
     private var authResultsView: some View {
-        let auth = ForensicManager.extractAuthResults(email)
+        let auth = ForensicManager.extractAuthResults(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("Authentication")
                 .font(Typography.callout)
@@ -1006,7 +1096,7 @@ struct EmailDetailView: View {
             HStack(spacing: Spacing.medium) {
                 authBadge(label: "SPF", value: auth.spf)
                 authBadge(label: "DKIM", value: auth.dkim)
-                authBadge(label: "DMARC", value: auth.dmarc)
+                authBadge(label: String(localized: "DMARC"), value: auth.dmarc)
             }
         }
     }
@@ -1029,7 +1119,7 @@ struct EmailDetailView: View {
     }
 
     private var receivedChainView: some View {
-        let hops = ForensicManager.parseReceivedChain(email)
+        let hops = ForensicManager.parseReceivedChain(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("Received Chain (\(hops.count) hops)")
                 .font(Typography.callout)
@@ -1087,7 +1177,7 @@ struct EmailDetailView: View {
     }
 
     private func computeHashes() {
-        let rawData = email.rawSource.data(using: .utf8) ?? Data()
+        let rawData = shown.rawSource.data(using: .utf8) ?? Data()
         cachedSHA256 = SHA256.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
         cachedMD5 = Insecure.MD5.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
     }
@@ -1136,9 +1226,15 @@ struct EmailDetailView: View {
                     .help("Copy MD5 hash")
                     .accessibilityLabel("Copy MD5 hash to clipboard")
                 }
-                Text("Raw source: \(email.rawSource.utf8.count) bytes")
+                Text("Raw source: \(shown.rawSource.utf8.count) bytes")
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
+                if RawSourceProvenance.label(for: shown.rawSource).isReconstructed {
+                    Text("These hashes are of the reconstructed source, not of captured wire bytes.")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.orange)
+                        .accessibilityIdentifier("detail.hashes.reconstructed")
+                }
             }
         }
     }
@@ -1174,11 +1270,11 @@ struct EmailDetailView: View {
                     Text("Replying to:")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
-                    Text(email.headers["Subject"] ?? "(No Subject)")
+                    Text(shown.headers["Subject"] ?? "(No Subject)")
                         .font(Typography.subheadline)
                         .fontWeight(.semibold)
                         .lineLimit(2)
-                    Text("From: \(email.headers["From"] ?? "Unknown")")
+                    Text("From: \(shown.headers["From"] ?? "Unknown")")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -1196,7 +1292,7 @@ struct EmailDetailView: View {
                     if #available(macOS 26, iOS 26, *) {
                         Picker("Tone", selection: $selectedReplyTone) {
                             ForEach(Array(FoundationModelEngine.ReplyTone.allCases.enumerated()), id: \.offset) { index, tone in
-                                Text(tone.rawValue).tag(index)
+                                Text(LocalizedStringKey(tone.rawValue)).tag(index)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -1216,12 +1312,12 @@ struct EmailDetailView: View {
                             } else {
                                 Image(systemName: "sparkles")
                             }
-                            Text(isGeneratingReply ? "Stop" : "Generate Reply")
+                            Text(isGeneratingReply ? String(localized: "Stop") : String(localized: "Generate Reply"))
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .help(isGeneratingReply ? "Stop generating — keeps the draft so far" : "Draft a reply with on-device AI")
+                    .help(isGeneratingReply ? String(localized: "Stop generating — keeps the draft so far") : String(localized: "Draft a reply with on-device AI"))
                 }
                 #endif
 
@@ -1277,7 +1373,7 @@ struct EmailDetailView: View {
             let tone = tones.indices.contains(selectedReplyTone) ? tones[selectedReplyTone] : .professional
             replyGenerationTask = Task { @MainActor in
                 do {
-                    let _ = try await FoundationModelEngine.suggestReply(to: email, tone: tone) { text in
+                    let _ = try await FoundationModelEngine.suggestReply(to: shown, tone: tone) { text in
                         guard !Task.isCancelled else { return }
                         replyText = text
                     }
@@ -1305,9 +1401,9 @@ struct EmailDetailView: View {
     }
 
     private var emailBody: String {
-        guard !email.plainBody.isEmpty else { return "(No Body Content Found)" }
-        let cleaned = showCleanView ? cleanText(email.plainBody) : email.plainBody
-        return cleaned.isEmpty ? email.plainBody : cleaned
+        guard !shown.plainBody.isEmpty else { return String(localized: "(No Body Content Found)") }
+        let cleaned = showCleanView ? cleanText(shown.plainBody) : shown.plainBody
+        return cleaned.isEmpty ? shown.plainBody : cleaned
     }
 
     private func highlightedBody(_ text: String) -> AttributedString {
@@ -1429,14 +1525,17 @@ struct EmailDetailView: View {
         #endif
     }
 
+    /// Bytes for an attachment of the message on screen.
+    ///
+    /// A stored (imported) email has neither a live temp file nor an inline
+    /// payload — parse-time temp files do not survive, and the store keeps the
+    /// bytes inside the raw MIME instead. `AttachmentHydrator` re-extracts from
+    /// there, which is what makes Open/Save work on an archived message rather
+    /// than only on one just parsed this session.
     private func attachmentData(for att: AttachmentMetadata) -> Data? {
-        if let fileURL = att.fileURL {
-            return try? Data(contentsOf: fileURL)
-        }
-        if let base64 = att.base64 {
-            return Data(base64Encoded: base64)
-        }
-        return nil
+        let index = shown.attachments.firstIndex { $0.filename == att.filename } ?? 0
+        return AttachmentHydrator.data(for: att, index: index, email: shown,
+                                       cache: attachmentCache)
     }
 
     private func formatSize(_ bytes: Int) -> String {
@@ -1448,7 +1547,7 @@ struct EmailDetailView: View {
     private func header(_ key: String) -> String {
         let tryKeys = [key, key.lowercased(), key.capitalized]
         for k in tryKeys {
-            if let val = email.headers[k], !val.isEmpty {
+            if let val = shown.headers[k], !val.isEmpty {
                 return decodeMIMEHeader(val)
             }
         }
@@ -1478,7 +1577,7 @@ struct EmailDetailView: View {
     }
 
     private var htmlAttributedString: NSAttributedString? {
-        guard let data = safeHTML.data(using: .utf8) else { return nil }
+        guard let data = SafeHTMLRenderer.sanitizedIfEnabled(safeHTML).data(using: .utf8) else { return nil }
         return try? NSAttributedString(
             data: data,
             options: [
@@ -1491,27 +1590,55 @@ struct EmailDetailView: View {
 
     // MARK: - Download Logic
 
-    // Save one file
-    private func saveAttachmentToUserFolder(fileURL: URL, suggestedName: String) {
+    /// IPAD-04: the plan's answer for single attachment saves.
+    private var downloadDecision: AttachmentDownloadDecision {
+        AttachmentDownloadGate.decide(policy: storeManager.accessPolicy, usedToday: freeAttachmentDownloadCount)
+    }
+
+    /// IPAD-04: saves attachment `index` from the stored message's own bytes
+    /// (a stored message has no parse-time temp file), counted against the
+    /// Free allowance only once it was really saved or handed to the share sheet.
+    private func downloadAttachment(at index: Int) {
+        StoreManager.resetDailyCountersIfNeeded()
+        guard downloadDecision.isEnabled else { return }
+        switch EvidenceAttachmentOpener.temporaryFile(for: shown, ordinal: index, cache: attachmentCache) {
+        case .success(let fileURL):
+            defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+            let name = shown.attachments[index].filename.isEmpty ? fileURL.lastPathComponent : shown.attachments[index].filename
+            if saveAttachmentToUserFolder(fileURL: fileURL, suggestedName: name) {
+                AttachmentDownloadGate.recordSave(policy: storeManager.accessPolicy)
+            }
+        case .failure(let failure):
+            exportError = failure.message
+        }
+    }
+
+    // Save one file. True when it was saved (Mac) or handed to the share sheet (iOS).
+    @discardableResult
+    private func saveAttachmentToUserFolder(fileURL: URL, suggestedName: String) -> Bool {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
         let result = panel.runModal()
         if result == .OK, let destinationURL = panel.url {
             do {
                 try FileUtils.copyFile(from: fileURL, to: destinationURL)
+                return true
             } catch {
                 exportError = "Failed to save attachment: \(error.localizedDescription)"
             }
         }
+        return false
         #else
-        let destinationURL = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
+        let destinationURL = FileManager.default.temporaryDirectory.appendingPathComponent(EvidenceAttachmentOpener.safeFilename(suggestedName, mimeType: ""))
         do {
             try FileUtils.copyFile(from: fileURL, to: destinationURL)
             iOSShareFile(at: destinationURL)
+            return true
         } catch {
             exportError = "Failed to save attachment: \(error.localizedDescription)"
+            return false
         }
         #endif
     }
@@ -1539,7 +1666,7 @@ struct EmailDetailView: View {
 
     private func saveAllAttachments(to folderURL: URL) {
         var usedNames = Set<String>()
-        for att in email.attachments {
+        for att in shown.attachments {
             guard let fileURL = att.fileURL else { continue }
             var filename = att.filename
             var counter = 1
@@ -1576,9 +1703,9 @@ struct EmailDetailView: View {
                 .replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;")
         }
-        let bodyHTML = email.htmlBody.isEmpty
+        let bodyHTML = shown.htmlBody.isEmpty
             ? "<p>" + htmlEscape(emailBody).replacingOccurrences(of: "\n", with: "<br>") + "</p>"
-            : email.htmlBody
+            : shown.htmlBody
         var headerRows = ""
         for (label, key) in [("Subject", "Subject"), ("From", "From"), ("To", "To"),
                              ("Cc", "Cc"), ("Date", "Date"), ("Message-ID", "Message-ID")] {
@@ -1599,7 +1726,7 @@ struct EmailDetailView: View {
         """
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
@@ -1639,7 +1766,7 @@ struct EmailDetailView: View {
         exportText += emailBody
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
@@ -1682,7 +1809,7 @@ struct EmailDetailView: View {
         let csvContent = csvHeaders + csvRow
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
@@ -1706,6 +1833,7 @@ struct EmailDetailView: View {
     }
 
     private func exportAsPDF() {
+        guard OrgPolicy.confirmAllowed(.export) else { return }   // enterprise policy (OrgPolicy)
         let headerText = """
         Subject: \(subjectLine)
         From: \(header("From"))
@@ -1715,7 +1843,7 @@ struct EmailDetailView: View {
         """
 
         let htmlContent: String
-        let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedHTML = shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
             htmlContent = """
             <html><body style="font-family: -apple-system, Helvetica, sans-serif; font-size: 13px;">
@@ -1734,7 +1862,7 @@ struct EmailDetailView: View {
             """
         }
 
-        guard let data = htmlContent.data(using: .utf8),
+        guard let data = SafeHTMLRenderer.sanitizedIfEnabled(htmlContent).data(using: .utf8),
               let attrString = try? NSAttributedString(
                   data: data,
                   options: [.documentType: NSAttributedString.DocumentType.html,
@@ -1757,7 +1885,7 @@ struct EmailDetailView: View {
             height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin))
         textView.textStorage?.setAttributedString(attrString)
 
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
         panel.nameFieldStringValue = "\(safeName).pdf"
         panel.canCreateDirectories = true
@@ -1799,8 +1927,8 @@ struct EmailDetailView: View {
         let batesNumber = ForensicManager.batesNumber(prefix: batesPrefix, index: 1)
         let examiner = forensicManager.isEnabled ? forensicManager.examinerName : ""
         let caseNum = forensicManager.isEnabled ? forensicManager.caseNumber : ""
-        let tag = forensicManager.tagForEmail(email.id)
-        let emailHash = forensicManager.perEmailHashes[email.id]
+        let tag = forensicManager.tagForEmail(shown.id)
+        let emailHash = forensicManager.perEmailHashes[shown.id]
 
         var lines: [String] = []
         lines.append("Subject: \(subjectLine)")
@@ -1824,7 +1952,7 @@ struct EmailDetailView: View {
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "\(batesNumber)_\(safeName).pdf"
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.pdf]
@@ -1862,6 +1990,7 @@ struct EmailDetailView: View {
     #endif
 
     private func printEmail() {
+        guard OrgPolicy.confirmAllowed(.print) else { return }   // enterprise policy (OrgPolicy)
         let headerText = """
         Subject: \(subjectLine)
         From: \(header("From"))
@@ -1871,7 +2000,7 @@ struct EmailDetailView: View {
 
         #if os(macOS)
         let htmlContent: String
-        let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedHTML = shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
             htmlContent = """
             <html><body style="font-family: -apple-system, Helvetica, sans-serif; font-size: 13px;">
@@ -1895,7 +2024,7 @@ struct EmailDetailView: View {
             width: printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin,
             height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin))
 
-        if let data = htmlContent.data(using: .utf8),
+        if let data = SafeHTMLRenderer.sanitizedIfEnabled(htmlContent).data(using: .utf8),
            let attrString = try? NSAttributedString(
                data: data,
                options: [.documentType: NSAttributedString.DocumentType.html,
@@ -1920,7 +2049,7 @@ struct EmailDetailView: View {
 
     // MARK: - Forensic Report Export
     private func exportForensicReport() {
-        let rawData = email.rawSource.data(using: .utf8) ?? Data()
+        let rawData = shown.rawSource.data(using: .utf8) ?? Data()
         let sha256 = SHA256.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
         let md5 = Insecure.MD5.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
 
@@ -1929,7 +2058,7 @@ struct EmailDetailView: View {
         let exportDate = dateFormatter.string(from: Date())
 
         let batesNum = ForensicManager.batesNumber(prefix: "MAIL", index: (currentIndex ?? 0) + 1)
-        let evidenceTag = forensicManager.tagForEmail(email.id)
+        let evidenceTag = forensicManager.tagForEmail(shown.id)
 
         var report = "FORENSIC EMAIL REPORT\n"
         report += "Chain of Custody Document\n"
@@ -1950,14 +2079,14 @@ struct EmailDetailView: View {
         report += "MD5: \(md5)\n"
         report += "Raw Source Size: \(rawData.count) bytes\n\n"
 
-        let auth = ForensicManager.extractAuthResults(email)
+        let auth = ForensicManager.extractAuthResults(shown)
         report += "AUTHENTICATION RESULTS\n"
         report += String(repeating: "-", count: 70) + "\n"
         report += "SPF: \(auth.spf)\n"
         report += "DKIM: \(auth.dkim)\n"
         report += "DMARC: \(auth.dmarc)\n"
 
-        let hops = ForensicManager.parseReceivedChain(email)
+        let hops = ForensicManager.parseReceivedChain(shown)
         if !hops.isEmpty {
             report += "\nRECEIVED CHAIN (\(hops.count) hops)\n"
             report += String(repeating: "-", count: 70) + "\n"
@@ -1972,32 +2101,32 @@ struct EmailDetailView: View {
 
         report += "\nCOMPLETE HEADERS\n"
         report += String(repeating: "-", count: 70) + "\n"
-        for (key, value) in email.headers.sorted(by: { $0.key < $1.key }) {
+        for (key, value) in shown.headers.sorted(by: { $0.key < $1.key }) {
             report += "\(key): \(value)\n"
         }
 
         report += "\n\nMESSAGE METADATA\n"
         report += String(repeating: "-", count: 70) + "\n"
-        report += "Message-ID: \(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "N/A")\n"
-        report += "Thread-ID: \(email.threadID ?? "N/A")\n"
-        report += "In-Reply-To: \(email.inReplyTo ?? "N/A")\n"
-        report += "References: \(email.references?.joined(separator: " ") ?? "N/A")\n"
-        report += "Message Type: \(email.messageType)\n"
-        report += "Domains: \(email.domains.joined(separator: ", "))\n"
-        report += "Tags: \(email.tags.joined(separator: ", "))\n"
-        report += "Anomalies: \(email.anomalies.isEmpty ? "None" : email.anomalies.joined(separator: "; "))\n"
+        report += "Message-ID: \(shown.headers["Message-ID"] ?? shown.headers["Message-Id"] ?? "N/A")\n"
+        report += "Thread-ID: \(shown.threadID ?? "N/A")\n"
+        report += "In-Reply-To: \(shown.inReplyTo ?? "N/A")\n"
+        report += "References: \(shown.references?.joined(separator: " ") ?? "N/A")\n"
+        report += "Message Type: \(shown.messageType)\n"
+        report += "Domains: \(shown.domains.joined(separator: ", "))\n"
+        report += "Tags: \(shown.tags.joined(separator: ", "))\n"
+        report += "Anomalies: \(shown.anomalies.isEmpty ? "None" : shown.anomalies.joined(separator: "; "))\n"
 
-        if !email.attachments.isEmpty {
+        if !shown.attachments.isEmpty {
             report += "\n\nATTACHMENTS\n"
             report += String(repeating: "-", count: 70) + "\n"
-            for (i, att) in email.attachments.enumerated() {
+            for (i, att) in shown.attachments.enumerated() {
                 report += "\(i + 1). \(att.filename) (\(att.mimeType), \(att.size) bytes)\n"
             }
         }
 
         report += "\n\nPLAIN TEXT BODY\n"
         report += String(repeating: "-", count: 70) + "\n"
-        report += email.plainBody
+        report += shown.plainBody
 
         report += "\n\n" + String(repeating: "=", count: 70) + "\n"
         report += "END OF FORENSIC REPORT\n"
@@ -2010,7 +2139,7 @@ struct EmailDetailView: View {
         let fileName = "forensic_\(batesNum)_\(safeName).txt"
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -2041,7 +2170,7 @@ struct EmailDetailView: View {
         let fileName = "redacted_\(safeName).txt"
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -2061,7 +2190,7 @@ struct EmailDetailView: View {
             Task { await DocumentRegistry.captureStructured(.export,
                 summary: "Redaction — \(subj)",
                 document: CapturedDocument(title: "Redaction — \(subj)", sections: [
-                  .init(name: "Redaction", fields: [
+                  .init(name: String(localized: "Redaction"), fields: [
                     .init(key: "Subject", value: subj),
                     .init(key: "Redacted content", value: capturedText)])])) }
         } catch {
@@ -2071,7 +2200,7 @@ struct EmailDetailView: View {
 
     // MARK: - TIFF Export
     private func exportAsTIFF() {
-        guard let tiffData = ExportManager.exportAsTIFF(email: email) else {
+        guard let tiffData = ExportManager.exportAsTIFF(email: shown) else {
             exportError = "Failed to generate TIFF image."
             return
         }
@@ -2080,7 +2209,7 @@ struct EmailDetailView: View {
         let fileName = "\(safeName).tiff"
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.tiff]
@@ -2121,15 +2250,15 @@ struct EmailDetailView: View {
         VStack(spacing: Spacing.small) {
             HStack(alignment: .top, spacing: Spacing.large) {
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                    LabelText(title: "From", value: header("From"))
-                    LabelText(title: "To", value: header("To"))
+                    LabelText(title: String(localized: "From"), value: header("From"))
+                    LabelText(title: String(localized: "To"), value: header("To"))
                     if hasHeader("Reply-To") {
-                        LabelText(title: "Reply-To", value: header("Reply-To"))
+                        LabelText(title: String(localized: "Reply-To"), value: header("Reply-To"))
                     }
                 }
                 Spacer()
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                    LabelText(title: "Date", value: header("Date"))
+                    LabelText(title: String(localized: "Date"), value: header("Date"))
                     if hasHeader("Cc") {
                         LabelText(title: "CC", value: header("Cc"))
                     }
@@ -2137,7 +2266,7 @@ struct EmailDetailView: View {
                         LabelText(title: "BCC", value: header("Bcc"))
                     }
                     if hasHeader("Message-ID") {
-                        LabelText(title: "Message-ID", value: header("Message-ID"))
+                        LabelText(title: String(localized: "Message-ID"), value: header("Message-ID"))
                     }
                 }
             }
@@ -2150,11 +2279,11 @@ struct EmailDetailView: View {
 
     private var narrowHeaderLayout: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
-            LabelText(title: "From", value: header("From"))
-            LabelText(title: "To", value: header("To"))
-            LabelText(title: "Date", value: header("Date"))
+            LabelText(title: String(localized: "From"), value: header("From"))
+            LabelText(title: String(localized: "To"), value: header("To"))
+            LabelText(title: String(localized: "Date"), value: header("Date"))
             if hasHeader("Reply-To") {
-                LabelText(title: "Reply-To", value: header("Reply-To"))
+                LabelText(title: String(localized: "Reply-To"), value: header("Reply-To"))
             }
             if hasHeader("Cc") {
                 LabelText(title: "CC", value: header("Cc"))
@@ -2163,7 +2292,7 @@ struct EmailDetailView: View {
                 LabelText(title: "BCC", value: header("Bcc"))
             }
             if hasHeader("Message-ID") {
-                LabelText(title: "Message-ID", value: header("Message-ID"))
+                LabelText(title: String(localized: "Message-ID"), value: header("Message-ID"))
             }
         }
     }
@@ -2173,8 +2302,8 @@ struct EmailDetailView: View {
         if !storeManager.isPremium {
             EmptyView()
         } else {
-        let sigResult = SMIMEHandler.verifySignature(of: email)
-        let isEncrypted = SMIMEHandler.isEncrypted(email)
+        let sigResult = SMIMEHandler.verifySignature(of: shown)
+        let isEncrypted = SMIMEHandler.isEncrypted(shown)
         if sigResult.status != .notSigned || isEncrypted {
             HStack(spacing: Spacing.small) {
                 if sigResult.status != .notSigned {
@@ -2243,7 +2372,7 @@ struct EmailDetailView: View {
     private func hasHeader(_ key: String) -> Bool {
         let tryKeys = [key, key.lowercased(), key.capitalized]
         for k in tryKeys {
-            if let val = email.headers[k], !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let val = shown.headers[k], !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return true
             }
         }
@@ -2358,11 +2487,10 @@ extension View {
         window.title = title
         window.isReleasedWhenClosed = true
         window.minSize = NSSize(width: 500, height: 400)
-        if let storeManager {
-            window.contentView = NSHostingView(rootView: self.environmentObject(storeManager))
-        } else {
-            window.contentView = NSHostingView(rootView: self)
-        }
+        // The detail view reads the page registry and the store; a bare
+        // NSHostingView provides neither (it crashed without the registry).
+        let content: AnyView = storeManager.map { AnyView(self.environmentObject($0)) } ?? AnyView(self)
+        window.contentView = NSHostingView(rootView: ToolWindowPresenter.windowRoot(content, title: title))
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }

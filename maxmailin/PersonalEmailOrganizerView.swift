@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct PersonalEmailOrganizerView: View {
@@ -7,6 +8,11 @@ struct PersonalEmailOrganizerView: View {
     // corpus). Categorization/cleanup/stats run over this sample; the exact
     // archive total comes from the store.
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    // §3-A10: cleanup/storage figures over the whole archive (3.0 engine).
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var cleanup: PersonalCleanupStats?
+    @State private var cleanupNote: String?
+    private var v3: Bool { v3Modules?.isOn(.v3AnalysisQueries) ?? false }
     @State private var archiveTotal = 0
 
     // MARK: - State
@@ -117,6 +123,19 @@ struct PersonalEmailOrganizerView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.personal, key: "personal_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showCleanupWizard) { cleanupWizardSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .task(id: v3) {
+            guard v3, cleanup == nil else { return }
+            do {
+                let r = try await PersonalCleanupEngine.compute()
+                cleanup = r.stats
+                cleanupNote = String(localized: "Cleanup and storage figures cover all \(r.stats.emails) emails.")
+            } catch is CancellationError {
+            } catch {
+                // §3-M3: the previous engine's figures (below) stay on screen.
+                cleanupNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            }
+        }
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
         .task { await loadV4Data() }
@@ -161,7 +180,8 @@ struct PersonalEmailOrganizerView: View {
             let result = await FoundationModelEngine.enhanceWithAI(
                 scope: .all,
                 emails: workingSet,
-                context: "Suggest emails to archive, unsubscribe from, or clean up. Focus on newsletters, duplicates, and old automated emails."
+                context: "Suggest emails to archive, unsubscribe from, or clean up. Focus on newsletters, duplicates, and old automated emails.",
+                given: .window
             )
             aiCleanupSuggestions = result ?? "AI cleanup unavailable."
             isGeneratingCleanup = false
@@ -191,23 +211,23 @@ struct PersonalEmailOrganizerView: View {
 
         coordinator.begin(steps: 10, color: .blue)
 
-        coordinator.advance(step: 1, label: "Classifying emails...")
+        coordinator.advance(step: 1, label: String(localized: "Classifying emails..."))
         guard let cats = await coordinator.runDetached({ EmailNLPEngine.classifyAll(emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Categorizing per email...")
+        coordinator.advance(step: 2, label: String(localized: "Categorizing per email..."))
         guard let perEmail = await coordinator.runDetached({
             var pe: [UUID: EmailNLPEngine.EmailCategory] = [:]
             for e in emailsCopy { pe[e.id] = EmailNLPEngine.classify(e) }
             return pe
         }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Scoring priorities...")
+        coordinator.advance(step: 3, label: String(localized: "Scoring priorities..."))
         guard let prio = await coordinator.runDetached({ EmailNLPEngine.scoreAllPriorities(emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Building contact insights...")
+        coordinator.advance(step: 4, label: String(localized: "Building contact insights..."))
         guard let insights = await coordinator.runDetached({ EmailNLPEngine.contactInsights(from: emailsCopy, limit: 20) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 5, label: "Detecting anomalies...")
+        coordinator.advance(step: 5, label: String(localized: "Detecting anomalies..."))
         guard let anom = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         nlpCategories = cats; nlpClassified = perEmail; priorities = prio
@@ -232,19 +252,19 @@ struct PersonalEmailOrganizerView: View {
 
         if !coordinator.isActive { coordinator.begin(steps: 10, color: .blue); coordinator.advance(step: 5, label: "") }
 
-        coordinator.advance(step: 6, label: "Extracting action items...")
+        coordinator.advance(step: 6, label: String(localized: "Extracting action items..."))
         guard let items = await coordinator.runDetached({ PersonalAnalysisFeatures.extractActionItems(from: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 7, label: "Detecting subscriptions...")
+        coordinator.advance(step: 7, label: String(localized: "Detecting subscriptions..."))
         guard let subs = await coordinator.runDetached({ PersonalAnalysisFeatures.detectSubscriptions(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 8, label: "Scoring contact relationships...")
+        coordinator.advance(step: 8, label: String(localized: "Scoring contact relationships..."))
         guard let rels = await coordinator.runDetached({ PersonalAnalysisFeatures.scoreContactRelationships(emails: emailsCopy, userEmail: nil) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 9, label: "Detecting response urgency...")
+        coordinator.advance(step: 9, label: String(localized: "Detecting response urgency..."))
         guard let urg = await coordinator.runDetached({ PersonalAnalysisFeatures.detectResponseUrgency(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 10, label: "Analyzing email habits...")
+        coordinator.advance(step: 10, label: String(localized: "Analyzing email habits..."))
         guard let habits = await coordinator.runDetached({ PersonalAnalysisFeatures.analyzeEmailHabits(emails: emailsCopy) }) else { coordinator.finish(); return }
 
         actionItems = items; subscriptions = subs; contactRelationships = rels
@@ -268,7 +288,7 @@ struct PersonalEmailOrganizerView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: tab.icon).font(.system(size: 9))
-                        Text(tab.rawValue).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
+                        Text(LocalizedStringKey(tab.rawValue)).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
                     }
                     .foregroundColor(activeTab == tab ? .blue : .secondary)
                     .padding(.horizontal, 6).padding(.vertical, 3)
@@ -580,7 +600,7 @@ struct PersonalEmailOrganizerView: View {
                 Text("\(count)")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundColor(category.color)
-                Text(category.rawValue)
+                Text(LocalizedStringKey(category.rawValue))
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
             }
@@ -708,10 +728,10 @@ struct PersonalEmailOrganizerView: View {
             Text("Your Email Network").font(.system(size: 11, weight: .semibold)).foregroundColor(.cyan)
                 .help("A summary of everyone and everything in your email archive — people, organizations, topics, and how they're all connected")
             HStack(spacing: 12) {
-                networkStat("\(stats.people)", label: "People", color: .blue, helpText: "Unique people detected across all emails")
-                networkStat("\(stats.orgs)", label: "Organizations", color: .orange, helpText: "Organizations identified from email domains and signatures")
-                networkStat("\(stats.topics)", label: "Topics", color: .teal, helpText: "Distinct topics extracted from email subjects and content")
-                networkStat("\(stats.edges)", label: "Links", color: .purple, helpText: "Connections between people, organizations, and topics")
+                networkStat("\(stats.people)", label: String(localized: "People"), color: .blue, helpText: String(localized: "Unique people detected across all emails"))
+                networkStat("\(stats.orgs)", label: String(localized: "Organizations"), color: .orange, helpText: String(localized: "Organizations identified from email domains and signatures"))
+                networkStat("\(stats.topics)", label: String(localized: "Topics"), color: .teal, helpText: String(localized: "Distinct topics extracted from email subjects and content"))
+                networkStat("\(stats.edges)", label: String(localized: "Links"), color: .purple, helpText: String(localized: "Connections between people, organizations, and topics"))
             }
         }
         .padding(10)
@@ -816,7 +836,7 @@ struct PersonalEmailOrganizerView: View {
                             VStack(spacing: 4) {
                                 Image(systemName: cat.icon).font(.system(size: 16)).foregroundColor(cat.color)
                                 Text("\(count)").font(.system(size: 14, weight: .bold)).foregroundColor(cat.color)
-                                Text(cat.rawValue).font(.system(size: 9)).foregroundColor(.secondary)
+                                Text(LocalizedStringKey(cat.rawValue)).font(.system(size: 9)).foregroundColor(.secondary)
                             }
                             .frame(maxWidth: .infinity)
                             .padding(10)
@@ -873,13 +893,14 @@ struct PersonalEmailOrganizerView: View {
                 (MBOXParser.parseDate($0.headers["Date"] ?? "") ?? .distantPast) >
                 (MBOXParser.parseDate($1.headers["Date"] ?? "") ?? .distantPast)
             }
+        let attachmentEmailCount = cleanup?.attachmentEmails ?? attachmentEmails.count
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                sectionTitle("Attachments (\(totalAttachments) files in \(attachmentEmails.count) emails)",
+                sectionTitle("Attachments (\(totalAttachments) files in \(attachmentEmailCount) emails)",
                              icon: "paperclip", color: .brown)
 
-                let typeStats = attachmentTypeStats()
+                let typeStats = cleanup?.attachmentTypes ?? attachmentTypeStats()
                 HStack(spacing: 12) {
                     ForEach(typeStats.prefix(5), id: \.0) { type, count in
                         VStack(spacing: 2) {
@@ -935,17 +956,21 @@ struct PersonalEmailOrganizerView: View {
             VStack(alignment: .leading, spacing: 16) {
                 sectionTitle("Cleanup Suggestions", icon: "sparkles", color: .purple)
 
-                let duplicateCount = countDuplicates()
+                let duplicateCount = cleanup?.duplicates ?? countDuplicates()
                 let largeEmails = findLargeEmails()
-                let noSubject = workingSet.filter { ($0.headers["Subject"] ?? "").isEmpty }
+                let largeCount = cleanup?.largeEmails ?? largeEmails.count
+                let noSubjectCount = cleanup?.noSubject ?? workingSet.filter { ($0.headers["Subject"] ?? "").isEmpty }.count
+                if let cleanupNote {
+                    Text(cleanupNote).font(.system(size: 9)).foregroundColor(.secondary)
+                }
 
                 HStack(spacing: 12) {
                     cleanupCard("Potential Duplicates", value: "\(duplicateCount)", icon: "doc.on.doc", color: .indigo,
-                                description: "Emails with identical subjects and senders")
-                    cleanupCard("Large Emails", value: "\(largeEmails.count)", icon: "externaldrive", color: .orange,
-                                description: "Emails over 100KB in body size")
-                    cleanupCard("No Subject", value: "\(noSubject.count)", icon: "text.badge.xmark", color: .red,
-                                description: "Emails missing a subject line")
+                                description: String(localized: "Emails with identical subjects and senders"))
+                    cleanupCard("Large Emails", value: "\(largeCount)", icon: "externaldrive", color: .orange,
+                                description: String(localized: "Emails over 100KB in body size"))
+                    cleanupCard("No Subject", value: "\(noSubjectCount)", icon: "text.badge.xmark", color: .red,
+                                description: String(localized: "Emails missing a subject line"))
                 }
 
                 Divider()
@@ -974,8 +999,8 @@ struct PersonalEmailOrganizerView: View {
                 Divider()
 
                 sectionTitle("Storage Breakdown", icon: "chart.pie", color: .blue)
-                let totalBodySize = workingSet.reduce(0) { $0 + $1.plainBody.count + $1.htmlBody.count }
-                let totalAttSize = workingSet.flatMap { $0.attachments }.reduce(0) { $0 + $1.size }
+                let totalBodySize = cleanup?.bodyCharacters ?? workingSet.reduce(0) { $0 + $1.plainBody.count + $1.htmlBody.count }
+                let totalAttSize = cleanup?.attachmentBytes ?? workingSet.flatMap { $0.attachments }.reduce(0) { $0 + $1.size }
                 HStack(spacing: 20) {
                     VStack {
                         Text(formatBytes(totalBodySize)).font(.system(size: 16, weight: .bold)).foregroundColor(.blue)
@@ -1111,7 +1136,7 @@ struct PersonalEmailOrganizerView: View {
                     VStack(spacing: 3) {
                         Image(systemName: type.icon).font(.system(size: 12)).foregroundColor(sevColor)
                         Text("\(items.count)").font(.system(size: 12, weight: .bold)).foregroundColor(sevColor)
-                        Text(type.rawValue).font(.system(size: 8)).foregroundColor(.secondary).lineLimit(1)
+                        Text(LocalizedStringKey(type.rawValue)).font(.system(size: 8)).foregroundColor(.secondary).lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(6)
@@ -1301,7 +1326,9 @@ struct PersonalEmailOrganizerView: View {
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
     }
 
     // MARK: - Action Items Section (v5)
@@ -1346,7 +1373,7 @@ struct PersonalEmailOrganizerView: View {
                                 .frame(width: 3, height: 32)
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 4) {
-                                    Text(item.actionType.rawValue)
+                                    Text(LocalizedStringKey(item.actionType.rawValue))
                                         .font(.system(size: 8, weight: .bold))
                                         .foregroundColor(.white)
                                         .padding(.horizontal, 5).padding(.vertical, 1)
@@ -1504,7 +1531,7 @@ struct PersonalEmailOrganizerView: View {
                             Text(contact.name)
                                 .font(.system(size: 10, weight: .medium))
                                 .lineLimit(1)
-                            Text(contact.relationship.rawValue)
+                            Text(LocalizedStringKey(contact.relationship.rawValue))
                                 .font(.system(size: 7, weight: .bold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 4).padding(.vertical, 1)
@@ -1579,7 +1606,7 @@ struct PersonalEmailOrganizerView: View {
                     if count > 0 {
                         VStack(spacing: 2) {
                             Text("\(count)").font(.system(size: 12, weight: .bold, design: .rounded)).foregroundColor(subscriptionCategoryColor(cat))
-                            Text(cat.rawValue).font(.system(size: 8)).foregroundColor(.secondary)
+                            Text(LocalizedStringKey(cat.rawValue)).font(.system(size: 8)).foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(6)
@@ -1596,7 +1623,7 @@ struct PersonalEmailOrganizerView: View {
                             Text(sub.senderName)
                                 .font(.system(size: 10, weight: .medium))
                                 .lineLimit(1)
-                            Text(sub.category.rawValue)
+                            Text(LocalizedStringKey(sub.category.rawValue))
                                 .font(.system(size: 7, weight: .bold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 4).padding(.vertical, 1)
@@ -1612,7 +1639,7 @@ struct PersonalEmailOrganizerView: View {
                             Text(sub.senderDomain)
                                 .font(.system(size: 8, design: .monospaced))
                                 .foregroundColor(.secondary).lineLimit(1)
-                            Text(sub.frequency.rawValue)
+                            Text(LocalizedStringKey(sub.frequency.rawValue))
                                 .font(.system(size: 8))
                                 .foregroundColor(.secondary)
                         }
@@ -1667,7 +1694,7 @@ struct PersonalEmailOrganizerView: View {
                         Text(insight.metric)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundColor(habitCategoryColor(insight.category))
-                        Text(insight.category.rawValue)
+                        Text(LocalizedStringKey(insight.category.rawValue))
                             .font(.system(size: 7, weight: .medium))
                             .foregroundColor(.secondary)
                     }
@@ -1723,7 +1750,8 @@ struct PersonalEmailOrganizerView: View {
     }
 
     private var totalAttachments: Int {
-        workingSet.flatMap { $0.attachments }.count
+        if let cleanup { return cleanup.attachmentTypes.reduce(0) { $0 + $1.1 } }
+        return workingSet.flatMap { $0.attachments }.count
     }
 
     private var dateRangeString: String {

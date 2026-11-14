@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import CoreGraphics
 import PDFKit
@@ -22,7 +23,7 @@ struct InvestigationReportGenerator {
     private static let contentWidth: CGFloat = 612 - 54 * 2  // 504
     private static let lineSpacing: CGFloat = 4
     private static let sectionSpacing: CGFloat = 16
-    private static let maxSampleEmails = 20
+    static let maxSampleEmails = 20
 
     // MARK: - Drawing State
 
@@ -183,10 +184,19 @@ struct InvestigationReportGenerator {
 
     /// Generate a PDF report with optional AI-enhanced analysis.
     /// This async variant attempts to gather AI insights before generating the report.
+    /// A titled block of lines appended after the analysis (e.g. the
+    /// journalist's leads and key quotes) so the PDF carries the work the
+    /// user did, not only the computed sections.
+    struct AppendixSection {
+        var title: String
+        var lines: [String]
+    }
+
     static func generateReport(
         emails: [MBOXParser.RawEmail],
         title: String,
-        investigatorName: String
+        investigatorName: String,
+        appendix: [AppendixSection] = []
     ) async -> Data {
         var aiInsights: String? = nil
 
@@ -204,7 +214,8 @@ struct InvestigationReportGenerator {
             emails: emails,
             title: title,
             investigatorName: investigatorName,
-            aiInsights: aiInsights
+            aiInsights: aiInsights,
+            appendix: appendix
         )
     }
 
@@ -213,7 +224,24 @@ struct InvestigationReportGenerator {
         emails: [MBOXParser.RawEmail],
         title: String,
         investigatorName: String,
-        aiInsights: String? = nil
+        aiInsights: String? = nil,
+        appendix: [AppendixSection] = []
+    ) -> Data {
+        var acc = ReportData.Accumulator()
+        acc.add(emails, keepEvidenceIDs: true)
+        return generateReport(data: acc.finish(), title: title, investigatorName: investigatorName,
+                              aiInsights: aiInsights, appendix: appendix)
+    }
+
+    /// Draws the report from precomputed data (§3-L13: the 3.0 engine builds
+    /// `ReportData` from the whole scope, batch by batch; the previous path
+    /// builds it from one array — the same numbers either way).
+    static func generateReport(
+        data: ReportData,
+        title: String,
+        investigatorName: String,
+        aiInsights: String? = nil,
+        appendix: [AppendixSection] = []
     ) -> Data {
         var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
         let pdfData = NSMutableData()
@@ -231,62 +259,56 @@ struct InvestigationReportGenerator {
             investigatorName: investigatorName
         )
 
-        // Pre-compute analysis data
-        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
-        let sentimentResults = EmailNLPEngine.analyzeSentiment(of: emails)
-        let classification = EmailNLPEngine.classifyAll(emails)
-        let topSenders = computeTopSenders(emails: emails, limit: 15)
-        let monthlyVolume = computeMonthlyVolume(emails: emails)
-        let contactDomains = computeContactDomains(emails: emails, limit: 15)
-        let evidenceTags = collectEvidenceTags(emails: emails)
-        let flaggedEmails = collectFlaggedEmails(emails: emails, limit: maxSampleEmails)
-
         // === Title Page ===
-        drawTitlePage(state: state, emails: emails, dates: dates)
+        drawTitlePage(state: state, data: data)
 
         // === Executive Summary ===
         finishAndStartNewPage(state: state)
-        drawExecutiveSummary(
-            state: state,
-            emails: emails,
-            dates: dates,
-            topSenders: topSenders,
-            sentimentResults: sentimentResults,
-            classification: classification
-        )
+        drawExecutiveSummary(state: state, data: data)
 
         // === Timeline Section ===
         finishAndStartNewPage(state: state)
-        drawTimelineSection(state: state, monthlyVolume: monthlyVolume)
+        drawTimelineSection(state: state, monthlyVolume: data.monthlyVolume)
 
         // === Top Contacts Table ===
         ensureSpace(state: state, needed: 200)
-        drawTopContactsTable(state: state, contacts: contactDomains)
+        drawTopContactsTable(state: state, contacts: data.contactDomains)
 
         // === Category Breakdown ===
         finishAndStartNewPage(state: state)
-        drawCategoryBreakdown(state: state, classification: classification, totalEmails: emails.count)
+        drawCategoryBreakdown(state: state, classification: data.classification, totalEmails: data.totalEmails)
 
         // === Evidence Tags Summary ===
         ensureSpace(state: state, needed: 200)
-        drawEvidenceTagsSummary(state: state, tags: evidenceTags)
+        drawEvidenceTagsSummary(state: state, tags: data.evidenceTags)
 
         // === Flagged / Important Emails ===
         finishAndStartNewPage(state: state)
-        drawFlaggedEmails(state: state, flaggedEmails: flaggedEmails)
+        drawFlaggedEmails(state: state, flaggedEmails: data.flaggedEmails)
 
         // === Communication Heatmap ===
         finishAndStartNewPage(state: state)
-        drawCommunicationHeatmap(state: state, emails: emails)
+        drawCommunicationHeatmap(state: state, heatmapData: data.heatmap)
 
         // === Sentiment Timeline ===
         ensureSpace(state: state, needed: 200)
-        drawSentimentTimeline(state: state, emails: emails)
+        drawSentimentTimeline(state: state, timelineData: data.sentimentTimeline)
 
         // === AI-Enhanced Analysis (optional, non-deterministic) ===
         if let aiInsights = aiInsights, !aiInsights.isEmpty {
             finishAndStartNewPage(state: state)
             drawAIEnhancedAnalysis(state: state, insights: aiInsights)
+        }
+
+        // === User's own work (leads, quotes, …) ===
+        for section in appendix where !section.lines.isEmpty {
+            finishAndStartNewPage(state: state)
+            drawSectionHeader(section.title, state: state)
+            for line in section.lines {
+                ensureSpace(state: state, needed: 30)
+                drawText(line, attrs: bodyAttrs, state: state, maxWidth: contentWidth)
+                state.currentY -= 4
+            }
         }
 
         // Close the final page
@@ -500,8 +522,7 @@ struct InvestigationReportGenerator {
 
     private static func drawTitlePage(
         state: DrawingState,
-        emails: [MBOXParser.RawEmail],
-        dates: [Date]
+        data: ReportData
     ) {
         startNewPage(state: state)
 
@@ -540,7 +561,7 @@ struct InvestigationReportGenerator {
         dateFormatter.timeStyle = .short
 
         let dateRange: String
-        if let first = dates.first, let last = dates.last {
+        if let first = data.firstDate, let last = data.lastDate {
             let rangeFormatter = DateFormatter()
             rangeFormatter.dateStyle = .medium
             dateRange = "\(rangeFormatter.string(from: first)) -- \(rangeFormatter.string(from: last))"
@@ -548,15 +569,15 @@ struct InvestigationReportGenerator {
             dateRange = "N/A"
         }
 
-        let sentCount = emails.filter { $0.messageType == "sent" }.count
-        let receivedCount = emails.filter { $0.messageType == "received" }.count
-        let uniqueDomains = Set(emails.flatMap { $0.domains }).count
+        let sentCount = data.sentCount
+        let receivedCount = data.receivedCount
+        let uniqueDomains = data.uniqueDomains
 
         let metaItems: [(String, String)] = [
             ("Investigator", state.investigatorName.isEmpty ? "N/A" : state.investigatorName),
             ("Report Generated", dateFormatter.string(from: Date())),
             ("", ""),  // spacer
-            ("Total Emails Analyzed", "\(emails.count)"),
+            ("Total Emails Analyzed", "\(data.totalEmails)"),
             ("Sent / Received", "\(sentCount) / \(receivedCount)"),
             ("Date Range of Emails", dateRange),
             ("Unique Domains", "\(uniqueDomains)"),
@@ -586,29 +607,27 @@ struct InvestigationReportGenerator {
 
     private static func drawExecutiveSummary(
         state: DrawingState,
-        emails: [MBOXParser.RawEmail],
-        dates: [Date],
-        topSenders: [(address: String, count: Int)],
-        sentimentResults: [EmailNLPEngine.SentimentResult],
-        classification: [EmailNLPEngine.EmailCategory: Int]
+        data: ReportData
     ) {
+        let topSenders = data.topSenders
+        let classification = data.classification
         drawSectionHeader("Executive Summary", state: state)
 
         // Date range
         let rangeFormatter = DateFormatter()
         rangeFormatter.dateStyle = .medium
         let dateRange: String
-        if let first = dates.first, let last = dates.last {
+        if let first = data.firstDate, let last = data.lastDate {
             dateRange = "\(rangeFormatter.string(from: first)) to \(rangeFormatter.string(from: last))"
         } else {
             dateRange = "N/A"
         }
 
-        let sentCount = emails.filter { $0.messageType == "sent" }.count
-        let receivedCount = emails.filter { $0.messageType == "received" }.count
+        let sentCount = data.sentCount
+        let receivedCount = data.receivedCount
 
         drawText("Date Range: \(dateRange)", attrs: bodyAttrs, state: state)
-        drawText("Total Emails: \(emails.count) (Sent: \(sentCount), Received: \(receivedCount))", attrs: bodyAttrs, state: state)
+        drawText("Total Emails: \(data.totalEmails) (Sent: \(sentCount), Received: \(receivedCount))", attrs: bodyAttrs, state: state)
         state.currentY -= 8
 
         // Top Senders
@@ -621,13 +640,13 @@ struct InvestigationReportGenerator {
 
         // Sentiment Breakdown
         drawText("Sentiment Breakdown:", attrs: bodyBoldAttrs, state: state)
-        if sentimentResults.isEmpty {
+        if data.sentimentCount == 0 {
             drawText("  No sentiment data available.", attrs: bodyAttrs, state: state)
         } else {
-            let avgScore = sentimentResults.map(\.score).reduce(0, +) / Double(sentimentResults.count)
-            let positiveCount = sentimentResults.filter { $0.score > 0.4 }.count
-            let negativeCount = sentimentResults.filter { $0.score < -0.4 }.count
-            let neutralCount = sentimentResults.count - positiveCount - negativeCount
+            let avgScore = data.sentimentSum / Double(data.sentimentCount)
+            let positiveCount = data.sentimentPositive
+            let negativeCount = data.sentimentNegative
+            let neutralCount = data.sentimentCount - positiveCount - negativeCount
             let overallLabel: String
             if avgScore > 0.4 { overallLabel = "Positive" }
             else if avgScore < -0.4 { overallLabel = "Negative" }
@@ -642,7 +661,7 @@ struct InvestigationReportGenerator {
             let barHeight: CGFloat = 12
             let barWidth: CGFloat = contentWidth - 40
             let barX = margin + 20
-            let total = max(1.0, Double(sentimentResults.count))
+            let total = max(1.0, Double(data.sentimentCount))
 
             // Background
             let bgRect = CGRect(x: barX, y: barY - barHeight, width: barWidth, height: barHeight)
@@ -997,11 +1016,10 @@ struct InvestigationReportGenerator {
 
     private static func drawCommunicationHeatmap(
         state: DrawingState,
-        emails: [MBOXParser.RawEmail]
+        heatmapData: CommunicationHeatmapData
     ) {
         drawSectionHeader("Communication Activity Heatmap", state: state)
 
-        let heatmapData = CommunicationHeatmapData.generate(from: emails)
         guard heatmapData.maxCount > 0 else {
             drawText("No dated emails available for heatmap.", attrs: bodyAttrs, state: state)
             return
@@ -1061,11 +1079,10 @@ struct InvestigationReportGenerator {
 
     private static func drawSentimentTimeline(
         state: DrawingState,
-        emails: [MBOXParser.RawEmail]
+        timelineData: SentimentTimelineData
     ) {
         drawSectionHeader("Sentiment Timeline", state: state)
 
-        let timelineData = SentimentTimelineData.generate(from: emails)
         guard timelineData.dataPoints.count >= 2 else {
             drawText("Not enough time periods for sentiment timeline.", attrs: bodyAttrs, state: state)
             return
@@ -1192,7 +1209,7 @@ struct InvestigationReportGenerator {
 
     // MARK: - Data Computation Helpers
 
-    private struct FlaggedEmail {
+    struct FlaggedEmail {
         let email: MBOXParser.RawEmail
         let priority: Priority
         let reason: String

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import XCTest
 @testable import maxmailin
 

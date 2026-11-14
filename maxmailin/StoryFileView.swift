@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  StoryFileView.swift
 //  maxmailin
@@ -42,7 +43,7 @@ struct StoryFileView: View {
                     PlatformClipboard.copyString(markdown)
                     copied = true
                 } label: {
-                    Label(copied ? "Copied" : "Copy Markdown", systemImage: "doc.on.doc")
+                    Label(copied ? String(localized: "Copied") : String(localized: "Copy Markdown"), systemImage: "doc.on.doc")
                 }
                 .disabled(isLoading)
                 .help("Copy the whole story file as Markdown")
@@ -125,7 +126,7 @@ struct StoryFileView: View {
 
     #if os(macOS)
     private func saveMarkdown() {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = (title.isEmpty ? "story_file" : title.replacingOccurrences(of: " ", with: "_")) + ".md"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let savedTitle = title

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  MailinStorageEnvironment.swift
 //  maxmailin
@@ -81,9 +82,7 @@ struct MailinStorageEnvironment: Sendable {
     /// The real production storage directory: `<AppSupport>/com.ecosanskriti.mailin`.
     /// Both the SwiftData store and the FTS shards live under this tree.
     static var productionStorageDirectory: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let appSupport = UITestStorageRoot.applicationSupport
         return appSupport.appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
     }
 
@@ -92,15 +91,20 @@ struct MailinStorageEnvironment: Sendable {
     /// standardized, resolved file paths so `..`/symlink tricks can't slip a
     /// production path past the gate.
     static func assertNotProduction(_ root: URL) throws {
-        let prod = productionStorageDirectory.standardizedFileURL.resolvingSymlinksInPath().path
         let candidate = root.standardizedFileURL.resolvingSymlinksInPath().path
+        // B5: the archive may have been relocated — guard the default root AND
+        // the root in use, so a harness can never land on either copy.
+        let guarded = [productionStorageDirectory, ArchiveLayout.productionRoot]
+            .map { $0.standardizedFileURL.resolvingSymlinksInPath().path }
         // Compare with a trailing separator so "/a/mailin2" isn't treated as a
         // child of "/a/mailin".
-        let prodPrefix = prod.hasSuffix("/") ? prod : prod + "/"
         let candPrefix = candidate.hasSuffix("/") ? candidate : candidate + "/"
-        let overlaps = candidate == prod
-            || candPrefix.hasPrefix(prodPrefix)   // candidate is inside production
-            || prodPrefix.hasPrefix(candPrefix)   // production is inside candidate
+        let overlaps = guarded.contains { prod in
+            let prodPrefix = prod.hasSuffix("/") ? prod : prod + "/"
+            return candidate == prod
+                || candPrefix.hasPrefix(prodPrefix)   // candidate is inside production
+                || prodPrefix.hasPrefix(candPrefix)   // production is inside candidate
+        }
         if overlaps {
             throw StorageEnvironmentError.refusedProductionPath(candidate)
         }

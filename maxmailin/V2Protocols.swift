@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  V2Protocols.swift
 //  maxmailin

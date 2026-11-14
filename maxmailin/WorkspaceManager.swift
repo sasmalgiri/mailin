@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  WorkspaceManager.swift
 //  mailin

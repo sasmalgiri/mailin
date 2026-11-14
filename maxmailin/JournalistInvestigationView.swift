@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct JournalistInvestigationView: View {
@@ -5,6 +6,9 @@ struct JournalistInvestigationView: View {
     // corpus). Investigation engines/contact-browse/export run over this sample;
     // the exact archive total comes from the store.
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    // §3-A11: overview figures for the whole archive (3.0 engine).
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var overview: SQLiteEmailStore.ArchiveOverview?
     @State private var archiveTotal = 0
 
     // MARK: - State
@@ -18,6 +22,10 @@ struct JournalistInvestigationView: View {
     @State private var showExportNotes = false
     @State private var keyQuotes: [KeyQuote] = []
     @State private var bookmarkedEmailIDs: Set<UUID> = []
+    /// Leads, quotes and bookmarks are saved (ReviewWorkspaceStore) and
+    /// restored on open — they used to vanish when the window closed.
+    @State private var journalistStateLoaded = false
+    @State private var journalistStatus: String?
     @State private var sentimentCache: [UUID: SentimentResult] = [:]
     @State private var hasSentimentAnalysis = false
 
@@ -88,15 +96,15 @@ struct JournalistInvestigationView: View {
         }
     }
 
-    struct Lead: Identifiable {
-        let id = UUID()
+    struct Lead: Identifiable, Codable, Equatable {
+        var id = UUID()
         var title: String
         var notes: String
         var linkedEmailIDs: [UUID] = []
         var priority: Priority = .medium
         var created: Date = Date()
 
-        enum Priority: String, CaseIterable {
+        enum Priority: String, CaseIterable, Codable {
             case high = "High"
             case medium = "Medium"
             case low = "Low"
@@ -111,8 +119,8 @@ struct JournalistInvestigationView: View {
         }
     }
 
-    struct KeyQuote: Identifiable {
-        let id = UUID()
+    struct KeyQuote: Identifiable, Codable, Equatable {
+        var id = UUID()
         var text: String
         var emailID: UUID
         var from: String
@@ -129,8 +137,24 @@ struct JournalistInvestigationView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.journalist, key: "journalist_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showExportNotes) { exportNotesSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .task {
+            guard v3Modules?.isOn(.v3AnalysisQueries) ?? false else { return }
+            do {
+                overview = try await SQLiteEmailStore.shared.archiveOverview(query: ArchiveDataService.shared.scoped(.all))
+            } catch is CancellationError {
+            } catch {
+                // §3-M3: the previous (working-set) figures stay, with their notice.
+                overview = nil
+                _ = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            }
+        }
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
+        .onAppear { restoreJournalistState() }
+        .onChange(of: leads) { _, _ in saveJournalistState() }
+        .onChange(of: keyQuotes) { _, _ in saveJournalistState() }
+        .onChange(of: bookmarkedEmailIDs) { _, _ in saveJournalistState() }
         .task { await loadV4Data() }
         .task { await loadInvestigationFeatures() }
         .sheet(isPresented: $showPDFExport) { pdfExportSheet }
@@ -209,27 +233,27 @@ struct JournalistInvestigationView: View {
             anomalies = AnomalyDetectionEngine.detectAnomalies(in: emailsCopy)
             nlpSentiment = sentiment
             var cache: [UUID: SentimentResult] = [:]
-            for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? "Negative" : "Neutral") }
+            for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? String(localized: "Negative") : String(localized: "Neutral")) }
             sentimentCache = cache; hasSentimentAnalysis = true; hasV3Analysis = true; isV3Loading = false; return
         }
 
         coordinator.begin(steps: 10, color: .purple)
 
-        coordinator.advance(step: 1, label: "Analyzing sentiment...")
+        coordinator.advance(step: 1, label: String(localized: "Analyzing sentiment..."))
         guard let sentiment = await coordinator.runDetached({ EmailNLPEngine.analyzeSentiment(of: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Extracting topics...")
+        coordinator.advance(step: 2, label: String(localized: "Extracting topics..."))
         guard let topics = await coordinator.runDetached({ EmailNLPEngine.extractTopics(from: emailsCopy, limit: 25) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Building contact insights...")
+        coordinator.advance(step: 3, label: String(localized: "Building contact insights..."))
         guard let insights = await coordinator.runDetached({ EmailNLPEngine.contactInsights(from: emailsCopy, limit: 20) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Running anomaly detection...")
+        coordinator.advance(step: 4, label: String(localized: "Running anomaly detection..."))
         guard let anom = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         nlpSentiment = sentiment; nlpTopics = topics; contactInsights = insights; anomalies = anom
         var cache: [UUID: SentimentResult] = [:]
-        for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? "Negative" : "Neutral") }
+        for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? String(localized: "Negative") : String(localized: "Neutral")) }
         sentimentCache = cache; hasSentimentAnalysis = true; hasV3Analysis = true; isV3Loading = false
     }
 
@@ -251,19 +275,19 @@ struct JournalistInvestigationView: View {
 
         if !coordinator.isActive { coordinator.begin(steps: 10, color: .purple); coordinator.advance(step: 4, label: "") }
 
-        coordinator.advance(step: 5, label: "Scoring source credibility...")
+        coordinator.advance(step: 5, label: String(localized: "Scoring source credibility..."))
         guard let creds = await coordinator.runDetached({ InvestigationFeatures.scoreSourceCredibility(emails: emailsCopy, graph: graphCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 6, label: "Detecting story leads...")
+        coordinator.advance(step: 6, label: String(localized: "Detecting story leads..."))
         guard let leads = await coordinator.runDetached({ InvestigationFeatures.detectStoryLeads(emails: emailsCopy, anomalies: anomCopy, graph: graphCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 7, label: "Finding contradictions...")
+        coordinator.advance(step: 7, label: String(localized: "Finding contradictions..."))
         guard let contras = await coordinator.runDetached({ InvestigationFeatures.detectContradictions(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 8, label: "Extracting key quotes...")
+        coordinator.advance(step: 8, label: String(localized: "Extracting key quotes..."))
         guard let quotes = await coordinator.runDetached({ InvestigationFeatures.extractQuotes(from: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 9, label: "Building event timeline...")
+        coordinator.advance(step: 9, label: String(localized: "Building event timeline..."))
         guard let events = await coordinator.runDetached({ InvestigationFeatures.extractTimelineEvents(from: emailsCopy) }) else { coordinator.finish(); return }
 
         sourceCredibilities = creds; storyLeads = leads; contradictions = contras
@@ -287,7 +311,7 @@ struct JournalistInvestigationView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: tab.icon).font(.system(size: 9))
-                        Text(tab.rawValue).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
+                        Text(LocalizedStringKey(tab.rawValue)).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
                     }
                     .foregroundColor(activeTab == tab ? .purple : .secondary)
                     .padding(.horizontal, 6).padding(.vertical, 3)
@@ -719,7 +743,7 @@ struct JournalistInvestigationView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(event.eventType.rawValue)
+                    Text(LocalizedStringKey(event.eventType.rawValue))
                         .font(.system(size: 8, weight: .bold))
                         .foregroundColor(.white)
                         .padding(.horizontal, 5).padding(.vertical, 1)
@@ -845,7 +869,7 @@ struct JournalistInvestigationView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 sectionTitle("Topic Discovery", icon: "text.magnifyingglass", color: .purple)
-                Text(hasV3Analysis ? "Topics automatically extracted from email content using advanced text analysis." : "Topics extracted from email subject lines.")
+                Text(hasV3Analysis ? String(localized: "Topics automatically extracted from email content using advanced text analysis.") : String(localized: "Topics extracted from email subject lines."))
                     .font(.system(size: 10)).foregroundColor(.secondary)
 
                 if isV3Loading {
@@ -929,11 +953,11 @@ struct JournalistInvestigationView: View {
             }
 
             HStack(alignment: .top, spacing: 8) {
-                claimView(label: "Claim A", color: .blue, claim: contradiction.claimA)
+                claimView(label: String(localized: "Claim A"), color: .blue, claim: contradiction.claimA)
                 Image(systemName: "arrow.left.arrow.right")
                     .font(.system(size: 10))
                     .foregroundColor(.red.opacity(0.6))
-                claimView(label: "Claim B", color: .orange, claim: contradiction.claimB)
+                claimView(label: String(localized: "Claim B"), color: .orange, claim: contradiction.claimB)
             }
         }
         .padding(8)
@@ -1103,7 +1127,7 @@ struct JournalistInvestigationView: View {
         let scoreText = String(format: "%.0f%%", storyLead.relevanceScore * 100)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text(storyLead.leadType.rawValue)
+                Text(LocalizedStringKey(storyLead.leadType.rawValue))
                     .font(.system(size: 7, weight: .bold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 5).padding(.vertical, 2)
@@ -1426,7 +1450,7 @@ struct JournalistInvestigationView: View {
 
                 HStack(spacing: 12) {
                     overviewCard("Key Quotes", value: "\(keyQuotes.count)", icon: "quote.opening", color: .teal)
-                    overviewCard("Attachments", value: "\(workingSet.flatMap { $0.attachments }.count)", icon: "paperclip", color: .brown)
+                    overviewCard("Attachments", value: "\(overview?.attachments ?? workingSet.flatMap { $0.attachments }.count)", icon: "paperclip", color: .brown)
                     overviewCard("Date Range", value: dateRange, icon: "calendar", color: .green)
                     overviewCard("Avg/Day", value: computeAvgPerDay(), icon: "chart.line.uptrend.xyaxis", color: .cyan)
                 }
@@ -1565,18 +1589,7 @@ struct JournalistInvestigationView: View {
                 Text("Export Investigation Report").font(.title3).fontWeight(.bold)
                 Spacer()
                 Button("Generate PDF") {
-                    Task {
-                        let bookmarked = workingSet.filter { bookmarkedEmailIDs.contains($0.id) }
-                        let target = bookmarked.isEmpty ? workingSet : bookmarked
-                        let data = await InvestigationReportGenerator.generateReport(
-                            emails: target,
-                            title: "Investigation Report",
-                            investigatorName: "Journalist"
-                        )
-                        #if os(macOS)
-                        _ = PlatformFileSaver.saveData(data, suggestedName: "investigation_report.pdf")
-                        #endif
-                    }
+                    Task { await generateInvestigationPDF() }
                 }
                 .buttonStyle(.borderedProminent).tint(.purple)
                 Button("Done") { showPDFExport = false }
@@ -1589,13 +1602,18 @@ struct JournalistInvestigationView: View {
                 Text("• \(leads.count) investigation leads")
                 Text("• \(keyQuotes.count) key quotes")
                 Text("• AI-enhanced analysis (if available)")
+                if let journalistStatus {
+                    Text(journalistStatus).foregroundColor(.secondary).padding(.top, 4)
+                }
             }
             .font(.system(size: 11))
             .frame(maxWidth: .infinity, alignment: .leading)
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 350)
+        #endif
     }
 
     private var investigationChecklist: some View {
@@ -1643,7 +1661,9 @@ struct JournalistInvestigationView: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 600, height: 500)
+        #endif
     }
 
     // MARK: - Helpers
@@ -1692,13 +1712,17 @@ struct JournalistInvestigationView: View {
 
     private func computeDateRange() -> String {
         let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
-        guard let first = dates.min(), let last = dates.max() else { return "N/A" }
+        guard let first = overview?.firstDate ?? dates.min(), let last = overview?.lastDate ?? dates.max() else { return "N/A" }
         let f = DateFormatter()
         f.dateFormat = "MMM yyyy"
         return "\(f.string(from: first)) — \(f.string(from: last))"
     }
 
     private func computeAvgPerDay() -> String {
+        if let overview, let first = overview.firstDate, let last = overview.lastDate {
+            let days = max(1, Calendar.current.dateComponents([.day], from: first, to: last).day ?? 1)
+            return String(format: "%.1f", Double(overview.emails) / Double(days))
+        }
         let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let days = max(1, Calendar.current.dateComponents([.day], from: first, to: last).day ?? 1)
@@ -1821,17 +1845,87 @@ struct JournalistInvestigationView: View {
         }
 
         if score >= 6 {
-            return CredibilityInfo(label: "High", icon: "checkmark.seal.fill", color: .green)
+            return CredibilityInfo(label: String(localized: "High"), icon: "checkmark.seal.fill", color: .green)
         } else if score >= 3 {
-            return CredibilityInfo(label: "Med", icon: "checkmark.seal", color: .orange)
+            return CredibilityInfo(label: String(localized: "Med"), icon: "checkmark.seal", color: .orange)
         }
-        return CredibilityInfo(label: "Low", icon: "questionmark.circle", color: .red)
+        return CredibilityInfo(label: String(localized: "Low"), icon: "questionmark.circle", color: .red)
     }
 
     private func performExport() {
         let text = generateExportText()
-        #if os(macOS)
-        _ = PlatformFileSaver.saveText(text, suggestedName: "investigation_notes.txt")
-        #endif
+        let outcome = PlatformExport.save(text: text, suggestedName: "investigation_notes.txt")
+        if let url = outcome.url {
+            Task { await DocumentRegistry.capture(.report, summary: "Investigation notes — \(leads.count) leads, \(keyQuotes.count) quotes",
+                                                  body: text, refs: url.lastPathComponent) }
+        }
+        journalistStatus = outcome.message(String(localized: "Investigation notes"))
+    }
+
+    // MARK: - Durable work (ReviewWorkspaceStore)
+
+    private struct JournalistSnapshot: Codable {
+        var leads: [Lead]
+        var keyQuotes: [KeyQuote]
+        var bookmarks: [UUID]
+        static let fileName = "journalist"
+    }
+
+    private func restoreJournalistState() {
+        guard !journalistStateLoaded else { return }
+        if ReviewWorkspaceStore.load(JournalistSnapshot.self, name: JournalistSnapshot.fileName) == nil {
+            // §3-F4: the file is gone — recover the database copy, once.
+            Task { @MainActor in
+                guard let s = await ReviewWorkspaceStore.loadFromDatabase(JournalistSnapshot.self, name: JournalistSnapshot.fileName) else { return }
+                ReviewWorkspaceStore.save(s, name: JournalistSnapshot.fileName)
+                journalistStateLoaded = false
+                restoreJournalistState()
+            }
+        }
+        if let s = ReviewWorkspaceStore.load(JournalistSnapshot.self, name: JournalistSnapshot.fileName) {
+            leads = s.leads
+            keyQuotes = s.keyQuotes
+            bookmarkedEmailIDs = Set(s.bookmarks)
+        }
+        journalistStateLoaded = true
+    }
+
+    private func saveJournalistState() {
+        guard journalistStateLoaded else { return }
+        let snapshot = JournalistSnapshot(leads: leads, keyQuotes: keyQuotes, bookmarks: Array(bookmarkedEmailIDs))
+        if let error = ReviewWorkspaceStore.save(snapshot, name: JournalistSnapshot.fileName) {
+            journalistStatus = String(localized: "Your leads and quotes couldn't be saved: \(error.localizedDescription)")
+        }
+    }
+
+    /// The PDF carries the journalist's own work — leads and key quotes —
+    /// alongside the analysis of the bookmarked (or all loaded) emails.
+    private func generateInvestigationPDF() async {
+        let bookmarked = workingSet.filter { bookmarkedEmailIDs.contains($0.id) }
+        let target = bookmarked.isEmpty ? workingSet : bookmarked
+        var appendix: [InvestigationReportGenerator.AppendixSection] = []
+        if !leads.isEmpty {
+            appendix.append(.init(title: String(localized: "Investigation Leads"), lines: leads.map {
+                "[\($0.priority.rawValue)] \($0.title)" + ($0.notes.isEmpty ? "" : " — \($0.notes)")
+            }))
+        }
+        if !keyQuotes.isEmpty {
+            appendix.append(.init(title: String(localized: "Key Quotes"), lines: keyQuotes.map {
+                "“\($0.text)” — \($0.from)\($0.date.isEmpty ? "" : ", \($0.date)")"
+            }))
+        }
+        let examiner = ForensicManager.shared.examinerName
+        let data = await InvestigationReportGenerator.generateReport(
+            emails: target,
+            title: String(localized: "Investigation Report"),
+            investigatorName: examiner.isEmpty ? String(localized: "Investigator") : examiner,
+            appendix: appendix)
+        let outcome = PlatformExport.save(data: data, suggestedName: "investigation_report.pdf")
+        if let url = outcome.url {
+            _ = await DocumentRegistry.post(.report,
+                summary: "Investigation report — \(target.count) emails, \(leads.count) leads, \(keyQuotes.count) quotes",
+                refs: url.lastPathComponent)
+        }
+        journalistStatus = outcome.message(String(localized: "Investigation report"))
     }
 }

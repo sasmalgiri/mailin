@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  AIDigestView.swift
 //  mailin
@@ -12,6 +13,9 @@ struct AIDigestView: View {
     // of the selected period from the SQLite store — the view never receives
     // or holds an archive array.
     var isPresented: Binding<Bool>?
+    /// Audit F14: the Page 2 scope (source / date) the digest is built over;
+    /// nil means the whole archive, as the standalone tool window uses it.
+    var scope: EmailQuery? = nil
     @State private var selectedPeriod: AIDigestGenerator.TimePeriod = .lastWeek
     @State private var sections: [AIDigestGenerator.DigestSection] = []
     @State private var isGenerating = false
@@ -19,6 +23,7 @@ struct AIDigestView: View {
     @State private var customEnd = Date()
     @State private var showTutorial = false
     @Environment(\.dismiss) private var envDismiss
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +35,7 @@ struct AIDigestView: View {
                     .font(Typography.headline)
                 Spacer()
                 TutorialHelpButton(showTutorial: $showTutorial)
-                SaveToDocumentsButton(title: "AI Digest") {
+                SaveToDocumentsButton(title: String(localized: "AI Digest")) {
                     [.init(key: "Note", value: "On-device analysis snapshot")]
                 }
                 if isPresented != nil {
@@ -46,7 +51,7 @@ struct AIDigestView: View {
             VStack(spacing: Spacing.small) {
                 Picker("Time Period", selection: $selectedPeriod) {
                     ForEach(AIDigestGenerator.TimePeriod.allCases, id: \.self) { period in
-                        Text(period.rawValue).tag(period)
+                        Text(LocalizedStringKey(period.rawValue)).tag(period)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -54,11 +59,11 @@ struct AIDigestView: View {
 
                 if selectedPeriod == .custom {
                     HStack(spacing: Spacing.medium) {
-                        ModernDateField(label: "From", date: $customStart)
+                        ModernDateField(label: String(localized: "From"), date: $customStart)
                         Text("to")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
-                        ModernDateField(label: "To", date: $customEnd)
+                        ModernDateField(label: String(localized: "To"), date: $customEnd)
                     }
                 }
 
@@ -88,8 +93,8 @@ struct AIDigestView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "doc.text.magnifyingglass",
-                        title: "No Digest Yet",
-                        message: "Select a time period and tap Generate Digest to create a summary of your email archive."
+                        title: String(localized: "No Digest Yet"),
+                        message: String(localized: "Select a time period and tap Generate Digest to create a summary of your email archive.")
                     )
                     Spacer()
                 }
@@ -205,12 +210,16 @@ struct AIDigestView: View {
         let period = selectedPeriod
         let start = customStart
         let end = customEnd
+        let base = scope ?? .all
+        let v3 = modules?.isOn(.v3AnalysisQueries) ?? false
 
         Task.detached {
             let results = await AIDigestGenerator.generateDigest(
                 period: period,
                 customStart: period == .custom ? start : nil,
-                customEnd: period == .custom ? end : nil
+                customEnd: period == .custom ? end : nil,
+                baseQuery: base,
+                v3: v3
             )
             await MainActor.run {
                 sections = results

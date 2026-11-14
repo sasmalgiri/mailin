@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import UniformTypeIdentifiers
 import TipKit
@@ -6,6 +7,11 @@ import AppKit
 #endif
 
 struct ContentView: View {
+    /// §3.3 R1: Archive shows only Archive. Any surface belonging to AI
+    /// Insights or Professional Workflows is hidden unless that page is on —
+    /// and `AppStateManager` refuses the flag even if a surface is missed.
+    @Environment(ModuleRegistry.self) private var modules
+
     @Environment(AppStateManager.self) var appState
     @EnvironmentObject var storeManager: StoreManager
     @ObservedObject private var forensicManager = ForensicManager.shared
@@ -35,6 +41,8 @@ struct ContentView: View {
     /// `.query(currentArchiveQuery, exclusions:)` instead of a materialized set.
     @State private var selectAllMatching = false
     @State private var showNewImportConfirmation = false
+    /// IPAD-08 (rule 4): what "Clear & Start Fresh" clears, counted before the confirmation shows.
+    @State private var clearArchiveCounts = ClearArchiveConfirmation.Counts()
     @State private var selectedFolder: String?
     @State private var selectedClusterFilter: String?
     @State private var bottomPanelHeight: CGFloat = 250
@@ -43,6 +51,8 @@ struct ContentView: View {
     @State private var sidebarSelection: HubDestination?
     @State private var navigationHistory: [HubDestination] = []
     @State private var isNavigatingBack = false
+    /// The window's Back / Forward history (the page strip's ‹ ›).
+    @Environment(\.navigationHistory) private var pageHistory
 
     // Sidebar section expansion state. For the Personal persona we default
     // the advanced groups to collapsed; power personas keep them expanded.
@@ -57,6 +67,11 @@ struct ContentView: View {
     @State private var legalForensicExpanded: Bool = !(PersonaManager.shared.selectedPersona == .personal)
     @State private var exportReportsExpanded: Bool = !(PersonaManager.shared.selectedPersona == .personal)
     @State private var aiIntelligenceExpanded: Bool = !(PersonaManager.shared.selectedPersona == .personal)
+    /// A3: files awaiting the guided-import sheet. Non-nil presents it; the
+    /// import does not start until the sheet's Start button is pressed.
+    @State private var pendingImportURLs: [URL]?
+    /// A4: the session import queue window.
+    @State private var showImportQueue = false
     #if os(iOS)
     @State private var showFileImporter = false
     @State private var showShareSheet = false
@@ -87,12 +102,102 @@ struct ContentView: View {
     var body: some View {
         @Bindable var appState = appState
         bodyContent
+            // Back / Forward: the Archive page's place is Home or the hub
+            // destination on screen (the list is .emailInbox).
+            .navigationSection(.archive, current: sidebarSelection?.rawValue ?? "home") { section in
+                sidebarSelection = section.flatMap { $0 == "home" ? nil : HubDestination(rawValue: $0) }
+            }
             // ONE sheet for the Feature Guide, at the root: attaching the
             // same isPresented binding to several nodes makes the sheets
             // suppress each other (observed on iOS).
             .sheet(isPresented: $showFeatureGuide) {
                 FeatureGuideView(isPresented: $showFeatureGuide)
             }
+            // §3-X1: tools opened outside the Archive page (Professional /
+            // AI pages, tool windows) open on this same filter.
+            .onChange(of: modelVM.currentArchiveQuery, initial: true) { _, query in
+                CurrentArchiveFilter.shared.query = query
+            }
+            // Drag a file ANYWHERE in the window to import it (v2.1 backlog
+            // #15). The pre-import hub has its own target; this one catches
+            // drops on the list, detail and sidebar once an archive is open.
+            .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
+                handleDroppedProviders(providers)
+            }
+            // Free input allowance refused an import: say exactly what and
+            // why, with the way to lift it. Attached at the root so every
+            // entry point (drop, picker, Shortcut, open-with) gets the same
+            // alert.
+            .alert("Import refused", isPresented: Binding(
+                get: { importAllowanceDenial != nil },
+                set: { if !$0 { importAllowanceDenial = nil } })) {
+                Button("See Plans") {
+                    storeManager.requestPurchase(.personal, feature: String(localized: "Import more than 100 MB"),
+                                                 reason: importAllowanceDenial?.message)
+                    importAllowanceDenial = nil
+                }
+                Button("OK", role: .cancel) { importAllowanceDenial = nil }
+            } message: {
+                Text(importAllowanceDenial?.message ?? "")
+            }
+            // A2: an open archive lands in the three-pane shell, not on a
+            // picker. The hub stays one click away (Tools).
+            .onChange(of: modelVM.showParsedList) { _, shown in
+                if shown && sidebarSelection == nil { landOnInbox() }
+            }
+            .onAppear {
+                if modelVM.showParsedList && sidebarSelection == nil { landOnInbox() }
+            }
+    }
+
+    /// The automatic landing on the inbox replaces the Home entry in the
+    /// Back / Forward history: the user did not go to Home, so Back must not
+    /// stop there.
+    private func landOnInbox() {
+        pageHistory?.replaceCurrent(page: .archive, section: HubDestination.emailInbox.rawValue)
+        sidebarSelection = .emailInbox
+    }
+
+    /// One handler for every drop target: a dragged message (from Mail) is
+    /// saved as a temporary .eml and imported; a dragged file goes through the
+    /// same funnel as File ▸ Import. ZIP / gzip are containers the funnel
+    /// opens itself (ParserFactory → ZIPArchiveReader).
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.emailMessage.identifier) {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.emailMessage.identifier) { data, _ in
+                    guard let data = data else { return }
+                    Task { @MainActor in
+                        let tempDir = FileManager.default.temporaryDirectory
+                        let tempFile = tempDir.appendingPathComponent("dropped_\(UUID().uuidString).eml")
+                        do {
+                            try data.write(to: tempFile, options: .atomic)
+                            resolveAndHandleSelectedFile(tempFile)
+                        } catch {
+                            viewModel.statusMessage = "Failed to save dropped email: \(error.localizedDescription)"
+                            viewModel.statusColor = .red
+                        }
+                    }
+                }
+                return true
+            }
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url = url else { return }
+                    let ext = url.pathExtension.lowercased()
+                    // Directories (Maildir, Apple Mail packages, .eml folders)
+                    // have no extension worth checking; the classifier decides.
+                    var isDirectory: ObjCBool = false
+                    let directory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+                    guard directory || ParserFactory.allSupportedExtensions.contains(ext) else { return }
+                    Task { @MainActor in
+                        resolveAndHandleSelectedFile(url)
+                    }
+                }
+                return true
+            }
+        }
+        return false
     }
 
     private var bodyContent: some View {
@@ -120,51 +225,30 @@ struct ContentView: View {
             }
         }
         .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
-            for provider in providers {
-                if provider.hasItemConformingToTypeIdentifier(UTType.emailMessage.identifier) {
-                    provider.loadDataRepresentation(forTypeIdentifier: UTType.emailMessage.identifier) { data, _ in
-                        guard let data = data else { return }
-                        Task { @MainActor in
-                            let tempDir = FileManager.default.temporaryDirectory
-                            let tempFile = tempDir.appendingPathComponent("dropped_\(UUID().uuidString).eml")
-                            do {
-                                try data.write(to: tempFile, options: .atomic)
-                                resolveAndHandleSelectedFile(tempFile)
-                            } catch {
-                                viewModel.statusMessage = "Failed to save dropped email: \(error.localizedDescription)"
-                                viewModel.statusColor = .red
-                            }
-                        }
-                    }
-                    return true
-                }
-                if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                        guard let url = url else { return }
-                        let ext = url.pathExtension.lowercased()
-                        guard ParserFactory.allSupportedExtensions.contains(ext) || ext == "zip" else { return }
-                        Task { @MainActor in
-                            if ext == "zip" {
-                                let extracted = await viewModel.extractMailFilesFromZipAsync(at: url)
-                                if extracted.isEmpty {
-                                    parseFailed = true
-                                } else {
-                                    handleMultipleFiles(extracted)
-                                }
-                            } else {
-                                resolveAndHandleSelectedFile(url)
-                            }
-                        }
-                    }
-                    return true
-                }
-            }
-            return false
+            handleDroppedProviders(providers)
         }
         .onChange(of: modelVM.isParsed) { handleParseStateChange() }
         .onChange(of: storeManager.isPremium) { handlePremiumChange() }
         .onChange(of: modelVM.visibleEmails.count) { handleFilteredChange() }
         .onAppear { handleAppear() }
+        // A3/A4 in one modifier: this body is already at the type-checker's
+        // limit, and attaching the two sheets inline pushed it over ("unable
+        // to type-check this expression in reasonable time").
+        .modifier(ImportSurfacesModifier(
+            pendingURLs: $pendingImportURLs,
+            showQueue: $showImportQueue,
+            dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
+            modules: modules,
+            coordinator: viewModel.importCoordinator,
+            onStart: { choices in startImport(choices) }))
+        // H3/H4: mail-client handoff sheets, same type-checker reasoning.
+        .modifier(HandoffSurfacesModifier(
+            showImport: $appState.showHandoffImport,
+            showExport: $appState.showHandoffExport,
+            viewModel: viewModel,
+            exportScope: { modelVM.showParsedList ? filteredScope : .query(.all, exclusions: []) },
+            exportScopeLabel: { modelVM.showParsedList && !modelVM.searchText.isEmpty ? "The current filter" : "The whole archive" },
+            onImport: { urls in handleMultipleFiles(urls) }))
         .onChange(of: viewModel.parseErrors) { _, errors in
             // Surface a friendly error sheet when parsing fails. Apple App
             // Review specifically tests corrupt/unsupported inputs.
@@ -179,6 +263,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .dataClearedByUser)) { _ in handleDataCleared() }
         .onReceive(NotificationCenter.default.publisher(for: .detectMetadata)) { _ in viewModel.autoDetectMetadata() }
         .onReceive(NotificationCenter.default.publisher(for: .triggerFileImportFromShortcut)) { _ in openPanelFallback() }
+        .onReceive(NotificationCenter.default.publisher(for: .retryImportSources)) { notification in
+            retryImportSources(notification.object as? [String] ?? [])
+        }
         .onReceive(NotificationCenter.default.publisher(for: .importFileFromURL)) { notification in
             // "Open with mailin" from Finder/Files: mailinApp posts the file
             // URL here. Route it through the same handler as every other
@@ -238,7 +325,7 @@ struct ContentView: View {
         .onChange(of: appState.showReplyStatsSheet) { _, shown in
             guard shown else { return }
             appState.showReplyStatsSheet = false
-            ToolWindowPresenter.shared.open(title: "Reply Statistics") { AnyView(Group {
+            ToolWindowPresenter.shared.open(title: String(localized: "Reply Statistics")) { AnyView(Group {
             ReplyStatsView(senderEmail: viewModel.senderEmail)
                 #if os(macOS)
                 .toolWindowFrame()
@@ -263,7 +350,10 @@ struct ContentView: View {
         .onChange(of: appState.showAnalytics) { _, shown in
             guard shown else { return }
             appState.showAnalytics = false
-            ToolWindowPresenter.shared.open(title: "Email Analytics") { AnyView(Group {
+            // §3.3 R1: Email Analytics is a Page 2 tool; a stale shortcut
+            // (⇧⌘G) must not open it while AI Insights is off.
+            guard modules.isEnabled(.aiInsights) else { return }
+            ToolWindowPresenter.shared.open(title: String(localized: "Email Analytics")) { AnyView(Group {
             EmailAnalyticsView(query: modelVM.currentArchiveQuery)
                 #if os(macOS)
                 .resizableSheet()
@@ -282,13 +372,9 @@ struct ContentView: View {
                 #endif
         }
         #endif
-        #if !DEBUG && !ENTERPRISE_EDITION
-        .sheet(isPresented: $storeManager.showPaywall) {
-            PaywallView()
-                .environmentObject(storeManager)
-                .resizableSheet()
-        }
-        #endif
+        // The paywall sheet is attached once, at the four-page root
+        // (`FourPageShell`), so a denied action on the AI Insights or
+        // Professional page shows it too — not only on this page.
         .alert("Start New Import?", isPresented: $showNewImportConfirmation) {
             Button("Clear & Start Fresh", role: .destructive) {
                 // Call the handler directly. On macOS, posting through
@@ -302,7 +388,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will clear your current emails and return to the welcome screen. You can re-import anytime.")
+            Text(ClearArchiveConfirmation.message(clearArchiveCounts))
         }
         // Friendly import-failure alert. The parsing pipeline sets
         // viewModel.statusMessage with a human-readable message and
@@ -360,6 +446,8 @@ struct ContentView: View {
             allowsMultipleSelection: true,
             onCompletion: handleArchiveImportResult
         )
+        // IPAD-06: the latest import receipt as a sheet, and its banner when an import ends.
+        .modifier(ImportReceiptHost())
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
         }
@@ -380,17 +468,22 @@ struct ContentView: View {
             UTType(filenameExtension: "eml"),
             UTType(filenameExtension: "emlx"),
             UTType(filenameExtension: "msg"),
+            UTType(filenameExtension: "oft"),
             UTType(filenameExtension: "pst"),
             UTType(filenameExtension: "ost"),
             UTType(filenameExtension: "nsf"),
-            UTType(filenameExtension: "zip")
+            UTType(filenameExtension: "zip"),
+            UTType(filenameExtension: "gz"),
+            UTType(filenameExtension: "olm"),
+            UTType(filenameExtension: "tar"),
+            UTType(filenameExtension: "tgz")
         ].compactMap { $0 }
     }
 
     private func handleArchiveImportResult(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            let resolved = resolveZipFiles(urls)
+            let resolved = urls   // containers (zip/gz) are opened by the import funnel itself
             if resolved.count == 1, let url = resolved.first {
                 resolveAndHandleSelectedFile(url)
             } else if resolved.count > 1 {
@@ -452,13 +545,19 @@ struct ContentView: View {
                 if !modelVM.showParsedList {
                     WelcomeHubView(onOpenArchive: { openPanelFallback() }, onBrowseFiles: { openPanelFallback() })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let dest = sidebarSelection {
+                } else if let dest = sidebarSelection,
+                          dest != .personaHub || modules.isEnabled(.professional) {
                     hubDestinationView(for: dest)
-                } else {
+                } else if modules.isEnabled(.professional) {
+                    // §3.3 R1: the persona home belongs to Page 3, not Archive.
                     PersonaPickerHomeView(onSelectPersona: { persona in
                         personaManager.switchPersona(to: persona)
                         sidebarSelection = .personaHub
                     })
+                } else {
+                    // Archive-only: there is no persona home; the archive
+                    // itself is home (owner, 2026-09-28).
+                    emailInboxDestination
                 }
             }
         }
@@ -542,11 +641,15 @@ struct ContentView: View {
 
     private var hubSidebar: some View {
         List(selection: $sidebarSelection) {
-            Section {
-                Button { sidebarSelection = nil } label: {
-                    Label("Home", systemImage: "house")
+            // The persona home is a Professional Workflows surface; the
+            // Archive-only page opens straight into the archive.
+            if modules.isEnabled(.professional) {
+                Section {
+                    Button { sidebarSelection = nil } label: {
+                        Label("Home", systemImage: "house")
+                    }
+                    .foregroundColor(sidebarSelection == nil ? personaManager.selectedPersona.accentColor : .primary)
                 }
-                .foregroundColor(sidebarSelection == nil ? personaManager.selectedPersona.accentColor : .primary)
             }
 
             Section("Persona") {
@@ -630,7 +733,7 @@ struct ContentView: View {
                     sidebarRow(.custodianPanel, "Custodian Panel", "person.badge.key")
                     sidebarRow(.redaction, "Redaction", "eye.slash")
                 } header: {
-                    Text(personaManager.selectedPersona == .forensic ? "Forensic" : "Legal & Forensic")
+                    Text(personaManager.selectedPersona == .forensic ? "Forensic" : String(localized: "Legal & Forensic"))
                 }
             }
 
@@ -685,29 +788,38 @@ struct ContentView: View {
                         }
                     }
             }
+            #if os(macOS)
             .frame(minWidth: 480, minHeight: 520)
+            #endif
         }
         .sheet(isPresented: $showGettingStarted) {
             GettingStartedView(isPresented: $showGettingStarted)
         }
     }
 
+    /// §3.3 R1: a tool row appears only while the page that owns the tool is
+    /// on. Archive-owned rows always show. (Owner, 2026-09-28: the sidebar
+    /// listed every tool regardless of page state, so Email Analytics was
+    /// reachable with AI Insights off.)
+    @ViewBuilder
     private func sidebarRow(_ dest: HubDestination, _ title: String, _ icon: String) -> some View {
-        let isLocked = storeManager.currentTier < dest.requiredTier
-        return NavigationLink(value: dest) {
-            HStack(spacing: Spacing.xSmall) {
-                Label(title, systemImage: icon)
-                if isLocked {
-                    Spacer()
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .accessibilityLabel("Requires \(dest.requiredTier.displayName)")
+        if dest.owner == .archive || modules.isEnabled(dest.owner) {
+            let isLocked = storeManager.currentTier < dest.requiredTier
+            NavigationLink(value: dest) {
+                HStack(spacing: Spacing.xSmall) {
+                    Label(title, systemImage: icon)
+                    if isLocked {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .accessibilityLabel("Requires \(dest.requiredTier.displayName)")
+                    }
                 }
             }
+            .help(dest.caption)
+            .accessibilityHint(dest.caption)
         }
-        .help(dest.caption)
-        .accessibilityHint(dest.caption)
     }
 
     // MARK: - Hub Navigation
@@ -730,6 +842,13 @@ struct ContentView: View {
     }
 
     private func handleHubNavigation(_ destination: HubDestination) {
+        // §3.3 R1: a tool whose page is off is not opened, whoever asked
+        // (tile, workflow step, palette, shortcut).
+        guard destination.owner == .archive || modules.isEnabled(destination.owner) else {
+            viewModel.statusMessage = "\(destination.owner.displayName) is off. Turn it on in Settings ▸ Modules to use this tool."
+            viewModel.statusColor = .orange
+            return
+        }
         recordRecentTool(destination)
         switch destination {
         case .settings:
@@ -755,9 +874,10 @@ struct ContentView: View {
              .predictiveInsights, .pluginManager,
              .itAdminDashboard, .journalistWorkbench, .actionRegister, .reasoningStudio:
             if storeManager.requirePremium() { goToDestination(destination) }
+        case .personaHub:
+            if modules.isEnabled(.professional) { goToDestination(destination) }
         case .emailInbox, .customExperts, .workspaceManager,
-             .personalOrganizer, .generalExplorer,
-             .personaHub:
+             .personalOrganizer, .generalExplorer:
             goToDestination(destination)
         }
     }
@@ -790,38 +910,43 @@ struct ContentView: View {
     /// bounded working set streamed from the store for the CURRENT query —
     /// never the resident preview arrays.
     private func hubWorkingSet<Content: View>(@ViewBuilder content: @escaping ([MBOXParser.RawEmail]) -> Content) -> some View {
-        ArchiveWorkingSetView(query: modelVM.currentArchiveQuery, content: content)
+        // §3-X1: the same scope rule as every other host — the current
+        // filter, with the whole archive one tap away.
+        ScopedWorkingSet(filter: modelVM.currentArchiveQuery, content: content)
+    }
+
+    /// §3.3 R1: a destination whose page is off is never built — not from a
+    /// stale sidebar selection, a restored window, a workflow launch or a
+    /// keyboard shortcut. It shows which page to turn on instead.
+    @ViewBuilder
+    private func hubDestinationView(for destination: HubDestination) -> some View {
+        if destination.owner == .archive || modules.isEnabled(destination.owner) {
+            hubDestinationContent(for: destination)
+        } else {
+            VStack(spacing: Spacing.small) {
+                Image(systemName: "switch.2")
+                    .font(.largeTitle)
+                    .foregroundColor(AppColors.secondary)
+                Text("\(destination.owner.displayName) is off")
+                    .font(Typography.title3)
+                Text("\(destination.caption) This tool belongs to the \(destination.owner.displayName) page. Turn the page on in Settings ▸ Modules to use it.")
+                    .font(Typography.callout)
+                    .foregroundColor(AppColors.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+            .accessibilityIdentifier("hub.destination.pageOff")
+        }
     }
 
     @ViewBuilder
-    private func hubDestinationView(for destination: HubDestination) -> some View {
+    private func hubDestinationContent(for destination: HubDestination) -> some View {
         switch destination {
         case .emailInbox:
             emailInboxDestination
 
-        case .achMatrix:
-            ACHMatrixStudioView()
-                .navigationTitle("Hypothesis Matrix (ACH)")
-
-        case .factMatrix:
-            FactEvidenceStudioView()
-                .navigationTitle("Fact–Evidence Matrix")
-
-        case .actionRegister:
-            ActionRegisterStudioView()
-                .navigationTitle("Action Register")
-
-        case .evidenceDesks:
-            hubWorkingSet { EvidenceDesksStudioView(workingSet: $0) }
-                .navigationTitle("Evidence Desks")
-
-        case .reasoningStudio:
-            ReasoningStudioView()
-                .navigationTitle("Reasoning Studio")
-
-        case .eDiscovery:
-            hubWorkingSet { EDiscoveryWorkflowView(emails: $0) }
-                .navigationTitle("eDiscovery Workflow")
         case .predictiveCoding:
             hubWorkingSet { PredictiveCodingView(emails: $0, engine: predictiveEngine) }
                 .navigationTitle("Predictive Coding")
@@ -835,20 +960,11 @@ struct ContentView: View {
         case .iocExtractor:
             hubWorkingSet { IOCExtractorView(emails: $0) }
                 .navigationTitle("IOC Extractor")
-        case .phishingTriage:
-            TriageQueueView()
-                .navigationTitle("Phishing Triage")
-        case .storyFile:
-            StoryFileView()
-                .navigationTitle("Story File")
         case .workCenter:
             WorkCenterView(onOpenDestination: { destination in
                 handleHubNavigation(destination)
             })
                 .navigationTitle("Work Center")
-        case .reviewDashboard:
-            ReviewDashboardView()
-                .navigationTitle("Review Dashboard")
         case .smartAlerts:
             hubWorkingSet { SmartAlertsView(emails: $0) }
                 .navigationTitle("Smart Alerts")
@@ -858,12 +974,8 @@ struct ContentView: View {
         case .nearDuplicates:
             hubWorkingSet { NearDuplicateDetectionView(emails: $0) }
                 .navigationTitle("Near Duplicates")
-        case .chainOfCustody:
-            hubWorkingSet { ChainOfCustodyView(emails: $0) }
-                .navigationTitle("Chain of Custody")
-
         case .emailAnalytics:
-            EmailAnalyticsView()
+            ToolScopeHost(filter: modelVM.currentArchiveQuery) { EmailAnalyticsView(query: $0) }
                 .navigationTitle("Email Analytics")
         case .topicClusters:
             hubWorkingSet { emails in
@@ -897,7 +1009,7 @@ struct ContentView: View {
                 .navigationTitle("Executive Dashboard")
 
         case .reportBuilder:
-            ReportBuilderView()
+            ToolScopeHost(filter: modelVM.currentArchiveQuery) { ReportBuilderView(scope: $0) }
                 .navigationTitle("Report Builder")
         case .batchOperations:
             hubWorkingSet { emails in
@@ -911,9 +1023,6 @@ struct ContentView: View {
                         } else {
                             modelVM.review.addTag(tag, to: idArray)
                         }
-                    },
-                    onExportRequested: { _, _ in
-                        appState.triggerExport = true
                     }
                 )
             }
@@ -924,15 +1033,6 @@ struct ContentView: View {
         case .forensicReview:
             ForensicReviewView(selectedEmailIDs: $selectedEmailIDs)
                 .navigationTitle("Forensic Review")
-        case .investigationReport:
-            hubWorkingSet { InvestigationReportConfigSheet(emails: $0, senderEmail: viewModel.senderEmail) }
-                .navigationTitle("Investigation Report")
-        case .batesNumbering:
-            hubWorkingSet { BatesConfigView(emails: $0) }
-                .navigationTitle("Bates Numbering")
-        case .redaction:
-            hubWorkingSet { RedactionConfigView(emails: $0) }
-                .navigationTitle("Redaction")
         case .automationRules:
             hubWorkingSet { AutomationRulesView(emails: $0) }
                 .navigationTitle("Automation Rules")
@@ -955,7 +1055,7 @@ struct ContentView: View {
         case .aiDigest:
             // Zero-array digest: the generator streams a bounded working set
             // of the selected period from the store itself.
-            AIDigestView()
+            ToolScopeHost(filter: modelVM.currentArchiveQuery) { AIDigestView(scope: $0) }
                 .navigationTitle("AI Digest")
         case .smartAutoTagger:
             SmartAutoTaggerView()
@@ -989,16 +1089,11 @@ struct ContentView: View {
                     handleHubNavigation(destination)
                 },
                 onOpenArchive: { openPanelFallback() },
-                onNewImport: { showNewImportConfirmation = true },
-                onSettings: { openSettingsAction() }
+                onNewImport: { askToClearArchive() },
+                onSettings: { openSettingsAction() },
+                isModuleEnabled: { modules.isEnabled($0) }
             )
             .navigationTitle("\(personaManager.selectedPersona.shortLabel) Hub")
-        case .reviewBatches:
-            hubWorkingSet { ReviewBatchPanelView(emails: $0, manager: reviewBatchManager) }
-                .navigationTitle("Review Batches")
-        case .custodianPanel:
-            CustodianPanelView(manager: custodianManager)
-                .navigationTitle("Custodian Panel")
         case .workspaceManager:
             WorkspaceManagerView()
                 .navigationTitle("Workspaces")
@@ -1021,29 +1116,50 @@ struct ContentView: View {
                 sidebarSelection = dest
             })
             .navigationTitle("Feature Explorer")
+        // §3-X1: Professional-page tools are built by the same view as on the
+        // Professional page (one construction per tool), on the current filter.
+        case .achMatrix, .factMatrix, .actionRegister, .evidenceDesks, .reasoningStudio, .eDiscovery, .custodianPanel, .chainOfCustody, .batesNumbering, .redaction, .reviewBatches, .investigationReport, .phishingTriage, .storyFile, .reviewDashboard:
+            ProfessionalDestinationView(destination: destination, filter: modelVM.currentArchiveQuery,
+                                        senderEmail: viewModel.senderEmail)
+
         case .settings:
             EmptyView()
         }
     }
 
     #if os(macOS)
+    @ViewBuilder
     private var emailInboxDestination: some View {
+        if preferSimpleList {
+            // A2: the three-pane archive shell — sidebar / list / detail, all
+            // repository-paged. Import / Search / Export live in its chrome.
+            ArchiveThreePaneView(onHome: modules.isEnabled(.professional) ? { sidebarSelection = nil } : nil,
+                                 onImport: { openPanelFallback() },
+                                 onSettings: { openSettingsAction() })
+        } else {
+            advancedInboxDestination
+        }
+    }
+
+    private var advancedInboxDestination: some View {
         HSplitView {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    Button {
-                        sidebarSelection = nil
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "house.fill")
-                                .font(.system(size: 13))
-                            Text("Home")
-                                .font(.system(size: 12, weight: .semibold))
+                    if modules.isEnabled(.professional) {
+                        Button {
+                            sidebarSelection = nil
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "house.fill")
+                                    .font(.system(size: 13))
+                                Text("Home")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .foregroundColor(personaManager.selectedPersona.accentColor)
                         }
-                        .foregroundColor(personaManager.selectedPersona.accentColor)
+                        .buttonStyle(.plain)
+                        .help("Return to the home hub with all tools and settings")
                     }
-                    .buttonStyle(.plain)
-                    .help("Return to the home hub with all tools and settings")
 
                     Spacer()
                 }
@@ -1054,28 +1170,34 @@ struct ContentView: View {
                 leftSidebar
             }
             .frame(minWidth: 200, idealWidth: 260, maxWidth: 360)
-            if preferSimpleList {
-                // Repository-backed bounded browse (its own list+detail split).
-                ArchiveListView()
-                    .frame(minWidth: 580)
-            } else {
-                ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
-                    .frame(minWidth: 280, idealWidth: 400)
-                VStack(spacing: 0) {
-                    detailContentView
-                    if appState.dockedBottomPanel != nil && modelVM.isParsed {
-                        dockedBottomPanelView
-                    }
+            // Each pane is announced by name (the Mac audit found three
+            // unnamed groups, 2026-10-12).
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Filters"))
+            ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
+                .frame(minWidth: 280, idealWidth: 400)
+            VStack(spacing: 0) {
+                detailContentView
+                if appState.dockedBottomPanel != nil && modelVM.isParsed {
+                    dockedBottomPanelView
                 }
-                .frame(minWidth: 300)
             }
+            .frame(minWidth: 300)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Email"))
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Archive"))
     }
     #else
     private var emailInboxDestination: some View {
         Group {
             if preferSimpleList {
-                ArchiveListView()
+                // A2: iPad gets the three-pane shell; iPhone's compact layout
+                // keeps the two-pane list (a split view inside a stack does
+                // not collapse well).
+                ArchiveThreePaneView(onImport: { showFileImporter = true },
+                                     onSettings: { openSettingsAction() })
             } else {
                 ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
             }
@@ -1086,6 +1208,13 @@ struct ContentView: View {
 
     // MARK: - iPhone Layout (Compact)
     #if os(iOS)
+    /// Tools ▸ Topics on iPhone: shown while the Topics panel is chosen; closing it returns to
+    /// the default panel.
+    private var iPhoneTopicsSheet: Binding<Bool> {
+        Binding(get: { appState.dockedBottomPanel == .topics },
+                set: { if !$0 { appState.dockedBottomPanel = .subjects } })
+    }
+
     private var iPhoneLayout: some View {
         @Bindable var appState = appState
         return NavigationStack {
@@ -1121,38 +1250,51 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("Feature Guide")
                     if viewModel.isParsed {
-                        Button { showWorkCenter = true } label: {
-                            Image(systemName: "briefcase")
+                        // §3.3 R1: these belong to Pages 3 and 2.
+                        if modules.isEnabled(.professional) {
+                            Button { showWorkCenter = true } label: {
+                                Image(systemName: "briefcase")
+                            }
+                            .accessibilityLabel("Work Center")
                         }
-                        .accessibilityLabel("Work Center")
-                        Button { appState.showAIAssistant = true } label: {
-                            Image(systemName: "sparkles")
+                        if modules.isEnabled(.aiInsights) {
+                            Button { appState.showAIAssistant = true } label: {
+                                Image(systemName: "sparkles")
+                            }
+                            .accessibilityLabel("AI Assistant")
                         }
-                        .accessibilityLabel("AI Assistant")
 
                         Menu {
-                            Section("Work") {
-                                Button { showWorkCenter = true } label: {
-                                    Label("Work Center — jobs, documents, reports", systemImage: "briefcase")
+                            if modules.isEnabled(.professional) {
+                                Section("Work") {
+                                    Button { showWorkCenter = true } label: {
+                                        Label("Work Center — jobs, documents, reports", systemImage: "briefcase")
+                                    }
                                 }
                             }
                             Section("Tools") {
-                                Button {
-                                    if storeManager.requirePremium() {
-                                        withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                                // Topic discovery is NLP clustering: an AI Insights tool
+                                // (owner, 2026-09-30). Subjects grouping is plain text.
+                                if modules.isEnabled(.aiInsights) {
+                                    Button {
+                                        if storeManager.requirePremium() {
+                                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
+                                        }
+                                    } label: {
+                                        Label("Topics", systemImage: "circle.grid.3x3")
                                     }
-                                } label: {
-                                    Label("Topics", systemImage: "circle.grid.3x3")
                                 }
                                 Button {
                                     if storeManager.requirePremium() {
-                                        withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+                                        withAnimation { appState.dockedBottomPanel = .subjects }
                                     }
                                 } label: {
                                     Label("Subjects", systemImage: "list.bullet.rectangle.portrait")
                                 }
-                                Button { appState.showAnalytics = true } label: {
-                                    Label("Analytics", systemImage: "chart.bar")
+                                if modules.isEnabled(.aiInsights) {
+                                    Button { appState.showAnalytics = true } label: {
+                                        Label("Analytics", systemImage: "chart.bar")
+                                    }
                                 }
                                 Button {
                                     if forensicManager.isEnabled || storeManager.requireProfessional() {
@@ -1167,8 +1309,10 @@ struct ContentView: View {
                                 Button { if storeManager.requirePremium() { appState.showDuplicateManager = true } } label: {
                                     Label("Duplicates", systemImage: "doc.on.doc")
                                 }
-                                Button { appState.showPredictiveCoding = true } label: {
-                                    Label("Predictive", systemImage: "brain")
+                                if modules.isEnabled(.aiInsights) {
+                                    Button { appState.showPredictiveCoding = true } label: {
+                                        Label("Predictive", systemImage: "brain")
+                                    }
                                 }
                                 Button { appState.showReplyStatsSheet = true } label: {
                                     Label("Replies", systemImage: "arrow.turn.up.left")
@@ -1176,11 +1320,14 @@ struct ContentView: View {
                                 Button { appState.showArchiveComparison = true } label: {
                                     Label("Compare", systemImage: "doc.on.doc.fill")
                                 }
-                                Button { exportFilteredEmailsAsEML() } label: {
+                                Menu {
+                                    filteredExportSections
+                                } label: {
                                     Label("Export", systemImage: "square.and.arrow.up")
                                 }
                             }
                             Section("Advanced") {
+                                if modules.isEnabled(.professional) {
                                 Button { appState.showAuditTrail = true } label: {
                                     Label("Audit Trail", systemImage: "clock.arrow.circlepath")
                                 }
@@ -1193,9 +1340,10 @@ struct ContentView: View {
                                 Button { if storeManager.requireProfessional() { appState.showReviewBatches = true } } label: {
                                     Label("Review Batches", systemImage: "list.bullet.rectangle")
                                 }
+                                }   // end Professional-only Advanced section
                             }
                             Section {
-                                Button { showNewImportConfirmation = true } label: {
+                                Button { askToClearArchive() } label: {
                                     Label("New Import", systemImage: "house")
                                 }
                                 Button { openPanelFallback() } label: {
@@ -1217,15 +1365,7 @@ struct ContentView: View {
                 }
             }
             .navigationDestination(for: UUID.self) { emailID in
-                if let email = modelVM.visibleEmails.first(where: { $0.id == emailID }) {
-                    EmailDetailView(
-                        email: email,
-                        orderedIDs: modelVM.visibleOrderedIDs,
-                        onNavigate: { newID in selectedEmailIDs = [newID] },
-                        onClose: { withAnimation { selectedEmailIDs = [] } },
-                        searchText: modelVM.searchText
-                    )
-                }
+                PhoneEmailDetailHost(initialID: emailID, modelVM: modelVM)
             }
             .sheet(isPresented: $showWorkCenter) {
                 NavigationStack {
@@ -1274,6 +1414,26 @@ struct ContentView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
+            // iOS shows one sheet at a time: a tool opened from Filters & Tools (Find Duplicates
+            // Now) waited until that sheet was closed by hand. Close it so the tool appears.
+            .onChange(of: appState.showDuplicateManager) { _, open in
+                if open { showFiltersSheet = false }
+            }
+            // iPhone has no docked panel under the email, so Tools ▸ Topics showed nothing:
+            // the topics panel opens as its own sheet instead.
+            .sheet(isPresented: iPhoneTopicsSheet) {
+                NavigationStack {
+                    dockedBottomPanelView
+                        .navigationTitle(String(localized: "Topics"))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { appState.dockedBottomPanel = .subjects }
+                            }
+                        }
+                }
+                .presentationDetents([.large])
+            }
             .sheet(isPresented: $showIOSSettings) {
                 NavigationStack {
                     SettingsView()
@@ -1284,6 +1444,7 @@ struct ContentView: View {
                                 Button("Done") { showIOSSettings = false }
                             }
                         }
+                        .modifier(IOSSettingsSheetChrome())
                 }
             }
         }
@@ -1450,6 +1611,25 @@ struct ContentView: View {
         .background(Color(.systemGroupedBackground))
     }
 
+    /// IPAD-05: Move to Trash / Restore for one row of the iPad list.
+    @ViewBuilder
+    private func iPadTrashMenu(for id: UUID) -> some View {
+        if modelVM.isDeleted(id) {
+            Button {
+                Task { @MainActor in await modelVM.restoreFromTrashNow([id]) }
+            } label: {
+                Label("Restore from Trash", systemImage: "arrow.uturn.backward")
+            }
+            .tint(.blue)
+        } else {
+            Button(role: .destructive) {
+                modelVM.deleteEmail(id)
+            } label: {
+                Label("Move to Trash", systemImage: "trash")
+            }
+        }
+    }
+
     // MARK: - iPad Layout (Regular)
     private var iPadLayout: some View {
         @Bindable var appState = appState
@@ -1488,10 +1668,12 @@ struct ContentView: View {
                                 Image(systemName: "sparkles")
                             }
                             .accessibilityLabel("AI Assistant")
-                            Button { appState.showAnalytics = true } label: {
-                                Image(systemName: "chart.bar")
+                            if modules.isEnabled(.aiInsights) {
+                                Button { appState.showAnalytics = true } label: {
+                                    Image(systemName: "chart.bar")
+                                }
+                                .accessibilityLabel("Analytics")
                             }
-                            .accessibilityLabel("Analytics")
                             Button {
                                 if forensicManager.isEnabled || storeManager.requireProfessional() {
                                     forensicManager.isEnabled.toggle()
@@ -1499,8 +1681,8 @@ struct ContentView: View {
                             } label: {
                                 Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                             }
-                            .accessibilityLabel(forensicManager.isEnabled ? "Disable Forensic Mode" : "Enable Forensic Mode")
-                            Button { showNewImportConfirmation = true } label: {
+                            .accessibilityLabel(forensicManager.isEnabled ? String(localized: "Disable Forensic Mode") : String(localized: "Enable Forensic Mode"))
+                            Button { askToClearArchive() } label: {
                                 Image(systemName: "house")
                             }
                             .accessibilityLabel("New Import")
@@ -1541,18 +1723,76 @@ struct ContentView: View {
                                 .foregroundColor(AppColors.secondary)
                             TextField("Search emails...", text: $modelVM.searchText)
                                 .textFieldStyle(.plain)
+                                // As the iPhone list's field does: re-query the archive as you type.
+                                // Without it the iPad list never filtered (only Apply did), while
+                                // every row was labelled "Body" for the typed word.
+                                .onChange(of: modelVM.searchText) { _, _ in modelVM.searchTextDidChange() }
                         }
                         .padding(.horizontal, Spacing.small)
                         .padding(.vertical, Spacing.xSmall)
                         .background(AppColors.backgroundSecondary)
 
+                        // IPAD-03: what the search said (a no-match notice says what was
+                        // searched), and never a blank pane for a search with no hits.
+                        if let notice = modelVM.searchNotice {
+                            Label(notice, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, Spacing.small)
+                                .padding(.vertical, Spacing.xxSmall)
+                                .accessibilityLabel("Search notice: \(notice)")
+                                .accessibilityIdentifier("ipad.list.searchNotice")
+                        }
+                        if modelVM.visibleEmails.isEmpty && !modelVM.isLoadingPage
+                            && !modelVM.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            ContentUnavailableView("No matching emails", systemImage: "magnifyingglass")
+                                .frame(maxHeight: .infinity)
+                                .accessibilityIdentifier("ipad.list.noResults")
+                        } else {
+                        let evidenceProvider = modelVM.searchEvidenceProvider
                         List(modelVM.visibleEmails, id: \.id, selection: $iPadSelectedEmailID) { email in
-                            EmailRowView(email: email, searchText: modelVM.searchText, showRiskIndicator: forensicManager.isEnabled)
+                            // The open email stays blue. iPadOS greys the system
+                            // selection as soon as the reading pane takes focus (or
+                            // a scroll hands focus away), and tapping the same row
+                            // again does not bring it back — the open email looked
+                            // deselected (2026-10-18 simulator run). The row draws
+                            // the emphasized look itself; the List keeps the real
+                            // selection, so hardware-keyboard arrows still work.
+                            let isOpen = email.id == iPadSelectedEmailID
+                            EmailRowView(email: email, searchText: modelVM.isNaturalLanguageMode ? "" : modelVM.windowSearchText, showRiskIndicator: forensicManager.isEnabled,
+                                         evidenceProvider: evidenceProvider,
+                                         onOpenAttachment: evidenceProvider == nil ? nil : { id, ordinal, child in modelVM.openEvidenceAttachment(id, ordinal, child) })
                                 .padding(.vertical, Spacing.xxxSmall)
+                                .environment(\.backgroundProminence, isOpen ? .increased : .standard)
+                                .listRowBackground(isOpen ? EmailRowView.openRowFill : nil)
                                 .tag(email.id)
                                 .onAppear { modelVM.loadMoreIfNeeded(currentID: email.id) }
+                                // IPAD-05: Restore from the Trash on iPad (the
+                                // Trash row in the sidebar, or `in:trash`).
+                                .contextMenu { iPadTrashMenu(for: email.id) }
+                                .swipeActions(edge: .trailing) { iPadTrashMenu(for: email.id) }
                         }
                         .listStyle(.plain)
+                        .alert(String(localized: "Could not open the attachment"),
+                               isPresented: Binding(get: { modelVM.evidenceOpenFailure != nil }, set: { if !$0 { modelVM.evidenceOpenFailure = nil } })) {
+                            Button("OK", role: .cancel) { modelVM.evidenceOpenFailure = nil }
+                        } message: {
+                            Text(modelVM.evidenceOpenFailure ?? "")
+                        }
+                        .safeAreaInset(edge: .top) {
+                            if modelVM.reviewStateFilter == .trashed {
+                                Label("Trash: touch and hold an email, or swipe it, to restore it.", systemImage: "trash")
+                                    .font(Typography.caption1)
+                                    .foregroundColor(AppColors.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, Spacing.small)
+                                    .padding(.vertical, Spacing.xxSmall)
+                                    .background(.bar)
+                                    .accessibilityIdentifier("ipad.trash.banner")
+                            }
+                        }
+                        }
                     } else {
                         WelcomeHubView(onOpenArchive: { openPanelFallback() }, onBrowseFiles: { showFileImporter = true })
                     }
@@ -1602,12 +1842,14 @@ struct ContentView: View {
                             Button("Done") { showIOSSettings = false }
                         }
                     }
+                    .modifier(IOSSettingsSheetChrome())
             }
         }
         .sheet(isPresented: $appState.showAuditTrail) {
             AuditTrailView(forensicManager: forensicManager,
                            storeManager: storeManager,
-                           onExport: { exportAuditLog() })
+                           onExport: { exportAuditLog() },
+                           onExportJSON: { exportAuditLog(jsonLines: true) })
         }
         .sheet(isPresented: $showFiltersSheet) {
             NavigationStack {
@@ -1820,11 +2062,15 @@ struct ContentView: View {
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         #endif
         let vm = viewModel
-        let isPro = storeManager.isPremium
-        let limitedEmails = isPro ? emails : Array(emails.prefix(Self.freeExportLimit))
+        // CAP-02: the one access policy decides the cap (Free 500, a lapsed
+        // plan uncapped for .eml, paid uncapped) — not a private constant.
+        let exportLimit = exportCap(for: .emlFiles)
+        let limitedEmails = exportLimit.map { Array(emails.prefix($0)) } ?? emails
         Task.detached(priority: .userInitiated) {
             var usedNames = Set<String>()
             var exportedCount = 0
+            // T4: one source-verification ledger per export operation.
+            let sourceLedger = SourceVerificationLedger()
             var failedCount = 0
             var failedSubjects: [String] = []
             for (index, email) in limitedEmails.enumerated() {
@@ -1841,9 +2087,19 @@ struct ContentView: View {
                 }
                 usedNames.insert(filename)
                 let fileURL = folderURL.appendingPathComponent(filename)
-                let emlContent = vm.exportEmailAsEML(email)
                 do {
-                    try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                    // F05: a located message streams from its source; one
+                    // with neither content nor a reachable source is a
+                    // failure, never a headers-only stub.
+                    if email.rawSource.isEmpty {
+                        guard let locator = RawMessageFile.locator(for: email) else {
+                            throw RawMessageError.contentUnavailable(subject: rawSubject, reason: String(localized: "no stored content and no reachable original file"))
+                        }
+                        try RawMessageFile.write(located: locator, to: fileURL, verifying: sourceLedger)
+                    } else {
+                        let emlContent = vm.exportEmailAsEML(email)
+                        try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                    }
                     exportedCount += 1
                 } catch {
                     failedCount += 1
@@ -1856,7 +2112,7 @@ struct ContentView: View {
             let finalFailedSubjects = failedSubjects
             let totalSelected = emails.count
             await MainActor.run {
-                if !isPro && totalSelected > finalExported {
+                if exportLimit != nil && totalSelected > finalExported {
                     vm.statusMessage = "Exported \(finalExported) of \(totalSelected) emails (free limit). Upgrade for unlimited."
                     vm.statusColor = .orange
                     self.storeManager.showPaywall = true
@@ -1982,8 +2238,17 @@ struct ContentView: View {
                             viewModel.scanForThunderbirdProfiles()
                             if !viewModel.thunderbirdProfiles.isEmpty {
                                 parseFailed = false
-                                viewModel.importThunderbirdProfile(viewModel.thunderbirdProfiles)
-                                showSpinner = true
+                                // Through the SAME funnel as every other
+                                // import. This used to call
+                                // `viewModel.importThunderbirdProfile`, which
+                                // went straight to `parseSelectedFiles` and so
+                                // skipped `beginImport` — meaning a user who
+                                // had switched on the pre-import sheet did not
+                                // get it here, and a Thunderbird import never
+                                // appeared in the import queue at all. Two
+                                // entry points, different behaviour, and the
+                                // capability descriptions drew no distinction.
+                                handleMultipleFiles(viewModel.thunderbirdProfiles)
                             }
                         } label: {
                             Label("Thunderbird", systemImage: "bird")
@@ -2045,7 +2310,7 @@ struct ContentView: View {
                 if modelVM.isParsed {
                     HStack(spacing: Spacing.xSmall) {
                         Button {
-                            showNewImportConfirmation = true
+                            askToClearArchive()
                         } label: {
                             Label("New Import", systemImage: "house")
                                 .frame(maxWidth: .infinity)
@@ -2066,11 +2331,13 @@ struct ContentView: View {
                         .accessibilityLabel("Add more email files")
                     }
 
-                    if !storeManager.isPremium && viewModel.totalParsedCount > StoreManager.freeEmailLimit {
+                    // The archive total behind the list (unscoped), not the launch-time count — that
+                    // one is already limited to 500 on Free, so the box never appeared.
+                    if !storeManager.isPremium, let archiveTotal = modelVM.accessLimitedTotal {
                         Button {
                             storeManager.showPaywall = true
                         } label: {
-                            let remaining = viewModel.totalParsedCount - StoreManager.freeEmailLimit
+                            let remaining = archiveTotal - StoreManager.freeEmailLimit
                             HStack(spacing: Spacing.xSmall) {
                                 Image(systemName: "lock.fill")
                                     .foregroundColor(.orange)
@@ -2078,7 +2345,7 @@ struct ContentView: View {
                                     Text("Free limit: \(StoreManager.freeEmailLimit) emails")
                                         .font(Typography.caption1)
                                         .fontWeight(.semibold)
-                                    Text("\(remaining) more email\(remaining == 1 ? "" : "s") available with Pro")
+                                    Text("\(remaining) more email\(remaining == 1 ? "" : "s") with Personal or Professional")
                                         .font(Typography.caption2)
                                         .foregroundColor(.secondary)
                                 }
@@ -2148,8 +2415,15 @@ struct ContentView: View {
                                     modelVM.searchText = folder
                                 } else {
                                     modelVM.searchText = ""
+                                    modelVM.selectedSourceFolder = nil
                                 }
                             }
+                        // IPAD-02 / IPAD-05: every source folder (empty and
+                        // nested ones too) and the Trash — on iPad, iPhone
+                        // (Filters sheet) and the Mac's Advanced list alike.
+                        SourceFolderSection(model: modelVM)
+                            .padding(.horizontal, Spacing.xSmall)
+                            .padding(.top, Spacing.xSmall)
                     }
                 }
                 stickyFilterButtons
@@ -2198,24 +2472,33 @@ struct ContentView: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Spacing.xSmall) {
-                        compactToolIcon("sparkles", color: .purple) { appState.showAIAssistant = true }
-                        compactToolIcon("chart.bar", color: .blue) { appState.showAnalytics = true }
-                        compactToolIcon("circle.grid.3x3", color: .teal) {
-                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                        // §3.3 R1: AI icon only when Page 2 is on.
+                        if modules.isEnabled(.aiInsights) {
+                            compactToolIcon("sparkles", color: .purple, label: String(localized: "AI Assistant")) { appState.showAIAssistant = true }
                         }
-                        compactToolIcon("list.bullet.rectangle.portrait", color: .orange) {
-                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+                        if modules.isEnabled(.aiInsights) {
+                            compactToolIcon("chart.bar", color: .blue, label: String(localized: "Analytics")) { appState.showAnalytics = true }
                         }
-                        compactToolIcon("doc.on.doc", color: .indigo) { if storeManager.requirePremium() { appState.showDuplicateManager = true } }
-                        if isForensicPersona {
-                            compactToolIcon("brain", color: .pink) { appState.showPredictiveCoding = true }
-                            compactToolIcon("person.badge.key", color: .cyan) { appState.showCustodianPanel = true }
-                            compactToolIcon("doc.text.magnifyingglass", color: .red) { appState.showInvestigationReport = true }
-                            compactToolIcon("clock.arrow.circlepath", color: .orange) { appState.showAuditTrail = true }
-                            compactToolIcon("exclamationmark.shield", color: .red) { appState.showIOCExtractor = true }
-                            compactToolIcon("checklist", color: .blue) { appState.showEDiscovery = true }
+                        if modules.isEnabled(.aiInsights) {
+                            compactToolIcon("circle.grid.3x3", color: .teal, label: String(localized: "Topic Clusters")) {
+                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
+                            }
                         }
-                        compactToolIcon("square.and.arrow.up", color: .brown) { exportFilteredEmailsAsEML() }
+                        compactToolIcon("list.bullet.rectangle.portrait", color: .orange, label: String(localized: "Subjects")) {
+                            withAnimation { appState.dockedBottomPanel = .subjects }
+                        }
+                        compactToolIcon("doc.on.doc", color: .indigo, label: String(localized: "Duplicates")) { if storeManager.requirePremium() { appState.showDuplicateManager = true } }
+                        if isForensicPersona && modules.isEnabled(.aiInsights) {
+                            compactToolIcon("brain", color: .pink, label: String(localized: "Predictive Coding")) { appState.showPredictiveCoding = true }
+                        }
+                        if isForensicPersona && modules.isEnabled(.professional) {
+                            compactToolIcon("person.badge.key", color: .cyan, label: String(localized: "Custodians")) { appState.showCustodianPanel = true }
+                            compactToolIcon("doc.text.magnifyingglass", color: .red, label: String(localized: "Investigation Report")) { appState.showInvestigationReport = true }
+                            compactToolIcon("clock.arrow.circlepath", color: .orange, label: String(localized: "Audit Trail")) { appState.showAuditTrail = true }
+                            compactToolIcon("exclamationmark.shield", color: .red, label: String(localized: "IOC Extractor")) { appState.showIOCExtractor = true }
+                            compactToolIcon("checklist", color: .blue, label: String(localized: "E-Discovery")) { appState.showEDiscovery = true }
+                        }
+                        compactToolIcon("square.and.arrow.up", color: .brown, label: String(localized: "Export filtered emails as EML")) { exportFilteredEmailsAsEML() }
                     }
                     .padding(.trailing, Spacing.small)
                 }
@@ -2225,7 +2508,10 @@ struct ContentView: View {
         }
     }
 
-    private func compactToolIcon(_ icon: String, color: Color, action: @escaping () -> Void) -> some View {
+    /// An icon-only tool button. The label is required: without it VoiceOver
+    /// read the symbol name ("square.and.arrow.up") — found by the Mac
+    /// accessibility audit, 2026-10-12.
+    private func compactToolIcon(_ icon: String, color: Color, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 14))
@@ -2235,6 +2521,8 @@ struct ContentView: View {
                 .cornerRadius(CornerRadius.small)
         }
         .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     private var isForensicPersona: Bool {
@@ -2258,7 +2546,7 @@ struct ContentView: View {
                         .foregroundColor(AppColors.secondary)
                     Text("Click any email in the list, or use arrow keys to navigate")
                         .font(.footnote)
-                        .foregroundColor(AppColors.secondary.opacity(0.6))
+                        .foregroundColor(AppColors.secondary)
                 }
 
                 if modelVM.isParsed {
@@ -2274,36 +2562,59 @@ struct ContentView: View {
                             GridItem(.flexible()), GridItem(.flexible()),
                             GridItem(.flexible()), GridItem(.flexible())
                         ], spacing: Spacing.small) {
-                            detailToolButton(title: "AI Assistant", icon: "sparkles", color: .purple) {
-                                appState.showAIAssistant = true
+                            // §3.3 R1: AI Assistant and topic clustering are
+                            // Page 2 (AI Insights) work — shown only when that
+                            // page is on (owner, 2026-09-28).
+                            if modules.isEnabled(.aiInsights) {
+                                detailToolButton(title: String(localized: "AI Assistant"), icon: "sparkles", color: .purple) {
+                                    appState.showAIAssistant = true
+                                }
                             }
-                            detailToolButton(title: "Analytics", icon: "chart.bar", color: .blue) {
-                                appState.showAnalytics = true
+                            if modules.isEnabled(.aiInsights) {
+                                detailToolButton(title: String(localized: "Analytics"), icon: "chart.bar", color: .blue) {
+                                    appState.showAnalytics = true
+                                }
                             }
-                            detailToolButton(title: "Topics", icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
-                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                            if modules.isEnabled(.aiInsights) {
+                                detailToolButton(title: String(localized: "Topics"), icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
+                                    withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
+                                }
                             }
-                            detailToolButton(title: "Subjects", icon: "list.bullet.rectangle.portrait", color: appState.dockedBottomPanel == .subjects ? .orange.opacity(0.5) : .orange) {
-                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+                            detailToolButton(title: String(localized: "Subjects"), icon: "list.bullet.rectangle.portrait", color: appState.dockedBottomPanel == .subjects ? .orange.opacity(0.5) : .orange) {
+                                withAnimation { appState.dockedBottomPanel = .subjects }
                             }
-                            detailToolButton(title: "Duplicates", icon: "doc.on.doc", color: .indigo) {
+                            detailToolButton(title: String(localized: "Duplicates"), icon: "doc.on.doc", color: .indigo) {
                                 if storeManager.requirePremium() { appState.showDuplicateManager = true }
                             }
-                            detailToolButton(title: "Replies", icon: "arrow.turn.up.left", color: .green) {
+                            detailToolButton(title: String(localized: "Replies"), icon: "arrow.turn.up.left", color: .green) {
                                 appState.showReplyStats = true
                             }
-                            detailToolButton(title: "Compare", icon: "rectangle.on.rectangle.angled", color: .cyan) {
+                            detailToolButton(title: String(localized: "Compare"), icon: "rectangle.on.rectangle.angled", color: .cyan) {
                                 appState.showArchiveComparison = true
                             }
-                            detailToolButton(title: "Export", icon: "square.and.arrow.up", color: .brown) {
-                                exportFilteredEmailsAsEML()
+                            // Offers the formats (like the sidebar's Export Emails) instead of starting
+                            // an .eml export straight away, which on iPhone also went to the share
+                            // sheet with no choice.
+                            Menu {
+                                filteredExportSections
+                            } label: {
+                                detailToolLabel(title: String(localized: "Export"), icon: "square.and.arrow.up", color: .brown)
                             }
+                            .menuStyle(.button)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(String(localized: "Export"))
                         }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(String(localized: "Tools"))
                         .padding(.horizontal, Spacing.xxLarge)
                     }
 
-                    // MARK: Forensic & Investigation Tools (persona-gated)
-                    if isForensicPersona {
+                    // MARK: Forensic & Investigation Tools
+                    // §3.3 R1: this whole section is Professional Workflows
+                    // (Page 3) and AI Insights (Page 2) work. Archive shows
+                    // none of it until those pages are enabled — persona alone
+                    // is no longer enough to surface another page's features.
+                    if isForensicPersona && (modules.isEnabled(.professional) || modules.isEnabled(.aiInsights)) {
                         Divider().padding(.horizontal, Spacing.xxLarge)
 
                         VStack(spacing: Spacing.medium) {
@@ -2319,7 +2630,7 @@ struct ContentView: View {
                                 GridItem(.flexible()), GridItem(.flexible()),
                                 GridItem(.flexible()), GridItem(.flexible())
                             ], spacing: Spacing.small) {
-                                detailToolButton(title: forensicManager.isEnabled ? "Forensic ON" : "Forensic OFF", icon: forensicManager.isEnabled ? "shield.checkered" : "shield", color: forensicManager.isEnabled ? .orange : .gray, tip: "Toggle forensic mode — enables evidence tagging, Bates numbering, and chain of custody tracking") {
+                                detailToolButton(title: forensicManager.isEnabled ? String(localized: "Forensic ON") : String(localized: "Forensic OFF"), icon: forensicManager.isEnabled ? "shield.checkered" : "shield", color: forensicManager.isEnabled ? .orange : .gray, tip: "Toggle forensic mode — enables evidence tagging, Bates numbering, and chain of custody tracking") {
                                     if forensicManager.isEnabled {
                                         forensicManager.isEnabled = false
                                     } else if storeManager.requireProfessional() {
@@ -2329,43 +2640,43 @@ struct ContentView: View {
                                 detailToolButton(title: "e-Discovery", icon: "checklist", color: .blue, tip: "Manage legal discovery workflows — search, review, and produce documents for litigation") {
                                     if storeManager.requireProfessional() { appState.showEDiscovery = true }
                                 }
-                                detailToolButton(title: "Chain of Custody", icon: "link", color: .orange, tip: "Track who accessed, modified, or exported evidence and when") {
+                                detailToolButton(title: String(localized: "Chain of Custody"), icon: "link", color: .orange, tip: "Track who accessed, modified, or exported evidence and when") {
                                     if storeManager.requireProfessional() { appState.showChainOfCustody = true }
                                 }
-                                detailToolButton(title: "Audit Trail", icon: "clock.arrow.circlepath", color: .orange, tip: "View a complete log of all review actions taken on documents") {
+                                detailToolButton(title: String(localized: "Audit Trail"), icon: "clock.arrow.circlepath", color: .orange, tip: "View a complete log of all review actions taken on documents") {
                                     if storeManager.requireProfessional() { appState.showAuditTrail = true }
                                 }
-                                detailToolButton(title: "IOC Extractor", icon: "exclamationmark.shield", color: .red, tip: "Extract Indicators of Compromise — suspicious IPs, URLs, domains, and file hashes from emails") {
+                                detailToolButton(title: String(localized: "IOC Extractor"), icon: "exclamationmark.shield", color: .red, tip: "Extract Indicators of Compromise — suspicious IPs, URLs, domains, and file hashes from emails") {
                                     if storeManager.requireProfessional() { appState.showIOCExtractor = true }
                                 }
-                                detailToolButton(title: "Anomalies", icon: "waveform.path.ecg", color: .red, tip: "Detect unusual patterns — odd sending times, frequency spikes, or behavioral changes") {
+                                detailToolButton(title: String(localized: "Anomalies"), icon: "waveform.path.ecg", color: .red, tip: "Detect unusual patterns — odd sending times, frequency spikes, or behavioral changes") {
                                     if storeManager.requirePremium() { appState.showAnomalyDetection = true }
                                 }
-                                detailToolButton(title: "Keyword Monitor", icon: "text.magnifyingglass", color: .teal, tip: "Set up keyword alerts to flag emails containing specific terms") {
+                                detailToolButton(title: String(localized: "Keyword Monitor"), icon: "text.magnifyingglass", color: .teal, tip: "Set up keyword alerts to flag emails containing specific terms") {
                                     if storeManager.requirePremium() { appState.showKeywordMonitor = true }
                                 }
-                                detailToolButton(title: "Near Duplicates", icon: "square.on.square.dashed", color: .indigo, tip: "Find emails that are almost identical — catches forwarded, replied, or slightly edited copies") {
+                                detailToolButton(title: String(localized: "Near Duplicates"), icon: "square.on.square.dashed", color: .indigo, tip: "Find emails that are almost identical — catches forwarded, replied, or slightly edited copies") {
                                     if storeManager.requirePremium() { appState.showNearDuplicates = true }
                                 }
-                                detailToolButton(title: "Predictive Coding", icon: "brain", color: .pink, tip: "AI-assisted document review — learns from your tagging to suggest relevant documents") {
+                                detailToolButton(title: String(localized: "Predictive Coding"), icon: "brain", color: .pink, tip: "AI-assisted document review — learns from your tagging to suggest relevant documents") {
                                     if storeManager.requireProfessional() { appState.showPredictiveCoding = true }
                                 }
-                                detailToolButton(title: "Review Batches", icon: "list.bullet.rectangle", color: .mint, tip: "Organize emails into review batches for systematic team review") {
+                                detailToolButton(title: String(localized: "Review Batches"), icon: "list.bullet.rectangle", color: .mint, tip: "Organize emails into review batches for systematic team review") {
                                     if storeManager.requireProfessional() { appState.showReviewBatches = true }
                                 }
-                                detailToolButton(title: "Custodians", icon: "person.badge.key", color: .cyan, tip: "Manage custodians — the people responsible for the documents under review") {
+                                detailToolButton(title: String(localized: "Custodians"), icon: "person.badge.key", color: .cyan, tip: "Manage custodians — the people responsible for the documents under review") {
                                     if storeManager.requireProfessional() { appState.showCustodianPanel = true }
                                 }
-                                detailToolButton(title: "Bates Numbers", icon: "number", color: .purple, tip: "Assign unique tracking numbers to documents for legal reference") {
+                                detailToolButton(title: String(localized: "Bates Numbers"), icon: "number", color: .purple, tip: "Assign unique tracking numbers to documents for legal reference") {
                                     if storeManager.requireProfessional() { appState.showBatesNumbering = true }
                                 }
-                                detailToolButton(title: "Report Builder", icon: "doc.text.magnifyingglass", color: .red, tip: "Generate investigation reports with findings, timelines, and evidence summaries") {
+                                detailToolButton(title: String(localized: "Report Builder"), icon: "doc.text.magnifyingglass", color: .red, tip: "Generate investigation reports with findings, timelines, and evidence summaries") {
                                     if storeManager.requireProfessional() { appState.showInvestigationReport = true }
                                 }
-                                detailToolButton(title: "GDPR Report", icon: "hand.raised", color: .green, tip: "Generate data privacy compliance reports for GDPR and similar regulations") {
+                                detailToolButton(title: String(localized: "GDPR Report"), icon: "hand.raised", color: .green, tip: "Generate data privacy compliance reports for GDPR and similar regulations") {
                                     if storeManager.requireProfessional() { appState.showGDPRReport = true }
                                 }
-                                detailToolButton(title: "Redaction", icon: "eye.slash", color: .gray, tip: "Mark sensitive information for redaction before producing documents") {
+                                detailToolButton(title: String(localized: "Redaction"), icon: "eye.slash", color: .gray, tip: "Mark sensitive information for redaction before producing documents") {
                                     if storeManager.requirePremium() { appState.showRedaction = true }
                                 }
                                 detailToolButton(
@@ -2376,6 +2687,8 @@ struct ContentView: View {
                                     storeManager.showPaywall = true
                                 }
                             }
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel(String(localized: "Forensic & Investigation"))
                             .padding(.horizontal, Spacing.xxLarge)
                         }
                     }
@@ -2400,6 +2713,8 @@ struct ContentView: View {
                                 personaButton(persona)
                             }
                         }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(String(localized: "Persona"))
                         .padding(.horizontal, Spacing.xxLarge)
                     }
                 }
@@ -2416,19 +2731,21 @@ struct ContentView: View {
                         GridItem(.flexible()), GridItem(.flexible()),
                         GridItem(.flexible()), GridItem(.flexible())
                     ], spacing: Spacing.small) {
-                        detailToolButton(title: "Preferences", icon: "gearshape", color: .gray) {
+                        detailToolButton(title: String(localized: "Preferences"), icon: "gearshape", color: .gray) {
                             openSettingsAction()
                         }
-                        detailToolButton(title: "What's New", icon: "sparkles.rectangle.stack", color: .purple) {
+                        detailToolButton(title: String(localized: "What's New"), icon: "sparkles.rectangle.stack", color: .purple) {
                             appState.showWhatsNew = true
                         }
-                        detailToolButton(title: "Shortcuts", icon: "keyboard", color: .gray) {
+                        detailToolButton(title: String(localized: "Shortcuts"), icon: "keyboard", color: .gray) {
                             appState.showKeyboardShortcuts = true
                         }
-                        detailToolButton(title: "Commands", icon: "terminal", color: .indigo) {
+                        detailToolButton(title: String(localized: "Commands"), icon: "terminal", color: .indigo) {
                             appState.showCommandPalette = true
                         }
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(String(localized: "Settings"))
                     .padding(.horizontal, Spacing.xxLarge)
                 }
 
@@ -2438,27 +2755,51 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// The unified format list over the current filter, shared by the sidebar's Export Emails,
+    /// the Tools strip and the Tools menu.
+    private var filteredExportSections: some View {
+        UnifiedExportSections(
+            scope: { filteredScope },
+            emlRender: { viewModel.exportEmailAsEML($0) },
+            emailCount: modelVM.displayedEmailCount,
+            share: { url in
+                #if os(iOS)
+                iOSShareFile(at: url)
+                #endif
+            },
+            exportPST: { appState.triggerExportPST = true },
+            errorMessage: $sidebarExportError
+        )
+        .environmentObject(storeManager)
+    }
+
     private func detailToolButton(title: String, icon: String, color: Color, tip: String? = nil, action: @escaping () -> Void) -> some View {
+        // Owner, 2026-09-30: compact chips instead of 64-pt tiles — the
+        // detail column is for the message; tools and settings are a strip.
         Button(action: action) {
-            VStack(spacing: Spacing.xxSmall) {
-                Image(systemName: icon)
-                    .font(.system(size: 22))
-                    .foregroundColor(color)
-                Text(title)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(AppColors.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity, minHeight: 64)
-            .padding(.vertical, Spacing.small)
-            .background(color.opacity(0.06))
-            .cornerRadius(CornerRadius.medium)
+            detailToolLabel(title: title, icon: icon, color: color)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .help(tip ?? title)
+    }
+
+    private func detailToolLabel(title: String, icon: String, color: Color) -> some View {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .foregroundColor(color)
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppColors.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, minHeight: 22)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(color.opacity(0.06))
+            .cornerRadius(CornerRadius.small)
     }
 
     @ViewBuilder
@@ -2512,12 +2853,31 @@ struct ContentView: View {
             Group {
                 switch appState.dockedBottomPanel {
                 case .topics:
-                    ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                        TopicClustersView(
-                            emails: emails,
-                            selectedClusterFilter: $selectedClusterFilter,
-                            clusterFilterIDs: $modelVM.clusterFilterIDs
-                        )
+                    if modules.isEnabled(.aiInsights) {
+                        ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                            TopicClustersView(
+                                emails: emails,
+                                selectedClusterFilter: $selectedClusterFilter,
+                                clusterFilterIDs: $modelVM.clusterFilterIDs
+                            )
+                        }
+                    } else {
+                        // A panel restored from a previous session while the
+                        // page is off: say so instead of running NLP
+                        // clustering under the Archive page.
+                        VStack(spacing: Spacing.small) {
+                            Image(systemName: "circle.grid.3x3")
+                                .font(.system(size: 22))
+                                .foregroundColor(AppColors.secondary)
+                            Text("AI Insights is off")
+                                .font(Typography.callout).fontWeight(.medium)
+                            Text("Topic discovery groups messages with on-device NLP and belongs to the AI Insights page. Turn the page on in Settings ▸ Modules to use it.")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: 360)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 case .subjects:
                     ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
@@ -2534,6 +2894,19 @@ struct ContentView: View {
         }
         .background(AppColors.backgroundPrimary)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+        // Switching AI Insights off while the Topics panel is open closes it
+        // (and clears any cluster filter it applied), like every other
+        // AI-owned surface.
+        .onChange(of: modules.isEnabled(.aiInsights)) { _, on in
+            if !on, appState.dockedBottomPanel == .topics {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    appState.dockedBottomPanel = .subjects
+                    modelVM.clusterFilterIDs = nil
+                    selectedClusterFilter = nil
+                    modelVM.applyFilters()
+                }
+            }
+        }
     }
 
     private var dockedPanelDragHandle: some View {
@@ -2569,16 +2942,18 @@ struct ContentView: View {
     private var dockedPanelTabBar: some View {
         @Bindable var appState = appState
         return HStack(spacing: 0) {
-            dockedTabButton(
-                title: "Topics",
-                icon: "circle.grid.3x3",
-                isActive: appState.dockedBottomPanel == .topics
-            ) {
-                withAnimation(.easeInOut(duration: 0.2)) { appState.dockedBottomPanel = .topics }
+            if modules.isEnabled(.aiInsights) {
+                dockedTabButton(
+                    title: String(localized: "Topics"),
+                    icon: "circle.grid.3x3",
+                    isActive: appState.dockedBottomPanel == .topics
+                ) {
+                    withAnimation(.easeInOut(duration: 0.2)) { appState.dockedBottomPanel = .topics }
+                }
             }
 
             dockedTabButton(
-                title: "Subjects",
+                title: String(localized: "Subjects"),
                 icon: "list.bullet.rectangle.portrait",
                 isActive: appState.dockedBottomPanel == .subjects
             ) {
@@ -2586,25 +2961,29 @@ struct ContentView: View {
             }
 
             Spacer()
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    appState.dockedBottomPanel = nil
-                    modelVM.clusterFilterIDs = nil
-                    selectedClusterFilter = nil
-                    modelVM.applyFilters()
+            // Owner, 2026-09-30: the panel is always on, so there is no close
+            // button. Leaving Topics (or switching AI Insights off) returns to
+            // Subjects and clears any cluster filter.
+            if appState.dockedBottomPanel == .topics {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        appState.dockedBottomPanel = .subjects
+                        modelVM.clusterFilterIDs = nil
+                        selectedClusterFilter = nil
+                        modelVM.applyFilters()
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppColors.secondary)
+                        .padding(6)
+                        .background(AppColors.secondary.opacity(0.1))
+                        .clipShape(Circle())
                 }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(AppColors.secondary)
-                    .padding(6)
-                    .background(AppColors.secondary.opacity(0.1))
-                    .clipShape(Circle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to Subjects")
+                .padding(.trailing, Spacing.small)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close panel")
-            .padding(.trailing, Spacing.small)
         }
         .padding(.leading, Spacing.small)
         .background(AppColors.backgroundSecondary)
@@ -2628,6 +3007,51 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    /// "N Emails" and the AI-filter chip at the top of the sidebar summary.
+    private var summaryCountRow: some View {
+        HStack(spacing: Spacing.small) {
+            // Part G3: unfiltered → store-backed archive total; filtered →
+            // the visible (preview-backed) list count.
+            Label("\(modelVM.displayedEmailCount) Emails", systemImage: "chart.bar.fill")
+                .font(Typography.title3)
+                .foregroundColor(AppColors.secondary)
+                .contentTransition(.numericText())
+                .adaptiveAnimation(modelVM.displayedEmailCount)
+            if modelVM.aiPinnedIDs != nil {
+                Button {
+                    modelVM.aiPinnedIDs = nil
+                    modelVM.applyFilters()
+                } label: {
+                    Label("AI Filter", systemImage: "sparkles")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)))
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear AI filter")
+            }
+        }
+    }
+
+    /// The date span of the listed emails, or nothing while there are none.
+    @ViewBuilder
+    private var summaryDateRange: some View {
+        if let start = modelVM.filteredDateRange.0, let end = modelVM.filteredDateRange.1 {
+            Text("\(formatted(start)) – \(formatted(end))")
+                .font(Typography.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(AppColors.info)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .padding(Spacing.xxSmall)
+        }
+    }
+
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
             if viewModel.duplicatesRemoved > 0 && personaManager.showSection(.summary) {
@@ -2647,51 +3071,33 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .help("View removed duplicates")
             }
-            HStack(spacing: Spacing.small) {
-                // Part G3: unfiltered → store-backed archive total; filtered →
-                // the visible (preview-backed) list count.
-                Label("\(modelVM.displayedEmailCount) Emails", systemImage: "chart.bar.fill")
-                    .font(Typography.title3)
-                    .foregroundColor(AppColors.secondary)
-                    .contentTransition(.numericText())
-                    .adaptiveAnimation(modelVM.displayedEmailCount)
-                if modelVM.aiPinnedIDs != nil {
-                    Button {
-                        modelVM.aiPinnedIDs = nil
-                        modelVM.applyFilters()
-                    } label: {
-                        Label("AI Filter", systemImage: "sparkles")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)))
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear AI filter")
+            // One line when the sidebar is wide enough; otherwise the date
+            // range gets its own line instead of being cut to "15 Jan 2025 – 19 J…"
+            // (iPad with three panes open, 2026-10-22).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Spacing.small) {
+                    summaryCountRow
+                    Spacer()
+                    summaryDateRange
                 }
-                Spacer()
-                if let start = modelVM.filteredDateRange.0, let end = modelVM.filteredDateRange.1 {
-                    Text("\(formatted(start)) – \(formatted(end))")
-                        .font(Typography.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(AppColors.info)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .padding(Spacing.xxSmall)
+                VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
+                    summaryCountRow
+                    summaryDateRange
                 }
             }
             if personaManager.showSection(.dateRange) {
                 HStack(spacing: Spacing.xSmall) {
-                    ModernDateField(label: "Start date — hide emails older than this (click for calendar)", date: $modelVM.startDate)
+                    ModernDateField(label: String(localized: "Start date — hide emails older than this (click for calendar)"), date: $modelVM.startDate,
+                                    unboundedLabel: String(localized: "From the first email"),
+                                    suggested: { modelVM.filteredDateRange.0.map { Calendar.current.startOfDay(for: $0) } ?? Calendar.current.startOfDay(for: Date()) })
                         .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
                     Text("–")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
-                    ModernDateField(label: "End date — hide emails newer than this (click for calendar)", date: $modelVM.endDate)
+                        .accessibilityHidden(true)   // decorative; both dates are labelled
+                    ModernDateField(label: String(localized: "End date — hide emails newer than this (click for calendar)"), date: $modelVM.endDate,
+                                    unboundedLabel: String(localized: "To the last email"),
+                                    suggested: { modelVM.filteredDateRange.1 ?? Date() })
                         .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
                     Spacer()
                 }
@@ -2704,22 +3110,23 @@ struct ContentView: View {
             Divider()
 
             if personaManager.showSection(.senders) {
-                SidebarSectionHeader(title: "From (Senders)", icon: "arrow.up.forward", color: AppColors.sentEmail, helpText: "Filter emails by sender address")
+                SidebarSectionHeader(title: String(localized: "From (Senders)"), icon: "arrow.up.forward", color: AppColors.sentEmail, helpText: String(localized: "Filter emails by sender address"))
                 multiToggleList(items: modelVM.allFromEmails, selection: $modelVM.selectedFromEmails, helpVerb: "sent by")
             }
 
             if personaManager.showSection(.recipients) {
-                SidebarSectionHeader(title: "To (Recipients)", icon: "arrow.down.backward", color: AppColors.receivedEmail, helpText: "Filter emails by recipient address")
+                SidebarSectionHeader(title: String(localized: "To (Recipients)"), icon: "arrow.down.backward", color: AppColors.receivedEmail, helpText: String(localized: "Filter emails by recipient address"))
                 multiToggleList(items: modelVM.allToEmails, selection: $modelVM.selectedToEmails, helpVerb: "addressed to")
             }
 
             if !modelVM.allTags.isEmpty && personaManager.showSection(.labels) {
-                SidebarSectionHeader(title: "Labels", icon: "tag", color: .purple, helpText: "Filter emails by Gmail labels or tags")
+                SidebarSectionHeader(title: String(localized: "Labels"), icon: "tag", color: .purple, helpText: String(localized: "Filter emails by Gmail labels or tags"))
                 multiToggleList(items: modelVM.allTags, selection: $modelVM.selectedTags, helpVerb: "labeled")
             }
 
-            if !modelVM.smartTagCounts.isEmpty {
-                SidebarSectionHeader(title: "Smart Tags", icon: "tag.fill", color: .purple, helpText: "Filter by AI-detected category, priority, sentiment, or forensic tag")
+            // AI-detected tags are Page 2 output; the section follows the page.
+            if !modelVM.smartTagCounts.isEmpty, modules.isEnabled(.aiInsights) {
+                SidebarSectionHeader(title: String(localized: "Smart Tags"), icon: "tag.fill", color: .purple, helpText: String(localized: "Filter by AI-detected category, priority, sentiment, or forensic tag"))
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     ForEach(modelVM.smartTagCounts, id: \.tag) { entry in
                         Button {
@@ -2733,7 +3140,7 @@ struct ContentView: View {
                                 Image(systemName: entry.tag.icon)
                                     .font(.caption2)
                                     .foregroundColor(entry.tag.color)
-                                Text(entry.tag.rawValue)
+                                Text(LocalizedStringKey(entry.tag.rawValue))
                                     .font(Typography.caption1)
                                 Spacer()
                                 Text("\(entry.count)")
@@ -2768,7 +3175,7 @@ struct ContentView: View {
             }
 
             if forensicManager.isEnabled || personaManager.selectedPersona == .legal || personaManager.selectedPersona == .forensic {
-                SidebarSectionHeader(title: "Evidence Tags", icon: "shield.checkered", color: .orange, helpText: "Filter by forensic evidence tag")
+                SidebarSectionHeader(title: String(localized: "Evidence Tags"), icon: "shield.checkered", color: .orange, helpText: String(localized: "Filter by forensic evidence tag"))
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     Button {
                         modelVM.selectedEvidenceTag = nil
@@ -2802,7 +3209,7 @@ struct ContentView: View {
                                     Image(systemName: tag.icon)
                                         .font(.caption2)
                                         .foregroundColor(tag.color)
-                                    Text(tag.rawValue)
+                                    Text(LocalizedStringKey(tag.rawValue))
                                         .font(Typography.caption1)
                                     Spacer()
                                     Text("\(count)")
@@ -2829,14 +3236,19 @@ struct ContentView: View {
             }
 
             if !modelVM.sortedSendersByReplyCount.isEmpty && personaManager.showSection(.replyFrequency) {
-                SidebarSectionHeader(title: "Reply Frequency", icon: "envelope.arrow.triangle.branch", color: AppColors.primary, helpText: "Senders ranked by how often you replied to them")
+                SidebarSectionHeader(title: String(localized: "Reply Frequency"), icon: "envelope.arrow.triangle.branch", color: AppColors.primary, helpText: String(localized: "Senders ranked by how often you replied to them"))
                 ScrollView {
                     VStack(alignment: .leading, spacing: Spacing.xSmall) {
                         ForEach(modelVM.sortedSendersByReplyCount, id: \.email) { entry in
                             HStack {
-                                Text(entry.email.prefix(38))
+                                // The whole address; a narrow sidebar shortens it in the
+                                // middle so the name and the domain both stay readable
+                                // (a fixed 38-character cut lost "…com>").
+                                Text(entry.email)
                                     .font(Typography.caption1)
                                     .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(entry.email)
                                 Spacer()
                                 Text("\(entry.count)")
                                     .font(Typography.caption1)
@@ -2854,7 +3266,7 @@ struct ContentView: View {
             }
 
             if !modelVM.allDomains.isEmpty && personaManager.showSection(.domains) {
-                SidebarSectionHeader(title: "Domains", icon: "globe", color: .teal, helpText: "Filter emails by sender/recipient domain")
+                SidebarSectionHeader(title: String(localized: "Domains"), icon: "globe", color: .teal, helpText: String(localized: "Filter emails by sender/recipient domain"))
                 multiToggleList(items: modelVM.allDomains, selection: $modelVM.selectedDomains)
             }
         }
@@ -2887,18 +3299,7 @@ struct ContentView: View {
             Menu {
                 // THE unified format list — identical to the list footer's
                 // Export menu and the open-email export menu.
-                UnifiedExportSections(
-                    scope: { filteredScope },
-                    emlRender: { viewModel.exportEmailAsEML($0) },
-                    emailCount: modelVM.displayedEmailCount,
-                    share: { url in
-                        #if os(iOS)
-                        iOSShareFile(at: url)
-                        #endif
-                    },
-                    errorMessage: $sidebarExportError
-                )
-                .environmentObject(storeManager)
+                filteredExportSections
             } label: {
                 Label("Export Emails", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
@@ -2923,7 +3324,7 @@ struct ContentView: View {
                         Button {
                             if storeManager.requireProfessional() { exportBulkForensicCSV() }
                         } label: {
-                            Label(storeManager.isProfessional ? "Bates CSV (numbered + hashes)" : "Bates CSV (Pro)", systemImage: "tablecells")
+                            Label(storeManager.isProfessional ? String(localized: "Bates CSV (numbered + hashes)") : String(localized: "Bates CSV (Pro)"), systemImage: "tablecells")
                         }
                         Button {
                             if storeManager.requireProfessional() { exportConcordanceDAT() }
@@ -2936,6 +3337,18 @@ struct ContentView: View {
                             } label: {
                                 Label("Export Tagged Emails Only", systemImage: "checkmark.seal")
                             }
+                        }
+                    }
+                    Section("Team handoff") {
+                        Button {
+                            if storeManager.requireProfessional() { exportCaseBundle() }
+                        } label: {
+                            Label("Sealed Case Bundle (.mailincase)", systemImage: "shippingbox")
+                        }
+                        Button {
+                            if storeManager.requireProfessional() { importCaseBundle() }
+                        } label: {
+                            Label("Open a Case Bundle…", systemImage: "square.and.arrow.down.on.square")
                         }
                     }
                     if forensicManager.isEnabled {
@@ -2957,7 +3370,7 @@ struct ContentView: View {
                             Button {
                                 if storeManager.requireProfessional() { exportAuditLog() }
                             } label: {
-                                Label(storeManager.isProfessional ? "Audit Log (tamper-evident)" : "Audit Log (Pro)", systemImage: "list.bullet.rectangle")
+                                Label(storeManager.isProfessional ? String(localized: "Audit Log (tamper-evident)") : String(localized: "Audit Log (Pro)"), systemImage: "list.bullet.rectangle")
                             }
                         }
                         Button {
@@ -2980,19 +3393,19 @@ struct ContentView: View {
                                 appState.showReviewBatches = true
                             }
                         } label: {
-                            Label(storeManager.isProfessional ? "Review Batches" : "Review Batches (Pro)", systemImage: "rectangle.stack.badge.play")
+                            Label(storeManager.isProfessional ? String(localized: "Review Batches") : String(localized: "Review Batches (Pro)"), systemImage: "rectangle.stack.badge.play")
                         }
                     }
                     Section("Review Sharing") {
                         Button {
                             if storeManager.requireProfessional() { exportReviewState() }
                         } label: {
-                            Label(storeManager.isProfessional ? "Export Review State" : "Export Review State (Pro)", systemImage: "square.and.arrow.up.on.square")
+                            Label(storeManager.isProfessional ? String(localized: "Export Review State") : String(localized: "Export Review State (Pro)"), systemImage: "square.and.arrow.up.on.square")
                         }
                         Button {
                             if storeManager.requireProfessional() { importReviewState() }
                         } label: {
-                            Label(storeManager.isProfessional ? "Import Review State" : "Import Review State (Pro)", systemImage: "square.and.arrow.down.on.square")
+                            Label(storeManager.isProfessional ? String(localized: "Import Review State") : String(localized: "Import Review State (Pro)"), systemImage: "square.and.arrow.down.on.square")
                         }
                     }
                 } label: {
@@ -3003,8 +3416,8 @@ struct ContentView: View {
                 .menuStyle(.borderedButton)
                 #endif
                 .controlSize(.small)
-                .help(isLegalOnly ? "Export production sets: Bates-numbered CSV, Concordance load files, and tagged documents" : "Export forensic data: CSV with Bates numbers and hashes, Concordance load files, or the tamper-evident audit log")
-                .accessibilityLabel(isLegalOnly ? "Production export options" : "Forensic export options")
+                .help(isLegalOnly ? String(localized: "Export production sets: Bates-numbered CSV, Concordance load files, and tagged documents") : String(localized: "Export forensic data: CSV with Bates numbers and hashes, Concordance load files, or the tamper-evident audit log"))
+                .accessibilityLabel(isLegalOnly ? String(localized: "Production export options") : String(localized: "Forensic export options"))
             }
         }
         .padding(.vertical, Spacing.small)
@@ -3087,8 +3500,8 @@ struct ContentView: View {
                     .font(Typography.headline)
                     .foregroundColor(AppColors.primary)
 
-                onboardingStep(number: "1", icon: "folder.badge.plus", title: "Import an archive", subtitle: sizeClass == .compact ? nil : "Open .mbox, .eml, or .zip files from Gmail Takeout, Thunderbird, Apple Mail, Outlook, Postbox, and more")
-                onboardingStep(number: "2", icon: "at", title: "Enter your email (optional)", subtitle: sizeClass == .compact ? nil : "Helps identify sent vs received. Leave blank and mailin will auto-detect from your archive.")
+                onboardingStep(number: "1", icon: "folder.badge.plus", title: String(localized: "Import an archive"), subtitle: sizeClass == .compact ? nil : "Open .mbox, .eml, or .zip files from Gmail Takeout, Thunderbird, Apple Mail, Outlook, Postbox, and more")
+                onboardingStep(number: "2", icon: "at", title: String(localized: "Enter your email (optional)"), subtitle: sizeClass == .compact ? nil : "Helps identify sent vs received. Leave blank and mailin will auto-detect from your archive.")
                 onboardingStep(number: "3", icon: "line.3.horizontal.decrease.circle", title: personaStep3Title, subtitle: sizeClass == .compact ? nil : personaStep3Subtitle)
                 onboardingStep(number: "4", icon: personaStep4Icon, title: personaStep4Title, subtitle: sizeClass == .compact ? nil : personaStep4Subtitle)
             }
@@ -3209,6 +3622,19 @@ struct ContentView: View {
         .accessibilityLabel("Step \(number): \(title)\(subtitle.map { ". \($0)" } ?? "")")
     }
 
+    /// `"Ann Lee" <ann@x.org>` → "Ann Lee, ann@x.org"; `<ann@x.org>` → "ann@x.org".
+    /// Quotes and angle brackets read aloud as symbols (audit: "Label not
+    /// human-readable", 2026-10-13).
+    static func spokenAddress(_ raw: String) -> String {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard let lt = s.lastIndex(of: "<"), let gt = s.lastIndex(of: ">"), lt < gt else {
+            return s.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        }
+        let address = String(s[s.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
+        let name = String(s[..<lt]).trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        return name.isEmpty || name == address ? address : "\(name), \(address)"
+    }
+
     private func multiToggleList(items: [String], selection: Binding<[String]>,
                                  helpVerb: String = "matching") -> some View {
         ScrollView {
@@ -3225,13 +3651,27 @@ struct ContentView: View {
                             modelVM.applyFilters()
                         }
                     )) {
-                        Text(item.prefix(38)).font(Typography.caption1)
+                        // The whole value, up to two lines, shortened in the middle
+                        // only if it still does not fit (a fixed 38-character cut
+                        // showed "<sarah.johnson@techcorp." at any width).
+                        Text(item)
+                            .font(Typography.caption1)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
                     }
+                    .accessibilityLabel(String(localized: "Filter: \(Self.spokenAddress(item))"))
                     .help("Show only emails \(helpVerb) \(item) — check several to include all of them; searches the whole archive")
                 }
             }
         }
+        // iOS switch rows are taller: 90 pt showed two and a half rows, so the third looked cut off
+        // by the next section. A visible scroll bar says there is more.
+        #if os(iOS)
+        .frame(maxHeight: 170)
+        #else
         .frame(maxHeight: 90)
+        #endif
+        .scrollIndicators(.visible)
     }
 
     private var overlaySpinner: some View {
@@ -3338,12 +3778,12 @@ struct ContentView: View {
 
     private var personaPrivacyNote: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "All processing stays on-device. Cloud AI is disabled in forensic mode to maintain chain of custody."
-        case .legal: return "Documents never leave your Mac. Privilege review stays confidential."
-        case .itAdmin: return "All header analysis happens locally. No email content is transmitted externally."
-        case .journalist: return "Source material stays on your Mac. No data is shared with external servers."
-        case .researcher: return "Your corpus stays on your Mac. Analysis and citations are produced locally."
-        case .personal, .general: return "No data ever leaves your device. All analysis is performed locally."
+        case .forensic: return String(localized: "All processing stays on this device, and forensic mode records each action to keep the chain of custody.")
+        case .legal: return String(localized: "Documents never leave your device. Privilege review stays confidential.")
+        case .itAdmin: return String(localized: "All header analysis happens locally. No email content is transmitted externally.")
+        case .journalist: return String(localized: "Source material stays on your device. No data is shared with external servers.")
+        case .researcher: return String(localized: "Your corpus stays on your device. Analysis and citations are produced locally.")
+        case .personal, .general: return String(localized: "No data ever leaves your device. All analysis is performed locally.")
         }
     }
 
@@ -3351,23 +3791,23 @@ struct ContentView: View {
 
     private var personaStep3Title: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Analyze & tag"
-        case .legal: return "Review & code"
-        case .itAdmin: return "Inspect headers"
-        case .journalist: return "Find patterns"
-        case .researcher: return "Screen & code"
-        case .personal, .general: return "Filter & explore"
+        case .forensic: return String(localized: "Analyze & tag")
+        case .legal: return String(localized: "Review & code")
+        case .itAdmin: return String(localized: "Inspect headers")
+        case .journalist: return String(localized: "Find patterns")
+        case .researcher: return String(localized: "Screen & code")
+        case .personal, .general: return String(localized: "Filter & explore")
         }
     }
 
     private var personaStep3Subtitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Tag evidence, verify integrity hashes, and build your audit trail"
-        case .legal: return "Code documents for privilege, relevance, and responsiveness"
-        case .itAdmin: return "Examine MIME structure, routing headers, and authentication results"
-        case .journalist: return "Discover connections, timelines, and communication patterns"
-        case .researcher: return "Screen the corpus in or out, code passages, and keep every decision on record"
-        case .personal, .general: return "Filter by sender, recipient, date range, or reply frequency"
+        case .forensic: return String(localized: "Tag evidence, verify integrity hashes, and build your audit trail")
+        case .legal: return String(localized: "Code documents for privilege, relevance, and responsiveness")
+        case .itAdmin: return String(localized: "Examine MIME structure, routing headers, and authentication results")
+        case .journalist: return String(localized: "Discover connections, timelines, and communication patterns")
+        case .researcher: return String(localized: "Screen the corpus in or out, code passages, and keep every decision on record")
+        case .personal, .general: return String(localized: "Filter by sender, recipient, date range, or reply frequency")
         }
     }
 
@@ -3384,23 +3824,23 @@ struct ContentView: View {
 
     private var personaStep4Title: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Export evidence"
-        case .legal: return "Produce documents"
-        case .itAdmin: return "Export & diagnose"
-        case .journalist: return "Ask AI"
-        case .researcher: return "Build chronologies"
-        case .personal, .general: return "Ask AI"
+        case .forensic: return String(localized: "Export evidence")
+        case .legal: return String(localized: "Produce documents")
+        case .itAdmin: return String(localized: "Export & diagnose")
+        case .journalist: return String(localized: "Ask AI")
+        case .researcher: return String(localized: "Build chronologies")
+        case .personal, .general: return String(localized: "Ask AI")
         }
     }
 
     private var personaStep4Subtitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Generate Bates-stamped PDFs, forensic reports, and Concordance load files"
-        case .legal: return "Export Bates-numbered production sets, privilege logs, and redacted copies"
-        case .itAdmin: return "Export CSV data, analyze routing, and identify authentication failures"
-        case .journalist: return "Use AI to summarize threads, find contradictions, and build timelines"
-        case .researcher: return "Build cited chronologies, compare accounts, and export the coded dataset"
-        case .personal, .general: return "Use the AI assistant to summarize, analyze sentiment, or ask questions"
+        case .forensic: return String(localized: "Generate Bates-stamped PDFs, forensic reports, and Concordance load files")
+        case .legal: return String(localized: "Export Bates-numbered production sets, privilege logs, and redacted copies")
+        case .itAdmin: return String(localized: "Export CSV data, analyze routing, and identify authentication failures")
+        case .journalist: return String(localized: "Use AI to summarize threads, find contradictions, and build timelines")
+        case .researcher: return String(localized: "Build cited chronologies, compare accounts, and export the coded dataset")
+        case .personal, .general: return String(localized: "Use the AI assistant to summarize, analyze sentiment, or ask questions")
         }
     }
 
@@ -3424,20 +3864,25 @@ struct ContentView: View {
             UTType(filenameExtension: "eml"),
             UTType(filenameExtension: "emlx"),
             UTType(filenameExtension: "msg"),
+            UTType(filenameExtension: "oft"),
             UTType(filenameExtension: "pst"),
             UTType(filenameExtension: "ost"),
             UTType(filenameExtension: "nsf"),
-            UTType(filenameExtension: "zip")
+            UTType(filenameExtension: "zip"),
+            UTType(filenameExtension: "gz"),
+            UTType(filenameExtension: "olm"),
+            UTType(filenameExtension: "tar"),
+            UTType(filenameExtension: "tgz")
         ].compactMap { $0 }
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.message = "Select email files (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip) from any email client"
+        panel.message = String(localized: "Select email files (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .olm, .zip, .gz, .tar, .tgz) from any email client")
 
         if panel.runModal() == .OK {
             parseFailed = false
             let urls = panel.urls
-            let resolvedURLs = resolveZipFiles(urls)
+            let resolvedURLs = urls   // containers (zip/gz) are opened by the import funnel itself
             if resolvedURLs.count == 1, let url = resolvedURLs.first {
                 resolveAndHandleSelectedFile(url)
             } else if resolvedURLs.count > 1 {
@@ -3449,34 +3894,106 @@ struct ContentView: View {
         #endif
     }
 
-    private func resolveZipFiles(_ urls: [URL]) -> [URL] {
-        var resolved: [URL] = []
-        for url in urls {
-            if url.pathExtension.lowercased() == "zip" {
-                let extracted = viewModel.extractMailFilesFromZip(at: url)
-                if extracted.isEmpty {
-                    parseFailed = true
-                } else {
-                    resolved.append(contentsOf: extracted)
-                }
-            } else {
-                resolved.append(url)
-            }
+/// A5(d): "Retry failed sources" from the import receipt. The receipt knows
+/// file NAMES; the coordinator kept this run's URLs by name, so the ones
+/// still readable are re-imported through the ordinary funnel. Names that no
+/// longer resolve (a different launch, an ejected disk) are listed and the
+/// open panel is offered — never a silent no-op.
+private func retryImportSources(_ names: [String]) {
+    let known = viewModel.importCoordinator.lastRunSourceURLs
+    var resolved: [URL] = []
+    var missing: [String] = []
+    for name in names {
+        if let url = known[name], FileManager.default.isReadableFile(atPath: url.path) {
+            resolved.append(url)
+        } else {
+            missing.append(name)
         }
-        return resolved
     }
+    if !resolved.isEmpty {
+        handleMultipleFiles(resolved)
+    }
+    if !missing.isEmpty {
+        viewModel.statusMessage = "Could not reopen \(missing.joined(separator: ", ")) — choose the file(s) again to retry."
+        viewModel.statusColor = .orange
+        if resolved.isEmpty { openPanelFallback() }
+    }
+}
 
 private func handleMultipleFiles(_ urls: [URL]) {
+        // NOTE: the extension filter here is a cheap pre-filter only. The
+        // CONTENT classifier is what actually decides, and the guided sheet
+        // shows its verdict — which is how a PST named `.mbox` becomes
+        // visible before it is parsed rather than after.
         let supported = Set(ParserFactory.allSupportedExtensions)
-        let validURLs = urls.filter { supported.contains($0.pathExtension.lowercased()) }
+        let validURLs = urls.filter {
+            supported.contains($0.pathExtension.lowercased()) || $0.pathExtension.isEmpty
+        }
         guard !validURLs.isEmpty else {
             parseFailed = true
             return
         }
+        beginImport(validURLs)
+    }
+
+    /// A3: one funnel for every import entry point. With
+    /// `Capability.guidedImport` on, the user sees what will happen first;
+    /// with it off, the import starts immediately exactly as in 2.x.
+    private func beginImport(_ urls: [URL]) {
+        if modules.isOn(.guidedImport) {
+            pendingImportURLs = urls
+            return
+        }
+        startImport(urls)
+    }
+
+    private func startImport(_ urls: [URL]) {
+        startImport(ImportChoices(urls: urls,
+                                  dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
+                                  copiesOriginals: false,   // F03: 3.0 references originals
+                                  indexAttachmentText: ImportChoices.indexAttachmentTextDefault()))
+    }
+
+    /// A3: the sheet's choices drive the run.
+    private func startImport(_ choices: ImportChoices) {
+        guard OrgPolicy.confirmAllowed(.importMail) else { return }   // enterprise role (OrgPolicy)
+        // Free input allowance (owner, 2026-10-01): decided BEFORE anything is
+        // queued or spun up, with the cumulative figure from the store. A
+        // denied import does nothing and says why; the paywall opens on
+        // Personal with the reason. The view model checks again at the
+        // service boundary, so no other caller can skip this.
+        let limit = storeManager.inputByteLimit
+        Task { @MainActor in
+            if let denial = await ImportAllowance.check(urls: choices.urls, limitBytes: limit).denial {
+                importAllowanceDenial = denial
+                viewModel.statusMessage = "Import refused: Free plan input limit."
+                viewModel.statusColor = .orange
+                storeManager.requestPurchase(.personal, feature: String(localized: "Import more than 100 MB"),
+                                             reason: denial.message)
+                return
+            }
+            runImport(choices, inputByteLimit: limit)
+        }
+    }
+
+    private func runImport(_ choices: ImportChoices, inputByteLimit: Int?) {
         showSpinner = true
         parseFailed = false
+        UserDefaults.standard.set(choices.indexAttachmentText, forKey: ImportChoices.indexAttachmentTextKey)
+        // A4: the queue is a view of this session's work; the durable record
+        // is still the receipt.
+        if modules.isOn(.importQueue) {
+            ImportQueue.shared.enqueue(urls: choices.urls)
+        }
         let cap = storeManager.isPremium ? nil : StoreManager.freeEmailLimit
-        viewModel.parseSelectedFiles(validURLs, removeDuplicates: removeDuplicates, maxEmails: cap)
+        // Audit F18: the policy the sheet offered is the policy the store
+        // gets — including the canonical-fingerprint choice, which a Boolean
+        // cannot carry.
+        viewModel.parseSelectedFiles(choices.urls,
+                                     dedupPolicy: choices.dedupPolicy,
+                                     maxEmails: cap,
+                                     copiesOriginals: choices.copiesOriginals,
+                                     inputByteLimit: inputByteLimit)
     }
 
     private func resolveAndHandleSelectedFile(_ url: URL) {
@@ -3498,13 +4015,12 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
 
     private func handleSelectedFile(_ url: URL) {
-        showSpinner = true
-        parseFailed = false
-        let cap = storeManager.isPremium ? nil : StoreManager.freeEmailLimit
-        viewModel.parseSelectedFiles([url], removeDuplicates: removeDuplicates, maxEmails: cap)
+        beginImport([url])
     }
 
-    private static let freeExportLimit = 10
+
+    /// Set when the Free input allowance refuses an import; drives the alert.
+    @State private var importAllowanceDenial: ImportAllowance.Denial?
 
     // MARK: - Part O: streaming export plumbing
 
@@ -3535,9 +4051,11 @@ private func handleMultipleFiles(_ urls: [URL]) {
         return .none
     }
 
-    /// Free-tier cap on export record counts (nil = unlimited for Pro).
-    private var freeExportCap: Int? {
-        storeManager.isPremium ? nil : Self.freeExportLimit
+    /// CAP-02 / LIFE-06: the export cap for a format comes from the access
+    /// policy — Free 500, a lapsed plan uncapped for mail-preserving formats,
+    /// an active plan uncapped. Never a private number of its own.
+    private func exportCap(for format: UnifiedExportFormat) -> Int? {
+        storeManager.accessPolicy.exportCap(for: format)
     }
 
     /// Shared runner: progress + Cancel via `ExportRunCenter`; cancellation and
@@ -3546,32 +4064,41 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func runStreamingExport(_ title: String,
                                     _ operation: @escaping @MainActor (ArchiveExportService) async throws -> String?) {
         let vm = viewModel
-        ExportRunCenter.shared.run(title: title) {
+        let center = ExportRunCenter.shared
+        center.run(title: title) {
             do {
-                if let message = try await operation(ArchiveExportService.shared) {
+                let message = try await operation(ArchiveExportService.shared)
+                if let message {
                     vm.statusMessage = message
                     vm.statusColor = .green
+                }
+                // The receipt says what really happened (rule 5): the free-tier cap is a
+                // truncation, a body that reports "cancelled" is a cancel, the rest completed.
+                if let message, message.hasSuffix(Self.exportCancelledSuffix) {
+                    center.recordOutcome(.cancelled)
+                } else if let message, message.contains("(free limit)") {
+                    center.recordOutcome(.truncated)
+                } else {
+                    center.recordOutcome(.complete)
                 }
             } catch is CancellationError {
                 vm.statusMessage = "\(title) cancelled — partial output removed."
                 vm.statusColor = .orange
+                center.recordOutcome(.cancelled)
             } catch {
                 vm.statusMessage = "\(title) failed: \(error.localizedDescription)"
                 vm.statusColor = .red
+                center.recordOutcome(.failed, message: error.localizedDescription)
             }
         }
     }
 
-    /// Standard progress hook for the runner's overlay.
-    private var exportProgress: @MainActor (Int, Int) -> Void {
-        { done, total in ExportRunCenter.shared.update(done: done, total: total) }
-    }
 
     /// Free-limit messaging shared by capped exports; returns the status
     /// message and raises the paywall when the cap truncated the export.
     private func cappedExportMessage(written: Int, scope: ArchiveSelectionScope,
-                                     what: String) async -> String {
-        if let cap = freeExportCap {
+                                     cap: Int?, what: String) async -> String {
+        if let cap {
             let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? written
             if total > cap {
                 storeManager.showPaywall = true
@@ -3595,16 +4122,16 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
         let vm = viewModel
-        let cap = freeExportCap
+        let cap = exportCap(for: .emlFiles)
         runStreamingExport("Exporting selected emails as EML") { service in
             // Streams the (possibly symbolic) selection; one .eml per message.
             let result = try await service.exportEMLFiles(
                 scope: scope, to: folderURL, limit: cap,
                 render: { vm.exportEmailAsEML($0) },
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Export Selection", detail: "Exported \(result.recordsWritten) selected emails as EML")
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "selected emails")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: String(localized: "selected emails"))
         }
         #endif
     }
@@ -3620,15 +4147,15 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.message = "Export selected email(s) as individual PDFs"
         panel.prompt = "Export PDFs"
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
-        let cap = freeExportCap
+        let cap = exportCap(for: .pdfFiles)
         runStreamingExport("Exporting PDFs") { service in
             // Streams the selection; each PDF rendered per message (bounded).
             let result = try await service.exportPDFFiles(
                 scope: scope, to: folderURL, limit: cap,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "PDF export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Individual PDF Export", detail: "\(result.recordsWritten) exported")
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "PDFs")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: String(localized: "PDFs"))
         }
         #endif
     }
@@ -3648,19 +4175,19 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #endif
         let scope = filteredScope
         let vm = viewModel
-        let cap = freeExportCap
+        let cap = exportCap(for: .emlFiles)
         runStreamingExport("Exporting emails as EML") { service in
             // Streams the whole filtered query from the store — never the
             // bounded preview arrays.
             let result = try await service.exportEMLFiles(
                 scope: scope, to: folderURL, limit: cap,
                 render: { vm.exportEmailAsEML($0) },
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             if result.recordsWritten > 0 { self.iOSShareFile(at: folderURL) }
             #endif
-            let message = await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "emails")
+            let message = await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: "emails")
             return message == "Exported \(result.recordsWritten) emails."
                 ? "Exported \(result.recordsWritten) emails to \(folderURL.lastPathComponent)."
                 : message
@@ -3669,7 +4196,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportFilteredEmailsAsCSV() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "mailin_export_emails.csv"
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.commaSeparatedText]
@@ -3678,24 +4205,24 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_export_emails.csv")
         #endif
         let scope = filteredScope
-        let cap = freeExportCap
+        let cap = exportCap(for: .csv)
         runStreamingExport("Exporting CSV") { service in
             // Streamed row-by-row from the store; incremental file writes.
             let result = try await service.exportDetailedCSV(
                 scope: scope, to: url, limit: cap,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "CSV export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             self.iOSShareFile(at: url)
             #endif
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "emails as CSV")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, cap: cap, what: String(localized: "emails as CSV"))
         }
     }
 
     // MARK: - Forensic Exports
     private func exportBulkForensicCSV() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "forensic_export_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).csv"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -3708,7 +4235,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Streamed + signed: Ed25519 over the incrementally computed SHA-256.
             let result = try await service.exportForensicCSV(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Forensic CSV export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Bulk Forensic Export", detail: "Exported \(result.recordsWritten) emails as forensic CSV to \(url.lastPathComponent) (signed, sha256 \(result.sha256Hex?.prefix(12) ?? ""))")
             #if os(iOS)
@@ -3720,7 +4247,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportConcordanceDAT() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "forensic_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).dat"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -3732,7 +4259,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         runStreamingExport("Exporting Concordance load file") { service in
             let result = try await service.exportConcordanceDAT(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Concordance export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Concordance Export", detail: "Exported \(result.recordsWritten) emails as Concordance .dat (signed)")
             #if os(iOS)
@@ -3740,6 +4267,98 @@ private func handleMultipleFiles(_ urls: [URL]) {
             #endif
             return "Exported Concordance load file with \(result.recordsWritten) records (signed)."
         }
+    }
+
+    // MARK: - V3-E3/E4 sealed case bundles
+    //
+    // `CaseBundleService` implements export, seal verification and the
+    // attributed additive merge, and had no caller anywhere — E3 and E4 shipped
+    // as enterprise features that could not be reached from the app at all.
+    // These two actions are that missing wiring.
+
+    /// Exports the evidence-TAGGED emails plus the current studio artifacts as
+    /// one sealed `.mailincase` file.
+    ///
+    /// Scoped to tags rather than the whole archive on purpose. A bundle must
+    /// be sealed over its exact bytes, so its payload is necessarily built in
+    /// memory — making an archive-wide bundle proportional to the archive. The
+    /// tagged set is user-curated and bounded, and a case handoff is that set
+    /// anyway. The guard below states the requirement instead of silently
+    /// producing an empty bundle.
+    private func exportCaseBundle() {
+        let taggedIDs = Array(forensicManager.evidenceTags.keys)
+        guard !taggedIDs.isEmpty else {
+            viewModel.statusMessage = "Tag the emails for this case first — a bundle carries the tagged set."
+            viewModel.statusColor = .orange
+            return
+        }
+        #if os(macOS)
+        let panel = ManagedSavePanel()
+        let caseName = forensicManager.caseNumber.isEmpty ? "case" : forensicManager.caseNumber
+        panel.nameFieldStringValue = "\(caseName).\(CaseBundleService.fileExtension)"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        #else
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("case.\(CaseBundleService.fileExtension)")
+        #endif
+
+        let title = forensicManager.caseNumber.isEmpty ? "Untitled case" : forensicManager.caseNumber
+        Task { @MainActor in
+            var emails: [MBOXParser.RawEmail] = []
+            for id in taggedIDs {
+                if let email = try? await ArchiveDataService.shared.fullEmail(id: id) {
+                    emails.append(email)
+                }
+            }
+            guard !emails.isEmpty else {
+                viewModel.statusMessage = "None of the tagged emails could be read from the archive."
+                viewModel.statusColor = .red
+                return
+            }
+            do {
+                try await CaseBundleService.exportResolvingSources(
+                    caseTitle: title, emails: emails,
+                    includeEvidenceRecord: modules.isOn(.v3Fingerprints), to: url)
+                // Says how many were read, not how many were tagged: a tagged
+                // id the archive can no longer produce must not be counted as
+                // if it travelled.
+                viewModel.statusMessage = "Sealed case bundle: \(emails.count) of \(taggedIDs.count) tagged emails."
+                viewModel.statusColor = emails.count == taggedIDs.count ? .green : .orange
+                #if os(iOS)
+                iOSShareFile(at: url)
+                #endif
+            } catch {
+                viewModel.statusMessage = error.localizedDescription
+                viewModel.statusColor = .red
+            }
+        }
+    }
+
+    /// Verifies a `.mailincase` seal and merges its artifacts. A broken seal is
+    /// refused with the exact failure and nothing is merged.
+    private func importCaseBundle() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let (bundle, receipt) = try CaseBundleService.open(url: url)
+            let report = CaseBundleService.mergeArtifacts(from: bundle)
+            viewModel.statusMessage = """
+                Verified bundle from \(report.from) (seal \(receipt.sha256Hex.prefix(12))…): \(report.summary). \
+                \(report.emailsInBundle) email(s) in the bundle.
+                """
+            viewModel.statusColor = report.conflictsLabelled > 0 ? .orange : .green
+        } catch {
+            // The refusal text names which check failed — content mismatch or
+            // a signature that does not verify are different problems.
+            viewModel.statusMessage = error.localizedDescription
+            viewModel.statusColor = .red
+        }
+        #endif
     }
 
     private func exportTaggedOnly() {
@@ -3751,7 +4370,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "tagged_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).csv"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -3762,7 +4381,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         runStreamingExport("Exporting tagged emails") { service in
             let result = try await service.exportForensicCSV(
                 scope: .explicit(taggedIDs), to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Tagged export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Tagged Export", detail: "Exported \(result.recordsWritten) tagged emails (signed)")
             #if os(iOS)
@@ -3776,7 +4395,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportVCard() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "contacts.vcf"
         panel.allowedContentTypes = [.vCard]
         panel.canCreateDirectories = true
@@ -3790,7 +4409,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // streamed scope — not the preview arrays.
             let contactCount = try await service.exportVCard(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             #if os(iOS)
             self.iOSShareFile(at: url)
             #endif
@@ -3800,7 +4419,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportICS() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "events.ics"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -3812,7 +4431,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Events are extracted per streamed email and written incrementally.
             let events = try await service.exportICS(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             guard events > 0 else { return "ICS export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             self.iOSShareFile(at: url)
@@ -3823,7 +4442,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportHashManifest() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "hash_manifest_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).csv"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -3835,7 +4454,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         runStreamingExport("Exporting hash manifest") { service in
             let result = try await service.exportHashManifest(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Hash manifest export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Hash Manifest Export", detail: "Exported hash manifest for \(result.recordsWritten) emails (signed)")
             #if os(iOS)
@@ -3847,7 +4466,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func batchPrintFiltered() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "batch_print_emails.txt"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -3860,7 +4479,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // materializes; the file itself is the print artifact.
             let result = try await service.exportBatchPrintText(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Batch print \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             self.iOSShareFile(at: url)
@@ -3887,7 +4506,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Rendered per streamed message — bounded memory at any scale.
             let result = try await service.exportTIFFFiles(
                 scope: scope, to: folderURL,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "TIFF export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             if result.recordsWritten > 0 { self.iOSShareFile(at: folderURL) }
@@ -3910,14 +4529,14 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #endif
         let folderURL = baseURL.appendingPathComponent("mailin_html_export")
         let scope = filteredScope
-        let cap = freeExportCap
+        let cap = exportCap(for: .portableHTML)
         runStreamingExport("Exporting portable HTML") { service in
             // Streamed into index.html. A single self-contained page must be
             // loaded whole by the browser, so the format carries an explicit
-            // cap (ArchiveExportService.portableHTMLMaxEmails) — surfaced below.
+            // CAP-04: the chunked viewer has no message cap; only the plan's cap applies.
             let result = try await service.exportPortableHTML(
                 scope: scope, to: folderURL, limit: cap,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "HTML export \(Self.exportCancelledSuffix)" }
             #if os(macOS)
             NSWorkspace.shared.selectFile(folderURL.appendingPathComponent("index.html").path, inFileViewerRootedAtPath: folderURL.path)
@@ -3930,9 +4549,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 self.storeManager.showPaywall = true
                 return "Exported \(result.recordsWritten) of \(total) emails as portable HTML (free limit — upgrade for unlimited). Open index.html in any browser."
             }
-            if total > ArchiveExportService.portableHTMLMaxEmails {
-                return "Exported first \(result.recordsWritten) of \(total) emails as portable HTML (single-page format is capped at \(ArchiveExportService.portableHTMLMaxEmails) — use EML/CSV for the full set). Open index.html in any browser."
-            }
             return "Exported \(result.recordsWritten) emails as portable HTML. Open index.html in any browser."
         }
     }
@@ -3944,7 +4560,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         let casePart = forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber
         panel.nameFieldStringValue = "review_state_\(casePart).mailinreview"
         panel.canCreateDirectories = true
@@ -4003,7 +4619,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // over bounded batches from the store.
             let result = try await service.verifyIntegrity(
                 scope: scope,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             var message = "Integrity: \(result.passed) passed"
             if result.failed > 0 { message += ", \(result.failed) FAILED" }
             if result.unverified > 0 { message += ", \(result.unverified) unverified" }
@@ -4018,7 +4634,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func exportMSG() {
         let scope = filteredScope
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.title = "Export as MSG"
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "msg_export"
@@ -4029,13 +4645,13 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // MSG is per-message OLE2 — streams unbounded (unlike PST).
             let result = try await service.exportMSGFiles(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "MSG export \(Self.exportCancelledSuffix)" }
             return "Exported \(result.recordsWritten) MSG files."
         }
         #else
         let vm = viewModel
-        ExportRunCenter.shared.run(title: "Exporting MSG") {
+        ExportRunCenter.shared.run(title: String(localized: "Exporting MSG")) {
             // iOS shares a single .msg — hydrate just the first match.
             let first = try? await ArchiveDataService.shared
                 .page(query: modelVM.currentArchiveQuery, cursor: nil, limit: 1).summaries.first
@@ -4057,35 +4673,60 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func exportPST() {
         let scope = filteredScope
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.title = "Export as PST"
         panel.allowedContentTypes = [.data]
         panel.nameFieldStringValue = "export.pst"
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
+        if V3Paging.isOn {
+            // §3-H9: parts below the format's 50 GB ceiling and below the
+            // destination's maximum file size (FAT32: 4 GB). One part keeps
+            // the chosen name; more become name-0001.pst, name-0002.pst …
+            runStreamingExport("Exporting PST") { service in
+                let dir = url.deletingLastPathComponent()
+                let base = url.deletingPathExtension().lastPathComponent
+                let parts = try await service.exportPSTParts(scope: scope, toDirectory: dir, baseName: base,
+                                                             onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+                let messages = parts.reduce(0) { $0 + $1.messages }
+                if parts.count == 1, let only = parts.first {
+                    try? FileManager.default.removeItem(at: url)
+                    try FileManager.default.moveItem(at: only.url, to: url)
+                    // R3: the expected-record manifest goes with the file it describes.
+                    try ContainerManifest.moveSidecar(from: only.url, to: url)
+                    return "Exported \(messages) emails to PST."
+                }
+                return "Exported \(messages) emails to \(parts.count) PST files (\(base)-0001.pst …) — each below the size this drive and Outlook accept."
+            }
+            return
+        }
         runStreamingExport("Exporting PST") { service in
             // Streams every message in scope straight to disk — no count
             // cap; the PST format's own 50 GB ceiling is the only limit.
             let count = try await service.exportPST(
                 scope: scope,
                 to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             return "Exported \(count) emails to PST."
         }
         #else
-        let vm = viewModel
-        ExportRunCenter.shared.run(title: "Exporting PST") {
-            do {
-                let tmpURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("export.pst")
-                try? FileManager.default.removeItem(at: tmpURL)
-                _ = try await ArchiveExportService.shared.exportPST(scope: scope, to: tmpURL)
-                shareItems = [tmpURL]
+        // Same path as the Mac (progress, and a receipt that says what happened); it used to call
+        // the run center directly and so always ended "Failed — 0 written".
+        runStreamingExport("Exporting PST") { service in
+            let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("export.pst")
+            try? FileManager.default.removeItem(at: tmpURL)
+            let count = try await service.exportPST(
+                scope: scope, to: tmpURL,
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+            if count > 0 {
+                // R3: the receipt names the file (so Verify export can check it, its
+                // manifest kept with the receipt) and the Share sheet hands on the
+                // manifest beside it, so a saved copy verifies one-to-one too.
+                ExportRunCenter.shared.recordOutcome(.complete, destination: tmpURL)
+                shareItems = ExportRunCenter.shareItems(for: tmpURL)
                 showShareSheet = true
-            } catch {
-                vm.statusMessage = "PST export failed: \(error.localizedDescription)"
-                vm.statusColor = .red
             }
+            return "Exported \(count) emails to PST."
         }
         #endif
     }
@@ -4095,7 +4736,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let custodian = CustodianManager.shared.defaultCustodian
         let caseNumber = forensicManager.caseNumber
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.title = "Export Relativity Load File"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "relativity_loadfile.csv"
@@ -4105,7 +4746,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let result = try await service.exportRelativityCSV(
                 scope: scope, to: url,
                 custodianName: custodian, caseNumber: caseNumber,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Relativity export \(Self.exportCancelledSuffix)" }
             return "Exported Relativity load file (\(result.recordsWritten) records, signed)."
         }
@@ -4115,7 +4756,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let result = try await service.exportRelativityCSV(
                 scope: scope, to: url,
                 custodianName: custodian, caseNumber: caseNumber,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Relativity export \(Self.exportCancelledSuffix)" }
             shareItems = [url]
             showShareSheet = true
@@ -4126,32 +4767,42 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func importFromCloud(_ emails: [MBOXParser.RawEmail]) {
         guard !emails.isEmpty else { return }
-        // Part Q: cloud fetches are persisted into the SQLite authority + FTS
-        // — no in-RAM corpus, no v1 JSON writes. `.parsingFinished` (posted by
-        // ingestEmails) re-pages the list and refreshes derived caches.
+        // V4-08 (plan §3 A08): online mail enters the archive ONLY through the
+        // connected-mail sink — account, provider identity, folders and the
+        // original bytes, never Message-ID deduplication. The legacy
+        // connectors' parsed messages are not inserted (the unscoped
+        // `ingestEmails` stays for sample data); the accounts' capture runs instead.
+        let fetched = emails.count
         Task { @MainActor in
-            await viewModel.ingestEmails(emails, sourceLabel: "cloud")
+            let started = await ConnectedMailRuntime.requestCaptureOfAllAccounts()
+            viewModel.statusMessage = started
+                ? String(localized: "Saving mail from your connected accounts, with their folders and original messages.")
+                : String(localized: "Mail from online accounts is saved only through a connected account, with its account, folders and original messages; these \(fetched) messages were not added.")
+            viewModel.statusColor = started ? .green : .orange
         }
     }
 
     // MARK: - State Change Handlers
     private func handleParseStateChange() {
         if modelVM.isParsed {
-            modelVM.isPremiumUser = storeManager.isPremium
+            modelVM.isPremiumUser = storeManager.accessPolicy.readsWholeArchive   // LIFE-06
             modelVM.applyFilters()
             appState.hasParsedEmails = true
             appState.hasFilteredEmails = !modelVM.visibleEmails.isEmpty
         }
     }
     private func handlePremiumChange() {
-        modelVM.isPremiumUser = storeManager.isPremium
+        // LIFE-06: the list's reach follows the access policy — whole archive
+        // for anyone who held a plan; nothing here ever removes data.
+        modelVM.isPremiumUser = storeManager.accessPolicy.readsWholeArchive
         if storeManager.isPremium {
             UserDefaults.standard.removeObject(forKey: "freeAIQueryCount")
             UserDefaults.standard.removeObject(forKey: "freeAIFilterUsageCount")
             UserDefaults.standard.removeObject(forKey: "freeAttachmentDownloadCount")
         }
         if modelVM.isParsed {
-            // Premium unlock lifts the free paging cap — re-page from the store.
+            // A plan change moves the paging limit — re-page from the store (the list's counts and
+            // its "first 500 of N" notice follow).
             modelVM.refreshFromStore()
         }
     }
@@ -4167,6 +4818,13 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     // MARK: - Lifecycle Handlers
     private func handleAppear() {
+        // S4/S5: give the import view model the capability matrix, so it can
+        // choose its parse engine. Set here rather than in the app shell
+        // because this is where the view model is owned. Nil in previews, and
+        // nil reads as "every capability off" — the proven engine.
+        viewModel.isCapabilityOn = { [modules] capability in
+            modules.isOn(capability)
+        }
         // First-run tour for new users — shown once, dismissable any time.
         // Gated on the launch flow being complete: if Terms or Persona
         // onboarding is still showing in the parent scene, presenting another
@@ -4291,8 +4949,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
             modelVM.invalidateSearchCache()
             modelVM.refreshFromStore()
 
-            EmailSearchIndex.shared.clear()
-            EmailSearchIndex.shared.deleteDiskCache()
             AIAssistantView.invalidateNLPCache()
             AIAssistantView.invalidateNLPPrecomputation()
             appState.hasParsedEmails = outcome.heldKept > 0
@@ -4324,37 +4980,47 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func handleTriggerNewImport() {
         guard appState.triggerNewImport else { return }
         appState.triggerNewImport = false
-        showNewImportConfirmation = true
+        askToClearArchive()
+    }
+
+    /// IPAD-08 (rule 4): count the emails and sources first, then ask.
+    private func askToClearArchive() {
+        Task { @MainActor in
+            clearArchiveCounts = await ClearArchiveConfirmation.count()
+            showNewImportConfirmation = true
+        }
     }
 
     #if os(macOS)
     private func openAuditTrailWindow() {
-        ToolWindowPresenter.shared.open(title: "Audit Trail") {
+        ToolWindowPresenter.shared.open(title: String(localized: "Audit Trail")) {
             AnyView(AuditTrailView(
                 forensicManager: forensicManager,
                 storeManager: storeManager,
                 onExport: { exportAuditLog() },
-                onClose: { ToolWindowPresenter.shared.close(title: "Audit Trail") }))
+                onClose: { ToolWindowPresenter.shared.close(title: String(localized: "Audit Trail")) }))
         }
     }
     #endif
 
-    private func exportAuditLog() {
-        Task { @MainActor in
-            _ = await DocumentRegistry.post(
-                .export, summary: "Audit trail exported — \(forensicManager.auditLog.count) entries")
-        }
+    private func exportAuditLog(jsonLines: Bool = false) {
+        let ext = jsonLines ? "jsonl" : "txt"
         #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "audit_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).txt"
+        let panel = ManagedSavePanel()
+        panel.nameFieldStringValue = "audit_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).\(ext)"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.txt")
+        guard OrgPolicy.confirmAllowed(.export) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.\(ext)")
         #endif
         Task { @MainActor in
             do {
-                let total = try await forensicManager.exportAuditLogStreamed(to: url)
+                let total = jsonLines
+                    ? try await forensicManager.exportAuditLogJSONLines(to: url)
+                    : try await forensicManager.exportAuditLogStreamed(to: url)
+                // Rule 5: posted only after the file was written.
+                _ = await DocumentRegistry.post(.export, summary: "Audit trail exported — \(total) entries (\(ext))")
                 viewModel.statusMessage = "Exported audit log with \(total) entries."
                 viewModel.statusColor = .green
                 #if os(iOS)
@@ -4378,7 +5044,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "privilege_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).txt"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -4458,1584 +5124,42 @@ private func handleMultipleFiles(_ urls: [URL]) {
 }
 
 // MARK: - Advanced Feature Sheets Modifier
-struct MenuTriggerModifier: ViewModifier {
-    @Bindable var appState: AppStateManager
-    var onFileImport: () -> Void
-    var onExport: () -> Void
-    var onAuditLog: () -> Void
-    var onForensicCSV: () -> Void
-    var onSearch: () -> Void
-    var onSelectAll: () -> Void
-    var onPrint: () -> Void
-    var onNewImport: () -> Void
-
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: appState.triggerFileImport) {
-                if appState.triggerFileImport { appState.triggerFileImport = false; onFileImport() }
-            }
-            .onChange(of: appState.triggerExport) {
-                if appState.triggerExport { appState.triggerExport = false; onExport() }
-            }
-            .onChange(of: appState.showReplyStats) {
-                if appState.showReplyStats { appState.showReplyStats = false; appState.showReplyStatsSheet = true }
-            }
-            .onChange(of: appState.triggerAuditLogExport) {
-                if appState.triggerAuditLogExport { appState.triggerAuditLogExport = false; onAuditLog() }
-            }
-            .onChange(of: appState.triggerForensicCSVExport) {
-                if appState.triggerForensicCSVExport { appState.triggerForensicCSVExport = false; onForensicCSV() }
-            }
-            .onChange(of: appState.triggerSearch) { onSearch() }
-            .onChange(of: appState.triggerSelectAll) { onSelectAll() }
-            .onChange(of: appState.triggerPrint) { onPrint() }
-            .onChange(of: appState.triggerNewImport) { onNewImport() }
-    }
-}
-
-struct AdvancedFeatureSheetsModifier: ViewModifier {
-    @Bindable var appState: AppStateManager
-    @ObservedObject var modelVM: ParsedEmailListViewModel
-    @ObservedObject var predictiveEngine: PredictiveCodingEngine
-    @ObservedObject var custodianManager: CustodianManager
-    @ObservedObject var reviewBatchManager: ReviewBatchManager
-    @Binding var selectedClusterFilter: String?
-    @Binding var selectedEmailIDs: Set<UUID>
-    var exportVCard: () -> Void
-    var exportICS: () -> Void
-    var exportHashManifest: () -> Void
-    var batchPrintFiltered: () -> Void
-    var verifyAllEmailIntegrity: () -> Void
-    var exportMSG: () -> Void
-    var exportPST: () -> Void
-    var exportRelativity: () -> Void
-    var importFromCloud: ([MBOXParser.RawEmail]) -> Void
-    var senderEmail: String
-
-    /// Part G1: sheets that still take `[RawEmail]` are hosted over a bounded
-    /// working set streamed from the store for the CURRENT query — never the
-    /// resident preview arrays.
-    private var currentQuery: EmailQuery { modelVM.currentArchiveQuery }
-
-    func body(content: Content) -> some View {
-        var v = AnyView(content)
-        // Part O: shared progress + Cancel for streaming exports.
-        v = AnyView(v.overlay(alignment: .bottom) { ExportProgressOverlayView() })
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showDuplicateManager) { _, shown in
-                guard shown else { return }
-                appState.showDuplicateManager = false
-                ToolWindowPresenter.shared.open(title: "Duplicates") { AnyView(Group {
-                DuplicateManagerView(model: modelVM, isPresented: ToolWindowPresenter.closeBinding(title: "Duplicates"))
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showDuplicateManager) {
-                DuplicateManagerView(model: modelVM, isPresented: $appState.showDuplicateManager)
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showPredictiveCoding) { _, shown in
-                guard shown else { return }
-                appState.showPredictiveCoding = false
-                ToolWindowPresenter.shared.open(title: "Predictive Coding") { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: ToolWindowPresenter.closeBinding(title: "Predictive Coding"))
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showPredictiveCoding) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: $appState.showPredictiveCoding)
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showCustodianPanel) { _, shown in
-                guard shown else { return }
-                appState.showCustodianPanel = false
-                ToolWindowPresenter.shared.open(title: "Custodians") { AnyView(Group {
-                CustodianPanelView(manager: custodianManager, isPresented: ToolWindowPresenter.closeBinding(title: "Custodians"))
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showCustodianPanel) {
-                CustodianPanelView(manager: custodianManager, isPresented: $appState.showCustodianPanel)
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showReviewBatches) { _, shown in
-                guard shown else { return }
-                appState.showReviewBatches = false
-                ToolWindowPresenter.shared.open(title: "Review Batches") { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: ToolWindowPresenter.closeBinding(title: "Review Batches"))
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showReviewBatches) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: $appState.showReviewBatches)
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        v = AnyView(v.onChange(of: appState.triggerExportVCard) { _, val in
-                if val { appState.triggerExportVCard = false; exportVCard() }
-            })
-        v = AnyView(v.onChange(of: appState.triggerExportICS) { _, val in
-                if val { appState.triggerExportICS = false; exportICS() }
-            })
-        v = AnyView(v.onChange(of: appState.triggerExportHashManifest) { _, val in
-                if val { appState.triggerExportHashManifest = false; exportHashManifest() }
-            })
-        v = AnyView(v.onChange(of: appState.triggerExportHeadersCSV) { _, val in
-                if val {
-                    appState.triggerExportHeadersCSV = false
-                    // Part O: streamed from the store for the current query —
-                    // never the preview arrays.
-                    #if os(macOS)
-                    if let url = PlatformFileSaver.savePanel(suggestedName: "headers_export.csv") {
-                        let scope: ArchiveSelectionScope = .query(modelVM.currentArchiveQuery, exclusions: [])
-                        ExportRunCenter.shared.run(title: "Exporting headers CSV") {
-                            _ = try? await ArchiveExportService.shared.exportHeadersCSV(
-                                scope: scope, to: url,
-                                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-                        }
-                    }
-                    #endif
-                }
-            })
-        v = AnyView(v.onChange(of: appState.triggerBatchPrint) { _, val in
-                if val { appState.triggerBatchPrint = false; batchPrintFiltered() }
-            })
-        v = AnyView(v.onChange(of: appState.triggerVerifyIntegrity) { _, val in
-                if val { appState.triggerVerifyIntegrity = false; verifyAllEmailIntegrity() }
-            })
-        v = AnyView(v.onChange(of: appState.triggerExportMSG) { _, val in
-                if val { appState.triggerExportMSG = false; exportMSG() }
-            })
-        v = AnyView(v.onChange(of: appState.triggerExportPST) { _, val in
-                if val { appState.triggerExportPST = false; exportPST() }
-            })
-        v = AnyView(v.onChange(of: appState.triggerExportRelativity) { _, val in
-                if val { appState.triggerExportRelativity = false; exportRelativity() }
-            })
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showAttachmentGrid) { _, shown in
-                guard shown else { return }
-                appState.showAttachmentGrid = false
-                ToolWindowPresenter.shared.open(title: "Attachments") { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    AttachmentGridView(emails: emails)
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showAttachmentGrid) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    AttachmentGridView(emails: emails)
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showTimeline) { _, shown in
-                guard shown else { return }
-                appState.showTimeline = false
-                ToolWindowPresenter.shared.open(title: "Email Timeline") { AnyView(Group {
-                // nil emails → the timeline streams the archive from the store.
-                EmailTimelineView(isPresented: ToolWindowPresenter.closeBinding(title: "Email Timeline"))
-                    .resizableSheet()
-                    #if os(iOS)
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showTimeline) {
-                // nil emails → the timeline streams the archive from the store.
-                EmailTimelineView(isPresented: $appState.showTimeline)
-                    .resizableSheet()
-                    #if os(iOS)
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showRelationshipGraph) { _, shown in
-                guard shown else { return }
-                appState.showRelationshipGraph = false
-                ToolWindowPresenter.shared.open(title: "Relationship Graph") { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    RelationshipGraphView(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: "Relationship Graph"))
-                }
-                    .resizableSheet()
-                    #if os(iOS)
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showRelationshipGraph) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    RelationshipGraphView(emails: emails, senderEmail: senderEmail, isPresented: $appState.showRelationshipGraph)
-                }
-                    .resizableSheet()
-                    #if os(iOS)
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showArchiveComparison) { _, shown in
-                guard shown else { return }
-                appState.showArchiveComparison = false
-                ToolWindowPresenter.shared.open(title: "Archive Comparison") { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    ArchiveComparisonSheetWrapper(archiveA: emails)
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showArchiveComparison) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    ArchiveComparisonSheetWrapper(archiveA: emails)
-                }
-                    #if os(macOS)
-                    .toolWindowFrame()
-                    #else
-                    .presentationDetents([.large])
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showInvestigationReport) { _, shown in
-                guard shown else { return }
-                appState.showInvestigationReport = false
-                ToolWindowPresenter.shared.open(title: "Investigation Reports") { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    InvestigationReportConfigSheet(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: "Investigation Reports"))
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 350)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showInvestigationReport) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
-                    InvestigationReportConfigSheet(emails: emails, senderEmail: senderEmail, isPresented: $appState.showInvestigationReport)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 350)
-                    #endif
-            })
-        #endif
-        v = AnyView(v.modifier(V7SheetsModifier(appState: appState, query: currentQuery, senderEmail: senderEmail, selectedEmailIDs: $selectedEmailIDs, modelVM: modelVM)))
-        return v
-    }
-}
-
-// MARK: - V7 Sheets Modifier
-struct V7SheetsModifier: ViewModifier {
-    @Bindable var appState: AppStateManager
-    /// Part G1: the current archive query; each sheet streams its own bounded
-    /// working set — no preview array is passed down.
-    var query: EmailQuery
-    var senderEmail: String
-    @Binding var selectedEmailIDs: Set<UUID>
-    @ObservedObject var modelVM: ParsedEmailListViewModel
-
-    func body(content: Content) -> some View {
-        var v = AnyView(content)
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showAutomationRules) { _, shown in
-                guard shown else { return }
-                appState.showAutomationRules = false
-                ToolWindowPresenter.shared.open(title: "Automation Rules") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    AutomationRulesView(emails: emails)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showAutomationRules) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    AutomationRulesView(emails: emails)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showBatchOperations) { _, shown in
-                guard shown else { return }
-                appState.showBatchOperations = false
-                ToolWindowPresenter.shared.open(title: "Batch Operations") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    BatchOperationsView(
-                        emails: emails,
-                        selectedIDs: $selectedEmailIDs,
-                        onTagApplied: { tag, ids in
-                            let idArray = Array(ids)
-                            if tag.isEmpty {
-                                modelVM.review.clearAllTags(for: idArray)
-                            } else {
-                                modelVM.review.addTag(tag, to: idArray)
-                            }
-                        },
-                        onExportRequested: { emailsToExport, format in
-                            appState.triggerExport = true
-                        },
-                        isPresented: ToolWindowPresenter.closeBinding(title: "Batch Operations")
-                    )
-                }
-                .resizableSheet()
-                #if os(macOS)
-                .frame(minWidth: 500, minHeight: 400)
-                #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showBatchOperations) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    BatchOperationsView(
-                        emails: emails,
-                        selectedIDs: $selectedEmailIDs,
-                        onTagApplied: { tag, ids in
-                            let idArray = Array(ids)
-                            if tag.isEmpty {
-                                modelVM.review.clearAllTags(for: idArray)
-                            } else {
-                                modelVM.review.addTag(tag, to: idArray)
-                            }
-                        },
-                        onExportRequested: { emailsToExport, format in
-                            appState.triggerExport = true
-                        },
-                        isPresented: $appState.showBatchOperations
-                    )
-                }
-                .resizableSheet()
-                #if os(macOS)
-                .frame(minWidth: 500, minHeight: 400)
-                #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showThreadSummarizer) { _, shown in
-                guard shown else { return }
-                appState.showThreadSummarizer = false
-                ToolWindowPresenter.shared.open(title: "Thread Summarizer") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    ThreadSummarizerView(threadEmails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Thread Summarizer"))
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showThreadSummarizer) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    ThreadSummarizerView(threadEmails: emails, isPresented: $appState.showThreadSummarizer)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showSmartAlerts) { _, shown in
-                guard shown else { return }
-                appState.showSmartAlerts = false
-                ToolWindowPresenter.shared.open(title: "Smart Alerts") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    SmartAlertsView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Smart Alerts"))
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 350)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showSmartAlerts) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    SmartAlertsView(emails: emails, isPresented: $appState.showSmartAlerts)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 350)
-                    #endif
-            })
-        #endif
-        v = AnyView(v.modifier(V7ForensicSheetsModifier(appState: appState, query: query)))
-        return v
-    }
-}
-
-struct V7ForensicSheetsModifier: ViewModifier {
-    @Bindable var appState: AppStateManager
-    var query: EmailQuery
-
-    func body(content: Content) -> some View {
-        var v = AnyView(content)
-        #if os(macOS)
-        // A workflow this large gets its OWN window (movable, resizable,
-        // sits beside the list) — never a sheet pinned over the app.
-        v = AnyView(v.onChange(of: appState.showEDiscovery) { _, shown in
-                guard shown else { return }
-                appState.showEDiscovery = false
-                let capturedQuery = query
-                ToolWindowPresenter.shared.open(title: "E-Discovery Workflow") { AnyView(Group {
-                    ArchiveWorkingSetView(query: capturedQuery) { emails in
-                        EDiscoveryWorkflowView(
-                            emails: emails,
-                            isPresented: Binding(
-                                get: { true },
-                                set: { if !$0 { ToolWindowPresenter.shared.close(title: "E-Discovery Workflow") } }
-                            ))
-                    }
-                }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showEDiscovery) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    EDiscoveryWorkflowView(emails: emails, isPresented: $appState.showEDiscovery)
-                }
-                    .resizableSheet()
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showBatesNumbering) { _, shown in
-                guard shown else { return }
-                appState.showBatesNumbering = false
-                ToolWindowPresenter.shared.open(title: "Bates Numbering") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    BatesConfigView(emails: emails)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 500, minHeight: 400)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showBatesNumbering) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    BatesConfigView(emails: emails)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 500, minHeight: 400)
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showRedaction) { _, shown in
-                guard shown else { return }
-                appState.showRedaction = false
-                ToolWindowPresenter.shared.open(title: "Redaction") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    RedactionConfigView(emails: emails)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showRedaction) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    RedactionConfigView(emails: emails)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showGDPRReport) { _, shown in
-                guard shown else { return }
-                appState.showGDPRReport = false
-                ToolWindowPresenter.shared.open(title: "GDPR Compliance") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    GDPRReportConfigView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "GDPR Compliance"))
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 500, minHeight: 400)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showGDPRReport) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    GDPRReportConfigView(emails: emails, isPresented: $appState.showGDPRReport)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 500, minHeight: 400)
-                    #endif
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showChainOfCustody) { _, shown in
-                guard shown else { return }
-                appState.showChainOfCustody = false
-                ToolWindowPresenter.shared.open(title: "Chain of Custody") { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
-                    ChainOfCustodyView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Chain of Custody"))
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showChainOfCustody) {
-                ArchiveWorkingSetView(query: query) { emails in
-                    ChainOfCustodyView(emails: emails, isPresented: $appState.showChainOfCustody)
-                }
-                    .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 360)
-                    #endif
-            })
-        #endif
-        return v
-    }
-}
-
-// MARK: - V8 Sheets Modifier (Intelligence & Polish)
-struct V8SheetsModifier: ViewModifier {
-    @Bindable var appState: AppStateManager
-    @ObservedObject var modelVM: ParsedEmailListViewModel
-
-    func body(content: Content) -> some View {
-        var v = AnyView(content)
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showNearDuplicates) { _, shown in
-                guard shown else { return }
-                appState.showNearDuplicates = false
-                ToolWindowPresenter.shared.open(title: "Near-Duplicates") { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    NearDuplicateDetectionView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Near-Duplicates"))
-                }
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showNearDuplicates) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    NearDuplicateDetectionView(emails: emails, isPresented: $appState.showNearDuplicates)
-                }
-                    .resizableSheet()
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showAnomalyDetection) { _, shown in
-                guard shown else { return }
-                appState.showAnomalyDetection = false
-                ToolWindowPresenter.shared.open(title: "Anomaly Detection") { AnyView(Group {
-                AnomalyDetectionView(isPresented: ToolWindowPresenter.closeBinding(title: "Anomaly Detection"))
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showAnomalyDetection) {
-                AnomalyDetectionView(isPresented: $appState.showAnomalyDetection)
-                    .resizableSheet()
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showSmartAutoTagger) { _, shown in
-                guard shown else { return }
-                appState.showSmartAutoTagger = false
-                ToolWindowPresenter.shared.open(title: "Smart Auto-Tagger") { AnyView(Group {
-                SmartAutoTaggerView(isPresented: ToolWindowPresenter.closeBinding(title: "Smart Auto-Tagger"))
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showSmartAutoTagger) {
-                SmartAutoTaggerView(isPresented: $appState.showSmartAutoTagger)
-                    .resizableSheet()
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showAIDigest) { _, shown in
-                guard shown else { return }
-                appState.showAIDigest = false
-                ToolWindowPresenter.shared.open(title: "AI Digest") { AnyView(Group {
-                // Zero-array digest: the generator streams a bounded working
-                // set of the selected period from the store itself.
-                AIDigestView(isPresented: ToolWindowPresenter.closeBinding(title: "AI Digest"))
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showAIDigest) {
-                // Zero-array digest: the generator streams a bounded working
-                // set of the selected period from the store itself.
-                AIDigestView(isPresented: $appState.showAIDigest)
-                    .resizableSheet()
-            })
-        #endif
-        return v
-    }
-}
-
-// MARK: - V9 Sheets Modifier (Dashboard, Security & Workspaces)
-struct V9SheetsModifier: ViewModifier {
-    @Bindable var appState: AppStateManager
-    @ObservedObject var modelVM: ParsedEmailListViewModel
-    var senderEmail: String
-
-    func body(content: Content) -> some View {
-        var v = AnyView(content)
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showExecutiveDashboard) { _, shown in
-                guard shown else { return }
-                appState.showExecutiveDashboard = false
-                ToolWindowPresenter.shared.open(title: "Executive Dashboard") { AnyView(Group {
-                // Query injection: the dashboard streams the current scope
-                // from SQLite in bounded pages (no array plumbing).
-                ExecutiveDashboardView(query: modelVM.currentArchiveQuery, isPresented: ToolWindowPresenter.closeBinding(title: "Executive Dashboard"))
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showExecutiveDashboard) {
-                // Query injection: the dashboard streams the current scope
-                // from SQLite in bounded pages (no array plumbing).
-                ExecutiveDashboardView(query: modelVM.currentArchiveQuery, isPresented: $appState.showExecutiveDashboard)
-                    .resizableSheet()
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showReportBuilder) { _, shown in
-                guard shown else { return }
-                appState.showReportBuilder = false
-                ToolWindowPresenter.shared.open(title: "Report Builder") { AnyView(Group {
-                ReportBuilderView(isPresented: ToolWindowPresenter.closeBinding(title: "Report Builder"))
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showReportBuilder) {
-                ReportBuilderView(isPresented: $appState.showReportBuilder)
-                    .resizableSheet()
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showKeywordMonitor) { _, shown in
-                guard shown else { return }
-                appState.showKeywordMonitor = false
-                ToolWindowPresenter.shared.open(title: "Keyword Monitor") { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    KeywordMonitorView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Keyword Monitor"))
-                }
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showKeywordMonitor) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    KeywordMonitorView(emails: emails, isPresented: $appState.showKeywordMonitor)
-                }
-                    .resizableSheet()
-            })
-        #endif
-        #if os(macOS)
-        v = AnyView(v.onChange(of: appState.showCommunicationPatterns) { _, shown in
-                guard shown else { return }
-                appState.showCommunicationPatterns = false
-                ToolWindowPresenter.shared.open(title: "Communication Patterns") { AnyView(Group {
-                CommunicationPatternsView(senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: "Communication Patterns"))
-                    .resizableSheet()
-            }) }
-            })
-        #else
-        v = AnyView(v.sheet(isPresented: $appState.showCommunicationPatterns) {
-                CommunicationPatternsView(senderEmail: senderEmail, isPresented: $appState.showCommunicationPatterns)
-                    .resizableSheet()
-            })
-        #endif
-        v = AnyView(v.modifier(V9UtilitySheetsModifier(appState: appState, modelVM: modelVM)))
-        return v
-    }
-}
-
-struct V9UtilitySheetsModifier: ViewModifier {
-    @Bindable var appState: AppStateManager
-    @ObservedObject var modelVM: ParsedEmailListViewModel
-    @EnvironmentObject private var storeManager: StoreManager
-
-    func body(content: Content) -> some View {
-        content
-            .sheet(isPresented: $appState.showWorkspaceManager) {
-                WorkspaceManagerView(isPresented: $appState.showWorkspaceManager)
-                    .resizableSheet()
-            }
-            .sheet(isPresented: $appState.showCommandPalette) {
-                CommandPaletteView { command in
-                    appState.showCommandPalette = false
-                    handleCommand(command)
-                }
-                .resizableSheet()
-            }
-            .sheet(isPresented: $appState.showKeyboardShortcuts) {
-                KeyboardShortcutOverlayView()
-                    .resizableSheet()
-            }
-            .sheet(isPresented: $appState.showWhatsNew) {
-                WhatsNewView()
-                    .resizableSheet()
-            }
-            #if os(macOS)
-            .onChange(of: appState.showAllAttachmentsGallery) { _, shown in
-                guard shown else { return }
-                appState.showAllAttachmentsGallery = false
-                ToolWindowPresenter.shared.open(title: "Attachment Gallery") { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    AllAttachmentsGalleryView(emails: emails)
-                }
-                    .resizableSheet()
-            }) }
-            }
-            #else
-            .sheet(isPresented: $appState.showAllAttachmentsGallery) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    AllAttachmentsGalleryView(emails: emails)
-                }
-                    .resizableSheet()
-            }
-            #endif
-            #if os(macOS)
-            .onChange(of: appState.showIOCExtractor) { _, shown in
-                guard shown else { return }
-                appState.showIOCExtractor = false
-                ToolWindowPresenter.shared.open(title: "IOC Extractor") { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    IOCExtractorView(emails: emails)
-                }
-                    .resizableSheet()
-            }) }
-            }
-            #else
-            .sheet(isPresented: $appState.showIOCExtractor) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    IOCExtractorView(emails: emails)
-                }
-                    .resizableSheet()
-            }
-            #endif
-            .sheet(isPresented: $appState.showGuidedSearch) {
-                GuidedSearchView(searchText: $modelVM.searchText, isPresented: $appState.showGuidedSearch, onSearch: {
-                    modelVM.searchTextDidChange()
-                })
-                    .resizableSheet()
-            }
-    }
-
-    private func handleCommand(_ id: String) {
-        switch id {
-        case "askAI":
-            if storeManager.requirePremium() { appState.showAIAssistant = true }
-        case "analytics":
-            if storeManager.requirePremium() { appState.showAnalytics = true }
-        case "topicClusters":
-            if storeManager.requirePremium() { withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics } }
-        case "duplicates":
-            if storeManager.requirePremium() { appState.showDuplicateManager = true }
-        case "predictiveCoding":
-            if storeManager.requireProfessional() { appState.showPredictiveCoding = true }
-        case "timeline":
-            if storeManager.requirePremium() { appState.showTimeline = true }
-        case "relationshipGraph":
-            if storeManager.requirePremium() { appState.showRelationshipGraph = true }
-        case "smartAlerts":
-            if storeManager.requirePremium() { appState.showSmartAlerts = true }
-        case "anomalyDetection":
-            if storeManager.requirePremium() { appState.showAnomalyDetection = true }
-        case "autoTagger":
-            if storeManager.requirePremium() { appState.showSmartAutoTagger = true }
-        case "emailDigest":
-            if storeManager.requirePremium() { appState.showAIDigest = true }
-        case "nearDuplicates":
-            if storeManager.requirePremium() { appState.showNearDuplicates = true }
-        case "commPatterns":
-            if storeManager.requirePremium() { appState.showCommunicationPatterns = true }
-        case "dashboard":
-            if storeManager.requirePremium() { appState.showExecutiveDashboard = true }
-        case "keywordMonitor":
-            if storeManager.requirePremium() { appState.showKeywordMonitor = true }
-        case "reportBuilder":
-            if storeManager.requirePremium() { appState.showReportBuilder = true }
-        case "eDiscovery":
-            if storeManager.requireProfessional() { appState.showEDiscovery = true }
-        case "batesNumbering":
-            if storeManager.requireProfessional() { appState.showBatesNumbering = true }
-        case "redaction":
-            if storeManager.requireProfessional() { appState.showRedaction = true }
-        case "gdprReport":
-            if storeManager.requireProfessional() { appState.showGDPRReport = true }
-        case "chainOfCustody":
-            if storeManager.requireProfessional() { appState.showChainOfCustody = true }
-        case "forensicMode":
-            ForensicManager.shared.isEnabled.toggle()
-        case "custodianManager":
-            if storeManager.requireProfessional() { appState.showCustodianPanel = true }
-        case "reviewBatches":
-            if storeManager.requireProfessional() { appState.showReviewBatches = true }
-        case "investigationReport":
-            if storeManager.requireProfessional() { appState.showInvestigationReport = true }
-        case "exportFiltered":
-            appState.triggerExport = true
-        case "exportVCard":
-            appState.triggerExportVCard = true
-        case "exportICS":
-            appState.triggerExportICS = true
-        case "exportMSG":
-            appState.triggerExportMSG = true
-        case "exportPST":
-            appState.triggerExportPST = true
-        case "exportRelativity":
-            appState.triggerExportRelativity = true
-        case "workspaces": appState.showWorkspaceManager = true
-        case "toggleSidebar": appState.toggleSidebar()
-        case "allAttachments": appState.showAllAttachmentsGallery = true
-        case "iocExtractor":
-            if storeManager.requireProfessional() { appState.showIOCExtractor = true }
-        case "guidedSearch": appState.showGuidedSearch = true
-        default: break
-        }
-    }
-}
-
-// MARK: - Archive Comparison Sheet Wrapper
-struct ArchiveComparisonSheetWrapper: View {
-    let archiveA: [MBOXParser.RawEmail]
-    @State private var archiveB: [MBOXParser.RawEmail] = []
-    @State private var showFilePicker = false
-    @State private var isImporting = false
-    @State private var importError: String?
-    @State private var hasImported = false
-    @AppStorage("defaultSenderEmail") private var defaultSenderEmail = ""
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        if hasImported && !archiveB.isEmpty {
-            ArchiveComparisonView(
-                archiveA: archiveA,
-                archiveB: archiveB,
-                nameA: "Current Archive",
-                nameB: "Imported Archive"
-            )
-        } else {
-            VStack(spacing: Spacing.large) {
-                Image(systemName: "doc.on.doc.fill")
-                    .font(.largeTitle)
-                    .foregroundColor(AppColors.primary)
-
-                Text("Archive Comparison")
-                    .font(Typography.title2)
-
-                Text("Compare your current archive (\(archiveA.count) emails) with a second archive. Import a second .mbox file to compare.")
-                    .font(Typography.subheadline)
-                    .foregroundColor(AppColors.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 400)
-
-                if isImporting {
-                    ProgressView("Importing second archive...")
-                } else if let error = importError {
-                    Text(error)
-                        .font(Typography.caption1)
-                        .foregroundColor(AppColors.error)
-                }
-
-                HStack(spacing: Spacing.medium) {
-                    Button("Import Second Archive...") {
-                        showFilePicker = true
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(isImporting)
-
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                }
-            }
-            .padding(Spacing.xLarge)
-            #if os(macOS)
-            .frame(minWidth: 450, minHeight: 300)
-            #endif
-            .fileImporter(
-                isPresented: $showFilePicker,
-                allowedContentTypes: [
-                    UTType(filenameExtension: "mbox"),
-                    UTType(filenameExtension: "eml"),
-                    UTType(filenameExtension: "emlx"),
-                    UTType(filenameExtension: "msg"),
-                    UTType(filenameExtension: "pst"),
-                    UTType(filenameExtension: "ost"),
-                    UTType(filenameExtension: "nsf")
-                ].compactMap { $0 },
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first else { return }
-                    importSecondArchive(url: url)
-                case .failure(let error):
-                    importError = "Failed to select file: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func importSecondArchive(url: URL) {
-        isImporting = true
-        importError = nil
-        let accessing = url.startAccessingSecurityScopedResource()
-        let sender = defaultSenderEmail
-        Task.detached(priority: .userInitiated) {
-            do {
-                let emails = try MBOXParser.parse(fileURL: url, senderEmail: sender)
-                await MainActor.run {
-                    archiveB = emails
-                    hasImported = true
-                    isImporting = false
-                    if accessing { url.stopAccessingSecurityScopedResource() }
-                }
-            } catch {
-                await MainActor.run {
-                    importError = "Failed to parse file: \(error.localizedDescription)"
-                    isImporting = false
-                    if accessing { url.stopAccessingSecurityScopedResource() }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Investigation Report Configuration Sheet
-struct InvestigationReportConfigSheet: View {
-    let emails: [MBOXParser.RawEmail]
-    let senderEmail: String
-    var isPresented: Binding<Bool>?
-    @ObservedObject private var forensicManager = ForensicManager.shared
-    @EnvironmentObject var storeManager: StoreManager
-    @Environment(\.dismiss) private var envDismiss
-
-    @State private var examinerName: String = ""
-    @State private var reportTitle: String = "Email Investigation Report"
-    @State private var isGenerating = false
-    @State private var generationError: String?
-    @State private var selectedEmailIDs: Set<UUID> = []
-    @State private var showEmailSelector = false
-    @State private var emailSearchText = ""
-    @State private var generatedPDFData: Data?
-    @State private var showFileExporter = false
-    @State private var savedSuccessfully = false
-
-    private var matchingEmails: [MBOXParser.RawEmail] {
-        guard !emailSearchText.isEmpty else { return emails }
-        let query = emailSearchText.lowercased()
-        return emails.filter {
-            ($0.headers["From"] ?? "").lowercased().contains(query) ||
-            ($0.headers["Subject"] ?? "").lowercased().contains(query) ||
-            ($0.headers["To"] ?? "").lowercased().contains(query)
-        }
-    }
-
-    private var selectedEmails: [MBOXParser.RawEmail] {
-        emails.filter { selectedEmailIDs.contains($0.id) }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .foregroundColor(AppColors.primary)
-                Text("Generate Investigation Report")
-                    .font(Typography.headline)
-                Spacer()
-                Button { closeSheet() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(AppColors.secondary)
-                        .imageScale(.large)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(Spacing.medium)
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: Spacing.medium) {
-                    VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                        Text("Report Configuration")
-                            .font(Typography.callout)
-                            .fontWeight(.semibold)
-
-                        TextField("Report Title", text: $reportTitle)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("Investigator / Examiner Name", text: $examinerName)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    Divider()
-
-                    // Email Selection
-                    VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                        HStack {
-                            Text("Email Selection")
-                                .font(Typography.callout)
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Text("\(selectedEmailIDs.count) of \(emails.count) selected")
-                                .font(Typography.caption1)
-                                .foregroundColor(AppColors.secondary)
-                        }
-
-                        HStack(spacing: Spacing.small) {
-                            Button("Select All") {
-                                selectedEmailIDs = Set(emails.map(\.id))
-                            }
-                            .buttonStyle(CompactSecondaryButtonStyle())
-                            .disabled(selectedEmailIDs.count == emails.count)
-
-                            Button("Deselect All") {
-                                selectedEmailIDs.removeAll()
-                            }
-                            .buttonStyle(CompactSecondaryButtonStyle())
-                            .disabled(selectedEmailIDs.isEmpty)
-
-                            Spacer()
-
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showEmailSelector.toggle()
-                                }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(showEmailSelector ? "Hide Emails" : "Choose Emails")
-                                        .font(Typography.caption1)
-                                    Image(systemName: showEmailSelector ? "chevron.up" : "chevron.down")
-                                        .font(.system(size: 9))
-                                }
-                            }
-                            .buttonStyle(CompactSecondaryButtonStyle())
-                        }
-
-                        if showEmailSelector {
-                            VStack(spacing: Spacing.xSmall) {
-                                TextField("Search emails...", text: $emailSearchText)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(Typography.caption1)
-
-                                ScrollView {
-                                    LazyVStack(spacing: 0) {
-                                        ForEach(matchingEmails, id: \.id) { email in
-                                            emailSelectionRow(email)
-                                        }
-                                    }
-                                }
-                                .frame(maxHeight: 200)
-                                .background(AppColors.backgroundSecondary)
-                                .cornerRadius(CornerRadius.small)
-                            }
-                        }
-                    }
-
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                        Text("Report Contents")
-                            .font(Typography.callout)
-                            .fontWeight(.semibold)
-
-                        Group {
-                            Label("Title page with case info", systemImage: "doc.text")
-                            Label("Executive summary with NLP analysis", systemImage: "text.magnifyingglass")
-                            Label("Email timeline (monthly volume chart)", systemImage: "chart.bar")
-                            Label("Top contacts table", systemImage: "person.2")
-                            Label("Category breakdown", systemImage: "folder")
-                            Label("Evidence tags summary", systemImage: "tag")
-                            Label("Flagged / important emails", systemImage: "flag")
-                        }
-                        .font(Typography.caption1)
-                        .foregroundColor(AppColors.secondary)
-                    }
-
-                    Divider()
-
-                    HStack {
-                        Image(systemName: "info.circle")
-                            .foregroundColor(AppColors.info)
-                        Text("Report will analyze \(selectedEmailIDs.count) email\(selectedEmailIDs.count == 1 ? "" : "s") and generate a multi-page PDF.")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    }
-
-                    if let error = generationError {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(AppColors.error)
-                            Text(error)
-                                .font(Typography.caption1)
-                                .foregroundColor(AppColors.error)
-                        }
-                    }
-
-                    if savedSuccessfully {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("Report saved. You can save it again, or generate another below.")
-                                .font(Typography.caption1)
-                                .foregroundColor(.green)
-                        }
-                    } else if generatedPDFData != nil {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("Report generated. Save it, or generate another.")
-                                .font(Typography.caption1)
-                                .foregroundColor(.green)
-                        }
-                    }
-
-                    HStack(spacing: Spacing.small) {
-                        Spacer()
-                        if savedSuccessfully {
-                            // Post-save: let the user reuse the window.
-                            Button("Generate Another") { resetForNewReport() }
-                                .buttonStyle(SecondaryButtonStyle())
-                            Button {
-                                showFileExporter = true
-                            } label: {
-                                HStack(spacing: Spacing.xSmall) {
-                                    Image(systemName: "square.and.arrow.down")
-                                    Text("Save Again")
-                                }
-                            }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .disabled(generatedPDFData == nil)
-                            Button("Done") { closeSheet() }
-                                .buttonStyle(PrimaryButtonStyle())
-                        } else if generatedPDFData != nil {
-                            // Generated, not yet saved.
-                            Button("Generate Another") { resetForNewReport() }
-                                .buttonStyle(SecondaryButtonStyle())
-                            Button {
-                                showFileExporter = true
-                            } label: {
-                                HStack(spacing: Spacing.xSmall) {
-                                    Image(systemName: "square.and.arrow.down")
-                                    Text("Save PDF")
-                                }
-                            }
-                            .buttonStyle(PrimaryButtonStyle())
-                        } else {
-                            // Config state.
-                            Button("Cancel") { closeSheet() }
-                                .buttonStyle(SecondaryButtonStyle())
-                            Button {
-                                generateReport()
-                            } label: {
-                                HStack(spacing: Spacing.xSmall) {
-                                    if isGenerating {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                            .frame(width: 16, height: 16)
-                                    }
-                                    Text(isGenerating ? "Generating..." : "Generate PDF Report")
-                                }
-                            }
-                            .buttonStyle(PrimaryButtonStyle())
-                            .keyboardShortcut("r", modifiers: .command)
-                            .disabled(isGenerating || selectedEmailIDs.isEmpty)
-                        }
-                    }
-                }
-                .padding(Spacing.medium)
-            }
-        }
-        .fileExporter(
-            isPresented: $showFileExporter,
-            document: InvestigationPDFExportFile(data: generatedPDFData),
-            contentType: .pdf,
-            defaultFilename: pdfFileName
-        ) { result in
-            switch result {
-            case .success:
-                forensicManager.logAction("Investigation Report", detail: "Generated PDF report for \(selectedEmailIDs.count) emails")
-                // Keep the generated data so the user can Save Again to
-                // another location without regenerating.
-                savedSuccessfully = true
-                // Capture a numbered, referable document of this job.
-                let count = selectedEmailIDs.count
-                let title = reportTitle
-                let examiner = examinerName
-                Task { await DocumentRegistry.captureStructured(.report,
-                    summary: "Investigation Report: \(title) — \(count) emails",
-                    document: CapturedDocument(title: title, sections: [
-                      .init(name: "Investigation Report", fields: [
-                        .init(key: "Title", value: title),
-                        .init(key: "Examiner", value: examiner.isEmpty ? "—" : examiner),
-                        .init(key: "Emails analyzed", value: "\(count)"),
-                        .init(key: "Sections", value: "title page · executive summary · timeline · top contacts · category breakdown · evidence tags · flagged")
-                      ])])) }
-            case .failure(let error):
-                generationError = "Failed to save: \(error.localizedDescription)"
-            }
-        }
-        .onAppear {
-            selectedEmailIDs = Set(emails.map(\.id))
-            examinerName = forensicManager.examinerName
-            if !forensicManager.caseNumber.isEmpty {
-                reportTitle = "Case \(forensicManager.caseNumber) — Investigation Report"
-            }
-        }
-    }
-
-    private func closeSheet() {
-        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
-    }
-
-    /// Return the window to the configuration state so another report can be
-    /// generated without closing and reopening.
-    private func resetForNewReport() {
-        savedSuccessfully = false
-        generatedPDFData = nil
-        generationError = nil
-    }
-
-    private var pdfFileName: String {
-        let safeName = reportTitle.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
-        return safeName
-    }
-
-    private func emailSelectionRow(_ email: MBOXParser.RawEmail) -> some View {
-        let isSelected = selectedEmailIDs.contains(email.id)
-        let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
-        let subject = email.headers["Subject"] ?? "(No Subject)"
-
-        return Button {
-            if isSelected {
-                selectedEmailIDs.remove(email.id)
-            } else {
-                selectedEmailIDs.insert(email.id)
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(isSelected ? AppColors.primary : AppColors.secondary)
-                    .font(.system(size: 14))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(from)
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                    Text(subject)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Text(email.headers["Date"]?.prefix(16) ?? "")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, Spacing.small)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func generateReport() {
-        isGenerating = true
-        generationError = nil
-
-        let reportEmails = selectedEmails
-        let title = reportTitle
-        let investigator = examinerName
-
-        Task.detached(priority: .userInitiated) {
-            let pdfData = await InvestigationReportGenerator.generateReport(
-                emails: reportEmails,
-                title: title,
-                investigatorName: investigator
-            )
-
-            await MainActor.run {
-                isGenerating = false
-                guard !pdfData.isEmpty else {
-                    generationError = "Failed to generate PDF report."
-                    return
-                }
-                generatedPDFData = pdfData
-            }
-        }
-    }
-}
-
-struct InvestigationPDFExportFile: FileDocument {
-    static var readableContentTypes: [UTType] { [.pdf] }
-
-    let data: Data
-
-    init?(data: Data?) {
-        guard let data, !data.isEmpty else { return nil }
-        self.data = data
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        data = configuration.file.regularFileContents ?? Data()
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: data)
-    }
-}
-
-// MARK: - Email Management Modifier
-
-struct EmailManagementModifier: ViewModifier {
-    @ObservedObject var modelVM: ParsedEmailListViewModel
-    @Binding var selectedEmailIDs: Set<UUID>
-
-    func body(content: Content) -> some View {
-        content
-            .onReceive(NotificationCenter.default.publisher(for: .deleteCurrentEmail)) { notification in
-                if let emailID = notification.object as? UUID {
-                    modelVM.deleteEmail(emailID)
-                    selectedEmailIDs.remove(emailID)
-                    modelVM.applyFilters()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .archiveCurrentEmail)) { notification in
-                if let emailID = notification.object as? UUID {
-                    modelVM.archiveEmail(emailID)
-                    selectedEmailIDs.remove(emailID)
-                    modelVM.applyFilters()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .toggleReadCurrentEmail)) { notification in
-                if let emailID = notification.object as? UUID {
-                    modelVM.toggleRead(emailID)
-                }
-            }
-    }
-}
-
-// MARK: - InfoBanner
-struct InfoBanner: View {
-    var text: String
-    var color: Color = AppColors.primary
-    var systemImage: String? = nil
-
-    var body: some View {
-        HStack(spacing: Spacing.xSmall) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .foregroundColor(.white)
-            }
-            Text(text)
-                .font(Typography.callout)
-                .foregroundColor(.white)
-                .fontWeight(.semibold)
-            Spacer()
-        }
-        .padding(.horizontal, Spacing.medium)
-        .padding(.vertical, Spacing.xSmall)
-        .background(color.opacity(0.95))
-        .cornerRadius(CornerRadius.medium)
-        .shadow(color: .black.opacity(0.08), radius: Shadows.medium.radius, y: Shadows.medium.y)
-        .padding(.horizontal, Spacing.medium)
-        .transition(.move(edge: .top).combined(with: .opacity))
-        .animation(AnimationTiming.normal, value: text)
-    }
-}
-
-// MARK: - VisualEffectBlur for Modern Blur Background
-#if os(macOS)
-struct VisualEffectBlur: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .windowBackground
-    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        return view
-    }
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) { }
-}
-#else
-struct VisualEffectBlur: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        let blur = UIBlurEffect(style: .systemMaterial)
-        return UIVisualEffectView(effect: blur)
-    }
-    func updateUIView(_ uiView: UIVisualEffectView, context: Context) { }
-}
-#endif
-
-// MARK: - Sidebar Section Header
-struct SidebarSectionHeader: View {
-    let title: String
-    let icon: String
-    var color: Color = AppColors.primary
-    var helpText: String? = nil
-
-    var body: some View {
-        HStack(spacing: Spacing.xxSmall) {
-            Image(systemName: icon)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(color)
-            Text(title.uppercased())
-                .font(.system(.caption, design: .rounded))
-                .fontWeight(.semibold)
-                .foregroundColor(color.opacity(0.8))
-                .tracking(0.5)
-            if let helpText {
-                Image(systemName: "questionmark.circle")
-                    .font(.caption)
-                    .foregroundColor(AppColors.secondary.opacity(0.5))
-                    .help(helpText)
-                    .accessibilityHidden(true)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityLabel(title)
-    }
-}
-
-// MARK: - Feature Badge
-struct FeatureBadge: View {
-    let icon: String
-    let text: String
-    var color: Color = AppColors.primary
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.caption)
-                .adaptiveIconGradient(colors: [color, color.opacity(0.6)])
-                .accessibilityHidden(true)
-            Text(text)
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(AppColors.secondary)
-        }
-        .padding(.horizontal, Spacing.small)
-        .padding(.vertical, Spacing.xxSmall)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
-        .overlay(
-            Capsule()
-                .stroke(color.opacity(0.15), lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(text)
-    }
-}
-
-// MARK: - Audit Trail Sheet
-
 
 #if os(iOS)
-private struct ReviewImporterModifier: ViewModifier {
-    @Binding var isPresented: Bool
-    let onCompletion: (Result<[URL], Error>) -> Void
+/// iPhone: the email pushed onto the navigation stack. Previous / Next and
+/// Close used to set `selectedEmailIDs` — the iPad/Mac selection, which this
+/// pushed screen never reads — so on iPhone they did nothing (found in the
+/// V6 simulator walkthrough, 2026-10-11). The host keeps the email on screen
+/// itself and closes by popping.
+private struct PhoneEmailDetailHost: View {
+    let initialID: UUID
+    @ObservedObject var modelVM: ParsedEmailListViewModel
+    @State private var currentID: UUID?
+    @State private var fetched: MBOXParser.RawEmail?
+    @Environment(\.dismiss) private var dismiss
 
-    func body(content: Content) -> some View {
-        content.background(
-            Color.clear.fileImporter(
-                isPresented: $isPresented,
-                allowedContentTypes: [.json, .data],
-                allowsMultipleSelection: false,
-                onCompletion: onCompletion
-            )
-        )
+    private var shownID: UUID { currentID ?? initialID }
+
+    var body: some View {
+        Group {
+            if let email = modelVM.visibleEmails.first(where: { $0.id == shownID }) ?? fetched.flatMap({ $0.id == shownID ? $0 : nil }) {
+                EmailDetailView(
+                    email: email,
+                    orderedIDs: modelVM.visibleOrderedIDs,
+                    onNavigate: { newID in currentID = newID },
+                    onClose: { dismiss() },
+                    searchText: modelVM.searchText
+                )
+                .id(email.id)
+            } else {
+                ProgressView()
+            }
+        }
+        .task(id: shownID) {
+            // An email outside the loaded page of the list is read from the store.
+            guard !modelVM.visibleEmails.contains(where: { $0.id == shownID }) else { return }
+            fetched = try? await ArchiveDataService.shared.fullEmails(ids: [shownID]).first
+        }
     }
 }
 #endif

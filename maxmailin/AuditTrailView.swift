@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  AuditTrailView.swift
 //  maxmailin
@@ -68,6 +69,8 @@ struct AuditTrailView: View {
     @ObservedObject var forensicManager: ForensicManager
     @ObservedObject var storeManager: StoreManager
     var onExport: () -> Void
+    /// Enterprise B-3: machine-readable export for a SIEM / records system.
+    var onExportJSON: (() -> Void)? = nil
     var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -79,7 +82,8 @@ struct AuditTrailView: View {
     @State private var dailyReportNote: String? = nil
     @State private var expandedEntryID: UUID? = nil
 
-    private static let freeViewLimit = 10
+    /// Entries shown below Professional; every entry is kept (listed in Settings ▸ Health ▸ Limits).
+    static let freeViewLimit = 10
 
     private var filtered: [ForensicManager.AuditEntry] {
         forensicManager.auditLog.reversed().filter {
@@ -150,14 +154,17 @@ struct AuditTrailView: View {
                 Button {
                     Task { await generateDailyReport() }
                 } label: {
-                    Label(isGeneratingDailyReport ? "Verifying…" : "Daily Report",
+                    Label(isGeneratingDailyReport ? String(localized: "Verifying…") : String(localized: "Daily Report"),
                           systemImage: "doc.badge.clock")
                 }
                 .disabled(isGeneratingDailyReport)
                 .help("End-of-day case log: verifies the chain, then copies today's activity report to the clipboard")
                 if storeManager.isProfessional {
-                    Button {
-                        onExport()
+                    Menu {
+                        Button(String(localized: "Readable report (.txt)")) { onExport() }
+                        if let onExportJSON {
+                            Button(String(localized: "For a SIEM or records system (.jsonl)")) { onExportJSON() }
+                        }
                     } label: {
                         Label("Export", systemImage: "square.and.arrow.up")
                     }
@@ -227,7 +234,7 @@ struct AuditTrailView: View {
 
                 Picker("", selection: $scope) {
                     ForEach(AuditTrailFilter.DateScope.allCases, id: \.self) { s in
-                        Text(s.rawValue).tag(s)
+                        Text(LocalizedStringKey(s.rawValue)).tag(s)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -408,12 +415,20 @@ struct AuditTrailView: View {
             ($0.timestamp, $0.sequence, $0.action, $0.detail, $0.examiner)
         }
         inputs.chainVerified = chainOK
-        PlatformClipboard.copyString(CaseActivityReportBuilder.build(inputs))
+        let report = CaseActivityReportBuilder.build(inputs)
+        // The numbered RPT document carries the report itself, so opening
+        // it in Documents reproduces it (it used to be an empty record).
+        var saved = false
+        if let number = inputs.documentNumber {
+            saved = (try? await SQLiteEmailStore.shared.attachDocumentPayload(number, body: report)) != nil
+        }
+        PlatformClipboard.copyString(report)
         forensicManager.logAction(
             "Daily activity report generated",
-            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? "FAILED verification" : "not verifiable"); report copied to clipboard")
+            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? String(localized: "FAILED verification") : "not verifiable"); report \(saved ? "saved as \(inputs.documentNumber ?? "") and " : "")copied to clipboard")
+        let where_ = saved ? String(localized: "Saved as \(inputs.documentNumber ?? "") and copied") : String(localized: "Report copied (it could not be saved to Documents)")
         dailyReportNote = chainOK == false
-            ? "Report copied — WARNING: the audit chain FAILED verification."
-            : "Report copied — paste it into the case file."
+            ? "\(where_) — WARNING: the audit chain FAILED verification."
+            : "\(where_) — paste it into the case file."
     }
 }

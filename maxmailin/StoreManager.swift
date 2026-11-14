@@ -1,5 +1,9 @@
+@testable import ArchiveCore
 import Foundation
+import os
+#if !ENTERPRISE_EDITION
 import StoreKit
+#endif
 
 enum PurchaseTier: Int, Comparable {
     case free = 0
@@ -12,9 +16,9 @@ enum PurchaseTier: Int, Comparable {
 
     var displayName: String {
         switch self {
-        case .free: return "Free"
-        case .personal: return "Personal"
-        case .professional: return "Professional"
+        case .free: return String(localized: "Free")
+        case .personal: return String(localized: "Personal")
+        case .professional: return String(localized: "Professional")
         }
     }
 }
@@ -23,12 +27,162 @@ enum BillingPeriod: String, CaseIterable {
     case monthly = "Monthly"
     case yearly = "Yearly"
     case lifetime = "Lifetime"
+
+    var displayName: String {
+        switch self {
+        case .monthly: return String(localized: "Monthly")
+        case .yearly: return String(localized: "Yearly")
+        case .lifetime: return String(localized: "Lifetime")
+        }
+    }
+}
+
+/// Where a purchase request should be presented. Each SwiftUI root (main
+/// window, Settings window, each tool window) hosts one presenter and shows
+/// the paywall only for requests aimed at it, so a request is never shown
+/// twice and never shown in a window the user is not looking at.
+enum PurchasePresentationTarget: Hashable {
+    case main
+    case settings
+    case window(String)
+}
+
+/// A request to show the purchase screen: the minimum tier the triggering
+/// feature needs (`.free` = just show plans), the feature's name and the
+/// reason, and the window to present in.
+struct PurchaseRequest: Equatable {
+    var requiredTier: PurchaseTier
+    var feature: String?
+    var reason: String?
+    var target: PurchasePresentationTarget
+}
+
+/// What one purchase attempt did. Distinct cases so the UI never says
+/// "unlocked" for a pending or unverified transaction.
+enum PurchaseOutcome: Equatable {
+    case success(PurchaseTier)
+    case cancelled
+    case pending
+    case verificationFailed
+    case failed(String)
+    case alreadyInProgress
+}
+
+/// What Restore Purchases did.
+enum RestoreOutcome: Equatable {
+    case restored(PurchaseTier)
+    case nothingFound
+    case failed(String)
+
+    var message: String {
+        switch self {
+        case .restored(let tier): return "Restored: your \(tier.displayName) access is active on this device."
+        case .nothingFound: return String(localized: "No eligible purchases were found for this Apple Account.")
+        case .failed(let detail): return "Restore failed: \(detail)"
+        }
+    }
+
+    var isSuccess: Bool {
+        if case .restored = self { return true }
+        return false
+    }
+}
+
+/// The Free plan's input allowance, applied at the one import funnel
+/// (`ContentView.startImport`) and again at the service boundary
+/// (`ContentViewModel.parseSelectedFiles`) so no caller can get past it.
+/// Cumulative: what the archive already holds, from the `sources` table,
+/// plus what this import would add. Pure functions, so the rule is tested
+/// without StoreKit or a store.
+enum ImportAllowance {
+    struct Denial: Equatable {
+        let requestedBytes: Int
+        let ingestedBytes: Int
+        let limitBytes: Int
+
+        var remainingBytes: Int { max(0, limitBytes - ingestedBytes) }
+
+        /// The sentence the alert, the sheet and the status line all use.
+        var message: String {
+            let f = { (n: Int) in ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
+            let limit = f(limitBytes), requested = f(requestedBytes), ingested = f(ingestedBytes), remaining = f(remainingBytes)
+            if ingestedBytes == 0 {
+                return String(localized: "The Free plan imports up to \(limit) of input. These files total \(requested). Personal and Professional have no input limit.")
+            }
+            return String(localized: "The Free plan imports up to \(limit) of input in total. This archive already holds \(ingested); these files would add \(requested), \(remaining) remain. Personal and Professional have no input limit.")
+        }
+    }
+
+    enum Decision: Equatable {
+        case allowed
+        case denied(Denial)
+
+        var denial: Denial? {
+            if case .denied(let d) = self { return d }
+            return nil
+        }
+    }
+
+    /// `limitBytes == nil` means the tier has no limit. A request that would
+    /// take the cumulative total past the limit is denied as a whole: nothing
+    /// is imported, nothing is silently truncated.
+    static func evaluate(requestedBytes: Int, ingestedBytes: Int, limitBytes: Int?) -> Decision {
+        guard let limitBytes else { return .allowed }
+        if ingestedBytes + requestedBytes <= limitBytes { return .allowed }
+        return .denied(Denial(requestedBytes: requestedBytes, ingestedBytes: ingestedBytes, limitBytes: limitBytes))
+    }
+
+    /// Bytes of input the user is asking to import: regular files by size,
+    /// folders by the sum of the regular files inside them (symbolic links
+    /// are not followed, so a link cannot smuggle a larger tree past the
+    /// count nor inflate it).
+    nonisolated static func totalBytes(of urls: [URL]) -> Int {
+        let fm = FileManager.default
+        var total = 0
+        for url in urls {
+            guard let attributes = try? fm.attributesOfItem(atPath: url.path),
+                  let type = attributes[.type] as? FileAttributeType else { continue }
+            switch type {
+            case .typeRegular:
+                total += (attributes[.size] as? NSNumber)?.intValue ?? 0
+            case .typeDirectory:
+                guard let enumerator = fm.enumerator(at: url,
+                                                     includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey],
+                                                     options: [.skipsHiddenFiles]) else { continue }
+                for case let child as URL in enumerator {
+                    guard let values = try? child.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey]),
+                          values.isSymbolicLink != true, values.isRegularFile == true else { continue }
+                    total += values.fileSize ?? 0
+                }
+            default:
+                continue   // symlink at the top level, device, socket: not input
+            }
+        }
+        return total
+    }
+
+    /// Bytes already ingested into this archive: the recorded size of every
+    /// source the store holds.
+    static func ingestedBytes(archive: ArchiveDataService = .shared) async -> Int {
+        let sources = (try? await archive.sources()) ?? []
+        return sources.reduce(0) { $0 + max(0, $1.byteSize) }
+    }
+
+    /// One call for the funnel: measures, sums, decides.
+    static func check(urls: [URL], limitBytes: Int?, archive: ArchiveDataService = .shared) async -> Decision {
+        guard let limitBytes else { return .allowed }
+        let requested = totalBytes(of: urls)
+        let ingested = await ingestedBytes(archive: archive)
+        return evaluate(requestedBytes: requested, ingestedBytes: ingested, limitBytes: limitBytes)
+    }
 }
 
 @MainActor
 class StoreManager: ObservableObject {
 
     // MARK: - Product IDs
+
+    private static let log = Logger(subsystem: "com.ecosanskriti.mailin", category: "purchases")
 
     static let personalLifetimeID = "mailin_personal"
     static let professionalLifetimeID = "Professional_Lifetime"
@@ -61,6 +215,17 @@ class StoreManager: ObservableObject {
 
     nonisolated static let freeEmailLimit = 500
 
+    /// Owner decision 2026-10-01: the Free plan ingests at most 100 MB of
+    /// input in total (every file or folder it has ever imported into this
+    /// archive, counted by the bytes on disk). Decimal megabytes, so the
+    /// formatter and the number agree ("100 MB").
+    nonisolated static let freeInputByteLimit = 100_000_000
+    /// Free plan: bulk attachment saves per day (opening attachments is never limited).
+    nonisolated static let freeAttachmentDownloadsPerDay = 10
+
+    /// The input allowance for the current tier: nil = unlimited.
+    var inputByteLimit: Int? { isPremium ? nil : Self.freeInputByteLimit }
+
     // MARK: - Daily Usage Reset
 
     static func resetDailyCountersIfNeeded() {
@@ -88,54 +253,300 @@ class StoreManager: ObservableObject {
 
     // MARK: - Published State
 
+    #if !ENTERPRISE_EDITION
     @Published private(set) var products: [Product] = []
-    @Published private(set) var currentTier: PurchaseTier = .free
+    #endif
+    @Published private(set) var currentTier: PurchaseTier = .free {
+        didSet {
+            // LIFE-06: remember that a plan was held, so an expiry, refund or
+            // revocation leaves the archive open instead of re-applying the
+            // Free rules to mail that was imported under a paid plan.
+            if currentTier > .free {
+                lastPaidTier = max(lastPaidTier ?? .free, currentTier)
+                if persistsEntitlementHistory {
+                    UserDefaults.standard.set(lastPaidTier?.rawValue, forKey: Self.lastPaidTierKey)
+                    // A08: the archive itself remembers that it was used under a plan.
+                    Task { await self.refreshArchiveAccessRecord() }
+                }
+            }
+            publishAccessScope()
+        }
+    }
+
+    // MARK: - LIFE-06 entitlement history and the access policy
+
+    static let lastPaidTierKey = "entitlement.lastPaidTier"
+    /// The highest paid tier this install ever verified (nil = never paid).
+    private(set) var lastPaidTier: PurchaseTier?
+    /// Test fixtures never write the history; the live manager does.
+    private var persistsEntitlementHistory = false
+
+    /// Audit 2026-11-06 A08: the paid tier recorded INSIDE the archive, so a
+    /// restore onto a clean installation (no preferences, no store history
+    /// yet) still keeps the imported mail open. Read by
+    /// `refreshArchiveAccessRecord()`; fixtures set it directly.
+    private(set) var archivePaidTier: PurchaseTier?
+
+    /// What the store has proved now, and whether a plan was held before —
+    /// from this install's history, the archive's own record, or (A08) the
+    /// App Store's transaction history scanned in `checkEntitlements`.
+    var entitlementState: EntitlementState {
+        let tier = effectiveTier
+        if tier > .free { return isLifetimePurchase ? .lifetime(tier) : .active(tier) }
+        let previous = max(lastPaidTier ?? .free, archivePaidTier ?? .free)
+        if previous > .free { return .lapsed(previous: previous) }
+        return .free
+    }
+
+    /// Reads the archive's own paid-tier record and, while a plan is active,
+    /// writes the current tier into it (highest wins). Live manager only.
+    func refreshArchiveAccessRecord() async {
+        guard Self.live === self else { return }
+        let recorded = await ArchiveDataService.shared.paidTierRecord()
+        archivePaidTier = PurchaseTier(rawValue: recorded).flatMap { $0 > .free ? $0 : nil }
+        if currentTier > .free { await ArchiveDataService.shared.recordPaidTier(currentTier.rawValue) }
+        publishAccessScope()
+    }
+
+    /// The single access table every gate on existing data consults (§12.2).
+    var accessPolicy: AccessPolicy { AccessPolicy(state: entitlementState) }
     @Published private(set) var purchaseInProgress = false
     @Published private(set) var purchasePending = false
     @Published private(set) var productLoadError: String?
     @Published private(set) var subscriptionExpirationDate: Date?
     @Published private(set) var isLifetimePurchase = false
-    @Published var showPaywall = false
 
-    #if ENTERPRISE_EDITION
-    // mailin Enterprise (Custom App via Apple Business Manager): every
-    // Professional feature is included in the purchase price — there are no
-    // in-app purchases in this edition (IAP cannot be bulk-purchased through
-    // ABM, and App Review rejects dead IAP UI in custom apps).
-    var isPremium: Bool { true }
-    var isProfessional: Bool { true }
-    var isSubscribed: Bool { true }
-    #elseif DEBUG
-    // Debug builds unlock all paid tiers so we can exercise gated features in
-    // the simulator without going through StoreKit. Release builds (TestFlight,
-    // App Store) keep the real entitlement check.
-    var isPremium: Bool { true }
-    var isProfessional: Bool { true }
-    var isSubscribed: Bool { true }
-    #else
-    var isPremium: Bool { currentTier >= .personal }
-    var isProfessional: Bool { currentTier >= .professional }
-    var isSubscribed: Bool { currentTier >= .personal }
+    // MARK: - Purchase presentation (one coordinator, many presenters)
+
+    /// The purchase request currently asking to be shown, if any. Exactly one
+    /// presenter — the main window's root, the Settings window, or a tool
+    /// window — matches its `target` and hosts the single `PaywallView`.
+    /// Views bind to it through `purchasePresenter(target:)`; nothing else
+    /// presents a paywall. There is one StoreManager per process, so every
+    /// window sees the same tier the moment it changes.
+    @Published private(set) var paywallRequest: PurchaseRequest?
+
+    /// Compatibility surface for the 40-odd gates that set `showPaywall =
+    /// true`: reads "a request is up", setting true raises a plain "show
+    /// plans" request in the main window, setting false dismisses.
+    var showPaywall: Bool {
+        get { paywallRequest != nil }
+        set {
+            if newValue {
+                requestPurchase(.free, feature: nil, reason: nil, target: .main)
+            } else {
+                dismissPaywall()
+            }
+        }
+    }
+
+    /// Asks for the purchase screen. `tier` is the minimum the triggering
+    /// feature needs (`.free` = "show plans", nothing specific). If a request
+    /// is already showing, it is UPDATED in place — same sheet, new tier and
+    /// reason — so a second click never stacks a duplicate and never gets
+    /// lost; the already-visible sheet keeps its window.
+    func requestPurchase(_ tier: PurchaseTier,
+                         feature: String? = nil,
+                         reason: String? = nil,
+                         target: PurchasePresentationTarget = .main) {
+        if var current = paywallRequest {
+            current.requiredTier = max(current.requiredTier, tier)
+            current.feature = feature ?? current.feature
+            current.reason = reason ?? current.reason
+            paywallRequest = current
+        } else {
+            paywallRequest = PurchaseRequest(requiredTier: tier, feature: feature, reason: reason, target: target)
+        }
+    }
+
+    func dismissPaywall() {
+        paywallRequest = nil
+    }
+
+    // MARK: - Restore state
+
+    /// What the last Restore Purchases did, for Settings and the paywall to
+    /// report. Distinguishes restored / nothing found / failed; never silent.
+    @Published private(set) var lastRestoreOutcome: RestoreOutcome?
+    @Published private(set) var isRestoring = false
+
+    #if DEBUG
+    /// Debug builds unlock every paid tier by default so gated features can
+    /// be exercised in the simulator without StoreKit. Tests that prove a
+    /// gate denies set this to false on their own instance (see
+    /// `init(testTier:)`); Release builds do not compile this property, so
+    /// the override cannot reach the App Store.
+    var debugUnlocksAllTiers = true {
+        didSet { publishAccessScope() }
+    }
     #endif
 
+    /// The archive scope the tier allows, handed to the data service so every
+    /// read — list, counts, search, AI, analytics, exports, attachments — is
+    /// bounded once: Free sees the newest `freeEmailLimit` emails, paid tiers
+    /// the whole archive. Called whenever the effective tier can change.
+    func publishAccessScope() {
+        guard Self.live === self || Self.live == nil else { return }   // test fixtures never reach the live data
+        // LIFE-06: the read scope comes from the access policy, so a lapsed
+        // plan keeps the whole archive readable and only Free is scoped.
+        let limit: Int? = accessPolicy.archiveReadLimit
+        let changed = ArchiveDataService.shared.accessLimit != limit
+        ArchiveDataService.shared.accessLimit = limit
+        TierAccess.tier = effectiveTier
+        // Views that load once (subject groups, …) reload when the plan's reach changes.
+        if changed { NotificationCenter.default.post(name: .accessScopeChanged, object: nil) }
+    }
+
+    /// The single tier every purchase gate consults. Enterprise: everything is
+    /// included in the purchase price. Debug (unless a test opts out): all
+    /// unlocked. Otherwise the tier StoreKit's verified transactions proved.
+    var effectiveTier: PurchaseTier {
+        #if ENTERPRISE_EDITION
+        // The organization's signed license (EnterpriseLicense.swift).
+        return currentTier
+        #else
+        #if DEBUG
+        if debugUnlocksAllTiers { return .professional }
+        #endif
+        return currentTier
+        #endif
+    }
+
+    /// Enterprise edition: the license in force (always `.missing` elsewhere).
+    @Published private(set) var license = EnterpriseLicense(status: .missing)
+
+    #if ENTERPRISE_EDITION
+    /// A key pasted in Settings ▸ About. An MDM key, when present, wins.
+    /// Returns the new license so the screen can say what happened.
+    @discardableResult
+    func enterLicenseKey(_ key: String) -> EnterpriseLicense {
+        let checked = EnterpriseLicense.evaluate(key: key, now: Date())
+        if case .invalid = checked.status { return checked }
+        UserDefaults.standard.set(key.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  forKey: EnterpriseLicense.enteredKeyDefaultsKey)
+        refreshLicense()
+        return license
+    }
+
+    func refreshLicense() {
+        license = EnterpriseLicense.current()
+        currentTier = license.tier
+        publishAccessScope()
+    }
+    #endif
+
+    var isPremium: Bool { effectiveTier >= .personal }
+    var isProfessional: Bool { effectiveTier >= .professional }
+    var isSubscribed: Bool { effectiveTier >= .personal }
+
+    #if !ENTERPRISE_EDITION
     private var transactionListener: Task<Void, Error>?
+    #endif
+
+    /// The app's store manager, for views hosted outside the SwiftUI
+    /// environment (tool windows, the shared list pane). Claimed by the first
+    /// instance the app creates; test instances made with `init(testTier:)`
+    /// never claim it.
+    static weak var live: StoreManager?
 
     // MARK: - Lifecycle
 
     init() {
         #if ENTERPRISE_EDITION
-        // Enterprise edition: everything is included; never touch StoreKit.
-        currentTier = .professional
+        // Enterprise edition: no purchases, never touch StoreKit; the tier
+        // is the organization's signed license (LICENSING.md).
+        license = EnterpriseLicense.current()
+        currentTier = license.tier
         #else
         transactionListener = listenForTransactions()
         Task { await loadProducts() }
         Task { await checkEntitlements() }
         #endif
+        persistsEntitlementHistory = true
+        lastPaidTier = PurchaseTier(rawValue: UserDefaults.standard.integer(forKey: Self.lastPaidTierKey)).flatMap { $0 > .free ? $0 : nil }
+        if Self.live == nil { Self.live = self }
+        publishAccessScope()
+        // A08: the archive's own record, for a clean installation restoring an archive.
+        Task { await refreshArchiveAccessRecord() }
     }
 
-    deinit {
-        transactionListener?.cancel()
+    /// Test fixture: a deterministic Free / Personal / Professional manager
+    /// that never touches StoreKit and does not take the debug unlock, so a
+    /// test can prove that a gate denies. Compiled in every configuration
+    /// (R10: the tests also build against Release) — it grants nothing: the
+    /// instance never claims `live`, so `publishAccessScope` ignores it, and
+    /// the app never calls it.
+    init(testTier: PurchaseTier, lifetime: Bool = false, lapsedFrom: PurchaseTier? = nil, archiveRecord: PurchaseTier? = nil) {
+        currentTier = testTier
+        isLifetimePurchase = lifetime
+        #if DEBUG
+        debugUnlocksAllTiers = false
+        #endif
+        // LIFE-06: a fixture for "the plan ended" — Free now, paid before.
+        if let lapsedFrom, lapsedFrom > .free { lastPaidTier = lapsedFrom }
+        // A08: a fixture for "clean installation, the archive remembers the plan".
+        if let archiveRecord, archiveRecord > .free { archivePaidTier = archiveRecord }
     }
+
+    #if DEBUG
+    /// Developer switch: launching with `-mailinSimulateTier free|personal|
+    /// professional` makes the LIVE manager behave as that tier in a Debug
+    /// build (no all-unlocked shortcut), so the Free experience and every
+    /// purchase entry point can be seen and screenshotted without StoreKit.
+    /// Release builds do not compile this.
+    func applyDebugLaunchOverride(arguments: [String] = CommandLine.arguments) {
+        // `-mailinRealStore`: no Debug unlock and no simulated tier — the tier
+        // comes only from StoreKit's verified transactions, as in the App
+        // Store build. The purchase UI tests drive StoreKit with SKTestSession.
+        if arguments.contains("-mailinRealStore") {
+            debugUnlocksAllTiers = false
+            simulatedTier = nil
+            #if !ENTERPRISE_EDITION
+            Task { await checkEntitlements() }
+            #endif
+            return
+        }
+        guard let index = arguments.firstIndex(of: "-mailinSimulateTier"), index + 1 < arguments.count else { return }
+        let tier: PurchaseTier?
+        switch arguments[index + 1].lowercased() {
+        case "free": tier = .free
+        case "personal": tier = .personal
+        case "professional": tier = .professional
+        default: tier = nil
+        }
+        guard let tier else { return }
+        debugUnlocksAllTiers = false
+        currentTier = tier
+        isLifetimePurchase = arguments.contains("-mailinSimulateLifetime")
+        // Keep the simulated tier even after StoreKit's entitlement pass.
+        simulatedTier = tier
+        // `-mailinShowPaywall <feature>` raises a contextual request at launch
+        // so the purchase screen itself can be reviewed and screenshotted.
+        if let flag = arguments.firstIndex(of: "-mailinShowPaywall"), flag + 1 < arguments.count {
+            let feature = arguments[flag + 1]
+            // A hub destination name gets its real tier; anything else asks
+            // for the next tier up.
+            let destination = HubDestination(rawValue: feature) ?? ProfessionalPageView.destination(forTitle: feature)
+            let required = destination.map(Self.requiredTier(for:))
+                ?? (tier == .free ? PurchaseTier.personal : .professional)
+            requestPurchase(required, feature: feature,
+                            reason: "\(feature) is part of the \(required.displayName) purchase.", target: .main)
+        }
+    }
+
+    private var simulatedTier: PurchaseTier?
+    #endif
+
+    deinit {
+        #if !ENTERPRISE_EDITION
+        transactionListener?.cancel()
+        #endif
+    }
+
+    // P-5: everything that talks to StoreKit is compiled only into the public
+    // line. The enterprise edition (ABM Custom App) has no products, purchases,
+    // restores or subscription management.
+    #if !ENTERPRISE_EDITION
 
     // MARK: - Load Products
 
@@ -156,36 +567,65 @@ class StoreManager: ObservableObject {
 
     // MARK: - Purchase
 
-    func purchase(_ product: Product) async throws {
-        guard !purchaseInProgress else { return }
+    /// One purchase attempt with a distinct outcome for each StoreKit result.
+    /// A second submission while one is in flight is refused (`.alreadyInProgress`),
+    /// a pending (Ask to Buy) purchase unlocks nothing until the transaction
+    /// arrives through the listener, and a verification failure never unlocks.
+    @discardableResult
+    func purchase(_ product: Product) async -> PurchaseOutcome {
+        guard !purchaseInProgress else { return .alreadyInProgress }
         purchaseInProgress = true
         purchasePending = false
         defer { purchaseInProgress = false }
 
-        let result = try await product.purchase()
+        let result: Product.PurchaseResult
+        do {
+            result = try await product.purchase()
+        } catch {
+            return .failed(error.localizedDescription)
+        }
 
         switch result {
         case .success(let verification):
-            let transaction = try checkVerified(verification)
-            await transaction.finish()
-            await checkEntitlements()
+            do {
+                let transaction = try checkVerified(verification)
+                await transaction.finish()
+                await checkEntitlements()
+                return .success(currentTier)
+            } catch {
+                return .verificationFailed
+            }
 
         case .userCancelled:
-            break
+            return .cancelled
 
         case .pending:
             purchasePending = true
+            return .pending
 
         @unknown default:
-            break
+            return .failed("The App Store returned an unknown result.")
         }
     }
 
     // MARK: - Restore
 
-    func restorePurchases() async {
-        try? await AppStore.sync()
-        await checkEntitlements()
+    /// Restore Purchases, reporting what happened: access restored (to which
+    /// tier), nothing eligible on this Apple ID, or the sync itself failed.
+    @discardableResult
+    func restorePurchases() async -> RestoreOutcome {
+        isRestoring = true
+        defer { isRestoring = false }
+        let outcome: RestoreOutcome
+        do {
+            try await AppStore.sync()
+            await checkEntitlements()
+            outcome = currentTier > .free ? .restored(currentTier) : .nothingFound
+        } catch {
+            outcome = .failed(error.localizedDescription)
+        }
+        lastRestoreOutcome = outcome
+        return outcome
     }
 
     // MARK: - Entitlement Check
@@ -198,6 +638,10 @@ class StoreManager: ObservableObject {
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
             guard transaction.revocationDate == nil else { continue }
+            // A lapsed subscription grants nothing, even if StoreKit's
+            // entitlement list still carries it (seen in the StoreKit test
+            // environment right after expiry).
+            if let expiry = transaction.expirationDate, expiry <= Date() { continue }
 
             let isProProduct = StoreManager.professionalProductIDs.contains(transaction.productID)
             let isPersonalProduct = StoreManager.personalProductIDs.contains(transaction.productID)
@@ -221,9 +665,59 @@ class StoreManager: ObservableObject {
             }
         }
 
+        // Audit 2026-11-06 A08: current entitlements say what is active now;
+        // the transaction history says what was ever paid for. An expired
+        // subscription or a plan bought on another Mac with this Apple ID
+        // still counts as "a plan was held" — refunded/revoked ones do not —
+        // so a clean installation recovers the existing-data policy without
+        // the old preferences.
+        if highestTier == .free {
+            var historical: PurchaseTier = .free
+            for await result in Transaction.all {
+                guard let transaction = try? checkVerified(result), transaction.revocationDate == nil else { continue }
+                if StoreManager.professionalProductIDs.contains(transaction.productID) { historical = .professional; break }
+                if StoreManager.personalProductIDs.contains(transaction.productID) { historical = max(historical, .personal) }
+            }
+            if historical > .free {
+                lastPaidTier = max(lastPaidTier ?? .free, historical)
+                if persistsEntitlementHistory {
+                    UserDefaults.standard.set(lastPaidTier?.rawValue, forKey: Self.lastPaidTierKey)
+                    Task { await self.refreshArchiveAccessRecord() }
+                }
+            }
+        }
+
+        #if DEBUG
+        if let simulatedTier {
+            currentTier = simulatedTier
+            return
+        }
+        #endif
         currentTier = highestTier
         isLifetimePurchase = hasLifetime
         subscriptionExpirationDate = hasLifetime ? nil : latestExpiration
+        scheduleExpiryRecheck(at: latestExpiration)
+        // Diagnostics (no personal data): what StoreKit's verified
+        // transactions grant right now. Lets a renewal in the sandbox be seen
+        // as the expiry moving forward — the screen only shows the date.
+        Self.log.notice("entitlements tier=\(highestTier.rawValue, privacy: .public) lifetime=\(hasLifetime, privacy: .public) expires=\(latestExpiration.map { ISO8601DateFormatter().string(from: $0) } ?? "none", privacy: .public)")
+    }
+
+    /// Expiry is not a transaction update, so nothing would otherwise tell a
+    /// running app that a subscription has lapsed until it is next activated
+    /// (a Mac app can stay active for days). Re-read entitlements the moment
+    /// the latest subscription period ends.
+    private var expiryRecheck: Task<Void, Never>?
+
+    private func scheduleExpiryRecheck(at expiry: Date?) {
+        expiryRecheck?.cancel()
+        guard let expiry else { expiryRecheck = nil; return }
+        let delay = max(0.5, expiry.timeIntervalSinceNow + 0.5)
+        expiryRecheck = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.checkEntitlements()
+        }
     }
 
     // MARK: - Subscription Management
@@ -239,18 +733,65 @@ class StoreManager: ObservableObject {
         #endif
     }
 
+    #endif
+
     // MARK: - Feature Gating
 
-    func requirePremium() -> Bool {
-        if isPremium { return true }
-        showPaywall = true
+    func requirePremium() -> Bool { require(.personal) }
+
+    func requireProfessional() -> Bool { require(.professional) }
+
+    /// Purchase gate for a tier: true when the effective tier covers it,
+    /// otherwise raises a purchase request — with the feature's name and the
+    /// reason, in the window that asked — and returns false. `.free` always
+    /// passes.
+    @discardableResult
+    func require(_ tier: PurchaseTier,
+                 feature: String? = nil,
+                 reason: String? = nil,
+                 target: PurchasePresentationTarget = .main) -> Bool {
+        if effectiveTier >= tier { return true }
+        requestPurchase(tier, feature: feature, reason: reason, target: target)
         return false
     }
 
-    func requireProfessional() -> Bool {
-        if isProfessional { return true }
-        showPaywall = true
-        return false
+    /// The plan badge every page shows: what the user has, and for Free the
+    /// upgrade call in the same two words.
+    static func planBadgeLabel(tier: PurchaseTier, lifetime: Bool) -> String {
+        switch tier {
+        case .free: return String(localized: "Free · Upgrade")
+        case .personal: return lifetime ? String(localized: "Personal · Lifetime") : "Personal"
+        case .professional: return lifetime ? String(localized: "Professional · Lifetime") : "Professional"
+        }
+    }
+
+    /// What the plan badge asks for: Free and Personal see the next tier
+    /// selected; a Professional owner sees their plan, not an upgrade demand.
+    static func planBadgeRequestTier(current: PurchaseTier) -> PurchaseTier {
+        switch current {
+        case .free: return .personal
+        case .personal: return .professional
+        case .professional: return .free
+        }
+    }
+
+    /// The purchase tier a tools-hub destination needs before it may EXECUTE,
+    /// mirrored from the Archive page's hub so Page 3's strip, a workflow
+    /// step and a keyboard shortcut all answer the same way. Enabling the
+    /// Professional page is module consent, not purchase authorization.
+    static func requiredTier(for destination: HubDestination) -> PurchaseTier {
+        switch destination {
+        case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
+             .forensicReview, .investigationReport, .batesNumbering,
+             .reviewBatches, .custodianPanel, .legalWorkspace, .achMatrix, .factMatrix,
+             .evidenceDesks, .iocExtractor, .phishingTriage, .reviewDashboard:
+            return .professional
+        case .settings, .workCenter, .personaHub, .emailInbox, .customExperts,
+             .workspaceManager, .personalOrganizer, .generalExplorer:
+            return .free
+        default:
+            return .personal
+        }
     }
 
     func hasAccess(to feature: ProFeature) -> Bool {
@@ -264,6 +805,8 @@ class StoreManager: ObservableObject {
     func featureLocked(_ feature: ProFeature) -> Bool {
         return currentTier < tierRequired(for: feature)
     }
+
+    #if !ENTERPRISE_EDITION
 
     // MARK: - Product Helpers
 
@@ -324,6 +867,8 @@ class StoreManager: ObservableObject {
             }
         }
     }
+
+    #endif
 
     enum StoreError: Error {
         case verificationFailed

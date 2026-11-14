@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  KeywordMonitorView.swift
 //  mailin
@@ -197,6 +198,12 @@ struct KeywordMonitorView: View {
     @State private var hasScanned = false
     @State private var selectedKeywordID: UUID?
     @State private var showTutorial = false
+    // §3-L17: whole-scope sweep when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var v3Scanned: Int?
+    @State private var v3Error: String?
+    private var v3: Bool { modules?.isOn(.v3KeywordMonitor) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -238,9 +245,12 @@ struct KeywordMonitorView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Keyword Monitor")
                         .font(Typography.headline)
-                    Text("\(emails.count) emails, \(keywords.count) keywords")
+                    Text("\(v3Scanned ?? emails.count) emails, \(keywords.count) keywords")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
+                    if let v3Error {
+                        Text(v3Error).font(Typography.caption2).foregroundColor(AppColors.error)
+                    }
                 }
             }
             Spacer()
@@ -294,8 +304,8 @@ struct KeywordMonitorView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "text.magnifyingglass",
-                        title: "No Keywords",
-                        message: "Add keywords to monitor in your email archive."
+                        title: String(localized: "No Keywords"),
+                        message: String(localized: "Add keywords to monitor in your email archive.")
                     )
                     Spacer()
                 }
@@ -323,7 +333,7 @@ struct KeywordMonitorView: View {
                             .scaleEffect(0.7)
                     }
                     Image(systemName: "magnifyingglass")
-                    Text(isScanning ? "Scanning..." : "Scan Archive")
+                    Text(isScanning ? String(localized: "Scanning...") : String(localized: "Scan Archive"))
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -396,8 +406,8 @@ struct KeywordMonitorView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "doc.text.magnifyingglass",
-                        title: "Ready to Scan",
-                        message: "Add keywords and press 'Scan Archive' to search your emails."
+                        title: String(localized: "Ready to Scan"),
+                        message: String(localized: "Add keywords and press 'Scan Archive' to search your emails.")
                     )
                     Spacer()
                 }
@@ -413,8 +423,8 @@ struct KeywordMonitorView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "checkmark.circle",
-                        title: "No Matches",
-                        message: "None of your keywords were found in the email archive."
+                        title: String(localized: "No Matches"),
+                        message: String(localized: "None of your keywords were found in the email archive.")
                     )
                     Spacer()
                 }
@@ -430,13 +440,13 @@ struct KeywordMonitorView: View {
                 // Summary
                 HStack(spacing: Spacing.medium) {
                     AnimatedStatCard(
-                        title: "Total Matches",
+                        title: String(localized: "Total Matches"),
                         value: "\(matches.count)",
                         icon: "checkmark.circle.fill",
                         color: .green
                     )
                     AnimatedStatCard(
-                        title: "Emails Matched",
+                        title: String(localized: "Emails Matched"),
                         value: "\(uniqueMatchedEmailCount)",
                         icon: "envelope.fill",
                         color: .blue
@@ -550,6 +560,38 @@ struct KeywordMonitorView: View {
     }
 
     private func scanArchive() {
+        if v3 {
+            isScanning = true
+            hasScanned = true
+            let keywordsCopy = keywords
+            Task { @MainActor in
+                defer { isScanning = false }
+                do {
+                    let r = try await KeywordMonitorEngine.scan(scope: scope, keywords: keywordsCopy)
+                    matches = r.matches
+                    v3Scanned = r.receipt.processed
+                    v3Error = nil
+                    await DocumentRegistry.captureStructured(.report,
+                        summary: "Keyword sweep — \(keywordsCopy.count) terms, \(r.matches.count) matches",
+                        document: CapturedDocument(title: String(localized: "Keyword Sweep"), sections: [
+                            .init(name: String(localized: "Keyword Sweep"), fields: [
+                                .init(key: "Keywords", value: "\(keywordsCopy.count)"),
+                                .init(key: "Matches", value: "\(r.matches.count)")]),
+                            .init(name: String(localized: "Job receipt"), fields: r.receipt.documentFields)]))
+                } catch is CancellationError {
+                    v3Error = nil
+                } catch {
+                    // §3-M3: the previous engine runs for this call.
+                    v3Error = EngineGuard.fellBack(.v3KeywordMonitor, error: error)
+                    let emailsCopy = emails
+                    matches = await Task.detached(priority: .userInitiated) {
+                        KeywordMonitor.scan(emails: emailsCopy, keywords: keywordsCopy)
+                    }.value
+                    v3Scanned = nil
+                }
+            }
+            return
+        }
         isScanning = true
         hasScanned = true
         let emailsCopy = emails
@@ -565,8 +607,8 @@ struct KeywordMonitorView: View {
                 let hitCount = results.count
                 Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Keyword sweep — \(kwCount) terms, \(hitCount) matches",
-                    document: CapturedDocument(title: "Keyword Sweep", sections: [
-                      .init(name: "Keyword Sweep", fields: [
+                    document: CapturedDocument(title: String(localized: "Keyword Sweep"), sections: [
+                      .init(name: String(localized: "Keyword Sweep"), fields: [
                         .init(key: "Keywords", value: "\(kwCount)"),
                         .init(key: "Matches", value: "\(hitCount)")])])) }
             }

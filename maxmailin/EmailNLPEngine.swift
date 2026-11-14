@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import NaturalLanguage
 
@@ -9,9 +10,9 @@ struct EmailNLPEngine {
         let email: MBOXParser.RawEmail
         let score: Double
         var label: String {
-            if score > 0.4 { return "Positive" }
-            if score < -0.4 { return "Negative" }
-            return "Neutral"
+            if score > 0.4 { return String(localized: "Positive") }
+            if score < -0.4 { return String(localized: "Negative") }
+            return String(localized: "Neutral")
         }
     }
 
@@ -189,6 +190,34 @@ struct EmailNLPEngine {
             .sorted { $0.count > $1.count }
     }
 
+    /// Gate on the on-device MODEL fallback inside `detectLanguagesHybrid`.
+    ///
+    /// Two problems this fixes, both found by measurement rather than reading:
+    ///
+    ///  1. **Page independence (V3_0_PLAN.md §3.3 R1–R6).** Language detection
+    ///     is reached from ARCHIVE analytics, and its low-confidence path was
+    ///     calling `FoundationModelEngine.detectLanguage` unconditionally — so
+    ///     a Page-1-only install was invoking an AI model. Archive work must
+    ///     not depend on the AI Insights page.
+    ///
+    ///  2. **Non-determinism and cost in tests.** The model returns different
+    ///     answers for the same low-confidence snippet, which made
+    ///     `testFullAnalytics_streamingEqualsArrayOracle` compare 3 vs 2 on one
+    ///     run and 3 vs 4 on the next, and made
+    ///     `testProductionPathScale_boundedEnginesOverLargeStore` fail with
+    ///     `CancellationError` when ~200 model calls over 2,000 synthetic
+    ///     emails ran under suite load.
+    ///
+    /// Installed by `CapabilityWiring` from the AI Insights page. **Nil means
+    /// no model**, which is the correct default for tests, previews, and any
+    /// caller that has not opted in: the NLP result is still returned, just
+    /// without a second opinion.
+    nonisolated(unsafe) static var modelLanguageFallbackGate: (@Sendable () -> Bool)?
+
+    private static var modelFallbackAllowed: Bool {
+        modelLanguageFallbackGate?() ?? false
+    }
+
     static func detectLanguagesHybrid(in emails: [MBOXParser.RawEmail]) async -> [LanguageResult] {
         let recognizer = NLLanguageRecognizer()
         var langCounts: [String: Int] = [:]
@@ -218,7 +247,24 @@ struct EmailNLPEngine {
         }
 
         // Phase 2: Apple AI fallback for low-confidence detections — parallelism scales with count
-        // Cap AI calls to prevent unbounded processing on huge archives
+        // Cap AI calls to prevent unbounded processing on huge archives.
+        //
+        // When the model is not permitted (Page 1 only, or a caller that has
+        // not opted in), every low-confidence snippet takes its NLP fallback
+        // name and the function returns without touching a model. The result
+        // is less refined and completely deterministic, which for batch
+        // analytics over a large archive is the better trade anyway.
+        guard modelFallbackAllowed else {
+            for item in lowConfidenceSnippets {
+                langCounts[item.nlpFallback, default: 0] += 1
+            }
+            let total = max(langCounts.values.reduce(0, +), 1)
+            return langCounts
+                .map { LanguageResult(language: $0.key, count: $0.value,
+                                      percentage: Double($0.value) / Double(total) * 100) }
+                .sorted { $0.count > $1.count }
+        }
+
         let maxAIFallbacks: Int
         switch emails.count {
         case 0...500: maxAIFallbacks = lowConfidenceSnippets.count
@@ -301,36 +347,59 @@ struct EmailNLPEngine {
 
     // MARK: - Topic Extraction (keyword frequency)
 
+    static let topicStopWords: Set<String> = [
+        "the", "a", "an", "is", "was", "are", "were", "be", "been",
+        "have", "has", "had", "do", "does", "did", "will", "would",
+        "could", "should", "may", "might", "shall", "can", "to", "of",
+        "in", "for", "on", "with", "at", "by", "from", "as", "into",
+        "through", "during", "before", "after", "above", "below",
+        "between", "out", "off", "over", "under", "again", "further",
+        "then", "once", "here", "there", "when", "where", "why", "how",
+        "all", "both", "each", "few", "more", "most", "other", "some",
+        "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+        "too", "very", "just", "don", "now", "it", "its", "this", "that",
+        "these", "those", "i", "me", "my", "we", "our", "you", "your",
+        "he", "him", "his", "she", "her", "they", "them", "their",
+        "what", "which", "who", "whom", "if", "but", "or", "and",
+        "because", "until", "while", "about", "up", "re", "sent",
+        "email", "mailto", "http", "https", "www", "com",
+        "thanks", "thank", "regards", "dear", "hello", "hi", "hey",
+        "best", "sincerely", "cheers", "reply", "forward", "forwarded",
+        "wrote", "said", "original", "message", "mail", "subject",
+        "attachment", "attached", "file", "click", "link", "view",
+        "copy", "please", "let", "know", "get", "got", "like",
+        "one", "two", "also", "new", "well", "way", "use", "make",
+        "want", "see", "look", "need", "take", "come", "think",
+        "good", "right", "going", "back", "much", "still", "made",
+        "even", "thing", "many", "said", "give", "tell", "try",
+        // Time words, company boilerplate and confidentiality footers:
+        // they appear in nearly every business email and topped the list
+        // ("year", "intl") on a real archive (2026-10-06).
+        "year", "years", "month", "months", "week", "weeks", "day", "days",
+        "time", "today", "date", "yesterday", "tomorrow", "morning",
+        "intl", "inc", "ltd", "pvt", "llp", "llc", "corp", "dept", "co",
+        "team", "info", "details", "detail", "number", "regard", "kind",
+        "confidential", "confidentiality", "intended", "recipient", "recipients",
+        "disclaimer", "privileged", "information", "notice", "unauthorized",
+        "prohibited", "rights", "reserved", "copyright", "unsubscribe",
+        // HTML entities left in plain-text parts, and mail-provider names.
+        "nbsp", "amp", "quot", "apos", "lt", "gt", "zwnj", "rsquo", "lsquo", "rdquo", "ldquo", "mdash", "ndash",
+        "gmail", "google", "googlemail", "yahoo", "outlook", "hotmail", "icloud",
+        "sir", "sirs", "madam", "mr", "mrs", "ms", "dr",
+        // Conversational filler and day/month abbreviations: with each
+        // conversation counted once they topped the list ("pls", "mam",
+        // "needful", "fri") on a real archive (2026-10-06).
+        "pls", "plz", "pl", "kindly", "needful", "mam", "maam", "ji", "sirji",
+        "ok", "okay", "okk", "yes", "thanx", "thx", "asap", "fyi", "pfa", "pfb",
+        "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    ]
+
     static func extractTopics(from emails: [MBOXParser.RawEmail], limit: Int = 10) -> [(word: String, count: Int)] {
         let tagger = NLTagger(tagSchemes: [.lexicalClass])
         var wordCounts: [String: Int] = [:]
         var docFrequency: [String: Int] = [:]
-        let stopWords: Set<String> = [
-            "the", "a", "an", "is", "was", "are", "were", "be", "been",
-            "have", "has", "had", "do", "does", "did", "will", "would",
-            "could", "should", "may", "might", "shall", "can", "to", "of",
-            "in", "for", "on", "with", "at", "by", "from", "as", "into",
-            "through", "during", "before", "after", "above", "below",
-            "between", "out", "off", "over", "under", "again", "further",
-            "then", "once", "here", "there", "when", "where", "why", "how",
-            "all", "both", "each", "few", "more", "most", "other", "some",
-            "such", "no", "nor", "not", "only", "own", "same", "so", "than",
-            "too", "very", "just", "don", "now", "it", "its", "this", "that",
-            "these", "those", "i", "me", "my", "we", "our", "you", "your",
-            "he", "him", "his", "she", "her", "they", "them", "their",
-            "what", "which", "who", "whom", "if", "but", "or", "and",
-            "because", "until", "while", "about", "up", "re", "sent",
-            "email", "mailto", "http", "https", "www", "com",
-            "thanks", "thank", "regards", "dear", "hello", "hi", "hey",
-            "best", "sincerely", "cheers", "reply", "forward", "forwarded",
-            "wrote", "said", "original", "message", "mail", "subject",
-            "attachment", "attached", "file", "click", "link", "view",
-            "copy", "please", "let", "know", "get", "got", "like",
-            "one", "two", "also", "new", "well", "way", "use", "make",
-            "want", "see", "look", "need", "take", "come", "think",
-            "good", "right", "going", "back", "much", "still", "made",
-            "even", "thing", "many", "said", "give", "tell", "try",
-        ]
+        let stopWords = topicStopWords
 
         for email in emails {
             guard let body = bodyText(for: email), !body.isEmpty else { continue }
@@ -365,6 +434,198 @@ struct EmailNLPEngine {
             .map { (word: $0.word, count: $0.count) }
     }
 
+    // MARK: - Quoted history
+
+    /// The text before a reply's quoted history: everything from the first
+    /// "On <date>, <name> wrote:", "-----Original Message-----" or Outlook
+    /// "From: … Sent:" header is dropped. Forwarded content is kept — in a
+    /// "Fwd:" it is the substance. Each email then speaks for its sender
+    /// only (kalsmritikosh: every statement keeps its witness).
+    static func withoutQuotedReply(_ text: String) -> String {
+        let markers = [#"On [^\n]{5,160}? wrote:"#, #"-{2,}\s*Original Message\s*-{2,}"#, #"\nFrom: [^\n]+\n(?:Sent|Date): "#]
+        var cut = text.endIndex
+        for marker in markers {
+            if let range = text.range(of: marker, options: [.regularExpression, .caseInsensitive]), range.lowerBound < cut {
+                cut = range.lowerBound
+            }
+        }
+        let kept = text[..<cut].trimmingCharacters(in: .whitespacesAndNewlines)
+        return kept.isEmpty ? text : kept
+    }
+
+    // MARK: - Conversation-level counting (kalsmritikosh H-1, use-once)
+
+    /// The conversation an email belongs to, for counting: the subject without
+    /// reply/forward prefixes, case and spacing. Replies in one thread, and the
+    /// 81 copies of one automated alert, are one conversation. An email with
+    /// no subject is its own conversation.
+    static func conversationKey(_ email: MBOXParser.RawEmail) -> String {
+        let key = conversationKey(subject: email.headers["Subject"] ?? "")
+        return key.isEmpty ? "id:\(email.id.uuidString)" : key
+    }
+
+    /// The key for a subject line; empty when the subject is.
+    static func conversationKey(subject: String) -> String {
+        baseSubject(subject).lowercased()
+    }
+
+    /// A subject without reply/forward prefixes, spacing collapsed, case kept:
+    /// "RE: Fwd: Hearing  notice" → "Hearing notice".
+    static func baseSubject(_ subject: String) -> String {
+        var text = subject
+        let prefix = #"^\s*((re|fwd?|aw|sv|wg)(\[\d+\])?\s*:\s*|\[(fwd|ext|external)\]\s*)"#
+        while let range = text.range(of: prefix, options: [.regularExpression, .caseInsensitive]) {
+            text.removeSubrange(range)
+        }
+        return text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Conversations with at least two people taking part, busiest first:
+    /// most senders, then most messages, then most recent. One sender's
+    /// repeated alerts are not a conversation.
+    static func conversationsByActivity(in emails: [MBOXParser.RawEmail]) -> [[MBOXParser.RawEmail]] {
+        Dictionary(grouping: emails, by: conversationKey)
+            .filter { !$0.key.hasPrefix("id:") }
+            .compactMap { _, members -> (members: [MBOXParser.RawEmail], senders: Int, newest: Date)? in
+                let senders = Set(members.map { ($0.headers["From"] ?? "").lowercased() }).count
+                guard senders >= 2 else { return nil }
+                let newest = members.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.max() ?? .distantPast
+                return (members, senders, newest)
+            }
+            .sorted { ($0.senders, $0.members.count, $0.newest) > ($1.senders, $1.members.count, $1.newest) }
+            .map(\.members)
+    }
+
+    /// The conversation a "tell the story of <subject>" question names: an
+    /// exact subject match, else the busiest conversation whose subject
+    /// contains the words given.
+    static func conversation(matching subject: String, in emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail]? {
+        let needle = conversationKey(subject: subject.trimmingCharacters(in: CharacterSet(charactersIn: " “”\"'?.!")))
+        guard !needle.isEmpty else { return nil }
+        let groups = Dictionary(grouping: emails, by: conversationKey)
+        if let exact = groups[needle] { return exact }
+        return groups.filter { $0.key.contains(needle) }.values.max { $0.count < $1.count }
+    }
+
+    /// Topics counted once per conversation, not once per mention. A word that
+    /// fills one repeated alert ("Hoi", "Choi", "Photocardon" in 81 copies of
+    /// one notice) ranked above the archive's real subjects when mentions
+    /// were counted (found 2026-10-06). A topic must recur in at least two
+    /// conversations.
+    static func extractTopicsByConversation(from emails: [MBOXParser.RawEmail], limit: Int = 10) -> [(word: String, conversations: Int, emails: Int)] {
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        let stopWords = topicStopWords
+        var conversationsByWord: [String: Set<String>] = [:]
+        var emailsByWord: [String: Int] = [:]
+        var allConversations = Set<String>()
+
+        for email in emails {
+            guard let body = bodyText(for: email), !body.isEmpty else { continue }
+            let key = conversationKey(email)
+            allConversations.insert(key)
+            let cleanBody = body.components(separatedBy: .newlines)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+                .joined(separator: " ")
+            let text = String(cleanBody.prefix(2000))
+            tagger.string = text
+            var wordsInDoc = Set<String>()
+            tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .lexicalClass, options: [.omitPunctuation, .omitWhitespace]) { tag, tokenRange in
+                guard let tag = tag, tag == .noun || tag == .adjective else { return true }
+                let word = String(text[tokenRange]).lowercased()
+                // Hosts and link fragments ("t.co") are not topics.
+                if word.count >= 3 && !stopWords.contains(word) && word.range(of: #"^\d+$"#, options: .regularExpression) == nil
+                    && !word.contains(".") && !word.contains("/") {
+                    wordsInDoc.insert(word)
+                }
+                return true
+            }
+            for word in wordsInDoc {
+                conversationsByWord[word, default: []].insert(key)
+                emailsByWord[word, default: 0] += 1
+            }
+        }
+
+        // A word in most conversations is boilerplate, not a topic.
+        let ceiling = max(Int(Double(allConversations.count) * 0.5), 3)
+        return conversationsByWord
+            .map { (word: $0.key, conversations: $0.value.count, emails: emailsByWord[$0.key, default: 0]) }
+            .filter { $0.conversations >= 2 && $0.conversations <= ceiling }
+            .sorted { ($0.conversations, $0.emails, $1.word) > ($1.conversations, $1.emails, $0.word) }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// Names that are not people or organisations the user deals with: mail
+    /// infrastructure, providers and calendar words (kalsmritikosh D-13).
+    static let entityStoplist: Set<String> = [
+        "gmail", "google", "googlemail", "outlook", "hotmail", "yahoo", "icloud", "microsoft",
+        "smtp", "imap", "pop3", "mx", "mailer-daemon", "mailer daemon", "noreply", "no-reply",
+        "mail delivery subsystem", "postmaster", "whatsapp", "facebook", "linkedin", "twitter",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "january", "february", "march", "april", "june", "july", "august",
+        "september", "october", "november", "december",
+        "re", "fw", "fwd", "http", "https", "www", "com", "org", "net", "cc", "bcc", "sent", "subject",
+    ]
+
+    /// True when a tagged name is presentable as a person, organisation or
+    /// place: not a mail brand or calendar word, not a host or address, no
+    /// digits, and at most four words (a longer run is a sentence fragment
+    /// the tagger joined, such as "Expiry of Driving Licence Photocardon").
+    static func isPresentableEntity(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        guard name.count >= 2, !entityStoplist.contains(lower) else { return false }
+        if lower.contains("@") || lower.contains("://") { return false }
+        if !lower.contains(" ") && lower.contains(".") { return false }
+        if lower.rangeOfCharacter(from: .decimalDigits) != nil { return false }
+        if name.split(separator: " ").count > 4 { return false }
+        // Brand stems inside a longer name ("Gmail Team", "Google Payments").
+        let brandStems = ["gmail", "google", "outlook", "hotmail", "yahoo", "icloud", "microsoft", "mailer", "noreply", "postmaster", "smtp", "imap"]
+        if brandStems.contains(where: { lower.contains($0) }) { return false }
+        return name.first?.isUppercase ?? false
+    }
+
+    /// Entities counted once per conversation, through the presentation gate.
+    /// `count` is the number of conversations naming the entity; it must be
+    /// at least two.
+    static func extractEntitiesByConversation(from emails: [MBOXParser.RawEmail], limit: Int = 10) -> [EntityResult] {
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        var conversations: [String: (type: String, name: String, keys: Set<String>)] = [:]
+
+        for email in emails {
+            guard let body = bodyText(for: email), !body.isEmpty else { continue }
+            let key = conversationKey(email)
+            let cleanBody = body.components(separatedBy: .newlines)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+                .joined(separator: " ")
+            let text = String(cleanBody.prefix(3000))
+            tagger.string = text
+            tagger.setLanguage(.english, range: text.startIndex..<text.endIndex)
+            tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .nameType, options: [.omitPunctuation, .omitWhitespace, .joinNames]) { tag, tokenRange in
+                guard let tag = tag else { return true }
+                let typeName: String
+                switch tag {
+                case .personalName: typeName = "Person"
+                case .organizationName: typeName = "Organization"
+                case .placeName: typeName = "Place"
+                default: return true
+                }
+                let entity = String(text[tokenRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard isPresentableEntity(entity) else { return true }
+                let normalized = entity.lowercased() + "|" + typeName
+                conversations[normalized, default: (type: typeName, name: entity, keys: [])].keys.insert(key)
+                return true
+            }
+        }
+
+        return conversations.values
+            .filter { $0.keys.count >= 2 }
+            .map { EntityResult(name: $0.name, type: $0.type, count: $0.keys.count) }
+            .sorted { ($0.count, $1.name) > ($1.count, $0.name) }
+            .prefix(limit)
+            .map { $0 }
+    }
+
     // MARK: - Busiest Contacts (by volume + sentiment)
 
     struct ContactInsight {
@@ -372,9 +633,9 @@ struct EmailNLPEngine {
         let emailCount: Int
         let avgSentiment: Double
         var sentimentLabel: String {
-            if avgSentiment > 0.4 { return "Positive" }
-            if avgSentiment < -0.4 { return "Negative" }
-            return "Neutral"
+            if avgSentiment > 0.4 { return String(localized: "Positive") }
+            if avgSentiment < -0.4 { return String(localized: "Negative") }
+            return String(localized: "Neutral")
         }
     }
 
@@ -495,18 +756,46 @@ struct EmailNLPEngine {
 
     static func detectPhishing(in emails: [MBOXParser.RawEmail]) -> [PhishingFlag] {
         var flagged: [PhishingFlag] = []
+        // People the owner has written to. Wording alone ("urgent", a short
+        // link) does not make their mail high-risk: the owner's patent
+        // attorney's reply ranked "high" on such signals (2026-10-06).
+        let correspondents = Set(emails
+            .filter { $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent") }
+            .map { ($0.headers["To"] ?? "") + "," + ($0.headers["Cc"] ?? "") }
+            .joined(separator: ",")
+            .split(separator: ",")
+            .compactMap { part -> String? in
+                let piece = String(part)
+                let addr = piece.firstIndex(of: "<").map { String(piece[piece.index(after: $0)...].prefix { $0 != ">" }) } ?? piece
+                let clean = addr.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                return clean.contains("@") ? clean : nil
+            })
+        // One flag per message: an archive can hold the same email twice.
+        var seenMessages = Set<String>()
         for email in emails {
+            let identity = email.headers["Message-ID"].map { $0.lowercased() }
+                ?? "\(email.headers["From"] ?? "")|\(email.headers["Subject"] ?? "")|\(email.headers["Date"] ?? "")"
+            guard seenMessages.insert(identity).inserted else { continue }
+            // Mail the owner sent is not phishing aimed at them.
+            if email.messageType == "sent" || (email.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent") { continue }
             var reasons: [String] = []
             var riskScore = 0
+            // Signals that do not depend on wording: forged identity, failed
+            // authentication, disguised links.
+            var hardSignal = false
             let subject = (email.headers["Subject"] ?? "").lowercased()
             let from = (email.headers["From"] ?? "").lowercased()
             let body = (bodyText(for: email) ?? "").lowercased()
             let headers = email.headers
             let htmlBody = email.htmlBody.lowercased()
 
-            // Urgency language
-            let urgentPhrases = ["urgent", "act now", "immediately", "suspended", "verify your account", "confirm your identity", "unusual activity", "security alert", "unauthorized", "compromised", "locked", "expire", "limited time", "within 24 hours", "within 48 hours"]
-            for phrase in urgentPhrases where subject.contains(phrase) || body.prefix(1000).contains(phrase) {
+            // Urgency language — counted once. "Unauthorized", "expire" and
+            // "locked" sit in confidentiality footers and renewal notices, so
+            // they count only in the subject line.
+            let urgentPhrases = ["urgent", "act now", "immediately", "suspended", "verify your account", "confirm your identity", "unusual activity", "security alert", "compromised", "limited time", "within 24 hours", "within 48 hours"]
+            let subjectOnlyPhrases = ["unauthorized", "locked", "expire"]
+            if let phrase = urgentPhrases.first(where: { subject.contains($0) || body.prefix(1000).contains($0) })
+                ?? subjectOnlyPhrases.first(where: { subject.contains($0) }) {
                 reasons.append("Urgency language: \"\(phrase)\"")
                 riskScore += 2
             }
@@ -519,7 +808,10 @@ struct EmailNLPEngine {
             }
 
             // Display name spoofing
-            let fromDisplay = headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+            // Quotes around the display name are not part of it: "\"hr@x.com\""
+            // read as a different domain from hr@x.com.
+            let fromDisplay = headers["From"]?.components(separatedBy: "<").first?
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"' ").union(.whitespaces)).lowercased() ?? ""
             let fromAddress = from.components(separatedBy: "<").last?.replacingOccurrences(of: ">", with: "").trimmingCharacters(in: .whitespaces) ?? from
             if !fromDisplay.isEmpty && !fromAddress.isEmpty {
                 let displayDomain = fromDisplay.components(separatedBy: "@").last ?? ""
@@ -527,6 +819,7 @@ struct EmailNLPEngine {
                 if !displayDomain.isEmpty && !addressDomain.isEmpty && displayDomain != addressDomain && displayDomain.contains(".") {
                     reasons.append("Display name domain mismatch")
                     riskScore += 3
+                    hardSignal = true
                 }
             }
 
@@ -534,10 +827,22 @@ struct EmailNLPEngine {
             let brandNames = ["paypal", "apple", "amazon", "microsoft", "google", "netflix", "bank of america", "wells fargo", "chase", "citibank", "facebook", "instagram", "linkedin", "dropbox", "docusign"]
             let displayLower = fromDisplay.lowercased()
             let addrDomain = fromAddress.components(separatedBy: "@").last ?? ""
+            // A brand's own mail domains: Google mail comes from gmail.com too.
+            let brandDomains: [String: [String]] = [
+                "google": ["google", "gmail.com", "googlemail.com", "youtube.com"],
+                "apple": ["apple", "icloud.com", "me.com", "mac.com"],
+                "microsoft": ["microsoft", "outlook.com", "hotmail.com", "live.com", "office.com", "office365.com"],
+                "amazon": ["amazon", "amazonses.com"],
+                "facebook": ["facebook", "facebookmail.com", "meta.com"],
+                "instagram": ["instagram", "facebookmail.com"],
+                "linkedin": ["linkedin"],
+            ]
             for brand in brandNames {
-                if displayLower.contains(brand) && !addrDomain.contains(brand) {
+                let owned = brandDomains[brand] ?? [brand]
+                if displayLower.contains(brand) && !owned.contains(where: { addrDomain.contains($0) }) {
                     reasons.append("Brand impersonation: display says \"\(brand)\" but sent from \(addrDomain)")
                     riskScore += 4
+                    hardSignal = true
                     break
                 }
             }
@@ -552,26 +857,26 @@ struct EmailNLPEngine {
                 riskScore += 3
             }
 
-            // Shortened URLs
-            let shorteners = ["bit.ly", "tinyurl", "goo.gl", "t.co", "ow.ly", "is.gd", "buff.ly", "rebrand.ly", "shorturl"]
-            for shortener in shorteners where body.contains(shortener) || htmlBody.contains(shortener) {
-                reasons.append("Shortened URL detected: \(shortener)")
+            // Shortened URLs — as a link host, not a substring: "t.co" is in
+            // every "patent.com" and "contact.com".
+            let shortenerPattern = #"(https?://|www\.|[\s"'(<>=])(bit\.ly|tinyurl\.com|goo\.gl|t\.co|ow\.ly|is\.gd|buff\.ly|rebrand\.ly|shorturl\.at)/"#
+            if let range = (body + " " + htmlBody).range(of: shortenerPattern, options: .regularExpression) {
+                let host = String((body + " " + htmlBody)[range])
+                    .replacingOccurrences(of: #"^(https?://|www\.|[\s"'(<>=])"#, with: "", options: .regularExpression)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                reasons.append("Shortened URL detected: \(host)")
                 riskScore += 1
-                break
             }
 
-            // Mismatched link text vs href
-            if let hrefMismatch = htmlBody.range(of: #"<a[^>]*href="https?://([^"]+)"[^>]*>[^<]*https?://([^<\s]+)"#, options: .regularExpression) {
-                let match = String(htmlBody[hrefMismatch])
-                if let hrefDomain = match.range(of: #"href="https?://([^/\"]+)"#, options: .regularExpression),
-                   let textDomain = match.range(of: #">https?://([^<\s/]+)"#, options: .regularExpression) {
-                    let h = String(htmlBody[hrefDomain])
-                    let t = String(htmlBody[textDomain])
-                    if h != t {
-                        reasons.append("Link text shows different domain than actual URL")
-                        riskScore += 4
-                    }
-                }
+            // Mismatched link text vs href: a link whose visible text is one
+            // web address but which goes to another site. The old check
+            // compared 'href="https://host' with '>https://host' — strings
+            // that are never equal — so every link written as its own address
+            // was flagged (47 of 526 emails, 2026-10-06).
+            if let mismatch = mismatchedLink(in: htmlBody) {
+                reasons.append("Link text shows \(mismatch.shown) but goes to \(mismatch.actual)")
+                riskScore += 4
+                hardSignal = true
             }
 
             // SPF/DKIM authentication results
@@ -634,8 +939,18 @@ struct EmailNLPEngine {
                 riskScore += 3
             }
 
+            if authResults.contains("spf=fail") || authResults.contains("dkim=fail")
+                || authDetail.spfResult == .fail || authDetail.dkimResult == .fail || authDetail.dmarcResult == .fail {
+                hardSignal = true
+            }
+
             guard !reasons.isEmpty, riskScore >= 4 else { continue }
-            let level: PhishingFlag.RiskLevel = riskScore >= 8 ? .high : .medium
+            var level: PhishingFlag.RiskLevel = riskScore >= 8 ? .high : .medium
+            if correspondents.contains(fromAddress), !hardSignal {
+                // Someone the owner writes to, flagged on wording alone.
+                if level == .high { level = .medium } else { continue }
+                reasons.append("You have written to this sender")
+            }
             flagged.append(PhishingFlag(email: email, reasons: reasons, riskLevel: level))
         }
         return flagged
@@ -732,18 +1047,66 @@ struct EmailNLPEngine {
         return (0, "")
     }
 
+    /// The first link whose visible text is a web address on a different site
+    /// from the one it opens. Mail-provider redirect wrappers (Google's
+    /// /url?q=, Outlook Safe Links) are unwrapped first; a host and its
+    /// subdomains count as the same site.
+    static func mismatchedLink(in html: String) -> (shown: String, actual: String)? {
+        let pattern = #"<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return nil }
+        let ns = html as NSString
+        for match in regex.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
+            let href = ns.substring(with: match.range(at: 1)).replacingOccurrences(of: "&amp;", with: "&")
+            // The visible text with tags removed: Gmail breaks long link text
+            // with <wbr>, which cut "apminfrastructure.com" down to "a".
+            let visible = ns.substring(with: match.range(at: 2))
+                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let urlRange = visible.range(of: #"^(https?://|www\.)\S+"#, options: [.regularExpression, .caseInsensitive]) else { continue }
+            let text = String(visible[urlRange])
+            guard let actual = linkHost(unwrapRedirect(href)),
+                  let shown = linkHost(text.lowercased().hasPrefix("www.") ? "http://" + text : text),
+                  shown.contains(".") else { continue }
+            if !sameSite(actual, shown) { return (shown, actual) }
+        }
+        return nil
+    }
+
+    private static func unwrapRedirect(_ href: String) -> String {
+        guard let components = URLComponents(string: href), let host = components.host?.lowercased() else { return href }
+        let wrapped: String?
+        if host.hasSuffix("google.com") && components.path == "/url" {
+            wrapped = components.queryItems?.first { $0.name == "q" || $0.name == "url" }?.value
+        } else if host.hasSuffix("safelinks.protection.outlook.com") {
+            wrapped = components.queryItems?.first { $0.name == "url" }?.value
+        } else {
+            wrapped = nil
+        }
+        return wrapped ?? href
+    }
+
+    private static func linkHost(_ url: String) -> String? {
+        guard let host = URLComponents(string: url.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:)]>\"'")))?.host?.lowercased(),
+              !host.isEmpty else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    private static func sameSite(_ a: String, _ b: String) -> Bool {
+        a == b || a.hasSuffix("." + b) || b.hasSuffix("." + a)
+    }
+
     private static func detectEncodedURLs(in text: String) -> [String] {
         var findings: [String] = []
 
-        if let _ = text.range(of: #"%[0-9a-fA-F]{2}.*%[0-9a-fA-F]{2}.*%[0-9a-fA-F]{2}"#, options: .regularExpression) {
-            let decoded = text.removingPercentEncoding ?? text
-            if decoded.contains("http") || decoded.contains("://") {
-                findings.append("URL with heavy percent-encoding (potential obfuscation)")
-            }
+        // Encoding inside the link's HOST hides where it goes; encoding in
+        // its path or query is ordinary (tracking links, search terms). The
+        // old checks fired on any three "%xx" or any "&#39;" apostrophe
+        // anywhere in a message that also had a link.
+        if text.range(of: #"https?://[^/\s"'<>?#]*%[0-9a-fA-F]{2}"#, options: .regularExpression) != nil {
+            findings.append("URL with heavy percent-encoding (potential obfuscation)")
         }
 
-        if text.range(of: #"&#x?[0-9a-fA-F]+;"#, options: .regularExpression) != nil &&
-           text.range(of: #"https?://"#, options: .regularExpression) != nil {
+        if text.range(of: #"(https?:|href\s*=\s*["']?)[^\s"'<>]{0,8}&#x?[0-9a-fA-F]+;"#, options: [.regularExpression, .caseInsensitive]) != nil {
             findings.append("HTML entity-encoded URL (potential obfuscation)")
         }
 
@@ -788,7 +1151,7 @@ struct EmailNLPEngine {
 
     static func summarizeEmail(_ email: MBOXParser.RawEmail) -> String {
         guard let body = bodyText(for: email), !body.isEmpty else {
-            return "No content to summarize."
+            return String(localized: "No content to summarize.")
         }
 
         let tagger = NLTagger(tagSchemes: [.sentimentScore])
@@ -1431,32 +1794,32 @@ struct EmailNLPEngine {
         }
         if lower.contains("last week") || lower.contains("past week") {
             guard let start = calendar.date(byAdding: .day, value: -7, to: now) else { return nil }
-            return DateRange(start: start, end: now, label: "the last 7 days")
+            return DateRange(start: start, end: now, label: String(localized: "the last 7 days"))
         }
         if lower.contains("last month") || lower.contains("past month") {
             guard let start = calendar.date(byAdding: .month, value: -1, to: now) else { return nil }
-            return DateRange(start: start, end: now, label: "the last month")
+            return DateRange(start: start, end: now, label: String(localized: "the last month"))
         }
         if lower.contains("last year") || lower.contains("past year") {
             guard let start = calendar.date(byAdding: .year, value: -1, to: now) else { return nil }
-            return DateRange(start: start, end: now, label: "the last year")
+            return DateRange(start: start, end: now, label: String(localized: "the last year"))
         }
         if lower.contains("this week") {
             let start = calendar.dateComponents([.calendar, .yearForWeekOfYear, .weekOfYear], from: now).date ?? now
-            return DateRange(start: start, end: now, label: "this week")
+            return DateRange(start: start, end: now, label: String(localized: "this week"))
         }
         if lower.contains("this month") {
             var comps = calendar.dateComponents([.year, .month], from: now)
             comps.day = 1
             let start = calendar.date(from: comps) ?? now
-            return DateRange(start: start, end: now, label: "this month")
+            return DateRange(start: start, end: now, label: String(localized: "this month"))
         }
         if lower.contains("this year") {
             var comps = calendar.dateComponents([.year], from: now)
             comps.month = 1
             comps.day = 1
             let start = calendar.date(from: comps) ?? now
-            return DateRange(start: start, end: now, label: "this year")
+            return DateRange(start: start, end: now, label: String(localized: "this year"))
         }
 
         let lastNDays = try? NSRegularExpression(pattern: #"last\s+(\d+)\s+days?"#)

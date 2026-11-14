@@ -81,10 +81,13 @@ observing the result (dates per repository history):
 | Bates-stamped PDF stamps readable | rendered 3-page PDF -> PDFKit read-back: Bates number + page x/y on EVERY page, case/examiner in header | PASS |
 | TAR ranking quality | Naive Bayes scorer on labeled synthetic corpus: unseen relevant 0.999 vs irrelevant 0.001, clean separation | PASS |
 | S/MIME safe verdicts | unsigned email -> "Not Signed"; malformed p7m -> "Unverifiable"; never a false "valid" | PASS |
+| S/MIME positive path, opaque | real OpenSSL self-signed `signed-data` through `CMSDecoder` -> "Valid, untrusted certificate"; tampered bytes -> never valid; truncated -> "Unverifiable" | PASS (executed 2026-09-25) |
+| S/MIME positive path, detached | real OpenSSL `multipart/signed`: signed entity reconstructed in canonical CRLF form and verified from LF- and CRLF-stored copies -> "Valid, untrusted certificate"; one changed signed character -> "Invalid"; one-part message -> "Unverifiable" | PASS (executed 2026-09-25) |
 
-Remaining known limitation: positive-path S/MIME verification (a genuinely signed sample
-returning "Valid & Trusted") requires a real signed message and is exercised manually;
-the verdict mapping and negative paths are validated above.
+Remaining known limitation: the "Valid & Trusted" verdict has been exercised only through
+its mapping (a trusted chain requires a CA-issued certificate, which no offline fixture can
+supply); the cryptographic check itself is exercised end to end by the two rows above.
+Encrypted (`enveloped-data`) messages are detected and reported as unverifiable, not decrypted.
 
 ## 6. Honest limitations
 

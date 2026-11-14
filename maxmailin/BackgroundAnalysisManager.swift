@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  BackgroundAnalysisManager.swift
 //  mailin
@@ -86,24 +87,32 @@ final class BackgroundAnalysisManager: ObservableObject {
     }
     #endif
 
+    /// Lifecycle audit 2026-11-14: BGTaskScheduler handlers must be registered
+    /// before the app finishes launching (a launch for a scheduled task finds
+    /// no handler otherwise, and a later register() raises). Called from the
+    /// app's init; scheduling happens later, only when the analysis is wanted.
+    func registerLaunchHandler() {
+        #if os(iOS)
+        guard !didRegisterBGTask else { return }
+        didRegisterBGTask = BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.taskIdentifier, using: nil) { [weak self] task in
+            guard let self, let processingTask = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: true)
+                return
+            }
+            Task { @MainActor in
+                await self.handleBGTask(processingTask)
+            }
+        }
+        #endif
+    }
+
     #if os(iOS)
     private func scheduleiOS() {
-        // The task identifier MUST be registered with BGTaskScheduler before
-        // any submit() call, otherwise BGTaskScheduler raises an uncatchable
-        // NSInternalInconsistencyException. Apple normally expects register()
-        // to happen at app launch; we do it lazily on first submit and guard
-        // with `didRegisterBGTask` to avoid double registration.
-        if !didRegisterBGTask {
-            BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.taskIdentifier, using: nil) { [weak self] task in
-                guard let self, let processingTask = task as? BGProcessingTask else {
-                    task.setTaskCompleted(success: true)
-                    return
-                }
-                Task { @MainActor in
-                    await self.handleBGTask(processingTask)
-                }
-            }
-            didRegisterBGTask = true
+        // The handler is registered at launch (`registerLaunchHandler`); a
+        // submit without a registered identifier is refused, never raised.
+        guard didRegisterBGTask else {
+            logger.error("Background analysis not scheduled: its handler was not registered at launch")
+            return
         }
 
         let request = BGProcessingTaskRequest(identifier: Self.taskIdentifier)
@@ -132,6 +141,15 @@ final class BackgroundAnalysisManager: ObservableObject {
     // MARK: - Run Analysis
 
     func runAnalysis() async {
+        // §3-S3/S6: never in Safe Mode, never while the device has not been
+        // unlocked since boot (the archive is unreadable then).
+        guard SafeMode.shared.allowsBackgroundWork, BackgroundExecution.isProtectedDataAvailable else { return }
+        // §3-A1: the 3.0 engine analyses the whole archive instead of the
+        // newest 2,000.
+        if Self.wholeArchiveEnabled {
+            await runAnalysisWholeArchive()
+            return
+        }
         let emails = await currentArchiveEmails()
         guard !emails.isEmpty else {
             logger.info("No emails loaded — skipping background analysis")
@@ -163,7 +181,7 @@ final class BackgroundAnalysisManager: ObservableObject {
             findings.append(BackgroundFinding(
                 category: "phishing",
                 title: "\(highRiskPhishing.count) High-Risk Phishing Email\(highRiskPhishing.count == 1 ? "" : "s")",
-                detail: "Subjects: " + highRiskPhishing.prefix(3).compactMap { $0.email.headers["Subject"] }.joined(separator: ", "),
+                detail: String(localized: "Subjects: ") + highRiskPhishing.prefix(3).compactMap { $0.email.headers["Subject"] }.joined(separator: ", "),
                 severity: 0.9,
                 timestamp: timestamp
             ))
@@ -196,7 +214,7 @@ final class BackgroundAnalysisManager: ObservableObject {
                 let direction = shift > 0 ? "positive" : "negative"
                 findings.append(BackgroundFinding(
                     category: "sentiment",
-                    title: "Sentiment Shift Detected",
+                    title: String(localized: "Sentiment Shift Detected"),
                     detail: "Overall tone shifted \(direction) by \(String(format: "%.1f", abs(shift) * 100))%",
                     severity: min(abs(shift), 1.0),
                     timestamp: timestamp
@@ -367,5 +385,129 @@ final class BackgroundAnalysisManager: ObservableObject {
         return cached.findings.filter { $0.severity >= 0.4 }.map {
             (category: $0.category, title: $0.title, detail: $0.detail, severity: $0.severity)
         }
+    }
+}
+
+
+// MARK: - §3-A1 whole-archive background analysis (switch: `v3AlertsAnomalies`)
+//
+// Same findings and thresholds as `runAnalysis`, over every email: anomalies
+// from the streaming detector; phishing, PII and the sentiment trend from one
+// pass in the same newest-first order the working set had (so "first half"
+// and "second half" mean what they meant); the knowledge graph fed batch by
+// batch. Pauses while the device is hot, on low battery or in Low Power Mode.
+
+extension BackgroundAnalysisManager {
+    nonisolated(unsafe) static var wholeArchiveEnabled = false
+
+    func runAnalysisWholeArchive() async {
+        guard await StorageActivationCoordinator.shared.activate() == .active else { return }
+        isRunning = true
+        defer { isRunning = false }
+        let token = EngineGuard.begin(.v3AlertsAnomalies)
+        defer { EngineGuard.end(token) }
+        let assertion = BackgroundExecution.begin("Background analysis")
+        defer { BackgroundExecution.end(assertion) }
+        let timestamp = Date()
+        var findings: [BackgroundFinding] = []
+
+        // 1. Anomalies (whole archive, streaming).
+        let anomalies = (try? await AnomalyDetectionEngine.detectAnomalies(from: .shared)) ?? []
+        for anomaly in anomalies where anomaly.severity >= 0.5 {
+            findings.append(BackgroundFinding(category: "anomaly", title: anomaly.title, detail: anomaly.detail,
+                                              severity: anomaly.severity, timestamp: timestamp))
+        }
+
+        // 2–5. One pass.
+        var highRiskCount = 0
+        var highRiskSubjects: [String] = []
+        var pii: [EmailNLPEngine.PIIType: Int] = [:]
+        var scores: [Double] = []
+        #if canImport(FoundationModels)
+        var graph: AnyObject?
+        if #available(macOS 26, iOS 26, *) { graph = KnowledgeGraph.load() }
+        #endif
+        do {
+            for try await batch in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200) {
+                while BackgroundBudget.shouldPause { try await Task.sleep(for: .seconds(60)) }
+                if assertion.isExpiring || Task.isCancelled { break }
+                for flag in EmailNLPEngine.detectPhishing(in: batch) where flag.riskLevel == .high {
+                    highRiskCount += 1
+                    if highRiskSubjects.count < 3, let s = flag.email.headers["Subject"] { highRiskSubjects.append(s) }
+                }
+                for (type, n) in EmailNLPEngine.piiSummary(in: batch) { pii[type, default: 0] += n }
+                scores.append(contentsOf: EmailNLPEngine.analyzeSentiment(of: batch).map(\.score))
+                #if canImport(FoundationModels)
+                if #available(macOS 26, iOS 26, *), let kg = graph as? KnowledgeGraph {
+                    KnowledgeGraphBuilder.build(from: batch, into: kg)
+                }
+                #endif
+                await Task.yield()
+            }
+        } catch {
+            logger.error("Whole-archive background pass failed: \(error.localizedDescription)")
+        }
+        if highRiskCount > 0 {
+            findings.append(BackgroundFinding(
+                category: "phishing",
+                title: "\(highRiskCount) High-Risk Phishing Email\(highRiskCount == 1 ? "" : "s")",
+                detail: String(localized: "Subjects: ") + highRiskSubjects.joined(separator: ", "),
+                severity: 0.9, timestamp: timestamp))
+        }
+        let piiTotal = pii.values.reduce(0, +)
+        if piiTotal > 0 {
+            let types = pii.filter { $0.value > 0 }.keys.map(\.rawValue).joined(separator: ", ")
+            findings.append(BackgroundFinding(category: "pii", title: "\(piiTotal) PII Exposure\(piiTotal == 1 ? "" : "s")",
+                                              detail: "Types: \(types)", severity: piiTotal >= 5 ? 0.8 : 0.5, timestamp: timestamp))
+        }
+        if scores.count >= 20 {
+            let midpoint = scores.count / 2
+            let avgFirst = scores.prefix(midpoint).reduce(0, +) / Double(midpoint)
+            let avgSecond = scores.suffix(scores.count - midpoint).reduce(0, +) / Double(scores.count - midpoint)
+            let shift = avgSecond - avgFirst
+            if abs(shift) > 0.3 {
+                findings.append(BackgroundFinding(
+                    category: "sentiment", title: String(localized: "Sentiment Shift Detected"),
+                    detail: "Overall tone shifted \(shift > 0 ? "positive" : "negative") by \(String(format: "%.1f", abs(shift) * 100))%",
+                    severity: min(abs(shift), 1.0), timestamp: timestamp))
+            }
+        }
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *), let kg = graph as? KnowledgeGraph {
+            kg.save()
+            FoundationModelEngine.setKnowledgeGraph(kg)
+        }
+        #endif
+
+        // 6. High-volume domains (already whole-archive in the previous path).
+        var domainCounts: [String: Int] = [:]
+        do {
+            for try await batch in ArchiveDataService.shared.streamSummaries(query: .all, batchSize: 500) {
+                for summary in batch {
+                    guard !summary.from.isEmpty,
+                          let domain = summary.from.components(separatedBy: "@").last?.lowercased().trimmingCharacters(in: .punctuationCharacters)
+                    else { continue }
+                    domainCounts[domain, default: 0] += 1
+                }
+            }
+        } catch {}
+        let burst = domainCounts.filter { $0.value >= 10 }.sorted { $0.value > $1.value }
+        if burst.count > 3 {
+            findings.append(BackgroundFinding(category: "domains", title: "\(burst.count) High-Volume External Domains",
+                                              detail: burst.prefix(5).map { "\($0.key) (\($0.value))" }.joined(separator: ", "),
+                                              severity: 0.4, timestamp: timestamp))
+        }
+
+        findings.sort { $0.severity > $1.severity }
+        lastRunFindings = findings
+        lastRunDate = timestamp
+        cacheFindings(findings)
+        let notifier = SmartNotificationManager()
+        for finding in findings where finding.severity >= 0.6 {
+            notifier.sendLocalNotification(for: SmartAlert(
+                type: alertType(for: finding.category), severity: finding.severity >= 0.8 ? .high : .medium,
+                title: finding.title, message: finding.detail))
+        }
+        logger.info("Whole-archive background analysis complete: \(findings.count) findings")
     }
 }

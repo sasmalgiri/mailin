@@ -1,0 +1,412 @@
+@testable import ArchiveCore
+//
+//  FourPageShell.swift
+//  mailin
+//
+//  Plan tasks A1/A2 — the top-level four-page frame (directive §0–§6).
+//
+//  Shape (owner decision, 2026-09-24): every page the edition ships has a tab
+//  that is always visible, so the app's structure is discoverable, and Archive
+//  is the page shown by default. (Owner, 2026-09-28: a page compiled out of the
+//  edition gets no tab — the no-network build shows three.)
+//  Clicking an INACTIVE tab does not switch to it — it opens that page's
+//  feature matrix and asks whether to turn the page on. Nothing about an
+//  inactive page runs until the user agrees (§3.3 R2), so a visible tab costs
+//  a Page-1-only user nothing but a tab.
+//
+//  (This supersedes the earlier reading, where chrome was hidden entirely for a
+//  Page-1-only install.)
+//
+//  Each page hosts its own experience. Subwindows, sheets and tabs inside a
+//  page are not extra top-level pages.
+//
+
+import SwiftUI
+import Observation
+
+/// Which page is showing. Selection is validated against the registry, so a
+/// page that gets switched off (by the user or by an organization policy)
+/// cannot remain on screen.
+@MainActor
+@Observable
+final class PageRouter {
+    private static let defaultsKey = "selectedTopLevelPage"
+
+    private(set) var selection: AppModule
+
+    init(initial: AppModule? = nil, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let initial {
+            self.selection = initial
+        } else if let raw = defaults.string(forKey: Self.defaultsKey),
+                  let restored = AppModule(rawValue: raw) {
+            self.selection = restored
+        } else {
+            self.selection = .archive
+        }
+    }
+
+    private let defaults: UserDefaults
+
+    /// Switches page. Refuses a page that is not enabled — the switcher should
+    /// never offer one, and a stale keyboard shortcut or restored state must
+    /// not be able to open a disabled page either.
+    @discardableResult
+    func select(_ page: AppModule, in registry: ModuleRegistry) -> Bool {
+        guard registry.isEnabled(page) else { return false }
+        selection = page
+        defaults.set(page.rawValue, forKey: Self.defaultsKey)
+        return true
+    }
+
+    /// Re-checks the current selection after module state changes: if the page
+    /// on screen has been switched off, fall back to Archive, which is always
+    /// available.
+    func reconcile(with registry: ModuleRegistry) {
+        guard !registry.isEnabled(selection) else { return }
+        selection = .archive
+        defaults.set(AppModule.archive.rawValue, forKey: Self.defaultsKey)
+    }
+}
+
+// MARK: - Shell
+
+struct FourPageShell: View {
+    @Environment(ModuleRegistry.self) private var modules
+    @EnvironmentObject private var storeManager: StoreManager
+    @State private var router = PageRouter()
+    /// Back / Forward across pages and their sections (NavigationHistory.swift).
+    @State private var history = NavigationHistory()
+    /// The page whose activation sheet is showing. Set by tapping an inactive
+    /// tab: nothing is enabled until the user reads the matrix and agrees.
+    @State private var pendingActivation: AppModule?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Every page this edition ships has a tab, so the app's shape is
+            // discoverable. An inactive tab does not switch to its page: it
+            // asks first, showing that page's feature matrix. A page compiled
+            // out of the edition (Live Mail in the no-network build) has no
+            // tab at all — nothing behind it exists to turn on.
+            HStack(spacing: 0) {
+                if showsBackForward { backForwardButtons }
+                PageSwitcher(
+                    pages: modules.shippedModules,
+                    selection: router.selection,
+                    isEnabled: { modules.isEnabled($0) },
+                    isLocked: { !modules.activation($0).isUserSwitchable },
+                    onSelect: { page in
+                        if modules.isEnabled(page) {
+                            router.select(page, in: modules)
+                        } else {
+                            pendingActivation = page
+                        }
+                    }
+                )
+                .layoutPriority(1)
+                // The current-plan control sits on the page strip, so it is
+                // on every page and every platform without crowding a page's
+                // own toolbar. Not built in the enterprise edition (no IAP).
+                #if !ENTERPRISE_EDITION
+                PlanBadgeButton()
+                    .padding(.trailing, Spacing.xSmall)
+                #endif
+            }
+            // The strip must always be on screen: it is the only way between
+            // pages. On a short Mac window a tall page (AI Insights ▸ Ask)
+            // pushed it above the window's top edge and the user could not
+            // get back to Archive (found 2026-10-05). The strip keeps its
+            // height and wins layout; the page takes what is left, clipped.
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
+            Divider()
+            // §3-M2: an engine the previous launch stopped inside has been
+            // switched off; say so once, with diagnostics to copy.
+            EngineTripBanner()
+            SafeModeBanner()
+            ScopeJobProgressBar()
+            page
+                .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                .clipped()
+        }
+        .environment(\.navigationHistory, history)
+        .onAppear {
+            // Before any 3.0 engine can run: trip engines the last process
+            // stopped inside, and decide whether this launch is Safe Mode.
+            SafeMode.shared.evaluateAtLaunch(registry: modules)
+            EngineTripCenter.shared.checkAtLaunch(registry: modules)
+            SnapshotLocation.restoreAtLaunch()
+            // Enterprise: report version, licence, role and config problems to the MDM.
+            ManagedConfig.publishFeedback(license: storeManager.license)
+            // §3-M5: TestFlight builds run the 3.0 engines by default.
+            Task { @MainActor in
+                if await BetaEnvironment.detect() { CapabilityWiring.applyAll(modules) }
+            }
+            ArchiveSnapshots.scheduleIfDue()
+            IdleCheckpoint.start()
+            router.reconcile(with: modules)
+            #if DEBUG
+            storeManager.applyDebugLaunchOverride()
+            #endif
+        }
+        .onChange(of: modules.enabledModules) { _, _ in
+            router.reconcile(with: modules)
+        }
+        // I5: the one place a cloud AI request asks before anything leaves
+        // the device. Attached at the root so any page's request can ask.
+        .modifier(CloudAIConsentSheetModifier())
+        // The main window's paywall presenter. Every purchase gate raises a
+        // request on the one StoreManager; this root shows the requests aimed
+        // at the main window, whichever page is on screen. Settings and tool
+        // windows host their own presenter for requests raised there.
+        .purchasePresenter(target: .main)
+        .sheet(item: $pendingActivation) { module in
+            PageActivationSheet(
+                module: module,
+                activation: modules.activation(module),
+                hasProfessional: storeManager.isProfessional,
+                onEnable: {
+                    try? modules.enable(module)
+                    router.select(module, in: modules)
+                    pendingActivation = nil
+                },
+                onCancel: { pendingActivation = nil }
+            )
+        }
+    }
+
+    /// Back / Forward through the places visited: pages and the sections
+    /// inside them. ⌘[ and ⌘] as in a browser.
+    private var backForwardButtons: some View {
+        HStack(spacing: 2) {
+            Button { navigate(to: history.goBack()) } label: {
+                Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+            }
+            .disabled(!history.canGoBack)
+            .help("Back")
+            .accessibilityLabel(Text("Back"))
+            .accessibilityIdentifier("nav.back")
+            .keyboardShortcut("[", modifiers: .command)
+            Button { navigate(to: history.goForward()) } label: {
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+            }
+            .disabled(!history.canGoForward)
+            .help("Forward")
+            .accessibilityLabel(Text("Forward"))
+            .accessibilityIdentifier("nav.forward")
+            .keyboardShortcut("]", modifiers: .command)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .padding(.leading, Spacing.xSmall)
+    }
+
+    /// The ‹ › buttons sit on the strip on the Mac and at regular width
+    /// (iPad). On an iPhone the strip is too narrow: with them, only the
+    /// first page tab fit and the rest were cut off (found 2026-10-09).
+    private var showsBackForward: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .regular
+        #else
+        return true
+        #endif
+    }
+
+    /// Shows a place from the history: switch page if needed (the page then
+    /// applies its section from `history.pending`). A page that has been
+    /// switched off since cannot be shown; the request is dropped.
+    private func navigate(to location: NavigationLocation?) {
+        guard let location else { return }
+        if location.page != router.selection, !router.select(location.page, in: modules) {
+            history.pending = nil
+        }
+    }
+
+    @ViewBuilder
+    private var page: some View {
+        switch router.selection {
+        case .archive:
+            ContentView()
+        case .aiInsights:
+            // Page 2's own scope is the whole archive; narrowing happens inside
+            // the page (its scope bar), not by inheriting Page 1's filter.
+            AIInsightsPageView()
+        case .professional:
+            ProfessionalPageView()
+        case .liveMail:
+            // V4-13: the Mail workspace. In a build without the mail
+            // transports it shows the honest "no mail connection" state and
+            // no actionable control.
+            MailWorkspaceView()
+            // A place in the history too (no sections), so Back/Forward
+            // arriving here consumes its pending request.
+            .navigationSection(.liveMail, current: nil) { _ in }
+        }
+    }
+}
+
+// MARK: - Switcher
+
+private struct PageSwitcher: View {
+    let pages: [AppModule]
+    let selection: AppModule
+    let isEnabled: (AppModule) -> Bool
+    let isLocked: (AppModule) -> Bool
+    let onSelect: (AppModule) -> Void
+
+    var body: some View {
+        // Compact widths (iPhone): the three names do not fit side by side at
+        // heading size, and a wrapped "Professio-nal Workflow-s" is worse than
+        // a scroll. Names never wrap; the strip scrolls sideways if it must.
+        // First choice: full names; then short names (first word — "AI",
+        // "Professional"); only if even those do not fit, a sideways scroll.
+        // A clipped name failed the accessibility audit on iPhone.
+        ViewThatFits(in: .horizontal) {
+            switcherRow(short: false)
+            switcherRow(short: true)
+            ScrollView(.horizontal, showsIndicators: false) {
+                switcherRow(short: true)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private func name(_ page: AppModule, short: Bool) -> String {
+        guard short else { return page.displayName }
+        return page.displayName.split(separator: " ").first.map(String.init) ?? page.displayName
+    }
+
+    private func switcherRow(short: Bool) -> some View {
+        HStack(spacing: Spacing.xxSmall) {
+            ForEach(pages, id: \.rawValue) { page in
+                // Owner, 2026-09-30: these are the PAGE names, so they read
+                // at heading size, and a page that is on looks different
+                // from one that is off — filled tint and a green dot when on;
+                // dimmed text with an "Off" marker (or a lock) when not.
+                let on = isEnabled(page)
+                let current = page == selection && on
+                Button {
+                    onSelect(page)
+                } label: {
+                    HStack(spacing: 6) {
+                        // Text styles, not fixed points: the names grow with
+                        // the reader's text size (Dynamic Type).
+                        Image(systemName: icon(page))
+                            .font(.subheadline.weight(.semibold))
+                        Text(name(page, short: short))
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        if isLocked(page) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                        } else if on {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 7, height: 7)
+                                .accessibilityLabel("On")
+                        } else {
+                            Text("Off")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(AppColors.secondary.opacity(0.15), in: Capsule())
+                        }
+                    }
+                    // Full-contrast text; the current page is marked by its
+                    // tint and an accent outline (accent text on an accent
+                    // tint failed the contrast audit).
+                    .foregroundColor(on ? .primary : AppColors.secondary)
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, 7)
+                    .background(
+                        current
+                            ? Color.accentColor.opacity(0.16)
+                            : (on ? AppColors.secondary.opacity(0.08) : .clear),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(current ? Color.accentColor : (on ? Color.clear : AppColors.secondary.opacity(0.25)),
+                                          style: StrokeStyle(lineWidth: current ? 1.5 : 1, dash: on ? [] : [3, 3]))
+                    )
+                }
+                .buttonStyle(.plain)
+                .help(isEnabled(page)
+                      ? page.displayName
+                      : "\(page.displayName) is off — click to see what it includes")
+                .accessibilityLabel(page.displayName)
+                .accessibilityValue(on ? String(localized: "On") : String(localized: "Off"))
+                .accessibilityAddTraits(page == selection ? [.isSelected] : [])
+                .accessibilityHint(isEnabled(page) ? "" : String(localized: "Off. Opens a summary before turning it on."))
+            }
+            Spacer()
+        }
+        .padding(.horizontal, Spacing.xSmall)
+        .padding(.vertical, 4)
+    }
+
+    private func icon(_ page: AppModule) -> String {
+        switch page {
+        case .archive: return "archivebox"
+        case .aiInsights: return "sparkles"
+        case .professional: return "briefcase"
+        case .liveMail: return "envelope.badge"
+        }
+    }
+}
+
+// MARK: - Honest placeholder
+
+/// Shown for a page that is enabled but genuinely not implemented in this
+/// build. Saying so plainly is better than an empty screen that looks broken,
+/// and better than a demo that implies a capability that does not exist.
+struct PageNotBuiltView: View {
+    let module: AppModule
+    let detail: String
+
+    var body: some View {
+        VStack(spacing: Spacing.small) {
+            Image(systemName: "hammer")
+                .font(.largeTitle)
+                .foregroundColor(AppColors.secondary)
+            Text("\(module.displayName) is not built yet")
+                .font(Typography.title3)
+            Text(detail)
+                .font(Typography.callout)
+                .foregroundColor(AppColors.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+            Text("You can turn this page off again in Settings ▸ Modules.")
+                .font(Typography.caption1)
+                .foregroundColor(AppColors.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+}
+
+#if DEBUG
+#Preview("Page switcher — three pages on") {
+    VStack(spacing: 0) {
+        PageSwitcher(
+            pages: AppModule.allCases,
+            selection: .archive,
+            isEnabled: { $0 == .archive },
+            isLocked: { _ in false },
+            onSelect: { _ in }
+        )
+        Divider()
+        PageNotBuiltView(
+            module: .liveMail,
+            detail: String(localized: "Live Mail is planned for this release but is not implemented in this build.")
+        )
+    }
+    #if os(macOS)
+    .frame(width: 620, height: 380)
+    #endif
+}
+#endif
