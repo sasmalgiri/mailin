@@ -497,17 +497,24 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     /// again, never search results for deleted mail. Any index failure stops
     /// the deletion and is stated.
     func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
-        let summary = try await removal.planArchiveDeletion(account)
-        guard summary.deletable == confirmedCount else {
-            throw ConnectedLifecycleError.countChanged(shown: confirmedCount, now: summary.deletable)
-        }
+        try await deleteArchivedMail(account, confirmedCount: confirmedCount, progress: { _, _ in })
+    }
+
+    /// Owner report 2026-11-15: the deletable set is computed once (it IS the
+    /// confirmed count — exactly what the store deletes), the search index
+    /// drops it in one batch (one pass per shard, not one scan per message),
+    /// and the archive deletion reports `progress(done, total)` page by page.
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int,
+                            progress: @escaping @Sendable (_ done: Int, _ total: Int) -> Void) async throws -> ConnectedAccountArchiveDeletion {
         let ids = try await runtime.sink.deletableRecordIDs(accountID: account)
-        var failed = 0
-        for id in ids {
-            do { try await runtime.searchIndex.delete(id: id) } catch { failed += 1 }
+        guard ids.count == confirmedCount else {
+            throw ConnectedLifecycleError.countChanged(shown: confirmedCount, now: ids.count)
         }
-        if failed > 0 { throw MailWorkspaceError(MailLifecycleText.searchRemovalFailed(failed: failed, total: ids.count)) }
-        let result = try await removal.deleteArchivedMail(account, confirmedCount: confirmedCount)
+        progress(0, ids.count)
+        do { try await runtime.searchIndex.delete(ids: ids) } catch {
+            throw MailWorkspaceError(MailLifecycleText.searchRemovalFailed(failed: ids.count, total: ids.count))
+        }
+        let result = try await removal.deleteArchivedMail(account, confirmedCount: confirmedCount, progress: progress)
         if !result.deletedEmailIDs.isEmpty { await runtime.afterDelete(result.deletedEmailIDs) }
         return result
     }

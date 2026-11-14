@@ -11419,8 +11419,8 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
         let left = try await env.store.totalCount()
         XCTAssertEqual(left, 0)
         let backendSource = try source("maxmailin/MailWorkspaceBackend.swift")
-        let body = String(backendSource[try XCTUnwrap(backendSource.range(of: "func deleteArchivedMail(")).upperBound...].prefix(1_500))
-        let index = try XCTUnwrap(body.range(of: "runtime.searchIndex.delete(id:"))
+        let body = String(backendSource[try XCTUnwrap(backendSource.range(of: "func deleteArchivedMail(")).upperBound...].prefix(1_800))
+        let index = try XCTUnwrap(body.range(of: "runtime.searchIndex.delete(ids:"), "the search index drops the set in one batch")
         let archive = try XCTUnwrap(body.range(of: "removal.deleteArchivedMail("))
         XCTAssertLessThan(index.lowerBound, archive.lowerBound, "search index first, then the archive")
         XCTAssertTrue(body.contains("searchRemovalFailed"), "an index failure is stated")
@@ -11774,5 +11774,156 @@ final class ConnectedFixIntegrationTests: XCTestCase {
         XCTAssertTrue(summary.contains("myaccount.google.com/apppasswords"))
         XCTAssertTrue(summary.contains("account.microsoft.com ▸ Privacy ▸ Apps and services"))
         XCTAssertTrue(summary.contains("myapps.microsoft.com"))
+    }
+}
+
+// MARK: - Owner report 2026-11-15: removal / deletion progress is stated
+
+/// A backend whose removal steps wait until the test lets them go, so the
+/// sheet's state can be read while each step runs.
+@MainActor
+private final class PhasedRemovalBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var snapshots: [MailAccountSnapshot] = []
+    var summary: ConnectedAccountArchiveSummary
+    private(set) var waiting: String?
+    private var release: CheckedContinuation<Void, Never>?
+    private(set) var deleteCalls: [Int] = []
+
+    init(summary: ConnectedAccountArchiveSummary) { self.summary = summary }
+
+    func open() { let r = release; release = nil; waiting = nil; r?.resume() }
+
+    private func hold(_ step: String) async {
+        await withCheckedContinuation { c in waiting = step; release = c }
+    }
+
+    func accounts() async throws -> [MailAccountSnapshot] { snapshots }
+    func folders(_ account: UUID) async throws -> [ConnectedFolderSummary] { [] }
+    func removalPlan(_ account: UUID) async throws -> AccountRemovalPlan {
+        await hold("plan")
+        guard let a = snapshots.first(where: { $0.id == account })?.account else { throw MailBackendUnavailable() }
+        return AccountRemovalPlan(account: a, drafts: 0, outboxToKeep: 0, outboxAwaitingOutcome: 0, archive: summary)
+    }
+    func archiveDeletionPlan(_ account: UUID) async throws -> ConnectedAccountArchiveSummary { summary }
+    func remove(_ account: UUID) async throws -> AccountRemovalReport {
+        await hold("remove")
+        if let i = snapshots.firstIndex(where: { $0.id == account }) { snapshots[i].account.connectionState = .removed }
+        return AccountRemovalReport(accountID: account, tasksCancelled: 1, keptAsDrafts: [], keptInOutbox: [], awaitingOutcome: [],
+                                    secretsRemoved: true, liveCacheRowsRemoved: 0, archivedRecordsKept: summary.records)
+    }
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
+        XCTFail("the sheet asks for the deletion with progress")
+        throw MailBackendUnavailable()
+    }
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int,
+                            progress: @escaping @Sendable (Int, Int) -> Void) async throws -> ConnectedAccountArchiveDeletion {
+        deleteCalls.append(confirmedCount)
+        progress(0, confirmedCount)
+        progress(confirmedCount / 2, confirmedCount)
+        await hold("delete")
+        progress(confirmedCount, confirmedCount)
+        let held = summary.held
+        summary.deletable = 0
+        summary.records = held
+        return ConnectedAccountArchiveDeletion(accountID: account, deletedEmailIDs: (0..<confirmedCount).map { _ in UUID() }, heldKept: held,
+                                               blobsRemoved: 0, bytesReclaimed: 0, blobsKeptShared: 0)
+    }
+}
+
+@MainActor
+final class MailRemovalProgressTests: XCTestCase {
+
+    private func waitFor(_ what: String, _ condition: () -> Bool) async {
+        let until = Date().addingTimeInterval(5)
+        while !condition() && Date() < until { try? await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertTrue(condition(), "timed out waiting for: \(what)")
+    }
+
+    private func account() -> MailAccount {
+        MailAccount(provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                    enabledModes: [.capture], connectionState: .connected)
+    }
+
+    /// Remove account: "Counting archived messages…" while the plan is
+    /// computed (Cancel then changes nothing), "Removing the account…" while
+    /// the capture stops, then "Deleting X of Y messages…" from the
+    /// deletion's own progress, ending at the total.
+    func testRemoveSheet_statesCountingRemovingAndDeletingXOfY() async {
+        let a = account()
+        let fake = PhasedRemovalBackend(summary: ConnectedAccountArchiveSummary(accountID: a.id, records: 6_850, held: 2, deletable: 6_848,
+                                                                                exclusiveBlobs: 6_848, exclusiveBytes: 1, sharedBlobs: 0))
+        fake.snapshots = [MailAccountSnapshot(account: a, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        let flow = MailRemovalFlow(model: model, accountID: a.id)
+
+        let loading = Task { await flow.load() }
+        await waitFor("planning") { fake.waiting == "plan" }
+        XCTAssertEqual(flow.phase, .counting)
+        XCTAssertEqual(flow.phase.text, MailRemovalText.counting)
+        XCTAssertNil(flow.plan, "nothing is shown as decided while counting")
+        fake.open()
+        await loading.value
+        XCTAssertEqual(flow.phase, .idle)
+        XCTAssertEqual(flow.deletion?.deletable, 6_848, "the plan's own count, counted once")
+
+        flow.chooseDelete()
+        flow.typedCount = "6848"
+        let removing = Task { await flow.removeAndDelete() }
+        await waitFor("removing") { fake.waiting == "remove" }
+        XCTAssertEqual(flow.phase, .removing)
+        XCTAssertEqual(flow.phase.text, MailRemovalText.removing)
+        XCTAssertTrue(flow.working)
+        fake.open()
+
+        await waitFor("deleting half") { flow.phase == .deleting(done: 3_424, total: 6_848) }
+        XCTAssertEqual(fake.waiting, "delete")
+        XCTAssertEqual(flow.phase.text, MailRemovalText.deleting(done: 3_424, total: 6_848))
+        XCTAssertTrue(flow.phase.text?.hasPrefix("Deleting 3") == true && flow.phase.text?.contains("of 6") == true, flow.phase.text ?? "")
+        fake.open()
+        await removing.value
+        XCTAssertEqual(fake.deleteCalls, [6_848])
+        XCTAssertNotNil(flow.deleted)
+        XCTAssertEqual(flow.phase, .idle)
+        XCTAssertFalse(flow.working)
+    }
+
+    /// A removed account's "Delete archived mail" sheet reports the
+    /// deletion's progress in order, ending at the total.
+    func testDeleteRemovedMail_progressIsMonotonic_andEndsAtTheTotal() async {
+        let a = account()
+        let fake = PhasedRemovalBackend(summary: ConnectedAccountArchiveSummary(accountID: a.id, records: 40, held: 0, deletable: 40,
+                                                                                exclusiveBlobs: 40, exclusiveBytes: 1, sharedBlobs: 0))
+        fake.snapshots = [MailAccountSnapshot(account: a, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        let model = MailWorkspaceModel(backend: fake)
+        var seen: [Int] = []
+        let deleting = Task { await model.deleteArchivedMail(a.id, confirmedCount: 40, progress: { done, total in
+            XCTAssertEqual(total, 40)
+            seen.append(done)
+        }) }
+        await waitFor("deleting") { fake.waiting == "delete" }
+        fake.open()
+        let result = await deleting.value
+        XCTAssertEqual(result?.deletedEmailIDs.count, 40)
+        XCTAssertEqual(seen.last, 40, "the last report is the total")
+        XCTAssertEqual(seen, seen.sorted(), "never backwards")
+    }
+
+    /// Both sheets state what they are doing: no bare spinner, the phase
+    /// view in each, a determinate bar while deleting.
+    func testRemovalSheets_useThePhaseView_notABareSpinner() throws {
+        let views = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/MailAccountViews.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(views.range(of: "struct MailRemoveAccountView"))
+        let end = try XCTUnwrap(views.range(of: "struct MailReplacePasswordView"))
+        let sheets = String(views[start.upperBound..<end.lowerBound])
+        XCTAssertFalse(sheets.contains("ProgressView()\n"), "no bare spinner in the removal sheets")
+        XCTAssertEqual(sheets.components(separatedBy: "MailRemovalPhaseView(phase: .counting)").count, 3, "both sheets say what is counted")
+        XCTAssertEqual(sheets.components(separatedBy: "MailRemovalPhaseView(phase: flow.phase)").count, 3, "both sheets show removing / deleting")
+        XCTAssertTrue(views.contains("ProgressView(value: Double(min(done, total)), total: Double(max(total, 1)))"), "deleting is a determinate bar")
+        XCTAssertEqual(MailRemovalPhase.idle.text, nil)
+        XCTAssertEqual(MailRemovalPhase.counting.text, MailRemovalText.counting)
+        XCTAssertEqual(MailRemovalPhase.removing.text, MailRemovalText.removing)
     }
 }

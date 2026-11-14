@@ -21,7 +21,8 @@
 //     identified, page by page, for source-based recapture; the comparison
 //     reads both records and never replaces or deletes the old one.
 //
-//  No schema change: everything reads and writes existing tables.
+//  No schema change: everything reads and writes existing tables (plus
+//  additive `CREATE INDEX IF NOT EXISTS` lookups and a per-call TEMP table).
 //
 
 import CryptoKit
@@ -164,8 +165,65 @@ extension SQLiteEmailStore {
                 WHERE t.message_id = e.message_id AND t.id <> e.id))
     """
 
-    func connectedAccountArchiveSummary(accountID: UUID) throws -> ConnectedAccountArchiveSummary {
-        let db = try ensureDB()
+    // MARK: The deletable set, computed once per call
+    //
+    // Owner report 2026-11-15: the summary used to re-evaluate the whole
+    // deletable-set subquery once per blob digest (O(n²): minutes for 7k
+    // records), and the deletion re-ran it per page. Now every call writes
+    // the set ONCE into a TEMP table on this connection — the store actor
+    // runs one call at a time, so the table is private to the call — derives
+    // every count from it with set-based queries, and drops it afterwards.
+
+    private static let deletableSetTable = "temp.mailin_del_set"
+
+    /// Lookups the deletable set and the blob check use. `CREATE INDEX IF NOT
+    /// EXISTS` — additive and idempotent (no table or row change, so no schema
+    /// version; the same pattern as `connectedMailboxIndexSQL`); a read-only
+    /// (Safe Mode) archive simply reads without them.
+    static let connectedLifecycleIndexSQL = [
+        "CREATE INDEX IF NOT EXISTS idx_remote_messages_blob ON remote_messages(blob_digest, account_id);",
+        "CREATE INDEX IF NOT EXISTS idx_remote_messages_account_email ON remote_messages(account_id, email_id);",
+        "CREATE INDEX IF NOT EXISTS idx_bodies_raw_blob ON email_bodies(raw_blob_digest) WHERE raw_blob_digest IS NOT NULL;",
+        "CREATE INDEX IF NOT EXISTS idx_emails_msgid_lookup ON emails(message_id) WHERE message_id IS NOT NULL;",
+    ]
+
+    func ensureConnectedLifecycleIndexes(_ db: OpaquePointer) {
+        for sql in Self.connectedLifecycleIndexSQL { try? exec(db, sql) }
+    }
+
+    /// Writes the account's deletable set into the temp table (replacing any
+    /// earlier content) and returns its size. Callers drop it with
+    /// `dropAccountDeletableSet` when the call ends.
+    private func fillAccountDeletableSet(_ db: OpaquePointer, accountID: UUID) throws -> Int {
+        ensureConnectedLifecycleIndexes(db)
+        try exec(db, "CREATE TEMP TABLE IF NOT EXISTS mailin_del_set(email_id TEXT PRIMARY KEY) WITHOUT ROWID;")
+        try exec(db, "DELETE FROM \(Self.deletableSetTable);")
+        let insert = try prepare(db, "INSERT OR IGNORE INTO \(Self.deletableSetTable)(email_id) \(Self.accountRecordsSQL);")
+        defer { sqlite3_finalize(insert) }
+        bindText(insert, 1, accountID.uuidString)
+        guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return try scalarInt(db, "SELECT COUNT(*) FROM \(Self.deletableSetTable);")
+    }
+
+    private func dropAccountDeletableSet(_ db: OpaquePointer) {
+        try? exec(db, "DROP TABLE IF EXISTS \(Self.deletableSetTable);")
+    }
+
+    /// One blob of the account's deletable records: its size, and whether
+    /// anything outside the set uses it (another account's occurrence, an
+    /// imported, held or kept record).
+    private struct DeletableBlob {
+        var digest: String
+        var length: Int64
+        var shared: Bool
+    }
+
+    /// The summary and the set's blobs, read from the filled temp table.
+    /// One grouped query for the blobs; each digest's "used outside" check is
+    /// an index lookup (remote_messages by digest, email_bodies by digest
+    /// against the set's primary key) — never the set re-evaluated.
+    private func summaryOfDeletableSet(_ db: OpaquePointer, accountID: UUID,
+                                       deletable: Int) throws -> (ConnectedAccountArchiveSummary, [DeletableBlob]) {
         let a = accountID.uuidString
         func count(_ sql: String) throws -> Int {
             let stmt = try prepare(db, sql)
@@ -178,72 +236,97 @@ extension SQLiteEmailStore {
             SELECT COUNT(DISTINCT r.email_id) FROM remote_messages r JOIN emails e ON e.id = r.email_id
             WHERE r.account_id = ?1 AND EXISTS (SELECT 1 FROM legal_holds h WHERE h.email_id = r.email_id);
             """)
-        let deletable = try count("SELECT COUNT(DISTINCT email_id) FROM (\(Self.accountRecordsSQL));")
+        let stmt = try prepare(db, """
+            SELECT d.digest, d.len,
+                   EXISTS (SELECT 1 FROM remote_messages r2 WHERE r2.blob_digest = d.digest AND r2.account_id <> ?1)
+                   OR EXISTS (SELECT 1 FROM email_bodies b WHERE b.raw_blob_digest = d.digest
+                              AND NOT EXISTS (SELECT 1 FROM \(Self.deletableSetTable) s WHERE s.email_id = b.id))
+            FROM (SELECT r.blob_digest AS digest, MAX(r.blob_length) AS len FROM remote_messages r
+                  JOIN \(Self.deletableSetTable) s ON s.email_id = r.email_id
+                  WHERE r.account_id = ?1 GROUP BY r.blob_digest) d
+            ORDER BY d.digest;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, a)
+        var blobs: [DeletableBlob] = []
         var exclusive = 0, shared = 0
         var bytes: Int64 = 0
-        for (digest, length) in try accountDigests(db, accountID: accountID) {
-            if try digestReferencedOutside(db, digest: digest, accountID: accountID) { shared += 1 } else { exclusive += 1; bytes += length }
+        while try stepRow(stmt, db) {
+            let blob = DeletableBlob(digest: columnText(stmt, 0), length: sqlite3_column_int64(stmt, 1), shared: sqlite3_column_int(stmt, 2) != 0)
+            if blob.shared { shared += 1 } else { exclusive += 1; bytes += blob.length }
+            blobs.append(blob)
         }
-        return ConnectedAccountArchiveSummary(accountID: accountID, records: records, held: held, deletable: deletable,
-                                              exclusiveBlobs: exclusive, exclusiveBytes: bytes, sharedBlobs: shared,
-                                              keptOnlyCopy: max(0, records - held - deletable))
+        let summary = ConnectedAccountArchiveSummary(accountID: accountID, records: records, held: held, deletable: deletable,
+                                                     exclusiveBlobs: exclusive, exclusiveBytes: bytes, sharedBlobs: shared,
+                                                     keptOnlyCopy: max(0, records - held - deletable))
+        return (summary, blobs)
     }
 
-    /// Distinct blob digests of the account's deletable records.
-    private func accountDigests(_ db: OpaquePointer, accountID: UUID) throws -> [(String, Int64)] {
-        let stmt = try prepare(db, """
-            SELECT r.blob_digest, MAX(r.blob_length) FROM remote_messages r JOIN emails e ON e.id = r.email_id
-            WHERE r.account_id = ?1 AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.email_id = r.email_id)
-              AND \(Self.onlyCopyExclusionSQL)
-            GROUP BY r.blob_digest ORDER BY r.blob_digest;
-        """)
+    func connectedAccountArchiveSummary(accountID: UUID) throws -> ConnectedAccountArchiveSummary {
+        let db = try ensureDB()
+        defer { dropAccountDeletableSet(db) }
+        let deletable = try fillAccountDeletableSet(db, accountID: accountID)
+        return try summaryOfDeletableSet(db, accountID: accountID, deletable: deletable).0
+    }
+
+    /// How many of the account's records are in the archive (the removal
+    /// report's "kept" figure) — one count, no deletion planning.
+    func connectedAccountRecordCount(accountID: UUID) throws -> Int {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT COUNT(DISTINCT r.email_id) FROM remote_messages r JOIN emails e ON e.id = r.email_id WHERE r.account_id = ?1;")
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, accountID.uuidString)
-        var out: [(String, Int64)] = []
-        while try stepRow(stmt, db) { out.append((columnText(stmt, 0), sqlite3_column_int64(stmt, 1))) }
-        return out
+        return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0
     }
 
-    /// Whether anything other than this account's deletable records uses the
-    /// digest: another account's occurrence, an imported or held record.
-    private func digestReferencedOutside(_ db: OpaquePointer, digest: String, accountID: UUID) throws -> Bool {
-        let stmt = try prepare(db, """
-            SELECT
-              EXISTS (SELECT 1 FROM remote_messages r2 WHERE r2.blob_digest = ?1 AND r2.account_id <> ?2)
-              OR EXISTS (SELECT 1 FROM email_bodies b WHERE b.raw_blob_digest = ?1 AND b.id NOT IN (\(Self.accountRecordsSQL.replacingOccurrences(of: "?1", with: "?2"))));
-        """)
+    /// Exactly the records `deleteConnectedAccountArchive` deletes now, in id order.
+    func connectedDeletableRecordIDs(accountID: UUID) throws -> [UUID] {
+        let db = try ensureDB()
+        defer { dropAccountDeletableSet(db) }
+        _ = try fillAccountDeletableSet(db, accountID: accountID)
+        let stmt = try prepare(db, "SELECT email_id FROM \(Self.deletableSetTable) ORDER BY email_id;")
         defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, digest); bindText(stmt, 2, accountID.uuidString)
-        return try stepRow(stmt, db) && sqlite3_column_int(stmt, 0) != 0
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
     }
 
     /// Deletes the account's archived mail (held records excepted) when the
     /// deletable count still equals `confirmedCount`, then the blobs nothing
-    /// else references. Records are removed in pages; nothing of any other
-    /// account is read for writing.
-    func deleteConnectedAccountArchive(accountID: UUID, confirmedCount: Int, pageSize: Int = 1_000) throws -> ConnectedAccountArchiveDeletion {
-        let before = try connectedAccountArchiveSummary(accountID: accountID)
-        guard before.deletable == confirmedCount else { throw ConnectedLifecycleError.countChanged(shown: confirmedCount, now: before.deletable) }
+    /// else references. Records are removed in pages over the set computed
+    /// once; `progress(done, total)` follows each page (0 first, total last).
+    /// Nothing of any other account is read for writing.
+    func deleteConnectedAccountArchive(accountID: UUID, confirmedCount: Int, pageSize: Int = 1_000,
+                                       progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil) throws -> ConnectedAccountArchiveDeletion {
         let db = try ensureDB()
-        let digests = try accountDigests(db, accountID: accountID)
-            .filter { try !digestReferencedOutside(db, digest: $0.0, accountID: accountID) }
+        defer { dropAccountDeletableSet(db) }
+        let total = try fillAccountDeletableSet(db, accountID: accountID)
+        let (before, blobs) = try summaryOfDeletableSet(db, accountID: accountID, deletable: total)
+        guard before.deletable == confirmedCount else { throw ConnectedLifecycleError.countChanged(shown: confirmedCount, now: before.deletable) }
+        let digests = blobs.filter { !$0.shared }.map { ($0.digest, $0.length) }
         var deleted: [UUID] = []
+        var done = 0
+        progress?(0, total)
+        let pageStmt = try prepare(db, "SELECT email_id FROM \(Self.deletableSetTable) WHERE email_id > ?1 ORDER BY email_id LIMIT ?2;")
+        defer { sqlite3_finalize(pageStmt) }
         var after = ""
         while true {
-            let stmt = try prepare(db, "SELECT DISTINCT email_id FROM (\(Self.accountRecordsSQL)) WHERE email_id > ?2 ORDER BY email_id LIMIT ?3;")
-            bindText(stmt, 1, accountID.uuidString); bindText(stmt, 2, after); sqlite3_bind_int64(stmt, 3, Int64(max(1, pageSize)))
+            sqlite3_reset(pageStmt); sqlite3_clear_bindings(pageStmt)
+            bindText(pageStmt, 1, after); sqlite3_bind_int64(pageStmt, 2, Int64(max(1, pageSize)))
             var page: [UUID] = []
-            while try stepRow(stmt, db) {
-                after = columnText(stmt, 0)
+            while try stepRow(pageStmt, db) {
+                after = columnText(pageStmt, 0)
                 if let id = UUID(uuidString: after) { page.append(id) }
             }
-            sqlite3_finalize(stmt)
+            sqlite3_reset(pageStmt)
             if page.isEmpty { break }
             // No Message-ID tombstones: removing an account's archive is not
             // "never import this message again" — a later import of the same
             // mail (a file, or the account reconnected) stores it as new.
             let refused = try deleteReportingHeld(ids: Set(page), recordTombstones: false)
             deleted.append(contentsOf: page.filter { !refused.contains($0) })
+            done += page.count
+            progress?(done, total)
         }
         // The account's occurrence rows of records that no longer exist.
         try exec(db, SQLiteHygiene.beginWrite)
@@ -537,8 +620,15 @@ extension ConnectedArchiveSink {
 
     /// The explicit, separate "delete this account's archived mail":
     /// `confirmedCount` is the deletable count the user was shown.
-    public func deleteAccountArchive(accountID: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
-        try await store.deleteConnectedAccountArchive(accountID: accountID, confirmedCount: confirmedCount)
+    /// `progress(done, total)` reports each page of records removed (on the store's executor).
+    public func deleteAccountArchive(accountID: UUID, confirmedCount: Int,
+                                     progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil) async throws -> ConnectedAccountArchiveDeletion {
+        try await store.deleteConnectedAccountArchive(accountID: accountID, confirmedCount: confirmedCount, progress: progress)
+    }
+
+    /// The account's records in the archive (one count; no deletion planning).
+    public func accountRecordCount(accountID: UUID) async throws -> Int {
+        try await store.connectedAccountRecordCount(accountID: accountID)
     }
 
     @discardableResult

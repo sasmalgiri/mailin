@@ -43,22 +43,11 @@ extension SQLiteEmailStore {
         return removed
     }
 
-    /// The account's archived records that "delete this account's archived
-    /// mail" removes: its records in the archive, legal holds excepted (the
-    /// same set `deleteConnectedAccountArchive` deletes). Every record, in id order.
-    func connectedDeletableRecordIDs(accountID: UUID) throws -> [UUID] {
-        let db = try ensureDB()
-        let stmt = try prepare(db, """
-            SELECT DISTINCT r.email_id FROM remote_messages r JOIN emails e ON e.id = r.email_id
-            WHERE r.account_id = ?1 AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.email_id = r.email_id)
-            ORDER BY r.email_id;
-        """)
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, accountID.uuidString)
-        var out: [UUID] = []
-        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
-        return out
-    }
+    // `connectedDeletableRecordIDs` lives beside the deletion
+    // (SQLiteEmailStore+ConnectedLifecycle.swift) and reads the same
+    // deletable set — holds AND only-visible copies excepted (2026-11-15:
+    // the list here used to omit the only-copy rule, so the search index
+    // lost records the deletion then kept).
 }
 
 extension ConnectedArchiveSink {

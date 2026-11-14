@@ -437,6 +437,39 @@ enum MailRemovalText {
         }
         return String(localized: "\(r.deletedEmailIDs.count) archived messages deleted; \(r.heldKept) on hold kept; \(r.keptOnlyCopy) kept as the only copy left after duplicate removal.")
     }
+
+    // Owner report 2026-11-15: what the sheet is doing, never a bare spinner (rule 9).
+    static var counting: String { String(localized: "Counting archived messages…") }
+    static var removing: String { String(localized: "Removing the account…") }
+    static func deleting(done: Int, total: Int) -> String {
+        String(localized: "Deleting \(done) of \(total) messages…")
+    }
+}
+
+/// One progress report of an account-archive deletion.
+struct MailDeletionProgress: Sendable, Equatable {
+    var done: Int
+    var total: Int
+}
+
+/// What the Remove account / Delete archived mail sheet is busy with.
+enum MailRemovalPhase: Equatable {
+    case idle
+    /// Planning: the counts shown before anything changes (Cancel closes; nothing changed).
+    case counting
+    /// Stopping the capture, cancelling unsent mail, removing sign-in details.
+    case removing
+    /// Removing the archived messages, `done` of `total`.
+    case deleting(done: Int, total: Int)
+
+    var text: String? {
+        switch self {
+        case .idle: return nil
+        case .counting: return MailRemovalText.counting
+        case .removing: return MailRemovalText.removing
+        case .deleting(let done, let total): return MailRemovalText.deleting(done: done, total: total)
+        }
+    }
 }
 
 // MARK: - Cleanup confirmation
@@ -826,6 +859,9 @@ protocol MailWorkspaceBackend: AnyObject {
     func remove(_ account: UUID) async throws -> AccountRemovalReport
     func archiveDeletionPlan(_ account: UUID) async throws -> ConnectedAccountArchiveSummary
     func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion
+    /// The same, reporting `progress(done, total)` as records are removed.
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int,
+                            progress: @escaping @Sendable (_ done: Int, _ total: Int) -> Void) async throws -> ConnectedAccountArchiveDeletion
 
     func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage
     func email(_ id: UUID) async throws -> MBOXParser.RawEmail?
@@ -879,6 +915,14 @@ extension MailWorkspaceBackend {
     func remove(_ account: UUID) async throws -> AccountRemovalReport { throw MailBackendUnavailable() }
     func archiveDeletionPlan(_ account: UUID) async throws -> ConnectedAccountArchiveSummary { throw MailBackendUnavailable() }
     func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion { throw MailBackendUnavailable() }
+    /// A backend without page-by-page progress reports the start and the end.
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int,
+                            progress: @escaping @Sendable (_ done: Int, _ total: Int) -> Void) async throws -> ConnectedAccountArchiveDeletion {
+        progress(0, confirmedCount)
+        let result = try await deleteArchivedMail(account, confirmedCount: confirmedCount)
+        progress(confirmedCount, confirmedCount)
+        return result
+    }
     func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {
         ConnectedMailboxPage(rows: [], total: 0, next: nil)
     }
@@ -1220,13 +1264,30 @@ final class MailWorkspaceModel {
         return report
     }
 
-    func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async -> ConnectedAccountArchiveDeletion? {
+    /// `progress(done, total)` runs on the main actor, in order (an ordered
+    /// stream from the store's executor; a burst keeps only the newest).
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int,
+                            progress: @escaping @MainActor (_ done: Int, _ total: Int) -> Void = { _, _ in }) async -> ConnectedAccountArchiveDeletion? {
         var result: ConnectedAccountArchiveDeletion?
+        let (reports, sink) = AsyncStream.makeStream(of: MailDeletionProgress.self, bufferingPolicy: .bufferingNewest(1))
+        let relay = Task { @MainActor in
+            for await report in reports { progress(report.done, report.total) }
+        }
         await run {
-            let r = try await self.backend.deleteArchivedMail(account, confirmedCount: confirmedCount)
+            let r: ConnectedAccountArchiveDeletion
+            do {
+                r = try await self.backend.deleteArchivedMail(account, confirmedCount: confirmedCount,
+                                                              progress: { done, total in sink.yield(MailDeletionProgress(done: done, total: total)) })
+            } catch {
+                sink.finish()
+                throw error
+            }
+            sink.finish()
+            await relay.value      // the last report reaches the sheet before the result
             result = r
             self.message = MailRemovalText.deletionReport(r)
         }
+        sink.finish()
         if result != nil { await refresh() }
         return result
     }

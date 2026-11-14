@@ -142,7 +142,8 @@ public actor AccountRemovalCoordinator {
             try await registry.save(account)
         }
         let cacheRows = options.removeLiveCache ? try await sink.removeLiveCache(accountID: id) : 0
-        let kept = try await sink.accountArchiveSummary(accountID: id).records
+        // Only the kept count is reported: one count, not a deletion plan.
+        let kept = try await sink.accountRecordCount(accountID: id)
         return AccountRemovalReport(accountID: id, tasksCancelled: cancelled, keptAsDrafts: keptAsDrafts, keptInOutbox: keptInOutbox,
                                     awaitingOutcome: awaiting, secretsRemoved: options.removeSecrets,
                                     liveCacheRowsRemoved: cacheRows, archivedRecordsKept: kept)
@@ -156,7 +157,9 @@ public actor AccountRemovalCoordinator {
     /// Deletes the account's archived mail — only when `confirmedCount`
     /// equals the deletable count now (else `countChanged`, nothing deleted).
     /// The caller removes `deletedEmailIDs` from the search index.
-    public func deleteArchivedMail(_ id: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
-        try await sink.deleteAccountArchive(accountID: id, confirmedCount: confirmedCount)
+    /// `progress(done, total)` follows each page of records removed.
+    public func deleteArchivedMail(_ id: UUID, confirmedCount: Int,
+                                   progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil) async throws -> ConnectedAccountArchiveDeletion {
+        try await sink.deleteAccountArchive(accountID: id, confirmedCount: confirmedCount, progress: progress)
     }
 }

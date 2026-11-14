@@ -767,6 +767,38 @@ actor FTSSearchIndex {
         }
     }
 
+    /// Removes many emails from every shard: per shard ONE transaction and
+    /// one pass over the FTS table (`email_id` is UNINDEXED, so `delete(id:)`
+    /// scans the shard once per id — minutes for thousands of ids). The ids
+    /// go into a TEMP table on the shard connection, dropped afterwards.
+    func delete(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        try migrateLegacyIfNeeded()
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            try exec(db, SQLiteHygiene.beginWrite)
+            do {
+                try exec(db, "CREATE TEMP TABLE IF NOT EXISTS fts_del_ids(email_id TEXT PRIMARY KEY) WITHOUT ROWID;")
+                try exec(db, "DELETE FROM temp.fts_del_ids;")
+                let insert = try prepare(db, "INSERT OR IGNORE INTO temp.fts_del_ids(email_id) VALUES (?);")
+                defer { sqlite3_finalize(insert) }
+                for id in ids {
+                    sqlite3_reset(insert)
+                    bindText(insert, 1, id.uuidString)
+                    guard sqlite3_step(insert) == SQLITE_DONE else { throw FTSError.execFailed(lastError(db)) }
+                }
+                try exec(db, "DELETE FROM email_search WHERE email_id IN (SELECT email_id FROM temp.fts_del_ids);")
+                try exec(db, "DELETE FROM indexed_message WHERE email_id IN (SELECT email_id FROM temp.fts_del_ids);")
+                try exec(db, "DELETE FROM temp.fts_del_ids;")
+                try exec(db, "COMMIT;")
+            } catch {
+                try? exec(db, "ROLLBACK;")
+                throw error
+            }
+            try? exec(db, "DROP TABLE IF EXISTS temp.fts_del_ids;")
+        }
+    }
+
     /// One-time repair for archives indexed by a pre-idempotent build, which
     /// could append more than one FTS row per email (the registry masked it,
     /// so the reconciler never repaired it, and search returned doubles). Per

@@ -859,4 +859,225 @@ final class ConnectedArchiveSinkTests: XCTestCase {
         }
         XCTAssertNotEqual(loaded[0].rawSource, loaded[1].rawSource)
     }
+
+    // MARK: Owner report 2026-11-15 — account-archive deletion at scale
+
+    struct DeletionReference: Equatable {
+        var records = 0, held = 0, deletable = 0, keptOnlyCopy = 0
+        var exclusiveBlobs = 0, sharedBlobs = 0
+        var exclusiveBytes: Int64 = 0
+        var deletableIDs: Set<UUID> = []
+    }
+
+    /// An account with `n` captured messages plus 300 more identities sharing
+    /// a blob with one of them, 50 held, 100 imported duplicates kept apart,
+    /// 20 captured survivors whose imported copy is in the Trash, 20 captured
+    /// copies whose link was carried to an imported survivor, and a second
+    /// account holding 100 of the same blobs. Returns (account, other).
+    func buildDeletionFixture(_ sink: ConnectedArchiveSink, n: Int) async throws -> (UUID, UUID) {
+        let store = sink.store
+        let account = try await makeAccount(sink)
+        let other = try await makeAccount(sink, display: "other@example.com")
+        let run = try await sink.beginRun(accountID: account, selection: "all")
+        func bytes(_ i: Int) -> Data { Self.message(id: "m\(i)@x", body: "Body \(i)") }
+        var captured: [Int: UUID] = [:]
+        for i in 0..<n {
+            captured[i] = try XCTUnwrapAsync(try await sink.capture(item(sink, account: account, gmailID: "m\(i)", bytes: bytes(i)), runID: run).emailID)
+        }
+        for i in 0..<300 {
+            _ = try await sink.capture(item(sink, account: account, gmailID: "dup\(i)", bytes: bytes(i)), runID: run)
+        }
+        _ = try await sink.finishRun(run)
+        _ = try await store.legalHoldsAdd((100..<150).compactMap { captured[$0] }, matter: "Scale", sync: true)
+        let files = try (200..<340).map { try MBOXParser.processRawMessage(String(decoding: bytes($0), as: UTF8.self), senderEmail: "") }
+        _ = try await store.insertBatch(files, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .preserveAll, batchSize: 500, progress: nil)
+        // 300..<320: the captured copy survives, the imported one goes to the Trash.
+        // 320..<340: the imported copy survives, the captured one's link is carried to it.
+        var plans: [SQLiteEmailStore.DuplicateRemovalPlan] = []
+        for i in 300..<340 {
+            let file = files[i - 200].id, cap = try XCTUnwrap(captured[i])
+            plans.append(i < 320 ? .init(survivor: cap, removed: [file]) : .init(survivor: file, removed: [cap]))
+        }
+        _ = try await store.removeDuplicateCopies(plans)
+        let runB = try await sink.beginRun(accountID: other, selection: "all")
+        for i in 400..<500 { _ = try await sink.capture(item(sink, account: other, gmailID: "o\(i)", bytes: bytes(i)), runID: runB) }
+        _ = try await sink.finishRun(runB)
+        return (account, other)
+    }
+
+    /// The deletion's numbers computed independently, in Swift, from the raw tables.
+    func referenceDeletion(dbAt url: URL, account: UUID) throws -> DeletionReference {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db = handle else { throw CocoaError(.fileReadUnknown) }
+        defer { sqlite3_close(db) }
+        func rows(_ sql: String, _ each: (OpaquePointer) -> Void) {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return XCTFail(String(cString: sqlite3_errmsg(db))) }
+            while sqlite3_step(stmt) == SQLITE_ROW { each(stmt) }
+            sqlite3_finalize(stmt)
+        }
+        func text(_ s: OpaquePointer, _ i: Int32) -> String? { sqlite3_column_text(s, i).map { String(cString: $0) } }
+        func int(_ s: OpaquePointer, _ i: Int32) -> Int64? { sqlite3_column_type(s, i) == SQLITE_NULL ? nil : sqlite3_column_int64(s, i) }
+        let a = account.uuidString
+        var accountSource: Int64?
+        rows("SELECT source_id FROM mail_accounts WHERE account_id = '\(a)'") { accountSource = int($0, 0) }
+        var emails: [String: (source: Int64?, mid: String)] = [:]
+        rows("SELECT id, source_id, COALESCE(message_id, '') FROM emails") { emails[text($0, 0)!] = (int($0, 1), text($0, 2) ?? "") }
+        var trashed = Set<String>(), held = Set<String>()
+        rows("SELECT email_id FROM email_review_state WHERE trashed = 1") { trashed.insert(text($0, 0)!) }
+        rows("SELECT email_id FROM legal_holds") { held.insert(text($0, 0)!) }
+        var trashedByMID: [String: Set<String>] = [:]
+        for id in trashed { if let e = emails[id], !e.mid.isEmpty { trashedByMID[e.mid, default: []].insert(id) } }
+        var rm: [(account: String, email: String, digest: String, length: Int64, carried: Bool)] = []
+        rows("SELECT account_id, COALESCE(email_id, ''), blob_digest, blob_length, metadata_json FROM remote_messages") {
+            rm.append((text($0, 0)!, text($0, 1)!, text($0, 2)!, sqlite3_column_int64($0, 3), (text($0, 4) ?? "").contains("mailinCarriedFrom")))
+        }
+        var bodies: [(id: String, digest: String)] = []
+        rows("SELECT id, raw_blob_digest FROM email_bodies WHERE raw_blob_digest IS NOT NULL") { bodies.append((text($0, 0)!, text($0, 1)!)) }
+
+        var ref = DeletionReference()
+        let mine = Set(rm.filter { $0.account == a && emails[$0.email] != nil }.map(\.email))
+        ref.records = mine.count
+        ref.held = mine.filter(held.contains).count
+        let otherAccountEmails = Set(rm.filter { $0.account != a }.map(\.email))
+        let carriedEmails = Set(rm.filter(\.carried).map(\.email))
+        let deletable = mine.filter { id in
+            let e = emails[id]!
+            guard !held.contains(id), e.source == accountSource, !otherAccountEmails.contains(id), !carriedEmails.contains(id) else { return false }
+            if !e.mid.isEmpty, let t = trashedByMID[e.mid], !t.subtracting([id]).isEmpty { return false }
+            return true
+        }
+        ref.deletableIDs = Set(deletable.compactMap(UUID.init(uuidString:)))
+        ref.deletable = deletable.count
+        ref.keptOnlyCopy = ref.records - ref.held - ref.deletable
+        var digests: [String: Int64] = [:]
+        for r in rm where r.account == a && deletable.contains(r.email) { digests[r.digest] = max(digests[r.digest] ?? 0, r.length) }
+        let otherDigests = Set(rm.filter { $0.account != a }.map(\.digest))
+        let outsideBodyDigests = Set(bodies.filter { !deletable.contains($0.id) }.map(\.digest))
+        for (d, len) in digests {
+            if otherDigests.contains(d) || outsideBodyDigests.contains(d) { ref.sharedBlobs += 1 } else { ref.exclusiveBlobs += 1; ref.exclusiveBytes += len }
+        }
+        return ref
+    }
+
+    func testScale_accountArchiveSummaryAndDeletion_7kRecords_areFast_andMatchTheReference() async throws {
+        let storeDir = dir.appendingPathComponent("store", isDirectory: true)
+        let sink = ConnectedArchiveSink(storeDirectory: storeDir)
+        let built = Date()
+        let (account, other) = try await buildDeletionFixture(sink, n: 7_000)
+        print("[scale] fixture built in \(String(format: "%.1f", Date().timeIntervalSince(built))) s")
+        let ref = try referenceDeletion(dbAt: storeDir.appendingPathComponent("emails.db"), account: account)
+        XCTAssertGreaterThanOrEqual(ref.records, 7_000)
+        XCTAssertEqual(ref.held, 50)
+        XCTAssertEqual(ref.keptOnlyCopy, 40, "20 survivors with a trashed copy, 20 carried links")
+        XCTAssertGreaterThan(ref.sharedBlobs, 0)
+
+        let t0 = Date()
+        let summary = try await sink.accountArchiveSummary(accountID: account)
+        let summarySeconds = Date().timeIntervalSince(t0)
+        print("[scale] summary of \(summary.records) records in \(String(format: "%.3f", summarySeconds)) s")
+        XCTAssertEqual(summary.records, ref.records)
+        XCTAssertEqual(summary.held, ref.held)
+        XCTAssertEqual(summary.deletable, ref.deletable)
+        XCTAssertEqual(summary.keptOnlyCopy, ref.keptOnlyCopy)
+        XCTAssertEqual(summary.exclusiveBlobs, ref.exclusiveBlobs)
+        XCTAssertEqual(summary.exclusiveBytes, ref.exclusiveBytes)
+        XCTAssertEqual(summary.sharedBlobs, ref.sharedBlobs)
+        XCTAssertLessThan(summarySeconds, 3, "the count before deleting is shown in seconds, not minutes")
+        let listed = try await sink.deletableRecordIDs(accountID: account)
+        XCTAssertEqual(Set(listed), ref.deletableIDs, "the search index loses exactly what the deletion removes")
+        XCTAssertEqual(listed.count, ref.deletable)
+
+        let reports = ProgressLog()
+        let t1 = Date()
+        let deletion = try await sink.deleteAccountArchive(accountID: account, confirmedCount: summary.deletable,
+                                                           progress: { reports.append($0, $1) })
+        let deleteSeconds = Date().timeIntervalSince(t1)
+        reports.assertMonotonic(endingAt: ref.deletable)
+        print("[scale] deleted \(deletion.deletedEmailIDs.count) records in \(String(format: "%.3f", deleteSeconds)) s")
+        XCTAssertEqual(Set(deletion.deletedEmailIDs), ref.deletableIDs)
+        XCTAssertEqual(deletion.heldKept, ref.held)
+        XCTAssertEqual(deletion.keptOnlyCopy, ref.keptOnlyCopy)
+        XCTAssertEqual(deletion.blobsRemoved, ref.exclusiveBlobs)
+        XCTAssertEqual(deletion.bytesReclaimed, ref.exclusiveBytes)
+        XCTAssertEqual(deletion.blobsKeptShared, ref.sharedBlobs)
+        XCTAssertLessThan(deleteSeconds, 10)
+        let after = try await sink.accountArchiveSummary(accountID: account)
+        XCTAssertEqual(after.deletable, 0)
+        XCTAssertEqual(after.records, ref.held + ref.keptOnlyCopy)
+        let otherAfter = try await sink.accountArchiveSummary(accountID: other)
+        XCTAssertEqual(otherAfter.records, 100, "the other account is never touched")
+    }
+
+    /// Thread-safe record of `(done, total)` progress reports.
+    final class ProgressLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [(Int, Int)] = []
+        func append(_ done: Int, _ total: Int) { lock.withLock { items.append((done, total)) } }
+        var all: [(Int, Int)] { lock.withLock { items } }
+
+        func assertMonotonic(endingAt total: Int, file: StaticString = #filePath, line: UInt = #line) {
+            let reports = all
+            XCTAssertGreaterThanOrEqual(reports.count, 2, "a start and an end are reported", file: file, line: line)
+            XCTAssertEqual(reports.first?.0, 0, "the first report is 0 done", file: file, line: line)
+            XCTAssertEqual(reports.last?.0, total, "the last report is the total", file: file, line: line)
+            XCTAssertTrue(reports.allSatisfy { $0.1 == total }, "the total never changes", file: file, line: line)
+            XCTAssertEqual(reports.map(\.0), reports.map(\.0).sorted(), "done never goes back", file: file, line: line)
+            XCTAssertTrue(reports.allSatisfy { $0.0 <= $0.1 }, file: file, line: line)
+        }
+    }
+
+    /// Deleting an account's mail reports its progress page by page: 0 first,
+    /// never backwards, the deletable count last; a stale count reports nothing.
+    func testAccountArchiveDeletion_reportsMonotonicProgress_endingAtTheTotal() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("store", isDirectory: true))
+        let (account, _) = try await buildDeletionFixture(sink, n: 400)
+        let summary = try await sink.accountArchiveSummary(accountID: account)
+        XCTAssertGreaterThan(summary.deletable, 300)
+
+        let stale = ProgressLog()
+        do {
+            _ = try await sink.store.deleteConnectedAccountArchive(accountID: account, confirmedCount: summary.deletable + 1,
+                                                                   pageSize: 7, progress: { stale.append($0, $1) })
+            XCTFail("a stale count must be refused")
+        } catch {
+            XCTAssertEqual(error as? ConnectedLifecycleError, .countChanged(shown: summary.deletable + 1, now: summary.deletable))
+        }
+        XCTAssertTrue(stale.all.isEmpty, "nothing ran, nothing is reported")
+
+        let reports = ProgressLog()
+        let deletion = try await sink.store.deleteConnectedAccountArchive(accountID: account, confirmedCount: summary.deletable,
+                                                                          pageSize: 7, progress: { reports.append($0, $1) })
+        XCTAssertEqual(deletion.deletedEmailIDs.count, summary.deletable)
+        reports.assertMonotonic(endingAt: summary.deletable)
+        XCTAssertEqual(reports.all.count, 1 + (summary.deletable + 6) / 7, "one report per page, after the start")
+    }
+
+    /// The search index drops many ids in one pass per shard (the account
+    /// deletion's batch), across years, and leaves every other row.
+    func testSearchIndex_batchDelete_removesExactlyTheIDs_inEveryShard() async throws {
+        let fts = FTSSearchIndex(shardsDirectory: dir.appendingPathComponent("fts", isDirectory: true))
+        let emails = try (0..<3_000).map { i -> MBOXParser.RawEmail in
+            let year = 2019 + i % 4
+            let raw = "Message-ID: <fts\(i)@x>\r\nFrom: a@example.com\r\nSubject: zebrafinch \(i)\r\n"
+                + "Date: Mon, 6 Jan \(year) 10:00:00 +0000\r\n\r\nbody \(i)\r\n"
+            return try MBOXParser.processRawMessage(raw, senderEmail: "")
+        }
+        try await fts.indexBatch(emails)
+        let shards = try await fts.shardYears()
+        XCTAssertGreaterThan(shards.count, 1, "the fixture spans several year shards")
+        let removed = emails.enumerated().filter { $0.offset % 3 != 0 }.map(\.element.id)
+        let t0 = Date()
+        try await fts.delete(ids: removed)
+        print("[scale] search index: \(removed.count) ids removed in \(String(format: "%.3f", Date().timeIntervalSince(t0))) s")
+        let rows = try await fts.rowCount()
+        XCTAssertEqual(rows, 1_000)
+        let stillIndexed = try await fts.indexedSubset(of: emails.map(\.id))
+        XCTAssertEqual(stillIndexed, Set(emails.enumerated().filter { $0.offset % 3 == 0 }.map(\.element.id)))
+        let found = Set(try await fts.search("zebrafinch", limit: 5_000))
+        XCTAssertTrue(found.isDisjoint(with: removed), "no search result for a removed id")
+        XCTAssertEqual(found.count, 1_000)
+        try await fts.delete(ids: [])
+    }
 }

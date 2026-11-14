@@ -364,6 +364,8 @@ final class MailRemovalFlow {
     /// "Remove and Delete Mail…" was chosen: the count field is shown.
     private(set) var alsoDelete = false
     private(set) var working = false
+    /// What the sheet is busy with, stated (counting, removing, deleting X of Y).
+    private(set) var phase: MailRemovalPhase = .idle
     /// This sheet's own error, shown in the sheet (never only on the page behind it).
     private(set) var error: String?
 
@@ -384,14 +386,18 @@ final class MailRemovalFlow {
         // An error from elsewhere on the page is not this sheet's.
         model.lastError = nil
         error = nil
+        phase = .counting; defer { phase = .idle }
         plan = await model.removalPlan(accountID)
         if plan == nil { error = model.lastError }
-        deletion = try? await model.backend.archiveDeletionPlan(accountID)
+        // The removal plan already carries the deletion count: counted once.
+        deletion = plan?.archive
+        if deletion == nil { deletion = try? await model.backend.archiveDeletionPlan(accountID) }
     }
 
     /// A removed account's sheet: only the deletion count.
     func loadDeletionOnly() async {
         error = nil
+        phase = .counting; defer { phase = .idle }
         do { deletion = try await model.backend.archiveDeletionPlan(accountID) } catch {
             self.error = ConnectedMailErrorText.text(for: error)
         }
@@ -404,17 +410,20 @@ final class MailRemovalFlow {
     }
 
     func removeKeepingMail() async {
-        working = true; defer { working = false }
+        working = true; defer { working = false; phase = .idle }
         alsoDelete = false
+        phase = .removing
         report = await model.remove(accountID)
         guard report != nil else { error = model.lastError; return }
+        phase = .counting
         deletion = try? await model.backend.archiveDeletionPlan(accountID)
         typedCount = ""
     }
 
     func removeAndDelete() async {
         guard let shown = deletion?.deletable, typedMatches else { return }
-        working = true; defer { working = false }
+        working = true; defer { working = false; phase = .idle }
+        phase = .removing
         report = await model.remove(accountID)
         guard report != nil else { error = model.lastError; return }
         await delete(shown: shown)
@@ -423,13 +432,15 @@ final class MailRemovalFlow {
     /// After removal: the delete section's own button (the count typed against the current plan).
     func deleteNow() async {
         guard let shown = deletion?.deletable, typedMatches else { return }
-        working = true; defer { working = false }
+        working = true; defer { working = false; phase = .idle }
         await delete(shown: shown)
     }
 
     /// Re-plans first: a count that changed since it was shown deletes
-    /// nothing and asks for the new number.
+    /// nothing and asks for the new number. While deleting, the sheet shows
+    /// "Deleting X of Y messages…" from the store's page-by-page progress.
     private func delete(shown: Int) async {
+        phase = .counting
         let fresh = try? await model.backend.archiveDeletionPlan(accountID)
         deletion = fresh
         guard let fresh, fresh.deletable == shown else {
@@ -437,13 +448,42 @@ final class MailRemovalFlow {
             error = MailLifecycleText.countChangedAfterRemoval(shown: shown, now: fresh?.deletable ?? 0)
             return
         }
-        deleted = await model.deleteArchivedMail(accountID, confirmedCount: shown)
+        phase = .deleting(done: 0, total: shown)
+        deleted = await model.deleteArchivedMail(accountID, confirmedCount: shown, progress: { [weak self] done, total in
+            self?.phase = .deleting(done: done, total: total)
+        })
         if deleted == nil {
             error = model.lastError
+            phase = .counting
             deletion = try? await model.backend.archiveDeletionPlan(accountID)
             typedCount = ""
         } else {
             error = nil
+        }
+    }
+}
+
+/// The sheet's current step, stated: a labelled spinner while counting or
+/// removing, a determinate bar with "Deleting X of Y messages…" while deleting.
+struct MailRemovalPhaseView: View {
+    let phase: MailRemovalPhase
+
+    var body: some View {
+        switch phase {
+        case .idle:
+            EmptyView()
+        case .counting, .removing:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(phase.text ?? "").foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("mail.remove.phase")
+        case .deleting(let done, let total):
+            ProgressView(value: Double(min(done, total)), total: Double(max(total, 1))) {
+                Text(phase.text ?? "")
+            }
+            .accessibilityIdentifier("mail.remove.phase")
         }
     }
 }
@@ -473,6 +513,10 @@ struct MailRemoveAccountView: View {
                         Text(error).foregroundStyle(.red).font(.callout)
                             .accessibilityIdentifier("mail.remove.error")
                     }
+                }
+                if flow.phase != .idle, flow.plan != nil || flow.report != nil {
+                    // Removing, re-counting or deleting X of Y: stated, never a bare spinner.
+                    Section { MailRemovalPhaseView(phase: flow.phase) }
                 }
                 if let report = flow.report {
                     Section {
@@ -522,7 +566,8 @@ struct MailRemoveAccountView: View {
                     }
                     #endif
                 } else if flow.error == nil {
-                    ProgressView()
+                    // Planning the removal: the counts come first (Cancel closes; nothing changed).
+                    MailRemovalPhaseView(phase: .counting)
                 }
             }
             .formStyle(.grouped)
@@ -592,6 +637,10 @@ struct MailDeleteRemovedMailView: View {
                 if let error = flow.error {
                     Section { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("mail.deleteRemoved.error") }
                 }
+                if flow.phase != .idle, flow.deletion != nil {
+                    // Re-counting or deleting X of Y: stated, never a bare spinner.
+                    Section { MailRemovalPhaseView(phase: flow.phase) }
+                }
                 if let deleted = flow.deleted {
                     Section { Text(MailRemovalText.deletionReport(deleted)) }
                 } else if let deletion = flow.deletion {
@@ -606,7 +655,8 @@ struct MailDeleteRemovedMailView: View {
                         }
                     }
                 } else if flow.error == nil {
-                    ProgressView()
+                    // Counting what would be deleted (Cancel closes; nothing changed).
+                    MailRemovalPhaseView(phase: .counting)
                 }
             }
             .formStyle(.grouped)
