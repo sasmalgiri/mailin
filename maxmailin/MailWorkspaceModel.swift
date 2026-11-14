@@ -887,6 +887,8 @@ protocol MailWorkspaceBackend: AnyObject {
     func attachmentAvailability(_ attachment: DraftAttachment, draft: UUID) async -> DraftAttachmentAvailability
     func addAttachment(_ file: URL, to draft: Draft) async throws -> Draft
     func archivedSource(_ emailID: UUID) async throws -> ArchivedMessageSource
+    /// Archived messages (imported or captured) attached to the draft as .eml files.
+    func attachArchived(_ emailIDs: [UUID], to draft: Draft) async throws -> Draft
     func queue(_ draft: Draft, undoDelay: TimeInterval) async throws -> OutboxOperation
 
     func outbox() async throws -> [OutboxOperation]
@@ -936,6 +938,7 @@ extension MailWorkspaceBackend {
         return result
     }
     func tags(_ ids: [UUID]) async -> [UUID: Set<String>] { [:] }
+    func attachArchived(_ emailIDs: [UUID], to draft: Draft) async throws -> Draft { throw MailBackendUnavailable() }
     func setTag(_ tag: String, on ids: [UUID], present: Bool) async throws { throw MailBackendUnavailable() }
     func knownTags() async -> [String] { [] }
     func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {

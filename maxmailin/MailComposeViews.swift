@@ -83,6 +83,7 @@ struct MailComposeSheet: View {
     @AppStorage("mailin.mail.undoSendSeconds") private var undoSeconds = 10
     @FocusState private var focus: Field?
     @State private var savedAt: Date?
+    @State private var pickingArchive = false
     @State private var editingSignature = false
     @State private var signatureText = ""
 
@@ -120,6 +121,12 @@ struct MailComposeSheet: View {
             }
         }
         .task { await load() }
+        .sheet(isPresented: $pickingArchive) {
+            ArchiveEmailPickerView(onDone: { chosen in
+                Task { await attachArchived(chosen.map(\.id)) }
+            }, title: String(localized: "Attach from Archive"),
+               hint: String(localized: "Search, tick the messages you want, then Add them. Each is attached as an .eml file."))
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             Task { await attach(urls) }
@@ -333,6 +340,10 @@ struct MailComposeSheet: View {
             Button { importing = true } label: { Label(String(localized: "Attach files…"), systemImage: "paperclip") }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
                 .help(String(localized: "Attach files… You can also drop files on the message."))
+            Button { pickingArchive = true } label: {
+                Label(String(localized: "Attach from Archive…"), systemImage: "archivebox")
+            }
+            .help(String(localized: "Attaches messages from your archive (imported or saved mail) as .eml files"))
             Menu {
                 Button(String(localized: "No Signature")) { update { $0.signature = nil } }
                 if let saved = MailSignatureStore.signature(for: current.accountID) {
@@ -541,6 +552,21 @@ struct MailComposeSheet: View {
             do { draft = try await model.backend.addAttachment(url, to: d) } catch { self.error = ConnectedMailErrorText.text(for: error) }
         }
         await checkAttachments()
+    }
+
+    /// Archived messages attached as .eml files ("X of Y" when some could not be read).
+    private func attachArchived(_ ids: [UUID]) async {
+        await saveNow()
+        var added = 0
+        for id in ids {
+            guard let d = draft else { return }
+            do { draft = try await model.backend.attachArchived([id], to: d); added += 1 }
+            catch { self.error = ConnectedMailErrorText.text(for: error) }
+        }
+        if added < ids.count {
+            self.error = String(localized: "Attached \(added) of \(ids.count) messages. ") + (self.error ?? "")
+        }
+        await model.reloadDrafts()
     }
 
     private func send() async {

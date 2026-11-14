@@ -595,6 +595,15 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         return ArchivedMessageSource(raw: raw)
     }
 
+    func attachArchived(_ emailIDs: [UUID], to draft: Draft) async throws -> Draft {
+        var current = draft
+        for id in emailIDs {
+            let source = try await archivedSource(id)
+            current = try await draftStore.addAttachment(ReplyBuilder.messageAttachment(source), to: current)
+        }
+        return current
+    }
+
     func queue(_ draft: Draft, undoDelay: TimeInterval) async throws -> OutboxOperation {
         let account = try await runtime.registry.account(draft.accountID)
         let identities = extras.identities(for: account)

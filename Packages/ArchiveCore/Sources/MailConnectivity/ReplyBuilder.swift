@@ -232,10 +232,15 @@ public enum ReplyBuilder {
         let own = identities.filter { $0.accountID == accountID }
         let draft = Draft(accountID: accountID, senderIdentityID: chooseIdentity(identityID, own: own, source: source),
                           kind: .forwardAsAttachment, references: referenceChain(source), subject: prefixed("Fwd:", source.subject))
+        return DraftSeed(draft: draft, attachments: [messageAttachment(source)])
+    }
+
+    /// An archived message as an attachment (`message/rfc822`, the subject as
+    /// the file name, Bcc removed) — Forward as Attachment and Attach from Archive.
+    public static func messageAttachment(_ source: ArchivedMessageSource) -> DraftAttachmentPayload {
         let base = source.subject.isEmpty ? "message" : source.subject
         let safe = String(base.map { "/\\:*?\"<>|".contains($0) || $0.isNewline ? "-" : $0 }.prefix(120))
-        return DraftSeed(draft: draft, attachments: [DraftAttachmentPayload(filename: safe + ".eml", mimeType: "message/rfc822",
-                                                                           data: removingBcc(source.raw))])
+        return DraftAttachmentPayload(filename: safe + ".eml", mimeType: "message/rfc822", data: removingBcc(source.raw))
     }
 
     // MARK: Helpers

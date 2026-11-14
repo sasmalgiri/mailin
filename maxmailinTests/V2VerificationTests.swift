@@ -8718,6 +8718,13 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertTrue(compose.contains("private func actionBar(") && compose.contains("actionBar(current)"))
         XCTAssertTrue(compose.contains("MailRichBodyEditor(initialPlain:"))
         XCTAssertTrue(compose.contains(".dropDestination(for: URL.self)"), "files dropped on the message are attached")
+        // Attach from Archive: the archive picker, each message as an .eml, "X of Y" when some fail.
+        XCTAssertTrue(compose.contains("ArchiveEmailPickerView(onDone:") && compose.contains("model.backend.attachArchived("))
+        XCTAssertTrue(compose.contains("Attached \\(added) of \\(ids.count) messages."))
+        let backend = try String(contentsOf: root.appendingPathComponent("maxmailin/MailWorkspaceBackend.swift"), encoding: .utf8)
+        XCTAssertTrue(backend.contains("ReplyBuilder.messageAttachment(source)"))
+        let picker = try String(contentsOf: root.appendingPathComponent("maxmailin/ArchiveEmailPickerView.swift"), encoding: .utf8)
+        XCTAssertTrue(picker.contains("nextCursor = page?.nextCursor") && picker.contains("loadMore()"), "every match can be reached (Show more)")
     }
 
     func testIdentityPickerRequired() throws {

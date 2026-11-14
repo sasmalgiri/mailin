@@ -516,4 +516,21 @@ final class DraftComposeTests: XCTestCase {
         XCTAssertEqual(reads, 0)
         XCTAssertNoThrow(try MIMEComposer.compose(good, sender: sender, date: Date()) { _ in Data() })
     }
+
+    /// Attach from Archive (2026-11-15): any archived message becomes a
+    /// message/rfc822 attachment named after its subject, without its Bcc —
+    /// the same payload Forward as Attachment uses.
+    func testMessageAttachment_isTheArchivedMessageWithoutBcc_namedBySubject() {
+        let raw = "From: Asha <asha@example.com>\r\nTo: ravi@example.org\r\nBcc: secret@example.org\r\nSubject: Q3: plan/final?\r\n"
+            + "Message-ID: <q3@example.com>\r\n\r\nBody\r\n"
+        let source = ArchivedMessageSource(raw: Data(raw.utf8))
+        let payload = ReplyBuilder.messageAttachment(source)
+        XCTAssertEqual(payload.mimeType, "message/rfc822")
+        XCTAssertEqual(payload.filename, "Q3- plan-final-.eml")
+        let text = String(decoding: payload.data, as: UTF8.self)
+        XCTAssertFalse(text.contains("secret@example.org"), "Bcc never travels in an attached copy")
+        XCTAssertTrue(text.contains("Subject: Q3: plan/final?"))
+        let forward = ReplyBuilder.forwardAsAttachment(source, accountID: UUID(), identities: [])
+        XCTAssertEqual(forward.attachments.first?.data, payload.data)
+    }
 }

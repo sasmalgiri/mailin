@@ -16,6 +16,10 @@ struct ArchiveEmailPickerView: View {
     /// Called with the chosen emails when the user taps Add.
     var onDone: ([EmailSummary]) -> Void
     var onCancel: () -> Void = {}
+    /// The heading and hint (the workflow runner's by default; the mail
+    /// composer passes its own).
+    var title = String(localized: "Add emails from your archive")
+    var hint = String(localized: "Search, tick the messages you want, then Add them to this step.")
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
@@ -24,6 +28,7 @@ struct ArchiveEmailPickerView: View {
     @State private var isLoading = false
     @State private var total = 0
     @State private var searchTask: Task<Void, Never>? = nil
+    @State private var nextCursor: EmailPageCursor?
 
     private static let limit = 200
 
@@ -31,8 +36,8 @@ struct ArchiveEmailPickerView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Add emails from your archive").font(Typography.title3)
-                    Text("Search, tick the messages you want, then Add them to this step.")
+                    Text(title).font(Typography.title3)
+                    Text(hint)
                         .font(Typography.caption1).foregroundColor(AppColors.secondary)
                 }
                 Spacer()
@@ -92,6 +97,10 @@ struct ArchiveEmailPickerView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                // The next page on request: every match can be reached.
+                if nextCursor != nil {
+                    Button(String(localized: "Show more")) { Task { await loadMore() } }
+                }
             }
 
             Divider()
@@ -130,6 +139,16 @@ struct ArchiveEmailPickerView: View {
     }
 
     @MainActor
+    private func loadMore() async {
+        guard let cursor = nextCursor else { return }
+        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
+        let query = EmailQuery(text: trimmed.isEmpty ? nil : trimmed)
+        let page = try? await ArchiveDataService.shared.page(query: query, cursor: cursor, limit: Self.limit)
+        results += page?.summaries ?? []
+        nextCursor = page?.nextCursor
+    }
+
+    @MainActor
     private func load() async {
         isLoading = true
         defer { isLoading = false }
@@ -137,6 +156,7 @@ struct ArchiveEmailPickerView: View {
         let query = EmailQuery(text: trimmed.isEmpty ? nil : trimmed)
         let page = try? await ArchiveDataService.shared.page(query: query, cursor: nil, limit: Self.limit)
         results = page?.summaries ?? []
+        nextCursor = page?.nextCursor
         total = (try? await ArchiveDataService.shared.count(query: query)) ?? results.count
     }
 }
