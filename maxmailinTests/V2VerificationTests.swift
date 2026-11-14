@@ -7913,8 +7913,8 @@ final class ConnectedFiveJobsTests: XCTestCase {
         XCTAssertNil(c.runtime.engines[c.accountID], "saving switched off for the account: its engine is gone")
         XCTAssertEqual(c.policy.account(c.accountID)?.isEnabled, false)
 
-        // This test build compiles no transport: the capability never creates a runtime.
-        XCTAssertFalse(ConnectedBuildFeatures.mailTransportsCompiled)
+        // Offline build: no transport, no runtime. Connected build: inside the
+        // unit-test host the production runtime never starts either.
         ConnectedMailRuntime.capabilityChanged(isOn: true)
         XCTAssertNil(ConnectedMailRuntime.shared)
         XCTAssertNil(ConnectedMailRuntime.makeProductionDependencies())
@@ -10457,5 +10457,46 @@ final class V416GmailIMAPTests: XCTestCase {
         XCTAssertTrue(script.contains("imap)") && script.contains("oauth)"), "both modes PASS and are printed")
         // This build: the connected scheme carries "imap"; the offline build has no key (read as imap).
         XCTAssertEqual(MailProviderChoice.gmailSignInMode(info: MailProviderChoice.bundleInfo()), .imap)
+    }
+}
+
+/// 2026-11-14: a test running in the connected build reached the real mail
+/// backend in the test host (the app on the owner's own archive) and added a
+/// fixture account to the owner's real account list. Inside the unit-test
+/// host the production mail runtime must never start.
+@MainActor
+final class TestHostIsolationTests: XCTestCase {
+    func testProductionMailRuntimeNeverStartsInTheUnitTestHost() {
+        XCTAssertFalse(ConnectedMailRuntime.productionAllowed(environment: ["XCTestConfigurationFilePath": "/x"], isolatedArchive: false))
+        XCTAssertTrue(ConnectedMailRuntime.productionAllowed(environment: ["XCTestConfigurationFilePath": "/x"], isolatedArchive: true),
+                      "a UI test on a fresh isolated archive may run it")
+        XCTAssertTrue(ConnectedMailRuntime.productionAllowed(environment: [:], isolatedArchive: false), "a normal launch runs it")
+        // This process is the unit-test host: no production dependencies, no shared runtime, no real backend.
+        XCTAssertNil(ConnectedMailRuntime.makeProductionDependencies())
+        ConnectedMailRuntime.capabilityChanged(isOn: true)
+        XCTAssertNil(ConnectedMailRuntime.shared)
+        XCTAssertNotEqual(ConnectedMailBackend.current().availability, .ready, "the real account list is never reachable from a test")
+    }
+}
+
+/// 2026-11-14 live run: Change server mail could be switched on for a Gmail account
+/// connected over IMAP with an app password, where 4.0 does not support it.
+@MainActor
+final class GmailIMAPServerActionsSwitchTests: XCTestCase {
+    func testChangeServerMailIsUnavailableForGmailOverIMAP_only() async {
+        let gmailIMAP = MailAccount(provider: .imap, host: "imap.gmail.com", displayIdentity: "me@gmail.com", enabledModes: [.capture])
+        let fastmail = MailAccount(provider: .imap, host: "imap.fastmail.com", displayIdentity: "me@fastmail.com", enabledModes: [.capture])
+        XCTAssertNotNil(MailModeText.unavailableReason(.serverActions, account: gmailIMAP))
+        XCTAssertNil(MailModeText.unavailableReason(.send, account: gmailIMAP), "sending works")
+        XCTAssertNil(MailModeText.unavailableReason(.capture, account: gmailIMAP))
+        XCTAssertNil(MailModeText.unavailableReason(.serverActions, account: fastmail), "other IMAP servers keep it")
+
+        let fake = FakeMailWorkspaceBackend()
+        fake.snapshots = [MailAccountSnapshot(account: gmailIMAP, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        await model.setMode(.serverActions, enabled: true, account: gmailIMAP.id)
+        XCTAssertEqual(model.account(gmailIMAP.id)?.account.enabledModes, [.capture], "the mode was not switched on")
+        XCTAssertNotNil(model.lastError, "the reason is shown")
     }
 }

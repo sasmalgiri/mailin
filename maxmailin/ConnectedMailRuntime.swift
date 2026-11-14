@@ -666,6 +666,16 @@ final class ConnectedMailRuntime {
     /// On: the runtime is created (once) and starts; off: it stops and goes
     /// away (the policy has already cancelled its registered work). A build
     /// without the mail transports never creates it.
+    /// The unit-test host IS this app, opened on the person's own archive,
+    /// settings and Keychain (2026-11-14: a test added a fixture account to
+    /// the owner's real account list). There the real mail runtime never
+    /// starts — no real account is listed, synced or written. Tests build
+    /// their own runtime with their own dependencies; a UI test on a fresh
+    /// isolated archive (`--uitest` + MAILIN_UITEST_FRESH_ARCHIVE) is allowed.
+    nonisolated static func productionAllowed(environment: [String: String], isolatedArchive: Bool) -> Bool {
+        environment["XCTestConfigurationFilePath"] == nil || isolatedArchive
+    }
+
     static func capabilityChanged(isOn: Bool) {
         guard ConnectedBuildFeatures.mailTransportsCompiled else { return }
         if isOn {
@@ -708,6 +718,8 @@ final class ConnectedMailRuntime {
 
     static func makeProductionDependencies() -> Dependencies? {
         #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        guard productionAllowed(environment: ProcessInfo.processInfo.environment,
+                                isolatedArchive: UITestStorageRoot.override != nil) else { return nil }
         return ConnectedMailProduction.dependencies()
         #else
         return nil

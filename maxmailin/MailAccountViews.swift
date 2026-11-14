@@ -202,16 +202,17 @@ struct MailAccountSettingsView: View {
 
                 Section {
                     ForEach(MailModeText.order, id: \.self) { mode in
+                        let unavailable = MailModeText.unavailableReason(mode, account: snapshot.account)
                         Toggle(isOn: Binding(
-                            get: { snapshot.account.enabledModes.contains(mode) },
+                            get: { unavailable == nil && snapshot.account.enabledModes.contains(mode) },
                             set: { on in Task { await model.setMode(mode, enabled: on, account: accountID) } })) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(MailModeText.title(mode))
-                                Text(MailModeText.explanation(mode)).font(.caption).foregroundStyle(.secondary)
+                                Text(unavailable ?? MailModeText.explanation(mode)).font(.caption).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        .disabled(snapshot.account.connectionState == .removed)
+                        .disabled(snapshot.account.connectionState == .removed || unavailable != nil)
                         .accessibilityIdentifier("mail.mode.\(mode.rawValue)")
                     }
                 } header: {

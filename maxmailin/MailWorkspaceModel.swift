@@ -213,6 +213,14 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
 // MARK: - Modes
 
 enum MailModeText {
+    /// Why `mode` cannot be switched on for this account in this version (nil = it can).
+    /// Gmail over IMAP with an app password (4.0): changing server mail is not supported —
+    /// a Gmail message sits in several label folders, so a folder-level change is unsafe.
+    static func unavailableReason(_ mode: MailAccount.Mode, account: MailAccount) -> String? {
+        guard mode == .serverActions, account.provider == .imap, ConnectedMailErrorText.isGmailHost(account.host) else { return nil }
+        return String(localized: "Not available for Gmail with an app password in this version. Saving and sending mail work.")
+    }
+
     static func title(_ mode: MailAccount.Mode) -> String {
         switch mode {
         case .capture: return String(localized: "Preserve mail")
@@ -988,6 +996,10 @@ final class MailWorkspaceModel {
     // MARK: Accounts
 
     func setMode(_ mode: MailAccount.Mode, enabled: Bool, account: UUID) async {
+        if enabled, let a = self.account(account)?.account, let why = MailModeText.unavailableReason(mode, account: a) {
+            lastError = why
+            return
+        }
         await run {
             try await self.backend.setMode(mode, enabled: enabled, account: account)
             self.accounts = try await self.backend.accounts().filter { $0.account.connectionState != .removed }

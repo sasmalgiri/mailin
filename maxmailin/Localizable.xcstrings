@@ -447845,6 +447845,71 @@
           }
         }
       }
+    },
+    "Not available for Gmail with an app password in this version. Saving and sending mail work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In dieser Version für Gmail mit einem App-Passwort nicht verfügbar. Mails sichern und senden funktioniert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No disponible para Gmail con una contraseña de aplicación en esta versión. Guardar y enviar correo funciona."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non disponible pour Gmail avec un mot de passe d’application dans cette version. L’enregistrement et l’envoi de courrier fonctionnent."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस संस्करण में ऐप पासवर्ड वाले Gmail के लिए उपलब्ध नहीं। मेल सहेजना और भेजना काम करता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non disponibile per Gmail con una password per app in questa versione. Salvare e inviare posta funziona."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このバージョンでは、アプリパスワードを使う Gmail では利用できません。メールの保存と送信は使えます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 버전에서는 앱 비밀번호를 사용하는 Gmail에서 사용할 수 없습니다. 메일 저장과 보내기는 작동합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não disponível para Gmail com senha de app nesta versão. Salvar e enviar e-mails funciona."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此版本中，使用应用专用密码的 Gmail 不支持此功能。保存和发送邮件可正常使用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此版本中，使用應用程式密碼的 Gmail 不支援此功能。儲存和傳送郵件可正常使用。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
