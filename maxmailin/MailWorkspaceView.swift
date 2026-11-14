@@ -174,7 +174,7 @@ private struct MailWorkspaceReadyView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
         } content: {
             MailContentColumn(model: model, sheet: $sheet)
-                .navigationSplitViewColumnWidth(min: 260, ideal: 340)
+                .navigationSplitViewColumnWidth(min: 300, ideal: 380)
         } detail: {
             MailDetailColumn(model: model, sheet: $sheet)
         }
@@ -630,10 +630,13 @@ private struct MailMessageList: View {
             HStack(spacing: Spacing.xxSmall) {
                 Toggle(isOn: $model.unreadOnly) { Label(String(localized: "Unread"), systemImage: "envelope.badge") }
                     .keyboardShortcut("u", modifiers: [.command, .option])
+                    .help(String(localized: "Unread"))
                     .accessibilityHint(Text("Shows only messages that were unread when they were saved"))
                 Toggle(isOn: $model.flaggedOnly) { Label(String(localized: "Flagged"), systemImage: "flag") }
                     .keyboardShortcut("l", modifiers: [.command, .option])
+                    .help(String(localized: "Flagged"))
                 Toggle(isOn: $model.attachmentsOnly) { Label(String(localized: "Attachments"), systemImage: "paperclip") }
+                    .help(String(localized: "Attachments"))
                 Menu {
                     Button(String(localized: "Any tag")) { model.tagFilter = nil }
                     Divider()
@@ -647,13 +650,16 @@ private struct MailMessageList: View {
                     Label(model.tagFilter ?? String(localized: "Tags"), systemImage: "tag")
                 }
                 .fixedSize()
+                .help(String(localized: "Tags"))
                 Spacer(minLength: 0)
-                Text(model.showingCountText).font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .accessibilityIdentifier("mail.list.showing")
             }
             .toggleStyle(.button)
-            .labelStyle(.titleAndIcon)
+            // Icons only: the list column is narrow; each says its name on hover and to VoiceOver.
+            .labelStyle(.iconOnly)
+            Text(model.showingCountText).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("mail.list.showing")
         }
         .controlSize(.small)
         .padding(.horizontal, Spacing.small)
@@ -854,14 +860,17 @@ private extension View {
     }
 
     /// The Live Mail page sits below the page strip, not under the window's
-    /// toolbar, yet macOS 26 drew the toolbar's top fade over each column's
-    /// first rows (the first draft and the filter bar looked washed out,
-    /// owner screenshots 2026-11-15). Nothing scrolls under the toolbar here
-    /// (the page is clipped below the strip), so the top fade is switched off.
+    /// toolbar, yet macOS 26 drew the window toolbar's background band (one
+    /// toolbar tall) over the top of the list and reading columns: the first
+    /// message and the filter bar were hidden under it (owner screenshots
+    /// 2026-11-15; measured: the columns' safe-area top is 0, the band is an
+    /// overlay). Nothing scrolls under the toolbar here (the page is clipped
+    /// below the strip), so the band and the top fade are switched off.
     @ViewBuilder
     func mailNoTopFade() -> some View {
         if #available(macOS 26.0, iOS 26.0, *) {
             scrollEdgeEffectHidden(true, for: .top)
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         } else {
             self
         }

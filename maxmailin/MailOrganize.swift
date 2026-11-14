@@ -28,7 +28,10 @@ enum MailOrganize {
     static func displayName(_ from: String) -> String {
         guard let lt = from.firstIndex(of: "<") else { return from }
         let name = from[..<lt].trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-        return name.isEmpty ? from : name
+        if !name.isEmpty { return name }
+        // "<asha@example.com>" alone: the address without its brackets.
+        let address = from[from.index(after: lt)...].prefix { $0 != ">" }.trimmingCharacters(in: .whitespaces)
+        return address.isEmpty ? from : address
     }
 
     /// The preview on two lines: whitespace runs folded to one space.

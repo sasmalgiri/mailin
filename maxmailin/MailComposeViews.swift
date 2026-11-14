@@ -37,8 +37,12 @@ struct MailDraftsList: View {
             ForEach(model.drafts) { draft in
                 Button { sheet = .compose(draft.id) } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(draft.subject.isEmpty ? String(localized: "(no subject)") : draft.subject).lineLimit(1)
-                        Text(draft.to.map(\.addrSpec).joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(draft.subject.isEmpty ? String(localized: "(no subject)") : draft.subject)
+                            .fontWeight(.medium).lineLimit(1)
+                        // Never an empty line: the date then looked like the next draft's.
+                        Text(draft.to.isEmpty ? String(localized: "No recipients yet")
+                             : String(localized: "To: \(draft.to.map(\.addrSpec).joined(separator: ", "))"))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         HStack {
                             if let account = model.account(draft.accountID)?.account {
                                 MailAccountBadge(account: account).font(.caption2)

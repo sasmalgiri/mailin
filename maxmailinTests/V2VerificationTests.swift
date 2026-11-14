@@ -8599,6 +8599,7 @@ final class MailWorkspaceTests: XCTestCase {
 
         XCTAssertEqual(MailOrganize.displayName("Asha Rao <asha@example.com>"), "Asha Rao")
         XCTAssertEqual(MailOrganize.displayName("asha@example.com"), "asha@example.com")
+        XCTAssertEqual(MailOrganize.displayName("<asha@example.com>"), "asha@example.com", "no name: the address, without brackets")
         XCTAssertEqual(MailOrganize.cleanPreview("Hello\n\n  there"), "Hello there")
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "UTC")!
         let now = Date(timeIntervalSince1970: 1_760_000_000)
