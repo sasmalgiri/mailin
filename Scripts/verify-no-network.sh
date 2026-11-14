@@ -11,8 +11,9 @@
 # sandbox grants no network entitlement, the process cannot open a socket
 # regardless of what the code asks for.
 #
-# This script asserts that, plus the compile-time flag and the absence of
-# network-transport symbols, and exits non-zero on the first failure.
+# This script asserts that, plus the compile-time flag and that no connected-mail
+# entry point is reachable (v4.0: the package's transport code IS linked — see
+# check 3 for why it cannot run), and exits non-zero if any check fails.
 #
 # Usage:
 #   Scripts/verify-no-network.sh /path/to/mailin.app
@@ -133,30 +134,88 @@ else
 fi
 echo
 
-# --------------------------------- 3. no network transport linked or reachable
+# ------------------- 3. connected-mail transports: linked, but not reachable
+#
+# v4.0 (2026-11-14). The package product `ArchiveCore` ships two targets,
+# ArchiveCore and MailConnectivity (Packages/ArchiveCore/Package.swift), so the
+# OFFLINE binary links MailConnectivity's transport code too: IMAPTransport /
+# SMTPStream (Network.framework, NWConnection), GmailHTTPTransport,
+# GraphTransport, APISendSubmitters, OAuthSession (URLSession). That code is
+# present and cannot be made absent without a project change. What this check
+# proves instead is that it cannot RUN in this build:
+#   - no network entitlement (check 1): the sandbox refuses every outbound
+#     connection the process attempts, whoever constructs it;
+#   - no app code path constructs it: every app-side entry point that builds a
+#     transport is compiled only under `MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD`
+#     (ConnectedMailProductionTransports, ConnectedMailProduction.dependencies,
+#     PolicyCheckedTokenTransport, the legacy GmailConnector / OutlookConnector /
+#     IMAPClient / SMTPClient) and must be ABSENT from this binary;
+#   - the connected edition marker `mailin.online.capable` is absent and the
+#     offline marker is present (check 2);
+#   - none of the connected edition's Info.plist keys is present.
+# A direct link of Network.framework is therefore reported as a NOTE, with the
+# reason, not as proof of anything either way.
 
-echo "3. Network transport symbols"
+echo "3. Connected-mail transports (linked from the package, not reachable)"
+
+# shellcheck disable=SC2086
+if strings $MARKER_FILES 2>/dev/null | grep -q 'mailin.online.capable'; then
+    fail "connected edition marker mailin.online.capable PRESENT — this is a MAILIN_CONNECTED_MAIL build, use Scripts/check-connected-release.sh"
+else
+    pass "connected edition marker (mailin.online.capable) absent"
+fi
+
+# Swift mangles a type as <length><name> (e.g. 33ConnectedMailProductionTransportsC).
+# Searched in the symbol table AND in the binary's strings (type metadata and
+# Objective-C class names survive stripping), so a stripped archive is checked too.
+# shellcheck disable=SC2086
+SYMS=$( { nm $MARKER_FILES 2>/dev/null; strings $MARKER_FILES 2>/dev/null; } )
+for entry in \
+    ConnectedMailProductionTransports \
+    ConnectedMailProduction \
+    PolicyCheckedTokenTransport \
+    GmailConnector \
+    OutlookConnector \
+    IMAPClient \
+    SMTPClient \
+    CloudAIManager
+do
+    mangled="${#entry}${entry}"
+    N=$(printf '%s\n' "$SYMS" | grep -c -- "$mangled" || true)
+    if [ "${N:-0}" -eq 0 ]; then
+        pass "app entry point $entry absent"
+    else
+        fail "app entry point $entry PRESENT ($N references) — compiled without NO_NETWORK_BUILD?"
+    fi
+done
+
+PLIST_FOR_KEYS="$APP/Contents/Info.plist"
+[ -f "$PLIST_FOR_KEYS" ] || PLIST_FOR_KEYS="$APP/Info.plist"
+for key in MailinGmailClientID MailinGraphClientID MailinGraphRedirectURI MailinGmailSignInMode; do
+    if [ -f "$PLIST_FOR_KEYS" ] && /usr/libexec/PlistBuddy -c "Print :$key" "$PLIST_FOR_KEYS" >/dev/null 2>&1; then
+        fail "Info.plist carries the connected edition key $key"
+    else
+        pass "Info.plist has no $key"
+    fi
+done
 
 LINKED=$(otool -L "$BINARY" 2>/dev/null)
 for framework in Network CFNetwork; do
     if echo "$LINKED" | grep -q "/$framework.framework/"; then
-        # Foundation pulls CFNetwork transitively; a DIRECT link is the signal.
-        fail "$framework is linked directly"
+        dim "  NOTE  $framework.framework is linked directly: the package target MailConnectivity"
+        dim "        (same library product as ArchiveCore) uses it. It cannot run here: no"
+        dim "        network.client entitlement (check 1) and no app entry point above."
     else
         pass "$framework is not linked directly"
     fi
 done
 
-# URLSession being present in Foundation is unavoidable; what matters is
-# whether OUR code references it. Swift mangles our symbols with the module
-# name, so a reference from the mailin module is visible and attributable.
 OURS=$(nm -u "$BINARY" 2>/dev/null | grep -c 'URLSession' || true)
 if [ "${OURS:-0}" -eq 0 ]; then
     pass "no undefined URLSession symbols"
 else
-    dim "  NOTE  $OURS URLSession symbol reference(s) present."
-    dim "        Foundation exports these regardless; the entitlement check"
-    dim "        above is what proves they cannot be used. Not a failure."
+    dim "  NOTE  $OURS URLSession symbol reference(s) present (MailConnectivity and"
+    dim "        Foundation). The entitlement check above is what proves they cannot be used."
 fi
 echo
 

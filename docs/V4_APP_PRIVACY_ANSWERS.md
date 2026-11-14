@@ -1,6 +1,14 @@
-# App Store Connect ▸ App Privacy — draft answers for v4.0 (V4-14)
+# App Store Connect ▸ App Privacy — answers for v4.0 (V4-14), updated 2026-11-14
 
-Draft for the owner. **The owner gives the final answers in App Store Connect**; Apple's label depends on what is
+**4.0 facts (owner decision 2026-11-14):** mailin 4.0 (build 1000) is released on the public App Store record
+(`com.ecosanskriti.mailin`) as the **connected edition** (archive scheme "maxmailin Connected", configuration
+Release-Connected). Connected mail: Gmail over IMAP + Google app password (no Google API, no Google sign-in in 4.0;
+Google sign-in returns in 4.0.x after Google verification); Outlook / Microsoft 365 via Microsoft sign-in (Microsoft
+Graph; scopes `Mail.Read`, `User.Read`, `offline_access`; `Mail.Send` / `Mail.ReadWrite` only on request when Send
+mail / Change server mail is switched on); iCloud Mail, Fastmail and other IMAP with passwords. Cloud AI is not
+included. The privacy page text for 4.0 is in `docs/privacy/index.html` (public once the site is published).
+
+Answers for the owner to enter. **The owner gives the final answers in App Store Connect**; Apple's label depends on what is
 actually collected and by whom (plan §10, [P21]) — a network entitlement alone decides nothing. Reasoning below is
 from the code at d4a3ec3 (inventory: [`PRIVACY_V4_DRAFT.md`](PRIVACY_V4_DRAFT.md)).
 
@@ -26,6 +34,11 @@ with whom the developer shares data*.
 In the connected edition, at the user's request: mail content and metadata (Gmail/Graph/IMAP capture is a download
 *to* the device; sending uploads the user's message *to* their provider; server actions send message IDs and the
 requested change), and OAuth tokens / app passwords to the provider that issued them.
+
+**Outlook / Microsoft 365 in 4.0:** sign-in on Microsoft's page in the system sign-in window (ephemeral session),
+`login.microsoftonline.com` (personal accounts may continue on `login.live.com`), mail over `graph.microsoft.com`.
+`User.Read` is used only to read the account's own address from `/me`, so the account is named by Microsoft's answer;
+nothing about the user is sent anywhere else. Tokens stay in this device's Keychain.
 
 **Gmail in 4.0 (V4-16, owner 2026-11-13):** Gmail connects over IMAP with a Google app password
 (`MailinGmailSignInMode = imap` in `Info-Connected.plist`). The device connects to `imap.gmail.com:993` and
@@ -57,14 +70,15 @@ and add the same entries to `NSPrivacyCollectedDataTypes` in `PrivacyInfo.xcpriv
 consistent with "Data Not Collected"). The label and the manifest must say the same thing.
 
 Either way, write in the App Review notes and on the privacy page that connected mail is optional, off by default,
-and goes directly to the user's provider (drafts in `V4_STORE_METADATA_DRAFT.md`, `privacy/v4-connected-draft.html`).
+and goes directly to the user's provider (`V4_STORE_METADATA_DRAFT.md`; live page text `privacy/index.html`).
 
 ## 4. Questions only the owner can decide
 
 1. "Data Not Collected" or the conservative declaration in §3? (One label per app record: the offline and connected
    editions share bundle `com.ecosanskriti.mailin`, so the label must be true of the connected build.)
-2. Will the connected edition replace the offline edition on the public App Store, or ship as a separate product /
-   later version? (Decides when the live privacy page is replaced and whether a separate app record is needed.)
+2. ~~Will the connected edition replace the offline edition on the public App Store?~~ **Answered 2026-11-14:**
+   yes — 4.0 (build 1000) ships the connected edition on the existing record; the privacy page is replaced
+   (3.0 text archived at `privacy/3.0.html`). The label must therefore be true of the connected build.
 3. Is a support channel planned that receives user data (e-mail with attached diagnostics, a web form)? If yes,
    reconsider "Data Not Collected" for that path.
 4. Is Apple's opt-in crash-log sharing (App Store Connect ▸ crashes) used for support? Apple collects that, not the
@@ -75,7 +89,7 @@ and goes directly to the user's provider (drafts in `V4_STORE_METADATA_DRAFT.md`
    (Network.framework / URLSession) and CryptoKit — standard exempt encryption; confirm the answer stays No.
 7. Google's Limited Use and Microsoft's publisher terms: confirm the published privacy page states what the
    registrations state (`V4_PROVIDER_REGISTRATION.md` §1.5, §2.5). In 4.0 Gmail uses no Google API, so Limited
-   Use applies from 4.0.x (Google sign-in); the 4.0 page says so.
+   Use applies from 4.0.x (Google sign-in); the 4.0 page heads that section "applies only when Google sign-in ships".
 8. App Review: give a demo Gmail address **with its Google app password** (2-Step Verification on; not the
    account password, which Gmail refuses over IMAP), or an iCloud address with an app-specific password
    (`V4_STORE_METADATA_DRAFT.md`, App Review notes).

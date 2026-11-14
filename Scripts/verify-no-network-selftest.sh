@@ -23,6 +23,11 @@ printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>
 mkdir -p "$WORK/FakeIOS.app"
 printf 'binary' > "$WORK/FakeIOS.app/FakeIOS"
 cp "$WORK/Fake.app/Contents/Info.plist" "$WORK/FakeIOS.app/Info.plist"
+# v4.0 check 3: a macOS bundle whose Info.plist carries a connected edition key.
+mkdir -p "$WORK/FakeKey.app/Contents/MacOS"
+printf 'binary' > "$WORK/FakeKey.app/Contents/MacOS/FakeKey"
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>test</string><key>MailinGmailSignInMode</key><string>imap</string></dict></plist>\n' \
+    > "$WORK/FakeKey.app/Contents/Info.plist"
 
 # Mocks. `codesign -d --entitlements` prints $ENT; `codesign --verify` succeeds.
 cat > "$WORK/mock/codesign" <<'EOF'
@@ -43,7 +48,8 @@ esac
 EOF
 printf '#!/bin/sh\necho "${MARKER:-mailin.offline.attested}"\n' > "$WORK/mock/strings"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/mock/otool"
-printf '#!/bin/sh\nexit 0\n' > "$WORK/mock/nm"
+# v4.0 check 3: `nm` prints $NM_OUT (default nothing) so a gated app entry point can be planted.
+printf '#!/bin/sh\n[ -n "${NM_OUT:-}" ] && echo "$NM_OUT"\nexit 0\n' > "$WORK/mock/nm"
 chmod +x "$WORK"/mock/*
 
 plist() {   # $1 = dict body, laid out one element per line like `plutil -convert xml1`
@@ -84,6 +90,12 @@ expect "iOS: no entitlements (unsigned sim)"  0 "" FakeIOS.app
 expect "iOS: marker missing"                  1 "" FakeIOS.app "mailin.online.capable"
 expect "iOS: network.client granted"          1 "${CLIENT_KEY}<true/>" FakeIOS.app
 expect "macOS: marker missing"                1 "${SANDBOX_KEY}<true/>" Fake.app "mailin.online.capable"
+
+# v4.0 check 3 (2026-11-14): transport code is linked from the package, but no
+# app entry point that constructs it and no connected Info.plist key may be present.
+NM_OUT='_$s9maxmailin33ConnectedMailProductionTransportsCMn' \
+expect "macOS: connected transports entry point" 1 "${SANDBOX_KEY}<true/>"
+expect "macOS: connected Info.plist key"        1 "${SANDBOX_KEY}<true/>" FakeKey.app
 
 if [ "$FAILS" -eq 0 ]; then echo "all shapes judged correctly"; exit 0; fi
 echo "$FAILS shape(s) misjudged"; exit 1

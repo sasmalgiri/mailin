@@ -1,16 +1,18 @@
 <!DOCTYPE html>
 <!--
-  V4-14 (2026-11-12): this page describes the shipping offline 3.0.x app and stays as it is until the
-  connected edition ships. A v4.0 connected-edition draft exists: docs/privacy/v4-connected-draft.html
-  (text and reasoning in docs/PRIVACY_V4_DRAFT.md). It MUST replace this page before any connected
-  build is distributed (plan A17: no "cannot connect" claim on the connected build).
+  LIVE privacy policy for mailin 4.0 (build 1000), published 2026-11-14 (V4-14, owner decision 2026-11-14).
+  Source of every statement: docs/PRIVACY_V4_DRAFT.md (data-flow inventory read from the code) and
+  docs/V4_PROVIDER_REGISTRATION.md. The previous (3.0, offline-only) policy is kept at docs/privacy/3.0.html.
+  The in-app summary of this text is LegalComplianceManager.connectedPrivacyPolicySummary.
+  4.0.x: when MailinGmailSignInMode flips to oauth (Google sign-in), update the Gmail row and the
+  Google API Services section BEFORE that build is released.
 -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>mailin - Privacy Policy</title>
-    <meta name="description" content="mailin Privacy Policy. mailin collects zero user data. All email processing happens on your device.">
+    <meta name="description" content="mailin Privacy Policy. mailin collects no user data. Your archive is processed on your device; optional connected mail talks directly to your own mail provider.">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -66,6 +68,10 @@
         p { font-size: 15px; color: #444; margin-bottom: 12px; }
         ul { padding-left: 20px; margin-bottom: 12px; }
         li { font-size: 15px; color: #444; margin-bottom: 6px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 16px; font-size: 14px; color: #444; }
+        th, td { border: 1px solid #e5e5ea; padding: 8px 10px; text-align: left; vertical-align: top; }
+        th { background: #f5f5f7; font-weight: 600; }
+        code { font-size: 13px; }
 
         .effective { font-size: 14px; color: #86868b; margin-bottom: 32px; }
 
@@ -100,49 +106,81 @@
 
     <section class="page-header">
         <h1>Privacy Policy</h1>
-        <p>Privacy-first. Your data stays on your device by default.</p>
+        <p>Local archive and search. Optional connected mail, directly with your own provider.</p>
     </section>
 
     <div class="content">
-        <p class="effective">Effective Date: September 29, 2026 (version 3.0)</p>
+        <p class="effective">Effective Date: November 14, 2026 (version 4.0). The policy that applied to version 3.0 is <a href="3.0.html">kept here</a> for the record.</p>
 
         <div class="highlight">
-            mailin does not collect, store, transmit, or share any personal data. Period.
+            mailin collects no personal data. There is no mailin server: your archive, your mail and your sign-in details stay on your device or go directly to the mail provider you chose.
         </div>
 
+        <h2>Two editions</h2>
+        <p><strong>Connected edition</strong> (mailin 4.0 on the App Store). Adds optional connected mail for Gmail, Outlook / Microsoft 365, iCloud Mail, Fastmail and other IMAP / SMTP accounts. Connected mail is <strong>off</strong> until you turn it on, and each account is allowed nothing until you switch on, one by one, what it may do.</p>
+        <p><strong>Offline edition</strong> (mailin 3.x, and offline builds made for organisations). Its app sandbox grants no network access and it offers no way to add an account, so it cannot connect to any server. Everything on this page about connected mail does not apply to it.</p>
+        <p>The About window in the app says which edition you have.</p>
+
         <h2>Data Collection</h2>
-        <p>mailin collects <strong>zero</strong> user data. We do not collect analytics, usage data, crash reports, device information, or any other personal information.</p>
+        <p>mailin collects <strong>no</strong> user data in either edition. We do not collect analytics, usage data, crash reports, device information, contact lists, email content or any other personal information, and we have no server that could receive it. Nothing you import, save, search or send reaches the developer.</p>
 
         <h2>Email Processing</h2>
-        <p>All email parsing, search, filtering, and core analysis happens <strong>entirely on your device</strong>. mailin uses Apple's on-device NaturalLanguage framework and FoundationModels framework for AI features &mdash; both run locally on your device.</p>
+        <p>All parsing, search, duplicate detection, exports and analysis happen <strong>on your device</strong>. AI features use Apple's on-device frameworks only.</p>
 
         <h2>No Cloud AI</h2>
-        <p>Every AI feature in mailin runs on your device using Apple's NaturalLanguage framework and, on macOS 26 and later, Apple Intelligence's on-device models. mailin has no cloud AI mode and no way to add one: the app has no network entitlement, so it cannot contact any AI provider, and no email content is ever sent to a third party.</p>
+        <p>Neither edition contains cloud AI. No email content, attachment, search or summary is sent to any AI provider. Mail captured from Gmail is never used for AI outside your device.</p>
 
-        <h2>Live Mail (not included in version 3.0)</h2>
-        <p>Version 3.0 does not connect to any mail account. The Live Mail page is present as a placeholder and states this in the app: no account can be added and no mail server is contacted. If Live Mail ships in a later version, this policy will be updated before it does, and each account will be authorised by you separately from enabling the page.</p>
+        <h2>Connected Mail (connected edition only)</h2>
+        <p>When you turn on Connected mail and add an account, your device connects <strong>directly</strong> to that account's own mail provider. Nothing is relayed through a mailin server or any other intermediary. Each account does only what you allowed it:</p>
+        <ul>
+            <li><strong>Preserve mail</strong> (read-only): downloads your messages, folders and labels and keeps a copy in your archive on this device. Nothing on the server is changed and nothing is marked as read.</li>
+            <li><strong>Send mail</strong>: sends a message you wrote and submitted from the outbox, from that account's own address.</li>
+            <li><strong>Change server mail</strong>: applies changes you choose (read / unread, flag, move or label, move to Trash, restore). Each change is listed first; a bulk cleanup runs only after you type the exact count shown.</li>
+        </ul>
+        <table>
+            <tr><th>Account</th><th>Servers your device contacts</th><th>Permission you grant</th></tr>
+            <tr><td>Gmail</td><td><code>imap.gmail.com</code> (mail, IMAP over TLS, port 993) and <code>smtp.gmail.com</code> (sending, SMTP over TLS, port 465)</td><td>a Google app password you create in your Google Account (2-Step Verification on, <code>myaccount.google.com/apppasswords</code>), sent only to those two Google servers. Preserve mail is read-only; Send mail uses the same app password. In version 4.0 Change server mail is not available for Gmail, so mailin does not change Gmail mail on the server. Version 4.0 uses no Google API and no Google sign-in page.</td></tr>
+            <tr><td>Outlook / Microsoft 365</td><td><code>login.microsoftonline.com</code> (sign-in; personal accounts may continue on <code>login.live.com</code>), <code>graph.microsoft.com</code> (mail, Microsoft Graph)</td><td>Mail.Read, User.Read (only to read the account's own address, so the account is named by Microsoft) and offline_access (stay signed in) for Preserve mail; Mail.Send only when you switch on Send mail; Mail.ReadWrite only when you switch on Change server mail</td></tr>
+            <tr><td>iCloud Mail, Fastmail, other IMAP</td><td>the IMAP and SMTP servers of that provider or the ones you enter (for example <code>imap.mail.me.com</code>, <code>smtp.mail.me.com</code>)</td><td>your app-specific password, sent only to those servers over TLS</td></tr>
+        </table>
+        <p>Your mail provider processes your mail under its own terms and privacy policy, as it does for any mail app. Messages are shown with remote content (images, tracking pixels) blocked, so opening a message does not contact the sender.</p>
+
+        <h2>Sign-in and Credentials</h2>
+        <p>Gmail connects with a Google app password; mailin never asks for your Google account password. Outlook / Microsoft 365 sign-in happens on Microsoft's own page; mailin never sees your Microsoft password. The sign-in tokens the provider issues, and any app password or IMAP / SMTP password you enter, are stored only in this device's Keychain. They are never synchronised to other devices, never included in backups or exports, and never sent anywhere except to the provider that issued them. A restored or new device asks you to sign in again.</p>
+
+        <h2>Google API Services (applies only when Google sign-in ships)</h2>
+        <p><strong>Version 4.0 uses no Google API:</strong> it connects Gmail over IMAP with an app password, as described above. Google sign-in is planned for a later 4.0.x update, after Google has verified the app; this page will be updated before that update is released, and the section below applies only from then, to accounts added with Google sign-in.</p>
+        <p>When Google sign-in is offered, mailin's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Gmail data is used only to provide the features you switched on, stays on your device, is not transferred to anyone, is not used for advertising and is not read by any person at mailin.</p>
+
+        <h2>Removing an Account and Deleting Data</h2>
+        <ul>
+            <li>To remove an account, open the Mail page, choose the account and Remove account&hellip;. <strong>Remove</strong> stops its connections, cancels outbox messages that were not yet sent (nothing is sent) and deletes its sign-in data (password or tokens) from the Keychain; mail already saved in your archive is kept. <strong>Remove and Delete Mail&hellip;</strong> also deletes that account's saved mail from your archive, after showing the number of messages first (mail under a legal hold, or also saved from another account or import, is kept).</li>
+            <li>To also withdraw mailin's access at the provider, revoke the app password in your Google Account (Security &rsaquo; App passwords) or remove mailin in your Microsoft account (app permissions). mailin cannot do this for you because it has no server.</li>
+            <li>Turning Connected mail off stops every mail connection at once; saved mail stays readable, searchable and exportable.</li>
+            <li>You can delete all data at any time in Settings &rsaquo; Data &amp; Privacy &rsaquo; Delete All Data. This also deletes every connected account's sign-in data from this device's Keychain.</li>
+        </ul>
 
         <h2>Network Access</h2>
-        <p>mailin has no network capability. The app sandbox grants it no network entitlement, so no connection can be made from the app to any server, including ours. The only network activity associated with mailin is Apple's own StoreKit handling of in-app purchases, which runs in Apple's systems, not in the app.</p>
+        <p>The offline edition has no network access: its app sandbox grants no network entitlement, so the system refuses any connection it might attempt. The connected edition (version 4.0) may open connections only to the mail and sign-in servers listed above, only for accounts you added and for what you allowed; every attempt is checked first and can be seen in Settings &rsaquo; Health &rsaquo; Mail network. Apple's StoreKit handles in-app purchases in Apple's systems.</p>
 
         <h2>Third-Party Services</h2>
-        <p>mailin does not integrate any third-party analytics, advertising, tracking or AI services.</p>
+        <p>mailin integrates no third-party analytics, advertising, tracking or AI services. In the connected edition, the only third parties your device talks to are the mail providers of the accounts you add.</p>
 
         <h2>In-App Purchases &amp; Subscriptions</h2>
-        <p>mailin offers both auto-renewable subscriptions and one-time lifetime purchases. All transactions are processed by Apple through the App Store. Apple's privacy policy governs how purchase and subscription data is handled. mailin does not have access to your payment information. Subscription status is verified locally through Apple's StoreKit framework.</p>
+        <p>All transactions are processed by Apple through the App Store. Apple's privacy policy governs purchase and subscription data. mailin does not have access to your payment information. Subscription status is verified locally through Apple's StoreKit framework.</p>
 
         <h2>Spotlight Indexing</h2>
-        <p>mailin optionally indexes email subjects and senders using Apple's CoreSpotlight framework so you can find emails from macOS Spotlight search. This index is stored locally on your device and is never transmitted. You can remove all indexed data by clearing your email data in Settings.</p>
+        <p>mailin optionally indexes email subjects and senders using Apple's CoreSpotlight framework so you can find emails from Spotlight. This index is stored locally on your device and is never transmitted.</p>
 
         <h2>Data Storage</h2>
-        <p>Your archive is a folder you own, stored locally in mailin's app container or, if you move it, on a disk you choose. Moving makes a verified copy at the new location and never deletes the old one until the new one is in use. You can clear all saved data at any time from Settings; cleared data is permanently deleted.</p>
+        <p>Your archive &mdash; imported files, mail saved from connected accounts, drafts and the outbox &mdash; is a folder you own, stored locally in mailin's app container or, if you move it, on a disk you choose. Moving makes a verified copy at the new location and never deletes the old one until the new one is in use. You can clear all saved data at any time from Settings; cleared data is permanently deleted.</p>
         <p>Single messages larger than 100 MB are not copied into the archive. mailin records where the message sits in the file you imported and reads it from there when you open or export it, after checking that the file is still the one that was imported. Keep that file where it is; if it is moved or deleted, mailin says the message's content is unavailable rather than showing an empty message.</p>
 
         <h2>Children's Privacy</h2>
         <p>mailin does not knowingly collect any information from anyone, including children under the age of 13.</p>
 
         <h2>Changes to This Policy</h2>
-        <p>If we ever change this policy, we will update this page. Given that we collect no data, we do not anticipate changes.</p>
+        <p>If what the app does with data changes, this page is updated before that version is released.</p>
 
         <h2>Contact</h2>
         <p>If you have questions about this privacy policy, contact us at <a href="mailto:sasmalgiri@gmail.com">sasmalgiri@gmail.com</a>.</p>

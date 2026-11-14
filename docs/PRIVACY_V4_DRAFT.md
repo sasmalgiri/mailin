@@ -1,11 +1,24 @@
-# Privacy policy — v4.0 connected edition (draft, V4-14)
+# Privacy policy — v4.0 connected edition (V4-14) — **LIVE TEXT (2026-11-14)**
 
-Status: **draft, not published.** The live `docs/privacy/index.html` and `PrivacyPolicy.html` describe the shipping
-offline 3.0.x app and stay unchanged until the connected edition ships; each now carries an HTML comment pointing
-here. The publishable page is [`privacy/v4-connected-draft.html`](privacy/v4-connected-draft.html) (same look as
-the live page). The in-app summary for the connected build is `LegalComplianceManager.connectedPrivacyPolicySummary`
-(`maxmailin/ConnectedEditionClaims.swift`), shown by About ▸ Privacy and the terms sheet only when
-`ConnectedBuildFeatures.mailTransportsCompiled`; the offline build shows its old summary unchanged.
+Status: **live text, in the repository since 2026-11-14 (owner decision 2026-11-14: release v4.0 build 1000 with
+connected mail).** [`privacy/index.html`](privacy/index.html) — the page served at the app's privacy URL `/privacy/` —
+and the mirror [`../PrivacyPolicy.html`](../PrivacyPolicy.html) now carry the 4.0 connected text. The 3.0 (offline-only)
+page is kept for the record at [`privacy/3.0.html`](privacy/3.0.html). The former draft
+[`privacy/v4-connected-draft.html`](privacy/v4-connected-draft.html) is marked superseded and is no longer edited.
+
+**It is public only once this branch is merged / published to the GitHub Pages site** — until then the site still
+serves the 3.0 text, and the 4.0 build must not be submitted (App Review and Google read the URL).
+
+What changed from the 2026-11-12 draft, for the 4.0 facts: Gmail is IMAP + app password only (`imap.gmail.com:993`,
+`smtp.gmail.com:465`, Keychain), sends with the same app password, and Change server mail is not available for Gmail
+in 4.0; Outlook / Microsoft 365 scopes are Mail.Read, User.Read and offline_access, with Mail.Send / Mail.ReadWrite only
+on request; the Google API Services / Limited Use section is headed "applies only when Google sign-in ships" (4.0.x,
+after Google verification); removal describes Remove and Remove and Delete Mail…; effective date November 14, 2026; the
+support address is the one the 3.0 page used. The in-app summary for the connected build is
+`LegalComplianceManager.connectedPrivacyPolicySummary` (`maxmailin/ConnectedEditionClaims.swift`), shown by About ▸
+Privacy and the terms sheet only when `ConnectedBuildFeatures.mailTransportsCompiled`; the offline build shows its old
+summary unchanged. (Not edited in this pass — Swift source; its wording says "remove it in your Google or Microsoft
+account's app permissions", which for a Gmail app password means revoking the app password.)
 
 ## Data-flow inventory the text is based on (read from the code, 2026-11-12)
 
@@ -29,7 +42,7 @@ Gates: compile time `MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD`; run time `Mail
 install until the Live Mail page / `connectedMail` capability is on; each account off with no modes; each account
 bound to its own mail and sign-in hosts; AI hosts and remote content always refused).
 
-## Section text for `PrivacyPolicy.html` (replaces "Live Mail (not included in version 3.0)", "No Cloud AI" and "Network Access")
+## Section text drafted 2026-11-12 for `PrivacyPolicy.html` (historical; the live wording is `privacy/index.html` and its mirror `PrivacyPolicy.html`)
 
 > **Two editions.** The offline edition is built without network code: it cannot connect to any server and no
 > account can be added. The connected edition adds optional connected mail for Gmail, Outlook / Microsoft 365 and
@@ -65,9 +78,9 @@ bound to its own mail and sign-in hosts; AI hosts and remote content always refu
 > for accounts you added and only for what you allowed; Settings ▸ Health ▸ Mail network shows every allowed and
 > refused attempt.
 
-## Owner decisions / checks before publishing
+## Owner decisions / checks (status 2026-11-14)
 
-1. Effective date and version; support e-mail address on the page (placeholder `<SUPPORT EMAIL>`).
+1. **Done 2026-11-14:** effective date November 14, 2026 (version 4.0); support address sasmalgiri@gmail.com (as on the 3.0 page). Re-date if publication slips.
 2. **Fixed 2026-11-12:** Settings ▸ Delete All Data (`ArchiveLifecycleService.eraseAllData`) now also removes every
    `com.ecosanskriti.mailin.connected-account` Keychain item (`KeychainCredentialStore.deleteAll`, guarded by
    `EraseConnectedSecretsTests` and `MailAccountCredentialTests.testDeleteAll_…`); the "remove each connected account
@@ -75,7 +88,7 @@ bound to its own mail and sign-in hosts; AI hosts and remote content always refu
 3. The in-app offline summary (`LegalComplianceManager.privacyPolicySummary`, unchanged by request) still mentions an
    optional Cloud AI feature and iCloud review sync that the offline 3.0.x build does not compile — worth a
    correction in a later offline release (it is English legal text, not in the string catalog).
-4. Publish the connected page at the same URL (`/privacy/`) when the connected build is distributed — Google's
+4. **Text in place 2026-11-14; publication = merge / deploy of the site.** Publish the connected page at the same URL (`/privacy/`) when the connected build is distributed — Google's
    consent screen and Entra's branding point to it, and Google reads it during verification.
 6. **V4-16 (owner, 2026-11-13):** 4.0 connects Gmail over IMAP with an app password (`MailinGmailSignInMode = imap`);
    Google sign-in returns in 4.0.x after Google verifies the restricted scopes. When 4.0.x switches the key to

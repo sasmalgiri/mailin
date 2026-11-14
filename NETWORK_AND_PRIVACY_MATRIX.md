@@ -46,14 +46,31 @@ The table above is the 3.0 record. From v4.0 there are two configurations of one
 
 | Configuration | Compile conditions | Entitlements (macOS) | Mail at run time |
 |---|---|---|---|
-| **Offline** (`Release`, `Debug`, enterprise edition) | `NO_NETWORK_BUILD` | no `network.client` / `network.server` | not compiled: `ConnectedBuildFeatures.mailTransportsCompiled == false`; Mail page shows "This edition has no mail connection"; proof unchanged (`NO_NETWORK_PROOF.md`) |
+| **Offline** (`Release`, `Debug`, enterprise edition) | `NO_NETWORK_BUILD` | no `network.client` / `network.server` | app-side transports not compiled: `ConnectedBuildFeatures.mailTransportsCompiled == false`; Mail page shows "This edition has no mail connection". **Linked but unreachable:** the package's MailConnectivity transport code (see below); proof `NO_NETWORK_PROOF.md` § v4.0 correction |
 | **Connected** (`Release-Connected`, owner creates it) | `MAILIN_CONNECTED_MAIL`, **not** `NO_NETWORK_BUILD`, **not** `MAILIN_CLOUD_AI` | `mailin/mailin-connected.entitlements` = offline set + `network.client` | **off by default**: `MailNetworkPolicy` refuses everything until the Live Mail page / `connectedMail` capability is on; each account off with no modes until granted |
+
+**What the offline binary links (2026-11-14).** `ArchiveCore` is one library product with two targets
+(`ArchiveCore`, `MailConnectivity`), so the offline app links MailConnectivity's transports — `IMAPTransport`,
+`SMTPStream` / `SMTPSubmitter` (Network.framework, `NWConnection`), `GmailHTTPTransport`, `GraphTransport`,
+`APISendSubmitters`, `APIActionExecutors`, `OAuthSession` (`URLSession`); `otool -L` shows Network.framework.
+It cannot run: (1) the offline entitlements (`mailin/mailin.entitlements`) grant no `network.client`, so the
+sandbox denies every outbound connection; (2) no app code path constructs a transport — the only constructors
+(`ConnectedMailProductionTransports`, `ConnectedMailProduction.dependencies`, `PolicyCheckedTokenTransport`, legacy
+`GmailConnector` / `OutlookConnector` / `IMAPClient` / `SMTPClient`) are compiled only under
+`MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD`, and `MailNetworkPolicy` answers `.notCompiled`.
+`Scripts/verify-no-network.sh` check 3 proves those entry points, the `mailin.online.capable` marker and the
+connected Info.plist keys are absent from the artifact.
 
 Every mail request asks `MailNetworkPolicy` first (socket, OAuth refresh, redirect, retry, download, request); an
 account is bound to its own hosts; AI hosts (`aiHostSuffixes`) and remote content are always refused; no redirect
 is followed with a bearer token.
 
 ### Hosts the connected edition may contact (exact)
+
+4.0 (owner 2026-11-14): Gmail connects over IMAP with an app password (`MailinGmailSignInMode = imap`), so the
+three Google API rows below are **not used by 4.0**; they apply when Google sign-in ships in 4.0.x. Outlook /
+Microsoft 365 capture asks for `Mail.Read`, `User.Read`, `offline_access`; `Mail.Send` / `Mail.ReadWrite` only
+when Send mail / Change server mail is switched on.
 
 | Provider | Host | Used for | Opened by |
 |---|---|---|---|
@@ -62,6 +79,7 @@ is followed with a bearer token.
 | Google | `gmail.googleapis.com` | capture (`profile`, `labels`, `messages`, `messages/{id}?format=raw`, `history`), send (`upload/…/messages/send`), server actions (`modify`, `trash`, `untrash`) | app (`GmailAdapter`, `GmailSendSubmitter`, `GmailActionExecutor`) |
 | Microsoft | `login.microsoftonline.com` (`/common/oauth2/v2.0/authorize`, `/token`); personal accounts may continue on `login.live.com` inside the sign-in window | sign-in, token exchange / refresh | sign-in window; app for `/token` |
 | Microsoft | `graph.microsoft.com` | capture (mail folders, delta, `/$value`), `sendMail`, PATCH / move | app (`GraphAdapter`, `GraphSendSubmitter`, `GraphActionExecutor`) |
+| Google (4.0, Gmail over IMAP) | `imap.gmail.com:993`, `smtp.gmail.com:465` | IMAP capture (X-GM-MSGID / X-GM-LABELS, EXAMINE + BODY.PEEK), SMTP send with the same app password; **no server changes** (Change server mail unavailable for Gmail-IMAP) | app (Network.framework, TLS) |
 | iCloud Mail | `imap.mail.me.com:993`, `smtp.mail.me.com:587` | IMAP capture / actions, SMTP send | app (Network.framework, TLS before AUTH) |
 | Fastmail | `imap.fastmail.com:993`, `smtp.fastmail.com:465` | same | app |
 | Other IMAP | the host and port the user enters | same | app |
