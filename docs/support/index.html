@@ -161,7 +161,7 @@
 
         <div class="faq">
             <h3>What is mailin?</h3>
-            <p>mailin is a privacy-first email archive analyzer for Mac, iPhone, and iPad. It lets you import email archives from Gmail, Outlook, Thunderbird, Apple Mail, and other providers, then search, filter, analyze, and export your email history. The interface is available in 11 languages, and email content in those languages is detected and analyzed. Everything runs on your device &mdash; no cloud servers, no data collection, no account required.</p>
+            <p>mailin is a privacy-first email archive analyzer for Mac, iPhone, and iPad. It lets you import email archives from Gmail, Outlook, Thunderbird, Apple Mail, and other providers, then search, filter, analyze, and export your email history. The interface is available in 11 languages, and email content in those languages is detected and analyzed. Everything runs on your device &mdash; no cloud servers, no data collection, no sign-up. From 4.0, Live Mail can also connect the mail accounts you add.</p>
         </div>
 
         <div class="faq">
@@ -222,12 +222,60 @@
             <p style="margin-top: 6px;">Email <em>content</em> in the same 11 languages is detected and analyzed, so search, sentiment and topic analysis work on a multilingual archive. Your own messages are never translated or altered &mdash; only the interface changes language. In the app, Settings &gt; General &gt; Language shows the language in use and opens the system setting that changes it.</p>
         </div>
 
+        <!-- New in 4.0 -->
+        <h2 class="section-header">New in 4.0: Live Mail</h2>
+
+        <div class="faq">
+            <h3>What is Live Mail?</h3>
+            <p>A mail page in mailin for the accounts you add: Outlook / Microsoft 365, Gmail, iCloud and other IMAP accounts. It saves each message into the same archive as your imported files (so search, duplicates, exports and verification work on it), and lets you write and send mail. It is off until you add an account.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I add an Outlook or Microsoft 365 account?</h3>
+            <p>Live Mail &rarr; <strong>Add account</strong> &rarr; <strong>Outlook and Microsoft 365</strong>, then sign in with Microsoft in the window that opens and choose Accept. Outlook.com does not accept passwords over IMAP, so always use this choice rather than &ldquo;Other IMAP server&rdquo;. If your Microsoft account was created with another address (for example a Gmail address), mailin shows the account under that name &mdash; it is still your Outlook mailbox.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I add a Gmail account?</h3>
+            <p>Gmail connects with a Google <strong>app password</strong>: turn on 2-Step Verification for your Google account, create an app password at <a href="https://myaccount.google.com/apppasswords">myaccount.google.com/apppasswords</a>, then Live Mail &rarr; Add account &rarr; Gmail and paste it. mailin stores it in your Keychain. You can revoke it in your Google account at any time.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I add iCloud, Fastmail or another provider?</h3>
+            <p>Live Mail &rarr; Add account &rarr; iCloud Mail, Fastmail or Other IMAP server. For iCloud, create an app-specific password at <a href="https://account.apple.com">account.apple.com</a> (Sign-In and Security &rarr; App-Specific Passwords). For other providers, mailin fills in common server settings; check your provider&rsquo;s IMAP and SMTP details if it asks.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What can mailin do with my account?</h3>
+            <p>Each account has three switches: <strong>Preserve mail</strong> (read and save; nothing on the server is changed or marked read), <strong>Send mail</strong> (messages wait in the Outbox and leave only when you send; Undo Send can hold them), and <strong>Change server mail</strong> (mark read, flag, move to Trash &mdash; only when you choose, each change listed). Only Preserve mail is needed to read.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Why is my account&rsquo;s Drafts folder empty while mailin shows drafts?</h3>
+            <p>Messages you write in mailin stay in mailin until they are sent; they are under <strong>Sending &rarr; Drafts</strong>. The account&rsquo;s own Drafts folder shows drafts saved on the server by other apps. A message leaves mailin&rsquo;s Drafts once the server accepts it.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I attach a message from my archive?</h3>
+            <p>In a new message, choose <strong>Attach from Archive&hellip;</strong>, search, tick the messages and choose Add. Each is attached as an .eml file (without its Bcc), which any mail app can open.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I remove an account?</h3>
+            <p>Live Mail &rarr; Accounts and status &rarr; the account &rarr; Remove. mailin shows what will happen first. <strong>Remove</strong> keeps the saved mail in your archive; <strong>Remove and Delete Mail&hellip;</strong> also deletes it, with progress (&ldquo;Deleting X of Y&rdquo;). Passwords and sign-in tokens are deleted either way.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Does Live Mail send my mail to a mailin server?</h3>
+            <p>No. There is no mailin server. The app connects only to your provider&rsquo;s servers (for example login.microsoftonline.com and graph.microsoft.com for Outlook, imap.gmail.com and smtp.gmail.com for Gmail, imap.mail.me.com and smtp.mail.me.com for iCloud). See the <a href="../privacy/">Privacy Policy</a>.</p>
+        </div>
+
         <!-- New in 3.0 -->
         <h2 class="section-header">New in 3.0</h2>
 
         <div class="faq">
             <h3>Where do I download mailin?</h3>
-            <p>On the App Store: <a href="https://apps.apple.com/app/mailin/id6767245397">https://apps.apple.com/app/mailin/id6767245397</a>. One app for Mac, iPhone and iPad; a purchase on one device unlocks the others signed in to the same Apple Account. To update, open the App Store, go to your account (iPhone/iPad) or Updates (Mac), and update mailin to 3.0.1.</p>
+            <p>On the App Store: <a href="https://apps.apple.com/app/mailin/id6767245397">https://apps.apple.com/app/mailin/id6767245397</a>. One app for Mac, iPhone and iPad; a purchase on one device unlocks the others signed in to the same Apple Account. To update, open the App Store, go to your account (iPhone/iPad) or Updates (Mac), and update mailin to the latest version.</p>
         </div>
 
         <div class="faq">
@@ -237,7 +285,7 @@
 
         <div class="faq">
             <h3>What changed in version 3.0?</h3>
-            <p>A three-pane archive shell (mailboxes, sources and labels; the list; the message), an import queue, export pre-flight and resume, moving the archive to another disk, search results that say where they matched and what the index covered, direct ZIP import, and single messages over 100 MB kept instead of reported as damaged. Also new: finding deleted mail still inside your mailbox files, searching the text in scanned PDFs and photos, Scripts and Shortcuts actions, Review Packs and team cases, hidden header timestamps with ARC and DKIM checks, a rebuilt Outlook .pst export, and (on Mac) Send to DEVONthink and links to any email. AI Insights and Professional Workflows are now separate pages you switch on. There is no Live Mail page in this version; mailin connects to no mail server.</p>
+            <p>A three-pane archive shell (mailboxes, sources and labels; the list; the message), an import queue, export pre-flight and resume, moving the archive to another disk, search results that say where they matched and what the index covered, direct ZIP import, and single messages over 100 MB kept instead of reported as damaged. Also new: finding deleted mail still inside your mailbox files, searching the text in scanned PDFs and photos, Scripts and Shortcuts actions, Review Packs and team cases, hidden header timestamps with ARC and DKIM checks, a rebuilt Outlook .pst export, and (on Mac) Send to DEVONthink and links to any email. AI Insights and Professional Workflows are now separate pages you switch on. Live Mail (connected accounts) arrived in 4.0.</p>
         </div>
 
         <div class="faq">
@@ -479,17 +527,17 @@
 
         <div class="faq">
             <h3>Is my email data safe?</h3>
-            <p>Yes. mailin processes everything <strong>100% on your device</strong>. Your email content is never sent to any server, cloud service, or third party. There is no analytics, no telemetry, no tracking, and no account required.</p>
+            <p>Yes. mailin processes everything <strong>100% on your device</strong>. Your email content is never sent to any server, cloud service, or third party. There is no analytics, no telemetry, no tracking, and no sign-up. If you add a mail account in Live Mail, mailin talks to that provider&rsquo;s servers only.</p>
         </div>
 
         <div class="faq">
             <h3>Does mailin need an internet connection?</h3>
-            <p>No. mailin works entirely offline for all email processing, AI analysis, search, and export features. The only network access is for <strong>App Store purchases</strong> (handled by Apple's StoreKit), which is required to verify subscriptions and process transactions.</p>
+            <p>Not for the archive: email processing, AI analysis, search and export all work offline. Live Mail needs a connection to reach the accounts you add. The only other network access is for <strong>App Store purchases</strong> (handled by Apple's StoreKit).</p>
         </div>
 
         <div class="faq">
             <h3>Does mailin use cloud AI?</h3>
-            <p>No. Every AI feature runs on your device: Apple's <strong>NaturalLanguage framework</strong> everywhere, and on macOS 26+ Apple Intelligence's on-device models through the FoundationModels framework. There is no cloud AI mode and no way to add one: the app has no network entitlement, so it cannot contact any provider. Nothing is ever sent anywhere, including to us.</p>
+            <p>No. Every AI feature runs on your device: Apple's <strong>NaturalLanguage framework</strong> everywhere, and on macOS 26+ Apple Intelligence's on-device models through the FoundationModels framework. There is no cloud AI mode: your mail is never sent to an AI provider, or to us.</p>
         </div>
 
         <div class="faq">
