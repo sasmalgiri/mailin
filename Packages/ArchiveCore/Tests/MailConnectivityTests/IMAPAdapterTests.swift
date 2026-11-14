@@ -22,6 +22,7 @@
 import XCTest
 import Foundation
 import CryptoKit
+import Network
 @testable import MailConnectivity
 @testable import ArchiveCore
 
@@ -74,12 +75,15 @@ final class IMAPAdapterTests: XCTestCase {
     func makeAdapter(_ server: LocalIMAPServer, account: UUID = UUID(), credentials: InMemoryCredentialStore = InMemoryCredentialStore(),
                      password: String? = nil, security: IMAPSecurity = .plaintextLoopbackOnly, host: String = "127.0.0.1",
                      pageSize: Int = 500, maxConnections: Int = 2, permission: NetworkPermission? = nil,
-                     reconnectSleeps: Box<[TimeInterval]>? = nil) throws -> IMAPAdapter {
+                     reconnectSleeps: Box<[TimeInterval]>? = nil, timeout: TimeInterval = 10, startTLSFallback: Bool = false,
+                     transportFactory: IMAPTransportFactory? = nil) throws -> IMAPAdapter {
         try credentials.write(Data((password ?? server.model.password).utf8), kind: .password, account: account)
         let config = IMAPAccountConfiguration(host: host, port: server.port, security: security, login: server.model.login,
-                                              maxConnections: maxConnections, pageSize: pageSize, timeout: 10)
+                                              maxConnections: maxConnections, pageSize: pageSize, timeout: timeout,
+                                              startTLSFallback: startTLSFallback)
         let sleeps = reconnectSleeps
-        return IMAPAdapter(accountID: account, configuration: config, credentials: credentials, permission: permission,
+        return IMAPAdapter(accountID: account, configuration: config, credentials: credentials,
+                           transportFactory: transportFactory ?? IMAPTransports.system, permission: permission,
                            reconnect: IMAPReconnectPolicy(base: 1, maximum: 8, sleep: { s in sleeps?.mutate { $0.append(s) } }))
     }
 
@@ -364,9 +368,208 @@ final class IMAPAdapterTests: XCTestCase {
             _ = try await adapter.listFolders(pageToken: nil, context: ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0))
             XCTFail("a TLS handshake with a plaintext server cannot succeed")
         } catch let e as MailProviderError {
-            if case .transient = e {} else { XCTFail("\(e)") }
+            // Audit 2026-11-14 finding 2: a REAL failed handshake is named
+            // (permanent, coded) — before, a transient "could not be reached".
+            guard case .permanent(let why) = e else { return XCTFail("\(e)") }
+            XCTAssertEqual(IMAPErrorCode.code(in: why), IMAPErrorCode.tlsHandshakeFailed, why)
+            XCTAssertTrue(why.contains("127.0.0.1"), why)
         }
         XCTAssertFalse(server.model.transcript.contains { $0.contains("LOGIN") || $0.contains("AUTHENTICATE") })
+    }
+
+    /// Finding 8: on a port other than 993 / 143 a server that answers in
+    /// plaintext and advertises STARTTLS is used with STARTTLS (sign-in only
+    /// after the upgrade); a certificate failure never falls back.
+    func testSTARTTLSFallback_onANonStandardPort_signsInOnlyAfterTheUpgrade() async throws {
+        let server = try await startServer { m in
+            m.offerSTARTTLS = true
+            m.greeting = "* OK mailin test server ready"
+            m.addMailbox("INBOX")
+        }
+        XCTAssertEqual(IMAPAccountConfiguration.defaultSecurity(port: 993).security, .implicitTLS)
+        XCTAssertEqual(IMAPAccountConfiguration.defaultSecurity(port: 143).security, .startTLS)
+        XCTAssertEqual(IMAPAccountConfiguration.defaultSecurity(port: 1143).security, .implicitTLS)
+        XCTAssertTrue(IMAPAccountConfiguration.defaultSecurity(port: 1143).startTLSFallback)
+        XCTAssertFalse(IMAPAccountConfiguration.defaultSecurity(port: 993).startTLSFallback)
+        let account = MailAccount(provider: .imap, host: "127.0.0.1", port: 1143, loginName: "asha", displayIdentity: "asha@127.0.0.1",
+                                  enabledModes: [.capture], connectionState: .connected)
+        let fromRecord = try IMAPAdapter(account: account, credentials: InMemoryCredentialStore())
+        XCTAssertTrue(fromRecord.configuration.startTLSFallback, "a record naming only port 1143 allows STARTTLS there")
+
+        let securities = Box<[IMAPSecurity]>([])
+        let factory: IMAPTransportFactory = { endpoint in
+            securities.mutate { $0.append(endpoint.security) }
+            if endpoint.security == .implicitTLS { return try await IMAPTransports.system(endpoint) }   // REAL handshake: fails
+            // STARTTLS: the loopback connection; the in-place upgrade is simulated.
+            var plain = endpoint
+            plain.security = .plaintextLoopbackOnly
+            return UpgradeSimulatingTransport(try await IMAPTransports.system(plain))
+        }
+        let adapter = try makeAdapter(server, security: .implicitTLS, startTLSFallback: true, transportFactory: factory)
+        let ctx = ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0)
+        let folders = try await adapter.listFolders(pageToken: nil, context: ctx)
+        XCTAssertEqual(folders.folders.map(\.serverID), ["INBOX"])
+        XCTAssertEqual(securities.value, [.implicitTLS, .startTLS])
+        let negotiated = await adapter.negotiatedSecurity
+        XCTAssertEqual(negotiated, .startTLS)
+        let commands = server.model.transcript.map { $0.split(separator: " ").dropFirst().first.map(String.init) ?? $0 }
+        let starttls = try XCTUnwrap(commands.firstIndex(of: "STARTTLS"))
+        let auth = try XCTUnwrap(commands.firstIndex { $0 == "AUTHENTICATE" || $0 == "LOGIN" })
+        XCTAssertLessThan(starttls, auth, "sign-in only after STARTTLS: \(server.model.transcript)")
+        // A second connection goes straight to STARTTLS.
+        await adapter.disconnect()
+        _ = try await adapter.listFolders(pageToken: nil, context: ctx)
+        XCTAssertEqual(securities.value, [.implicitTLS, .startTLS, .startTLS])
+
+        // A certificate failure never falls back to STARTTLS.
+        let refused = Box<[IMAPSecurity]>([])
+        let certAdapter = try makeAdapter(server, security: .implicitTLS, startTLSFallback: true, transportFactory: { endpoint in
+            refused.mutate { $0.append(endpoint.security) }
+            throw IMAPTLSError(host: endpoint.host, status: -9807, isCertificateFailure: true, detail: "invalid certificate chain")
+        })
+        do { _ = try await certAdapter.listFolders(pageToken: nil, context: ctx); XCTFail("must refuse") }
+        catch MailProviderError.permanent(let why) { XCTAssertEqual(IMAPErrorCode.code(in: why), IMAPErrorCode.certificateNotTrusted, why) }
+        XCTAssertEqual(refused.value, [.implicitTLS])
+        // Without the fallback (993, or a chosen security) nothing changes.
+        let strict = Box<[IMAPSecurity]>([])
+        let strictAdapter = try makeAdapter(server, security: .implicitTLS, transportFactory: { endpoint in
+            strict.mutate { $0.append(endpoint.security) }
+            return try await IMAPTransports.system(endpoint)
+        })
+        do { _ = try await strictAdapter.listFolders(pageToken: nil, context: ctx); XCTFail("must refuse") } catch {}
+        XCTAssertEqual(strict.value, [.implicitTLS])
+        await adapter.disconnect()
+    }
+
+    /// Finding 1, end to end: Gmail's [ALERT] "not enabled for IMAP use" reaches
+    /// the run's outcome with its code and words, and the adapter keeps the refusal.
+    func testSignInAlert_reachesTheRunOutcome_withItsCode() async throws {
+        let alert = "Your account is not enabled for IMAP use. Please visit your Gmail settings page and enable your account for IMAP access. (Failure)"
+        let server = try await startServer { m in
+            m.addMailbox("INBOX")
+            m.authFailureCode = "ALERT"
+            m.authFailureText = alert
+        }
+        let sink = makeSink()
+        let adapter = try makeAdapter(server)
+        try await register(adapter, in: sink)
+        let report = await makeEngine(adapter, sink).sync()
+        guard case .failed(let why) = report.outcome else { return XCTFail("\(report.outcome)") }
+        XCTAssertEqual(IMAPErrorCode.code(in: why), IMAPErrorCode.imapDisabled, why)
+        XCTAssertTrue(why.contains(alert), why)
+        let refusal = await adapter.lastSignInRefusal
+        XCTAssertEqual(refusal, IMAPSignInRefusal(code: IMAPErrorCode.imapDisabled, serverText: alert, isAlert: true))
+
+        // A plain wrong password still asks for sign-in, with the refusal recorded.
+        server.model.authFailureCode = "AUTHENTICATIONFAILED"
+        server.model.authFailureText = "Invalid credentials (Failure)"
+        let wrong = try makeAdapter(server)
+        let ctx = ProviderRequestContext(accountID: wrong.accountID, accessToken: nil, attempt: 0)
+        do { _ = try await wrong.listFolders(pageToken: nil, context: ctx); XCTFail("must refuse") }
+        catch let e as MailProviderError { XCTAssertEqual(e, .reauthorisationRequired) }
+        let wrongRefusal = await wrong.lastSignInRefusal
+        XCTAssertEqual(wrongRefusal?.code, IMAPErrorCode.authenticationFailed)
+    }
+
+    /// Finding 6: an IDLE longer than the connection's read timeout waits it
+    /// out (before: the read timed out and the wait failed).
+    func testIDLE_longerThanTheReadTimeout_waitsInsteadOfFailing() async throws {
+        let server = try await startServer()
+        server.model.addMailbox("INBOX")
+        let adapter = try makeAdapter(server, timeout: 0.5)
+        let ctx = ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0)
+        let inbox = try await adapter.listFolders(pageToken: nil, context: ctx).folders[0]
+        let started = Date()
+        let quiet = try await adapter.waitForChange(in: inbox, timeout: 1.5, context: ctx)
+        XCTAssertFalse(quiet)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), 1.4, "it waited the whole IDLE")
+        XCTAssertTrue(server.model.transcript.contains("DONE"))
+        // The connection is still good afterwards.
+        _ = try await adapter.listFolders(pageToken: nil, context: ctx)
+        await adapter.disconnect()
+    }
+
+    /// Finding 6: a send to a server that stopped reading ends with a
+    /// timeout (before: it waited for ever, with no cancellation either).
+    func testSend_toAServerThatStopsReading_timesOut() async throws {
+        let listener = try NWListener(using: {
+            let p = NWParameters.tcp
+            p.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+            return p
+        }())
+        let accepted = Box<[NWConnection]>([])
+        let queue = DispatchQueue(label: "mailin.test.deaf")
+        listener.newConnectionHandler = { c in accepted.mutate { $0.append(c) }; c.start(queue: queue) }   // never reads
+        let ready = expectation(description: "listening")
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
+        listener.start(queue: queue)
+        await fulfillment(of: [ready], timeout: 5)
+        defer { listener.cancel(); for c in accepted.value { c.cancel() } }
+        let port = try XCTUnwrap(listener.port?.rawValue)
+        let transport = try await NWIMAPTransport.connect(IMAPEndpoint(host: "127.0.0.1", port: port, security: .plaintextLoopbackOnly,
+                                                                       timeout: 0.5), tls: false)
+        let result = Box<Error?>(nil)
+        let done = expectation(description: "send ended")
+        let big = Data(count: 64 * 1024 * 1024)
+        Task {
+            do { try await transport.send(big) } catch { result.mutate { $0 = error } }
+            done.fulfill()
+        }
+        await fulfillment(of: [done], timeout: 20)
+        XCTAssertEqual(result.value as? IMAPTransportError, .timedOut)
+        transport.close()
+    }
+
+    /// Finding 3: Gmail with All Mail hidden from IMAP states the limit on the
+    /// listing (archived mail without a label is in no folder) — never silent.
+    func testGmail_allMailHiddenFromIMAP_isAStatedLimit() async throws {
+        let hidden = try await startServer { m in
+            m.postAuthCapabilities.append("X-GM-EXT-1")
+            for (name, attrs) in Self.gmailTree where name != Self.allMail { m.addMailbox(name, attributes: attrs) }
+        }
+        let adapter = try makeAdapter(hidden)
+        let ctx = ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0)
+        _ = try await adapter.listFolders(pageToken: nil, context: ctx)
+        let limits = await adapter.listingLimits
+        XCTAssertEqual(limits.map(\.code), [IMAPErrorCode.gmailAllMailHidden])
+        XCTAssertTrue(limits.first?.detail.contains("Show in IMAP") ?? false)
+
+        let shown = try await startServer { m in
+            m.postAuthCapabilities.append("X-GM-EXT-1")
+            for (name, attrs) in Self.gmailTree { m.addMailbox(name, attributes: attrs) }
+        }
+        let ok = try makeAdapter(shown)
+        _ = try await ok.listFolders(pageToken: nil, context: ProviderRequestContext(accountID: ok.accountID, accessToken: nil, attempt: 0))
+        let none = await ok.listingLimits
+        XCTAssertEqual(none, [], "All Mail listed: no limit")
+        await adapter.disconnect(); await ok.disconnect()
+    }
+
+    /// Finding 9: with UTF8=ACCEPT on, Gmail's modified-UTF-7 X-GM-LABELS
+    /// name the (UTF-8) label folder: one membership, not a stray label.
+    func testGmail_nonASCIILabelInModifiedUTF7_underUTF8Accept_matchesItsFolder() async throws {
+        let label = "Отчёты"
+        let server = try await startServer { m in
+            m.postAuthCapabilities.append("X-GM-EXT-1")
+            for (name, attrs) in Self.gmailTree { m.addMailbox(name, attributes: attrs) }
+            m.addMailbox(label)
+        }
+        let bytes = Self.message("gm-cyrillic")
+        server.model.addGmail(bytes, msgID: 1_766_000_000_000_777, labels: ["\\Inbox", IMAPModifiedUTF7.encode(label)],
+                              in: [Self.allMail, "INBOX", label])
+        let sink = makeSink()
+        let adapter = try makeAdapter(server)
+        let ctx = ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0)
+        _ = try await adapter.listFolders(pageToken: nil, context: ctx)
+        let raw = RawByteSink(writer: try sink.makeStagingWriter())
+        let fetched = try await adapter.fetchRaw(RemoteItemRef(identity: .gmailIMAP(messageID: 1_766_000_000_000_777), folder: nil),
+                                                 into: raw, context: ctx)
+        let staged = try raw.finish()
+        try? FileManager.default.removeItem(at: staged.fileURL)
+        XCTAssertTrue(server.model.transcript.contains { $0.contains("ENABLE") && $0.contains("UTF8=ACCEPT") })
+        XCTAssertEqual(Set(fetched.occurrences.map(\.serverID)), ["INBOX", label, Self.allMail], "\(fetched.occurrences)")
+        XCTAssertTrue(fetched.occurrences.allSatisfy { $0.kind == .folder }, "no stray label membership")
+        await adapter.disconnect()
     }
 
     func testPlaintextModeRefusedForNonLoopbackHost_andPermissionAskedBeforeConnecting() async throws {

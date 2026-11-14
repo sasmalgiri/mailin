@@ -181,6 +181,57 @@ final class OutboxSendTests: XCTestCase {
         return text.components(separatedBy: "\r\n\r\n").first ?? ""
     }
 
+    // MARK: Audit 2026-11-14 — TLS failures on port 465 are not retried automatically
+
+    /// A stream whose first read fails like a refused certificate on an
+    /// implicit-TLS connection (URLSession reports it at the first read).
+    final class CertificateRefusingConnector: SMTPConnector, @unchecked Sendable {
+        final class Stream: SMTPByteStream, @unchecked Sendable {
+            let error: Error
+            init(_ error: Error) { self.error = error }
+            func write(_ data: Data) async throws { throw error }
+            func read() async throws -> Data { throw error }
+            func startTLS() async throws {}
+            var isTLS: Bool { true }
+            func close() {}
+        }
+        let error: Error
+        init(_ error: Error) { self.error = error }
+        func connect(host: String, port: Int, implicitTLS: Bool) async throws -> any SMTPByteStream { Stream(error) }
+    }
+
+    func testSMTP465_certificateRefused_andRealHandshakeFailure_areCodedAndNotRetriedAutomatically() async throws {
+        let p = try await prepare()
+        let perm = PermissionLog()
+        func message() -> OutboundMessage {
+            OutboundMessage(operationID: UUID(), accountID: p.account.id, messageID: p.composed.messageID, envelopeFrom: p.composed.envelopeFrom,
+                            envelopeRecipients: p.composed.envelopeRecipients, requiresSMTPUTF8: false, bytes: p.composed.bytes)
+        }
+        func implicit(_ port: Int, _ connector: any SMTPConnector) throws -> SMTPSubmitter {
+            SMTPSubmitter(settings: SMTPServerSettings(host: "127.0.0.1", port: port, security: .implicitTLS, commandTimeout: 5),
+                          credentials: try credentials(p.account), connector: connector, permission: perm.permission)
+        }
+
+        // 1. The certificate is refused (URLSession's -1202 with errSSLXCertChainInvalid underneath).
+        let untrusted = NSError(domain: NSURLErrorDomain, code: NSURLErrorServerCertificateUntrusted, userInfo: [
+            NSUnderlyingErrorKey: NSError(domain: NSOSStatusErrorDomain, code: -9807)])
+        let refusing = try implicit(465, CertificateRefusingConnector(untrusted))
+        let outcome1 = await refusing.submit(message()) { _ in }
+        guard case .retry(let why1, _, _, let automatic1) = outcome1 else { return XCTFail("\(outcome1)") }
+        XCTAssertFalse(automatic1, "a refused certificate is not retried by itself (it was before: a connection failure)")
+        XCTAssertEqual(IMAPErrorCode.code(in: why1), IMAPErrorCode.smtpCertificateNotTrusted, why1)
+        XCTAssertTrue(why1.contains("127.0.0.1") && why1.contains("not sent"), why1)
+
+        // 2. REAL: TLS from the first byte to a plaintext server → a real handshake failure, coded.
+        let plain = try server { _ in SMTPServerBehavior() }
+        let real = try implicit(Int(plain.port), URLSessionSMTPConnector())
+        let outcome2 = await real.submit(message()) { _ in }
+        guard case .retry(let why2, _, _, let automatic2) = outcome2 else { return XCTFail("\(outcome2)") }
+        XCTAssertFalse(automatic2, why2)
+        XCTAssertNotNil(IMAPErrorCode.code(in: why2).flatMap { [IMAPErrorCode.smtpTLSHandshakeFailed, IMAPErrorCode.smtpCertificateNotTrusted].contains($0) ? $0 : nil }, why2)
+        noCredentialsSent(plain)
+    }
+
     // MARK: T35 — no STARTTLS / bad certificate / split EHLO
 
     func testT35_noSTARTTLS_badCertificate_realFailedHandshake_permissionRefused_neverSendCredentials() async throws {

@@ -103,27 +103,64 @@ private extension String {
 public struct IMAPMailboxName: Sendable, Hashable {
     /// The exact bytes the server sent (what EXAMINE must send back).
     public var wire: [UInt8]
-    /// Decoded Unicode name; also the folder's stable `serverID`.
+    /// Decoded Unicode name, for display (lossy — U+FFFD — when the server's
+    /// bytes are neither UTF-8 nor modified UTF-7).
     public var name: String
+    /// The folder's stable `serverID`: `name` when the bytes decoded exactly;
+    /// otherwise the wire bytes themselves (`rawPrefix` + hex), so two 8-bit
+    /// names that decode to the same lossy text never collide and the exact
+    /// bytes can be sent back without a fresh LIST.
+    public var serverID: String
+
+    /// Marks a `serverID` that carries undecodable wire bytes (U+FFFF is a
+    /// Unicode noncharacter: no decoded mailbox name starts with it).
+    public static let rawPrefix = "\u{FFFF}imap-bytes:"
 
     /// `utf8`: the session enabled UTF8=ACCEPT, so names are UTF-8.
     public init(wire: [UInt8], utf8: Bool) {
         self.wire = wire
+        var exact = true
         if wire.count == 5, String(decoding: wire, as: UTF8.self).uppercased() == "INBOX" {
             name = "INBOX"                      // case-insensitive (RFC 3501 §5.1)
         } else if utf8, let s = String(bytes: wire, encoding: .utf8) {
             name = s
         } else if let s = IMAPModifiedUTF7.decode(wire) {
             name = s
+        } else if let s = String(bytes: wire, encoding: .utf8) {
+            // Some servers send raw UTF-8 names without UTF8=ACCEPT.
+            name = s
         } else {
-            // Some servers send raw 8-bit names without UTF8=ACCEPT.
+            // Raw 8-bit bytes in some other charset: shown lossily, keyed exactly.
             name = String(decoding: wire, as: UTF8.self)
+            exact = false
         }
+        serverID = exact ? name : Self.rawPrefix + wire.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The bytes to send for `name` in a session with or without UTF8=ACCEPT.
+    /// The bytes to send for a `serverID` (or name) in a session with or without UTF8=ACCEPT.
     public static func wireBytes(for name: String, utf8: Bool) -> [UInt8] {
         if name == "INBOX" { return Array("INBOX".utf8) }
+        if let raw = rawBytes(name) { return raw }
         return utf8 ? Array(name.utf8) : Array(IMAPModifiedUTF7.encode(name).utf8)
+    }
+
+    /// The wire bytes a raw `serverID` carries (nil for a decoded name).
+    static func rawBytes(_ serverID: String) -> [UInt8]? {
+        guard serverID.hasPrefix(rawPrefix) else { return nil }
+        let hex = Array(serverID.dropFirst(rawPrefix.count).utf8)
+        guard hex.count % 2 == 0 else { return nil }
+        var out: [UInt8] = []
+        out.reserveCapacity(hex.count / 2)
+        var i = 0
+        while i < hex.count {
+            guard let b = UInt8(String(decoding: hex[i...i + 1], as: UTF8.self), radix: 16) else { return nil }
+            out.append(b); i += 2
+        }
+        return out
+    }
+
+    /// A readable name for a `serverID` (the lossy text of a raw one).
+    public static func displayName(forServerID serverID: String) -> String {
+        rawBytes(serverID).map { String(decoding: $0, as: UTF8.self) } ?? serverID
     }
 }

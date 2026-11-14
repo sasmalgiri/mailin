@@ -470,8 +470,17 @@ public struct IMAPUIDSet: Sendable, Equatable {
             guard let b, ends.count <= 2 else { return nil }
             all.append(min(a, b)...max(a, b))
         }
+        // Sort once, then merge in one pass: O(n log n), not one O(n) insert
+        // per range (a 50k-UID sparse set took minutes that way).
         all.sort { $0.lowerBound < $1.lowerBound }
-        for r in all { insert(r) }
+        ranges.reserveCapacity(all.count)
+        for r in all {
+            if let last = ranges.last, UInt64(r.lowerBound) <= UInt64(last.upperBound) + 1 {
+                if r.upperBound > last.upperBound { ranges[ranges.count - 1] = last.lowerBound...r.upperBound }
+            } else {
+                ranges.append(r)
+            }
+        }
     }
 
     public var isEmpty: Bool { ranges.isEmpty }
@@ -506,29 +515,33 @@ public struct IMAPUIDSet: Sendable, Equatable {
         ranges.append(u...u)
     }
 
-    public mutating func insert(_ r: ClosedRange<UInt32>) {
-        var merged = r
-        var out: [ClosedRange<UInt32>] = []
-        var placed = false
-        for x in ranges {
-            let touches = !(UInt64(x.upperBound) + 1 < UInt64(merged.lowerBound) || UInt64(merged.upperBound) + 1 < UInt64(x.lowerBound))
-            if touches {
-                merged = Swift.min(x.lowerBound, merged.lowerBound)...Swift.max(x.upperBound, merged.upperBound)
-            } else if x.upperBound < merged.lowerBound {
-                out.append(x)
-            } else {
-                if !placed { out.append(merged); placed = true }
-                out.append(x)
-            }
+    /// The first range whose end is at or after `u` - 1 (binary search).
+    private func firstIndex(endingAtOrAfterAdjacent u: UInt32) -> Int {
+        var lo = 0, hi = ranges.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if UInt64(ranges[mid].upperBound) + 1 < UInt64(u) { lo = mid + 1 } else { hi = mid }
         }
-        if !placed { out.append(merged) }
-        ranges = out
+        return lo
+    }
+
+    /// Binary search for the ranges `r` touches; they are replaced by one.
+    public mutating func insert(_ r: ClosedRange<UInt32>) {
+        let start = firstIndex(endingAtOrAfterAdjacent: r.lowerBound)
+        var end = start
+        var merged = r
+        while end < ranges.count, UInt64(ranges[end].lowerBound) <= UInt64(merged.upperBound) + 1 {
+            merged = Swift.min(ranges[end].lowerBound, merged.lowerBound)...Swift.max(ranges[end].upperBound, merged.upperBound)
+            end += 1
+        }
+        if start == end { ranges.insert(merged, at: start) } else { ranges.replaceSubrange(start..<end, with: [merged]) }
     }
 
     public mutating func insert(_ u: UInt32) { insert(u...u) }
 
     public mutating func remove(_ u: UInt32) {
-        guard let i = ranges.firstIndex(where: { $0.contains(u) }) else { return }
+        let i = firstIndex(endingAtOrAfterAdjacent: u == .max ? u : u + 1)
+        guard i < ranges.count, ranges[i].contains(u) else { return }
         let r = ranges[i]
         var repl: [ClosedRange<UInt32>] = []
         if r.lowerBound < u { repl.append(r.lowerBound...(u - 1)) }

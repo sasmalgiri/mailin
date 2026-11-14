@@ -62,16 +62,41 @@ public struct IMAPAccountConfiguration: Sendable, Equatable {
     /// Also list the "other users" and "shared" namespaces.
     public var includeSharedNamespaces: Bool
     public var timeout: TimeInterval
+    /// `security` is `.implicitTLS` but the port is not 993 and nobody chose
+    /// it: when the TLS handshake fails because the server answers in
+    /// plaintext, connect again with STARTTLS (required before any sign-in;
+    /// a certificate failure never falls back, plaintext sign-in never happens).
+    public var startTLSFallback: Bool
 
     public init(host: String, port: UInt16 = 993, security: IMAPSecurity = .implicitTLS, login: String,
                 auth: IMAPAuthMethod = .password, maxConnections: Int = 2, pageSize: Int = 500,
-                includeSharedNamespaces: Bool = false, timeout: TimeInterval = 60) {
+                includeSharedNamespaces: Bool = false, timeout: TimeInterval = 60, startTLSFallback: Bool = false) {
         self.host = host; self.port = port; self.security = security; self.login = login; self.auth = auth
         self.maxConnections = max(1, maxConnections); self.pageSize = max(1, pageSize)
         self.includeSharedNamespaces = includeSharedNamespaces; self.timeout = timeout
+        self.startTLSFallback = startTLSFallback && security == .implicitTLS
+    }
+
+    /// The security for an account record that names only a port: 993 →
+    /// implicit TLS, 143 → STARTTLS, any other port → implicit TLS with the
+    /// STARTTLS fallback (a server that advertises STARTTLS there is used).
+    public static func defaultSecurity(port: UInt16) -> (security: IMAPSecurity, startTLSFallback: Bool) {
+        switch port {
+        case 993: return (.implicitTLS, false)
+        case 143: return (.startTLS, false)
+        default: return (.implicitTLS, true)
+        }
     }
 
     var endpoint: IMAPEndpoint { IMAPEndpoint(host: host, port: port, security: security, timeout: timeout) }
+}
+
+/// A limit of a listing that the app states on screen (rule 6: nothing is
+/// skipped silently). `code` is an `IMAPErrorCode` constant.
+public struct IMAPListingLimit: Sendable, Equatable {
+    public var code: String
+    public var detail: String
+    public init(code: String, detail: String) { self.code = code; self.detail = detail }
 }
 
 /// Server presets. A preset fills in the server settings; it is NOT proof of
@@ -243,6 +268,17 @@ public actor IMAPAdapter: MailProviderAdapter {
     private var open = 0
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var consecutiveConnectFailures = 0
+    /// Set once a STARTTLS fallback worked (`startTLSFallback`): later connections use it at once.
+    public private(set) var negotiatedSecurity: IMAPSecurity?
+    /// Why the server last refused the sign-in (code + its own words, an
+    /// [ALERT] kept verbatim); nil after a successful sign-in.
+    public private(set) var lastSignInRefusal: IMAPSignInRefusal?
+    /// The account's Trash (LIST special-use \Trash), learnt by `listFolders`.
+    public private(set) var trashMailbox: String?
+    /// Limits of the last folder listing the app must state (e.g. Gmail's All
+    /// Mail hidden from IMAP). Empty = none.
+    public private(set) var listingLimits: [IMAPListingLimit] = []
+    private var foldersListed = false
 
     // Diagnostics.
     public private(set) var connectionsOpened = 0
@@ -268,8 +304,10 @@ public actor IMAPAdapter: MailProviderAdapter {
         try account.validate()
         guard account.provider == .imap, let host = account.host else { throw MailProviderError.permanent("not an IMAP account") }
         let port = UInt16(clamping: account.port ?? 993)
-        let config = IMAPAccountConfiguration(host: host, port: port, security: security ?? (port == 143 ? .startTLS : .implicitTLS),
-                                              login: account.loginName ?? account.displayIdentity, auth: auth)
+        let chosen = security.map { (security: $0, startTLSFallback: false) } ?? IMAPAccountConfiguration.defaultSecurity(port: port)
+        let config = IMAPAccountConfiguration(host: host, port: port, security: chosen.security,
+                                              login: account.loginName ?? account.displayIdentity, auth: auth,
+                                              startTLSFallback: chosen.startTLSFallback)
         self.init(accountID: account.id, configuration: config, credentials: credentials,
                   transportFactory: transportFactory, permission: permission)
     }
@@ -306,25 +344,48 @@ public actor IMAPAdapter: MailProviderAdapter {
         }
         let wait = reconnect.delay(afterFailures: consecutiveConnectFailures)
         if wait > 0 { try await reconnect.sleep(wait) }
-        let endpoint = configuration.endpoint
+        var endpoint = configuration.endpoint
+        if let negotiatedSecurity { endpoint.security = negotiatedSecurity }
         let transport: any IMAPByteTransport
         do {
             transport = try await transportFactory(endpoint)
+        } catch let tls as IMAPTLSError where configuration.startTLSFallback && negotiatedSecurity == nil
+                    && endpoint.security == .implicitTLS && !tls.isCertificateFailure {
+            // Not a TLS port (the server answered in plaintext): the same
+            // port with STARTTLS, which the session requires before sign-in.
+            endpoint.security = .startTLS
+            let upgraded: any IMAPByteTransport
+            do {
+                upgraded = try await transportFactory(endpoint)
+            } catch {
+                consecutiveConnectFailures += 1
+                throw Self.map(error)
+            }
+            let session = try await establish(upgraded, endpoint, auth)
+            negotiatedSecurity = .startTLS
+            return session
         } catch {
             consecutiveConnectFailures += 1
             throw Self.map(error)
         }
+        return try await establish(transport, endpoint, auth)
+    }
+
+    private func establish(_ transport: any IMAPByteTransport, _ endpoint: IMAPEndpoint,
+                           _ auth: IMAPAuthentication) async throws -> IMAPSession {
         connectionsOpened += 1
         let session = IMAPSession(transport: transport, endpoint: endpoint, log: log)
         do {
             try await session.establish(auth)
         } catch {
             transport.close()
+            if let refusal = await session.signInRefusal { lastSignInRefusal = refusal }
             let mapped = Self.map(error)
             if case MailProviderError.transient = mapped { consecutiveConnectFailures += 1 }
             throw mapped
         }
         consecutiveConnectFailures = 0
+        lastSignInRefusal = nil
         return session
     }
 
@@ -374,6 +435,7 @@ public actor IMAPAdapter: MailProviderAdapter {
         case is CancellationError: return error
         case IMAPTransportError.plaintextRefused(let host):
             return MailProviderError.permanent("mailin does not connect to \(host) without encryption")
+        case let e as IMAPTLSError: return e.providerError
         case let e as IMAPTransportError: return MailProviderError.transient(e.localizedDescription)
         case let e as IMAPProtocolError: return MailProviderError.transient(e.localizedDescription)
         case let e as CredentialStoreError: return MailProviderError.permanent(e.localizedDescription)
@@ -421,24 +483,38 @@ public actor IMAPAdapter: MailProviderAdapter {
         var seen = Set<String>()
         var labels: [String: RemoteFolderOccurrence] = [:]
         var allMail: String?
+        var trash: String?
         var skipped = Set<String>()
-        for m in listed where seen.insert(m.name.name).inserted {
-            let special = m.name.name == "INBOX" ? "INBOX"
+        // Keyed by `serverID`: two 8-bit names that decode to the same lossy
+        // text stay two folders (the ID carries their wire bytes).
+        for m in listed where seen.insert(m.name.serverID).inserted {
+            let id = m.name.serverID
+            let special = id == "INBOX" ? "INBOX"
                 : Self.specialUses.first(where: { m.attributes.contains($0.key) })?.value
-            let occ = RemoteFolderOccurrence(serverID: m.name.name, displayPath: displayPath(m, personal: personal),
+            let occ = RemoteFolderOccurrence(serverID: id, displayPath: displayPath(m, personal: personal),
                                              kind: .folder, specialUse: special)
-            folders[m.name.name] = FolderInfo(wire: m.name.wire, occurrence: occ, selectable: m.isSelectable)
+            folders[id] = FolderInfo(wire: m.name.wire, occurrence: occ, selectable: m.isSelectable)
             out.append(occ)
+            if m.isSelectable, trash == nil, m.attributes.contains("\\TRASH") { trash = id }
             if gmail, m.isSelectable {
                 if let label = Self.gmailLabel(forFolder: m) { labels[label.lowercased()] = occ }
-                if m.attributes.contains("\\ALL") { allMail = m.name.name }
-                if m.attributes.contains("\\JUNK") || m.attributes.contains("\\TRASH") { skipped.insert(m.name.name) }
+                if m.attributes.contains("\\ALL") { allMail = id }
+                if m.attributes.contains("\\JUNK") || m.attributes.contains("\\TRASH") { skipped.insert(id) }
             }
         }
         isGmail = gmail
         gmailLabelFolders = labels
         gmailAllMail = allMail
         gmailSkipped = skipped
+        trashMailbox = trash
+        foldersListed = true
+        // Gmail with All Mail hidden from IMAP: archived mail without a label
+        // is in no listed folder. Stated, never skipped silently (rule 6).
+        listingLimits = gmail && allMail == nil
+            ? [IMAPListingLimit(code: IMAPErrorCode.gmailAllMailHidden,
+                                detail: "[Gmail]/All Mail is hidden from IMAP, so archived mail without a label cannot be listed; "
+                                    + "turn on \"Show in IMAP\" for All Mail in Gmail's settings (Labels)")]
+            : []
         if let allMail, let i = out.firstIndex(where: { $0.serverID == allMail }) {
             // Read from All Mail first: every other folder's messages are then
             // already preserved and only gain a membership.
@@ -451,12 +527,12 @@ public actor IMAPAdapter: MailProviderAdapter {
 
     /// The X-GM-LABELS name of the label a Gmail folder shows (nil for All Mail).
     static func gmailLabel(forFolder m: IMAPListedMailbox) -> String? {
-        if m.name.name == "INBOX" { return "\\Inbox" }
+        if m.name.serverID == "INBOX" { return "\\Inbox" }
         let system = ["\\SENT": "\\Sent", "\\DRAFTS": "\\Draft", "\\TRASH": "\\Trash", "\\JUNK": "\\Spam",
                       "\\FLAGGED": "\\Starred", "\\IMPORTANT": "\\Important"]
         if let s = system.first(where: { m.attributes.contains($0.key) }) { return s.value }
         if m.attributes.contains("\\ALL") { return nil }
-        return m.name.name
+        return m.name.serverID
     }
 
     /// Spam and Trash on Gmail: captured only when the person selects them.
@@ -471,7 +547,7 @@ public actor IMAPAdapter: MailProviderAdapter {
             if let occ = gmailLabelFolders[label.lowercased()] {
                 if !out.contains(where: { $0.serverID == occ.serverID }) { out.append(occ) }
             } else if !label.hasPrefix("\\"), !out.contains(where: { $0.serverID == label }) {
-                out.append(RemoteFolderOccurrence(serverID: label, displayPath: label, kind: .label))
+                out.append(RemoteFolderOccurrence(serverID: label, displayPath: IMAPMailboxName.displayName(forServerID: label), kind: .label))
             }
         }
         return out
@@ -483,12 +559,14 @@ public actor IMAPAdapter: MailProviderAdapter {
 
     private func info(_ serverID: String, utf8: Bool) -> FolderInfo {
         folders[serverID] ?? FolderInfo(wire: IMAPMailboxName.wireBytes(for: serverID, utf8: utf8),
-                                        occurrence: RemoteFolderOccurrence(serverID: serverID, displayPath: serverID),
+                                        occurrence: RemoteFolderOccurrence(serverID: serverID,
+                                                                           displayPath: IMAPMailboxName.displayName(forServerID: serverID)),
                                         selectable: true)
     }
 
     private func occurrence(_ serverID: String, uidValidity: UInt32) -> RemoteFolderOccurrence {
-        var o = folders[serverID]?.occurrence ?? RemoteFolderOccurrence(serverID: serverID, displayPath: serverID)
+        var o = folders[serverID]?.occurrence
+            ?? RemoteFolderOccurrence(serverID: serverID, displayPath: IMAPMailboxName.displayName(forServerID: serverID))
         o.uidValidity = uidValidity
         return o
     }
@@ -801,4 +879,14 @@ extension IMAPAdapter {
 
     /// The mailbox's wire name as LISTed (or encoded from its name).
     func actionWire(_ serverID: String, utf8: Bool) -> [UInt8] { info(serverID, utf8: utf8).wire }
+
+    /// The account's Trash (special-use \Trash) for `IMAPActionExecutor`: as
+    /// learnt by the last `listFolders`, or LISTed now when this adapter has
+    /// not listed the folders yet. nil = the server names no Trash.
+    public func discoverTrashMailbox() async throws -> String? {
+        if !foldersListed {
+            _ = try await listFolders(pageToken: nil, context: ProviderRequestContext(accountID: accountID, accessToken: nil, attempt: 0))
+        }
+        return trashMailbox
+    }
 }

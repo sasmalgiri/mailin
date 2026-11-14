@@ -70,6 +70,8 @@ final class IMAPServerModel: @unchecked Sendable {
     var bodyDelay: TimeInterval = 0
     /// Tagged NO with this code to authentication (e.g. "AUTHENTICATIONFAILED").
     var authFailureCode: String?
+    /// The text after the code of that NO (e.g. Gmail's [ALERT] wording).
+    var authFailureText = "Invalid credentials"
 
     var mailboxes: [Mailbox] { lock.withLock { _mailboxes } }
     var transcript: [String] { lock.withLock { _transcript } }
@@ -442,7 +444,7 @@ private final class ServerConnection: @unchecked Sendable {
             if !model.preAuthCapabilities.contains("LOGINDISABLED"), user == model.login, pass == model.password, model.authFailureCode == nil {
                 authenticated = true; ok(tag, "[CAPABILITY \(capabilities().joined(separator: " "))] LOGIN completed")
             } else {
-                write("\(tag) NO [\(model.authFailureCode ?? "AUTHENTICATIONFAILED")] Invalid credentials\r\n")
+                write("\(tag) NO [\(model.authFailureCode ?? "AUTHENTICATIONFAILED")] \(model.authFailureText)\r\n")
             }
         case "AUTHENTICATE":
             let mech = args.first?.atomText?.uppercased() ?? ""
@@ -528,7 +530,7 @@ private final class ServerConnection: @unchecked Sendable {
             authenticated = true
             ok(tag, "[CAPABILITY \(capabilities().joined(separator: " "))] AUTHENTICATE completed")
         } else {
-            write("\(tag) NO [\(model.authFailureCode ?? "AUTHENTICATIONFAILED")] Invalid credentials\r\n")
+            write("\(tag) NO [\(model.authFailureCode ?? "AUTHENTICATIONFAILED")] \(model.authFailureText)\r\n")
         }
     }
 
@@ -723,6 +725,23 @@ private final class ServerConnection: @unchecked Sendable {
         }
         ok(tag, "UID SEARCH completed")
     }
+}
+
+// MARK: - Simulated STARTTLS over a real loopback connection
+
+/// A real (loopback) transport whose in-place TLS upgrade is simulated: what
+/// is tested is when the session upgrades and when it signs in.
+final class UpgradeSimulatingTransport: IMAPByteTransport, @unchecked Sendable {
+    private let inner: any IMAPByteTransport
+    private let lock = NSLock()
+    private var upgraded = false
+    init(_ inner: any IMAPByteTransport) { self.inner = inner }
+    func receive() async throws -> Data? { try await inner.receive() }
+    func receive(timeout: TimeInterval?) async throws -> Data? { try await inner.receive(timeout: timeout) }
+    func send(_ data: Data) async throws { try await inner.send(data) }
+    func upgradeToTLS() async throws { lock.withLock { upgraded = true } }
+    var isEncrypted: Bool { lock.withLock { upgraded } }
+    func close() { inner.close() }
 }
 
 // MARK: - Scripted byte stream
