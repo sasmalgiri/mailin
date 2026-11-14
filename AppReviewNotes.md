@@ -10,20 +10,21 @@ Paste each section below into the corresponding field in **App Store Connect →
 Thank you for reviewing mailin.
 
 HOW TO TEST WITHOUT A REAL EMAIL ARCHIVE
-On the welcome screen, tap "Try with Sample Data" to load 25 fictional emails. All sample emails are clearly tagged "SAMPLE" and can be removed at any time from Settings. The sample button is intentionally placed near "Select Email Archive" specifically so reviewers (and new users) can immediately explore every feature.
+Help > Open sample loads the bundled demo_emails.mbox (fictional messages). Or use "Try with Sample Data" on the welcome screen, or drag any .mbox/.eml/.pst/.msg/.nsf/.zip onto the window. Sample data can be removed at any time from Settings.
 
-WHAT TO LOOK FOR ONCE SAMPLE DATA IS LOADED
-- Tap any email to see the detail view (headers, body, attachments, AI analysis).
-- Tap the Search icon to test full-text search ("project", "invoice", "kickoff").
-- Tap the chart icon for Email Analytics (charts, timeline, communication patterns).
-- Tap the brain icon for the AI Assistant — ask "summarize the project emails" or "who do I email the most?". All AI runs on-device via Apple Intelligence (no network required, no third-party servers).
-- The Settings screen contains the Glossary (plain-language definitions of every legal/forensic term used in the app).
+WHAT TO LOOK FOR (VERSION 3.0)
+- The Archive page is always on: mailboxes, sources and labels on the left, the list in the middle, the message on the right. J/K move, Return opens, / searches.
+- Import: drop several files to see the import queue (pause, resume, stop one file, reorder). Every import ends in a receipt.
+- Search "project" or "invoice": results say where they matched and how much of the archive the index covered.
+- Export (toolbar > Export): a pre-flight sheet shows the space needed; the run ends in a receipt with the file's SHA-256. Cancel mid-way and the receipt offers Resume.
+- AI Insights and Professional Workflows are OPTIONAL pages, off on a fresh install. The page switcher at the top explains what each needs and turns it on. AI Insights runs on-device (Apple NaturalLanguage; Apple Intelligence on macOS 26+).
+- There is no Live Mail page in this build: the page switcher shows Archive, AI Insights and Professional Workflows only. No account can be added and no mail server is contacted.
 
 OFFLINE-FIRST
-mailin works completely offline. No account creation, no login, no network calls for core functionality. The optional Cloud AI toggle (Settings → AI) is OFF by default and requires the user to provide their own API key — it is not used unless explicitly enabled.
+mailin works completely offline. No account creation, no login, no developer server, no network calls for anything to do with the archive. There is no cloud AI: the app has no network entitlement and cannot contact any server.
 
 SUBSCRIPTIONS / IN-APP PURCHASES
-All paywalls are gated by free trial. The app is fully functional in the free tier for evaluation: sample data, basic search, parsing, and a limited number of exports. Auto-renewable subscriptions (Personal / Professional) and a one-time Lifetime purchase unlock unlimited exports, advanced forensic features, and Cloud AI. Subscriptions are managed via standard StoreKit 2; cancellation is via Apple's standard Settings → Subscriptions UI.
+All paywalls are gated by free trial. The app is fully functional in the free tier for evaluation: sample data, basic search, parsing, and a limited number of exports. Auto-renewable subscriptions (Personal / Professional) and a one-time Lifetime purchase unlock unlimited exports and advanced forensic features. Subscriptions are managed via standard StoreKit 2; cancellation is via Apple's standard Settings → Subscriptions UI.
 
 DEMO ACCOUNT
 Not required. mailin has no account system — it is a local file analyzer. No login, no signup, no server.
@@ -31,7 +32,7 @@ Not required. mailin has no account system — it is a local file analyzer. No l
 PRIVACY
 - No tracking. No analytics SDK. No third-party libraries.
 - All processing is on-device by default.
-- Optional Cloud AI is opt-in and requires the user's own API key.
+- No cloud AI. The app has no network entitlement.
 - Privacy Manifest (PrivacyInfo.xcprivacy) declares zero data collection and only Required Reason APIs.
 
 CONTACT
@@ -105,7 +106,7 @@ A: The "Try with Sample Data" button loads 25 fictional emails. Reviewer can the
 A: No, and the app explicitly disclaims this. See in-app Terms of Use clause 6 and the visible disclaimer in Settings: "Disclaimer: Forensic features are analytical tools and have NOT been independently validated for court admissibility." Admissibility is jurisdiction-specific; the app supports workflows but makes no admissibility claim.
 
 **Q: Does the app upload email content anywhere?**
-A: No. Default mode is fully on-device. The optional "Cloud AI" toggle (off by default) requires the user's own OpenAI / Anthropic API key, and is disclosed in Settings with a clear privacy warning before activation.
+A: No. All processing is on-device and the app has no network entitlement, so it cannot upload anything. There is no cloud AI.
 
 **Q: Why does the app declare BGTaskScheduler for background analysis?**
 A: To allow long-running parsing/indexing of large archives to continue when the user briefly switches apps. Background work is gated to user-initiated parses only — never opportunistic, never network-bound.
@@ -117,10 +118,19 @@ A: To open user-selected email archives (.mbox, .eml, .emlx, .msg, .pst, .ost). 
 A: A visible banner above every AI feature reads "AI and software can make mistakes. Verify important results before relying on them." The Terms of Use clause 7 explicitly disclaims accuracy and assigns verification responsibility to the user.
 
 **Q: What is the subscription model?**
-A: Standard StoreKit 2 auto-renewable subscriptions (monthly / yearly) plus a one-time Lifetime purchase. Free tier is fully usable for evaluation. Subscriptions auto-renew per Apple's standard terms; cancellation is via Settings → Subscriptions.
+A: Standard StoreKit 2 auto-renewable subscriptions (monthly / yearly) plus a one-time Lifetime purchase. Free tier is fully usable for evaluation (up to 100 MB of imported input and the newest 500 emails of the archive in every view; 5 AI queries a day). Subscriptions auto-renew per Apple's standard terms; cancellation is via Settings → Subscriptions.
 
 **Q: GDPR Compliance Report — does this confer GDPR compliance on the user's data?**
 A: No. It's a discovery tool that helps users locate personal data (PII) in their email archives. The user remains the data controller; mailin is a tool, not a compliance certifier. This is clearly stated in the Glossary entry for "GDPR" and in the report's own disclaimer.
+
+**Q: mailin Scripts — does the app download or run executable code? (Guideline 2.5.2)**
+A: No. Scripts are small JavaScript functions the user writes or picks from a dozen bundled with the app. They run in Apple's JavaScriptCore on the device, have no network access (no fetch, XMLHttpRequest, WebSocket or timers; eval and Function are removed), cannot change the app's features, and only tag, annotate or set aside the user's own emails after a dry run the user reviews. Scripts are never downloaded; a `.mailinscript` file is a text file the user shares themselves, and its contents are shown before it can run. Scripts are off by default (Settings ▸ Modules).
+
+**Q: Review Packs and team cases — does the app send data anywhere?**
+A: No. A Review Pack is a file the user saves and hands over themselves (AirDrop, a USB disk, their own file share). A team case is a folder the user picks, for example on iCloud Drive or a file server mounted in Finder or Files; each member's app reads and writes signed files in that folder through the standard file system. mailin itself opens no connection (the sandbox grants no network entitlement). A reviewer who received a pack or joined a case needs no purchase to do that work.
+
+**Q: Deleted-email recovery — what does it do?**
+A: It marks mail that the user's own mailbox file still contains although it was deleted (a Deleted Items folder, messages Thunderbird has not yet compacted away, Apple Mail's deleted flag, unlisted Outlook items) and says how each was found. It reads only files the user chose to import; it does not touch the user's mail accounts.
 
 ---
 

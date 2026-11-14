@@ -1,0 +1,926 @@
+import Foundation
+import os.log
+
+private let pstLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PSTParser")
+
+struct PSTParser {
+    /// Bump when message extraction/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
+
+    enum PSTError: LocalizedError {
+        /// A documented format limit says the file cannot be what it claims to
+        /// be — currently only ANSI PST's 2 GB ceiling. Replaces the old
+        /// `fileTooLarge(50 GB)`, which was Outlook's configurable default
+        /// rather than a limit of the format (S1).
+        case formatViolation(String)
+        var errorDescription: String? {
+            switch self {
+            case .formatViolation(let reason):
+                return reason
+            }
+        }
+    }
+
+    static func parse(
+        fileURL: URL,
+        senderEmail: String,
+        onProgress: ((Double) -> Void)? = nil
+    ) throws -> [MBOXParser.RawEmail] {
+        let data = try mappedData(for: fileURL)
+        var messages: [PSTReader.PSTMessage] = []
+        var specRead = false
+        // A cyclic-encoded file stays with the spec reader even when it holds
+        // no mail (contacts or calendar only): the earlier reader cannot decode
+        // cyclic blocks and would refuse the file instead of reading zero mail.
+        if let spec = specReader(for: data) {
+            specRead = true
+            messages = spec.messages()
+            if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled && !messages.isEmpty {
+                messages += spec.carveUnallocated(listed: messages)
+            }
+            onProgress?(1)
+        }
+        // PSTs written by mailin itself use an earlier layout with no
+        // NID_TYPE_NORMAL_MESSAGE nodes; only those go to the heuristic reader.
+        if !specRead {
+            let reader = try PSTReader(data: data)
+            messages = try reader.readAllMessages(onProgress: onProgress)
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        return messages.map { rawEmail(from: $0, senderEmail: senderEmail, isoFormatter: isoFormatter) }
+    }
+
+    /// Five jobs OPEN-02 (switch: `streamingBinaryParsers`). Messages are
+    /// handed out in batches as they are read from the node tree, so memory
+    /// follows the batch, not the file. Same checks, same reader, same NID
+    /// order as `parse`, so a checkpoint written by either path resumes under
+    /// the other. Files mailin itself wrote in the pre-spec layout have no
+    /// message nodes and still take the heuristic reader's array path.
+    /// Returns how many messages were handed out and the folders the file
+    /// lists (FOLD-02), empty ones included.
+    struct StreamResult: Sendable {
+        let count: Int
+        let declaredFolders: [String]
+    }
+
+    static func parseStreaming(
+        fileURL: URL,
+        senderEmail: String,
+        batchSize: Int,
+        onProgress: ((Double) -> Void)? = nil,
+        onBatch: ([MBOXParser.RawEmail]) async throws -> Void
+    ) async throws -> StreamResult {
+        let size = max(1, batchSize)
+        let data = try mappedData(for: fileURL)
+        guard let spec = specReader(for: data) else {
+            let parsed = try parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            var start = 0
+            while start < parsed.count {
+                let end = min(start + size, parsed.count)
+                try await onBatch(Array(parsed[start..<end]))
+                start = end
+            }
+            return StreamResult(count: parsed.count, declaredFolders: [])
+        }
+        let isoFormatter = ISO8601DateFormatter()
+        let nodes = spec.messageNodes
+        let deep = RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled
+        var folderCache: [UInt32: String?] = [:]
+        var carveKeys = Set<String>()
+        var carveSubjects = Set<String>()
+        var batch: [MBOXParser.RawEmail] = []
+        batch.reserveCapacity(size)
+        var emitted = 0
+        for (index, node) in nodes.enumerated() {
+            try Task.checkCancellation()
+            let message: PSTReader.PSTMessage? = autoreleasepool { spec.message(for: node, folderCache: &folderCache) }
+            if let message {
+                if deep {
+                    carveKeys.insert(PSTSpecReader.carveKey(message))
+                    carveSubjects.insert(message.subject)
+                }
+                batch.append(rawEmail(from: message, senderEmail: senderEmail, isoFormatter: isoFormatter))
+                if batch.count >= size {
+                    try await onBatch(batch)
+                    emitted += batch.count
+                    batch.removeAll(keepingCapacity: true)
+                }
+            }
+            if index % 64 == 0 {
+                onProgress?(Double(index + 1) / Double(max(nodes.count, 1)) * (deep ? 0.9 : 1))
+            }
+        }
+        if !batch.isEmpty {
+            try await onBatch(batch)
+            emitted += batch.count
+            batch.removeAll()
+        }
+        if deep, emitted > 0 {
+            let carved = spec.carveUnallocated(listedKeys: carveKeys, listedSubjects: carveSubjects)
+                .map { rawEmail(from: $0, senderEmail: senderEmail, isoFormatter: isoFormatter) }
+            var start = 0
+            while start < carved.count {
+                let end = min(start + size, carved.count)
+                try await onBatch(Array(carved[start..<end]))
+                emitted += end - start
+                start = end
+            }
+        }
+        onProgress?(1)
+        return StreamResult(count: emitted, declaredFolders: spec.folderPaths())
+    }
+
+    /// FOLD-02: the folders a PST lists, for the array path (the streaming
+    /// path returns them with its result).
+    static func declaredFolders(fileURL: URL) -> [String] {
+        guard let data = try? mappedData(for: fileURL), let spec = specReader(for: data) else { return [] }
+        return spec.folderPaths()
+    }
+
+    /// The spec reader for this file, when it applies (see `parse`).
+    private static func specReader(for data: Data) -> PSTSpecReader? {
+        guard PSTReaderPolicy.useSpecReader, let spec = try? PSTSpecReader(data: data),
+              spec.crypt == 2 || spec.nodes.values.contains(where: { $0.nid & 0x1F == PSTSpecReader.nidTypeMessage })
+        else { return nil }
+        return spec
+    }
+
+    /// Size policy, then the file mapped (not read) into memory.
+    private static func mappedData(for fileURL: URL) throws -> Data {
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileSize = attrs[.size] as? Int64 ?? 0
+        // S1: 50 GB was Outlook's DEFAULT MaxLargeFileSize, not the format's
+        // limit — it is registry-configurable to 100 GB and beyond, so the old
+        // refusal rejected real files. Decide from the declared format version
+        // instead: ANSI genuinely cannot exceed 2 GB, Unicode can. mmap below
+        // means peak RSS tracks the working set the B-tree touches, not the
+        // file size.
+        let headerProbe = (try? FileHandle(forReadingFrom: fileURL)).flatMap { handle -> Data? in
+            defer { try? handle.close() }
+            return try? handle.read(upToCount: 16)
+        } ?? Data()
+        let declaredVersion = SourceSizePolicy.pstFormatVersion(fromHeader: headerProbe)
+        switch SourceSizePolicy.pstVerdict(version: declaredVersion, fileSize: fileSize) {
+        case .refuse(let reason):
+            throw PSTError.formatViolation(reason)
+        case .warn(let note):
+            pstLog.notice("PST import warning: \(note, privacy: .public)")
+        case .ok:
+            break
+        }
+        // `.mappedIfSafe` returns Data backed by mmap'd file pages. The OS
+        // pages in only the bytes our B-tree reader actually touches, so
+        // a 10 GB PST never has 10 GB resident. Random-access B-tree
+        // patterns benefit massively from this vs `Data(contentsOf:)`.
+        return try Data(contentsOf: fileURL, options: .mappedIfSafe)
+    }
+
+    /// One read message as the archive's email record.
+    static func rawEmail(from msg: PSTReader.PSTMessage, senderEmail: String, isoFormatter: ISO8601DateFormatter) -> MBOXParser.RawEmail {
+            let from = msg.senderEmail.isEmpty ? msg.senderName : "\(msg.senderName) <\(msg.senderEmail)>"
+            let timestamp = isoFormatter.string(from: msg.deliveryTime ?? msg.creationTime ?? .distantPast)
+            let messageType = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
+
+            var headers: [String: String] = [
+                "From": from,
+                "To": msg.displayTo,
+                "Subject": msg.subject,
+                "Date": timestamp
+            ]
+            if !msg.displayCc.isEmpty { headers["Cc"] = msg.displayCc }
+            if !msg.displayBcc.isEmpty { headers["Bcc"] = msg.displayBcc }
+            if let msgID = msg.internetMessageId { headers["Message-ID"] = msgID }
+            if let inReplyTo = msg.inReplyToId { headers["In-Reply-To"] = inReplyTo }
+            if let refs = msg.references { headers["References"] = refs }
+            if let replyTo = msg.replyToAddress, !replyTo.isEmpty { headers["Reply-To"] = replyTo }
+            if let contentType = msg.contentType { headers["Content-Type"] = contentType }
+            if !msg.transportHeaders.isEmpty { mergeTransportHeaders(msg.transportHeaders, into: &headers) }
+            if let importance = msg.importance {
+                headers["X-Priority"] = importance == 2 ? "1" : importance == 0 ? "5" : "3"
+            }
+
+            let domains = MBOXParser.extractDomains(from: headers)
+
+            var email = MBOXParser.RawEmail(
+                id: UUID(),
+                headers: headers,
+                rawSource: "",
+                messageType: messageType,
+                attachments: msg.attachments,
+                timestamp: timestamp,
+                domains: domains,
+                plainBody: msg.bodyText,
+                htmlBody: msg.bodyHTML,
+                mimeRoot: nil,
+                mimeSummary: nil,
+                mimeDiagnostics: [],
+                threadID: headers["Message-ID"] ?? MBOXParser.sha1("\(msg.subject)\(from)\(timestamp)"),
+                inReplyTo: headers["In-Reply-To"],
+                references: headers["References"]?.components(separatedBy: .whitespaces).filter { !$0.isEmpty },
+                tags: msg.folderPath.isEmpty ? [] : [msg.folderPath],
+                anomalies: MBOXParser.findAnomalies(headers: headers, body: msg.bodyText, attachments: msg.attachments)
+                    + (msg.unreadable ? ["PST item whose properties could not be read; imported empty"] : [])
+            ).withRecovery(msg.recovery)
+            // FOLD-02: the folder as a path of its own, not only a tag.
+            email.folderPath = msg.folderPath.isEmpty ? nil : msg.folderPath
+            // §13.8 step 6: a rendered raw source, so the attachment bytes outlive the import.
+            return email.withRenderedSource("Outlook PST")
+    }
+
+    private static func mergeTransportHeaders(_ raw: String, into headers: inout [String: String]) {
+        var currentKey = ""
+        var currentValue = ""
+        for line in raw.components(separatedBy: "\n") {
+            if line.first?.isWhitespace == true {
+                currentValue += " " + line.trimmingCharacters(in: .whitespaces)
+            } else {
+                if !currentKey.isEmpty && headers[currentKey] == nil {
+                    headers[currentKey] = currentValue
+                }
+                if let colonIdx = line.firstIndex(of: ":") {
+                    currentKey = String(line[line.startIndex..<colonIdx])
+                    currentValue = String(line[line.index(after: colonIdx)...]).trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+        if !currentKey.isEmpty && headers[currentKey] == nil {
+            headers[currentKey] = currentValue
+        }
+    }
+}
+
+// MARK: - PST File Reader
+
+/// Which PST reader runs (pushed by CapabilityWiring, `v3PSTSpecReader`).
+public enum PSTReaderPolicy {
+    nonisolated(unsafe) public static var useSpecReader = true
+}
+
+/// Five jobs OPEN-02: whether binary formats stream in batches (pushed by
+/// CapabilityWiring, `streamingBinaryParsers`). Off = the previous path, which
+/// reads the whole file's messages into an array before storing them.
+public enum StreamingParserPolicy {
+    nonisolated(unsafe) public static var binaryStreaming = false
+}
+
+struct PSTReader {
+    private let data: Data
+    private let isUnicode: Bool
+    private let isOST: Bool
+    private let encType: UInt8
+    private static let maxBTreeDepth = 25
+    private static let maxChainLength = 100_000
+
+    struct PSTMessage {
+        var subject: String = ""
+        var senderName: String = ""
+        var senderEmail: String = ""
+        var displayTo: String = ""
+        var displayCc: String = ""
+        var displayBcc: String = ""
+        var bodyText: String = ""
+        var bodyHTML: String = ""
+        var internetMessageId: String?
+        var inReplyToId: String?
+        var references: String?
+        var replyToAddress: String?
+        var contentType: String?
+        var conversationTopic: String?
+        var importance: UInt32?
+        var sensitivity: UInt32?
+        var transportHeaders: String = ""
+        var deliveryTime: Date?
+        var creationTime: Date?
+        var lastModificationTime: Date?
+        var folderPath: String = ""
+        /// 3.1 R5/R6/R7: deleted folder, orphan or carved.
+        var recovery: RecoveryInfo?
+        var attachments: [AttachmentMetadata] = []
+        var hasAttachments: Bool = false
+        /// The item exists in the file but its properties could not be read.
+        var unreadable = false
+        var messageSize: Int = 0
+    }
+
+    init(data: Data) throws {
+        guard data.count >= 564 else {
+            throw PSTError.invalidFormat("File too small (\(data.count) bytes, need 564+)")
+        }
+
+        let magic = data[0..<4]
+        guard magic == Data([0x21, 0x42, 0x44, 0x4E]) else {
+            throw PSTError.invalidFormat("Not a PST/OST file (bad magic: !BDN expected)")
+        }
+
+        self.data = data
+
+        let contentType = pstReadUInt16(data, offset: 8)
+        self.isOST = contentType == 0x0024
+
+        let version = pstReadUInt16(data, offset: 10)
+        self.isUnicode = version >= 23
+
+        // bCryptMethod applies to PST and OST alike (MS-PST §2.2.2.6): 0 =
+        // none, 1 = permutation (Outlook's default "compressible
+        // encryption"), 2 = cyclic. Data blocks are obfuscated; pages and
+        // internal (XBLOCK / subnode) blocks are not. The old check only
+        // looked at OST files and never decoded a PST, so every default
+        // Outlook export parsed as garbage and yielded zero messages (found
+        // 2026-09-27 by the first executed PST import, Apache Tika fixture).
+        // [MS-PST] 2.2.2.6: bCryptMethod is at offset 513 in a Unicode header
+        // but 461 in an ANSI (Outlook 97–2002) header. Reading 513 for ANSI
+        // files took a header byte for the method and refused real files.
+        self.encType = isUnicode ? data[513] : data[461]
+        switch encType {
+        case 0x00, 0x01:
+            break
+        case 0x02:
+            throw PSTError.invalidFormat(
+                "This \(isOST ? "OST" : "PST") file uses cyclic encoding (bCryptMethod 2), which mailin does not decode yet. Re-save it from Outlook with compressible encryption or none.")
+        default:
+            // Directive 2026-11-07 §6: 0x10 (Windows Information Protection) named as locked, like the spec reader.
+            throw PSTError.invalidFormat(PSTProtection.CryptMethod(raw: encType).lockedDescription)
+        }
+    }
+
+    func readAllMessages(onProgress: ((Double) -> Void)? = nil) throws -> [PSTMessage] {
+        let nodeEntries = try readNodeBTree()
+        let blockEntries = try readBlockBTree()
+
+        let messageNodes = nodeEntries.filter { ($0.nid & 0x1F) == 0x0C }
+        // 3.1 R5/R6: the folder tree (folders are NID type 0x02; each names
+        // itself in PidTagDisplayName 0x3001 and points at its parent).
+        let folders = RecoveryPolicy.isEnabled ? folderTree(nodeEntries, blockEntries: blockEntries) : [:]
+
+        var messages: [PSTMessage] = []
+        let total = Double(max(messageNodes.count, 1))
+        var recoveryErrors = 0
+
+        for (idx, node) in messageNodes.enumerated() {
+            do {
+                var msg = try readMessage(node: node, blockEntries: blockEntries)
+                msg = try extractAttachments(for: node, blockEntries: blockEntries, message: msg)
+                if RecoveryPolicy.isEnabled {
+                    if let path = folderPath(of: node.parentNid, in: folders) {
+                        msg.folderPath = path
+                        msg.recovery = RecoveryDetector.fromFolder(path, method: "pst-folder")
+                    } else if node.parentNid != 0 {
+                        // Its recorded parent folder no longer exists: an
+                        // orphan (libpff's term). A parent of 0 says nothing
+                        // (older writers left it unset), so no claim is made.
+                        msg.recovery = RecoveryInfo(state: .orphan, method: "pst-orphan",
+                                                    evidence: String(format: "node 0x%08X, parent 0x%08X not a folder", node.nid, node.parentNid))
+                    }
+                }
+                messages.append(msg)
+            } catch {
+                recoveryErrors += 1
+                pstLog.warning("Skipped message node NID \(node.nid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+            onProgress?(Double(idx + 1) / total)
+        }
+
+        // 3.1 R7: messages left in unallocated space (deep recovery switch).
+        if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled {
+            messages.append(contentsOf: carveUnallocated(blockEntries: blockEntries))
+        }
+        return messages
+    }
+
+    // MARK: - 3.1 Folder tree and deep recovery
+
+    struct FolderNode { let name: String; let parent: UInt32 }
+
+    /// Every normal folder (NID type 0x02) with its display name and parent.
+    private func folderTree(_ nodes: [NodeEntry], blockEntries: [UInt64: BlockEntry]) -> [UInt32: FolderNode] {
+        var out: [UInt32: FolderNode] = [:]
+        for node in nodes where (node.nid & 0x1F) == 0x02 {
+            guard blockEntries[node.dataBid] != nil else { continue }
+            let pc = parsePropertyContext(readNodeData(bid: node.dataBid, blockEntries: blockEntries))
+            out[node.nid] = FolderNode(name: pc.strings[0x3001] ?? "", parent: node.parentNid)
+        }
+        return out
+    }
+
+    /// "Top of Personal Folders/Deleted Items"; nil when `nid` is not a folder.
+    private func folderPath(of nid: UInt32, in folders: [UInt32: FolderNode]) -> String? {
+        guard folders[nid] != nil else { return nil }
+        var parts: [String] = []
+        var current = nid
+        var guardCount = 0
+        while let f = folders[current], guardCount < 64 {
+            if !f.name.isEmpty { parts.append(f.name) }
+            if f.parent == current { break }       // the root points at itself
+            current = f.parent
+            guardCount += 1
+        }
+        return parts.reversed().joined(separator: "/")
+    }
+
+    /// Scans the file at 64-byte steps outside every allocated block for
+    /// heap-on-node property contexts ([MS-PST] HNHDR bSig 0xEC, bClientSig
+    /// 0xBC) — data blocks are permutation-encoded in default files, so each
+    /// candidate is tried raw and decoded. A context with a subject or body is
+    /// returned as a carved, partial message with its byte offset.
+    private func carveUnallocated(blockEntries: [UInt64: BlockEntry]) -> [PSTMessage] {
+        // Allocated byte ranges (block data + 16-byte trailer), sorted.
+        var allocated = blockEntries.values.map { (Int($0.offset), Int($0.offset) + Int($0.size) + 16) }
+        allocated.sort { $0.0 < $1.0 }
+        var out: [PSTMessage] = []
+        var seen = Set<String>()
+        var rangeIndex = 0
+        var pos = 4096
+        let limit = data.count - 64
+        while pos < limit {
+            while rangeIndex < allocated.count && allocated[rangeIndex].1 <= pos { rangeIndex += 1 }
+            if rangeIndex < allocated.count && allocated[rangeIndex].0 <= pos {
+                pos = (allocated[rangeIndex].1 + 63) & ~63
+                continue
+            }
+            let b2 = data[pos + 2], b3 = data[pos + 3]
+            // [MS-PST] heap-on-node property context (0xEC 0xBC), or the
+            // simplified context mailin's own PST export writes (0x0C 0x7C).
+            let rawHit = (b2 == 0xEC && b3 == 0xBC) || (b2 == 0x0C && b3 == 0x7C)
+            let decodedHit = encType == 0x01 && decodePermute(b2) == 0xEC && decodePermute(b3) == 0xBC
+            if rawHit || decodedHit {
+                let end = min(data.count, pos + 8192)
+                var chunk = Data(data[pos..<end])
+                if decodedHit && !rawHit { chunk = Data(chunk.map { decodePermute($0) }) }
+                let pc = parsePropertyContext(chunk)
+                let subject = pc.strings[0x0037] ?? ""
+                let body = pc.strings[0x1000] ?? ""
+                if !subject.isEmpty || !body.isEmpty {
+                    var msg = PSTMessage()
+                    msg.subject = subject
+                    msg.bodyText = body
+                    msg.senderName = pc.strings[0x0C1A] ?? pc.strings[0x0042] ?? ""
+                    msg.senderEmail = pc.strings[0x0C1F] ?? pc.strings[0x0065] ?? ""
+                    msg.displayTo = pc.strings[0x0E04] ?? ""
+                    msg.internetMessageId = pc.strings[0x1035]
+                    msg.deliveryTime = pc.dates[0x0E06]
+                    msg.creationTime = pc.dates[0x3007]
+                    msg.transportHeaders = pc.strings[0x007D] ?? ""
+                    let key = "\(subject)|\(msg.internetMessageId ?? "")|\(body.prefix(64))"
+                    if seen.insert(key).inserted {
+                        msg.recovery = RecoveryInfo(state: .carved, method: "pst-amap-scan",
+                                                    evidence: "property context in unallocated space at byte \(pos)",
+                                                    offset: Int64(pos), partial: true)
+                        out.append(msg)
+                    }
+                }
+            }
+            pos += 64
+        }
+        return out
+    }
+
+    // MARK: - NDB Layer
+
+    struct NodeEntry {
+        let nid: UInt32
+        let dataBid: UInt64
+        let subBid: UInt64
+        /// [MS-PST] NBTENTRY nidParent: the folder of a message, the parent of a folder.
+        var parentNid: UInt32 = 0
+    }
+
+    struct BlockEntry {
+        let bid: UInt64
+        let offset: UInt64
+        let size: UInt16
+    }
+
+    private func readNodeBTree() throws -> [NodeEntry] {
+        let rootOffset: Int
+        if isUnicode {
+            rootOffset = Int(pstReadUInt64(data, offset: 224))
+        } else {
+            rootOffset = Int(pstReadUInt32(data, offset: 188))
+        }
+        guard rootOffset > 0 && rootOffset < data.count else { return [] }
+        return readNodeBTreePage(at: rootOffset, depth: 0)
+    }
+
+    /// MS-PST §2.2.2.7.7: a BTPAGE's leaf-or-branch nature is `cLevel`
+    /// (byte 491), NOT `ptype` — every page of the node tree is ptypeNBT
+    /// (0x81) and every page of the block tree is ptypeBBT (0x80). The
+    /// first version switched on ptype, so the root of any tree with more
+    /// than one level was read as a leaf and its BTENTRYs came out as
+    /// garbage node ids: zero messages from every real PST (found
+    /// 2026-09-27). Files written by earlier mailin exports used private
+    /// ptype values (0x80 branch / 0x82, 0x83 block pages); reading by
+    /// `cLevel` keeps those importable too.
+    private func readNodeBTreePage(at offset: Int, depth: Int) -> [NodeEntry] {
+        guard depth < Self.maxBTreeDepth else { return [] }
+        guard offset >= 0 && offset + 512 <= data.count else { return [] }
+
+        let pageType = data[offset + 496]
+        guard (0x80...0x83).contains(pageType) else { return [] }
+        let level = data[offset + 491]
+        let entryCount = min(Int(data[offset + 488]), 40)
+
+        if level == 0 {
+            var entries: [NodeEntry] = []
+            entries.reserveCapacity(entryCount)
+            for i in 0..<entryCount {
+                let base = offset + i * (isUnicode ? 32 : 16)
+                guard base + (isUnicode ? 32 : 16) <= data.count else { break }
+                if isUnicode {
+                    let nid = pstReadUInt32(data, offset: base)
+                    let dataBid = pstReadUInt64(data, offset: base + 8)
+                    let subBid = pstReadUInt64(data, offset: base + 16)
+                    let parent = pstReadUInt32(data, offset: base + 24)
+                    entries.append(NodeEntry(nid: nid, dataBid: dataBid, subBid: subBid, parentNid: parent))
+                } else {
+                    let nid = pstReadUInt32(data, offset: base)
+                    let dataBid = UInt64(pstReadUInt32(data, offset: base + 4))
+                    let subBid = UInt64(pstReadUInt32(data, offset: base + 8))
+                    let parent = pstReadUInt32(data, offset: base + 12)
+                    entries.append(NodeEntry(nid: nid, dataBid: dataBid, subBid: subBid, parentNid: parent))
+                }
+            }
+            return entries
+        } else {
+            var entries: [NodeEntry] = []
+            for i in 0..<entryCount {
+                let childOffset: Int
+                if isUnicode {
+                    let base = offset + i * 24
+                    guard base + 24 <= data.count else { break }
+                    childOffset = Int(pstReadUInt64(data, offset: base + 16))
+                } else {
+                    let base = offset + i * 12
+                    guard base + 12 <= data.count else { break }
+                    childOffset = Int(pstReadUInt32(data, offset: base + 8))
+                }
+                entries.append(contentsOf: readNodeBTreePage(at: childOffset, depth: depth + 1))
+            }
+            return entries
+        }
+    }
+
+    private func readBlockBTree() throws -> [UInt64: BlockEntry] {
+        let rootOffset: Int
+        if isUnicode {
+            rootOffset = Int(pstReadUInt64(data, offset: 240))
+        } else {
+            rootOffset = Int(pstReadUInt32(data, offset: 196))
+        }
+        guard rootOffset > 0 && rootOffset < data.count else { return [:] }
+
+        var result: [UInt64: BlockEntry] = [:]
+        let entries = readBlockBTreePage(at: rootOffset, depth: 0)
+        for entry in entries {
+            result[entry.bid] = entry
+        }
+        return result
+    }
+
+    private func readBlockBTreePage(at offset: Int, depth: Int) -> [BlockEntry] {
+        guard depth < Self.maxBTreeDepth else { return [] }
+        guard offset >= 0 && offset + 512 <= data.count else { return [] }
+
+        let pageType = data[offset + 496]
+        guard (0x80...0x83).contains(pageType) else { return [] }
+        let level = data[offset + 491]
+        let entryCount = min(Int(data[offset + 488]), 40)
+
+        if level == 0 {
+            var entries: [BlockEntry] = []
+            entries.reserveCapacity(entryCount)
+            for i in 0..<entryCount {
+                if isUnicode {
+                    let base = offset + i * 24
+                    guard base + 24 <= data.count else { break }
+                    let bid = pstReadUInt64(data, offset: base)
+                    let blockOffset = pstReadUInt64(data, offset: base + 8)
+                    let size = pstReadUInt16(data, offset: base + 16)
+                    entries.append(BlockEntry(bid: bid, offset: blockOffset, size: size))
+                } else {
+                    let base = offset + i * 12
+                    guard base + 12 <= data.count else { break }
+                    let bid = UInt64(pstReadUInt32(data, offset: base))
+                    let blockOffset = UInt64(pstReadUInt32(data, offset: base + 4))
+                    let size = pstReadUInt16(data, offset: base + 8)
+                    entries.append(BlockEntry(bid: bid, offset: blockOffset, size: size))
+                }
+            }
+            return entries
+        } else {
+            var entries: [BlockEntry] = []
+            for i in 0..<entryCount {
+                let childOffset: Int
+                if isUnicode {
+                    let base = offset + i * 24
+                    guard base + 24 <= data.count else { break }
+                    childOffset = Int(pstReadUInt64(data, offset: base + 16))
+                } else {
+                    let base = offset + i * 12
+                    guard base + 12 <= data.count else { break }
+                    childOffset = Int(pstReadUInt32(data, offset: base + 8))
+                }
+                entries.append(contentsOf: readBlockBTreePage(at: childOffset, depth: depth + 1))
+            }
+            return entries
+        }
+    }
+
+    // MARK: - Read Message (Full MAPI property set)
+
+    private func readMessage(node: NodeEntry, blockEntries: [UInt64: BlockEntry]) throws -> PSTMessage {
+        var msg = PSTMessage()
+
+        guard blockEntries[node.dataBid] != nil else {
+            throw PSTError.blockNotFound
+        }
+
+        let blockData = readNodeData(bid: node.dataBid, blockEntries: blockEntries)
+        let properties = parsePropertyContext(blockData)
+
+        // Core addressing
+        msg.subject = properties.strings[0x0037] ?? ""
+        msg.senderName = properties.strings[0x0C1A] ?? properties.strings[0x0042] ?? ""
+        msg.senderEmail = properties.strings[0x0C1F] ?? properties.strings[0x0065] ?? properties.strings[0x0076] ?? ""
+        msg.displayTo = properties.strings[0x0E04] ?? ""
+        msg.displayCc = properties.strings[0x0E03] ?? ""
+        msg.displayBcc = properties.strings[0x0E02] ?? ""
+        msg.replyToAddress = properties.strings[0x0050]
+
+        // Body
+        msg.bodyText = properties.strings[0x1000] ?? ""
+        if let htmlData = properties.binaries[0x1013] {
+            msg.bodyHTML = String(data: htmlData, encoding: .utf8) ?? String(data: htmlData, encoding: .ascii) ?? ""
+        }
+        if msg.bodyHTML.isEmpty, let htmlStr = properties.strings[0x1013] {
+            msg.bodyHTML = htmlStr
+        }
+
+        // Threading
+        msg.internetMessageId = properties.strings[0x1035]
+        msg.inReplyToId = properties.strings[0x1042]
+        msg.references = properties.strings[0x1039]
+        msg.conversationTopic = properties.strings[0x0070]
+
+        // Transport headers (contains full RFC822 headers)
+        msg.transportHeaders = properties.strings[0x007D] ?? ""
+
+        // Content type
+        msg.contentType = properties.strings[0x001A]
+
+        // Timestamps
+        msg.deliveryTime = properties.dates[0x0E06]
+        msg.creationTime = properties.dates[0x3007]
+        msg.lastModificationTime = properties.dates[0x3008]
+
+        // Flags
+        msg.importance = properties.ints[0x0017]
+        msg.sensitivity = properties.ints[0x0036]
+        if let flags = properties.ints[0x0E07] {
+            msg.hasAttachments = (flags & 0x10) != 0
+        }
+        if let size = properties.ints[0x0E08] {
+            msg.messageSize = Int(size)
+        }
+
+        return msg
+    }
+
+    // MARK: - Attachment Extraction
+
+    private func extractAttachments(for node: NodeEntry, blockEntries: [UInt64: BlockEntry], message: PSTMessage) throws -> PSTMessage {
+        var msg = message
+        // Every subnode entry whose nid type is 0x0D is an attachment
+        // property context. Iterating the table (rather than exact-matching
+        // one derived NID) supports any number of attachments per message.
+        for attachNode in subnodeEntries(subBid: node.subBid, blockEntries: blockEntries)
+        where (attachNode.nid & 0x1F) == 0x0D {
+            guard blockEntries[attachNode.dataBid] != nil else { continue }
+            let attachData = readNodeData(bid: attachNode.dataBid, blockEntries: blockEntries)
+            let attachProps = parsePropertyContext(attachData)
+
+            for (propID, binData) in attachProps.binaries {
+                if propID == 0x3701 {
+                    let filename = attachProps.strings[0x3707] ?? attachProps.strings[0x3704] ?? "attachment"
+                    let mimeType = attachProps.strings[0x370E] ?? "application/octet-stream"
+                    let b64 = binData.base64EncodedString()
+                    msg.attachments.append(AttachmentMetadata(
+                        filename: filename, mimeType: mimeType, size: binData.count,
+                        isInline: false, contentID: attachProps.strings[0x3712],
+                        base64: b64, fileURL: nil
+                    ))
+                }
+            }
+        }
+        return msg
+    }
+
+    /// All entries in a node's subnode table.
+    private func subnodeEntries(subBid: UInt64, blockEntries: [UInt64: BlockEntry]) -> [NodeEntry] {
+        guard subBid > 0, blockEntries[subBid] != nil else { return [] }
+        let subData = readNodeData(bid: subBid, blockEntries: blockEntries)
+        guard subData.count >= 8 else { return [] }
+        let entrySize = isUnicode ? 24 : 12
+        var offset = isUnicode ? 8 : 4
+        var entries: [NodeEntry] = []
+        while offset + entrySize <= subData.count {
+            let subNid = pstReadUInt32(subData, offset: offset)
+            let dataBid = isUnicode ? pstReadUInt64(subData, offset: offset + 8) : UInt64(pstReadUInt32(subData, offset: offset + 4))
+            let subSubBid = isUnicode ? pstReadUInt64(subData, offset: offset + 16) : UInt64(pstReadUInt32(subData, offset: offset + 8))
+            entries.append(NodeEntry(nid: subNid, dataBid: dataBid, subBid: subSubBid))
+            offset += entrySize
+        }
+        return entries
+    }
+
+    private func findSubnode(nid: UInt32, subBid: UInt64, blockEntries: [UInt64: BlockEntry]) -> NodeEntry? {
+        guard subBid > 0, blockEntries[subBid] != nil else { return nil }
+        let subData = readNodeData(bid: subBid, blockEntries: blockEntries)
+        guard subData.count >= 8 else { return nil }
+        let entrySize = isUnicode ? 24 : 12
+        var offset = isUnicode ? 8 : 4
+        while offset + entrySize <= subData.count {
+            let subNid = pstReadUInt32(subData, offset: offset)
+            if subNid == nid {
+                let dataBid = isUnicode ? pstReadUInt64(subData, offset: offset + 8) : UInt64(pstReadUInt32(subData, offset: offset + 4))
+                let subSubBid = isUnicode ? pstReadUInt64(subData, offset: offset + 16) : UInt64(pstReadUInt32(subData, offset: offset + 8))
+                return NodeEntry(nid: subNid, dataBid: dataBid, subBid: subSubBid)
+            }
+            offset += entrySize
+        }
+        return nil
+    }
+
+    // MARK: - Block Data Reading
+
+    /// Materializes a node's full data. Blocks flagged internal (bid bit 1)
+    /// are XBLOCK/XXBLOCK data trees (MS-PST §2.2.2.8.3.2): a header
+    /// (btype 0x01, cLevel, cEnt, lcbTotal) followed by child bids whose
+    /// blocks are concatenated in order. Everything else is a plain block.
+    private func readNodeData(bid: UInt64, blockEntries: [UInt64: BlockEntry], depth: Int = 0) -> Data {
+        guard depth < 3, let block = blockEntries[bid] else { return Data() }
+        // Only leaf DATA blocks are obfuscated (MS-PST §2.2.2.8.3.1); internal
+        // blocks (bid bit 1) — XBLOCK, XXBLOCK, subnode tables — are stored
+        // in the clear.
+        let isInternal = (bid & 0x2) != 0
+        let raw = readBlockData(block, decode: !isInternal)
+        guard isInternal, raw.count >= 8, raw[raw.startIndex] == 0x01 else {
+            return raw
+        }
+        let count = Int(pstReadUInt16(raw, offset: 2))
+        var out = Data()
+        for i in 0..<count {
+            let childBid = pstReadUInt64(raw, offset: 8 + i * 8)
+            guard childBid != 0 else { break }
+            out.append(readNodeData(bid: childBid, blockEntries: blockEntries, depth: depth + 1))
+        }
+        return out
+    }
+
+    private func readBlockData(_ block: BlockEntry, decode: Bool = true) -> Data {
+        let offset = Int(block.offset)
+        let size = Int(block.size)
+        guard offset >= 0 && size >= 0 && offset + size <= data.count else { return Data() }
+
+        let blockData = data[offset..<(offset + size)]
+        guard decode, encType == 0x01 else { return Data(blockData) }
+        // Permutation decoding, PST and OST alike (bCryptMethod 1).
+        return Data(blockData.map { decodePermute($0) })
+    }
+
+    // MARK: - Property Context Parser
+
+    struct MAPIPropertySet {
+        var strings: [UInt16: String] = [:]
+        var binaries: [UInt16: Data] = [:]
+        var dates: [UInt16: Date] = [:]
+        var ints: [UInt16: UInt32] = [:]
+    }
+
+    private func parsePropertyContext(_ data: Data) -> MAPIPropertySet {
+        var props = MAPIPropertySet()
+        guard data.count >= 8 else { return props }
+
+        let heapType = data.count > 3 ? data[3] : 0
+        guard heapType == 0xBC || heapType == 0x7C else { return props }
+
+        var offset = 8
+        let entrySize = 8
+        while offset + entrySize <= data.count {
+            let propID = pstReadUInt16(data, offset: offset)
+            let propType = pstReadUInt16(data, offset: offset + 2)
+
+            if propType == 0x001F || propType == 0x001E {
+                let valueRef = pstReadUInt32(data, offset: offset + 4)
+                let strOffset = Int(valueRef)
+                if strOffset > 0 && strOffset < data.count {
+                    let remaining = data[strOffset...]
+                    // Values written by mailin are NUL-terminated, so the
+                    // split below recovers the exact string at any length.
+                    let maxLen = remaining.count
+                    if propType == 0x001F {
+                        if let str = String(data: Data(remaining.prefix(maxLen)), encoding: .utf16LittleEndian) {
+                            props.strings[propID] = str.components(separatedBy: "\0").first ?? str
+                        }
+                    } else {
+                        if let str = String(data: Data(remaining.prefix(maxLen)), encoding: .utf8) ??
+                                     String(data: Data(remaining.prefix(maxLen)), encoding: .ascii) {
+                            props.strings[propID] = str.components(separatedBy: "\0").first ?? str
+                        }
+                    }
+                }
+            } else if propType == 0x0102 {
+                let valueRef = pstReadUInt32(data, offset: offset + 4)
+                let binOffset = Int(valueRef)
+                if binOffset > 0 && binOffset < data.count {
+                    // Binary values run to the end of the node data (one
+                    // binary per property context), bounded by the node
+                    // itself — no artificial size cap.
+                    props.binaries[propID] = Data(data[binOffset...])
+                }
+            } else if propType == 0x0040 {
+                if offset + 12 <= data.count {
+                    let fileTime = pstReadUInt64(data, offset: offset + 4)
+                    if fileTime > 0 {
+                        let seconds = Double(fileTime) / 10_000_000.0 - 11_644_473_600.0
+                        if seconds > 0 && seconds < 4_102_444_800 {
+                            props.dates[propID] = Date(timeIntervalSince1970: seconds)
+                        }
+                    }
+                }
+            } else if propType == 0x0003 {
+                if offset + 8 <= data.count {
+                    props.ints[propID] = pstReadUInt32(data, offset: offset + 4)
+                }
+            }
+
+            offset += entrySize
+        }
+        return props
+    }
+
+    // MARK: - OST Encryption
+
+    private func decodePermute(_ byte: UInt8) -> UInt8 {
+        let table: [UInt8] = [
+            65, 54, 19, 98, 168, 33, 110, 187, 244, 22, 204, 4, 127, 100, 232, 93,
+            30, 242, 203, 42, 116, 197, 94, 53, 210, 149, 71, 158, 150, 45, 154, 136,
+            76, 125, 132, 63, 219, 172, 49, 182, 72, 95, 246, 196, 216, 57, 139, 231,
+            35, 59, 56, 142, 200, 193, 223, 37, 177, 32, 165, 70, 96, 78, 156, 251,
+            170, 211, 86, 81, 69, 124, 85, 0, 7, 201, 43, 157, 133, 155, 9, 160,
+            143, 173, 179, 15, 99, 171, 137, 75, 215, 167, 21, 90, 113, 102, 66, 191,
+            38, 74, 107, 152, 250, 234, 119, 83, 178, 112, 5, 44, 253, 89, 58, 134,
+            126, 206, 6, 235, 130, 120, 87, 199, 141, 67, 175, 180, 28, 212, 91, 205,
+            62, 128, 135, 174, 52, 79, 40, 41, 20, 13, 29, 117, 28, 51, 68, 146,
+            184, 82, 88, 236, 190, 164, 138, 163, 46, 73, 248, 121, 46, 115, 189, 145,
+            17, 11, 60, 145, 131, 108, 159, 24, 31, 14, 230, 12, 151, 176, 227, 213,
+            174, 218, 252, 153, 106, 109, 249, 105, 195, 2, 181, 198, 148, 207, 254, 166,
+            247, 103, 123, 55, 48, 129, 226, 161, 144, 255, 101, 192, 36, 239, 50, 97,
+            114, 162, 64, 77, 26, 10, 169, 228, 111, 104, 183, 118, 84, 8, 47, 147,
+            240, 122, 233, 16, 221, 243, 237, 208, 245, 186, 25, 238, 188, 23, 220, 34,
+            229, 39, 3, 140, 1, 92, 217, 209, 80, 241, 214, 61, 222, 18, 224, 27
+        ]
+        return table[Int(byte)]
+    }
+
+    private func decodeCyclic(_ byte: UInt8) -> UInt8 {
+        return byte ^ 0xA5
+    }
+}
+
+enum PSTError: LocalizedError {
+    case invalidFormat(String)
+    case blockNotFound
+    case unsupportedVersion
+    case depthLimitExceeded
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidFormat(let reason): return "Invalid PST/OST format: \(reason)"
+        case .blockNotFound: return "PST data block not found"
+        case .unsupportedVersion: return "Unsupported PST version"
+        case .depthLimitExceeded: return "PST B-tree depth limit exceeded"
+        }
+    }
+}
+
+// MARK: - PST Binary Read Helpers
+
+private func pstReadUInt16(_ data: Data, offset: Int) -> UInt16 {
+    guard offset >= 0 && offset + 2 <= data.count else { return 0 }
+    return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+}
+
+private func pstReadUInt32(_ data: Data, offset: Int) -> UInt32 {
+    guard offset >= 0 && offset + 4 <= data.count else { return 0 }
+    return UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8) |
+           (UInt32(data[offset + 2]) << 16) | (UInt32(data[offset + 3]) << 24)
+}
+
+private func pstReadUInt64(_ data: Data, offset: Int) -> UInt64 {
+    guard offset >= 0 && offset + 8 <= data.count else { return 0 }
+    return (0..<8).reduce(UInt64(0)) { result, i in
+        result | (UInt64(data[offset + i]) << (i * 8))
+    }
+}

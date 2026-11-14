@@ -1,0 +1,17 @@
+{
+  "recorded_by": "Thabang Kubheka",
+  "date": "2026-09-28",
+  "operating_system": "Windows 11 Home Single Language",
+  "word_version": "Microsoft® Word for Microsoft 365 MSO (Version 2608 Build 16.0.20326.20072) 64-bit ",
+  "word_user_name": "Configured as 'Controlled Editor', but Word recorded the signed-in account name 'Thabang Kubheka' as creator, last modifier and revision author",
+  "always_use_these_values": true,
+  "template": "Normal.dotm (unchanged)",
+  "track_changes_default": "Off, except where the protocol turns it on",
+  "autosave": "Off (file stored locally, not in OneDrive)",
+  "save_procedure": "Ctrl+S or File > Save As as stated, then close Word before the next sample",
+  "deviations": [
+    "W05: double-clicking 'brown' also deleted the following space; a space was typed after 'red' with Track Changes on (2 tracked insertions, deletion text 'brown ').",
+    "All samples: Word used the signed-in Microsoft 365 account name 'Thabang Kubheka' instead of the configured user name 'Controlled Editor'.",
+    "W09 was first saved with the name W08_template_control_B.docx and renamed to W09_template_control_B.docx before evaluation (file content unchanged)."
+  ]
+}

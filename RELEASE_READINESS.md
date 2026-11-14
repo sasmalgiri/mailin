@@ -1,0 +1,369 @@
+# mailin — Release Readiness
+
+Tracks the 3.0 baseline, measured facts, and the split between
+engineering-complete and owner/Apple gates. Companion to `V3_0_PLAN.md`.
+
+Status: **P0 in progress** (started 2026-09-23).
+
+---
+
+## P0.0 Build baseline
+
+| Item | Result |
+|---|---|
+| Workspace | `maxmailin.xcodeproj`, single shared scheme `maxmailin` |
+| Targets | `maxmailin` (app), `maxmailinTests`, `maxmailinUITests` |
+| Build (macOS, incremental, active config) | **PASS** — 0 errors, 44.5 s, 2026-09-23 |
+| Baseline commit | working tree at `771e993` (pre-2.1-tag; the 2.1 tag does not exist yet, so all P0 numbers are labelled against `771e993`) |
+
+Release-configuration build, clean-build time, and the iOS build are **NOT YET
+MEASURED**.
+
+---
+
+## P0.1 Cold-launch work inventory
+
+Every job that runs today on a cold launch with no user action, read out of
+`mailinApp.swift:100–266`. "Owner" is the module that will own it after P1;
+"3.0 disposition" is what has to change.
+
+| # | Launch-time work | Site | Owner after P1 | 3.0 disposition |
+|---|---|---|---|---|
+| 1 | `StoreManager.resetDailyCountersIfNeeded()` | :101 | AppShell | keep |
+| 2 | `configureAppearance()` | :102 | AppShell | keep |
+| 3 | **`BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()`** | :105 | AI Insights | **gate** — no analysis scheduling on a disabled launch |
+| 4 | `Tips.configure` | :106 | AppShell | keep |
+| 5 | `MemoryPressureHandler.shared.start()` | :115 | AppShell | keep |
+| 6 | Pressure hook → `FTSSearchIndex.evictIdleShards` | :121 | ArchiveCore | keep |
+| 7 | **Pressure hook → `FoundationModelEngine` cache invalidation** | :131 | AI Insights | **gate** — registering it forces the AI type to exist |
+| 8 | **Pressure hook → `AIAssistantView.invalidateNLPCache`** | :146 | AI Insights | **gate** — same reason |
+| 9 | `AppSelfAttestation.shared.compute()` | :157 | AppShell | keep; measure cost |
+| 10 | `MigrationService.shared.migrateIfNeeded()` (v1 JSON → SQLite) | :164 | ArchiveCore | keep — archive-core migration is always allowed |
+| 11 | `StorageActivationCoordinator.shared.activate()` (SwiftData → SQLite gate) | :173 | ArchiveCore | keep |
+| 12 | `HMACChainAuditLog.shared.append("v2.storage.activation")` | :174 | Professional | **gate** — owner ruling (§3.3 R6): no audit-chain write when Professional is off. Archive's own import receipt records the storage/activation provenance instead |
+| 13 | `FidelityBackfillJob.shared.kickIfNeeded()` | :195 | ArchiveCore | keep as bounded repair; **measure** and declare the schedule |
+| 14 | **`AttachmentTextIndexJob.shared.kickIfNeeded()`** | :199 | ArchiveCore | keep, but make it follow the per-import indexing choice (directive §2) instead of running unconditionally |
+| 15 | **`DigestScheduler.shared.checkAndDeliver()`** | :201 | AI Insights | **gate** — weekly digest must not exist on a disabled launch |
+| 16 | **`WorkflowService.seedBuiltins()`** | :205 | Professional | **gate** — directive §1 forbids workflow-catalog work on disabled launches |
+| 17 | Detached `FTSReconciler.reconcile` + `dedupeShards()` | :213–233 | ArchiveCore | keep; **measure** bounded cost |
+| 18 | `MaxmailinSelfTest.shared.runIfNeeded()` | :240 | AppShell | already `#if DEBUG` — fine |
+| 19 | `HMACChainAuditLog.append(launch/selfTest)` + `verifyChain()` | :248–265 | Professional | **gate + move off launch** (§3.3 R6) — no launch append when Professional is off; verification runs on demand or on Page 3 open, never as a whole-chain walk at every cold launch |
+| 20 | `TermsAcceptanceView` launch sheet | :90 | AppShell | keep |
+| 21 | **`PersonaOnboardingView` launch sheet** | :92 | Professional (preference) | **remove from the launch path** — directive §0: a new customer sees Archive with no persona choice |
+| 22 | `BiometricLockManager` lock overlay | :299 | AppShell / Enterprise | keep |
+| 23 | `SpotlightIndexer.shared.handleSpotlightActivity` | :282 | ArchiveCore | not launch work (user activity) — fine |
+
+**Eight items must be gated or moved for P1's "disabled means nothing runs"
+criterion: #3, #7, #8, #12, #15, #16, #19, #21.** #12 and #19 were resolved by
+the owner ruling recorded as `V3_0_PLAN.md` §3.3 R6 — no provenance carve-out;
+the audit chain is Professional-owned and silent while Professional is off,
+with Archive's receipts carrying Page 1 provenance. Three items (#9, #13, #17)
+need measurement before we can claim the cold-launch budget is unaffected.
+
+Consequence to implement with #12/#19: the chain's genesis entry must declare
+that it starts at Professional enablement and that earlier activity is
+evidenced by import/export receipts only — never implying unbroken continuity
+across a disabled period.
+
+---
+
+## P0.1b Singleton inventory
+
+69 `static let shared` declarations across 66 files. First-pass classification
+(to be confirmed file-by-file during the P1 extraction):
+
+| Prospective owner | Count | Notes |
+|---|---|---|
+| ArchiveCore (store, FTS, import, export, migration, checkpoint) | ~24 | e.g. `SQLiteEmailStore`, `EmailStore`, `EmailRepository`, `FTSSearchIndex`, `EmailSearchIndex`, `MigrationService`, `StorageActivationCoordinator`, `ImportCheckpointStore`, `ImportActivityManager`, `FidelityBackfillJob`, `AttachmentTextIndexJob`, `ArchiveExportService`, `ExportRunCenter`, `ExportSigner` |
+| Archive feature (derived analysis/UI services) | ~9 | `ArchiveDerivedState` (×2), `ArchiveDerivedAnalysis`, `ArchiveAnalyticsService`, `ArchiveFullAnalytics`, `ArchiveAggregateService`, `ArchiveRetrievalService`, `ArchiveTimelineService`, `ArchiveDataService` |
+| AI Insights | ~8 | `BackgroundAnalysisManager`, `DigestScheduler`, `AIProvenance`, `AIMetrics`, `CloudAIProvider`, `CustomExpertManager`, `PredictiveCodingEngine`, `SmartAutoTagger` |
+| Professional | ~17 | `HMACChainAuditLog`, `ChainOfCustodyManager`, `CustodianManager`, `BatesNumberingManager`, `ForensicManager`, `ForensicReviewManager`, `ReviewStateService`, `ReviewBatchManager`, `CollaborationManager`, `CollaborativeReviewActivity`, `PersonaManager`, plus the five 2.1 studios (`ACHMatrixStudio`, `FactEvidenceMatrixStudio`, `EvidenceDesksStudio`, `ActionRegisterStudio`, `ReasoningStudio`) |
+| Live Mail / cloud (currently excluded by `NO_NETWORK_BUILD`) | 5 | `GmailConnector` (×2), `OutlookConnector` (×2), `iCloudSyncManager` |
+| AppShell / platform | ~6 | `MemoryPressureHandler`, `AppSelfAttestation`, `MaxmailinSelfTest`, `LegalComplianceManager`, `BiometricLockManager`, `FeedbackManager`, `ToolWindowPresenter`, `PluginManager`, `WidgetDataProvider`, `WorkspaceManager`, `WatchFolderManager`, `SpotlightIndexer`, `TriageQueueService`, `ThreadKeyService`, `EncryptedStorageManager` |
+
+P1 rule that follows from this: a `static let shared` on an optional-module
+type is only safe if touching it does **no work** — the five studios and the
+eight AI singletons must either become registry-owned instances or prove that
+their initializer allocates nothing and schedules nothing. That check becomes a
+unit test asserting no file I/O and no timer registration on first access.
+
+---
+
+## P0.2 Runtime baseline
+
+### Measurement fixture (owner-provided, 2026-09-23)
+
+| Fixture | Size | Content | Use |
+|---|---|---|---|
+| `~/Downloads/Mail/Sent.mbox` | 91 MiB (95.4 MB decimal) | ~526 messages by `From_` count; ~173 KB/message average, so attachment-heavy | Import throughput, attachment coverage, FTS coverage, MBOX round-trip (P4 H2) |
+| `~/Downloads/Mail/*.eml` | 10 files, ~840 B each | Single RFC-822 messages | EML path + duplicate-policy checks |
+
+This is a real byte-scale fixture, not a synthetic one, and it exercises the
+attachment path that small corpora miss. It is **not** a substitute for the
+P9 16/50/100/200 GB rows.
+
+Note on the production container: TCC blocks this agent from reading inside
+`~/Library/Containers/com.ecosanskriti.mailin/Data`, so whether a real archive
+lives there cannot be confirmed from the shell. Launch-time items #10, #11,
+#13, #14 and #17 run against whatever is there — the same jobs that run on any
+normal launch, but they do mutate the store (backfill, FTS dedupe). Measurement
+runs check the app's own archive state on launch before importing anything.
+
+### Measured — Release build, existing library, all optional pages off
+
+Host: this Mac (arm64, macOS 27.0). Build: `xcodebuild -configuration Release
+-destination platform=macOS,arch=arm64` → **BUILD SUCCEEDED**. Run: launched
+from DerivedData, left idle, sampled with `ps`/`lsof`, 2026-09-23.
+
+| Metric | Measured | Note |
+|---|---|---|
+| App bundle size | **81 MB** | Release, unstripped of dSYM side files |
+| Process visible after `open` | **≤ 3 s** | coarse: first `pgrep` check. Launch-to-usable is NOT MEASURED — needs signpost instrumentation |
+| Idle RSS | **526 MiB** (538,688 KB) | steady across ~10 min idle |
+| Idle CPU | **0.0 %** | no spin at rest |
+| Open FTS year-shard databases at idle | **20** (`email_search_0.db` + per-year shards) | each with `-wal` and `-shm` |
+| Main store open | `emails.db` + `-wal` + `-shm` | as expected |
+| Open regular files | **141** | |
+| **Network sockets** | **0** | zero-network baseline holds on the signed Release build (pre-3.0: `NO_NETWORK_BUILD` excludes all connector code and the entitlements carry no `network.client`) |
+| Graceful quit | **vetoed** — AppleScript quit returned `-128 User cancelled`; needed `SIGTERM` | a modal launch gate (terms or persona sheet) is the suspect; confirm during P1's launch rework |
+
+**This is an existing-library baseline, not a fresh-install baseline.** The 20
+open year-shards prove a real archive lives in the container, spanning roughly
+2007–2026. A fresh-install baseline requires a clean container (separate bundle
+id or a moved-aside container) and is still NOT MEASURED.
+
+### Finding: 20 FTS shard handles stay open at idle
+
+`MemoryPressureHandler` only evicts shards *under pressure* (keep 4 on warning,
+2 otherwise — `mailinApp.swift:121–124`). With no pressure, all 20 stay open and
+hold their SQLite page caches, which is the bulk of the 526 MiB. Nothing here is
+an optional module: this is Page 1's own resting cost, and it grows with the
+number of years in the archive.
+
+Directly relevant to the §3.3 requirement — the all-off baseline is supposed to
+be the floor every other module is measured against, and a floor that scales
+with archive age is the wrong shape. Added to the plan as **A9: idle shard
+eviction** (close shards untouched for N minutes; open lazily on query) with a
+before/after RSS measurement.
+
+### Measured — engine-path import of the real fixture (isolated)
+
+`FixtureImportMeasurementTests` parses `~/Downloads/Mail/Sent.mbox` into
+`MailinStorageEnvironment.disposable(at:)`, which hard-refuses any root
+overlapping the production tree, so the owner's real archive is untouched. This
+drives the production parser, store and FTS directly — it is **not** the
+`BulkImportCoordinator` production path (that is `@MainActor` and wired to the
+shared singletons; see task A10). **Configuration: Debug** — timing is not
+quotable, memory shape is.
+
+| Metric | Measured |
+|---|---|
+| Source | 94,915,160 bytes (90.5 MiB), Sent.mbox |
+| Discovered / stored / damaged | 526 / 526 / **0** |
+| Messages with attachments | **152** of 526 |
+| FTS rows after import | 526 — **coverage equals stored rows** |
+| Batches at the production default (500) | **2** |
+| Wall time | 44.6 s — **Debug build, not a throughput claim** |
+| RSS baseline → peak | 170.8 MiB → **571.3 MiB** (**+400.5 MiB**) |
+
+Reconciliation is asserted, not eyeballed: `stored + damaged == discovered` and
+`ftsRows == stored` are test assertions, so the measurement fails if accounting
+ever drifts.
+
+### Measured — PRODUCTION-path import of the real fixture
+
+After plan task A10 (dependency injection into `BulkImportCoordinator`), the
+same coordinator the app uses can be driven over disposable storage. This row
+may be quoted as production-path; the Debug-configuration caveat still applies.
+
+| Metric | Measured |
+|---|---|
+| discovered / parsed / damaged | 526 / 526 / 0 |
+| inserted / stored | 526 / 526 |
+| duplicates / persistFailed | 0 / 0 |
+| indexed / FTS rows | 526 / 526 |
+| Wall time | 44.0 s (Debug) |
+
+Accounting identities asserted by the test, not read off a log:
+`discovered == parsed + damaged`, `stored == parsed - persistFailed`, and
+`ftsRows == stored`.
+
+### Measured — A9 idle shard eviction
+
+| Observation | Result |
+|---|---|
+| Handles open at launch (Release, existing 20-year archive) | 20 |
+| Handles after the 180 s idle TTL | **0** — verified by `lsof` on the shipped Release build |
+| Scheduler fires without being called | **yes** — `testScheduledSweep_firesWithoutBeingCalled` drives the real sweep task, not the sweep function |
+| Data after eviction | intact — rows, queries and re-indexing all verified after handles close |
+| Idle RSS reduction | **NOT DEMONSTRATED.** Samples were 421 MiB at 25 s, 388 MiB at 140 s, 392 MiB at 270 s (handles already 0). Closing a connection returns its page cache to SQLite's allocator, which need not return pages to the OS; `sqlite3_release_memory` is now called after a sweep, but no before/after A-B has been run. Claim only the handle result. |
+
+A true RSS before/after needs the eviction behind a runtime flag so one binary
+can be measured both ways — not yet built.
+
+### CORRECTION (2026-09-24): the 400 MiB import peak is NOT batch-driven
+
+The finding below was written as the justification for `AdaptiveBatchController`
+and attributed the 400 MiB peak to batch sizing. Measurement after wiring the
+controller shows that attribution was **wrong**:
+
+| Batching | Batches | Max batch | Peak RSS delta |
+|---|---|---|---|
+| Fixed 500 messages | 2 | 500 | +400 MiB |
+| Adaptive, 32 MiB byte bound | 3 | 256 | +410 MiB |
+| Adaptive, expansion-aware 16 MiB bound | 4 | 168 | +423 MiB |
+
+Halving batch residency twice did not move peak memory at all, so the memory is
+not held by the batch. Attributing it properly:
+
+- **The fixture spans 19 years (2007–2025)**, so the import opens **19 FTS
+  shard connections**, each with its own SQLite page cache. That cost
+  accumulates with the import's date spread, not with batch size.
+- **`SQLiteEmailStore` sets `PRAGMA cache_size = -131072` (128 MB), plus
+  `mmap_size = 256 MB` and `temp_store = MEMORY`** (`SQLiteEmailStore.swift:103–105`).
+  The store is *configured* to hold up to 128 MB of pages, and touched mmap
+  pages count in `phys_footprint`.
+
+So the levers for import peak memory are the SQLite cache/mmap budget and the
+number of shard connections held open during an import — **not** batch size.
+Added to the plan as **P3.3**. The controller is still required (bounded,
+byte-aware batches; pause on real pressure; oversized-item spooling — all
+directive requirements), but it must not be sold as the fix for this number.
+
+Measured expansion factor worth keeping: a 32 MiB source-byte bound produced
+~410 MiB of peak footprint, so parsed objects run roughly **13×** the source
+bytes they came from. `BatchEnvelope.measuredParsedExpansion` records it.
+
+### P3.3 attribution: the parser's per-message object graph owns the peak
+
+Three hypotheses, measured in order. Two were wrong:
+
+| Hypothesis | Change made | Peak RSS delta | Verdict |
+|---|---|---|---|
+| Batch size | fixed 500 → adaptive 256 → adaptive 168 | 400 → 410 → 423 MiB | **falsified** |
+| SQLite cache/mmap + shard cap | store 128→32 MB cache, 256→64 MB mmap, shard cap 20→4 | 419 MiB | **falsified** |
+| Parser residency | stage-by-stage attribution | see below | **confirmed** |
+
+Stage attribution over the same corpus and batch shape
+(`ImportMemoryAttributionTests`, deltas are per-stage because process RSS does
+not fall back when memory is freed):
+
+| Stage | Footprint delta |
+|---|---|
+| Parse only | **+334.8 MiB** |
+| Parse + store | +147.3 MiB (marginal; the heap had already grown in stage 1) |
+| Parse + store + index | +171.4 MiB (marginal) |
+
+Parsing alone accounts for the bulk. That also explains why changing the batch
+count did nothing: the high-water mark is set by the **per-message transient
+graph**, not by how many messages are in flight. For each message
+`MBOXParser` joins every line into one full string copy
+(`MBOXParser.swift`, `currentLines.joined`), `MIMEParser` builds part objects,
+attachments are decoded, and the resulting `RawEmail` then retains
+`rawSource` *and* `plainBody` *and* `htmlBody` — several copies of the same
+message resident at once. On a 173 KB average message that is a few hundred KB;
+on one message with a 20 MB attachment it is tens of MiB, and the worst single
+message sets the peak.
+
+So the lever is per-message parse residency — plan task **P3.4**. Note
+`RawEmail` already carries `isBodyCompacted` and `bodyPreview`, so a compaction
+path exists to build on.
+
+P3.3's budget work is kept as correctness hygiene (bounded caches, capped shard
+connections, both restored after an import) but it must not be claimed as a
+memory improvement: measured, it changed nothing.
+
+### Hypothesis ledger for the import peak (four measured, three falsified)
+
+| # | Hypothesis | Change / instrument | Result | Verdict |
+|---|---|---|---|---|
+| 1 | Batch size | fixed 500 → adaptive 256 → 168 | 400 → 410 → 423 MiB | **falsified** |
+| 2 | SQLite cache/mmap + shard cap | 128→32 MB cache, 256→64 MB mmap, cap 20→4 | 419 MiB | **falsified** |
+| 3 | Attachment base64 retained per message | `retainAttachmentBytes: false` | `base64` is **already nil** — `EmailBodyExtractor.swift:325` never populates it | **falsified** |
+| 4 | Retained MIME part tree | deterministic object-byte count | **28 bytes** retained for a 1.4 MB message | **falsified** |
+| 5 | Per-message allocator churn | not yet measured | — | **remaining candidate** |
+
+Hypothesis 3's plumbing was **reverted**: it changed parser output (`mimeRoot`
+nil, which `ForensicManager.buildMIMETree` reads) for zero measured benefit.
+The parameter survives on `MBOXParser.processRawMessage` with a warning
+comment so the same wrong conclusion is not re-derived from its name.
+
+**Instrument caveat that matters more than any of the above:** identical runs
+produced 400, 410, 419, 423 and 478 MiB. That is roughly ±15 % variance, so a
+single run cannot attribute a change of this size. Deterministic object-byte
+counting (as in `AttachmentCompactionTests`) settled hypotheses 3 and 4 in
+seconds where RSS could not. Future memory work needs repeated runs, a larger
+corpus, or an allocation-level instrument — not another single-run RSS reading.
+
+What stage attribution does still say: parse-stage first-touch growth was
++334.8 MiB while store and index added marginal amounts, and since neither
+retained structure explains it, the remaining candidate is the per-message
+String/Array churn — `currentLines` holding one `String` per line, the
+`joined()` full copy, and `EmailBodyExtractor` re-splitting the same text.
+Addressing that means parsing from bytes rather than `[String]`: plan task
+**P3.5**, a real parser rewrite on the most safety-critical code in the app.
+
+### Finding (SUPERSEDED as an explanation): the fixed 500-message batch ignores message size
+
+A 90 MiB source with 526 attachment-heavy messages fits in **two** batches at
+`batchSize = 500`, and peak RSS rises **400 MiB** above baseline. The batch
+bound is a message *count*, so batch memory scales with whatever those messages
+happen to weigh — exactly the failure mode `AdaptiveBatchController` exists to
+prevent (plan §5.1: bound parsed **bytes** as well as count). This is now
+measured evidence for that design rather than an assumption, and it is the
+before-number for A9/P3 work.
+
+Note the shape: 400 MiB of batch residency against a 526 MiB idle store cost
+means a large import on a small Mac is fighting the resting FTS cost too.
+
+### Still not measured, and why
+
+| Metric | Status |
+|---|---|
+| Cold launch, idle RSS, footprint — **Release build, 3.0, macOS 27, this Mac (2026-09-27, J-5)** | **MEASURED**: at idle after 60 s, `ps` RSS 273 MiB, `footprint` phys_footprint **145 MB** (peak 253 MB during launch), CPU **0.0 %**, **0 network sockets** open (`lsof`). Container: the existing test-host container, NOT a fresh install (TCC blocks resetting an app container from the shell). **The first measurement found the app at ~100 % CPU at idle**: `ModuleRegistry.policyRevision` was bumped on every `UserDefaults` change, so any `@AppStorage` write during a render re-invalidated every view that reads module activation and `ContentView.body` re-evaluated ~25×/s for ever. Fixed in 7f6b3a5 (the revision moves only when the managed-policy dictionary changes); the figures above are after the fix |
+| Launch-to-usable timing | NOT RELIABLY MEASURED — the shell-side window probe (System Events window count) reported 23.9 s but includes automation-permission overhead; the process was alive within 0.5 s. Needs the in-app signpost (P1) |
+| Release-configuration timing of any measurement test | **MEASURED 2026-09-28** via the ArchiveCore package test under `swift test -c release` (`ImportThroughputTests`): real Sent.mbox, offset engine **1.0 s, 86.6 MiB/s, 503 msg/s** after six profile-driven fixes (from 78.7 s: Release had been no faster than Debug at 1.15 MiB/s). The 1 GB rows re-ran 7–19× faster in Debug. Details in `SCALE_RESULTS.md` |
+| Production-path (`BulkImportCoordinator`) import of the fixture | **MEASURED 2026-09-26/27** — repository injection landed (A-7); the 1.5 GB rows and the seven 1 GB format-matrix rows in `SCALE_RESULTS.md` all run through the production coordinator |
+| Signed-entitlement dump (`codesign -d --entitlements`) | **VERIFIED 2026-09-27** — `Scripts/verify-no-network.sh` on the signed macOS Release app: PASS 8/8 (app sandbox on; `network.client` and `network.server` not granted; `NO_NETWORK_BUILD` marker present; no direct Network/CFNetwork link; no undefined URLSession symbols; no ATS exceptions). The marker check failed on the first Release build because the unreferenced `static let` was folded away; it is now carried in the About verdict text |
+| v1 JSON → SQLite migration timing | **MEASURED 2026-09-27 on a SYNTHETIC v1 library** authored from the owner's real Sent.mbox (`LegacyLibraryMigrationTests`): 526 messages, 6,317,591 B JSON, load 0.03 s, migrate into SQLite 0.08 s, 526 stored. A genuine customer v1 file is still owed by the owner; this proves the code against a library shaped like v1, not against a customer's file |
+| 2.x customer-library open timing | **MEASURED 2026-09-27 on a SYNTHETIC 2.x-shaped library** (current-schema store written, closed, reopened cold): 526 rows, cold open 0.001 s, schema v18. A real customer 2.x library is still owed |
+| 1.5 GB import, production path, Debug | **MEASURED 2026-09-26** — 8,416 messages in 1,096 s (1.3 MiB/s), peak Δ 790 MiB, store 1.08× / FTS 0.026×, export round trip exact; offset engine 1,141 s (not faster); ZIP path 887 s. `SCALE_RESULTS.md` |
+| `HMACChainAuditLog.verifyChain()` cost vs chain length | NOT MEASURED — needs a long chain fixture |
+| Clean-build time, Release config, iOS build | NOT MEASURED |
+
+### External source audit (2026-09-28)
+
+An independent audit of `v3-architecture` @ 17009fc reported 18 findings. Each was re-traced to
+its statement (`~/Downloads/MAILIN_3_0_AUDIT_FIXES.md`, "Root-cause confirmation"): 15 confirmed,
+2 partly (F03 narrower, F16 documentation), 1 labelling (F15). The audit's premise that the offset
+parser is off by default was wrong — it is on — so F02/F03/F05 applied to every install.
+
+| Wave | Findings | Status |
+|---|---|---|
+| 1 — data loss or misrepresentation on the default path | F01 relocation self-deletion; F02/F03/F05 deferred-message locator, copy claim, empty exports; F06 F07 F09 F10 F17 F18 correctness; F08 export resume | **FIXED 2026-09-28**, commits 815e8d4 · 91d51eb · b1b57b7 · ca6dc9e; regression rows: ArchiveRelocatorTests (+8), ArchiveCoreTests/AuditWave1Tests (14), DeferredMessageIntegrityTests (7), ExportResumeTests (4), CaseBundleTests (+2), BatesPDFReadBackTests (+2), BlobTierWiringTests (+1), V2ExportTests (+1), `verify-no-network-selftest.sh` 6/6 |
+| 2 — real defects, no data loss on the default path | F04 source identity on export; F11 audit-chain head; F12 policy hard-off teardown; F13 semantic-index cursor; F14 report scope/cap; F15 evidence label | **FIXED 2026-09-28 in 3.0** (owner pulled Wave 2 forward), commit 3080009; regression rows: DeferredMessageIntegrityTests (+2, source edit refused; ledger once per run), HMACChainHeadTests (7), ModuleGatingTests (+3: policy teardown, semantic catch-up + deleted sweep, report query/coverage) |
+| Recheck (second audit of 118d44e) | R1 attachment fallback ordinal; R2 start-time selection binding + partial-artifact length + fail-closed resume; R3 append gated on anchor, throwing anchors, quarantine failure; R4 verification in the legacy writer, cache key = path + digest + size + mtime, unverified count on receipts; R5 PDF/TIFF/MSG withhold undecoded messages (`withheld`, `.partial`); R6 case bundle format 2 with exact bytes; R7 byte state machine for streaming (un)quoting; R8 occupied destination refused; R9 date intersection | **FIXED 2026-09-29**; rows: DeferredMessageIntegrityTests (+5), ExportResumeTests (+1), HMACChainHeadTests (+2), CaseBundleTests (non-UTF-8 round trip), ArchiveRelocatorTests (occupied folder), V2ExportTests (bind/refuse), ModuleGatingTests (intersection) |
+| Third review (of 0b0eb7d) | T1 resume validated before binding; T2 length + hash boundary, folder manifest with per-file hashes; T3 input-position cursor + produced count; T4 operation-scoped ledger + pre/post-read change detector; T5 quote run counted, no cap; T6 unreadable destination refused | **FIXED 2026-09-29**; rows: ExportResumeTests (+2), DeferredMessageIntegrityTests (+2), ArchiveRelocatorTests (+1), V2ExportTests (prepare). Verified after 98b8b46: app suite 648 passed / 0 failed / 13 skipped, package 37 / 0. Residual stated in release notes: equal-size, mtime-restored replacement within one run |
+| Fourth review (of aadadfe) | Q1 MBOX stream checked before/after read; Q2 checkpoint never moves backward (seeded, replay-only batches silent); Q3 withheld/skipped persisted in manifest boundaries; Q4 manifest names validated before any deletion; Q5 accepted existing files fingerprinted; Q6 manifest cut back to boundary on verify. Plus: ledger baseline around the hash; by-id fetch returns requested order | **FIXED 2026-09-29**; rows: ExportResumeTests (+5), DeferredMessageIntegrityTests (+3), relocation permission test skips explicitly. Verified: app suite 649 passed / 0 failed / 13 skipped (UI click-through ran), package 45 / 0 |
+| Fifth review (of aedc54d) | S1 manifest opened by descriptor with `O_NOFOLLOW`, regular file + single link required, exclusive creation on a fresh run, control filename reserved; S2 committed output verified before any removal, unremovable stray refuses the resume and keeps its entry, writer cut-back only after every past-boundary file is gone; duplicate-name test uses a matching boundary | **FIXED 2026-09-29**; rows: ExportResumeTests (+2: symlinked/hard-linked manifest with outside sentinel byte-identical, fresh run over a pre-existing link; immutable stray → refusal → retry → exact output set). Verified: app suite 649 / 0 / 13 skipped, package 47 / 0 |
+| Sixth review (of bbe35bf) | U1 writer cleanup counts a stray as gone only on `ENOENT`; any other `lstat` failure keeps its entry; U2 control path claimed with `unlink(2)` (never recursive), a directory there refuses the export; `remove()` likewise | **FIXED 2026-09-29**; rows: ExportResumeTests (+2: folder made unsearchable mid-run → entries kept → retry under Keep both yields exactly 0…119; non-empty directory at the control path → refused in both cleanup modes, sentinel intact, stale regular file still replaced). Verified: app suite 649 / 0 / 13 skipped, package 49 / 0 |
+| Seventh review (of 4d0b742) | No defect; U1/U2 closed at source level. Precision notes: wording narrowed to "a directory" (unlink removes any non-directory entry); permission test skips before it can fail | **DONE 2026-09-29**; native test logs for the reviewed commit committed under `Verification/` (package `swift test` output and the Xcode test summary) |
+| Eighth review (of ed579a4) | V1 privacy audit silently skipped (stale `maxmailin/` paths after the package split) | **FIXED 2026-09-29** in c9dbb8c: both trees resolved, missing file fails, whole package scanned; all production guards include the package. Verified: app suite 650 / 0 / 12 skipped (privacy audit now PASSES), package 49 / 0; logs under `Verification/`, skip list named in its README |
+| iOS readiness (owner asked 2026-09-30) | iOS Release build compiles unsigned for `generic/platform=iOS`: `com.ecosanskriti.mailin` 3.0 (300), MinimumOSVersion 17.6, iPhone + iPad, StoreKit + six products present. Unit suite on iPad Pro 11-inch (M5) simulator: 508 XCTest with 46 skipped (the Downloads-fixture rows, absent in the simulator sandbox) and 0 failures; 157 Swift Testing passed. Test sources fixed for iOS: `homeDirectoryForCurrentUser` → `NSHomeDirectory()`, fixture unwraps → `XCTSkip` | **BUILDS AND PASSES 2026-09-30**; not yet done: a hands-on click-through on iPhone and iPad, iOS App Store screenshots, and confirming the mailin record in App Store Connect has an iOS version to update |
+| Public 3.0 update (owner 2026-09-30: "first our app will be an update version of this") | Target `maxmailin` switched from the enterprise identity to the public one via Xcode build settings: `PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.mailin`, `SWIFT_ACTIVE_COMPILATION_CONDITIONS = NO_NETWORK_BUILD $(inherited)` (Debug inherits `DEBUG` from the project; `ENTERPRISE_EDITION` dropped so the six products and the 500-email free tier return; the offline posture the installed 1.0 (10) already had is kept; entitlements unchanged and identical to the installed app). Installed App Store build read on this Mac: 1.0 (10), min macOS 14.6, same six product ids, same team | **DONE 2026-09-30**; full suite under the public configuration 508 XCTest + 157 Swift Testing, 0 failures, 12 skipped; built app verified: `com.ecosanskriti.mailin` 3.0 (300), min 14.6. Enterprise edition returns later by flipping these two settings back |
+| 3 — documentation / 3.1 | F16 per-format memory (documented above in `SUPPORTED_FORMATS_AND_LIMITS.md` §2); real copy-into-archive; snapshot-based export selection | documented / 3.1 |
+
+---
+
+## Owner / Apple gates (not engineering)
+
+| Gate | Needed for | Status |
+|---|---|---|
+| Release iOS 2.0, then 2.0.1 | current train | owner |
+| Cut the 2.1 tag (studios) and renumber `V3_PLAN.md` / `V3_RELEASE_PLAN.md` from 3.0 → 2.1 | 3.0 branch point | open |
+| Microsoft Entra app registration (client ID + `msauth.com.ecosanskriti.mailin://auth`) | 3.0 Page 4 | open |
+| Google Cloud project + restricted-scope/CASA decision | 3.1 Gmail (L3b) | open |
+| iCloud container identifier + Documents-vs-CloudKit choice | P8 prototype | open |
+| Apple Business Manager enrolment | Enterprise Offline SKU | open |
+| App Store privacy label + description rewrite | 3.0 submission | open |
+| Test hardware / corpora (250 GB Mac, ~1 TB mixed sources) | P9 | open — absent these, P9 rows ship as NOT TESTED |

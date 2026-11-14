@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import GroupActivities
 // Combine stays ONLY for `.values` bridging — GroupActivities exposes session

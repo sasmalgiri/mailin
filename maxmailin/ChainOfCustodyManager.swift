@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import SwiftUI
 
@@ -93,31 +94,39 @@ final class ChainOfCustodyManager: ObservableObject {
         let event = CustodyEvent(eventType: type, actor: actor, description: description, emailIDs: emailIDs, hashBefore: hashBefore, hashAfter: hashAfter)
         events.append(event)
         saveEvents()
+        if LegalStateMirror.isEnabled { LegalStateMirror.shared.scheduleSync() }   // §3-F4 dual-write
         ForensicManager.shared.logAction("Chain of Custody: \(type.rawValue)", detail: description)
     }
 
-    func verifyIntegrity(of emails: [MBOXParser.RawEmail]) -> IntegrityReport {
+    func verifyIntegrity(of emails: [MBOXParser.RawEmail]) async -> IntegrityReport {
         let forensic = ForensicManager.shared
         var failedIDs: [UUID] = []
-        var newlySealed = 0
 
-        // Auto-seal emails that don't have stored hashes yet
+        // Load the ORIGINAL seals from the store first. Without this, an email
+        // outside the in-memory window looked unsealed, was "sealed" with its
+        // current content, and then verified against itself — a tampered
+        // email passed.
+        await forensic.prefetchForensicWindow(ids: emails.map(\.id))
+
+        // Seal only emails that truly have no stored seal yet; they are new
+        // baselines, not verifications.
         let unsealed = emails.filter { forensic.perEmailHashes[$0.id] == nil }
+        let unsealedIDs = Set(unsealed.map(\.id))
         if !unsealed.isEmpty {
             forensic.storeEmailHashes(unsealed)
-            newlySealed = unsealed.count
         }
 
-        for email in emails {
+        for email in emails where !unsealedIDs.contains(email.id) {
             let result = forensic.verifyEmailIntegrity(email)
             if !result.passed {
                 failedIDs.append(email.id)
             }
         }
+        let newlySealed = unsealed.count
 
         return IntegrityReport(
             totalChecked: emails.count,
-            passed: emails.count - failedIDs.count,
+            passed: emails.count - newlySealed - failedIDs.count,
             failed: failedIDs.count,
             newlySealed: newlySealed,
             failedIDs: failedIDs,
@@ -282,11 +291,17 @@ struct ChainOfCustodyView: View {
     @State private var shareItems: [Any] = []
     @State private var showShareSheet = false
     #endif
+    @State private var exportStatus: String?
+    // §3-L7: whole-scope verification when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    private var v3: Bool { modules?.isOn(.v3ChainOfCustody) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
+            if v3 { WholeScopeNote().padding(.horizontal, Spacing.medium).padding(.top, Spacing.xSmall) }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
@@ -391,11 +406,11 @@ struct ChainOfCustodyView: View {
                     if isVerifying {
                         ProgressView().scaleEffect(0.7).frame(width: 16, height: 16)
                     }
-                    Text(isVerifying ? "Verifying..." : "Verify Integrity")
+                    Text(isVerifying ? String(localized: "Verifying...") : String(localized: "Verify Integrity"))
                 }
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(isVerifying || emails.isEmpty)
+            .disabled(isVerifying || (!v3 && emails.isEmpty))
         }
         .padding(Spacing.medium)
         .background(AppColors.backgroundTertiary)
@@ -403,17 +418,43 @@ struct ChainOfCustodyView: View {
     }
 
     private var actionsSection: some View {
-        HStack(spacing: Spacing.small) {
-            Button("Record Event") { showRecordEvent = true }
-                .buttonStyle(SecondaryButtonStyle())
+        VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+            HStack(spacing: Spacing.small) {
+                Button("Record Event") { showRecordEvent = true }
+                    .buttonStyle(SecondaryButtonStyle())
 
-            Button("Export Audit Trail") { exportAuditTrail() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(custodyManager.events.isEmpty)
+                Button("Export Audit Trail") { exportAuditTrail() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(custodyManager.events.isEmpty)
 
-            Button("Export PDF Report") { exportPDFReport() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(custodyManager.events.isEmpty)
+                Button("Export PDF Report") { exportPDFReport() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(custodyManager.events.isEmpty)
+
+                if modules?.isOn(.v3Fingerprints) ?? false {
+                    // §3-E2: per-email hash-tree proofs to the archive root.
+                    Button(String(localized: "Export Evidence Record")) {
+                        Task { @MainActor in
+                            let (outcome, n) = await EvidenceRecordExporter.export(scope: scope)
+                            exportStatus = outcome.message(String(localized: "Evidence record")) + (outcome.succeeded ? " (\(n))" : "")
+                        }
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .help("Every email in scope with a hash-tree proof to the archive fingerprint — verifiable with SHA-256 alone")
+                }
+
+                if modules?.isOn(.v3PreservationExport) ?? false {
+                    // §3-E5: BagIt + PREMIS preservation package.
+                    Button(String(localized: "Export Preservation Package")) { exportPreservationPackage() }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .help("A BagIt bag with every original message and PREMIS metadata — the archival standard")
+                }
+            }
+            if let exportStatus {
+                Text(exportStatus)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
         }
     }
 
@@ -445,7 +486,7 @@ struct ChainOfCustodyView: View {
 
             VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                 HStack {
-                    Text(event.eventType.rawValue)
+                    Text(LocalizedStringKey(event.eventType.rawValue))
                         .font(Typography.callout)
                         .fontWeight(.semibold)
                     Spacer()
@@ -514,7 +555,70 @@ struct ChainOfCustodyView: View {
         }
     }
 
-    private func verifyIntegrity() {
+    private func exportPreservationPackage() {
+        let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        let name = "mailin-preservation-\(stamp)"
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = String(localized: "Create Package Here")
+        guard panel.runModal() == .OK, let parent = panel.url else { exportStatus = String(localized: "Preservation package not saved — cancelled."); return }
+        let bag = parent.appendingPathComponent(name, isDirectory: true)
+        #else
+        let bag = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.removeItem(at: bag)
+        #endif
+        exportStatus = String(localized: "Building the preservation package…")
+        Task { @MainActor in
+            do {
+                let r = try await PreservationExporter.export(scope: scope, to: bag,
+                                                              organization: ForensicManager.shared.examinerName)
+                exportStatus = String(localized: "Preservation package: \(r.originals) originals") +
+                    (r.withoutOriginal > 0 ? String(localized: ", \(r.withoutOriginal) without a stored original") : "") +
+                    (r.verified ? String(localized: " — every file verified.") : String(localized: " — VERIFICATION FAILED, do not rely on this package."))
+                #if os(iOS)
+                // Registered only once it really left through the Share sheet (rule 5).
+                if r.verified, case .failed(let why) = PlatformExport.share(bag) {
+                    exportStatus = String(localized: "Preservation package failed: \(why)")
+                    return
+                }
+                #endif
+                if r.verified {
+                    _ = await DocumentRegistry.post(.export, summary: "Preservation package — \(r.originals) originals", refs: bag.lastPathComponent)
+                }
+            } catch {
+                exportStatus = String(localized: "Preservation package failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// `previousEngine`: the pre-3.0 check (switch off, or §3-M3 fallback).
+    private func verifyIntegrity(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
+            isVerifying = true
+            Task { @MainActor in
+                defer { isVerifying = false }
+                do {
+                    let (state, receipt) = try await EDiscoveryEngine.verifyCollection(
+                        scope: scope, capability: .v3ChainOfCustody, useFingerprints: modules?.isOn(.v3Fingerprints) ?? false)
+                    integrityReport = IntegrityReport(
+                        totalChecked: receipt.processed, passed: state.passed, failed: state.failed,
+                        newlySealed: state.newlySealed, failedIDs: state.failedIDs, timestamp: receipt.finishedAt)
+                    custodyManager.recordEvent(
+                        type: .accessed, actor: ForensicManager.shared.examinerName.isEmpty ? "mailin" : ForensicManager.shared.examinerName,
+                        description: "Integrity verification: \(state.passed) passed, \(state.failed) failed, \(state.newlySealed) newly sealed — \(receipt.coverageLine)",
+                        emailIDs: state.failedIDs)
+                    await ScopeJob.recordReceipt(receipt, registry: modules)
+                } catch is CancellationError {
+                } catch {
+                    exportStatus = EngineGuard.fellBack(.v3ChainOfCustody, error: error)
+                    verifyIntegrity(previousEngine: true)
+                }
+            }
+            return
+        }
         isVerifying = true
         let emailsCopy = emails
         Task.detached {
@@ -526,16 +630,30 @@ struct ChainOfCustodyView: View {
         }
     }
 
+    #if os(macOS)
+    /// Save, read back, then sign with a `.sig` sidecar — the same
+    /// tamper-evidence the iOS share path has always produced.
+    private func saveSigned(_ data: Data, name: String, auditAction: String) {
+        let outcome = PlatformExport.save(data: data, suggestedName: name)
+        guard let url = outcome.url else {
+            exportStatus = outcome.message(name)
+            return
+        }
+        do {
+            let sig = try ExportSigner.shared.signFile(url)
+            exportStatus = String(localized: "Saved \(url.lastPathComponent) and its signature \(sig.lastPathComponent).")
+            _ = try? HMACChainAuditLog.shared.append(action: auditAction, detail: "\(url.lastPathComponent) saved and signed")
+        } catch {
+            exportStatus = String(localized: "Saved \(url.lastPathComponent), but it could not be signed: \(error.localizedDescription)")
+            _ = try? HMACChainAuditLog.shared.append(action: auditAction, detail: "\(url.lastPathComponent) saved UNSIGNED: \(error.localizedDescription)")
+        }
+    }
+    #endif
+
     private func exportAuditTrail() {
         let data = custodyManager.exportAuditTrail()
         #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "chain_of_custody_audit.csv"
-        panel.allowedContentTypes = [.commaSeparatedText]
-        let result = panel.runModal()
-        if result == .OK, let url = panel.url {
-            try? data.write(to: url, options: .atomic)
-        }
+        saveSigned(data, name: "chain_of_custody_audit.csv", auditAction: "export.auditTrail")
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("chain_of_custody_audit.csv")
         do {
@@ -561,13 +679,7 @@ struct ChainOfCustodyView: View {
     private func exportPDFReport() {
         let data = custodyManager.generateCustodyReport()
         #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "chain_of_custody_report.pdf"
-        panel.allowedContentTypes = [.pdf]
-        let result = panel.runModal()
-        if result == .OK, let url = panel.url {
-            try? data.write(to: url, options: .atomic)
-        }
+        saveSigned(data, name: "chain_of_custody_report.pdf", auditAction: "export.custodyReport")
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("chain_of_custody_report.pdf")
         do {

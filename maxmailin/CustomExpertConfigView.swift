@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 // MARK: - Custom Expert Configuration View (v3.5.1)
@@ -17,7 +18,9 @@ struct CustomExpertConfigView: View {
                 expertList
             }
         }
+        #if os(macOS)
         .frame(minWidth: 400, minHeight: 300)
+        #endif
         .sheet(isPresented: $showingAddSheet) {
             ExpertEditSheet(onSave: { expert in
                 manager.addExpert(expert)
@@ -165,7 +168,7 @@ private struct ExpertEditSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(existingID == nil ? "New Custom Expert" : "Edit Expert")
+            Text(existingID == nil ? String(localized: "New Custom Expert") : String(localized: "Edit Expert"))
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -223,6 +226,8 @@ private struct ExpertEditSheet: View {
             }
         }
         .padding()
+        #if os(macOS)
         .frame(width: 420)
+        #endif
     }
 }

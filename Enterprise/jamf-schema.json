@@ -1,0 +1,26 @@
+{
+  "title": "mailin Enterprise (com.ecosanskriti.mailin.enterprise)",
+  "description": "Managed settings for mailin Enterprise. Upload in Jamf Pro ▸ Configuration Profiles ▸ Application & Custom Settings ▸ External Applications ▸ Custom Schema, with the preference domain com.ecosanskriti.mailin.enterprise. See ENTERPRISE_DEPLOYMENT.md.",
+  "properties": {
+    "orgName": { "title": "Organization name", "type": "string", "description": "Shown in About and on every report and receipt." },
+    "examinerName": { "title": "Examiner name", "type": "string", "description": "The person's name on audit entries and sealed receipts, e.g. $FULLNAME." },
+    "role": {
+      "title": "Role",
+      "type": "string",
+      "enum": ["viewer", "reviewer", "examiner", "administrator"],
+      "default": "examiner",
+      "description": "viewer: read and search. reviewer: + tag, code, annotate. examiner: + import, export, print, legal holds, productions. administrator: + permanent deletion, releasing holds, modules, restore, license. An unknown value is treated as viewer."
+    },
+    "allowExport": { "title": "Allow exporting and sharing", "type": "boolean", "default": true },
+    "allowPrint": { "title": "Allow printing", "type": "boolean", "default": true },
+    "requireBiometricLock": { "title": "Require the app lock", "type": "boolean", "default": true },
+    "disableCloudAI": { "title": "Disable cloud AI", "type": "boolean", "default": true },
+    "caseNumberPrefix": { "title": "Case and Bates number prefix", "type": "string" },
+    "licenseKey": { "title": "License key", "type": "string", "description": "The MAILIN1.… key issued for your organization." },
+    "disabledModules": {
+      "title": "Pages switched off for everyone",
+      "type": "array",
+      "items": { "type": "string", "enum": ["aiInsights", "professional"] }
+    }
+  }
+}

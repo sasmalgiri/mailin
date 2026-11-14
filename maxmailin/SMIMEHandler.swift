@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import Security
 
@@ -78,8 +79,10 @@ struct SMIMEHandler {
                 return .validUntrustedCert
             }
         case .needsDetachedContent:
-            // multipart/signed (detached): we don't reconstruct the
-            // canonicalized signed bytes, so the crypto check never ran.
+            // multipart/signed whose signed entity could NOT be reconstructed
+            // from the raw source (no boundary, no first part), so the crypto
+            // check never ran. When reconstruction succeeds the decoder
+            // reports .valid/.invalidSignature instead and never lands here.
             // Not "invalid" (that would falsely imply tampering).
             return .unverifiable
         case .invalidSignature:
@@ -144,6 +147,15 @@ struct SMIMEHandler {
                                       signerName: nil, signerEmail: nil, certificateInfo: nil)
         }
 
+        // multipart/signed carries the signature DETACHED from the content
+        // (v2.1 backlog #4). Hand the decoder the exact signed entity so the
+        // digest is actually checked; without this every detached signature
+        // reported "unverifiable" and a tampered one could never be caught.
+        if contentType.lowercased().contains("multipart/signed"),
+           let entity = detachedSignedEntity(rawSource: email.rawSource, contentType: contentType) {
+            _ = CMSDecoderSetDetachedContent(cmsDecoder, entity as CFData)
+        }
+
         var numSigners: Int = 0
         guard CMSDecoderGetNumSigners(cmsDecoder, &numSigners) == errSecSuccess, numSigners > 0 else {
             return VerificationResult(status: .notSigned, signerName: nil, signerEmail: nil, certificateInfo: nil)
@@ -206,9 +218,12 @@ struct SMIMEHandler {
 
         return VerificationResult(status: resultStatus, signerName: signerName, signerEmail: signerEmail, certificateInfo: certInfo)
         #else
-        // No CMSDecoder off macOS — verification is not supported, which is
-        // an "unverifiable" conclusion, not an invalid signature.
-        return VerificationResult(status: .unverifiable, signerName: nil, signerEmail: nil, certificateInfo: nil)
+        // No CMSDecoder off macOS. R6: with the S/MIME module on, the portable
+        // CMS reader verifies; off, "unverifiable" — never an invalid signature.
+        guard ProtectedContentPolicy.decryptSMIME else {
+            return VerificationResult(status: .unverifiable, signerName: nil, signerEmail: nil, certificateInfo: nil)
+        }
+        return verifySignaturePortable(of: email)
         #endif
     }
 
@@ -219,25 +234,29 @@ struct SMIMEHandler {
 
     static func decrypt(_ email: MBOXParser.RawEmail) -> Data? {
         guard isEncrypted(email) else { return nil }
-
         #if os(macOS)
         guard let encryptedData = findEncryptedData(in: email) else { return nil }
-
-        var decoder: CMSDecoder?
-        guard CMSDecoderCreate(&decoder) == errSecSuccess, let cmsDecoder = decoder else { return nil }
-
-        guard CMSDecoderUpdateMessage(cmsDecoder, (encryptedData as NSData).bytes, encryptedData.count) == errSecSuccess,
-              CMSDecoderFinalizeMessage(cmsDecoder) == errSecSuccess else { return nil }
-
-        var content: CFData?
-        guard CMSDecoderCopyContent(cmsDecoder, &content) == errSecSuccess,
-              let decryptedData = content as Data? else { return nil }
-
-        return decryptedData
+        return decodeCMS(encryptedData)
         #else
         return nil
         #endif
     }
+
+    #if os(macOS)
+    /// §13.8 step 5 (COMP-14): the content of a CMS message — an envelope
+    /// decrypted with a private key from this Mac's keychain, or the content
+    /// of a signed-data part. Nothing leaves the device; nil when no key
+    /// matches or the bytes are not CMS.
+    static func decodeCMS(_ data: Data) -> Data? {
+        var decoder: CMSDecoder?
+        guard CMSDecoderCreate(&decoder) == errSecSuccess, let cmsDecoder = decoder else { return nil }
+        guard CMSDecoderUpdateMessage(cmsDecoder, (data as NSData).bytes, data.count) == errSecSuccess,
+              CMSDecoderFinalizeMessage(cmsDecoder) == errSecSuccess else { return nil }
+        var content: CFData?
+        guard CMSDecoderCopyContent(cmsDecoder, &content) == errSecSuccess, let plain = content as Data?, !plain.isEmpty else { return nil }
+        return plain
+    }
+    #endif
 
     #if os(macOS)
     private static func extractCertificateInfo(from cert: SecCertificate, chain: [SecCertificate]) -> CertificateInfo {
@@ -326,7 +345,65 @@ struct SMIMEHandler {
     }
     #endif
 
-    private static func findSignedData(in email: MBOXParser.RawEmail) -> Data? {
+    // MARK: - Detached signed entity (multipart/signed)
+
+    /// The bytes a detached S/MIME signature covers, per RFC 5751 §3.4.3 and
+    /// RFC 1847: the FIRST body part of the multipart/signed message — its own
+    /// header block, the blank line and its content — exactly as transmitted,
+    /// up to but NOT including the line break that precedes the next boundary
+    /// delimiter, in canonical CRLF form.
+    ///
+    /// Canonicalisation matters: mbox and many stores rewrite CRLF to LF, and
+    /// the signer computed the digest over CRLF. Every line ending is
+    /// normalised to CRLF, so a message that was stored with LF, CRLF or a
+    /// mixture verifies identically. Returns nil when there is no boundary or
+    /// no first part, in which case the caller lets the decoder report
+    /// `.needsDetachedContent` and the verdict stays honest at "unverifiable".
+    static func detachedSignedEntity(rawSource: String, contentType: String) -> Data? {
+        guard let boundary = boundaryParameter(in: contentType) else { return nil }
+
+        // Split lines keeping empty ones; tolerate LF, CRLF and stray CR.
+        let lines = rawSource
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+
+        // The body starts after the first blank line of the message headers.
+        guard let blank = lines.firstIndex(where: { $0.isEmpty }) else { return nil }
+        let body = lines[(blank + 1)...]
+
+        let delimiter = "--" + boundary
+        guard let open = body.firstIndex(where: { $0 == delimiter }) else { return nil }
+        let entityStart = open + 1
+        guard entityStart < body.endIndex else { return nil }
+        guard let close = body[entityStart...].firstIndex(where: { $0.hasPrefix(delimiter) }) else { return nil }
+
+        // multipart/signed has exactly two parts: the entity, then the
+        // signature. If the delimiter that ends the entity is the CLOSING one,
+        // there is no signature part after it — the structure is broken, and
+        // whatever we found is not "the signed content", so say nothing
+        // rather than hand the decoder the wrong bytes and report tampering.
+        guard body[close] == delimiter else { return nil }
+
+        let entityLines = body[entityStart..<close]
+        guard !entityLines.isEmpty else { return nil }
+        return Data(entityLines.joined(separator: "\r\n").utf8)
+    }
+
+    /// `boundary=` from a Content-Type value, quoted or bare, case-insensitive.
+    static func boundaryParameter(in contentType: String) -> String? {
+        guard let range = contentType.range(of: #"boundary\s*=\s*"?([^";\r\n]+)"?"#,
+                                            options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let match = String(contentType[range])
+        guard let eq = match.firstIndex(of: "=") else { return nil }
+        let value = match[match.index(after: eq)...]
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        return value.isEmpty ? nil : value
+    }
+
+    static func findSignedData(in email: MBOXParser.RawEmail) -> Data? {
         for attachment in email.attachments {
             let mime = attachment.mimeType.lowercased()
             if mime.contains("pkcs7") || mime.contains("signature") {
@@ -360,6 +437,9 @@ struct SMIMEHandler {
     }
 
     private static func extractBase64Part(from raw: String) -> String? {
+        // A CRLF-stored message has no "\n\n" at all; normalise first so the
+        // blob is found regardless of how the store kept line endings.
+        let raw = raw.replacingOccurrences(of: "\r\n", with: "\n")
         let parts = raw.components(separatedBy: "\n\n")
         guard parts.count > 1 else { return nil }
         let bodyParts = parts.dropFirst()

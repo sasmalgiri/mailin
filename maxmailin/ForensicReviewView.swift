@@ -1,6 +1,11 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct ForensicReviewView: View {
+    // §3-L9: whole-archive privilege scan when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var v3Scope
+    @State private var wholeDashboard: ForensicReviewManager.CodingDashboard?
     // v2: no injected corpus. Review list is a growable paged full-email window
     // from the store (infinite scroll reaches EVERY email); forensic analysis /
     // QC / privilege scan / dashboard run over a bounded working set.
@@ -11,6 +16,8 @@ struct ForensicReviewView: View {
     @State private var workingSet: [MBOXParser.RawEmail] = []
     @State private var archiveTotal = 0
     @State private var searchHits: [MBOXParser.RawEmail] = []
+    // §3-H4: every search hit, paged (3.0 engine) — ids first, bodies per page.
+    @State private var v3SearchIDs: [UUID] = []
     @State private var selectedFullEmail: MBOXParser.RawEmail?
 
     /// Emails shown in the review list: FTS hits when searching, else the paged
@@ -149,6 +156,19 @@ struct ForensicReviewView: View {
         .featureTutorial(.forensicReview, key: "forensic_review_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showDashboard) { dashboardSheet }
         .sheet(isPresented: $showProductionSets) { productionSetsSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .task(id: forensicManager.evidenceTags.count) {
+            // §3-A11: the coding dashboard over the whole archive (3.0).
+            guard v3Modules?.isOn(.v3AnalysisQueries) ?? false else { wholeDashboard = nil; return }
+            do {
+                wholeDashboard = try await reviewManager.computeDashboardWholeArchive()
+            } catch is CancellationError {
+            } catch {
+                // §3-M3: the previous (working-set) dashboard stays, with its notice.
+                wholeDashboard = nil
+                _ = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            }
+        }
         .task { await loadInitial() }
         .task { await loadForensicFeatures() }
         .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
@@ -172,6 +192,12 @@ struct ForensicReviewView: View {
         guard canLoadMore, !isLoadingPage else { return }
         isLoadingPage = true
         defer { isLoadingPage = false }
+        if !v3SearchIDs.isEmpty, !searchHits.isEmpty {
+            let next = Array(v3SearchIDs.dropFirst(searchHits.count).prefix(100))
+            searchHits += (try? await ArchiveDataService.shared.fullEmails(ids: next)) ?? []
+            canLoadMore = searchHits.count < v3SearchIDs.count
+            return
+        }
         guard let page = try? await ArchiveDataService.shared.page(query: .all, cursor: pageCursor, limit: 100) else { return }
         let full = (try? await ArchiveDataService.shared.fullEmails(ids: page.summaries.map(\.id))) ?? []
         pagedEmails.append(contentsOf: full)
@@ -179,9 +205,41 @@ struct ForensicReviewView: View {
         canLoadMore = page.nextCursor != nil
     }
 
+
+    /// §3-H4: every hit id of `query` (paged lists). nil = the 3.0 path
+    /// failed: the fallback is recorded and the previous ranked search runs
+    /// (§3-M3) — it used to show a silently partial list.
+    private func pagedSearchIDs(_ query: EmailQuery) async -> [UUID]? {
+        var ids: [UUID] = []
+        do {
+            for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 1_000) {
+                ids.append(contentsOf: page.map(\.id))
+            }
+            return ids
+        } catch is CancellationError {
+            return ids
+        } catch {
+            _ = EngineGuard.fellBack(.v3PagedLists, error: error)
+            return nil
+        }
+    }
+
     private func runSearch() async {
         let q = filterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { searchHits = []; return }
+        guard !q.isEmpty else {
+            searchHits = []
+            if !v3SearchIDs.isEmpty { v3SearchIDs = []; canLoadMore = pageCursor != nil || pagedEmails.isEmpty }
+            return
+        }
+        var pagedQuery = EmailQuery.all
+        pagedQuery.text = q
+        if V3Paging.isOn, let ids = await pagedSearchIDs(pagedQuery) {
+            v3SearchIDs = ids
+            let first = Array(ids.prefix(100))
+            searchHits = (try? await ArchiveDataService.shared.fullEmails(ids: first)) ?? []
+            canLoadMore = ids.count > searchHits.count
+            return
+        }
         searchHits = ((try? await ArchiveRetrievalService.shared.retrieve(q, limit: 200)) ?? []).map(\.email)
     }
 
@@ -268,7 +326,7 @@ struct ForensicReviewView: View {
                         .foregroundColor(showCodingPanel ? .blue : .secondary)
                 }
                 .buttonStyle(.plain)
-                .help(showCodingPanel ? "Hide coding panel" : "Show coding panel")
+                .help(showCodingPanel ? String(localized: "Hide coding panel") : String(localized: "Show coding panel"))
 
                 TutorialHelpButton(showTutorial: $showTutorial)
             }
@@ -306,7 +364,7 @@ struct ForensicReviewView: View {
                     filterRisk = level
                 } label: {
                     HStack {
-                        Text(level.rawValue)
+                        Text(LocalizedStringKey(level.rawValue))
                         if filterRisk == level { Image(systemName: "checkmark") }
                     }
                 }
@@ -326,7 +384,7 @@ struct ForensicReviewView: View {
                     value.wrappedValue = opt
                 } label: {
                     HStack {
-                        Text(opt.rawValue)
+                        Text(LocalizedStringKey(opt.rawValue))
                         if value.wrappedValue == opt { Image(systemName: "checkmark") }
                     }
                 }
@@ -560,7 +618,7 @@ struct ForensicReviewView: View {
             }
             .buttonStyle(.plain)
 
-            Button { forensicManager.runPrivilegeScan(on: workingSet) } label: {
+            Button { PrivilegeScanEngine.run(modules: v3Modules, query: v3Scope.query, loaded: workingSet) } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "lock.shield").font(.system(size: 9))
                     Text("Privilege Scan").font(.system(size: 9, weight: .medium))
@@ -603,13 +661,13 @@ struct ForensicReviewView: View {
         HStack(spacing: 6) {
             Image(systemName: "keyboard").font(.system(size: 9)).foregroundColor(.secondary)
             Text("Quick Tag:").font(.system(size: 8)).foregroundColor(.secondary)
-            keyBadge("1", label: "Relevant", color: .green)
-            keyBadge("2", label: "Privileged", color: .orange)
-            keyBadge("3", label: "Irrelevant", color: .gray)
-            keyBadge("4", label: "Flagged", color: .red)
-            keyBadge("5", label: "Suspicious", color: .purple)
-            keyBadge("0", label: "Clear", color: .secondary)
-            keyBadge("␣", label: "Preview", color: .blue)
+            keyBadge("1", label: String(localized: "Relevant"), color: .green)
+            keyBadge("2", label: String(localized: "Privileged"), color: .orange)
+            keyBadge("3", label: String(localized: "Irrelevant"), color: .gray)
+            keyBadge("4", label: String(localized: "Flagged"), color: .red)
+            keyBadge("5", label: String(localized: "Suspicious"), color: .purple)
+            keyBadge("0", label: String(localized: "Clear"), color: .secondary)
+            keyBadge("␣", label: String(localized: "Preview"), color: .blue)
         }
         .help("Select an email, then press a number key to quickly tag it. Use Space to preview the full email.")
     }
@@ -808,7 +866,7 @@ struct ForensicReviewView: View {
 
             // Tag
             if tag != .none {
-                Text(tag.rawValue)
+                Text(LocalizedStringKey(tag.rawValue))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(tag.color)
                     .padding(.horizontal, 3).padding(.vertical, 1)
@@ -1033,7 +1091,7 @@ struct ForensicReviewView: View {
                             Image(systemName: tagOpt.icon)
                                 .font(.system(size: 12))
                                 .foregroundColor(tagOpt.color)
-                            Text(tagOpt.rawValue)
+                            Text(LocalizedStringKey(tagOpt.rawValue))
                                 .font(.system(size: 8))
                                 .foregroundColor(forensicManager.tagForEmail(email.id) == tagOpt ? tagOpt.color : .secondary)
                         }
@@ -1161,7 +1219,7 @@ struct ForensicReviewView: View {
                 Text("Risk Score:").font(.system(size: 10)).foregroundColor(.secondary)
                 Text("\(risk.score)/100").font(.system(size: 10, weight: .bold)).foregroundColor(riskColor(risk.score))
                     .help("Risk score 0-100. Safe: 0-20, Low: 21-40, Medium: 41-60, High: 61-80, Critical: 81-100")
-                Text(risk.level.rawValue).font(.system(size: 9)).foregroundColor(.secondary)
+                Text(LocalizedStringKey(risk.level.rawValue)).font(.system(size: 9)).foregroundColor(.secondary)
             }
 
             if let custodian = custodianManager.custodian(for: email.id) {
@@ -1238,7 +1296,7 @@ struct ForensicReviewView: View {
                     HStack(spacing: 4) {
                         Image(systemName: prod.status.icon).font(.system(size: 8)).foregroundColor(prod.status.color)
                         Text(prod.name).font(.system(size: 10))
-                        Text(prod.status.rawValue).font(.system(size: 8)).foregroundColor(prod.status.color)
+                        Text(LocalizedStringKey(prod.status.rawValue)).font(.system(size: 8)).foregroundColor(prod.status.color)
                         Spacer()
                         Button(role: .destructive) {
                             reviewManager.removeFromProductionSet(prod.id, emailIDs: [email.id])
@@ -1411,7 +1469,7 @@ struct ForensicReviewView: View {
     // MARK: - Status Bar
 
     private var forensicStatusBar: some View {
-        let dashboard = reviewManager.computeDashboard(emails: workingSet)
+        let dashboard = wholeDashboard ?? reviewManager.computeDashboard(emails: workingSet)
         let filtered = visibleEmails.count
         let progressPct = Int(dashboard.progress * 100)
 
@@ -1431,11 +1489,11 @@ struct ForensicReviewView: View {
                 Divider().frame(height: 12)
 
                 HStack(spacing: 5) {
-                    tagDot(.green, count: dashboard.tagDistribution[.relevant] ?? 0, label: "Relevant")
-                    tagDot(.orange, count: dashboard.tagDistribution[.privileged] ?? 0, label: "Privileged")
-                    tagDot(.red, count: dashboard.tagDistribution[.flagged] ?? 0, label: "Flagged")
-                    tagDot(.gray, count: dashboard.tagDistribution[.irrelevant] ?? 0, label: "Irrelevant")
-                    tagDot(.purple, count: dashboard.tagDistribution[.suspicious] ?? 0, label: "Suspicious")
+                    tagDot(.green, count: dashboard.tagDistribution[.relevant] ?? 0, label: String(localized: "Relevant"))
+                    tagDot(.orange, count: dashboard.tagDistribution[.privileged] ?? 0, label: String(localized: "Privileged"))
+                    tagDot(.red, count: dashboard.tagDistribution[.flagged] ?? 0, label: String(localized: "Flagged"))
+                    tagDot(.gray, count: dashboard.tagDistribution[.irrelevant] ?? 0, label: String(localized: "Irrelevant"))
+                    tagDot(.purple, count: dashboard.tagDistribution[.suspicious] ?? 0, label: String(localized: "Suspicious"))
                 }
                 .help("How your tagged emails are distributed across categories")
 
@@ -1506,7 +1564,7 @@ struct ForensicReviewView: View {
     // MARK: - Dashboard Sheet
 
     private var dashboardSheet: some View {
-        let dashboard = reviewManager.computeDashboard(emails: workingSet)
+        let dashboard = wholeDashboard ?? reviewManager.computeDashboard(emails: workingSet)
         return ScrollView {
         VStack(spacing: 16) {
             HStack {
@@ -1531,7 +1589,7 @@ struct ForensicReviewView: View {
                     let pct = dashboard.totalEmails > 0 ? Double(count) / Double(dashboard.totalEmails) : 0
                     HStack {
                         Image(systemName: tag.icon).foregroundColor(tag.color).frame(width: 20)
-                        Text(tag.rawValue).font(.system(size: 12)).frame(width: 80, alignment: .leading)
+                        Text(LocalizedStringKey(tag.rawValue)).font(.system(size: 12)).frame(width: 80, alignment: .leading)
                         ProgressView(value: pct).frame(width: 120).tint(tag.color)
                         Text("\(count)").font(.system(size: 12, weight: .medium, design: .monospaced)).frame(width: 40, alignment: .trailing)
                         Text(String(format: "%.1f%%", pct * 100)).font(.system(size: 10)).foregroundColor(.secondary).frame(width: 50, alignment: .trailing)
@@ -1564,7 +1622,9 @@ struct ForensicReviewView: View {
         }
         .padding(20)
         }
+        #if os(macOS)
         .frame(width: 500)
+        #endif
         .frame(minHeight: 450)
     }
 
@@ -1636,7 +1696,9 @@ struct ForensicReviewView: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
     }
 
     // MARK: - Review Queue
@@ -1703,19 +1765,19 @@ struct ForensicReviewView: View {
 
         coordinator.begin(steps: 5, color: .orange)
 
-        coordinator.advance(step: 1, label: "Scoring evidence relevance...")
+        coordinator.advance(step: 1, label: String(localized: "Scoring evidence relevance..."))
         guard let scores = await coordinator.runDetached({ ForensicAnalysisFeatures.scoreEvidenceRelevance(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Reconstructing forensic timeline...")
+        coordinator.advance(step: 2, label: String(localized: "Reconstructing forensic timeline..."))
         guard let timeline = await coordinator.runDetached({ ForensicAnalysisFeatures.reconstructTimeline(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Detecting suspicious patterns...")
+        coordinator.advance(step: 3, label: String(localized: "Detecting suspicious patterns..."))
         guard let patterns = await coordinator.runDetached({ ForensicAnalysisFeatures.detectSuspiciousPatterns(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Clustering evidence...")
+        coordinator.advance(step: 4, label: String(localized: "Clustering evidence..."))
         guard let clusters = await coordinator.runDetached({ ForensicAnalysisFeatures.clusterEvidence(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 5, label: "Checking metadata anomalies...")
+        coordinator.advance(step: 5, label: String(localized: "Checking metadata anomalies..."))
         guard let anomalies = await coordinator.runDetached({ ForensicAnalysisFeatures.detectMetadataAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         evidenceScores = Dictionary(uniqueKeysWithValues: scores.map { ($0.id, $0) })
@@ -1777,7 +1839,7 @@ struct ForensicReviewView: View {
                 ForEach(suspiciousPatterns.prefix(5)) { pattern in
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 4) {
-                            Text(pattern.patternType.rawValue)
+                            Text(LocalizedStringKey(pattern.patternType.rawValue))
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundColor(patternSeverityColor(pattern.severity))
                             Spacer()
@@ -1840,7 +1902,7 @@ struct ForensicReviewView: View {
                             Image(systemName: anomalyTypeIcon(anomaly.anomalyType))
                                 .font(.system(size: 9))
                                 .foregroundColor(patternSeverityColor(anomaly.severity))
-                            Text(anomaly.anomalyType.rawValue)
+                            Text(LocalizedStringKey(anomaly.anomalyType.rawValue))
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundColor(patternSeverityColor(anomaly.severity))
                             Spacer()
@@ -1953,7 +2015,7 @@ struct ForensicReviewView: View {
                             .frame(width: 20)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
-                                Text(event.eventType.rawValue)
+                                Text(LocalizedStringKey(event.eventType.rawValue))
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundColor(timelineEventColor(event.eventType))
                                 Spacer()

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 @MainActor
@@ -155,10 +156,14 @@ class LegalComplianceManager: ObservableObject {
     • Vision — OCR text recognition
     • Charts — Data visualization
 
-    No third-party open source libraries are used. All code is original.
+    One open source component is included, under its licence below. All other
+    code is original.
 
     Apple frameworks are provided under Apple's Software License Agreement.
-    """
+
+    ────────────────────────────────────────
+
+    """ + VendoredNotices.libarchive
 }
 
 // MARK: - Terms Acceptance View
@@ -207,7 +212,7 @@ struct TermsAcceptanceView: View {
             ScrollView {
                 Text(activeTab == 0
                      ? LegalComplianceManager.termsOfUseSummary
-                     : LegalComplianceManager.privacyPolicySummary)
+                     : LegalComplianceManager.privacyPolicyText())
                     .font(.system(.caption, design: .monospaced))
                     .padding(Spacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)

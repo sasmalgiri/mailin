@@ -1,0 +1,892 @@
+import Foundation
+
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+import CryptoKit
+
+struct MBOXParser {
+    /// Bump when message splitting/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    /// 2 (2026-09-27): mbox records have their RFC 4155 mboxrd `>From `
+    /// escaping undone on read, so `rawSource` bytes changed for messages
+    /// that carried such lines; resume checkpoints from version 1 retire.
+    static let parserVersion = 2
+
+    struct RawEmail: Identifiable, Codable, Sendable {
+        let id: UUID
+        var headers: [String: String]
+        var rawSource: String
+        var messageType: String
+        var attachments: [AttachmentMetadata]
+        var timestamp: String
+        var domains: [String]
+        var plainBody: String
+        var htmlBody: String
+        var mimeRoot: MIMEPart?
+        var mimeSummary: String?
+        var mimeDiagnostics: [String]
+        var threadID: String?
+        var inReplyTo: String?
+        var references: [String]?
+        var tags: [String] = []
+        var anomalies: [String] = []
+        var isBodyCompacted: Bool = false
+        var bodyPreview: String = ""
+        /// 3.1 R1: how the parser found this message (nil = an ordinary, live email).
+        var recovery: RecoveryInfo? = nil
+        /// FOLD-02: where the source kept this message — a "/"-separated path
+        /// within the source (PST folder, Apple Mail mailbox chain, Maildir
+        /// name). Nil when the source has no folder structure. Labels (Gmail)
+        /// stay in `tags`; both become folder memberships.
+        var folderPath: String? = nil
+        /// FOLD-02: status flags a source stores next to its labels (Apple
+        /// Mail's Read/Deleted/…). Also in `tags` for compatibility, but never
+        /// a folder.
+        var flags: [String] = []
+
+        var bodyLines: [String] {
+            (plainBody.isEmpty ? htmlBody : plainBody).components(separatedBy: .newlines)
+        }
+
+        var fullText: String {
+            let headerStr = headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+            return headerStr + "\n\n" + (plainBody.isEmpty ? htmlBody : plainBody)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, headers, rawSource, messageType, attachments, timestamp
+            case domains, plainBody, htmlBody, mimeRoot, mimeSummary
+            case mimeDiagnostics, threadID, inReplyTo, references, tags, anomalies
+            case bodyLines, fullText, isBodyCompacted, bodyPreview, recovery
+            case folderPath, flags
+        }
+
+        init(id: UUID = UUID(), headers: [String: String], bodyLines: [String] = [], rawSource: String, messageType: String, attachments: [AttachmentMetadata], timestamp: String, fullText: String = "", domains: [String], plainBody: String, htmlBody: String, mimeRoot: MIMEPart? = nil, mimeSummary: String? = nil, mimeDiagnostics: [String] = [], threadID: String? = nil, inReplyTo: String? = nil, references: [String]? = nil, tags: [String] = [], anomalies: [String] = []) {
+            self.id = id
+            self.headers = headers
+            self.rawSource = rawSource
+            self.messageType = messageType
+            self.attachments = attachments
+            self.timestamp = timestamp
+            self.domains = domains
+            self.plainBody = plainBody
+            self.htmlBody = htmlBody
+            self.mimeRoot = mimeRoot
+            self.mimeSummary = mimeSummary
+            self.mimeDiagnostics = mimeDiagnostics
+            self.threadID = threadID
+            self.inReplyTo = inReplyTo
+            self.references = references
+            self.tags = tags
+            self.anomalies = anomalies
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            headers = try container.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+            rawSource = try container.decodeIfPresent(String.self, forKey: .rawSource) ?? ""
+            messageType = try container.decodeIfPresent(String.self, forKey: .messageType) ?? "received"
+            attachments = try container.decodeIfPresent([AttachmentMetadata].self, forKey: .attachments) ?? []
+            timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp) ?? ""
+            domains = try container.decodeIfPresent([String].self, forKey: .domains) ?? []
+            plainBody = try container.decodeIfPresent(String.self, forKey: .plainBody) ?? ""
+            htmlBody = try container.decodeIfPresent(String.self, forKey: .htmlBody) ?? ""
+            mimeRoot = try container.decodeIfPresent(MIMEPart.self, forKey: .mimeRoot)
+            mimeSummary = try container.decodeIfPresent(String.self, forKey: .mimeSummary)
+            mimeDiagnostics = try container.decodeIfPresent([String].self, forKey: .mimeDiagnostics) ?? []
+            threadID = try container.decodeIfPresent(String.self, forKey: .threadID)
+            inReplyTo = try container.decodeIfPresent(String.self, forKey: .inReplyTo)
+            references = try container.decodeIfPresent([String].self, forKey: .references)
+            tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+            anomalies = try container.decodeIfPresent([String].self, forKey: .anomalies) ?? []
+            isBodyCompacted = try container.decodeIfPresent(Bool.self, forKey: .isBodyCompacted) ?? false
+            bodyPreview = try container.decodeIfPresent(String.self, forKey: .bodyPreview) ?? ""
+            recovery = try container.decodeIfPresent(RecoveryInfo.self, forKey: .recovery)
+            folderPath = try container.decodeIfPresent(String.self, forKey: .folderPath)
+            flags = try container.decodeIfPresent([String].self, forKey: .flags) ?? []
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(headers, forKey: .headers)
+            try container.encode(rawSource, forKey: .rawSource)
+            try container.encode(messageType, forKey: .messageType)
+            try container.encode(attachments, forKey: .attachments)
+            try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(domains, forKey: .domains)
+            try container.encode(plainBody, forKey: .plainBody)
+            try container.encode(htmlBody, forKey: .htmlBody)
+            try container.encodeIfPresent(mimeRoot, forKey: .mimeRoot)
+            try container.encodeIfPresent(mimeSummary, forKey: .mimeSummary)
+            try container.encode(mimeDiagnostics, forKey: .mimeDiagnostics)
+            try container.encodeIfPresent(threadID, forKey: .threadID)
+            try container.encodeIfPresent(inReplyTo, forKey: .inReplyTo)
+            try container.encodeIfPresent(references, forKey: .references)
+            try container.encode(tags, forKey: .tags)
+            try container.encode(anomalies, forKey: .anomalies)
+            try container.encode(isBodyCompacted, forKey: .isBodyCompacted)
+            try container.encode(bodyPreview, forKey: .bodyPreview)
+            try container.encodeIfPresent(recovery, forKey: .recovery)
+        }
+
+        mutating func compact() {
+            guard !isBodyCompacted else { return }
+            let body = plainBody.isEmpty ? htmlBody : plainBody
+            bodyPreview = String(body.prefix(200))
+            plainBody = ""
+            htmlBody = ""
+            rawSource = ""
+            mimeRoot = nil
+            mimeSummary = nil
+            mimeDiagnostics = []
+            isBodyCompacted = true
+        }
+    }
+
+    struct ExportableRawEmail: Codable {
+        let id: UUID
+        let headers: [String: String]
+        let plainBody: String
+        let htmlBody: String
+        let rawSource: String
+        let messageType: String
+        let attachments: [AttachmentMetadataForExport]
+        let timestamp: String
+        let domains: [String]
+        let threadID: String?
+        let inReplyTo: String?
+        let references: [String]?
+        let tags: [String]
+        let anomalies: [String]
+    }
+
+    struct AttachmentMetadataForExport: Codable {
+        let filename: String
+        let mimeType: String
+        let contentID: String?
+        let size: Int
+    }
+
+    struct SummaryMetadata: Codable {
+        let start: String
+        let end: String
+        let subjectCount: Int
+    }
+
+    struct ExportableParsedMBOXFile: Codable {
+        let emails: [ExportableRawEmail]
+        let summary: SummaryMetadata
+    }
+
+    struct ParseRecoveryReport {
+        let totalMessages: Int
+        let successfullyParsed: Int
+        let failed: Int
+        var errorCategories: [String: Int]
+        /// FOLD-02: folders the source lists itself ("/"-separated paths),
+        /// empty ones included, so the archive keeps them.
+        var declaredFolders: [String] = []
+
+        var hasDamage: Bool { failed > 0 }
+        var summaryText: String {
+            if !hasDamage { return "All \(totalMessages) emails parsed successfully." }
+            var text = "Recovered \(successfullyParsed) of \(totalMessages) emails (\(failed) damaged)."
+            if !errorCategories.isEmpty {
+                let cats = errorCategories.sorted { $0.value > $1.value }.map { "\($0.key): \($0.value)" }
+                text += " Errors: \(cats.joined(separator: ", "))"
+            }
+            return text
+        }
+    }
+
+    /// §7.2: one malformed/synthetic message may not consume unbounded RAM.
+    /// A single RFC-822 message above this ceiling is counted as damaged
+    /// (category "oversized_message") and skipped with a clean report —
+    /// never silently truncated, never an OOM.
+    ///
+    /// 3.0: applies to the STREAMING parser only, which is now the fallback
+    /// engine (`Capability.offsetParser` is on by default and archives such
+    /// messages instead). Scheduled for removal with the streaming parser in
+    /// 3.1 — see `SIZE_LIMITS_DESIGN.md` §S4.
+    static let maxMessageBytes = 100 * 1024 * 1024
+
+    static func parse(
+        fileURL: URL,
+        senderEmail: String,
+        onProgress: ((Double) -> Void)? = nil
+    ) throws -> [RawEmail] {
+        try parseWithReport(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress).emails
+    }
+
+    /// §7.7: the recovery report is RETURNED, source-scoped — there is no
+    /// global mutable report, so concurrent imports cannot race.
+    static func parseWithReport(
+        fileURL: URL,
+        senderEmail: String,
+        onProgress: ((Double) -> Void)? = nil
+    ) throws -> (emails: [RawEmail], report: ParseRecoveryReport) {
+        // Ceiling on the non-streaming path ONLY: this function reads the whole
+        // file into a String, so it must refuse what it cannot hold. It is not
+        // a limit on mbox import — `parseStreamingCallback` has no file-size
+        // ceiling and is what the importer uses (S1/S4 of
+        // SIZE_LIMITS_DESIGN.md). Anything above the cap belongs on that path.
+        let maxNonStreamingBytes = 500 * 1024 * 1024
+        if let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size]) as? Int,
+           size > maxNonStreamingBytes {
+            throw ExtractionError.fileTooLarge(filename: fileURL.lastPathComponent, size: size)
+        }
+        // Mail older than UTF-8 (Thunderbird, Eudora) is often Latin-1 or mixed:
+        // a strict UTF-8 read refused the whole file. Fall back to Latin-1,
+        // which maps every byte, as the streaming engine already does.
+        let content: String
+        if let utf8 = try? FileUtils.readTextFile(url: fileURL) {
+            content = utf8
+        } else {
+            content = try FileUtils.readTextFile(url: fileURL, encoding: .isoLatin1)
+        }
+        let rawMessages = splitMBOX(content: content)
+        var messages: [RawEmail] = []
+        let total = Double(rawMessages.count)
+
+        var recoveryErrors = 0
+        var errorCategories: [String: Int] = [:]
+        for (idx, raw) in rawMessages.enumerated() {
+            do {
+                let email = try processRawMessage(raw, senderEmail: senderEmail)
+                messages.append(email)
+            } catch {
+                recoveryErrors += 1
+                let category = categorizeParseError(error, rawSnippet: String(raw.prefix(200)))
+                errorCategories[category, default: 0] += 1
+            }
+
+            if let onProgress = onProgress, total > 0 {
+                let progress = Double(idx + 1) / total
+                onProgress(progress)
+            }
+        }
+
+        let report = ParseRecoveryReport(
+            totalMessages: rawMessages.count,
+            successfullyParsed: messages.count,
+            failed: recoveryErrors,
+            errorCategories: errorCategories
+        )
+
+        // A `parsed_session.json` used to be written here on every array
+        // parse. Nothing read it (checked 2026-09-26: no loader anywhere), it
+        // put message content into Application Support as a side effect of
+        // parsing, and two parallel parses raced on its temp file. Removed.
+        return (messages, report)
+    }
+
+    private static func categorizeParseError(_ error: Error, rawSnippet: String) -> String {
+        let desc = String(describing: error).lowercased()
+        if desc.contains("encoding") || desc.contains("utf") || desc.contains("ascii") { return "encoding" }
+        if desc.contains("mime") || desc.contains("content-type") { return "mime" }
+        let lower = rawSnippet.lowercased()
+        if !lower.contains("from:") && !lower.contains("subject:") { return "missing_headers" }
+        if rawSnippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "empty_message" }
+        return "unknown"
+    }
+
+    // MARK: - Streaming Pipeline (callback per batch — no array accumulation)
+
+    /// Drain-as-you-go variant of `parseStreaming`. Instead of returning
+    /// `[RawEmail]`, the parser flushes batches of `batchSize` messages to
+    /// `onBatch` and immediately frees them, so peak memory is bounded by
+    /// `batchSize`, not by the source file size. Use this for archives that
+    /// would otherwise exceed available RAM (Gmail Takeout 200 GB+ mbox).
+    ///
+    /// Returns the total number of messages successfully parsed.
+    /// Returns the source-scoped recovery report (§7.7 — no global state).
+    @discardableResult
+    /// - Parameter envelopeProvider: P3.1. When supplied, the batch boundary is
+    ///   decided by the `AdaptiveBatchController` - bounded by parsed BYTES as
+    ///   well as message count - and re-queried after every flush, so the
+    ///   envelope can shrink mid-file under pressure. When nil the fixed
+    ///   `batchSize` applies (manual troubleshooting override).
+    static func parseStreamingCallback(
+        fileURL: URL,
+        senderEmail: String,
+        batchSize: Int = 200,
+        envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
+        retainAttachmentBytes: Bool = true,
+        materializeAttachments: Bool = true,
+        onProgress: ((Double) -> Void)? = nil,
+        onBatch: ([RawEmail]) async throws -> Void
+    ) async throws -> ParseRecoveryReport {
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileSize = (attrs[.size] as? Int64) ?? 0
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        let chunkSize = 65536
+        var buffer = Data()
+        var eof = false
+        var currentLines: [String] = []
+        var currentBytes = 0
+        var oversized = false
+        // True when the current message began at a real `From ` envelope
+        // line, i.e. it is an mbox RECORD and its `>From ` lines are the
+        // container's escaping (RFC 4155 mboxrd), to be undone on read. A
+        // bare .eml that this loop also accepts has no such escaping.
+        var currentHadEnvelope = false
+        var inMessage = false
+        var totalParsed = 0
+        var skippedCount = 0
+        var errorCategories: [String: Int] = [:]
+        var batch: [RawEmail] = []
+        batch.reserveCapacity(batchSize)
+        // P3.1: bytes accumulated in the current batch, and the envelope in
+        // force. A message COUNT alone let a 90 MiB source sit in two batches.
+        var batchBytes = 0
+        var envelope = await envelopeProvider?()
+            ?? BatchEnvelope(maxMessages: batchSize, maxBytes: Int.max)
+
+        func nextLine() throws -> String? {
+            while true {
+                if let nlRange = buffer.range(of: Data([0x0A])) {
+                    let lineData = buffer[buffer.startIndex..<nlRange.lowerBound]
+                    buffer.removeSubrange(buffer.startIndex...nlRange.lowerBound)
+                    return String(data: lineData, encoding: .utf8)
+                        ?? String(data: lineData, encoding: .isoLatin1)
+                }
+                if eof {
+                    if buffer.isEmpty { return nil }
+                    let rest = String(data: buffer, encoding: .utf8)
+                        ?? String(data: buffer, encoding: .isoLatin1)
+                    buffer.removeAll()
+                    return rest
+                }
+                // §7.1: a READ ERROR must throw — treating it as EOF would
+                // silently truncate the archive ("fake EOF" data loss).
+                let chunk: Data?
+                do { chunk = try autoreleasepool(invoking: { try handle.read(upToCount: chunkSize) }) }
+                catch {
+                    throw ExtractionError.invalidEmail(
+                        reason: "I/O error reading \(fileURL.lastPathComponent) at offset \((try? handle.offset()) ?? 0): \(error.localizedDescription)")
+                }
+                if let chunk, !chunk.isEmpty {
+                    buffer.append(chunk)
+                } else {
+                    eof = true
+                }
+            }
+        }
+
+        func flushBatchIfFull() async throws {
+            guard batch.count >= envelope.maxMessages || batchBytes >= envelope.maxBytes else { return }
+            try await onBatch(batch)
+            totalParsed += batch.count
+            batch.removeAll(keepingCapacity: true)
+            batchBytes = 0
+            // Re-ask after every flush so pressure that appears mid-file
+            // shrinks the NEXT batch rather than the next file.
+            if let envelopeProvider { envelope = await envelopeProvider() }
+        }
+
+        func flushCurrentMessage() {
+            let hadEnvelope = currentHadEnvelope
+            defer { currentBytes = 0; oversized = false; currentHadEnvelope = false }
+            if oversized {
+                skippedCount += 1
+                errorCategories["oversized_message", default: 0] += 1
+                return
+            }
+            guard !currentLines.isEmpty else { return }
+            let joined = currentLines.joined(separator: "\n")
+            let raw = hadEnvelope ? MBOXRecordBuilder.unquoteFromLines(joined) : joined
+            do {
+                let email = try processRawMessage(
+                    raw, senderEmail: senderEmail,
+                    retainAttachmentBytes: retainAttachmentBytes,
+                    materializeAttachments: materializeAttachments)
+                batchBytes += raw.utf8.count
+                batch.append(email)
+            } catch {
+                // Count the drop so it's surfaced in the returned report, not
+                // silently vanished — critical for a forensic tool.
+                skippedCount += 1
+                errorCategories["streaming parse error", default: 0] += 1
+            }
+            if fileSize > 0, let onProgress {
+                let offset = Double((try? handle.offset()) ?? 0)
+                onProgress(min(offset / Double(fileSize), 1.0))
+            }
+        }
+
+        var isFirstLine = true
+        // True from the start of a message until its first blank line. An
+        // envelope-shaped line INSIDE a header block is not a separator: RFC
+        // 4155 puts `From ` before the headers, never among them. A real
+        // Gmail-exported .eml carried its envelope line after the first few
+        // headers, and splitting there produced two half-messages — one with
+        // headers and no body, one with a body and no From (found 2026-09-25
+        // by the real-export test). The offset engine applies the same rule.
+        var headerBlockOpen = false
+        while let line = try nextLine() {
+            try Task.checkCancellation()
+            let envelopeShaped = line.hasPrefix("From ") && line.count > 5
+                && line.range(of: #"\d{4}"#, options: .regularExpression) != nil
+            let isFromLine = envelopeShaped && (!inMessage || !headerBlockOpen)
+            if isFirstLine {
+                isFirstLine = false
+                // §7.3, streaming path: a bare RFC-822 message — a .eml file,
+                // or one member of a Maildir / folder of .eml — has no "From "
+                // envelope line. `parse` and `processRawMessage` both handle
+                // that with a synthetic envelope; this loop did not, and
+                // returned ZERO messages for every such file while reporting
+                // no failure (found 2026-09-25 by the directory-source test).
+                // A file whose first line is a header field is one bare
+                // message; the envelope is added by `processRawMessage`.
+                if !isFromLine, Self.looksLikeHeaderField(line) {
+                    inMessage = true
+                    headerBlockOpen = true
+                }
+            }
+            if isFromLine {
+                if inMessage {
+                    flushCurrentMessage()
+                    currentLines = []
+                    try await flushBatchIfFull()
+                }
+                inMessage = true
+                headerBlockOpen = true
+                currentHadEnvelope = true
+            } else if inMessage {
+                if headerBlockOpen, line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\r", with: "").isEmpty {
+                    headerBlockOpen = false
+                }
+                // §7.2 per-message ceiling: stop buffering an oversized
+                // message; it is flushed as one damaged record.
+                if !oversized {
+                    currentBytes += line.utf8.count + 1
+                    if currentBytes > Self.maxMessageBytes {
+                        oversized = true
+                        currentLines = []
+                    } else {
+                        currentLines.append(line)
+                    }
+                }
+            }
+        }
+        flushCurrentMessage()
+
+        if !batch.isEmpty {
+            try await onBatch(batch)
+            totalParsed += batch.count
+            batch.removeAll(keepingCapacity: true)
+            batchBytes = 0
+        }
+        return ParseRecoveryReport(
+            totalMessages: totalParsed + skippedCount,
+            successfullyParsed: totalParsed,
+            failed: skippedCount,
+            errorCategories: errorCategories
+        )
+    }
+
+    // MARK: - Per-Email Processing
+    /// - Parameter retainAttachmentBytes: when false, attachment metadata is
+    ///   kept but any decoded payload and the MIME part tree are dropped.
+    ///
+    ///   MEASURED WARNING (2026-09-24): this saves almost nothing, and the
+    ///   import path deliberately does NOT use it. `EmailBodyExtractor` already
+    ///   leaves `base64` nil (EmailBodyExtractor.swift:325), and the retained
+    ///   MIME tree measured **28 bytes** for a 1.4 MB message. The import peak
+    ///   lives in per-message allocator churn, not in retained structures — see
+    ///   `RELEASE_READINESS.md` §P0.2 and plan task P3.5. Kept only as the hook
+    ///   for a future compaction that has an actual measured benefit.
+    /// - Parameter materializeAttachments: write each decoded attachment to a
+    ///   temp file (same-session Quick Look). The bulk import passes `false`.
+    static func processRawMessage(
+        _ raw: String,
+        senderEmail: String,
+        retainAttachmentBytes: Bool = true,
+        materializeAttachments: Bool = true
+    ) throws -> RawEmail {
+        // §7.3: a bare RFC-822 message (e.g. a .eml whose first line is a
+        // "From:" HEADER) gets a synthetic envelope on its OWN line — gluing
+        // "From " onto the first header line used to swallow that header.
+        let fullRaw = raw.hasPrefix("From ")
+            ? raw
+            : "From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n" + raw
+        let (headers, mimeParts) = MIMEParser.parseEmail(rawEmail: fullRaw)
+        let rootPart = mimeParts.first
+        let extraction: (plainBody: String, htmlBody: String, attachments: [AttachmentMetadata])
+        do {
+            // One MIME pass: the tree parsed above is what the extractor walks.
+            extraction = try EmailBodyExtractor.extractContents(parts: mimeParts, materializeAttachments: materializeAttachments)
+        } catch {
+            let bodyLines = fullRaw.components(separatedBy: "\n")
+            let blankIdx = bodyLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? 0
+            let rawBody = bodyLines.dropFirst(blankIdx + 1).joined(separator: "\n")
+            extraction = (plainBody: rawBody, htmlBody: "", attachments: [])
+        }
+
+        var mappedHeaders = headers.mapValues { decodeMIMEHeader($0) }
+        if mappedHeaders["From"] == nil {
+            if let fallback = fullRaw.split(separator: "\n").first(where: { $0.lowercased().starts(with: "from:") }) {
+                mappedHeaders["From"] = fallback.replacingOccurrences(of: "From:", with: "").trimmingCharacters(in: .whitespaces)
+            } else { mappedHeaders["From"] = "" }
+        }
+        if mappedHeaders["Subject"] == nil { mappedHeaders["Subject"] = "(No Subject)" }
+
+        ["To", "Cc", "Bcc"].forEach { key in
+            if let val = mappedHeaders[key] { mappedHeaders[key] = decodeAddressList(val) }
+        }
+
+        let from = mappedHeaders["From"] ?? ""
+        let type = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
+
+        // The Date header is kept exactly as found (it is evidence). When it
+        // is missing or unreadable, the timestamp falls back to the delivery
+        // time the message itself carries (Received, then the mbox envelope),
+        // so the archive can still date and sort it.
+        let timestamp = (parseDate(mappedHeaders["Date"]) ?? fallbackDate(headers: mappedHeaders, rawMessage: fullRaw))
+            .map { unsafe cachedISOFormatter.string(from: $0) } ?? undatedTimestamp
+        let domains = extractDomains(from: mappedHeaders)
+
+        var tags: [String] = []
+        if let gmailLabels = mappedHeaders["X-Gmail-Labels"] ?? mappedHeaders["X-gmail-labels"] {
+            tags = gmailLabels.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+
+        // P3.4: drop the duplicated payload when the caller does not need it.
+        let attachments: [AttachmentMetadata] = retainAttachmentBytes
+            ? extraction.attachments
+            : extraction.attachments.map {
+                AttachmentMetadata(filename: $0.filename, mimeType: $0.mimeType,
+                                   size: $0.size, isInline: $0.isInline,
+                                   contentID: $0.contentID, base64: nil, fileURL: $0.fileURL)
+            }
+        let retainedRoot = retainAttachmentBytes ? rootPart : nil
+
+        var email = RawEmail(
+            id: UUID(),
+            headers: mappedHeaders,
+            rawSource: fullRaw,
+            messageType: type,
+            attachments: attachments,
+            timestamp: timestamp,
+            domains: domains,
+            plainBody: extraction.plainBody,
+            htmlBody: extraction.htmlBody,
+            mimeRoot: retainedRoot,
+            mimeSummary: rootPart?.summary,
+            mimeDiagnostics: generateMIMEDiagnostics(root: rootPart),
+            threadID: detectThreadID(headers: mappedHeaders, plainBody: extraction.plainBody, htmlBody: extraction.htmlBody),
+            inReplyTo: mappedHeaders["In-Reply-To"],
+            references: mappedHeaders["References"]?.split(separator: " ").map { String($0) },
+            tags: tags,
+            anomalies: findAnomalies(headers: mappedHeaders, body: extraction.plainBody, attachments: extraction.attachments)
+        )
+        // 3.1 R3: deleted-but-present mail (Thunderbird expunged, X-Status D, Gmail Trash).
+        email.recovery = RecoveryDetector.fromHeaders(mappedHeaders, labels: tags)
+        return email
+    }
+
+    /// `Name:` at the start of a line, RFC 5322 field-name grammar (printable
+    /// ASCII except colon). Used only to decide whether a file that does not
+    /// open with an mbox envelope is a bare message rather than preamble.
+    static func looksLikeHeaderField(_ line: String) -> Bool {
+        line.range(of: #"^[!-9;-~]+:"#, options: .regularExpression) != nil
+    }
+
+    static func summarize(emails: [RawEmail]) -> SummaryMetadata {
+        let dates = emails.compactMap { parseDate($0.headers["Date"]) }.sorted()
+        let subjects = Set(emails.compactMap { $0.headers["Subject"]?.trimmingCharacters(in: .whitespacesAndNewlines) }).filter { !$0.isEmpty }
+        let start = dates.first.map { unsafe cachedISOFormatter.string(from: $0) } ?? "N/A"
+        let end = dates.last.map { unsafe cachedISOFormatter.string(from: $0) } ?? "N/A"
+        return SummaryMetadata(start: start, end: end, subjectCount: subjects.count)
+    }
+
+    static func splitMBOX(content: String) -> [String] {
+        let delimiterPattern = #"(?m)^From .+\d{4}$"#
+        guard let regex = try? NSRegularExpression(pattern: delimiterPattern) else {
+            return content.components(separatedBy: "\nFrom ")
+        }
+        let matches = regex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+        var parts: [String] = []
+        var lastIndex = content.startIndex
+        for match in matches.dropFirst() {
+            if let range = Range(match.range, in: content) {
+                parts.append(String(content[lastIndex..<range.lowerBound]))
+                lastIndex = range.lowerBound
+            }
+        }
+        parts.append(String(content[lastIndex...]))
+        return parts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    static func generateMIMEDiagnostics(root: MIMEPart?) -> [String] {
+        guard let root = root else { return ["<No MIME tree>"] }
+        var diags: [String] = []
+        func walk(_ part: MIMEPart, level: Int) {
+            let prefix = String(repeating: "  ", count: level)
+            let flags = (part.isAttachment ? "[Attachment]" : "") + (part.isInlineImage ? "[Inline]" : "")
+            diags.append("\(prefix)- \(part.mimeType) \(part.filename ?? "") \(flags)")
+            for sub in part.subparts {
+                walk(sub, level: level + 1)
+            }
+        }
+        walk(root, level: 0)
+        return diags
+    }
+
+    static func detectThreadID(headers: [String: String], plainBody: String, htmlBody: String) -> String {
+        if let refs = headers["References"], !refs.isEmpty {
+            return refs.components(separatedBy: " ").first ?? refs
+        }
+        if let inReply = headers["In-Reply-To"], !inReply.isEmpty {
+            return inReply
+        }
+        if let msgID = headers["Message-ID"] ?? headers["Message-Id"], !msgID.isEmpty {
+            return msgID
+        }
+        let subj = headers["Subject"] ?? ""
+        let from = headers["From"] ?? ""
+        let date = headers["Date"] ?? ""
+        let snippet = (plainBody + htmlBody).prefix(80)
+        return sha1("\(subj)\(from)\(date)\(snippet)")
+    }
+
+    static func findAnomalies(headers: [String: String], body: String, attachments: [AttachmentMetadata]) -> [String] {
+        var issues: [String] = []
+        if (headers["From"]?.isEmpty ?? true) { issues.append("Missing From header") }
+        if (headers["To"]?.isEmpty ?? true) { issues.append("Missing To header") }
+        if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { issues.append("Empty body") }
+        if let s = headers["Subject"], s.count > 200 { issues.append("Long subject") }
+        if let t = headers["Date"], parseDate(t) == nil { issues.append("Invalid date") }
+        if attachments.count > 10 { issues.append("Too many attachments") }
+        return issues
+    }
+
+    static func decodeMIMEHeader(_ value: String) -> String {
+        let pattern = "=\\?([^?]+)\\?([bBqQ])\\?([^?]+)\\?="
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return value }
+        let nsValue = value as NSString
+        let matches = regex.matches(in: value, range: NSRange(location: 0, length: nsValue.length))
+        var result = value
+        for match in matches.reversed() {
+            guard match.numberOfRanges == 4,
+                  let charsetRange = Range(match.range(at: 1), in: value),
+                  let encodingRange = Range(match.range(at: 2), in: value),
+                  let dataRange = Range(match.range(at: 3), in: value) else { continue }
+            let charset = value[charsetRange].lowercased()
+            let encoding = value[encodingRange].lowercased()
+            let encodedText = String(value[dataRange])
+            var decoded = encodedText
+            if encoding == "b", let data = Data(base64Encoded: encodedText) {
+                decoded = decodeWithCharset(data: data, charset: charset) ?? encodedText
+            } else if encoding == "q" {
+                let bytes = decodeQuotedPrintableBytes(encodedText)
+                decoded = decodeWithCharset(data: bytes, charset: charset) ?? encodedText
+            }
+            result = (result as NSString).replacingCharacters(in: match.range, with: decoded)
+        }
+        return result
+    }
+
+    static func decodeQuotedPrintableBytes(_ input: String) -> Data {
+        var raw = input.replacingOccurrences(of: "_", with: " ")
+        raw = raw.replacingOccurrences(of: "=\r\n", with: "")
+        raw = raw.replacingOccurrences(of: "=\n", with: "")
+        var output = Data()
+        var i = raw.startIndex
+        while i < raw.endIndex {
+            let ch = raw[i]
+            if ch == "=",
+               let h1 = raw.index(i, offsetBy: 1, limitedBy: raw.endIndex),
+               let h2 = raw.index(i, offsetBy: 2, limitedBy: raw.endIndex),
+               h2 < raw.endIndex {
+                let hex = String(raw[h1...h2])
+                if let byte = UInt8(hex, radix: 16) {
+                    output.append(byte)
+                    i = raw.index(i, offsetBy: 3)
+                    continue
+                }
+            }
+            if let ascii = ch.asciiValue {
+                output.append(ascii)
+            } else if let utf8 = String(ch).data(using: .utf8) {
+                output.append(contentsOf: utf8)
+            }
+            i = raw.index(after: i)
+        }
+        return output
+    }
+
+    static func decodeAddressList(_ value: String) -> String {
+        value.split(separator: ",").map {
+            decodeMIMEHeader($0.trimmingCharacters(in: .whitespaces))
+        }.joined(separator: ", ")
+    }
+
+    static func decodeWithCharset(data: Data, charset: String) -> String? {
+        let encoding: String.Encoding
+        switch charset.lowercased() {
+        case "utf-8", "utf8": encoding = .utf8
+        case "iso-8859-1", "latin1", "latin-1": encoding = .isoLatin1
+        case "iso-8859-2", "latin2", "latin-2": encoding = .isoLatin2
+        case "us-ascii", "ascii": encoding = .ascii
+        case "windows-1252", "cp1252": encoding = .windowsCP1252
+        case "windows-1251", "cp1251":
+            encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsCyrillic.rawValue)))
+        case "shift_jis", "shift-jis", "sjis": encoding = .shiftJIS
+        case "euc-jp": encoding = .japaneseEUC
+        case "iso-2022-jp": encoding = .iso2022JP
+        default:
+            let cfEnc = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
+            if cfEnc != kCFStringEncodingInvalidId {
+                encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEnc))
+            } else {
+                encoding = .utf8
+            }
+        }
+        return String(data: data, encoding: encoding)
+    }
+
+    /// ISO8601DateFormatter is thread-safe (Apple: formatters are safe to
+    /// use from multiple threads since iOS 7 / macOS 10.9).
+    nonisolated(unsafe) private static let cachedISOFormatter = ISO8601DateFormatter()
+
+    private static let dateFormats = [
+        "EEE, dd MMM yyyy HH:mm:ss Z",
+        "E, d MMM yyyy HH:mm:ss Z",
+        "d MMM yyyy HH:mm:ss Z",
+        "yyyy-MM-dd'T'HH:mm:ssZ",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+        "EEE, dd MMM yyyy HH:mm:ss zzz",
+        "E, d MMM yyyy HH:mm:ss zzz",
+        "EEE, dd MMM yyyy HH:mm Z",
+        "E, d MMM yyyy HH:mm Z",
+        "EEE MMM d HH:mm:ss yyyy",
+        "dd MMM yyyy HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ss"
+    ]
+
+    private static let dateFormatterQueue = DispatchQueue(label: "com.mailin.dateFormatter")
+
+    private static let threadLocalFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    static func parseDate(_ raw: String?) -> Date? {
+        guard var cleaned = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !cleaned.isEmpty else { return nil }
+        if let parenRange = cleaned.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) {
+            cleaned = String(cleaned[cleaned.startIndex..<parenRange.lowerBound])
+        }
+        return dateFormatterQueue.sync {
+            for format in dateFormats {
+                threadLocalFormatter.dateFormat = format
+                if let date = threadLocalFormatter.date(from: cleaned) {
+                    return date
+                }
+            }
+            return unsafe cachedISOFormatter.date(from: cleaned)
+        }
+    }
+
+    /// The timestamp a message gets when no date can be found anywhere in it.
+    static let undatedTimestamp = "1970-01-01T00:00:00Z"
+
+    /// A date for a message whose `Date` header is missing or unreadable
+    /// (Gmail chat transcripts, some forwarded and generated mail): the time in
+    /// its `Received` header (the text after the last `;`), then the date on the
+    /// mbox `From ` envelope line. The synthetic envelope added for bare
+    /// RFC 822 files (1 Jan 1970) is not a date and is ignored.
+    static func fallbackDate(headers: [String: String], rawMessage: String) -> Date? {
+        if let received = headers["Received"], let semicolon = received.lastIndex(of: ";") {
+            let tail = received[received.index(after: semicolon)...]
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            if let date = parseDate(tail) { return date }
+        }
+        guard rawMessage.hasPrefix("From ") else { return nil }
+        let envelope = rawMessage.prefix(while: { $0 != "\n" && $0 != "\r" })
+        // "From <sender> <asctime>", where asctime may carry a zone:
+        // "Fri Jun 20 02:34:13 +0000 2014" or "Tue Mar 14 09:41:00 2017".
+        let fields = envelope.split(separator: " ", omittingEmptySubsequences: true).dropFirst(2)
+        guard fields.count >= 5 else { return nil }
+        let text = fields.joined(separator: " ")
+        let date: Date? = dateFormatterQueue.sync {
+            for format in ["EEE MMM d HH:mm:ss Z yyyy", "EEE MMM d HH:mm:ss yyyy"] {
+                threadLocalFormatter.dateFormat = format
+                if let date = threadLocalFormatter.date(from: text) { return date }
+            }
+            return nil
+        }
+        guard let date, date.timeIntervalSince1970 > 0 else { return nil }
+        return date
+    }
+
+    /// The date the archive stores for `email`: its `Date` header, else the
+    /// fallback recorded in its timestamp at parse time, else nil.
+    static func effectiveDate(for email: RawEmail) -> Date? {
+        if let date = parseDate(email.headers["Date"]) { return date }
+        guard email.timestamp != undatedTimestamp, let date = unsafe cachedISOFormatter.date(from: email.timestamp) else { return nil }
+        return date
+    }
+
+    static func extractDomains(from headers: [String: String]) -> [String] {
+        var domains = Set<String>()
+        let stripChars = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "<>\""))
+        ["From", "To", "Cc", "Bcc"].forEach { key in
+            guard let line = headers[key] else { return }
+            for part in line.split(separator: ",") {
+                if let at = part.firstIndex(of: "@") {
+                    let domain = part[at...].dropFirst().trimmingCharacters(in: stripChars)
+                    if domain.contains(".") {
+                        domains.insert(domain.lowercased())
+                    }
+                }
+            }
+        }
+        return Array(domains)
+    }
+
+    static func sha1(_ input: String) -> String {
+        let data = Data(input.utf8)
+        let digest = Insecure.SHA1.hash(data: data)
+        return digest.map { unsafe String(format: "%02x", $0) }.joined()
+    }
+}
+
+extension MBOXParser.RawEmail {
+    func asExportable() -> MBOXParser.ExportableRawEmail {
+        MBOXParser.ExportableRawEmail(
+            id: self.id,
+            headers: self.headers,
+            plainBody: self.plainBody,
+            htmlBody: self.htmlBody,
+            rawSource: self.rawSource,
+            messageType: self.messageType,
+            attachments: self.attachments.map {
+                MBOXParser.AttachmentMetadataForExport(
+                    filename: $0.filename,
+                    mimeType: $0.mimeType,
+                    contentID: $0.contentID,
+                    size: $0.size
+                )
+            },
+            timestamp: self.timestamp,
+            domains: self.domains,
+            threadID: self.threadID,
+            inReplyTo: self.inReplyTo,
+            references: self.references,
+            tags: self.tags,
+            anomalies: self.anomalies
+        )
+    }
+}

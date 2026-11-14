@@ -1,0 +1,236 @@
+//
+//  ExportRequest.swift
+//  ArchiveCore
+//
+//  The export option, request and format types shared by the writers and the app's
+//  pre-flight sheet / runner.
+//
+
+import Foundation
+
+enum UnifiedExportFormat: String, Codable, CaseIterable, Sendable {
+    case word, csv, json, printText, markdown, headersCSV, mbox   // single documents
+    case emlFiles, pdfFiles, tiffFiles, msgFiles                  // one file per email
+    case portableHTML                    // folder with index.html viewer
+    case vcard, ics                      // derived extracts
+}
+
+/// An app a finished export is handed to.
+enum ExportHandOff: String, Codable, Sendable {
+    case devonthink
+}
+
+/// Five jobs OUT-01: what a format preserves, said before the export runs.
+/// A PDF or a spreadsheet is a readable report of the mail; it cannot be
+/// re-imported as email. Only the mail formats are restorable copies.
+enum ExportFidelity: String, Codable, Sendable, CaseIterable {
+    /// Standard mail files: re-importable by mailin and other mail apps.
+    case mailPreserving
+    /// Human- or machine-readable renderings: not a restorable mail archive.
+    case report
+    /// Derived from the mail (addresses, events): not a copy of the mail at all.
+    case extract
+
+    var label: String {
+        switch self {
+        case .mailPreserving: return "Mail — reimportable"
+        case .report: return "Reports and documents — readable, not restorable mail"
+        case .extract: return "Extracts from the mail"
+        }
+    }
+
+    /// The one-line explanation shown on the pre-flight sheet.
+    var note: String {
+        switch self {
+        case .mailPreserving:
+            return "A mail-preserving format: these files can be re-imported by mailin and by other mail apps."
+        case .report:
+            return "A report, not a mail archive: this output cannot be re-imported as email. Keep an mbox or .eml export for a restorable copy."
+        case .extract:
+            return "Derived from the mail, not a copy of it: the messages themselves are not in this output."
+        }
+    }
+}
+
+extension UnifiedExportFormat {
+    var fidelity: ExportFidelity {
+        switch self {
+        case .mbox, .emlFiles, .msgFiles: return .mailPreserving
+        case .word, .csv, .json, .printText, .markdown, .headersCSV, .pdfFiles, .tiffFiles, .portableHTML: return .report
+        case .vcard, .ics: return .extract
+        }
+    }
+}
+
+// MARK: - Options
+
+enum ExportFolderLayout: String, Codable, CaseIterable, Sendable {
+    case flat
+    case byYear
+    /// Five jobs OUT-03 / FOLD-05: the folders the messages came from
+    /// (PST folders, Gmail labels, mailbox names), one directory per folder
+    /// path, names made safe for the file system with the original kept in
+    /// the inventory.
+    case sourceFolders
+
+    var label: String {
+        switch self {
+        case .flat: return "One folder"
+        case .byYear: return "A folder per year"
+        case .sourceFolders: return "The folders they came from"
+        }
+    }
+}
+
+enum ExportCollisionRule: String, Codable, CaseIterable, Sendable {
+    case skipExisting
+    case overwrite
+    case keepBoth
+
+    var label: String {
+        switch self {
+        case .skipExisting: return "Skip files that already exist"
+        case .overwrite: return "Replace files that already exist"
+        case .keepBoth: return "Keep both (add a number)"
+        }
+    }
+}
+
+/// How a writer should treat the destination and an interrupted run.
+struct ExportWriteOptions: Codable, Equatable, Sendable {
+    /// Scope positions already written by an interrupted run; stepped over.
+    var skipFirst: Int = 0
+    /// Single documents: continue the existing file instead of recreating it.
+    var append: Bool = false
+    /// Keep partial output on cancel/error so the run can be resumed.
+    var keepPartialOnCancel: Bool = false
+    var layout: ExportFolderLayout = .flat
+    var collision: ExportCollisionRule = .overwrite
+    /// Recheck R2: for a single-document resume, the byte length the partial
+    /// artifact must have (recorded when the run stopped). A different length
+    /// means the file was changed and the resume is refused.
+    var expectedAppendOffset: UInt64? = nil
+    /// Third review T2: the SHA-256 the partial artifact must hash to; length
+    /// alone does not distinguish a same-length edit.
+    var expectedAppendSHA256: String? = nil
+    /// OUT-02: with the source-folder layout, write a message that belongs to
+    /// several folders into each of them (one file per occurrence) instead
+    /// of once in its first folder. The extra copies are counted and disclosed.
+    var folderOccurrences: Bool = false
+}
+
+/// The user's pre-flight choices.
+struct ExportOptions: Codable, Equatable, Sendable {
+    var layout: ExportFolderLayout = .flat
+    var collision: ExportCollisionRule = .overwrite
+    /// OUT-02: source-folder layout — each folder occurrence, not each unique message.
+    /// Optional-defaulted so receipts written before it decode.
+    var folderOccurrences: Bool? = nil
+    /// Folder formats: also copy every attachment into `Attachments/`.
+    var includeAttachmentsFolder: Bool = false
+    /// mbox: split into ≤ 2 GB partitions (FAT32-safe, Apple Mail imports a folder).
+    var partitionMBOX: Bool = false
+}
+
+// MARK: - Request
+
+/// Everything needed to run — or later resume — one export. Codable so a
+/// receipt can carry it.
+struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID = UUID()
+    var format: UnifiedExportFormat
+    var title: String
+    var scope: ArchiveSelectionScope
+    var destination: String
+    var isFolder: Bool
+    /// Free-tier cap, nil when unlimited.
+    var cap: Int?
+    var options: ExportOptions = ExportOptions()
+    /// Resume: positions already written by the interrupted run.
+    var skipFirst: Int = 0
+    /// Resume (audit F08): the selection's fingerprint when the run stopped.
+    /// A resume recomputes it and refuses to continue over a changed
+    /// selection, since "skip the first N" would then skip or repeat mail.
+    var selectionFingerprint: String? = nil
+    /// Resume (recheck R2): the partial single-document artifact's byte
+    /// length when the run stopped; the resume refuses a file of any other
+    /// length. Nil for folder formats.
+    var resumeArtifactBytes: UInt64? = nil
+    /// Resume (T2): the partial single-document artifact's SHA-256 when the
+    /// run stopped. Nil for folder formats (their manifest carries per-file hashes).
+    var resumeArtifactSHA256: String? = nil
+    /// Count known when the request was built (menu headline); nil = unknown.
+    var emailCountHint: Int?
+    /// After the files are written, hand them to another app (E2: DEVONthink). Optional,
+    /// so receipts written before it existed still decode.
+    var handOff: ExportHandOff? = nil
+
+    var destinationURL: URL { URL(fileURLWithPath: destination) }
+
+    /// Formats whose partial output can be continued. JSON and Word carry a
+    /// trailer, the HTML viewer regenerates its index, vCard/ICS are derived
+    /// extracts — none of those can be appended to.
+    var isResumable: Bool {
+        switch format {
+        case .emlFiles, .pdfFiles, .tiffFiles, .msgFiles: return true
+        case .csv, .headersCSV, .printText, .markdown: return true
+        case .mbox: return !options.partitionMBOX
+        case .word, .json, .portableHTML, .vcard, .ics: return false
+        }
+    }
+
+    var writeOptions: ExportWriteOptions {
+        ExportWriteOptions(skipFirst: skipFirst,
+                           append: skipFirst > 0,
+                           keepPartialOnCancel: isResumable,
+                           layout: options.layout,
+                           collision: options.collision,
+                           expectedAppendOffset: skipFirst > 0 ? resumeArtifactBytes : nil,
+                           expectedAppendSHA256: skipFirst > 0 ? resumeArtifactSHA256 : nil,
+                           folderOccurrences: options.layout == .sourceFolders && options.folderOccurrences == true)
+    }
+}
+
+extension UnifiedExportFormat {
+    var displayName: String {
+        switch self {
+        case .word: return "Word document"
+        case .csv: return "CSV spreadsheet"
+        case .json: return "JSON archive"
+        case .printText: return "Batch print text"
+        case .markdown: return "Markdown"
+        case .headersCSV: return "Headers-only CSV"
+        case .mbox: return "mbox archive"
+        case .emlFiles: return ".eml files"
+        case .pdfFiles: return "PDF files"
+        case .tiffFiles: return "TIFF images"
+        case .msgFiles: return "Outlook .msg files"
+        case .portableHTML: return "Portable HTML viewer"
+        case .vcard: return "Contacts (vCard)"
+        case .ics: return "Calendar events (.ics)"
+        }
+    }
+
+    var writesFolder: Bool {
+        switch self {
+        case .emlFiles, .pdfFiles, .tiffFiles, .msgFiles, .portableHTML: return true
+        default: return false
+        }
+    }
+
+    /// Output bytes per stored raw byte — a planning factor, labelled as such
+    /// in the sheet. TIFF renders pages as images; CSV keeps a few columns.
+    var sizeFactor: Double {
+        switch self {
+        case .emlFiles, .mbox: return 1.02
+        case .msgFiles, .json, .portableHTML: return 1.1
+        case .pdfFiles: return 0.8
+        case .tiffFiles: return 3.0
+        case .word, .markdown, .printText: return 0.35
+        case .csv: return 0.06
+        case .headersCSV: return 0.01
+        case .vcard, .ics: return 0.002
+        }
+    }
+}
+

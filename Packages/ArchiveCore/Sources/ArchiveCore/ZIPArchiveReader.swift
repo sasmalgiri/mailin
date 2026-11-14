@@ -1,0 +1,635 @@
+//
+//  ZIPArchiveReader.swift
+//  maxmailin
+//
+//  Bounded container import (v2.1 backlog #1). Streams ONE member at a time
+//  out of a ZIP — or the single payload of a gzip — to a scratch file, so the
+//  importer can hand that file to the ordinary format classifier and parser
+//  and delete it before the next member is touched.
+//
+//  What "bounded" means here, and what limits apply:
+//   • The archive is never loaded into memory. The central directory is read
+//     (it is small: ~80 bytes per member), then each member's bytes stream
+//     through a 64 KiB window into the destination file.
+//   • The only size ceiling is the DEVICE's: a member is refused when the
+//     volume holding the scratch file lacks room for its declared size plus a
+//     margin. There is no arbitrary "members over N MB are skipped" cap —
+//     the format has none, so the app must not invent one.
+//   • A member whose output exceeds its declared uncompressed size is aborted
+//     and refused (zip-bomb shape: the directory lies about the size). A
+//     member whose output is short, or whose CRC-32 does not match, is refused
+//     too — a truncated mailbox imported "successfully" would be a lie.
+//   • Encrypted members and compression methods other than stored/deflate are
+//     refused by name. Nested containers are left to the caller, which refuses
+//     them rather than recursing without bound.
+//
+//  ZIP64 is supported (Google Takeout exports over 4 GB use it): the ZIP64
+//  end-of-central-directory record and the 0x0001 extra field are honoured.
+//  Deflate is decoded with the Compression framework's `COMPRESSION_ZLIB`,
+//  which is raw DEFLATE — exactly what ZIP method 8 and the gzip body carry.
+//
+
+import Foundation
+import CryptoKit
+import Compression
+
+struct ZIPArchiveReader {
+
+    /// Bumped when extraction behaviour changes in a way that alters which
+    /// messages come out of the same archive; bound into import identities.
+    static let version = 1
+
+    /// Kept free on the scratch volume beyond a member's declared size, so an
+    /// extraction cannot fill the disk to the last byte.
+    static let diskMarginBytes: Int64 = 64 * 1024 * 1024
+
+    private static let windowSize = 64 * 1024
+
+    struct Member: Sendable, Equatable {
+        let name: String
+        let compressedSize: Int64
+        let uncompressedSize: Int64
+        let method: UInt16
+        let crc32: UInt32
+        /// Absolute within the source: for a spanned set, the disk's base is already added.
+        let localHeaderOffset: Int64
+        let isEncrypted: Bool
+        /// Directive §6 "Containers": the volume (0-based) a spanned entry starts on.
+        var diskNumberStart: Int = 0
+
+        var isDirectory: Bool { name.hasSuffix("/") }
+
+        /// Members that are never mail and should not even be extracted.
+        var isJunk: Bool {
+            let base = (name as NSString).lastPathComponent
+            return name.hasPrefix("__MACOSX/") || base == ".DS_Store" || base == "Thumbs.db"
+                || base.hasPrefix("._") || name.hasPrefix(".")
+        }
+    }
+
+    enum ReadError: Error, CustomStringConvertible, Equatable {
+        case notAZip
+        case truncated(String)
+        case malformed(String)
+        case unsupportedMethod(UInt16, member: String)
+        case encrypted(member: String)
+        /// §13.8 step 5: a password was given and did not open the member.
+        case wrongPassword(member: String)
+        case sizeMismatch(member: String, declared: Int64, actual: Int64)
+        case crcMismatch(member: String)
+        case insufficientDisk(member: String, needed: Int64, available: Int64)
+        /// R05: the caller's byte budget was reached while decompressing —
+        /// decompression stopped there; nothing was invented about the rest.
+        case budgetExceeded(member: String, limit: Int64)
+
+        var description: String {
+            switch self {
+            case .budgetExceeded(let member, let limit): return "\(member): decompression stopped at the \(limit)-byte budget."
+            case .notAZip: return "Not a ZIP archive (no end-of-central-directory record)."
+            case .truncated(let what): return "Archive is truncated: \(what)."
+            case .malformed(let what): return "Archive is malformed: \(what)."
+            case .unsupportedMethod(let m, let member): return "\(member): compression method \(m) is not supported (only stored and deflate)."
+            case .encrypted(let member): return "\(member): encrypted members cannot be imported."
+            case .wrongPassword(let member): return "\(member): the password did not open it."
+            case .sizeMismatch(let member, let declared, let actual): return "\(member): declared \(declared) bytes, produced \(actual) — refused."
+            case .crcMismatch(let member): return "\(member): CRC-32 does not match — the member is damaged."
+            case .insufficientDisk(let member, let needed, let available): return "\(member): needs \(needed) bytes of scratch space, \(available) available."
+            }
+        }
+    }
+
+    // MARK: - Central directory
+
+    /// Every entry in the archive's central directory, in directory order.
+    static func members(of url: URL) throws -> [Member] {
+        try members(source: try FileRandomAccessSource(url: url))
+    }
+
+    /// Directive §6 "Containers": the number of disks a spanned archive's
+    /// last volume declares (its end-of-central-directory "number of this
+    /// disk" + 1), or nil when the file is not a ZIP / is a single-disk ZIP.
+    static func spannedDiskCount(url: URL) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let fileSize = try? Int64(handle.seekToEnd()), fileSize >= 22 else { return nil }
+        let tailLength = Int(min(fileSize, 65_557))
+        guard (try? handle.seek(toOffset: UInt64(fileSize - Int64(tailLength)))) != nil,
+              let tail = try? handle.read(upToCount: tailLength),
+              let eocdIndex = lastIndex(of: [0x50, 0x4B, 0x05, 0x06], in: tail) else { return nil }
+        let eocd = Data(tail[eocdIndex...])
+        guard eocd.count >= 22 else { return nil }
+        var thisDisk = Int(u16(eocd, 4))
+        if thisDisk == 0xFFFF, eocdIndex - 20 >= tail.startIndex, tail[(eocdIndex - 20)..<(eocdIndex - 16)].elementsEqual([0x50, 0x4B, 0x06, 0x07]) {
+            thisDisk = Int(u32(tail, eocdIndex - 20 + 16)) - 1   // ZIP64 locator: total number of disks
+        }
+        return thisDisk > 0 ? thisDisk + 1 : nil
+    }
+
+    /// The directory of a ZIP held in any random-access source — one file
+    /// or a spanned volume set. Local header offsets come out absolute
+    /// within the source (the entry's disk base is added), so `extract`
+    /// reads them without knowing about volumes.
+    static func members(source: RandomAccessSource) throws -> [Member] {
+        let fileSize = source.length
+
+        // End of central directory: at most 65,535 bytes of comment precede
+        // the end of file, plus the 22-byte record itself.
+        let tailLength = Int(min(fileSize, 65_557))
+        let tail = try source.read(at: fileSize - Int64(tailLength), count: tailLength)
+        guard let eocdIndex = lastIndex(of: [0x50, 0x4B, 0x05, 0x06], in: tail) else { throw ReadError.notAZip }
+        // Copied, not sliced: a Data slice keeps its parent's indices, and the
+        // little-endian readers below index from zero.
+        let eocd = Data(tail[eocdIndex...])
+        guard eocd.count >= 22 else { throw ReadError.truncated("end-of-central-directory record") }
+
+        var entryCount = Int64(u16(eocd, 10))
+        var cdSize = Int64(u32(eocd, 12))
+        var cdOffset = Int64(u32(eocd, 16))
+        var cdDisk = Int(u16(eocd, 6))
+
+        // ZIP64: any 0xFFFF / 0xFFFFFFFF field means "see the ZIP64 record",
+        // located by the 20-byte locator that immediately precedes the EOCD.
+        if entryCount == 0xFFFF || cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF || cdDisk == 0xFFFF {
+            let locatorStart = eocdIndex - 20
+            guard locatorStart >= tail.startIndex,
+                  tail[locatorStart..<locatorStart + 4].elementsEqual([0x50, 0x4B, 0x06, 0x07]) else {
+                throw ReadError.malformed("ZIP64 fields present but no ZIP64 locator")
+            }
+            let zip64Disk = Int(u32(tail, locatorStart + 4))
+            var zip64Offset = try i64(u64(tail, locatorStart + 8), "ZIP64 locator offset")
+            zip64Offset += source.diskBase(zip64Disk) ?? 0
+            guard zip64Offset >= 0, try checkedSum(zip64Offset, 56, "ZIP64 record end") <= fileSize else {
+                throw ReadError.truncated("ZIP64 end-of-central-directory record")
+            }
+            let z = try source.read(at: zip64Offset, count: 56)
+            guard z.count == 56, z.prefix(4).elementsEqual([0x50, 0x4B, 0x06, 0x06]) else {
+                throw ReadError.malformed("ZIP64 end-of-central-directory signature")
+            }
+            entryCount = try i64(u64(z, 32), "ZIP64 entry count")
+            cdSize = try i64(u64(z, 40), "ZIP64 central directory size")
+            cdOffset = try i64(u64(z, 48), "ZIP64 central directory offset")
+            cdDisk = Int(u32(z, 20))
+        }
+        // Spanned set: the directory offset is relative to its own disk.
+        if let base = source.diskBase(cdDisk) { cdOffset += base }
+        else if source.volumeCount > 1 || cdDisk > 0 { throw ReadError.malformed("the central directory is on volume \(cdDisk + 1), which the set does not have") }
+
+        guard cdOffset >= 0, cdSize >= 0, try checkedSum(cdOffset, cdSize, "central directory end") <= fileSize else {
+            throw ReadError.truncated("central directory")
+        }
+        let directory = try source.read(at: cdOffset, count: Int(cdSize))
+        guard Int64(directory.count) == cdSize else { throw ReadError.truncated("central directory") }
+
+        var members: [Member] = []
+        members.reserveCapacity(Int(min(entryCount, 1_000_000)))
+        var cursor = directory.startIndex
+        while cursor + 46 <= directory.endIndex {
+            guard directory[cursor..<cursor + 4].elementsEqual([0x50, 0x4B, 0x01, 0x02]) else {
+                throw ReadError.malformed("central directory entry signature at \(cursor - directory.startIndex)")
+            }
+            let flags = u16(directory, cursor + 8)
+            let method = u16(directory, cursor + 10)
+            let crc = u32(directory, cursor + 16)
+            var compressed = Int64(u32(directory, cursor + 20))
+            var uncompressed = Int64(u32(directory, cursor + 24))
+            let nameLength = Int(u16(directory, cursor + 28))
+            let extraLength = Int(u16(directory, cursor + 30))
+            let commentLength = Int(u16(directory, cursor + 32))
+            var diskStart = Int(u16(directory, cursor + 34))
+            var localOffset = Int64(u32(directory, cursor + 42))
+
+            let nameStart = cursor + 46
+            let extraStart = nameStart + nameLength
+            let entryEnd = extraStart + extraLength + commentLength
+            guard entryEnd <= directory.endIndex else { throw ReadError.truncated("central directory entry") }
+
+            let nameData = directory[nameStart..<extraStart]
+            let name = String(data: nameData, encoding: .utf8)
+                ?? String(data: nameData, encoding: .isoLatin1) ?? "member-\(members.count)"
+
+            // ZIP64 extra field 0x0001: 8-byte values, present only for the
+            // fields that were saturated, in the fixed order size/csize/offset.
+            if compressed == 0xFFFF_FFFF || uncompressed == 0xFFFF_FFFF || localOffset == 0xFFFF_FFFF || diskStart == 0xFFFF {
+                var e = extraStart
+                let extraEnd = extraStart + extraLength
+                while e + 4 <= extraEnd {
+                    let id = u16(directory, e), declared = Int(u16(directory, e + 2))
+                    // Audit F10: a declared field length is untrusted — it is
+                    // bounded by the extra region that actually exists, not
+                    // the other way round.
+                    guard e + 4 + declared <= extraEnd else {
+                        throw ReadError.malformed("\(name): extra field 0x\(String(id, radix: 16)) declares \(declared) bytes, \(extraEnd - e - 4) present")
+                    }
+                    let fieldEnd = e + 4 + declared
+                    var f = e + 4
+                    if id == 0x0001 {
+                        if uncompressed == 0xFFFF_FFFF, f + 8 <= fieldEnd { uncompressed = try i64(u64(directory, f), "\(name): ZIP64 size"); f += 8 }
+                        if compressed == 0xFFFF_FFFF, f + 8 <= fieldEnd { compressed = try i64(u64(directory, f), "\(name): ZIP64 compressed size"); f += 8 }
+                        if localOffset == 0xFFFF_FFFF, f + 8 <= fieldEnd { localOffset = try i64(u64(directory, f), "\(name): ZIP64 offset"); f += 8 }
+                        if diskStart == 0xFFFF, f + 4 <= fieldEnd { diskStart = Int(u32(directory, f)); f += 4 }
+                        break
+                    }
+                    e = fieldEnd
+                }
+            }
+            // Spanned set: the local header offset is relative to the entry's
+            // disk; made absolute here. A disk the set does not have leaves
+            // the offset relative — the caller marks the member as needing
+            // that volume (`SplitVolumeSet`).
+            if let base = source.diskBase(diskStart) { localOffset += base }
+
+            members.append(Member(name: name,
+                                  compressedSize: compressed,
+                                  uncompressedSize: uncompressed,
+                                  method: method,
+                                  crc32: crc,
+                                  localHeaderOffset: localOffset,
+                                  isEncrypted: (flags & 0x0001) != 0,
+                                  diskNumberStart: diskStart))
+            cursor = entryEnd
+        }
+        return members
+    }
+
+    // MARK: - Extraction
+
+    /// Streams `member` into `destination`, verifying size and CRC-32. On any
+    /// failure the partial output is deleted and the error names the member.
+    ///
+    /// - Parameter availableDiskBytes: room on the destination volume; when
+    ///   nil it is read from the file system. The member is refused before a
+    ///   byte is written if it would not fit with `diskMarginBytes` to spare.
+    /// - Parameter password: §13.8 step 5 — opens a ZipCrypto or WinZip AES
+    ///   member; without one an encrypted member is refused as `encrypted`,
+    ///   with a wrong one as `wrongPassword`. The password is used for this
+    ///   call and not kept.
+    static func extract(_ member: Member, from url: URL, to destination: URL,
+                        availableDiskBytes: Int64? = nil, password: String? = nil) throws {
+        try extract(member, source: try FileRandomAccessSource(url: url), to: destination,
+                    availableDiskBytes: availableDiskBytes, password: password)
+    }
+
+    /// `extract` over any random-access source (a file or a spanned volume set).
+    static func extract(_ member: Member, source archive: RandomAccessSource, to destination: URL,
+                        availableDiskBytes: Int64? = nil, password: String? = nil) throws {
+        if member.isEncrypted, password == nil { throw ReadError.encrypted(member: member.name) }
+        guard member.method == 0 || member.method == 8 || (member.method == 99 && member.isEncrypted) else {
+            throw ReadError.unsupportedMethod(member.method, member: member.name)
+        }
+        let available = availableDiskBytes ?? freeSpace(at: destination.deletingLastPathComponent())
+        if let available, available < member.uncompressedSize + diskMarginBytes {
+            throw ReadError.insufficientDisk(member: member.name,
+                                             needed: member.uncompressedSize + diskMarginBytes,
+                                             available: available)
+        }
+
+        let fileSize = archive.length
+        // Sequential reads over the source, where the FileHandle cursor used to be.
+        var cursor: Int64 = 0
+        func readNext(_ count: Int) throws -> Data {
+            let chunk = try archive.read(at: cursor, count: count)
+            cursor += Int64(chunk.count)
+            return chunk
+        }
+
+        // Local file header: 30 fixed bytes, then name and extra (whose
+        // lengths may differ from the central directory's — always read the
+        // local ones).
+        guard member.localHeaderOffset >= 0, member.compressedSize >= 0, member.uncompressedSize >= 0,
+              try checkedSum(member.localHeaderOffset, 30, "\(member.name): local header end") <= fileSize else {
+            throw ReadError.truncated("\(member.name): local header")
+        }
+        cursor = member.localHeaderOffset
+        let local = try readNext(30)
+        guard local.count == 30, local.prefix(4).elementsEqual([0x50, 0x4B, 0x03, 0x04]) else {
+            throw ReadError.malformed("\(member.name): local header signature")
+        }
+        let localNameLength = Int64(u16(local, 26)), localExtraLength = Int64(u16(local, 28))
+        let dataStart = member.localHeaderOffset + 30 + localNameLength + localExtraLength
+        guard try checkedSum(dataStart, member.compressedSize, "\(member.name): member data end") <= fileSize else {
+            throw ReadError.truncated("\(member.name): member data")
+        }
+        cursor = dataStart
+
+        // Encrypted members: the data is read through a decrypting source.
+        var method = member.method
+        var compressedLength = member.compressedSize
+        var source: (Int) throws -> Data = { try readNext($0) }
+        var finish: () throws -> Void = {}
+        var checkCRC = true
+        if member.isEncrypted, let password {
+            if member.method == 99 {
+                cursor = member.localHeaderOffset + 30 + localNameLength
+                let extra = try readNext(Int(localExtraLength))
+                guard let aes = WinZipAES.extraField(in: extra) else { throw ReadError.malformed("\(member.name): AES member without its extra field") }
+                let saltLength = WinZipAES.saltLength(strength: aes.strength)
+                let prefix = try readNext(saltLength + 2)
+                guard prefix.count == saltLength + 2 else { throw ReadError.truncated("\(member.name): AES salt") }
+                let keys = WinZipAES.keys(password: password, salt: Array(prefix.prefix(saltLength)), strength: aes.strength)
+                guard Array(prefix.suffix(2)) == keys.verifier else { throw ReadError.wrongPassword(member: member.name) }
+                var stream = WinZipAES.CounterStream(key: keys.encryption)
+                var mac = HMAC<Insecure.SHA1>(key: SymmetricKey(data: keys.authentication))
+                compressedLength = member.compressedSize - Int64(saltLength) - 2 - 10
+                guard compressedLength >= 0 else { throw ReadError.truncated("\(member.name): AES payload") }
+                var remainingPayload = compressedLength
+                source = { want in
+                    let take = Int(min(Int64(want), remainingPayload))
+                    guard take > 0 else { return Data() }
+                    let chunk = try readNext(take)
+                    remainingPayload -= Int64(chunk.count)
+                    mac.update(data: chunk)
+                    return try stream.process(chunk)
+                }
+                finish = {
+                    let code = try readNext(10)
+                    guard code.count == 10, Data(mac.finalize()).prefix(10) == code else { throw ReadError.wrongPassword(member: member.name) }
+                }
+                method = aes.actualMethod
+                checkCRC = aes.vendorVersion == 1 || member.crc32 != 0   // AE-2 stores no CRC
+            } else {
+                var cipher = ZipCryptoCipher(password: password)
+                let header = cipher.decrypt(try readNext(12))
+                guard header.count == 12 else { throw ReadError.truncated("\(member.name): encryption header") }
+                let localFlags = u16(local, 6), localTime = u16(local, 10)
+                let check: UInt8 = (localFlags & 0x0008) != 0 ? UInt8(truncatingIfNeeded: localTime >> 8) : UInt8(truncatingIfNeeded: member.crc32 >> 24)
+                guard header[header.startIndex + 11] == check else { throw ReadError.wrongPassword(member: member.name) }
+                compressedLength = member.compressedSize - 12
+                source = { want in cipher.decrypt(try readNext(want)) }
+            }
+        }
+        guard method == 0 || method == 8 else { throw ReadError.unsupportedMethod(method, member: member.name) }
+
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let out = try FileHandle(forWritingTo: destination)
+        var succeeded = false
+        defer {
+            try? out.close()
+            if !succeeded { try? FileManager.default.removeItem(at: destination) }
+        }
+
+        var crc = CRC32()
+        var written: Int64 = 0
+        func sink(_ chunk: Data) throws {
+            written += Int64(chunk.count)
+            if written > member.uncompressedSize {
+                throw ReadError.sizeMismatch(member: member.name, declared: member.uncompressedSize, actual: written)
+            }
+            crc.update(chunk)
+            try out.write(contentsOf: chunk)
+        }
+
+        if method == 0 {
+            try copyStored(count: compressedLength, member: member.name, supply: source, sink: sink)
+        } else {
+            try inflate(count: compressedLength, member: member.name, supply: source, sink: sink)
+        }
+        try finish()
+
+        guard written == member.uncompressedSize else {
+            throw ReadError.sizeMismatch(member: member.name, declared: member.uncompressedSize, actual: written)
+        }
+        if checkCRC, crc.value != member.crc32 {
+            // A ZipCrypto check byte passes one wrong password in 256; the CRC catches the rest.
+            throw member.isEncrypted ? ReadError.wrongPassword(member: member.name) : ReadError.crcMismatch(member: member.name)
+        }
+        succeeded = true
+    }
+
+    // MARK: - gzip
+
+    /// Decompresses a gzip file (RFC 1952) into `destination`, verifying the
+    /// trailer's CRC-32 and size. gzip carries no member name; the caller
+    /// derives one from the archive's own name.
+    /// - Parameter maxOutputBytes: R05 — a budget enforced INSIDE the inflate
+    ///   sink: decompression stops the moment the output would pass it, the
+    ///   partial file is removed and `budgetExceeded` names the member.
+    static func gunzip(_ url: URL, to destination: URL, availableDiskBytes: Int64? = nil, maxOutputBytes: Int64? = nil) throws {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let fileSize = Int64(try handle.seekToEnd())
+        guard fileSize >= 18 else { throw ReadError.truncated("gzip header and trailer") }
+
+        try handle.seek(toOffset: 0)
+        let header = try handle.read(upToCount: 10) ?? Data()
+        guard header.count == 10, header[0] == 0x1F, header[1] == 0x8B else { throw ReadError.malformed("gzip signature") }
+        guard header[2] == 8 else { throw ReadError.unsupportedMethod(UInt16(header[2]), member: url.lastPathComponent) }
+        let flags = header[3]
+        var offset: Int64 = 10
+        if flags & 0x04 != 0 {                       // FEXTRA
+            try handle.seek(toOffset: UInt64(offset))
+            let len = try handle.read(upToCount: 2) ?? Data()
+            guard len.count == 2 else { throw ReadError.truncated("gzip extra field") }
+            offset += 2 + Int64(u16(len, len.startIndex))
+        }
+        for flag: UInt8 in [0x08, 0x10] where flags & flag != 0 {   // FNAME, FCOMMENT
+            try handle.seek(toOffset: UInt64(offset))
+            var found = false
+            while !found {
+                let chunk = try handle.read(upToCount: 256) ?? Data()
+                guard !chunk.isEmpty else { throw ReadError.truncated("gzip header string") }
+                if let zero = chunk.firstIndex(of: 0) {
+                    offset += Int64(zero - chunk.startIndex + 1)
+                    found = true
+                } else {
+                    offset += Int64(chunk.count)
+                }
+            }
+        }
+        if flags & 0x02 != 0 { offset += 2 }         // FHCRC
+
+        // Trailer: CRC-32 and ISIZE (mod 2^32) of the uncompressed data.
+        try handle.seek(toOffset: UInt64(fileSize - 8))
+        let trailer = try handle.read(upToCount: 8) ?? Data()
+        guard trailer.count == 8 else { throw ReadError.truncated("gzip trailer") }
+        let expectedCRC = u32(trailer, trailer.startIndex)
+        let expectedSizeMod = u32(trailer, trailer.startIndex + 4)
+
+        let compressedLength = fileSize - 8 - offset
+        guard compressedLength > 0 else { throw ReadError.truncated("gzip payload") }
+
+        // A gzip trailer only gives the size modulo 2^32, so the disk check
+        // uses the compressed length as the floor; the size check after
+        // decoding is exact modulo 2^32.
+        let available = availableDiskBytes ?? freeSpace(at: destination.deletingLastPathComponent())
+        if let available, available < compressedLength + diskMarginBytes {
+            throw ReadError.insufficientDisk(member: url.lastPathComponent,
+                                             needed: compressedLength + diskMarginBytes, available: available)
+        }
+
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let out = try FileHandle(forWritingTo: destination)
+        var succeeded = false
+        defer {
+            try? out.close()
+            if !succeeded { try? FileManager.default.removeItem(at: destination) }
+        }
+        var crc = CRC32()
+        var written: Int64 = 0
+        try handle.seek(toOffset: UInt64(offset))
+        try inflate(count: compressedLength, member: url.lastPathComponent, supply: { try handle.read(upToCount: $0) ?? Data() }) { chunk in
+            written += Int64(chunk.count)
+            if let maxOutputBytes, written > maxOutputBytes {
+                throw ReadError.budgetExceeded(member: url.lastPathComponent, limit: maxOutputBytes)
+            }
+            crc.update(chunk)
+            try out.write(contentsOf: chunk)
+        }
+        guard UInt32(truncatingIfNeeded: written) == expectedSizeMod else {
+            throw ReadError.sizeMismatch(member: url.lastPathComponent, declared: Int64(expectedSizeMod), actual: written)
+        }
+        guard crc.value == expectedCRC else { throw ReadError.crcMismatch(member: url.lastPathComponent) }
+        succeeded = true
+    }
+
+    // MARK: - Streaming primitives
+
+    private static func copyStored(count: Int64, member: String, supply: (Int) throws -> Data,
+                                   sink: (Data) throws -> Void) throws {
+        var remaining = count
+        while remaining > 0 {
+            try autoreleasepool {   // as in `inflate`: no window outlives its turn
+                let chunk = try supply(Int(min(Int64(windowSize), remaining)))
+                guard !chunk.isEmpty else { throw ReadError.truncated("\(member): stored data") }
+                remaining -= Int64(chunk.count)
+                try sink(chunk)
+            }
+        }
+    }
+
+    /// Raw DEFLATE through a `compression_stream`, `count` compressed bytes
+    /// from the handle's current offset, output delivered in windows.
+    ///
+    /// §3-P2: `compression_stream` is a C API that needs raw pointers; this is
+    /// the only pointer code in the ZIP/gzip path. SAFETY: `source` and
+    /// `output` are each `windowSize` bytes; a chunk read is at most
+    /// `windowSize` (`upToCount:`), so `copyBytes(to:count:)` stays inside
+    /// `source`; the decoder writes at most `dst_size` = `windowSize` bytes
+    /// into `output`, and `produced` = `windowSize - dst_size` is therefore
+    /// within `output`. All three allocations are freed by the `defer`s.
+    private static func inflate(count: Int64, member: String, supply: (Int) throws -> Data,
+                                sink: (Data) throws -> Void) throws {
+        let streamPointer = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        defer { unsafe streamPointer.deallocate() }
+        guard unsafe compression_stream_init(streamPointer, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
+            throw ReadError.malformed("\(member): decoder could not start")
+        }
+        defer { unsafe compression_stream_destroy(streamPointer) }
+
+        let source = UnsafeMutablePointer<UInt8>.allocate(capacity: windowSize)
+        let output = UnsafeMutablePointer<UInt8>.allocate(capacity: windowSize)
+        defer { unsafe source.deallocate(); unsafe output.deallocate() }
+
+        var remaining = count
+        unsafe streamPointer.pointee.src_size = 0
+        var status = COMPRESSION_STATUS_OK
+
+        while status == COMPRESSION_STATUS_OK {
+            // CLOSE-01 follow-up (as TARReader): each window in its own
+            // autorelease pool — `FileHandle.read(upToCount:)` hands back
+            // autoreleased buffers, and without a drain every window of the
+            // input stayed resident until the call returned (measured: +193 MiB
+            // gunzipping a 192 MiB file; `GunzipFootprintTests`).
+            status = try autoreleasepool { () throws -> compression_status in
+                if unsafe streamPointer.pointee.src_size == 0 && remaining > 0 {
+                    let chunk = try supply(Int(min(Int64(windowSize), remaining)))
+                    guard !chunk.isEmpty else { throw ReadError.truncated("\(member): compressed data") }
+                    unsafe chunk.copyBytes(to: source, count: chunk.count)
+                    remaining -= Int64(chunk.count)
+                    unsafe streamPointer.pointee.src_ptr = UnsafePointer(source)
+                    unsafe streamPointer.pointee.src_size = chunk.count
+                }
+                let flags = remaining == 0 ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
+                unsafe streamPointer.pointee.dst_ptr = output
+                unsafe streamPointer.pointee.dst_size = windowSize
+                let step = unsafe compression_stream_process(streamPointer, flags)
+                let produced = windowSize - (unsafe streamPointer.pointee.dst_size)
+                if produced > 0 {
+                    try sink(unsafe Data(bytes: output, count: produced))
+                }
+                if step == COMPRESSION_STATUS_ERROR {
+                    throw ReadError.malformed("\(member): deflate stream is corrupt")
+                }
+                // Input exhausted with FINALIZE sent and nothing more produced:
+                // the stream ended without signalling END — treat as truncated.
+                if step == COMPRESSION_STATUS_OK, remaining == 0,
+                   unsafe streamPointer.pointee.src_size == 0, produced == 0 {
+                    throw ReadError.truncated("\(member): deflate stream ended early")
+                }
+                return step
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    static func freeSpace(at directory: URL) -> Int64? {
+        let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage
+    }
+
+    private static func lastIndex(of pattern: [UInt8], in data: Data) -> Data.Index? {
+        guard data.count >= pattern.count else { return nil }
+        var i = data.endIndex - pattern.count
+        while i >= data.startIndex {
+            if data[i] == pattern[0], data[i..<i + pattern.count].elementsEqual(pattern) { return i }
+            if i == data.startIndex { break }
+            i -= 1
+        }
+        return nil
+    }
+
+    private static func u16(_ d: Data, _ i: Data.Index) -> UInt16 {
+        UInt16(d[i]) | UInt16(d[i + 1]) << 8
+    }
+    private static func u32(_ d: Data, _ i: Data.Index) -> UInt32 {
+        UInt32(d[i]) | UInt32(d[i + 1]) << 8 | UInt32(d[i + 2]) << 16 | UInt32(d[i + 3]) << 24
+    }
+    private static func u64(_ d: Data, _ i: Data.Index) -> UInt64 {
+        UInt64(u32(d, i)) | UInt64(u32(d, i + 4)) << 32
+    }
+
+    /// Audit F10: every 64-bit field in a ZIP is untrusted input. `Int64(_:)`
+    /// on a value above `Int64.max` traps; this throws instead, naming the
+    /// field, so a malformed archive is an import error and not a crash.
+    private static func i64(_ value: UInt64, _ what: String) throws -> Int64 {
+        guard let v = Int64(exactly: value) else {
+            throw ReadError.malformed("\(what) \(value) is out of range")
+        }
+        return v
+    }
+
+    /// Offset + length with overflow reported as a malformed archive.
+    private static func checkedSum(_ a: Int64, _ b: Int64, _ what: String) throws -> Int64 {
+        let (sum, overflow) = a.addingReportingOverflow(b)
+        guard !overflow else { throw ReadError.malformed("\(what) overflows") }
+        return sum
+    }
+
+    /// CRC-32 (IEEE 802.3), the checksum ZIP and gzip both carry.
+    struct CRC32 {
+        private static let table: [UInt32] = (0..<256).map { n -> UInt32 in
+            var c = UInt32(n)
+            for _ in 0..<8 { c = (c & 1) == 1 ? 0xEDB8_8320 ^ (c >> 1) : c >> 1 }
+            return c
+        }
+        private var state: UInt32 = 0xFFFF_FFFF
+
+        var value: UInt32 { state ^ 0xFFFF_FFFF }
+
+        /// SAFETY (§3-P2): the buffer is valid inside the closure and the
+        /// loop reads exactly its `count` bytes.
+        mutating func update(_ data: Data) {
+            var s = state
+            unsafe data.withUnsafeBytes { bytes in
+                for unsafe b in unsafe bytes { s = Self.table[Int((s ^ UInt32(b)) & 0xFF)] ^ (s >> 8) }
+            }
+            state = s
+        }
+
+        static func checksum(_ data: Data) -> UInt32 {
+            var c = CRC32()
+            c.update(data)
+            return c.value
+        }
+    }
+}

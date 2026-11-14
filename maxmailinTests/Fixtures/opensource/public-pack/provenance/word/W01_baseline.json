@@ -1,0 +1,28 @@
+{
+  "sample_id": "W01_baseline",
+  "file": "samples/word_native/W01_baseline.docx",
+  "corpus": "word_native",
+  "status": "pre-registered - confirm every step was followed exactly; record any deviation in 'deliberate_deviations'",
+  "role": "baseline",
+  "transformation": "create and save once",
+  "creation_method": "New blank document in Microsoft Word, one editing session",
+  "controlled_actions": [
+    "File > New > Blank document",
+    "Type exactly: The quick brown fox jumps over the dog.",
+    "File > Save As > W01_baseline.docx",
+    "Close Word"
+  ],
+  "deliberate_deviations": [],
+  "known_final_text": "The quick brown fox jumps over the dog.",
+  "expected_selected_evidence": {
+    "retained_insertions": 0,
+    "retained_deletions": 0,
+    "context_metadata_present": true,
+    "creator_present": true,
+    "classification": "metadata-only evidence",
+    "rsid_expectation": "No claim; observe how many RSIDs a single Word session leaves."
+  },
+  "research_limitations": [
+    "Word-native sample. RSID values are produced by Microsoft Word and are recorded as observed, not predicted."
+  ]
+}

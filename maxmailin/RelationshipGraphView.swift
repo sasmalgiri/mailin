@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  RelationshipGraphView.swift
 //  mailin
@@ -38,66 +39,87 @@ class GraphLayout {
         var weight: Int  // email count between them
     }
 
-    func buildGraph(from emails: [MBOXParser.RawEmail], senderEmail: String) {
-        guard !senderEmail.isEmpty else { return }
+    typealias ContactTally = (name: String, count: Int, sent: Int, received: Int, lastDate: Date?, sentiment: Double, sentimentCount: Int)
 
-        var contactData: [String: (name: String, count: Int, sent: Int, received: Int, lastDate: Date?, sentiment: Double, sentimentCount: Int)] = [:]
+    /// Per-contact and per-edge tallies; fed batch by batch (§3-A15) or with
+    /// one array (the previous path) — the same numbers either way.
+    struct Accumulator {
+        let senderLower: String
+        var contactData: [String: ContactTally] = [:]
         var edgeData: [String: Int] = [:]
+        var emailCount = 0
 
-        let senderLower = senderEmail.lowercased()
+        init(senderEmail: String) { senderLower = senderEmail.lowercased() }
 
-        for email in emails {
-            let from = email.headers["From"] ?? ""
-            let toField = email.headers["To"] ?? ""
-            let ccField = email.headers["Cc"] ?? ""
-            let date = MBOXParser.parseDate(email.headers["Date"])
+        mutating func add(_ emails: [MBOXParser.RawEmail]) {
+            emailCount += emails.count
+            for email in emails {
+                let from = email.headers["From"] ?? ""
+                let toField = email.headers["To"] ?? ""
+                let ccField = email.headers["Cc"] ?? ""
+                let date = MBOXParser.parseDate(email.headers["Date"])
 
-            // Simple sentiment heuristic from subject/body keywords
-            let text = (email.headers["Subject"] ?? "") + " " + email.plainBody.prefix(500)
-            let sentimentScore = Self.quickSentiment(text)
+                // Simple sentiment heuristic from subject/body keywords
+                let text = (email.headers["Subject"] ?? "") + " " + email.plainBody.prefix(500)
+                let sentimentScore = GraphLayout.quickSentiment(text)
 
-            // Extract addresses from To and Cc
-            let allRecipients = Self.extractAddresses(from: toField) + Self.extractAddresses(from: ccField)
-            let fromAddress = Self.extractAddresses(from: from).first
+                // Extract addresses from To and Cc
+                let allRecipients = GraphLayout.extractAddresses(from: toField) + GraphLayout.extractAddresses(from: ccField)
+                let fromAddress = GraphLayout.extractAddresses(from: from).first
 
-            if email.messageType == "sent" {
-                // User sent this; recipients are contacts
-                for recipient in allRecipients {
-                    let addr = recipient.address.lowercased()
-                    if addr == senderLower { continue }
-                    var entry = contactData[addr] ?? (name: recipient.name.isEmpty ? addr : recipient.name, count: 0, sent: 0, received: 0, lastDate: nil, sentiment: 0, sentimentCount: 0)
-                    entry.count += 1
-                    entry.sent += 1
-                    if let date, (entry.lastDate.map({ date > $0 }) ?? true) { entry.lastDate = date }
-                    entry.sentiment += sentimentScore
-                    entry.sentimentCount += 1
-                    if !recipient.name.isEmpty && entry.name == addr { entry.name = recipient.name }
-                    contactData[addr] = entry
-
-                    let edgeKey = [senderLower, addr].sorted().joined(separator: "|")
-                    edgeData[edgeKey, default: 0] += 1
-                }
-            } else {
-                // Received; sender is a contact
-                if let fromAddr = fromAddress {
-                    let addr = fromAddr.address.lowercased()
-                    if addr != senderLower {
-                        var entry = contactData[addr] ?? (name: fromAddr.name.isEmpty ? addr : fromAddr.name, count: 0, sent: 0, received: 0, lastDate: nil, sentiment: 0, sentimentCount: 0)
+                if email.messageType == "sent" {
+                    // User sent this; recipients are contacts
+                    for recipient in allRecipients {
+                        let addr = recipient.address.lowercased()
+                        if addr == senderLower { continue }
+                        var entry = contactData[addr] ?? (name: recipient.name.isEmpty ? addr : recipient.name, count: 0, sent: 0, received: 0, lastDate: nil, sentiment: 0, sentimentCount: 0)
                         entry.count += 1
-                        entry.received += 1
+                        entry.sent += 1
                         if let date, (entry.lastDate.map({ date > $0 }) ?? true) { entry.lastDate = date }
                         entry.sentiment += sentimentScore
                         entry.sentimentCount += 1
-                        if !fromAddr.name.isEmpty && entry.name == addr { entry.name = fromAddr.name }
+                        if !recipient.name.isEmpty && entry.name == addr { entry.name = recipient.name }
                         contactData[addr] = entry
 
                         let edgeKey = [senderLower, addr].sorted().joined(separator: "|")
                         edgeData[edgeKey, default: 0] += 1
                     }
+                } else {
+                    // Received; sender is a contact
+                    if let fromAddr = fromAddress {
+                        let addr = fromAddr.address.lowercased()
+                        if addr != senderLower {
+                            var entry = contactData[addr] ?? (name: fromAddr.name.isEmpty ? addr : fromAddr.name, count: 0, sent: 0, received: 0, lastDate: nil, sentiment: 0, sentimentCount: 0)
+                            entry.count += 1
+                            entry.received += 1
+                            if let date, (entry.lastDate.map({ date > $0 }) ?? true) { entry.lastDate = date }
+                            entry.sentiment += sentimentScore
+                            entry.sentimentCount += 1
+                            if !fromAddr.name.isEmpty && entry.name == addr { entry.name = fromAddr.name }
+                            contactData[addr] = entry
+
+                            let edgeKey = [senderLower, addr].sorted().joined(separator: "|")
+                            edgeData[edgeKey, default: 0] += 1
+                        }
+                    }
                 }
             }
-        }
 
+        }
+    }
+
+    func buildGraph(from emails: [MBOXParser.RawEmail], senderEmail: String) {
+        guard !senderEmail.isEmpty else { return }
+        var acc = Accumulator(senderEmail: senderEmail)
+        acc.add(emails)
+        finish(acc)
+    }
+
+    /// Top 40 contacts by volume, edges to them — from the tallies.
+    func finish(_ acc: Accumulator) {
+        let senderLower = acc.senderLower
+        let contactData = acc.contactData
+        let edgeData = acc.edgeData
         // Build nodes - limit to top 40 contacts by volume for readability
         let sortedContacts = contactData.sorted { $0.value.count > $1.value.count }
         let topContacts = Array(sortedContacts.prefix(40))
@@ -106,8 +128,8 @@ class GraphLayout {
         // Center node for user
         graphNodes.append(GraphNode(
             id: senderLower,
-            name: "You",
-            emailCount: emails.count,
+            name: String(localized: "You"),
+            emailCount: acc.emailCount,
             sentiment: 0,
             position: .zero,
             isCenterNode: true
@@ -317,6 +339,9 @@ struct RelationshipGraphView: View {
     @State private var isLoadingAI = false
     @State private var kgAnnotations: [RelationshipMapAnnotation] = []
     @State private var showTutorial = false
+    // §3-A15: the network over the whole archive when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var wholeEmailCount: Int?
     @Environment(\.dismiss) private var envDismiss
 
     // MARK: - Computed
@@ -372,7 +397,7 @@ struct RelationshipGraphView: View {
             VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                 Text("Relationship Graph")
                     .font(Typography.title3)
-                Text("\(totalContacts) contacts from \(emails.count) emails")
+                Text("\(totalContacts) contacts from \(wholeEmailCount ?? emails.count) emails")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             }
@@ -381,7 +406,7 @@ struct RelationshipGraphView: View {
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Rebuild the relationship graph")
             TutorialHelpButton(showTutorial: $showTutorial)
-            SaveToDocumentsButton(title: "Relationship Graph") {
+            SaveToDocumentsButton(title: String(localized: "Relationship Graph")) {
                 [.init(key: "Emails", value: "\(emails.count)")]
             }
             if isPresented != nil {
@@ -403,8 +428,8 @@ struct RelationshipGraphView: View {
             Spacer()
             EmptyStateView(
                 icon: "person.3",
-                title: "No Relationship Data",
-                message: "Import emails to see your contact network."
+                title: String(localized: "No Relationship Data"),
+                message: String(localized: "Import emails to see your contact network.")
             )
             Spacer()
         }
@@ -555,11 +580,11 @@ struct RelationshipGraphView: View {
 
     private var statsSection: some View {
         HStack(spacing: Spacing.medium) {
-            miniStat(title: "Contacts", value: "\(totalContacts)")
+            miniStat(title: String(localized: "Contacts"), value: "\(totalContacts)")
             if let most = mostActive {
-                miniStat(title: "Most Active", value: shortName(most.name))
+                miniStat(title: String(localized: "Most Active"), value: shortName(most.name))
             }
-            miniStat(title: "Total Emails", value: "\(emails.count)")
+            miniStat(title: String(localized: "Total Emails"), value: "\(emails.count)")
         }
         .accessibilityElement(children: .combine)
     }
@@ -612,20 +637,20 @@ struct RelationshipGraphView: View {
             }
 
             HStack(spacing: Spacing.medium) {
-                detailItem(label: "Total", value: "\(node.emailCount)")
-                detailItem(label: "Sent", value: "\(node.sentCount)")
-                detailItem(label: "Received", value: "\(node.receivedCount)")
+                detailItem(label: String(localized: "Total"), value: "\(node.emailCount)")
+                detailItem(label: String(localized: "Sent"), value: "\(node.sentCount)")
+                detailItem(label: String(localized: "Received"), value: "\(node.receivedCount)")
             }
 
             HStack(spacing: Spacing.medium) {
-                detailItem(label: "Sentiment", value: sentimentLabel(node.sentiment))
+                detailItem(label: String(localized: "Sentiment"), value: sentimentLabel(node.sentiment))
                 if let date = node.lastContactDate {
                     let formatter: DateFormatter = {
                         let f = DateFormatter()
                         f.dateStyle = .medium
                         return f
                     }()
-                    detailItem(label: "Last Contact", value: formatter.string(from: date))
+                    detailItem(label: String(localized: "Last Contact"), value: formatter.string(from: date))
                 }
             }
 
@@ -723,7 +748,8 @@ struct RelationshipGraphView: View {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .entity,
                     emails: emailsCopy,
-                    context: context
+                    context: context,
+                    given: .window
                 )
                 aiInsights = result ?? "AI analysis unavailable."
             } else {
@@ -828,8 +854,42 @@ struct RelationshipGraphView: View {
 
     // MARK: - Actions
 
-    private func buildAndSimulate() {
+    /// `previousEngine`: the pre-3.0 graph (switch off, or §3-M3 fallback).
+    private func buildAndSimulate(previousEngine: Bool = false) {
         graphLayout.isReady = false
+        if v3Modules?.isOn(.v3Graphs) ?? false, !senderEmail.isEmpty, !previousEngine {
+            Task { @MainActor [senderEmail, graphSize] in
+                var acc = GraphLayout.Accumulator(senderEmail: senderEmail)
+                let token = EngineGuard.begin(.v3Graphs)
+                defer { EngineGuard.end(token) }
+                do {
+                    for try await batch in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 500) {
+                        let current = acc
+                        acc = await Task.detached(priority: .userInitiated) { var a = current; a.add(batch); return a }.value
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // §3-M3 (was `catch {}`, which drew a partial graph as if whole).
+                    _ = EngineGuard.fellBack(.v3Graphs, error: error)
+                    wholeEmailCount = nil
+                    buildAndSimulate(previousEngine: true)
+                    return
+                }
+                let finished = acc
+                let layout = await Task.detached(priority: .userInitiated) { () -> GraphLayout in
+                    let layout = GraphLayout()
+                    layout.finish(finished)
+                    layout.runSimulation(iterations: 120, bounds: CGSize(width: max(graphSize.width, 500), height: max(graphSize.height, 350)))
+                    return layout
+                }.value
+                wholeEmailCount = finished.emailCount
+                graphLayout.nodes = layout.nodes
+                graphLayout.edges = layout.edges
+                graphLayout.isReady = true
+            }
+            return
+        }
         Task.detached { [emails, senderEmail, graphSize] in
             let layout = GraphLayout()
             layout.buildGraph(from: emails, senderEmail: senderEmail)

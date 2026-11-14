@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  AIProvenanceView.swift
 //  mailin
@@ -11,6 +12,11 @@ import SwiftUI
 
 struct AIProvenanceView: View {
     let provenance: AIProvenance
+    /// I3: opens the cited message. nil → the view opens it in its own
+    /// window on macOS.
+    var onOpenEmail: ((UUID) -> Void)? = nil
+
+    @State private var citedSummaries: [EmailSummary] = []
 
     var body: some View {
         ScrollView {
@@ -18,6 +24,7 @@ struct AIProvenanceView: View {
                 header
                 routingSection
                 evidenceSection
+                citationsSection
                 kgSection
                 findingsSection
                 synthesisSection
@@ -57,7 +64,7 @@ struct AIProvenanceView: View {
     }
 
     private var routingSection: some View {
-        section(title: "Routing") {
+        section(title: String(localized: "Routing")) {
             row("Intent", provenance.intent)
             row("Persona", provenance.persona)
             row("Model", "\(provenance.modelGeneration)\(provenance.modelAvailable ? "" : " (fallback)")")
@@ -75,7 +82,7 @@ struct AIProvenanceView: View {
     }
 
     private var evidenceSection: some View {
-        section(title: "Evidence retrieved") {
+        section(title: String(localized: "Evidence retrieved")) {
             row("Archive size", "\(provenance.archiveEmailCount) emails")
             row("Retrieved", "\(provenance.retrievedEmailIDs.count) emails")
             if provenance.ragKeyChunkCount > 0 {
@@ -84,8 +91,57 @@ struct AIProvenanceView: View {
         }
     }
 
+    /// I3: every [E#] tag in the answer maps to one retrieved message, in
+    /// retrieval order. Each row reopens the exact message.
+    private var citationsSection: some View {
+        section(title: String(localized: "Citations — [E#] → message")) {
+            if provenance.retrievedEmailIDs.isEmpty {
+                Text("No messages were retrieved for this answer.")
+                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
+            }
+            ForEach(Array(provenance.retrievedEmailIDs.enumerated()), id: \.offset) { index, id in
+                let summary = citedSummaries.first { $0.id == id }
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.xSmall) {
+                    Text("[E\(index + 1)]")
+                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        .foregroundColor(AppColors.primary)
+                        .frame(width: 44, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(summary?.subject.isEmpty == false ? summary!.subject : (summary == nil ? id.uuidString : "(No Subject)"))
+                            .font(Typography.caption1).lineLimit(1)
+                        if let summary {
+                            Text("\(summary.from) · \(summary.date.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.caption2).foregroundColor(AppColors.secondary).lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    Button("Open") { open(id) }
+                        .controlSize(.small)
+                        .help("Open the cited message")
+                        .accessibilityIdentifier("provenance.open.\(index + 1)")
+                }
+            }
+        }
+        .task(id: provenance.id) {
+            citedSummaries = (try? await ArchiveDataService.shared.summaries(ids: provenance.retrievedEmailIDs)) ?? []
+        }
+    }
+
+    private func open(_ id: UUID) {
+        if let onOpenEmail { onOpenEmail(id); return }
+        #if os(macOS)
+        Task { @MainActor in
+            guard let email = try? await ArchiveDataService.shared.fullEmail(id: id) else { return }
+            let title = (email.headers["Subject"]?.isEmpty == false ? email.headers["Subject"]! : "(No Subject)")
+            ToolWindowPresenter.shared.open(title: title, size: CGSize(width: 900, height: 720)) {
+                AnyView(EmailDetailView(email: email).toolWindowFrame())
+            }
+        }
+        #endif
+    }
+
     private var kgSection: some View {
-        section(title: "Knowledge graph") {
+        section(title: String(localized: "Knowledge graph")) {
             row("Edges in graph at synthesis", "\(provenance.kgEdgeCount)")
             row("Nodes cited in answer", "\(provenance.kgNodeIDs.count)")
             if !provenance.kgNodeIDs.isEmpty {
@@ -109,7 +165,7 @@ struct AIProvenanceView: View {
     }
 
     private var findingsSection: some View {
-        section(title: "Findings") {
+        section(title: String(localized: "Findings")) {
             row("Total findings", "\(provenance.totalFindings)")
             row("High relevance", "\(provenance.highRelevanceCount)")
             row("Linked to specific emails", "\(provenance.linkedFindings)")
@@ -117,7 +173,7 @@ struct AIProvenanceView: View {
     }
 
     private var synthesisSection: some View {
-        section(title: "Synthesis") {
+        section(title: String(localized: "Synthesis")) {
             row("Compression layer", "Layer \(provenance.synthesisLayerCount)")
             row("Context characters", "\(provenance.contextCharCount)")
             row("Answer characters", "\(provenance.answerCharCount)")
@@ -125,7 +181,7 @@ struct AIProvenanceView: View {
     }
 
     private var hashesSection: some View {
-        section(title: "Reproducibility hashes (SHA-256)") {
+        section(title: String(localized: "Reproducibility hashes (SHA-256)")) {
             row("Archive snapshot", provenance.archiveHash.prefix(16) + "…", mono: true)
             row("Graph snapshot", provenance.kgSnapshotHash.prefix(16) + "…", mono: true)
             row("Provenance ID", provenance.id.uuidString.prefix(12) + "…", mono: true)

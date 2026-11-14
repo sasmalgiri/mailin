@@ -1,0 +1,14 @@
+{
+  "annotations" : 30,
+  "builtFrom" : "3e4b9cb^ (schema v19)",
+  "emails" : 1000,
+  "fingerprintRoot" : "65e1693da17073a2a9e45f680283a9b0e3a5e872dbdfb6bf94d76994e99e1b71",
+  "held" : 120,
+  "pinned" : 25,
+  "privileged" : 112,
+  "read" : 600,
+  "schema" : 19,
+  "seals" : 120,
+  "tagHot" : 70,
+  "tagResponsive" : 300
+}

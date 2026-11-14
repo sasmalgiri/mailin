@@ -1,0 +1,58 @@
+{
+ "store": "example-2013.ost",
+ "tool": "readpst (libpst, Homebrew) -D -e / -D -S",
+ "folders": {
+  "": [
+   {
+    "n": 16,
+    "kind": "eml",
+    "subject": "",
+    "messageID": "",
+    "date": "",
+    "from": "MAILER-DAEMON",
+    "attachments": []
+   }
+  ],
+  "Sent Items": [
+   {
+    "n": 1,
+    "kind": "eml",
+    "subject": "Test 2",
+    "messageID": "<7D1139ED-A46E-49DF-9570-7EC8A06108DD@apogeephysicians.com>",
+    "date": "Wed, 09 Apr 2014 11:38:31 -0500",
+    "from": "Bernard Chung <bernard.chung@apogeephysicians.com>",
+    "attachments": []
+   }
+  ],
+  "Inbox": [
+   {
+    "n": 9,
+    "kind": "eml",
+    "subject": "Microsoft Outlook Test Message",
+    "messageID": "<B9.03.22673.84990935@smtp69.gate.dfw1a.rsapps.net>",
+    "date": "Thu, 05 Jun 2014 12:22:32 -0400",
+    "from": "Microsoft Outlook <arc.test1@apogeephysicians.com>",
+    "attachments": []
+   },
+   {
+    "n": 10,
+    "kind": "eml",
+    "subject": "Microsoft Outlook Test Message",
+    "messageID": "<F6.E6.04758.F75A5435@smtp42.gate.dfw1a.rsapps.net>",
+    "date": "Wed, 09 Apr 2014 15:54:39 -0400",
+    "from": "Microsoft Outlook <arc.test1@apogeephysicians.com>",
+    "attachments": []
+   }
+  ],
+  "Inbox/Testing": [],
+  "Contacts (This computer only)": [],
+  "Calendar (This computer only)": [],
+  "Sync Issues (This computer only)": []
+ },
+ "totals": {
+  "items": 4,
+  "mail": 4,
+  "nonMail": 0,
+  "attachmentPayloads": 0
+ }
+}

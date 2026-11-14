@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import CryptoKit
 import ImageIO
@@ -207,24 +208,23 @@ struct ExportManager {
         #endif
     }
 
-    // MARK: - Concordance Load File (6F)
-
-    static func generateConcordanceLoadFile(from emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
-        var lines = ["\u{14}DOCID\u{14}\u{14}BEGBATES\u{14}\u{14}ENDBATES\u{14}\u{14}FROM\u{14}\u{14}TO\u{14}\u{14}CC\u{14}\u{14}SUBJECT\u{14}\u{14}DATE\u{14}\u{14}ATTACHMENTS\u{14}"]
-
-        for (idx, email) in emails.enumerated() {
-            let bates = String(format: "%@%06d", batesPrefix, idx + 1)
-            let from = (email.headers["From"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let to = (email.headers["To"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let cc = (email.headers["Cc"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let date = email.timestamp
-            let attachCount = "\(email.attachments.count)"
-            lines.append("\u{14}\(email.id)\u{14}\u{14}\(bates)\u{14}\u{14}\(bates)\u{14}\u{14}\(from)\u{14}\u{14}\(to)\u{14}\u{14}\(cc)\u{14}\u{14}\(subject)\u{14}\u{14}\(date)\u{14}\u{14}\(attachCount)\u{14}")
-        }
-
-        return lines.joined(separator: "\n")
-    }
+    // MARK: - Concordance Load File
+    //
+    // REMOVED: `generateConcordanceLoadFile`. It had no caller and was wrong
+    // twice over, which made it a trap rather than merely dead — it is the
+    // more obvious name than the path that actually ships, so the next person
+    // to need a load file would have found it first.
+    //
+    //  • It used \u{14} (DC4) as BOTH the delimiter and the text qualifier, so
+    //    a review platform cannot tell one from the other. The convention, and
+    //    what `ForensicManager.concordanceDATHeader` emits, is \u{14} to
+    //    delimit and \u{FE} (þ) to qualify.
+    //  • It omitted BCC, the SHA-256 hash, the custodian and the tag — four
+    //    columns a production is judged on.
+    //
+    // Concordance .dat ships from `ForensicManager.concordanceDATRow` and
+    // `ArchiveExportService.exportConcordanceDAT`, which stream row by row
+    // instead of building the whole file in memory.
 
     // MARK: - Relativity Load File (6F+)
 
@@ -270,19 +270,12 @@ struct ExportManager {
         return "\(controlNum),\(csvEscape(custodianName)),\(dateSent),,\(from),\(to),\(cc),\(bcc),\(subject),\(messageID),\(conversationIdx),\(attachCount),\(hasAttach),\(fileSize),\(md5),\(nativePath)"
     }
 
-    static func generateRelativityLoadFile(
-        from emails: [MBOXParser.RawEmail],
-        batesPrefix: String = "MAIL",
-        custodianName: String = "",
-        caseNumber: String = ""
-    ) -> String {
-        var lines = [relativityLoadFileHeader]
-        for (idx, email) in emails.enumerated() {
-            lines.append(relativityRow(email: email, index: idx, batesPrefix: batesPrefix,
-                                       custodianName: custodianName, caseNumber: caseNumber))
-        }
-        return lines.joined(separator: "\r\n")
-    }
+    // REMOVED: `generateRelativityLoadFile`. No caller, and it accumulated the
+    // entire load file in one String — an archive-sized allocation, which is
+    // the thing the streaming exporter was written to avoid. The header and
+    // `relativityRow` above are the shared pieces and stay;
+    // `ArchiveExportService.exportRelativityCSV` writes the file a row at a
+    // time from a bounded stream.
 
     private static func csvEscape(_ value: String) -> String {
         var v = value
@@ -611,6 +604,81 @@ struct ExportManager {
             + portableHTMLSuffix
         let indexURL = folder.appendingPathComponent("index.html")
         try html.write(to: indexURL, atomically: true, encoding: .utf8)
+    }
+
+    /// CAP-04: the viewer for a chunked export — `index.html` loads
+    /// `data/part-0001.js` … one after another (script tags work from a
+    /// file:// folder, fetch does not), so an archive of any size opens. The
+    /// list shows the first rows at once and grows on "Show more"; search
+    /// runs over everything loaded; the counter always says how much of the
+    /// export has arrived. No message cap.
+    static func portableHTMLViewer(total: Int, parts: Int, chunkSize: Int) -> String {
+        let head = portableHTMLPrefix(emailCount: total).replacingOccurrences(of: "var DATA=[", with: "")
+        return head + """
+        var TOTAL=\(total),PARTS=\(parts),CHUNK=\(chunkSize),DATA=[],loadedParts=0,failedPart=null;
+        var listEl=document.getElementById("list"),detailEl=document.getElementById("detail"),searchEl=document.getElementById("search"),countEl=document.getElementById("count");
+        var filtered=[],activeId=null,shown=0,PAGE=500,query="";
+        function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
+        function status(){
+            var loading=loadedParts<PARTS?" — loading "+DATA.length+" of "+TOTAL:"";
+            if(failedPart){loading=" — part "+failedPart+" of "+PARTS+" could not be read"}
+            countEl.textContent=(query?filtered.length+" of ":"")+DATA.length+" emails"+loading;
+        }
+        function row(e){
+            var d=document.createElement("div");d.className="item"+(e.id===activeId?" active":"");
+            d.innerHTML='<div class="subject">'+esc(e.subject)+'</div><div class="meta">'+esc(e.from)+' &mdash; '+esc(e.date)+'</div><div class="preview">'+esc(e.preview)+'</div>';
+            d.onclick=function(){activeId=e.id;showDetail(e);render()};
+            return d;
+        }
+        function render(){
+            listEl.innerHTML="";
+            if(filtered.length===0){listEl.innerHTML='<div class="no-results">'+(DATA.length===0?"Loading…":"No emails match your search.")+'</div>';status();return}
+            var upto=Math.min(shown,filtered.length);
+            for(var i=0;i<upto;i++){listEl.appendChild(row(filtered[i]))}
+            if(upto<filtered.length){
+                var more=document.createElement("div");more.className="item";more.style.textAlign="center";more.style.color="#0071e3";
+                more.textContent="Show more ("+upto+" of "+filtered.length+")";
+                more.onclick=function(){shown+=PAGE;render()};
+                listEl.appendChild(more);
+            }
+            status();
+        }
+        function applyFilter(){
+            var q=query;
+            filtered=q?DATA.filter(function(e){return e.subject.toLowerCase().indexOf(q)!==-1||e.from.toLowerCase().indexOf(q)!==-1||e.body.toLowerCase().indexOf(q)!==-1}):DATA.slice();
+            if(shown===0){shown=PAGE}
+            render();
+            if(activeId===null&&DATA.length>0){activeId=DATA[0].id;showDetail(DATA[0]);render()}
+        }
+        function sanitizeHTML(s){return s.replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi,"").replace(/<iframe[^>]*>[\\s\\S]*?<\\/iframe>/gi,"").replace(/<embed[^>]*>/gi,"").replace(/<object[^>]*>[\\s\\S]*?<\\/object>/gi,"").replace(/<form[^>]*>[\\s\\S]*?<\\/form>/gi,"").replace(/\\son\\w+\\s*=/gi," data-removed=")}
+        function showDetail(e){
+            var isHTML=e.body.indexOf("<")!==-1&&e.body.indexOf(">")!==-1;
+            var bodyContent=isHTML?sanitizeHTML(e.body):'<pre style="white-space:pre-wrap;font-family:inherit">'+esc(e.body)+'</pre>';
+            detailEl.innerHTML='<h2>'+esc(e.subject)+'</h2>'
+                +'<div class="hdr"><b>From:</b> '+esc(e.from)+'</div>'
+                +'<div class="hdr"><b>To:</b> '+esc(e.to)+'</div>'
+                +(e.cc?'<div class="hdr"><b>Cc:</b> '+esc(e.cc)+'</div>':'')
+                +'<div class="hdr"><b>Date:</b> '+esc(e.date)+'</div>'
+                +'<hr><div class="body">'+bodyContent+'</div>'
+        }
+        function mailinChunk(entries){
+            DATA=DATA.concat(entries);loadedParts++;applyFilter();
+            if(loadedParts<PARTS){loadPart(loadedParts+1)}
+        }
+        function loadPart(n){
+            var s=document.createElement("script");
+            var name=String(n);while(name.length<4){name="0"+name}
+            s.src="data/part-"+name+".js";
+            s.onerror=function(){failedPart=n;status()};
+            document.body.appendChild(s);
+        }
+        searchEl.addEventListener("input",function(){query=searchEl.value.toLowerCase();shown=PAGE;applyFilter()});
+        render();
+        if(PARTS>0){loadPart(1)}
+        </script>
+        </body>
+        </html>
+        """
     }
 
     /// Everything up to (and including) the opening `var DATA=[`.

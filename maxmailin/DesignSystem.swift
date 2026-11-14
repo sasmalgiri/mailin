@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  DesignSystem.swift
 //  mailin
@@ -807,18 +808,22 @@ struct ContactAvatar: View {
     }
 
     private var gradientColors: [Color] {
-        let hash = abs(name.hashValue)
+        // A stable hash: `hashValue` is seeded per launch, so the same sender
+        // got a different colour every time the app opened.
+        let hash = name.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
+        // Deep tones only: white initials on cyan, mint or pink failed the
+        // contrast audit (white needs about 4.5:1).
         let palettes: [[Color]] = [
-            [.blue, .purple],
-            [.green, .teal],
-            [.orange, .pink],
-            [.indigo, .blue],
-            [.purple, .pink],
-            [.teal, .cyan],
-            [.red, .orange],
-            [.mint, .green],
+            [Color(red: 0.16, green: 0.32, blue: 0.75), Color(red: 0.40, green: 0.20, blue: 0.70)],
+            [Color(red: 0.05, green: 0.45, blue: 0.30), Color(red: 0.05, green: 0.40, blue: 0.45)],
+            [Color(red: 0.70, green: 0.25, blue: 0.10), Color(red: 0.65, green: 0.15, blue: 0.35)],
+            [Color(red: 0.25, green: 0.22, blue: 0.65), Color(red: 0.16, green: 0.32, blue: 0.75)],
+            [Color(red: 0.45, green: 0.18, blue: 0.62), Color(red: 0.65, green: 0.15, blue: 0.40)],
+            [Color(red: 0.05, green: 0.40, blue: 0.48), Color(red: 0.10, green: 0.35, blue: 0.60)],
+            [Color(red: 0.70, green: 0.12, blue: 0.15), Color(red: 0.65, green: 0.28, blue: 0.05)],
+            [Color(red: 0.12, green: 0.42, blue: 0.20), Color(red: 0.05, green: 0.45, blue: 0.30)],
         ]
-        return palettes[hash % palettes.count]
+        return palettes[Int(hash % UInt32(palettes.count))]
     }
 
     var body: some View {
@@ -1009,6 +1014,26 @@ extension View {
         return self
         #endif
     }
+
+    /// A List section header or footer as a named element: on macOS the
+    /// List otherwise wraps it in a full-width group with no description
+    /// (accessibility audit, 2026-10-13).
+    func listSectionAccessibility(_ label: Text, isHeader: Bool = true) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(isHeader ? .isHeader : [])
+    }
+
+    /// A sheet's working minimum on macOS. No-op on iOS, where a minimum
+    /// wider than an iPhone screen would push content off both edges.
+    func macSheetFrame(minWidth: CGFloat, minHeight: CGFloat) -> some View {
+        #if os(macOS)
+        return frame(minWidth: minWidth, minHeight: minHeight)
+        #else
+        return self
+        #endif
+    }
 }
 
 // MARK: - Help Dot
@@ -1167,6 +1192,17 @@ extension View {
 struct ModernDateField: View {
     let label: String
     @Binding var date: Date
+    /// Shown instead of the date while there is no limit (`.distantPast` / `.distantFuture`):
+    /// the field read "1 Jan 1" and "1 Jan 4001". Nil keeps the old behaviour.
+    var unboundedLabel: String? = nil
+    /// Where the picker starts when the field is opened with no limit (e.g. the first email).
+    var suggested: () -> Date = { Calendar.current.startOfDay(for: Date()) }
+
+    static func isUnbounded(_ date: Date) -> Bool {
+        let year = Calendar.current.component(.year, from: date)
+        return year < 1900 || year > 3000
+    }
+    private var showsUnbounded: Bool { unboundedLabel != nil && Self.isUnbounded(date) }
 
     #if os(macOS)
     @State private var showPicker = false
@@ -1175,12 +1211,13 @@ struct ModernDateField: View {
     var body: some View {
         #if os(macOS)
         Button {
+            if Self.isUnbounded(date) { date = suggested() }
             showPicker = true
         } label: {
             HStack(spacing: Spacing.xxSmall) {
                 Image(systemName: "calendar")
                     .foregroundColor(AppColors.primary)
-                Text(date.formatted(date: .abbreviated, time: .omitted))
+                Text(showsUnbounded ? (unboundedLabel ?? "") : date.formatted(date: .abbreviated, time: .omitted))
                     .foregroundColor(.primary)
             }
             .font(Typography.caption1)
@@ -1230,9 +1267,17 @@ struct ModernDateField: View {
             .frame(width: 280)
         }
         #else
-        DatePicker(label, selection: $date, displayedComponents: .date)
-            .labelsHidden()
-            .accessibilityLabel(label)
+        if showsUnbounded {
+            // No limit yet: a button, so the field does not show year 1 or 4001.
+            Button(unboundedLabel ?? "") { date = suggested() }
+                .font(Typography.caption1)
+                .buttonStyle(.bordered)
+                .accessibilityLabel(label)
+        } else {
+            DatePicker(label, selection: $date, displayedComponents: .date)
+                .labelsHidden()
+                .accessibilityLabel(label)
+        }
         #endif
     }
 
@@ -1281,7 +1326,7 @@ struct ModernDateField: View {
         @State private var date = Date(timeIntervalSince1970: 1_431_648_000)  // May 2015
         var body: some View {
             VStack(spacing: Spacing.xSmall) {
-                ModernDateField(label: "Demo", date: $date)
+                ModernDateField(label: String(localized: "Demo"), date: $date)
             }
             .padding(40)
             .onAppear { }
@@ -1296,9 +1341,9 @@ struct ModernDateField: View {
         @State private var end = Date(timeIntervalSince1970: 1_762_200_000)
         var body: some View {
             HStack(spacing: Spacing.xSmall) {
-                ModernDateField(label: "Start date filter", date: $start)
+                ModernDateField(label: String(localized: "Start date filter"), date: $start)
                 Text("–").font(Typography.caption1).foregroundColor(AppColors.secondary)
-                ModernDateField(label: "End date filter", date: $end)
+                ModernDateField(label: String(localized: "End date filter"), date: $end)
             }
             .padding()
         }

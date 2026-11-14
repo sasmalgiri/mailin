@@ -1,0 +1,178 @@
+[
+  {
+    "path": "03_word/W01_baseline.docx",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/word_native/W01_baseline.docx",
+    "transport": "direct",
+    "source_sha256": "1d8d0487161bd34dacb8773e74adb5ffc3381e2b36e65ddb9413913e411b501c",
+    "bytes": 14059,
+    "sha256": "1d8d0487161bd34dacb8773e74adb5ffc3381e2b36e65ddb9413913e411b501c"
+  },
+  {
+    "path": "provenance/word/W01_baseline.json",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/ground_truth/W01_baseline.json",
+    "transport": "direct",
+    "source_sha256": "bcbee9a69b957ca0e235ebfab9c014c0e24fe50c7b1e16702c9f16d29d656e17",
+    "bytes": 1112,
+    "sha256": "bcbee9a69b957ca0e235ebfab9c014c0e24fe50c7b1e16702c9f16d29d656e17"
+  },
+  {
+    "path": "03_word/W05_tracked_retained.docx",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/word_native/W05_tracked_retained.docx",
+    "transport": "direct",
+    "source_sha256": "395614e777bdd348376c739104ade830649977bea877e9144e90b86c245e31b7",
+    "bytes": 15100,
+    "sha256": "395614e777bdd348376c739104ade830649977bea877e9144e90b86c245e31b7"
+  },
+  {
+    "path": "provenance/word/W05_tracked_retained.json",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/ground_truth/W05_tracked_retained.json",
+    "transport": "direct",
+    "source_sha256": "ef5173321a0bed61fb3dfffdb4c9a249aeeabe780b3376133e7fde62aad16fa6",
+    "bytes": 2232,
+    "sha256": "ef5173321a0bed61fb3dfffdb4c9a249aeeabe780b3376133e7fde62aad16fa6"
+  },
+  {
+    "path": "03_word/W06_tracked_accepted.docx",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/word_native/W06_tracked_accepted.docx",
+    "transport": "direct",
+    "source_sha256": "bf63e63aad5d417c1390c7f83f8bce836e5ef5609c288f086f67ae58fc17d942",
+    "bytes": 14187,
+    "sha256": "bf63e63aad5d417c1390c7f83f8bce836e5ef5609c288f086f67ae58fc17d942"
+  },
+  {
+    "path": "provenance/word/W06_tracked_accepted.json",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/ground_truth/W06_tracked_accepted.json",
+    "transport": "direct",
+    "source_sha256": "51cef0e61635ba67644a09784bbeff6a293c42483fd1f209a9f5cbda4bd07ce0",
+    "bytes": 1230,
+    "sha256": "51cef0e61635ba67644a09784bbeff6a293c42483fd1f209a9f5cbda4bd07ce0"
+  },
+  {
+    "path": "03_word/W07_tracked_rejected.docx",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/word_native/W07_tracked_rejected.docx",
+    "transport": "direct",
+    "source_sha256": "08bf09d3e46e7eb47474e5d9e213bd676c741aa8786fc12cd3d525680e56fcfa",
+    "bytes": 14155,
+    "sha256": "08bf09d3e46e7eb47474e5d9e213bd676c741aa8786fc12cd3d525680e56fcfa"
+  },
+  {
+    "path": "provenance/word/W07_tracked_rejected.json",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/ground_truth/W07_tracked_rejected.json",
+    "transport": "direct",
+    "source_sha256": "dfe40785310bb8ab053a4c8e0e552d33abcb05bb34e4b5ad93e6c155af11e762",
+    "bytes": 1453,
+    "sha256": "dfe40785310bb8ab053a4c8e0e552d33abcb05bb34e4b5ad93e6c155af11e762"
+  },
+  {
+    "path": "provenance/word/environment.json",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/samples/word_native/environment.json",
+    "transport": "direct",
+    "source_sha256": "d5c25e092ef7fbf84b422603e8b45e8850ffc6daffb987508a641de647408692",
+    "bytes": 1193,
+    "sha256": "d5c25e092ef7fbf84b422603e8b45e8850ffc6daffb987508a641de647408692"
+  },
+  {
+    "path": "licenses/WORD_MIT_LICENSE.txt",
+    "source_url": "https://raw.githubusercontent.com/InterTechSA/docx-edit-trail-analyser/a8aea6152926d5b8875104f81df9306fc61ebbb7/LICENSE",
+    "transport": "direct",
+    "source_sha256": "00c83c06b6ddb1a5f4d1a54c4e1437633d96003fd8b6e9d833c515e3e0144fff",
+    "bytes": 1072,
+    "sha256": "00c83c06b6ddb1a5f4d1a54c4e1437633d96003fd8b6e9d833c515e3e0144fff"
+  },
+  {
+    "path": "02_archives/public/test_read_format_zip_winzip_aes128.zip",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_zip_winzip_aes128.zip.uu",
+    "transport": "uu",
+    "source_sha256": "e83ce7cf406e049592e0efeea59be74bf2dacba61ff58d1db8d2b42b04a2ca8e",
+    "bytes": 2821,
+    "sha256": "4cb263afa9f999074643978598f4450e7f408f482dd3adb1a00a7aff6f30e0ac"
+  },
+  {
+    "path": "02_archives/public/test_read_format_zip_winzip_aes256.zip",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_zip_winzip_aes256.zip.uu",
+    "transport": "uu",
+    "source_sha256": "3cf66443e8a3585d3f740342fc59a8c9c9d99ee4663c7b3cee0b915350ab3d4a",
+    "bytes": 2829,
+    "sha256": "447342e5b3b20d05d087e3bc3b89727879fb74734cd84556abc6c5126528dd9e"
+  },
+  {
+    "path": "02_archives/public/test_read_format_zip_winzip_aes256_stored.zip",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_zip_winzip_aes256_stored.zip.uu",
+    "transport": "uu",
+    "source_sha256": "0c710f925aeda0a4e51bfee6007b83af47a2235001397bd18c83d9dfd384685e",
+    "bytes": 6978,
+    "sha256": "ab0101c368b2dac4a652b09338fd53d95d9598d7c39d2195ff063b25d0a3eb39"
+  },
+  {
+    "path": "02_archives/public/test_read_format_7zip_encryption.7z",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_7zip_encryption.7z.uu",
+    "transport": "uu",
+    "source_sha256": "6ffca867af12df7bb62ccbdc2bd37677cb4c690aefb266247abc54687e34efb9",
+    "bytes": 145,
+    "sha256": "91f5427859ad1391c9fb877c98e4b55213c479f39fd012882f7d112388842076"
+  },
+  {
+    "path": "02_archives/public/test_read_format_7zip_encryption_header.7z",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_7zip_encryption_header.7z.uu",
+    "transport": "uu",
+    "source_sha256": "afff7c927a529d4b0ce6d0ad42971510d7f37540d84f0fcf033499956b0826b6",
+    "bytes": 198,
+    "sha256": "6d91af6a1632666d014ea44736074b77a6722c820c8400d14e036f3b6f4538ac"
+  },
+  {
+    "path": "02_archives/public/test_read_format_7zip_encryption_partially.7z",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_7zip_encryption_partially.7z.uu",
+    "transport": "uu",
+    "source_sha256": "cb581af7af0f3dfca26f947c46480dd050a47622d05f4e5c4f3ac8763a50d8c7",
+    "bytes": 222,
+    "sha256": "7dfdfacca7d6c77cf1ddb1bf90990d13f181cf3e74b02631d47819875254e592"
+  },
+  {
+    "path": "provenance/libarchive/test_read_format_zip_winzip_aes.c",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_zip_winzip_aes.c",
+    "transport": "direct",
+    "source_sha256": "6a1736cdc4f9a8e95359633dd1c8b9ba4e43609a224d203b9f29202b45cb7bb2",
+    "bytes": 5809,
+    "sha256": "6a1736cdc4f9a8e95359633dd1c8b9ba4e43609a224d203b9f29202b45cb7bb2"
+  },
+  {
+    "path": "provenance/libarchive/test_read_format_7zip_encryption_data.c",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_7zip_encryption_data.c",
+    "transport": "direct",
+    "source_sha256": "a630f948cc98bc93832b6bfd51f938835a7cff9bb4142398a690feb99693aa0d",
+    "bytes": 3063,
+    "sha256": "a630f948cc98bc93832b6bfd51f938835a7cff9bb4142398a690feb99693aa0d"
+  },
+  {
+    "path": "provenance/libarchive/test_read_format_7zip_encryption_header.c",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_7zip_encryption_header.c",
+    "transport": "direct",
+    "source_sha256": "1194b59d4a03e91e5f2b5e1e766e2b1ab990cb1294d8901cb003af855c6689cf",
+    "bytes": 3115,
+    "sha256": "1194b59d4a03e91e5f2b5e1e766e2b1ab990cb1294d8901cb003af855c6689cf"
+  },
+  {
+    "path": "provenance/libarchive/test_read_format_7zip_encryption_partially.c",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/libarchive/test/test_read_format_7zip_encryption_partially.c",
+    "transport": "direct",
+    "source_sha256": "0f23f8e942a402db6a38dfd97c9c62b3e07c25dee01796833b61ce78606736cc",
+    "bytes": 3737,
+    "sha256": "0f23f8e942a402db6a38dfd97c9c62b3e07c25dee01796833b61ce78606736cc"
+  },
+  {
+    "path": "licenses/LIBARCHIVE_COPYING.txt",
+    "source_url": "https://raw.githubusercontent.com/libarchive/libarchive/eb57ffefe20e98eb7ba05829ee1c23b90e589a71/COPYING",
+    "transport": "direct",
+    "source_sha256": "30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229",
+    "bytes": 3089,
+    "sha256": "30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229"
+  },
+  {
+    "path": "01_outlook/Set_Up_Mobile_Thru_Admin.oft",
+    "source_url": "https://download.microsoft.com/download/0/5/f/05f327a1-e5b6-41df-b8d0-2c698b5d6b99/Set_Up_Mobile_Thru_Admin.oft",
+    "transport": "direct",
+    "source_sha256": "ca98181d4b7a77d5cc7cd6dc941003dde8128ec48a6ca1c0cb93d27a7c0dbe1c",
+    "bytes": 960512,
+    "sha256": "ca98181d4b7a77d5cc7cd6dc941003dde8128ec48a6ca1c0cb93d27a7c0dbe1c"
+  }
+]

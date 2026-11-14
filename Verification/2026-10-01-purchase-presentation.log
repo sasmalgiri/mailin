@@ -1,0 +1,37 @@
+# Purchase access & paywall placement — 2026-10-01, macOS, Debug test build
+# Gates exercised with StoreManager(testTier:), which does not take the Debug all-unlocked shortcut.
+# Command: xcodebuild test -scheme maxmailin -destination platform=macOS
+#   -only-testing PurchaseGateTests, PurchasePresentationTests, ModuleGatingTests, PageIsolationTests,
+#                 EnterpriseDeploymentTests, V2CutoverTests, V2VerificationTests
+✔ Suite "Purchase gates (Free / Personal / Professional)" passed
+✔ Suite "Purchase presentation coordinator" passed (10 tests)
+✔ Suite "Module gating (v3.0 §3.3)" passed
+✔ Suite "Page isolation of feature flags (§3.3 R1)" passed
+EnterpriseDeploymentTests: Executed 5 tests, 0 failures
+V2CutoverTests:            Executed 63 tests, 0 failures
+V2VerificationTests:       Executed 65 tests, 1 skipped (Downloads fixture absent), 1 failure:
+  testProductionPathScale_boundedEnginesOverLargeStore — CancellationError after ~112 s, reproduced alone.
+  Pre-existing load-sensitive scale test (store + FTS + seven analysis engines over 2,000 rows); none of the
+  files changed in this commit are on its path. It passed in the 04:5x run of the same class today
+  (Verification/2026-10-01-purchase-gates.log). Machine load average 4.0 with Xcode indexing at the time.
+
+# Builds of the same tree
+macOS Release (xcodebuild -configuration Release -destination platform=macOS build): BUILD SUCCEEDED
+iOS Simulator (xcodebuild -destination 'generic/platform=iOS Simulator' build):      BUILD SUCCEEDED
+
+# Runtime evidence (Debug app launched with -mailinSimulateTier, screenshots in
+# ~/Downloads/AppStoreScreenshots-3.0/purchase/)
+1-archive-advanced      Free: "Free · Upgrade" badge on the page strip; Advanced list's 500-email banner
+2-aiInsights            Free: badge + "5 of 5 free Ask queries left today"
+3-professional          Free: "Unlock Professional" + every tool locked (lock glyph)
+4-paywall-reason        Free, Chain of Custody: sheet titled "Unlock Chain of Custody", reason "needs Professional"
+5-archive-simple        Free, three-pane list over 527 emails: "First 500 of 527 emails · Unlock Full Archive"
+6-personal-lifetime     Personal lifetime: badge "Personal · Lifetime"; Action Register / Reasoning Studio open,
+                        legal tools locked, "Unlock Professional" offered
+7-professional-owner    Professional lifetime: "Your plan" sheet with ownership details, no upgrade demand
+8-settings-general      Settings ▸ General ▸ Plan & Purchases (Free): plan, ownership, View Plans, Restore
+
+# Not performed
+StoreKit purchase / restore / pending / revoke flows against the sandbox: requires a signed Release or
+TestFlight build and a sandbox Apple Account with no purchases. iPad / iPhone hands-on pass of the badge
+placement: not run (compiles; badge sits on the page strip outside the horizontally scrolling names).

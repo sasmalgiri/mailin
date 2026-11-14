@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct IOCEntry: Identifiable, Hashable {
@@ -159,11 +160,13 @@ struct IOCExtractorView: View {
     @State private var filterType: IOCEntry.IOCType?
     @State private var searchText = ""
     @State private var showTutorial = false
+    @State private var exportStatus: String?
     @Environment(\.dismiss) private var dismiss
-    #if os(iOS)
-    @State private var shareItems: [Any] = []
-    @State private var showShareSheet = false
-    #endif
+    // §3-L16: whole-scope extraction when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var v3Scanned: Int?
+    private var v3: Bool { modules?.isOn(.v3IOC) ?? false }
 
     private var filteredEntries: [IOCEntry] {
         var result = entries
@@ -183,7 +186,7 @@ struct IOCExtractorView: View {
                 VStack(alignment: .leading) {
                     Text("IOC Extraction")
                         .font(.headline)
-                    Text("Indicators of Compromise from \(emails.count) emails")
+                    Text("Indicators of Compromise from \(v3Scanned ?? emails.count) emails")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -197,6 +200,14 @@ struct IOCExtractorView: View {
                     .buttonStyle(.plain)
             }
             .padding()
+            if let exportStatus {
+                Text(exportStatus)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
+            }
             Divider()
 
             if isExtracting {
@@ -224,7 +235,7 @@ struct IOCExtractorView: View {
                                 .lineLimit(1)
                                 .textSelection(.enabled)
                             HStack(spacing: 4) {
-                                Text(entry.type.rawValue)
+                                Text(LocalizedStringKey(entry.type.rawValue))
                                     .font(.caption2)
                                     .fontWeight(.medium)
                                     .padding(.horizontal, 5)
@@ -256,10 +267,6 @@ struct IOCExtractorView: View {
         .featureTutorial(.iocExtractor, key: "ioc_extractor_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
         .toolWindowFrame()
-        #else
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: shareItems)
-        }
         #endif
     }
 
@@ -308,6 +315,23 @@ struct IOCExtractorView: View {
     }
 
     private func extract() async {
+        if v3 {
+            isExtracting = true
+            defer { isExtracting = false }
+            do {
+                let r = try await IOCEngine.extract(scope: scope)
+                entries = r.entries
+                v3Scanned = r.receipt.processed
+                exportStatus = r.receipt.coverageLine
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                // §3-M3: the previous engine runs for this call (below).
+                exportStatus = EngineGuard.fellBack(.v3IOC, error: error)
+                v3Scanned = nil
+            }
+        }
         isExtracting = true
         let emailsCopy = emails
         let result = await Task.detached { IOCExtractor.extract(from: emailsCopy) }.value
@@ -317,28 +341,16 @@ struct IOCExtractorView: View {
 
     private func exportCSV() {
         let csv = IOCExtractor.exportAsCSV(filteredEntries)
-        // Record a numbered document of this export — the IOC list is the
-        // saved work, retrievable later from Work Center ▸ Documents.
         let iocCount = filteredEntries.count
-        Task { await DocumentRegistry.capture(.export,
-            summary: "IOC export — \(iocCount) indicator\(iocCount == 1 ? "" : "s")", body: csv) }
-        #if os(macOS)
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "ioc_indicators.csv"
-        if panel.runModal() == .OK, let url = panel.url {
-            try? csv.write(to: url, atomically: true, encoding: .utf8)
+        let outcome = PlatformExport.save(text: csv, suggestedName: "ioc_indicators.csv")
+        // Record the numbered export document only when the file was really
+        // saved or shared — a cancelled save is not an export.
+        if let url = outcome.url {
+            Task { await DocumentRegistry.capture(.export,
+                summary: "IOC export — \(iocCount) indicator\(iocCount == 1 ? "" : "s")", body: csv,
+                refs: url.lastPathComponent) }
         }
-        #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ioc_indicators.csv")
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            shareItems = [url]
-            showShareSheet = true
-        } catch {
-            // Best-effort; share sheet won't present if write fails.
-        }
-        #endif
+        exportStatus = outcome.message(String(localized: "IOC list"))
     }
 
     private func copyToClipboard(_ text: String) {

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ArchiveDerivedAnalysis.swift
 //  maxmailin
@@ -16,12 +17,40 @@
 
 import Foundation
 
+/// One model-backed analysis pass at a time. The email list's window pass and
+/// the archive-wide job each tagged the same emails in parallel, so two to
+/// four background model calls were in flight when the user asked a question
+/// (model log, 2026-10-07).
+actor DerivedModelPassLock {
+    static let shared = DerivedModelPassLock()
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+}
+
 enum DerivedAIAnalysis {
 
     /// Feature/model version for the Part I producers. Bump when the
     /// sentiment/classification/phishing/priority logic changes — persisted
     /// records at a lower version become stale and are recomputed.
     static let analysisVersion = 1
+
+    /// Background analysis uses the on-device NLP engine, not Apple
+    /// Intelligence (kalsmritikosh call-value test: a call must create or
+    /// improve evidence the user relies on). Owner's archive, 2026-10-07:
+    /// model tagging was ~25 calls of 7–11 s for 526 emails — thousands on a
+    /// large archive — for sentiment and category filters the NLP engine
+    /// already computes, and it competed with the user's questions. The
+    /// Smart Auto-Tagger window still uses the model when the user asks.
+    static let usesModelInBackground = false
 
     /// Compute the per-email derived filter attributes for ONE bounded batch,
     /// merging into `existing` records so fields owned by other producers
@@ -43,8 +72,12 @@ enum DerivedAIAnalysis {
         var phishIDs = Set<UUID>()
 
         #if canImport(FoundationModels)
-        if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
-            let tagResults = await FoundationModelEngine.tagEmails(emails) { _, _ in }
+        if usesModelInBackground, #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+            await DerivedModelPassLock.shared.acquire()
+            // Background work: yields to the user's questions, one call at a time.
+            let tagResults = await ModelScheduler.background {
+                await FoundationModelEngine.tagEmails(emails) { _, _ in }
+            }
             for (id, result) in tagResults {
                 switch result.sentiment {
                 case "positive": sentMap[id] = 0.8
@@ -60,7 +93,10 @@ enum DerivedAIAnalysis {
                 default: break
                 }
             }
-            phishIDs = await FoundationModelEngine.classifyPhishing(emails) { _, _ in }
+            phishIDs = await ModelScheduler.background {
+                await FoundationModelEngine.classifyPhishing(emails) { _, _ in }
+            }
+            await DerivedModelPassLock.shared.release()
         }
         #endif
 
@@ -71,7 +107,7 @@ enum DerivedAIAnalysis {
         let needClass = emails.filter { classMap[$0.id] == nil }
         let ranModelPhishing = !phishIDs.isEmpty || { () -> Bool in
             #if canImport(FoundationModels)
-            if #available(macOS 26, iOS 26, *) { return FoundationModelEngine.isAvailable }
+            if usesModelInBackground, #available(macOS 26, iOS 26, *) { return FoundationModelEngine.isAvailable }
             #endif
             return false
         }()
@@ -146,6 +182,8 @@ final class DerivedAIAnalysisJob: ObservableObject {
     /// re-runs only if new/stale work exists (the runner's work list is empty
     /// otherwise, so it completes immediately).
     func kickIfNeeded() {
+        guard SafeMode.shared.allowsBackgroundWork else { return }   // §3-S6
+        guard BackgroundExecution.isProtectedDataAvailable else { return }   // §3-S3
         guard UserDefaults.standard.object(forKey: "enableAIFeatures") as? Bool ?? true else { return }
         guard jobTask == nil else { return }   // one in-flight job at a time
         jobTask = Task { @MainActor [weak self] in

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct GeneralAnalysisView: View {
@@ -8,6 +9,13 @@ struct GeneralAnalysisView: View {
     // v2: bounded working set (recent sample) for on-device NLP/insight engines,
     // plus accurate archive-wide total from the store. No injected corpus.
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    // §3-A11: whole-archive figures (exact) + an evenly spaced sample for the
+    // text-reading trend/pattern analyses, when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var v3Sentiment: (avg: Double, positive: Int, negative: Int, count: Int)?
+    @State private var v3Attachments: Int?
+    @State private var v3Domains: Int?
+    private var v3Analysis: Bool { v3Modules?.isOn(.v3AnalysisQueries) ?? false }
     @State private var archiveTotal = 0
     @State private var searchResults: [EmailNLPEngine.SearchResult] = []
 
@@ -22,6 +30,8 @@ struct GeneralAnalysisView: View {
     @State private var sentimentResults: [EmailNLPEngine.SentimentResult] = []
     @State private var anomalies: [AnomalyDetectionEngine.Anomaly] = []
     @State private var hasAnalyzed = false
+    /// §3-M3: set when the 3.0 engine failed and the previous one ran.
+    @State private var fallbackNote: String?
     @State private var isAnalyzing = false
 
     // v4: AI + Background + Digest
@@ -67,6 +77,13 @@ struct GeneralAnalysisView: View {
         }
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.general, key: "general_tutorial_seen", isPresented: $showTutorial)
+        .modifier(GeneralAnalysisNotice(v3: v3Analysis && fallbackNote == nil, shown: workingSet.count, total: archiveTotal))
+        .safeAreaInset(edge: .top) {
+            if let fallbackNote {
+                Text(fallbackNote).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, Spacing.small)
+            }
+        }
         .task { archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0 }
         .task { await loadV3Data() }
         .task { await loadV4Data() }
@@ -94,6 +111,9 @@ struct GeneralAnalysisView: View {
         if loaded.nodeCount > 0 { graph = loaded; kgLoaded = true }
 
         guard !hasAnalyzed else { return }
+        if v3Analysis, await loadWholeArchive(graph: kgLoaded ? graph : nil) {
+            return
+        }
         isAnalyzing = true
         await loadWorkingSetIfNeeded()
         let emailsCopy = workingSet
@@ -111,26 +131,82 @@ struct GeneralAnalysisView: View {
 
         coordinator.begin(steps: 5, color: .mint)
 
-        coordinator.advance(step: 1, label: "Analyzing sentiment...")
+        coordinator.advance(step: 1, label: String(localized: "Analyzing sentiment..."))
         guard let sentiment = await coordinator.runDetached({ EmailNLPEngine.analyzeSentiment(of: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Detecting anomalies...")
+        coordinator.advance(step: 2, label: String(localized: "Detecting anomalies..."))
         guard let anomalyResults = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         sentimentResults = sentiment; anomalies = anomalyResults
         hasAnalyzed = true; isAnalyzing = false
 
-        coordinator.advance(step: 3, label: "Detecting trends...")
+        coordinator.advance(step: 3, label: String(localized: "Detecting trends..."))
         guard let trendResults = await coordinator.runDetached({ ArchiveInsightsFeatures.detectTrends(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Analyzing archive composition...")
+        coordinator.advance(step: 4, label: String(localized: "Analyzing archive composition..."))
         guard let composition = await coordinator.runDetached({ ArchiveInsightsFeatures.analyzeComposition(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 5, label: "Mapping communication patterns...")
+        coordinator.advance(step: 5, label: String(localized: "Mapping communication patterns..."))
         guard let patterns = await coordinator.runDetached({ ArchiveInsightsFeatures.analyzeCommunicationPatterns(emails: emailsCopy, graph: graphForPatterns) }) else { coordinator.finish(); return }
 
         trends = trendResults; archiveComposition = composition; communicationPatterns = patterns
         coordinator.finish()
+    }
+
+    /// §3-A11 whole-archive path.
+    /// Returns false when the 3.0 engine failed and the caller should run the
+    /// previous engine (§3-M3; this used to end silently with no results).
+    private func loadWholeArchive(graph: KnowledgeGraph?) async -> Bool {
+        isAnalyzing = true
+        defer { isAnalyzing = false }
+        do {
+            let sample = try await ArchiveSample.evenlySpaced()
+            workingSet = sample.emails
+            struct Progress: Codable, Sendable { var emails = 0 }
+            var comp = ArchiveInsightsFeatures.CompositionAccumulator()
+            var sum = 0.0, count = 0, pos = 0, neg = 0
+            _ = try await ScopeJob.run(
+                key: "general.analysis", title: String(localized: "General analysis"),
+                capability: .v3AnalysisQueries, query: .all, resumable: false, initialState: Progress()
+            ) { state, batch in
+                let (scores, next) = await Task.detached(priority: .userInitiated) { [comp] in
+                    var c = comp
+                    c.add(batch)
+                    return (EmailNLPEngine.analyzeSentiment(of: batch).map(\.score), c)
+                }.value
+                comp = next
+                for sc in scores {
+                    sum += sc; count += 1
+                    if sc > 0.4 { pos += 1 }
+                    if sc < -0.4 { neg += 1 }
+                }
+                state.emails += batch.count
+            }
+            v3Sentiment = (count > 0 ? sum / Double(count) : 0, pos, neg, count)
+            v3Attachments = comp.attachmentCount
+            v3Domains = comp.uniqueFromDomains
+            archiveComposition = comp.finish(languageSample: sample.emails)
+            do {
+                anomalies = try await AnomalyDetectionEngine.detectAnomalies(from: .shared)
+            } catch {
+                // §3-M3: the previous detector on the sample, not a silent empty list.
+                if !(error is CancellationError) { fallbackNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error) }
+                anomalies = AnomalyDetectionEngine.detectAnomalies(in: sample.emails)
+            }
+            hasAnalyzed = true
+            let emailsCopy = sample.emails
+            trends = await Task.detached(priority: .userInitiated) { ArchiveInsightsFeatures.detectTrends(in: emailsCopy) }.value
+            communicationPatterns = await Task.detached(priority: .userInitiated) {
+                ArchiveInsightsFeatures.analyzeCommunicationPatterns(emails: emailsCopy, graph: graph)
+            }.value
+            return true
+        } catch is CancellationError {
+            return true
+        } catch {
+            fallbackNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            workingSet = []
+            return false
+        }
     }
 
     private func loadV4Data() async {
@@ -147,7 +223,7 @@ struct GeneralAnalysisView: View {
 
         if digestSections.isEmpty {
             isGeneratingDigest = true
-            let sections = await AIDigestGenerator.generateDigest(period: .today)
+            let sections = await AIDigestGenerator.generateDigest(period: .today, v3: v3Modules?.isOn(.v3AnalysisQueries) ?? false)
             digestSections = sections
             isGeneratingDigest = false
         }
@@ -314,10 +390,10 @@ struct GeneralAnalysisView: View {
                 Text("Tap 'Run Analysis' to scan your emails for health metrics, sentiment, and anomalies.")
                     .font(.system(size: 10)).foregroundColor(.secondary)
             } else {
-                let avgSentiment = sentimentResults.isEmpty ? 0.0 : sentimentResults.reduce(0.0) { $0 + $1.score } / Double(sentimentResults.count)
-                let positive = sentimentResults.filter { $0.score > 0.4 }.count
-                let negative = sentimentResults.filter { $0.score < -0.4 }.count
-                let neutral = sentimentResults.count - positive - negative
+                let avgSentiment = v3Sentiment?.avg ?? (sentimentResults.isEmpty ? 0.0 : sentimentResults.reduce(0.0) { $0 + $1.score } / Double(sentimentResults.count))
+                let positive = v3Sentiment?.positive ?? sentimentResults.filter { $0.score > 0.4 }.count
+                let negative = v3Sentiment?.negative ?? sentimentResults.filter { $0.score < -0.4 }.count
+                let neutral = (v3Sentiment?.count ?? sentimentResults.count) - positive - negative
                 let highAnomalies = anomalies.filter { $0.severity > 0.7 }.count
                 let medAnomalies = anomalies.filter { $0.severity > 0.4 && $0.severity <= 0.7 }.count
                 let lowAnomalies = anomalies.filter { $0.severity <= 0.4 }.count
@@ -755,8 +831,8 @@ struct GeneralAnalysisView: View {
     // MARK: - Quick Stats
 
     private var quickStatsRow: some View {
-        let contacts = Set(workingSet.compactMap { extractDomain(from: $0.headers["From"] ?? "") }).count
-        let attachments = workingSet.flatMap { $0.attachments }.count
+        let contacts = v3Domains ?? Set(workingSet.compactMap { extractDomain(from: $0.headers["From"] ?? "") }).count
+        let attachments = v3Attachments ?? workingSet.flatMap { $0.attachments }.count
         let dateRange = computeDateRange()
 
         return HStack(spacing: 10) {
@@ -787,17 +863,17 @@ struct GeneralAnalysisView: View {
                 .font(.system(size: 10)).foregroundColor(.secondary)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                featuredCard("AI Assistant", subtitle: "Ask questions about your emails",
+                featuredCard("AI Assistant", subtitle: String(localized: "Ask questions about your emails"),
                              icon: "sparkles", color: .purple, destination: .aiAssistant)
-                featuredCard("Email Analytics", subtitle: "Charts, stats, and insights",
+                featuredCard("Email Analytics", subtitle: String(localized: "Charts, stats, and insights"),
                              icon: "chart.bar", color: .blue, destination: .emailAnalytics)
-                featuredCard("Topic Clusters", subtitle: "Auto-group by theme",
+                featuredCard("Topic Clusters", subtitle: String(localized: "Auto-group by theme"),
                              icon: "circle.grid.3x3", color: .teal, destination: .topicClusters)
-                featuredCard("Timeline", subtitle: "See emails chronologically",
+                featuredCard("Timeline", subtitle: String(localized: "See emails chronologically"),
                              icon: "calendar.day.timeline.left", color: .purple, destination: .timeline)
-                featuredCard("Relationships", subtitle: "Who contacts who",
+                featuredCard("Relationships", subtitle: String(localized: "Who contacts who"),
                              icon: "point.3.connected.trianglepath.dotted", color: .mint, destination: .relationshipGraph)
-                featuredCard("Executive Dashboard", subtitle: "High-level KPIs",
+                featuredCard("Executive Dashboard", subtitle: String(localized: "High-level KPIs"),
                              icon: "gauge.with.dots.needle.33percent", color: .blue, destination: .executiveDashboard)
             }
         }
@@ -934,13 +1010,13 @@ struct GeneralAnalysisView: View {
                 .font(.system(size: 10)).foregroundColor(.secondary)
 
             HStack(spacing: 10) {
-                stepCard(step: 1, title: "Explore", description: "Browse your emails and see top contacts", icon: "magnifyingglass", color: .blue) {
+                stepCard(step: 1, title: String(localized: "Explore"), description: String(localized: "Browse your emails and see top contacts"), icon: "magnifyingglass", color: .blue) {
                     trackFeature(.emailInbox); onNavigate(.emailInbox)
                 }
-                stepCard(step: 2, title: "Ask AI", description: "Natural language questions about your archive", icon: "sparkles", color: .purple) {
+                stepCard(step: 2, title: String(localized: "Ask AI"), description: String(localized: "Natural language questions about your archive"), icon: "sparkles", color: .purple) {
                     trackFeature(.aiAssistant); onNavigate(.aiAssistant)
                 }
-                stepCard(step: 3, title: "Analyze", description: "Charts, patterns, and insights", icon: "chart.bar", color: .green) {
+                stepCard(step: 3, title: String(localized: "Analyze"), description: String(localized: "Charts, patterns, and insights"), icon: "chart.bar", color: .green) {
                     trackFeature(.emailAnalytics); onNavigate(.emailAnalytics)
                 }
             }
@@ -1082,6 +1158,11 @@ struct GeneralAnalysisView: View {
     }
 
     private func computeDateRange() -> String {
+        if v3Analysis, let range = archiveComposition?.dateRange, let first = range.0, let last = range.1 {
+            let f = DateFormatter()
+            f.dateFormat = "MMM yy"
+            return "\(f.string(from: first))-\(f.string(from: last))"
+        }
         let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let f = DateFormatter()
@@ -1131,5 +1212,24 @@ private struct FlowLayout: Layout {
         }
 
         return (CGSize(width: maxX, height: currentY + lineHeight), positions)
+    }
+}
+
+
+/// The window notice for the previous engine; the sample notice for 3.0.
+private struct GeneralAnalysisNotice: ViewModifier {
+    let v3: Bool
+    let shown: Int
+    let total: Int
+    func body(content: Content) -> some View {
+        if v3 {
+            VStack(spacing: 0) {
+                SampleNotice(sample: shown, total: total,
+                             exactParts: String(localized: "Counts, sentiment, composition and anomalies cover every email."))
+                content
+            }
+        } else {
+            content.workingSetLimitNotice(shown: shown, total: total)
+        }
     }
 }

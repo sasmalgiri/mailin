@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  UnifiedExportMenu.swift
 //  maxmailin
@@ -9,11 +10,14 @@
 //  single-email rendition of a format (the detail view's Word/CSV/PDF/TIFF/
 //  plain-text buttons) omit the overlapping entries instead of duplicating.
 //
-//  Every export streams the scope through ArchiveExportService (bounded
-//  memory at any archive size), runs in the ExportRunCenter with progress,
-//  caps the free tier at StoreManager.freeEmailLimit with an honest
-//  "Exported X of Y" notice + paywall, and reports failures through the
-//  host's error binding (menus can't host alerts themselves).
+//  A8: a format button only picks the destination and builds an
+//  `ExportRequest`. The request goes to the run center's pre-flight sheet
+//  (folder layout, attachments, collision rule, size estimate against the
+//  destination's free space); Start hands it to `ExportJobRunner`, which
+//  streams the scope through ArchiveExportService (bounded memory at any
+//  archive size), caps the free tier at StoreManager.freeEmailLimit with an
+//  honest "Exported X of Y" notice + paywall, and ends every run — complete,
+//  truncated, cancelled or failed — in an `ExportReceipt`.
 //
 
 import SwiftUI
@@ -22,12 +26,6 @@ import AppKit
 #endif
 import UniformTypeIdentifiers
 
-enum UnifiedExportFormat: CaseIterable {
-    case word, csv, json, printText, markdown, headersCSV, mbox   // single documents
-    case emlFiles, pdfFiles, tiffFiles, msgFiles                  // one file per email
-    case portableHTML                    // folder with index.html viewer
-    case vcard, ics                      // derived extracts
-}
 
 struct UnifiedExportSections: View {
     /// Scope resolved at CLICK time (current filtered query / this email).
@@ -36,7 +34,7 @@ struct UnifiedExportSections: View {
     /// exports capped); the detail view passes requirePremium (its policy).
     var gate: () -> Bool = { true }
     /// v1-faithful RFC-822 renderer for .eml (default: stored raw source).
-    var emlRender: (@MainActor (MBOXParser.RawEmail) -> String)? = nil
+    var emlRender: (@MainActor @Sendable (MBOXParser.RawEmail) -> String)? = nil
     /// Formats the host already offers with its own (single-email) rendition.
     var omit: Set<UnifiedExportFormat> = []
     /// Exact number of emails the scope will export (shown as the menu
@@ -48,6 +46,9 @@ struct UnifiedExportSections: View {
     var requiresPremium: Bool = false
     /// iOS delivery: hand the finished artifact to the host's share sheet.
     var share: (URL) -> Void = { _ in }
+    /// Whole-list hosts: the Outlook .pst export (File ▸ Export as PST on the Mac). Without this
+    /// entry iPhone and iPad had no way to reach PST export. Nil hides it (single-email menus).
+    var exportPST: (() -> Void)? = nil
     @Binding var errorMessage: String?
 
     @EnvironmentObject private var storeManager: StoreManager
@@ -56,64 +57,94 @@ struct UnifiedExportSections: View {
         if let headline = countHeadline {
             Section(headline) { EmptyView() }
         }
-        if included(.word) {
-            button("Word Document (.doc)", icon: "doc.richtext",
-                   help: "One Word document, one page per email") { exportWord() }
+        // OUT-01: formats grouped by what they preserve — mail that can be
+        // re-imported first, then readable reports (not restorable mail),
+        // then extracts — so the choice says what the user will get back.
+        if anyIncluded(.mailPreserving) || exportPST != nil {
+            Section(LocalizedStringKey(ExportFidelity.mailPreserving.label)) {
+                if included(.mbox) {
+                    button("mbox Archive", icon: "archivebox",
+                           help: "Standard mailbox file — reimportable anywhere") { exportMBOX() }
+                }
+                if included(.emlFiles) {
+                    button("Individual .eml Files", icon: "envelope",
+                           help: "One standard email file each — reimportable") { exportEML() }
+                }
+                #if os(macOS)
+                if DEVONthinkHandOff.isEnabled {
+                    button(String(localized: "Send to DEVONthink"), icon: "tray.and.arrow.up",
+                           help: String(localized: "Exports these emails as .eml files and opens them in DEVONthink, which imports them")) { sendToDEVONthink() }
+                }
+                #endif
+                if included(.msgFiles) {
+                    button("Outlook Messages (.msg)", icon: "envelope.badge",
+                           help: "One Outlook-compatible file per email") { exportMSGs() }
+                }
+                if let exportPST {
+                    button(String(localized: "Outlook Archive (.pst)"), icon: "archivebox.fill",
+                           help: String(localized: "One Outlook data file with folders, recipients and attachments")) {
+                        if gate() { exportPST() }
+                    }
+                }
+            }
         }
-        if included(.csv) {
-            button("Spreadsheet (.csv)", icon: "tablecells",
-                   help: "One row per email — opens in Excel/Numbers") { exportCSV() }
+        if anyIncluded(.report) {
+            Section(LocalizedStringKey(ExportFidelity.report.label)) {
+                if included(.pdfFiles) {
+                    button("PDF Files (one per email)", icon: "doc.viewfinder",
+                           help: "One PDF per email — a readable rendering, not re-importable as email") { exportPDFs() }
+                }
+                if included(.tiffFiles) {
+                    button("TIFF Images (one per email)", icon: "photo",
+                           help: "Court-friendly image per email — not re-importable as email") { exportTIFFs() }
+                }
+                if included(.word) {
+                    button("Word-compatible Document (.doc)", icon: "doc.richtext",
+                           help: "One HTML document Word opens as .doc, one page per email") { exportWord() }
+                }
+                if included(.csv) {
+                    button("Spreadsheet (.csv)", icon: "tablecells",
+                           help: "One row per email — opens in Excel/Numbers; a report, not a mail archive") { exportCSV() }
+                }
+                if included(.headersCSV) {
+                    button("Headers-Only CSV", icon: "list.bullet.rectangle",
+                           help: "Metadata only, no bodies — safe to share") { exportHeadersOnly() }
+                }
+                if included(.json) {
+                    button("JSON Archive", icon: "curlybraces",
+                           help: "Machine-readable full archive — for other software, not re-importable as email") { exportJSON() }
+                }
+                if included(.printText) {
+                    button("Batch Print Text (.txt)", icon: "printer",
+                           help: "Plain text ready for printing") { exportPrintText() }
+                }
+                if included(.markdown) {
+                    button("Markdown (.md)", icon: "number",
+                           help: "Notes-friendly document — Obsidian, GitHub") { exportMarkdown() }
+                }
+                if included(.portableHTML) {
+                    button("Portable HTML Viewer", icon: "globe",
+                           help: "Self-contained browser viewer folder") { exportHTML() }
+                }
+            }
         }
-        if included(.json) {
-            button("JSON Archive", icon: "curlybraces",
-                   help: "Machine-readable full archive") { exportJSON() }
+        if anyIncluded(.extract) {
+            Section(LocalizedStringKey(ExportFidelity.extract.label)) {
+                if included(.vcard) {
+                    button("Contacts (vCard)", icon: "person.crop.rectangle.stack",
+                           help: "Every address as importable contacts") { exportVCard() }
+                }
+                if included(.ics) {
+                    button("Calendar Events (.ics)", icon: "calendar",
+                           help: "Detected events as a calendar file") { exportICS() }
+                }
+            }
         }
-        if included(.printText) {
-            button("Batch Print Text (.txt)", icon: "printer",
-                   help: "Plain text ready for printing") { exportPrintText() }
-        }
-        if included(.markdown) {
-            button("Markdown (.md)", icon: "number",
-                   help: "Notes-friendly document — Obsidian, GitHub") { exportMarkdown() }
-        }
-        if included(.headersCSV) {
-            button("Headers-Only CSV", icon: "list.bullet.rectangle",
-                   help: "Metadata only, no bodies — safe to share") { exportHeadersOnly() }
-        }
-        if included(.mbox) {
-            button("mbox Archive", icon: "archivebox",
-                   help: "Standard mailbox file — reimportable anywhere") { exportMBOX() }
-        }
-        if !omit.isSuperset(of: [.emlFiles, .pdfFiles, .tiffFiles]) { Divider() }
-        if included(.emlFiles) {
-            button("Individual .eml Files", icon: "envelope",
-                   help: "One standard email file each — reimportable") { exportEML() }
-        }
-        if included(.pdfFiles) {
-            button("PDF Files (one per email)", icon: "doc.viewfinder",
-                   help: "One PDF per email") { exportPDFs() }
-        }
-        if included(.tiffFiles) {
-            button("TIFF Images (one per email)", icon: "photo",
-                   help: "Court-friendly image per email") { exportTIFFs() }
-        }
-        if included(.msgFiles) {
-            button("Outlook Messages (.msg)", icon: "envelope.badge",
-                   help: "One Outlook-compatible file per email") { exportMSGs() }
-        }
-        Divider()
-        if included(.portableHTML) {
-            button("Portable HTML Viewer", icon: "globe",
-                   help: "Self-contained browser viewer folder") { exportHTML() }
-        }
-        if included(.vcard) {
-            button("Contacts (vCard)", icon: "person.crop.rectangle.stack",
-                   help: "Every address as importable contacts") { exportVCard() }
-        }
-        if included(.ics) {
-            button("Calendar Events (.ics)", icon: "calendar",
-                   help: "Detected events as a calendar file") { exportICS() }
-        }
+    }
+
+    /// At least one format of this fidelity is offered by this host.
+    private func anyIncluded(_ fidelity: ExportFidelity) -> Bool {
+        UnifiedExportFormat.allCases.contains { $0.fidelity == fidelity && included($0) }
     }
 
     /// "Export 222 emails (current filter)" — plus the free-tier bound when
@@ -132,10 +163,13 @@ struct UnifiedExportSections: View {
     private func button(_ title: String, icon: String, help: String,
                         action: @escaping () -> Void) -> some View {
         let locked = requiresPremium && !storeManager.isPremium
+        // The English literals are the catalog keys (OUT-01: this menu is translated like the rest).
+        let localizedTitle = String(localized: String.LocalizationValue(title))
+        let localizedHelp = String(localized: String.LocalizationValue(help))
         return Button(action: action) {
-            Label(locked ? "\(title) (Pro)" : title, systemImage: locked ? "lock" : icon)
+            Label(locked ? String(localized: "\(localizedTitle) (Pro)") : localizedTitle, systemImage: locked ? "lock" : icon)
         }
-        .help(locked ? "\(help) — unlocked with Pro" : help)
+        .help(locked ? String(localized: "\(localizedHelp) — unlocked with Pro") : localizedHelp)
     }
 
     // MARK: - Shared plumbing
@@ -151,7 +185,7 @@ struct UnifiedExportSections: View {
     /// Save-panel destination for single-document formats.
     private func documentDestination(_ name: String, type: UTType?) -> URL? {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = name
         panel.canCreateDirectories = true
         if let type { panel.allowedContentTypes = [type] }
@@ -180,216 +214,121 @@ struct UnifiedExportSections: View {
         #endif
     }
 
-    private func run(_ title: String,
-                     _ body: @escaping @MainActor (ArchiveExportService) async throws -> Void) {
+    /// Build the request and send it to the pre-flight sheet. The runner is
+    /// given this host's renderer, share sheet, error binding and store so a
+    /// later Resume behaves the same way.
+    private func request(_ format: UnifiedExportFormat, title: String, destination: URL, isFolder: Bool,
+                         handOff: ExportHandOff? = nil) {
         guard gate() else { return }
-        ExportRunCenter.shared.run(title: title) {
-            do {
-                try await body(ArchiveExportService.shared)
-            } catch {
-                errorMessage = "\(title) failed: \(error.localizedDescription)"
-            }
+        let runner = ExportJobRunner.shared
+        if let render = emlRender {
+            runner.emlRender = { email in render(email) }
+        } else {
+            runner.emlRender = nil
         }
-    }
-
-    /// Free-tier honesty: when the cap truncated the export, say exactly how
-    /// much was written and open the paywall.
-    @MainActor
-    private func handleCap(written: Int, cancelled: Bool, what: String,
-                           scope: ArchiveSelectionScope, deliver: URL?) async {
-        if cancelled {
-            errorMessage = "\(what) export cancelled — partial output removed."
-            return
-        }
-        if let cap {
-            let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? written
-            if total > cap {
-                storeManager.showPaywall = true
-                errorMessage = "Exported \(written) of \(total) emails. Upgrade to Pro for unlimited export."
-            }
-        }
-        #if os(iOS)
-        if let deliver { share(deliver) }
-        #else
-        _ = deliver
-        #endif
+        runner.share = share
+        runner.storeManager = storeManager
+        runner.onError = { message in errorMessage = message }
+        ExportRunCenter.shared.requestPreflight(ExportRequest(
+            format: format,
+            title: title,
+            // REC-05: opened from a recipe step, the export works on the run's frozen selection.
+            scope: RecipeFrozenScope.exportScope(scope(), ticket: RecipeJobBroker.shared.waitingTicket(for: .export)),
+            destination: destination.path,
+            isFolder: isFolder,
+            cap: cap,
+            emailCountHint: emailCount,
+            handOff: handOff))
     }
 
     // MARK: - Formats
 
     private func exportWord() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "doc"), type: nil) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting Word document") { service in
-            let result = try await service.exportWordArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Word", scope: scope, deliver: url)
-        }
+        request(.word, title: String(localized: "Exporting Word document"), destination: url, isFolder: false)
     }
 
     private func exportCSV() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "csv"), type: .commaSeparatedText) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting CSV") { service in
-            let result = try await service.exportDetailedCSV(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "CSV", scope: scope, deliver: url)
-        }
+        request(.csv, title: String(localized: "Exporting CSV"), destination: url, isFolder: false)
     }
 
     private func exportJSON() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "json"), type: .json) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting JSON") { service in
-            let result = try await service.exportJSONArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "JSON", scope: scope, deliver: url)
-        }
+        request(.json, title: String(localized: "Exporting JSON"), destination: url, isFolder: false)
     }
 
     private func exportPrintText() {
         guard let url = documentDestination(timestampName("mailin_print", ext: "txt"), type: .plainText) else { return }
-        let scope = scope()
-        run("Exporting print text") { service in
-            let result = try await service.exportBatchPrintText(
-                scope: scope, to: url,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Print text", scope: scope, deliver: url)
-        }
+        request(.printText, title: String(localized: "Exporting print text"), destination: url, isFolder: false)
     }
 
     private func exportEML() {
-        guard let folder = folderDestination(message: "Select a folder to save .eml files",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save .eml files"),
                                              fallbackName: "eml_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap, render = emlRender
-        run("Exporting emails as EML") { service in
-            let result = try await service.exportEMLFiles(
-                scope: scope, to: folder, limit: cap, render: render,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "EML", scope: scope, deliver: folder)
+        request(.emlFiles, title: String(localized: "Exporting emails as EML"), destination: folder, isFolder: true)
+    }
+
+    /// E2: the .eml export into a folder of mailin's own, then handed to DEVONthink by the runner
+    /// when the run ends. The count is shown in the menu headline and the pre-flight sheet first.
+    private func sendToDEVONthink() {
+        DEVONthinkHandOff.prune()
+        do {
+            let folder = try DEVONthinkHandOff.newHandOffFolder()
+            request(.emlFiles, title: String(localized: "Sending emails to DEVONthink"), destination: folder,
+                    isFolder: true, handOff: .devonthink)
+        } catch {
+            errorMessage = String(localized: "Could not prepare the files for DEVONthink: \(error.localizedDescription)")
         }
     }
 
     private func exportPDFs() {
-        guard let folder = folderDestination(message: "Select a folder to save PDF files",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save PDF files"),
                                              fallbackName: "pdf_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap
-        run("Exporting PDFs") { service in
-            let result = try await service.exportPDFFiles(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "PDF", scope: scope, deliver: folder)
-        }
+        request(.pdfFiles, title: String(localized: "Exporting PDFs"), destination: folder, isFolder: true)
     }
 
     private func exportTIFFs() {
-        guard let folder = folderDestination(message: "Select a folder to save TIFF images",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save TIFF images"),
                                              fallbackName: "tiff_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap
-        run("Exporting TIFF images") { service in
-            let result = try await service.exportTIFFFiles(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "TIFF", scope: scope, deliver: folder)
-        }
+        request(.tiffFiles, title: String(localized: "Exporting TIFF images"), destination: folder, isFolder: true)
     }
 
     private func exportHTML() {
-        guard let base = folderDestination(message: "Select a folder for the portable HTML export",
+        guard let base = folderDestination(message: String(localized: "Select a folder for the portable HTML export"),
                                            fallbackName: "html_export_\(UUID().uuidString)") else { return }
         let folder = base.appendingPathComponent("mailin_html_export")
-        let scope = scope(), cap = cap
-        run("Exporting portable HTML") { service in
-            let result = try await service.exportPortableHTML(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "HTML", scope: scope, deliver: folder)
-        }
+        request(.portableHTML, title: String(localized: "Exporting portable HTML"), destination: folder, isFolder: true)
     }
 
     private func exportMarkdown() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "md"), type: .plainText) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting Markdown") { service in
-            let result = try await service.exportMarkdownArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Markdown", scope: scope, deliver: url)
-        }
+        request(.markdown, title: String(localized: "Exporting Markdown"), destination: url, isFolder: false)
     }
 
     private func exportHeadersOnly() {
         guard let url = documentDestination(timestampName("mailin_headers", ext: "csv"), type: .commaSeparatedText) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting headers CSV") { service in
-            let result = try await service.exportHeadersCSV(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Headers CSV", scope: scope, deliver: url)
-        }
+        request(.headersCSV, title: String(localized: "Exporting headers CSV"), destination: url, isFolder: false)
     }
 
     private func exportMBOX() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "mbox"), type: nil) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting mbox") { service in
-            let result = try await service.exportMBOXArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "mbox", scope: scope, deliver: url)
-        }
+        request(.mbox, title: String(localized: "Exporting mbox"), destination: url, isFolder: false)
     }
 
     private func exportMSGs() {
-        guard let folder = folderDestination(message: "Select a folder to save .msg files",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save .msg files"),
                                              fallbackName: "msg_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap
-        run("Exporting Outlook messages") { service in
-            let result = try await service.exportMSGFiles(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "MSG", scope: scope, deliver: folder)
-        }
+        request(.msgFiles, title: String(localized: "Exporting Outlook messages"), destination: folder, isFolder: true)
     }
 
     private func exportVCard() {
         guard let url = documentDestination(timestampName("mailin_contacts", ext: "vcf"), type: .vCard) else { return }
-        let scope = scope()
-        run("Exporting contacts") { service in
-            _ = try await service.exportVCard(
-                scope: scope, to: url,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            #if os(iOS)
-            share(url)
-            #endif
-        }
+        request(.vcard, title: String(localized: "Exporting contacts"), destination: url, isFolder: false)
     }
 
     private func exportICS() {
         guard let url = documentDestination(timestampName("mailin_events", ext: "ics"), type: UTType(filenameExtension: "ics")) else { return }
-        let scope = scope()
-        run("Exporting calendar events") { service in
-            _ = try await service.exportICS(
-                scope: scope, to: url,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            #if os(iOS)
-            share(url)
-            #endif
-        }
+        request(.ics, title: String(localized: "Exporting calendar events"), destination: url, isFolder: false)
     }
 }

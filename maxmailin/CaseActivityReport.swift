@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  CaseActivityReport.swift
 //  maxmailin

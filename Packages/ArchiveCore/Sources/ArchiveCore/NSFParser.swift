@@ -1,0 +1,860 @@
+import Foundation
+import os
+
+struct NSFParser {
+    /// Bump when message extraction/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
+
+    private static let logger = Logger(subsystem: "com.mailin", category: "NSFParser")
+
+    static func parse(
+        fileURL: URL,
+        senderEmail: String,
+        onProgress: ((Double) -> Void)? = nil
+    ) throws -> [MBOXParser.RawEmail] {
+        let data = try mappedData(for: fileURL)
+        let reader = NSFReader(data: data)
+        let notes = try reader.readNotes(onProgress: onProgress)
+
+        var emails: [MBOXParser.RawEmail] = []
+        let total = Double(notes.count)
+
+        for (idx, note) in notes.enumerated() {
+            if let email = email(for: note, senderEmail: senderEmail) { emails.append(email) }
+            onProgress?(Double(idx + 1) / max(total, 1))
+        }
+
+        logger.info("Parsed \(emails.count) emails from NSF file (\(notes.count) notes total)")
+        return emails
+    }
+
+    /// Five jobs OPEN-02 (switch: `streamingBinaryParsers`). Notes are read
+    /// one record at a time from the mapped file and handed out in batches,
+    /// so memory follows the batch, not the database. Same checks, same
+    /// reader, same record order as `parse`. When the structured read finds
+    /// no note at all, the text-scan fallback runs as before (it reads the
+    /// file as one string and is bounded to 200 MB by its own guard).
+    /// Returns how many emails were handed out.
+    static func parseStreaming(
+        fileURL: URL,
+        senderEmail: String,
+        batchSize: Int,
+        onProgress: ((Double) -> Void)? = nil,
+        onBatch: ([MBOXParser.RawEmail]) async throws -> Void
+    ) async throws -> Int {
+        let size = max(1, batchSize)
+        let data = try mappedData(for: fileURL)
+        let reader = NSFReader(data: data)
+        var cursor = try reader.structuredStart()
+        var batch: [MBOXParser.RawEmail] = []
+        batch.reserveCapacity(size)
+        var emitted = 0
+        var seen = 0
+        while let note = reader.nextStructuredNote(&cursor) {
+            try Task.checkCancellation()
+            seen += 1
+            if let email = email(for: note, senderEmail: senderEmail) {
+                batch.append(email)
+                if batch.count >= size {
+                    try await onBatch(batch)
+                    emitted += batch.count
+                    batch.removeAll(keepingCapacity: true)
+                }
+            }
+            if seen % 100 == 0 { onProgress?(Double(cursor.offset) / Double(max(data.count, 1)) * 0.9) }
+        }
+        if !batch.isEmpty {
+            try await onBatch(batch)
+            emitted += batch.count
+            batch.removeAll()
+        }
+        if seen == 0 {
+            // Nothing structured: the previous fallback, drained in batches.
+            let notes = try reader.scanNotes(onProgress: onProgress)
+            let emails = notes.compactMap { email(for: $0, senderEmail: senderEmail) }
+            var start = 0
+            while start < emails.count {
+                let end = min(start + size, emails.count)
+                try await onBatch(Array(emails[start..<end]))
+                emitted += end - start
+                start = end
+            }
+        }
+        onProgress?(1)
+        logger.info("Streamed \(emitted) emails from NSF file (\(seen) structured notes)")
+        return emitted
+    }
+
+    /// One note as the archive's email record: a deletion stub becomes a
+    /// marked, partial row (B3) when recovery is on; non-mail notes are nil.
+    private static func email(for note: NSFNote, senderEmail: String) -> MBOXParser.RawEmail? {
+        if RecoveryPolicy.isEnabled, let info = NSFDeletionStub.recovery(for: note) {
+            return NSFDeletionStub.email(for: note, info: info)
+        }
+        return buildEmail(from: note, senderEmail: senderEmail)
+    }
+
+    /// Size policy, then the file mapped (not read) into memory.
+    private static func mappedData(for fileURL: URL) throws -> Data {
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileSize = attrs[.size] as? Int64 ?? 0
+        // S1: 64 GB is the PRE-ODS-53 limit. HCL documents 256 GB for Domino
+        // 10+ databases at ODS 53 or higher, so the old refusal rejected valid
+        // modern databases. mailin cannot yet read the ODS version from the
+        // header (offset not documented in the sources consulted), so a file
+        // between the two ceilings is accepted with a warning that says so.
+        // mmap below means peak RSS tracks the working set, not the file size.
+        switch SourceSizePolicy.nsfVerdict(fileSize: fileSize) {
+        case .refuse(let reason):
+            throw NSFError.invalidFormat(reason)
+        case .warn(let note):
+            Self.logger.notice("NSF import warning: \(note, privacy: .public)")
+        case .ok:
+            break
+        }
+        if fileSize < 256 {
+            throw NSFError.invalidFormat("File too small for NSF format")
+        }
+
+        // `.mappedIfSafe` lets the OS page in only what we actually read,
+        // so a 30 GB NSF doesn't materialise 30 GB of RSS.
+        return try Data(contentsOf: fileURL, options: .mappedIfSafe)
+    }
+
+    private static func buildEmail(from note: NSFNote, senderEmail: String) -> MBOXParser.RawEmail? {
+        guard note.isMailNote else { return nil }
+
+        let from = note.items["From"] ?? note.items["$From"] ?? note.items["SMTPOriginator"] ?? ""
+        let to = note.items["SendTo"] ?? note.items["EnterSendTo"] ?? ""
+        let cc = note.items["CopyTo"] ?? note.items["EnterCopyTo"] ?? ""
+        let bcc = note.items["BlindCopyTo"] ?? ""
+        let subject = note.items["Subject"] ?? "(No Subject)"
+        let body = note.items["Body"] ?? ""
+        let deliveredDate = note.items["DeliveredDate"] ?? note.items["PostedDate"] ?? ""
+        let messageID = note.items["$MessageID"] ?? note.items["UNID"] ?? UUID().uuidString
+
+        let isoFormatter = ISO8601DateFormatter()
+        let timestamp: String
+        if let parsedDate = parseNotesDate(deliveredDate) {
+            timestamp = isoFormatter.string(from: parsedDate)
+        } else if !deliveredDate.isEmpty {
+            timestamp = deliveredDate
+        } else {
+            timestamp = isoFormatter.string(from: Date.distantPast)
+        }
+
+        var headers: [String: String] = [
+            "From": from,
+            "To": to,
+            "Subject": subject,
+            "Date": timestamp,
+            "Message-ID": messageID
+        ]
+        if !cc.isEmpty { headers["Cc"] = cc }
+        if !bcc.isEmpty { headers["Bcc"] = bcc }
+        if let inReplyTo = note.items["$Ref"] { headers["In-Reply-To"] = inReplyTo }
+        if let form = note.items["Form"] { headers["X-Notes-Form"] = form }
+        headers["X-Source-Format"] = "NSF"
+
+        let messageType: String
+        if !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) {
+            messageType = "sent"
+        } else {
+            messageType = "received"
+        }
+
+        let domains = MBOXParser.extractDomains(from: headers)
+
+        let htmlBody = note.items["$HtmlBody"] ?? note.items["Body_HTML"] ?? ""
+
+        let email = MBOXParser.RawEmail(
+            id: UUID(),
+            headers: headers,
+            rawSource: "",
+            messageType: messageType,
+            attachments: note.attachments,
+            timestamp: timestamp,
+            domains: domains,
+            plainBody: body,
+            htmlBody: htmlBody,
+            mimeRoot: nil,
+            mimeSummary: nil,
+            mimeDiagnostics: [],
+            threadID: messageID,
+            inReplyTo: headers["In-Reply-To"],
+            references: nil,
+            tags: note.categories,
+            anomalies: MBOXParser.findAnomalies(headers: headers, body: body.isEmpty ? htmlBody : body, attachments: note.attachments)
+        )
+        // §13.8 step 6: a rendered raw source, so the attachment bytes outlive the import.
+        return email.withRenderedSource("Lotus Notes NSF")
+    }
+
+    static func parseNotesDateForStub(_ dateStr: String) -> Date? { parseNotesDate(dateStr) }
+
+    private static func parseNotesDate(_ dateStr: String) -> Date? {
+        if dateStr.isEmpty { return nil }
+
+        let formatters: [String] = [
+            "MM/dd/yyyy hh:mm:ss a",
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "MM/dd/yyyy HH:mm:ss",
+            "dd/MM/yyyy HH:mm:ss",
+            "yyyy/MM/dd HH:mm:ss",
+            "EEE, dd MMM yyyy HH:mm:ss Z"
+        ]
+
+        for format in formatters {
+            let formatter = DateFormatter()
+            formatter.dateFormat = format
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            if let date = formatter.date(from: dateStr) {
+                return date
+            }
+        }
+
+        let iso = ISO8601DateFormatter()
+        return iso.date(from: dateStr)
+    }
+
+    enum NSFError: LocalizedError {
+        case invalidFormat(String)
+        case fileTooLarge(Int64)
+        case unsupportedVersion(Int)
+        case corruptDatabase(String)
+        case noEmailsFound
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidFormat(let reason):
+                return "Invalid NSF format: \(reason)"
+            case .fileTooLarge(let size):
+                // S1: the honest ceiling is HCL's documented 256 GB (ODS 53+);
+                // 64 GB applies only below ODS 53. This case is retained for
+                // callers that still construct it; SourceSizePolicy decides.
+                return "NSF file is \(size / 1_073_741_824) GiB. HCL documents 256 GB as the maximum database size (64 GB below ODS 53)."
+            case .unsupportedVersion(let ver):
+                return "Unsupported NSF version: \(ver). Only NSF versions 2-5 are supported."
+            case .corruptDatabase(let detail):
+                return "Corrupt NSF database: \(detail)"
+            case .noEmailsFound:
+                return "No email notes found in NSF file"
+            }
+        }
+    }
+}
+
+// MARK: - NSF Note Model
+
+struct NSFNote {
+    var items: [String: String] = [:]
+    var attachments: [AttachmentMetadata] = []
+    var categories: [String] = []
+
+    var isMailNote: Bool {
+        let form = (items["Form"] ?? "").lowercased()
+        if form == "memo" || form == "reply" || form == "notice" || form.contains("mail") {
+            return true
+        }
+        if items["From"] != nil || items["$From"] != nil || items["SMTPOriginator"] != nil {
+            if items["SendTo"] != nil || items["EnterSendTo"] != nil || items["Subject"] != nil {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+// MARK: - NSF Binary Reader
+
+struct NSFReader {
+    private let data: Data
+    private static let logger = Logger(subsystem: "com.mailin", category: "NSFReader")
+
+    // R5b: no fixed note count (the former 500,000 stopped the rollback reader without a word).
+
+    /// The text-scan fallback reads the whole file as one string, so it is
+    /// bounded: a larger file that the structured read could not parse is
+    /// refused with that reason (listed in Settings ▸ Health ▸ Limits).
+    static let scanFallbackMaxBytes = 200 * 1024 * 1024
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    func readNotes(onProgress: ((Double) -> Void)? = nil) throws -> [NSFNote] {
+        try checkSignature()
+
+        // Try structured binary parse first, fall back to scan-based extraction
+        if let notes = try? parseStructured(onProgress: onProgress), !notes.isEmpty {
+            return notes
+        }
+
+        return try parseByScan(onProgress: onProgress)
+    }
+
+    private func checkSignature() throws {
+        guard data.count >= 256 else {
+            throw NSFParser.NSFError.invalidFormat("File too small")
+        }
+
+        let signature = readUInt16(at: 0)
+        // NSF signature: 0x1A00 is most common, but some files use other variants
+        let validSignatures: Set<UInt16> = [0x001A, 0x1A00]
+        guard validSignatures.contains(signature) || isLikelyNSF() else {
+            throw NSFParser.NSFError.invalidFormat("Not a valid NSF file (signature: 0x\(String(format: "%04X", signature)))")
+        }
+    }
+
+    // MARK: - OPEN-02: one note at a time
+
+    /// Where the structured read is: the next byte to try, how many bytes in
+    /// a row held no record (progress information only), and how many notes
+    /// were found.
+    struct Cursor {
+        var offset: Int
+        var consecutiveFailures = 0
+        var notes = 0
+    }
+
+    /// Signature and header checks, then the cursor at the first record.
+    func structuredStart() throws -> Cursor {
+        try checkSignature()
+        guard data.count >= 0x2C else {
+            throw NSFParser.NSFError.invalidFormat("Header too small for structured parse")
+        }
+        let dbInfoOffset = data.count > 0x30 ? Int(readUInt32(at: 0x28)) : 0
+        return Cursor(offset: max(dbInfoOffset, 256))
+    }
+
+    /// The next note record after the cursor, or nil at the end of the
+    /// database. The whole file is scanned: the earlier give-up after 100,000
+    /// bytes without a record was a hidden cap (rule 6) that read the public
+    /// Aspose SampleNSF.nsf — 47 MB whose first megabytes are design notes —
+    /// as empty after its first 100 KB (directive §3 run, 2026-11-07).
+    /// No note cap: the caller holds one batch, not the database.
+    func nextStructuredNote(_ cursor: inout Cursor) -> NSFNote? {
+        while cursor.offset < data.count - 64 {
+            if let (note, nextOffset) = try? readNoteRecord(at: cursor.offset), nextOffset > cursor.offset {
+                cursor.offset = nextOffset
+                cursor.consecutiveFailures = 0
+                cursor.notes += 1
+                return note
+            }
+            cursor.offset += 1
+            cursor.consecutiveFailures += 1
+        }
+        return nil
+    }
+
+    /// The text-scan fallback, for the streaming path when no record was found.
+    func scanNotes(onProgress: ((Double) -> Void)? = nil) throws -> [NSFNote] {
+        try parseByScan(onProgress: onProgress)
+    }
+
+    private func isLikelyNSF() -> Bool {
+        guard data.count > 100 else { return false }
+        let headerChunk = String(data: data[0..<min(512, data.count)], encoding: .ascii) ?? ""
+        return headerChunk.contains("NSF") || headerChunk.contains("Notes") || headerChunk.contains("Lotus")
+    }
+
+    // MARK: - Structured Parse (NSF Database Header)
+
+    private func parseStructured(onProgress: ((Double) -> Void)? = nil) throws -> [NSFNote] {
+        guard data.count >= 0x2C else {
+            throw NSFParser.NSFError.invalidFormat("Header too small for structured parse")
+        }
+
+        // NSF database header layout (offsets are approximate — vary by version):
+        // Bytes 0-1: Signature
+        // Bytes 2-5: Database size or flags
+        // Bytes 6-41: Title (null-terminated)
+        // After header: RRV (Record Relocation Vector) bucket table → note records
+
+        // Read database info block offset (typically at offset 0x28)
+        let dbInfoOffset: Int
+        if data.count > 0x30 {
+            dbInfoOffset = Int(readUInt32(at: 0x28))
+        } else {
+            dbInfoOffset = 0
+        }
+
+        // Scan for note record headers in the database
+        // Notes in NSF are identified by NOTE_CLASS flags
+        // Mail notes have NOTE_CLASS = 0x0001 (DOCUMENT)
+        var notes: [NSFNote] = []
+        var offset = max(dbInfoOffset, 256)
+        let totalBytes = Double(data.count)
+
+        // The whole file, not the first 100 KB after the last record (see `nextStructuredNote`).
+        while offset < data.count - 64 {
+            if let (note, nextOffset) = try? readNoteRecord(at: offset), nextOffset > offset {
+                notes.append(note)
+                offset = nextOffset
+            } else {
+                offset += 1
+            }
+
+            if notes.count % 100 == 0 {
+                onProgress?(Double(offset) / totalBytes * 0.9)
+            }
+        }
+
+        return notes
+    }
+
+    private func readNoteRecord(at offset: Int) throws -> (NSFNote, Int)? {
+        guard offset + 32 <= data.count else { return nil }
+
+        // Look for item-name patterns that indicate a note record boundary
+        // Notes items start with item header: Type(2) + NameLength(2) + ValueLength(4) + ...
+        let itemType = readUInt16(at: offset)
+
+        // Valid NSF item types: TYPE_TEXT=0x0500, TYPE_NUMBER=0x0300,
+        // TYPE_TIME=0x0400, TYPE_COMPOSITE=0x0100, TYPE_TEXT_LIST=0x0501
+        let validItemTypes: Set<UInt16> = [
+            0x0500, 0x0501, 0x0300, 0x0400, 0x0100,
+            0x0005, 0x0105, 0x0003, 0x0004, 0x0001,
+        ]
+
+        guard validItemTypes.contains(itemType) || validItemTypes.contains(itemType.byteSwapped) else {
+            return nil
+        }
+
+        let nameLen = Int(readUInt16(at: offset + 2))
+        guard nameLen > 0 && nameLen < 256 else { return nil }
+
+        let (headerPlusName, overflow1) = offset.addingReportingOverflow(8 + nameLen)
+        guard !overflow1, headerPlusName <= data.count else { return nil }
+        let valueLenRaw = Int(readUInt32(at: offset + 4))
+        let maxValueLen = data.count - headerPlusName
+        let valueLen = min(valueLenRaw, maxValueLen)
+        guard valueLen >= 0 else { return nil }   // R5b: no 10 MB item ceiling — the length is already bounded by the file
+
+        let nameStart = offset + 8
+        guard let name = readLMBCSString(at: nameStart, length: nameLen) else { return nil }
+
+        let knownNames: Set<String> = [
+            "Form", "Subject", "Body", "From", "$From", "SendTo", "CopyTo",
+            "BlindCopyTo", "DeliveredDate", "PostedDate", "$MessageID",
+            "EnterSendTo", "EnterCopyTo", "Categories", "$Ref", "UNID",
+            "$HtmlBody", "Body_HTML", "SMTPOriginator", "$FILE"
+        ]
+
+        guard knownNames.contains(name) || name.hasPrefix("$") || name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else {
+            return nil
+        }
+
+        var note = NSFNote()
+        var pos = offset
+
+        // R5b: no 200-item ceiling — every item of the note is read; the walk
+        // always moves forward and ends at the note's end or an unreadable item.
+        while pos < data.count - 8 {
+            if let (binName, binData, binNext) = readItemBinary(at: pos),
+               binName == "$FILE" || binName.hasPrefix("$FILE_") || binName == "$AttachmentData" {
+                if let attachment = parseAttachmentItemWithData(name: binName, binaryValue: binData) {
+                    note.attachments.append(attachment)
+                }
+                pos = binNext
+                continue
+            }
+
+            guard let (itemName, itemValue, nextPos) = readItem(at: pos) else { break }
+
+            if itemName == "$FILE" {
+                if let attachment = parseAttachmentItem(value: itemValue) {
+                    note.attachments.append(attachment)
+                }
+            } else if itemName == "Categories" {
+                note.categories = itemValue.components(separatedBy: CharacterSet(charactersIn: ",;"))
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            } else {
+                note.items[itemName] = itemValue
+            }
+
+            pos = nextPos
+
+            if itemName == "Form" && note.items.count > 1 {
+                break
+            }
+            // B3: a deletion stub has no Form; its deleted note ID ends the record.
+            if RecoveryPolicy.isEnabled, itemName == "$NoteID" || itemName == "NoteID",
+               NSFDeletionStub.isDeletedID(itemValue) {
+                break
+            }
+        }
+
+        guard !note.items.isEmpty else { return nil }
+        return (note, pos)
+    }
+
+    private func readItem(at offset: Int) -> (String, String, Int)? {
+        guard offset + 8 <= data.count else { return nil }
+
+        let nameLen = Int(readUInt16(at: offset + 2))
+        guard nameLen > 0 && nameLen < 256 else { return nil }
+
+        let (headerPlusName, overflow1) = offset.addingReportingOverflow(8 + nameLen)
+        guard !overflow1, headerPlusName <= data.count else { return nil }
+        let valueLenRaw = Int(readUInt32(at: offset + 4))
+        let maxValueLen = data.count - headerPlusName
+        let valueLen = min(valueLenRaw, maxValueLen)
+        guard valueLen >= 0 else { return nil }   // R5b: no 10 MB item ceiling — the length is already bounded by the file
+
+        let nameStart = offset + 8
+        guard let name = readLMBCSString(at: nameStart, length: nameLen) else { return nil }
+
+        let valueStart = nameStart + nameLen
+        guard valueStart + valueLen <= data.count else { return nil }
+
+        let value: String
+        if valueLen > 0 {
+            // Re-wrap the slice in a fresh Data so downstream byte-subscripting
+            // consumers (lzssDecompress, stripCompositeHeader) get a 0-based
+            // index. A Data slice keeps its parent's non-zero startIndex, so
+            // `input[0]` on the raw slice traps with index-out-of-bounds.
+            let valueData = Data(data[valueStart..<(valueStart + valueLen)])
+            if name == "Body" || name == "$HtmlBody" || name == "Body_HTML" {
+                value = decodeBodyValue(valueData)
+            } else {
+                value = String(data: valueData, encoding: .utf8)
+                    ?? String(data: valueData, encoding: .isoLatin1)
+                    ?? ""
+            }
+        } else {
+            value = ""
+        }
+
+        return (name, value.trimmingCharacters(in: .controlCharacters), valueStart + valueLen)
+    }
+
+    private func readItemBinary(at offset: Int) -> (String, Data, Int)? {
+        guard offset + 8 <= data.count else { return nil }
+
+        let nameLen = Int(readUInt16(at: offset + 2))
+        guard nameLen > 0 && nameLen < 256 else { return nil }
+
+        guard offset + 8 + nameLen <= data.count else { return nil }
+        let valueLenRaw = Int(readUInt32(at: offset + 4))
+        let maxValueLen = max(0, data.count - (offset + 8 + nameLen))
+        let valueLen = min(valueLenRaw, maxValueLen)
+        guard valueLen >= 0 else { return nil }   // R5b: no 50 MB attachment ceiling — bounded by the file
+
+        let nameStart = offset + 8
+        guard let name = readLMBCSString(at: nameStart, length: nameLen) else { return nil }
+
+        let valueStart = nameStart + nameLen
+        guard valueStart + valueLen <= data.count else { return nil }
+
+        let valueData = valueLen > 0 ? Data(data[valueStart..<(valueStart + valueLen)]) : Data()
+        return (name, valueData, valueStart + valueLen)
+    }
+
+    private func decodeBodyValue(_ valueData: Data) -> String {
+        if let text = String(data: valueData, encoding: .utf8), !text.isEmpty {
+            return text
+        }
+        if let decompressed = lzssDecompress(valueData) {
+            if let text = String(data: decompressed, encoding: .utf8) ?? String(data: decompressed, encoding: .isoLatin1) {
+                return text
+            }
+        }
+        if valueData.count >= 4 {
+            let stripped = stripCompositeHeader(valueData)
+            if let text = String(data: stripped, encoding: .utf8) ?? String(data: stripped, encoding: .isoLatin1), !text.trimmingCharacters(in: .controlCharacters).isEmpty {
+                return text
+            }
+        }
+        return String(data: valueData, encoding: .isoLatin1) ?? ""
+    }
+
+    private func stripCompositeHeader(_ data: Data) -> Data {
+        guard data.count > 8 else { return data }
+        var offset = 0
+        while offset + 4 <= data.count {
+            let sig = UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+            let len = UInt16(data[offset + 2]) | (UInt16(data[offset + 3]) << 8)
+            if sig == 0x0000 && len == 0x0000 { break }
+            let recordLen = 4 + Int(len)
+            if sig == 0x0005 || sig == 0x0500 {
+                let textStart = offset + 4
+                if textStart < data.count {
+                    return Data(data[textStart...])
+                }
+            }
+            offset += max(recordLen, 4)
+        }
+        return data
+    }
+
+    private func lzssDecompress(_ input: Data) -> Data? {
+        guard input.count > 4 else { return nil }
+        let expectedSize = Int(UInt32(input[0]) | (UInt32(input[1]) << 8) | (UInt32(input[2]) << 16) | (UInt32(input[3]) << 24))
+        // R5b: no fixed 50 MB ceiling; LZSS cannot expand past 18 bytes per 2 input bytes,
+        // so a larger declared size is damage, not a large body.
+        guard expectedSize > 0 && expectedSize <= input.count * 9 + 4_096 else { return nil }
+
+        var output = Data(capacity: expectedSize)
+        var window = [UInt8](repeating: 0x20, count: 4096)
+        var windowPos = 1
+        var inputPos = 4
+
+        while inputPos < input.count && output.count < expectedSize {
+            guard inputPos < input.count else { break }
+            let flags = input[inputPos]
+            inputPos += 1
+
+            for bit in 0..<8 {
+                guard inputPos < input.count && output.count < expectedSize else { break }
+
+                if flags & (1 << bit) != 0 {
+                    output.append(input[inputPos])
+                    window[windowPos % 4096] = input[inputPos]
+                    windowPos += 1
+                    inputPos += 1
+                } else {
+                    guard inputPos + 1 < input.count else { break }
+                    let b1 = Int(input[inputPos])
+                    let b2 = Int(input[inputPos + 1])
+                    inputPos += 2
+
+                    let offset = b1 | ((b2 & 0xF0) << 4)
+                    let length = (b2 & 0x0F) + 3
+
+                    for i in 0..<length {
+                        guard output.count < expectedSize else { break }
+                        let byte = window[(offset + i) % 4096]
+                        output.append(byte)
+                        window[windowPos % 4096] = byte
+                        windowPos += 1
+                    }
+                }
+            }
+        }
+
+        guard output.count > 0 else { return nil }
+        return output
+    }
+
+    // MARK: - Scan-Based Parse (Fallback)
+
+    private func parseByScan(onProgress: ((Double) -> Void)? = nil) throws -> [NSFNote] {
+        // Scan the raw bytes for recognizable email-like text patterns
+        // This is a fallback for NSF files where the structured parse fails
+        var notes: [NSFNote] = []
+
+        // The scan fallback materialises the entire file as a String. Cap it so
+        // a multi-GB NSF that fails structured parse fails cleanly rather than
+        // OOM'ing (structured parse handles large files via mmap; this doesn't).
+        guard data.count <= Self.scanFallbackMaxBytes else {
+            throw NSFParser.NSFError.invalidFormat("File too large for scan fallback (\(data.count) bytes)")
+        }
+
+        guard let text = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1)
+                ?? String(data: data, encoding: .windowsCP1252) else {
+            throw NSFParser.NSFError.invalidFormat("Cannot decode file content")
+        }
+
+        // Split on "Form" field boundaries, which delimit notes in raw text scans
+        let noteBlocks = extractNoteBlocks(from: text)
+        let total = Double(noteBlocks.count)
+
+        for (idx, block) in noteBlocks.enumerated() {
+            var note = NSFNote()
+            let lines = block.components(separatedBy: .newlines)
+
+            for line in lines {
+                if let (key, value) = parseFieldLine(line) {
+                    if key == "Categories" {
+                        note.categories = value.components(separatedBy: CharacterSet(charactersIn: ",;"))
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                    } else {
+                        note.items[key] = value
+                    }
+                }
+            }
+
+            if note.isMailNote {
+                notes.append(note)
+            }
+
+            if idx % 50 == 0 {
+                onProgress?(Double(idx) / max(total, 1))
+            }
+        }
+
+        if notes.isEmpty {
+            // Last resort: try to find any email-like content with regex patterns
+            let emailPattern = try? NSRegularExpression(
+                pattern: "(?:From|Subject|To|SendTo)\\s*[:=]\\s*[^\\x00-\\x08\\x0E-\\x1F]{3,}",
+                options: [.caseInsensitive]
+            )
+            if let matches = emailPattern?.matches(in: text, range: NSRange(text.startIndex..., in: text)),
+               !matches.isEmpty {
+                Self.logger.info("Found \(matches.count) potential email fields via regex scan")
+            }
+        }
+
+        return notes
+    }
+
+    private func extractNoteBlocks(from text: String) -> [String] {
+        var blocks: [String] = []
+        var currentBlock = ""
+        var foundFirstForm = false
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let isFormBoundary = trimmed.hasPrefix("Form") &&
+                (trimmed.contains(":") || trimmed.contains("=")) &&
+                (trimmed.lowercased().contains("memo") || trimmed.lowercased().contains("reply") ||
+                 trimmed.lowercased().contains("notice") || trimmed.lowercased().contains("mail"))
+
+            if isFormBoundary {
+                if foundFirstForm && !currentBlock.isEmpty {
+                    blocks.append(currentBlock)
+                }
+                currentBlock = line + "\n"
+                foundFirstForm = true
+            } else if foundFirstForm {
+                currentBlock += line + "\n"
+            }
+        }
+        if !currentBlock.isEmpty {
+            blocks.append(currentBlock)
+        }
+        return blocks
+    }
+
+    private func parseFieldLine(_ line: String) -> (String, String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+
+        let separators: [Character] = [":", "="]
+        for sep in separators {
+            if let idx = trimmed.firstIndex(of: sep) {
+                let key = String(trimmed[trimmed.startIndex..<idx]).trimmingCharacters(in: .whitespaces)
+                let value = String(trimmed[trimmed.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
+
+                let knownFields: Set<String> = [
+                    "Form", "Subject", "Body", "From", "$From", "SendTo", "CopyTo",
+                    "BlindCopyTo", "DeliveredDate", "PostedDate", "$MessageID",
+                    "EnterSendTo", "EnterCopyTo", "Categories", "$Ref",
+                    "$HtmlBody", "Body_HTML", "SMTPOriginator", "UNID"
+                ]
+
+                if knownFields.contains(key) && !value.isEmpty {
+                    return (key, value)
+                }
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Attachment Parsing
+
+    private func parseAttachmentItem(value: String) -> AttachmentMetadata? {
+        guard !value.isEmpty else { return nil }
+        let filename = value.components(separatedBy: CharacterSet(charactersIn: "/\\")).last ?? value
+        guard !filename.isEmpty else { return nil }
+
+        return AttachmentMetadata(
+            filename: filename.trimmingCharacters(in: .controlCharacters),
+            mimeType: Self.mimeType(for: filename),
+            size: 0,
+            isInline: false,
+            contentID: nil,
+            base64: nil,
+            fileURL: nil
+        )
+    }
+
+    private func parseAttachmentItemWithData(name: String, binaryValue: Data) -> AttachmentMetadata? {
+        guard !binaryValue.isEmpty else { return nil }
+
+        var filename = name
+        var contentData = binaryValue
+
+        if binaryValue.count > 64 {
+            let header = binaryValue.prefix(256)
+            if let headerStr = String(data: header, encoding: .ascii) {
+                let parts = headerStr.components(separatedBy: CharacterSet(charactersIn: "\0"))
+                    .map { $0.trimmingCharacters(in: .controlCharacters) }
+                    .filter { !$0.isEmpty && $0.contains(".") }
+                if let extracted = parts.first {
+                    filename = extracted.components(separatedBy: CharacterSet(charactersIn: "/\\")).last ?? extracted
+                    if let filenameEnd = header.firstIndex(of: 0x00), filenameEnd < header.endIndex {
+                        let dataStart = header.index(after: filenameEnd)
+                        let offset = header.distance(from: header.startIndex, to: dataStart)
+                        if offset < binaryValue.count {
+                            contentData = Data(binaryValue[binaryValue.startIndex.advanced(by: offset)...])
+                        }
+                    }
+                }
+            }
+        }
+
+        let base64 = contentData.base64EncodedString()
+
+        return AttachmentMetadata(
+            filename: filename.trimmingCharacters(in: .controlCharacters),
+            mimeType: Self.mimeType(for: filename),
+            size: contentData.count,
+            isInline: false,
+            contentID: nil,
+            base64: base64,
+            fileURL: nil
+        )
+    }
+
+    private static func mimeType(for filename: String) -> String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "pdf": return "application/pdf"
+        case "doc", "docx": return "application/msword"
+        case "xls", "xlsx": return "application/vnd.ms-excel"
+        case "ppt", "pptx": return "application/vnd.ms-powerpoint"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "txt": return "text/plain"
+        case "html", "htm": return "text/html"
+        case "zip": return "application/zip"
+        case "tiff", "tif": return "image/tiff"
+        case "bmp": return "image/bmp"
+        case "rtf": return "text/rtf"
+        case "xml": return "application/xml"
+        case "csv": return "text/csv"
+        case "mp3": return "audio/mpeg"
+        case "mp4": return "video/mp4"
+        case "wav": return "audio/wav"
+        default: return "application/octet-stream"
+        }
+    }
+
+    // MARK: - Binary Helpers
+
+    // LMBCS (Lotus Multi-Byte Character Set) — simplified as ASCII/Latin1 for common cases
+    private func readLMBCSString(at offset: Int, length: Int) -> String? {
+        guard offset + length <= data.count else { return nil }
+        let slice = data[offset..<(offset + length)]
+        return (String(data: slice, encoding: .utf8) ?? String(data: slice, encoding: .isoLatin1))?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+    }
+
+    private func readUInt16(at offset: Int) -> UInt16 {
+        guard offset + 2 <= data.count else { return 0 }
+        return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+    }
+
+    private func readUInt32(at offset: Int) -> UInt32 {
+        guard offset + 4 <= data.count else { return 0 }
+        return UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8) |
+               (UInt32(data[offset + 2]) << 16) | (UInt32(data[offset + 3]) << 24)
+    }
+}

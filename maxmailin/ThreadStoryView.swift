@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ThreadStoryView.swift
 //  maxmailin
@@ -29,6 +30,9 @@ struct ThreadStoryView: View {
     @State private var narrativeTask: Task<Void, Never>?
 
     static let maxThreadEmails = 200
+    // §3-A6: complete threads, told within the model's window (3.0 engine).
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    private var v3: Bool { v3Modules?.isOn(.v3Threads) ?? false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -196,6 +200,19 @@ struct ThreadStoryView: View {
 
     private func load() async {
         defer { isLoading = false }
+        if v3 {
+            do {
+                members = try await ThreadStoryEngine.completeThread(of: email)
+                truncated = false
+                return
+            } catch is CancellationError {
+                members = [email]
+                return
+            } catch {
+                // §3-M3 (was `try?`: one email shown as the whole thread).
+                _ = EngineGuard.fellBack(.v3Threads, error: error)
+            }
+        }
         do {
             var ids: [UUID]
             if let key = try await ArchiveThreadService.shared.threadKey(for: email.id) {
@@ -236,9 +253,38 @@ struct ThreadStoryView: View {
         narrative = ""
         let thread = members
         narrativeTask = Task {
-            _ = try? await FoundationModelEngine.synthesizeThread(thread) { partial in
-                guard !Task.isCancelled else { return }
-                narrative = partial
+            if v3 {
+                do {
+                    _ = try await ThreadStoryEngine.tell(thread) { partial in
+                        guard !Task.isCancelled else { return }
+                        narrative = partial
+                    }
+                } catch is CancellationError {
+                } catch {
+                    // §3-M3: the previous narrator tries; if it fails too, say why.
+                    let note = EngineGuard.fellBack(.v3Threads, error: error)
+                    do {
+                        _ = try await FoundationModelEngine.synthesizeThread(thread) { partial in
+                            guard !Task.isCancelled else { return }
+                            narrative = partial
+                        }
+                    } catch is CancellationError {
+                    } catch {
+                        narrative = note + " " + String(localized: "The story could not be written: \(error.localizedDescription)")
+                    }
+                }
+            } else {
+                // §8 #6: a long thread exceeds the model's window; this used to
+                // be `try?`, which left the story silently empty.
+                do {
+                    _ = try await FoundationModelEngine.synthesizeThread(thread) { partial in
+                        guard !Task.isCancelled else { return }
+                        narrative = partial
+                    }
+                } catch is CancellationError {
+                } catch {
+                    narrative = String(localized: "The story could not be written: \(error.localizedDescription)")
+                }
             }
             if !Task.isCancelled { isNarrating = false }
         }

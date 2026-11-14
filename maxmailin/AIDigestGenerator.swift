@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  AIDigestGenerator.swift
 //  mailin
@@ -35,9 +36,9 @@ struct AIDigestGenerator {
 
             var label: String {
                 switch self {
-                case .low: return "Low"
-                case .medium: return "Medium"
-                case .high: return "High"
+                case .low: return String(localized: "Low")
+                case .medium: return String(localized: "Medium")
+                case .high: return String(localized: "High")
                 }
             }
         }
@@ -59,14 +60,37 @@ struct AIDigestGenerator {
     static func generateDigest(
         period: TimePeriod,
         customStart: Date? = nil,
-        customEnd: Date? = nil
+        customEnd: Date? = nil,
+        baseQuery: EmailQuery = .all,
+        v3: Bool = false
     ) async -> [DigestSection] {
-        var query = EmailQuery.all
+        // §3-A17: the whole-period digest (switch `v3AnalysisQueries`); the
+        // previous engine below if it throws (§3-M3).
+        if v3 {
+            do {
+                let q = await DigestEngine.periodQuery(baseQuery, period: period, customStart: customStart, customEnd: customEnd)
+                return try await DigestEngine.digest(query: q)
+            } catch is CancellationError {
+                return []
+            } catch {
+                let line = await EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+                let previous = await generateDigest(period: period, customStart: customStart, customEnd: customEnd, baseQuery: baseQuery)
+                return [DigestSection(title: String(localized: "Note"), icon: "info.circle",
+                                      items: [DigestItem(headline: line, detail: "", emailIDs: [], priority: .low)])] + previous
+            }
+        }
+        // F14: the caller's scope (Page 2 source/date) is the base; the
+        // period narrows it further.
+        var query = baseQuery
         if period == .custom {
+            // Recheck R9: the custom dates narrow the base scope, never widen it.
             let calendar = Calendar.current
-            if let s = customStart { query.afterDate = calendar.startOfDay(for: s) }
-            if let e = customEnd {
-                query.beforeDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: e))
+            if let s = customStart {
+                let lower = calendar.startOfDay(for: s)
+                query.afterDate = query.afterDate.map { max($0, lower) } ?? lower
+            }
+            if let e = customEnd, let upper = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: e)) {
+                query.beforeDate = query.beforeDate.map { min($0, upper) } ?? upper
             }
         }
         let recent = await ArchiveDataService.shared.workingSet(query: query, cap: 1000)
@@ -146,7 +170,7 @@ struct AIDigestGenerator {
                     )
                 }
                 if !items.isEmpty {
-                    sections.append(DigestSection(title: "AI Insights", icon: "sparkles", items: items))
+                    sections.append(DigestSection(title: String(localized: "AI Insights"), icon: "sparkles", items: items))
                 }
             }
         }
@@ -224,14 +248,14 @@ struct AIDigestGenerator {
         if !topSenders.isEmpty {
             let senderList = topSenders.map { "\($0.key) (\($0.value))" }.joined(separator: ", ")
             items.append(DigestItem(
-                headline: "Top senders",
+                headline: String(localized: "Top senders"),
                 detail: senderList,
                 emailIDs: [],
                 priority: .low
             ))
         }
 
-        return DigestSection(title: "Statistics", icon: "chart.bar.fill", items: items)
+        return DigestSection(title: String(localized: "Statistics"), icon: "chart.bar.fill", items: items)
     }
 
     // MARK: - 2. Key Conversations
@@ -267,7 +291,7 @@ struct AIDigestGenerator {
             )
         }
 
-        return DigestSection(title: "Key Conversations", icon: "bubble.left.and.bubble.right.fill", items: items)
+        return DigestSection(title: String(localized: "Key Conversations"), icon: "bubble.left.and.bubble.right.fill", items: items)
     }
 
     // MARK: - 3. Action Items
@@ -310,7 +334,7 @@ struct AIDigestGenerator {
         guard !items.isEmpty else { return nil }
 
         let sortedItems = items.sorted { $0.priority > $1.priority }
-        return DigestSection(title: "Action Items", icon: "exclamationmark.bubble.fill", items: Array(sortedItems.prefix(10)))
+        return DigestSection(title: String(localized: "Action Items"), icon: "exclamationmark.bubble.fill", items: Array(sortedItems.prefix(10)))
     }
 
     // MARK: - 4. New Contacts
@@ -357,7 +381,7 @@ struct AIDigestGenerator {
                 )
             }
 
-        return DigestSection(title: "New Contacts", icon: "person.badge.plus", items: items)
+        return DigestSection(title: String(localized: "New Contacts"), icon: "person.badge.plus", items: items)
     }
 
     // MARK: - 5. Sentiment Summary
@@ -394,7 +418,7 @@ struct AIDigestGenerator {
             ))
         }
 
-        return DigestSection(title: "Sentiment Summary", icon: "face.smiling", items: items)
+        return DigestSection(title: String(localized: "Sentiment Summary"), icon: "face.smiling", items: items)
     }
 
     // MARK: - 6. Attachments Overview
@@ -436,7 +460,7 @@ struct AIDigestGenerator {
                 .map { "\($0.key): \($0.value)" }
                 .joined(separator: ", ")
             items.append(DigestItem(
-                headline: "File types",
+                headline: String(localized: "File types"),
                 detail: typeBreakdown,
                 emailIDs: [],
                 priority: .low
@@ -460,7 +484,7 @@ struct AIDigestGenerator {
             ))
         }
 
-        return DigestSection(title: "Attachments Overview", icon: "paperclip", items: items)
+        return DigestSection(title: String(localized: "Attachments Overview"), icon: "paperclip", items: items)
     }
 
     // MARK: - Helpers
@@ -493,7 +517,7 @@ struct AIDigestGenerator {
         }
     }
 
-    private static func normalizeSubject(_ subject: String) -> String {
+    static func normalizeSubject(_ subject: String) -> String {
         var s = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixes = ["re:", "fw:", "fwd:", "re: re:", "fw: fw:"]
         var changed = true
@@ -511,7 +535,7 @@ struct AIDigestGenerator {
         return s.isEmpty ? "(No Subject)" : s
     }
 
-    private static func extractEmailAddress(from header: String) -> String {
+    static func extractEmailAddress(from header: String) -> String {
         if let openAngle = header.firstIndex(of: "<"),
            let closeAngle = header.firstIndex(of: ">"),
            openAngle < closeAngle {
@@ -523,7 +547,7 @@ struct AIDigestGenerator {
         return ""
     }
 
-    private static func bodyText(for email: MBOXParser.RawEmail) -> String {
+    static func bodyText(for email: MBOXParser.RawEmail) -> String {
         if !email.plainBody.isEmpty { return email.plainBody }
         if !email.htmlBody.isEmpty {
             return email.htmlBody
@@ -534,7 +558,7 @@ struct AIDigestGenerator {
         return ""
     }
 
-    private static func formatSize(_ bytes: Int) -> String {
+    static func formatSize(_ bytes: Int) -> String {
         if bytes < 1024 { return "\(bytes) B" }
         if bytes < 1024 * 1024 { return "\(bytes / 1024) KB" }
         return String(format: "%.1f MB", Double(bytes) / (1024.0 * 1024.0))
@@ -560,14 +584,14 @@ struct AIDigestGenerator {
             )
         }
 
-        return DigestSection(title: "Predictions & Alerts", icon: "chart.line.uptrend.xyaxis", items: digestItems)
+        return DigestSection(title: String(localized: "Predictions & Alerts"), icon: "chart.line.uptrend.xyaxis", items: digestItems)
     }
 
     // MARK: - What's New (v3.4.1)
 
     #if canImport(FoundationModels)
     @available(macOS 26, iOS 26, *)
-    private static func whatsNewSection() -> DigestSection? {
+    static func whatsNewSection() -> DigestSection? {
         var items: [DigestItem] = []
 
         // Proactive findings from import-time analysis
@@ -602,7 +626,7 @@ struct AIDigestGenerator {
 
         guard !items.isEmpty else { return nil }
         items.sort { $0.priority > $1.priority }
-        return DigestSection(title: "What's New", icon: "bell.badge", items: Array(items.prefix(8)))
+        return DigestSection(title: String(localized: "What's New"), icon: "bell.badge", items: Array(items.prefix(8)))
     }
     #endif
 }

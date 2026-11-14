@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -43,12 +44,20 @@ struct AIAssistantView: View {
     var searchContext: String = ""
     var onSelectEmail: ((UUID) -> Void)?
     var onFilterByIDs: (([UUID]) -> Void)?
+    /// Done closes the sheet or window that presents the assistant. Embedded
+    /// in a page (AI Insights ▸ Ask) there is nothing to close: `dismiss()`
+    /// there closed the main window on macOS (found 2026-10-05), so the page
+    /// hides it.
+    var showsDoneButton: Bool = true
 
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
 
     @State private var prompt = ""
     @State private var isProcessing = false
+    /// A period question already found to have mail in it, so the re-ask
+    /// skips the empty-period check.
+    @State private var periodCheckedQuery: String?
     @State private var conversationHistory: [(query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])] = []
     @State private var selectedEngine: AIEngine = .auto
     @State private var emailScope: EmailScope = .filtered
@@ -66,6 +75,9 @@ struct AIAssistantView: View {
     @EnvironmentObject private var storeManager: StoreManager
 
     static let freeQueryLimit = 5
+    /// Appended to a model answer cut off by the deadline. Such an answer is
+    /// not counted against the Free allowance.
+    static let timedOutNote = "\n\n(Response timed out — partial result shown)"
 
     #if os(iOS)
     @State private var showShareSheet = false
@@ -80,7 +92,7 @@ struct AIAssistantView: View {
         case appleAIMoE = "Apple AI MoE"
         case appleAI = "Apple AI"
         case hybrid = "Hybrid"
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         case cloudAI = "Cloud AI"
         #endif
         case nlp = "NLP"
@@ -135,6 +147,7 @@ struct AIAssistantView: View {
         } catch { }
         workingSet = Array(acc.prefix(Self.workingSetCap))
         hydratedScope = scope
+        OwnerIdentity.update(from: workingSet)
     }
 
     /// The bounded working set for the CURRENT scope, hydrating first if needed.
@@ -182,7 +195,7 @@ struct AIAssistantView: View {
     }
 
     private var cloudAIAvailable: Bool {
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         CloudAIManager.shared.isReady && !forensicManager.isEnabled
         #else
         false
@@ -233,7 +246,7 @@ struct AIAssistantView: View {
                 HStack(spacing: Spacing.xSmall) {
                     Image(systemName: "shield.checkered")
                         .foregroundColor(.orange)
-                    Text("Forensic Mode — Cloud AI disabled. All analysis is on-device only.")
+                    Text("Forensic Mode is on — all analysis runs on this device.")
                         .font(Typography.caption1)
                         .foregroundColor(.orange)
                     Spacer()
@@ -277,7 +290,7 @@ struct AIAssistantView: View {
             currentTask = nil
             saveConversation()
         }
-        #if !DEBUG
+        #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $showUpgradePaywall) {
             PaywallView()
                 .environmentObject(storeManager)
@@ -332,6 +345,13 @@ struct AIAssistantView: View {
             .frame(minWidth: 520, minHeight: 600)
             #endif
         }
+        #if os(iOS)
+        .sheet(isPresented: $showMetricsSheet) {
+            NavigationStack {
+                AIMetricsView(onClose: { showMetricsSheet = false })
+            }
+        }
+        #endif
     }
 
     // MARK: - LLM Status Banners
@@ -345,7 +365,7 @@ struct AIAssistantView: View {
                 Text("Unlock Apple Intelligence for richer AI answers")
                     .font(Typography.callout)
                     .fontWeight(.medium)
-                Text("Apple Intelligence is available on this Mac but not enabled yet. Enable it to get natural language summaries, deeper analysis, and conversational answers.")
+                Text("Apple Intelligence is available on this device but not enabled yet. Enable it to get natural language summaries, deeper analysis, and conversational answers.")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -425,6 +445,8 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(conversationHistory.isEmpty)
+                    .help("Export conversation")
+                    .accessibilityLabel("Export conversation")
                     Button {
                         conversationHistory.removeAll()
                         Self.clearSavedConversation()
@@ -433,9 +455,34 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(conversationHistory.isEmpty)
+                    .help("Clear conversation")
+                    .accessibilityLabel("Clear conversation")
+                    .accessibilityIdentifier("ai.clearConversation")
+                    // Reading surface for AIMetrics: what queries actually
+                    // cost and produced, per engine, with honest "not
+                    // measured" where an engine cannot see a figure.
+                    Button {
+                        #if os(macOS)
+                        ToolWindowPresenter.shared.open(title: String(localized: "AI Metrics"),
+                                                        size: CGSize(width: 820, height: 720)) {
+                            AnyView(NavigationStack {
+                                AIMetricsView(onClose: { ToolWindowPresenter.shared.close(title: String(localized: "AI Metrics")) })
+                            }
+                            .toolWindowFrame())
+                        }
+                        #else
+                        showMetricsSheet = true
+                        #endif
+                    } label: {
+                        Image(systemName: "chart.bar.xaxis")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("AI query metrics — timing, citations and outcomes per engine")
                     TutorialHelpButton(showTutorial: $showTutorial)
-                    Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
+                    if showsDoneButton {
+                        Button("Done") { dismiss() }
+                            .fontWeight(.semibold)
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -454,7 +501,7 @@ struct AIAssistantView: View {
                                 Label("Hybrid", systemImage: selectedEngine == .hybrid ? "checkmark" : "sparkles")
                             }
                         }
-                        #if !OFFLINE_MODE
+                        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
                         if cloudAIAvailable {
                             Button { selectedEngine = .cloudAI } label: {
                                 Label("Cloud AI", systemImage: selectedEngine == .cloudAI ? "checkmark" : "cloud")
@@ -468,7 +515,7 @@ struct AIAssistantView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "cpu")
                                 .font(.caption)
-                            Text(selectedEngine.rawValue)
+                            Text(LocalizedStringKey(selectedEngine.rawValue))
                                 .font(.subheadline)
                             Image(systemName: "chevron.down")
                                 .font(.caption2)
@@ -601,13 +648,17 @@ struct AIAssistantView: View {
                 .buttonStyle(.borderless)
                 .disabled(conversationHistory.isEmpty)
                 .help("Clear conversation")
+                .accessibilityLabel("Clear conversation")
+                .accessibilityIdentifier("ai.clearConversation")
 
                 TutorialHelpButton(showTutorial: $showTutorial)
 
-                Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .keyboardShortcut(.cancelAction)
+                if showsDoneButton {
+                    Button("Done") { dismiss() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                }
             }
             .padding(.horizontal, Spacing.medium)
             .padding(.vertical, Spacing.small)
@@ -621,7 +672,7 @@ struct AIAssistantView: View {
                         Text("Apple AI").tag(AIEngine.appleAI)
                         Text("Hybrid").tag(AIEngine.hybrid)
                     }
-                    #if !OFFLINE_MODE
+                    #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
                     if cloudAIAvailable {
                         Text("Cloud AI").tag(AIEngine.cloudAI)
                     }
@@ -671,16 +722,16 @@ struct AIAssistantView: View {
 
     private var engineDescription: String {
         switch selectedEngine {
-        case .auto: return "Smart routing — picks the best engine for each query automatically"
-        case .appleAIMoE: return "Apple AI with Mixture of Experts — maximum intelligence, on-device"
-        case .appleAI: return "Direct Apple AI — fast single-session, on-device"
-        case .hybrid: return "Enhanced NLP + Apple AI synthesis — best of both, on-device"
-        #if !OFFLINE_MODE
+        case .auto: return String(localized: "Smart routing — picks the best engine for each query automatically")
+        case .appleAIMoE: return String(localized: "Apple AI with Mixture of Experts — maximum intelligence, on-device")
+        case .appleAI: return String(localized: "Direct Apple AI — fast single-session, on-device")
+        case .hybrid: return String(localized: "Enhanced NLP + Apple AI synthesis — best of both, on-device")
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "\(mgr.selectedProvider.displayName) (\(mgr.selectedModel)) — cloud-powered analysis"
         #endif
-        case .nlp: return "Pure NLP — fast semantic search + deterministic analysis, no AI needed"
+        case .nlp: return String(localized: "Pure NLP — fast semantic search + deterministic analysis, no AI needed")
         }
     }
 
@@ -693,7 +744,13 @@ struct AIAssistantView: View {
     private var chatArea: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: Spacing.medium) {
+                // A plain VStack, not LazyVStack: on macOS the lazy container
+                // churned its accessibility children (empty state swapped for
+                // the conversation, then a re-render per streamed token) and
+                // AppKit read a destroyed element (EXC_BAD_ACCESS in
+                // _accessibilityFindRoleFromProtocol), found by the Mac crawl
+                // 2026-10-05. A conversation is short; laziness buys nothing.
+                VStack(spacing: Spacing.medium) {
                     if conversationHistory.isEmpty && streamingQuery.isEmpty {
                         emptyStateView
                     } else {
@@ -703,6 +760,10 @@ struct AIAssistantView: View {
                         }
                         if !streamingQuery.isEmpty {
                             chatBubble(query: streamingQuery, answer: streamingAnswer.isEmpty ? "Thinking..." : streamingAnswer, isStreaming: true)
+                                // One stable element while tokens arrive; the
+                                // finished answer is read in full as a history bubble.
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(Text("Answering: \(streamingQuery)"))
                                 .id("streaming")
                         }
                     }
@@ -747,14 +808,21 @@ struct AIAssistantView: View {
             VStack(spacing: Spacing.xSmall) {
                 ForEach(sampleQuestions, id: \.self) { question in
                     Button {
-                        prompt = question
-                        askAI()
+                        // One question at a time; and defer, because askAI()
+                        // replaces this whole list with the conversation and
+                        // removing the pressed button inside its own action
+                        // left macOS accessibility holding a destroyed element.
+                        guard !isProcessing else { return }
+                        Task { @MainActor in
+                            prompt = question
+                            askAI()
+                        }
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: "sparkle")
                                 .font(Typography.caption1)
                                 .foregroundStyle(.blue)
-                            Text(question)
+                            Text(Self.displayQuestion(question))
                                 .font(Typography.callout)
                                 .foregroundColor(.primary)
                             Spacer()
@@ -768,8 +836,9 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.plain)
                     .hoverEffect(scale: 1.01)
-                    .accessibilityLabel("Ask: \(question)")
+                    .accessibilityLabel("Ask: \(Self.displayQuestion(question))")
                     .accessibilityHint("Send this question to the AI assistant")
+                    .disabled(isProcessing)
                 }
             }
             #if os(iOS)
@@ -782,15 +851,34 @@ struct AIAssistantView: View {
         }
     }
 
+    /// "Ann Lee" from `"Ann Lee" <ann@x.org>`; the address when there is no
+    /// display name; "" when the header has neither.
+    nonisolated static func senderDisplayName(_ from: String) -> String {
+        if OwnerIdentity.isOwner(from) { return String(localized: "You") }
+        let trimmed = from.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let lt = trimmed.firstIndex(of: "<") {
+            let name = trimmed[..<lt].trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
+            if !name.isEmpty { return name }
+            let address = trimmed[trimmed.index(after: lt)...].prefix { $0 != ">" }
+            return String(address).trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    }
+
     private var sampleQuestions: [String] {
         var questions: [String] = []
 
         if !emails.isEmpty {
-            let topSender = Dictionary(grouping: emails, by: { $0.headers["From"] ?? "" })
+            // The top sender among RECEIVED mail (in a Sent mailbox the top
+            // "From" is the user), named by display name without quotes, or
+            // by address. No usable sender, no suggestion: an empty name made
+            // "Tell me about emails from " a question that did nothing.
+            let received = emails.filter { $0.messageType != "sent" && !OwnerIdentity.isOwner($0.headers["From"] ?? "") }
+            let topSender = Dictionary(grouping: received, by: { Self.senderDisplayName($0.headers["From"] ?? "") })
+                .filter { !$0.key.isEmpty }
                 .max(by: { $0.value.count < $1.value.count })
             if let sender = topSender, sender.value.count >= 2 {
-                let name = sender.key.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? sender.key
-                questions.append("Tell me about emails from \(name)")
+                questions.append("Tell me about emails from \(sender.key)")
             }
 
             let topics = EmailNLPEngine.extractTopics(from: Array(emails.prefix(200)), limit: 1)
@@ -838,7 +926,7 @@ struct AIAssistantView: View {
             HStack {
                 Spacer(minLength: Spacing.xxLarge)
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(query)
+                    Text(Self.displayQuestion(query))
                         .font(Typography.body)
                         .padding(.horizontal, Spacing.small)
                         .padding(.vertical, Spacing.xSmall)
@@ -853,7 +941,7 @@ struct AIAssistantView: View {
                             .foregroundColor(AppColors.secondary.opacity(0.6))
                     }
                 }
-                .accessibilityLabel("Your question: \(query)")
+                .accessibilityLabel("Your question: \(Self.displayQuestion(query))")
             }
 
             HStack {
@@ -864,7 +952,7 @@ struct AIAssistantView: View {
                             .foregroundStyle(
                                 LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)
                             )
-                        Text(selectedEngine.rawValue)
+                        Text(LocalizedStringKey(selectedEngine.rawValue))
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
                         if isStreaming {
@@ -1024,7 +1112,22 @@ struct AIAssistantView: View {
     @State private var expandedResultSet: Set<Int> = []
     @State private var showActionToast: String?
     @State private var showProvenanceSheet: Bool = false
+    @State private var showMetricsSheet: Bool = false
     @ObservedObject private var provenanceStore = AIProvenanceStore.shared
+
+    /// A question as the user sees it: the routing tag the app uses
+    /// internally ("[Smart Triage] …") is not shown.
+    nonisolated static func displayQuestion(_ question: String) -> String {
+        question.replacingOccurrences(of: #"^\s*\[[^\]]{2,30}\]\s*"#, with: "", options: .regularExpression)
+    }
+
+    /// The question in an answer line of the form `Ask: “…”` (optionally a
+    /// list item, optionally followed by a note in brackets).
+    static func followUpQuestion(in line: String) -> String? {
+        guard let match = line.firstMatch(of: /^\s*(?:[-•]\s*)?Ask:\s*[“"](.+?)[”"]/) else { return nil }
+        let question = String(match.1).trimmingCharacters(in: .whitespaces)
+        return question.isEmpty ? nil : question
+    }
 
     private func renderedMarkdown(_ text: String, isStreaming: Bool, relatedEmailIDs: [UUID] = []) -> some View {
         let relatedEmails = relatedEmailIDs.compactMap { cachedEmail(id: $0) }
@@ -1037,13 +1140,37 @@ struct AIAssistantView: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                 if line.trimmingCharacters(in: .whitespaces).isEmpty {
                     Spacer().frame(height: 6)
+                } else if !isStreaming, let question = Self.followUpQuestion(in: line) {
+                    // An answer's suggested follow-up ("Ask: “…”") is one click,
+                    // not something to retype.
+                    Button {
+                        guard !isProcessing else { return }
+                        prompt = question
+                        askAI()
+                    } label: {
+                        Label(question, systemImage: "arrow.turn.down.right")
+                            .font(Typography.callout)
+                            .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isProcessing)
+                    .help("Ask this question")
+                    .accessibilityLabel("Ask follow-up: \(question)")
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
-                        if let attributed = try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-                            Text(attributed)
-                        } else {
-                            Text(line)
+                        Group {
+                            if let attributed = try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                                Text(attributed)
+                            } else {
+                                Text(line)
+                            }
                         }
+                        // Selectable per line, never on the container: on macOS
+                        // selectable text is a native text view, and a container
+                        // label resolved across those views and the citation
+                        // buttons crashed AppKit accessibility (EXC_BAD_ACCESS in
+                        // _accessibilityFindRoleFromProtocol, 2026-10-05).
+                        .textSelection(.enabled)
 
                         if let email = lineEmailMap[index] {
                             inlineEmailLink(email: email)
@@ -1082,13 +1209,14 @@ struct AIAssistantView: View {
             }
         }
         .font(Typography.body)
-        .textSelection(.enabled)
         .padding(.horizontal, Spacing.small)
         .padding(.vertical, Spacing.xSmall)
         .background(AppColors.backgroundSecondary)
         .cornerRadius(CornerRadius.large)
         .opacity(isStreaming && text == "Thinking..." ? 0.5 : 1.0)
-        .accessibilityLabel(isStreaming ? "AI is thinking" : "AI response")
+        // A container whose children (lines, citations) are read one by one;
+        // no label override, which forced the cross-element label resolution.
+        .accessibilityElement(children: .contain)
     }
 
     private func inlineEmailLink(email: MBOXParser.RawEmail) -> some View {
@@ -1388,13 +1516,15 @@ struct AIAssistantView: View {
     }
 
     private func exportEmailsAsCSV(_ emails: [MBOXParser.RawEmail]) {
-        var csv = "From,To,Subject,Date,Body\n"
+        // Full body (it used to be cut to 500 characters under a column
+        // called "Body"); RFC 4180 quoting keeps line breaks inside the cell.
+        var csv = csvRow(["From", "To", "Subject", "Date", "Body"])
         for email in emails {
-            let from = (email.headers["From"] ?? email.headers["from"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
-            let to = (email.headers["To"] ?? email.headers["to"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
-            let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
-            let body = String(email.plainBody.prefix(500)).replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\n", with: " ")
-            csv += "\"\(from)\",\"\(to)\",\"\(subj)\",\"\(email.timestamp)\",\"\(body)\"\n"
+            csv += csvRow([email.headers["From"] ?? email.headers["from"] ?? "",
+                           email.headers["To"] ?? email.headers["to"] ?? "",
+                           email.headers["Subject"] ?? email.headers["subject"] ?? "",
+                           email.timestamp,
+                           email.plainBody])
         }
         #if os(macOS)
         if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.csv", allowedTypes: [.commaSeparatedText]) {
@@ -1503,7 +1633,7 @@ struct AIAssistantView: View {
                 .foregroundStyle(canSend ? Color.blue : AppColors.secondary.opacity(0.3))
                 .disabled(!canSend)
                 .keyboardShortcut(.return, modifiers: [])
-                .accessibilityLabel(isProcessing ? "Processing query" : "Send question")
+                .accessibilityLabel(isProcessing ? String(localized: "Processing query") : String(localized: "Send question"))
             }
             .padding(.horizontal, Spacing.medium)
             .padding(.vertical, 12)
@@ -1539,12 +1669,12 @@ struct AIAssistantView: View {
 
     private var personaAITitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Investigate your email evidence"
-        case .legal: return "Analyze documents for review"
-        case .itAdmin: return "Diagnose email infrastructure"
-        case .journalist: return "Discover patterns and stories"
-        case .researcher: return "Interrogate your corpus with citations"
-        case .personal, .general: return "Ask anything about your emails"
+        case .forensic: return String(localized: "Investigate your email evidence")
+        case .legal: return String(localized: "Analyze documents for review")
+        case .itAdmin: return String(localized: "Diagnose email infrastructure")
+        case .journalist: return String(localized: "Discover patterns and stories")
+        case .researcher: return String(localized: "Interrogate your corpus with citations")
+        case .personal, .general: return String(localized: "Ask anything about your emails")
         }
     }
 
@@ -1563,7 +1693,7 @@ struct AIAssistantView: View {
             return "Analyzing \(count) email\(suffix) with Apple Intelligence (on-device)"
         case .hybrid:
             return "Analyzing \(count) email\(suffix) with Hybrid NLP + AI (on-device)"
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "Analyzing \(count) email\(suffix) with \(mgr.selectedProvider.displayName) (\(mgr.selectedModel))"
@@ -1575,14 +1705,14 @@ struct AIAssistantView: View {
 
     private var engineHelp: String {
         switch selectedEngine {
-        case .auto: return "Auto — smart routing picks the best engine based on query complexity, email count, and available resources"
-        case .appleAIMoE: return "Apple AI MoE — multi-session experts, fan-in synthesis, self-correction"
-        case .appleAI: return "Apple AI — direct single-session, fast and private"
-        case .hybrid: return "Hybrid — NLP foundation + RAG + MoE experts + cloud experts + dynamic fan-in synthesis"
-        #if !OFFLINE_MODE
+        case .auto: return String(localized: "Auto — smart routing picks the best engine based on query complexity, email count, and available resources")
+        case .appleAIMoE: return String(localized: "Apple AI MoE — multi-session experts, fan-in synthesis, self-correction")
+        case .appleAI: return String(localized: "Apple AI — direct single-session, fast and private")
+        case .hybrid: return String(localized: "Hybrid — NLP foundation + RAG + MoE experts + cloud experts + dynamic fan-in synthesis")
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         case .cloudAI: return "Cloud AI — \(CloudAIManager.shared.selectedProvider.displayName) powered analysis with NLP + RAG"
         #endif
-        case .nlp: return "NLP — pure semantic search + deterministic analysis, no AI"
+        case .nlp: return String(localized: "NLP — pure semantic search + deterministic analysis, no AI")
         }
     }
 
@@ -1611,7 +1741,7 @@ struct AIAssistantView: View {
 
         // Complex but no Apple AI → Cloud AI if available, else NLP
         if isComplex && !hasAppleAI {
-            #if !OFFLINE_MODE
+            #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
             if hasCloudAI { return .cloudAI }
             #endif
             return .nlp
@@ -1627,7 +1757,7 @@ struct AIAssistantView: View {
             return .appleAI
         }
 
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         // Simple with cloud → Cloud AI
         if hasCloudAI {
             return .cloudAI
@@ -1717,8 +1847,27 @@ struct AIAssistantView: View {
     typealias SmartQueryResult = (query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])
     typealias SmartHandler = @Sendable ([MBOXParser.RawEmail]) async -> SmartQueryResult
 
-    nonisolated private static func handleSmartQuery(query: String) -> SmartHandler? {
+    nonisolated static func handleSmartQuery(query rawQuery: String) -> SmartHandler? {
+        // Common words are corrected before routing: "wat is my patnt numbr"
+        // reached the model and got the application number (2026-10-07).
+        let query = normalizeTypos(rawQuery)
         let lower = query.lowercased()
+
+        // "Which year / month did I get the most emails?" — a histogram, not
+        // the top senders the "most email" keywords used to send it to.
+        if lower.range(of: #"\b(which|what) (year|month)\b.*\b(most|least|fewest|busiest|highest)\b|\bbusiest (year|month)\b"#, options: .regularExpression) != nil {
+            return { emails in smartBusiestPeriod(query: query, emails: emails) }
+        }
+
+        // "Did I get any emails from Amazon?" — a sender lookup, exact.
+        if lower.range(of: #"\b(did|have) (i|we) (ever )?(get|got|receive|received)( any)? (e-?mails?|messages?) (from|by) "#, options: .regularExpression) != nil {
+            return { emails in smartStatistics(query: query, emails: emails) }
+        }
+
+        // "What files did Shabana Khan send me?" / "documents from X".
+        if lower.range(of: #"\b(files?|documents?|attachments?|pdfs?)\b.*\b(send|sent|from)\b"#, options: .regularExpression) != nil {
+            return { emails in smartAttachments(query: query, emails: emails) }
+        }
 
         // Duplicate detection
         let dupKeywords = ["duplicate", "duplicates", "duplicated", "dedup", "same email", "same emails", "repeated email", "identical email", "copies of"]
@@ -1732,7 +1881,85 @@ struct AIAssistantView: View {
             return { emails in smartStatistics(query: query, emails: emails) }
         }
 
+        // "Do any emails contain a password?": a scan of the message text.
+        // Through the model the answer was "no emails contain a password"
+        // while a plain-text game password sat in the archive (2026-10-06).
+        if lower.contains("password") || lower.contains("passcode") {
+            return { emails in smartSecrets(query: query, emails: emails) }
+        }
+
+        // "What is my <label> number?" (kalsmritikosh D-11/D-12/D-15): the
+        // value written next to that label, one sentence, its source — or a
+        // conflict, or an honest "not found". The model mixed up the
+        // application number, the patent number and an examination date.
+        if let slot = slotRequest(in: query) {
+            return { emails in smartSlot(label: slot.label, eventVerb: slot.verb, query: query, emails: emails) }
+        }
+
+        // "Find the email about <topic>": a search, answered with the
+        // matching emails. The model held the right thread and still said it
+        // "couldn't locate" one (2026-10-06).
+        if let topic = findRequestTopic(in: query) {
+            return { emails in smartFind(topic: topic, query: query, emails: emails) }
+        }
+
+        // "How much did I pay <someone> (in total)?": payments the emails
+        // state as made or received, each once, summed by the app. The model
+        // could not add them up and mixed requests with payments.
+        if let payee = paymentQuestion(in: query) {
+            return { emails in smartPayments(payee: payee, query: query, emails: emails) }
+        }
+
+        // "How much loan was approved?", "How much is the renewal fee?": the
+        // sentences that state an amount with the question's words, quoted.
+        // The model answered "the emails do not specify an exact loan
+        // amount" with "Loan amount approved Rs. 100000" in them.
+        if lower.hasPrefix("how much") {
+            return { emails in smartAmounts(query: query, emails: emails) }
+        }
+
+        // "Who is <name>?": the person as the archive shows them — counts,
+        // organisation, dates, subjects — not a model guess from 3 emails.
+        if let name = whoIsName(in: query) {
+            return { emails in smartWhoIs(name: name, query: query, emails: emails) }
+        }
+
+        // "Summarize what Ann and I discussed (about X)" / "my conversation
+        // with Ann (about X)": the conversation with that person, told as a
+        // story. Through the general path the model opened with "I couldn't
+        // find any emails…" and listed the thread instead (2026-10-07).
+        if let request = discussionRequest(in: query) {
+            return { emails in await smartDiscussion(person: request.person, topic: request.topic, query: query, emails: emails) }
+        }
+
+        // "Tell the story of <subject>": one named conversation, narrated —
+        // the follow-up Thread Story offers for the next busiest threads.
+        if let subject = threadStorySubject(in: query) {
+            return { emails in await smartThreadStory(subject: subject, query: query, emails: emails) }
+        }
+
         // Top senders
+        // "Tell me about / show / find / summarize emails from <name>": the
+        // messages actually from that sender. The model path answered about
+        // a different sender (2026-10-06, "…from Mail Delivery Subsystem").
+        if let range = lower.range(of: #"(tell me about|show me|show|find|list|summari[sz]e)( all| the| my)? e?mails? from "#, options: .regularExpression) {
+            let name = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'"))
+            // "…emails from the last month / 2014 / yesterday" is a time range,
+            // not a sender: leave those to the date-aware path.
+            let timePhrase = name.lowercased().range(of: #"^(the |this |last |past |previous |next )?(last |past )?(\d+ )?(day|days|week|weeks|month|months|year|years|yesterday|today|tonight|morning|january|february|march|april|may|june|july|august|september|october|november|december|\d{4})\b"#, options: .regularExpression) != nil
+            if !name.isEmpty && !timePhrase {
+                return { emails in smartEmailsFrom(name: name, query: query, emails: emails) }
+            }
+        }
+
+        // Topic questions: answered from the topic counter itself. Through the
+        // model the answer depended on which few emails were retrieved (one
+        // run listed "test_full.csv" as a top topic).
+        let topicKeywords = ["most common topic", "main topic", "top topic", "what topics", "which topics", "common themes", "main themes"]
+        if topicKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartTopics(query: query, emails: emails) }
+        }
+
         let senderKeywords = ["who emails me", "who sends me", "top sender", "most email", "most frequent sender", "who contacts me", "who messages me"]
         if senderKeywords.contains(where: { lower.contains($0) }) {
             return { emails in smartTopSenders(query: query, emails: emails) }
@@ -1752,7 +1979,14 @@ struct AIAssistantView: View {
 
         // Attachment stats
         let attachKeywords = ["how many attachment", "attachment count", "emails with attachment", "which emails have attachment", "list attachment", "show attachment"]
-        if attachKeywords.contains(where: { lower.contains($0) }) {
+        // Any question about emails that carry files ("emails with photos or
+        // documents attached", "find PDFs attached"): answered from the real
+        // attachment data. The old exact-phrase list sent "…documents
+        // attached" to the language model, which said there were none.
+        let mentionsAttached = lower.contains("attached") || lower.contains("attachment")
+        let asksForEmails = ["email", "mail", "show", "find", "list", "which", "how many"].contains(where: { lower.contains($0) })
+        let asksForExtremes = ["most attach", "largest", "biggest"].contains(where: { lower.contains($0) })
+        if attachKeywords.contains(where: { lower.contains($0) }) || (mentionsAttached && asksForEmails && !asksForExtremes) {
             return { emails in smartAttachments(query: query, emails: emails) }
         }
 
@@ -1789,6 +2023,70 @@ struct AIAssistantView: View {
     }
 
     nonisolated private static func smartStatistics(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // "How many emails did I send in 2015?" — the year and the direction
+        // were ignored and the archive totals came back instead.
+        let lower = query.lowercased()
+        let years = Self.years(in: query)
+        let fmtYear = DateFormatter(); fmtYear.dateStyle = .medium; fmtYear.timeStyle = .none
+        let isSentMail: (MBOXParser.RawEmail) -> Bool = {
+            $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent")
+        }
+        // "How many emails did Hatigarm send me?" / "…from Hatigarm": that
+        // sender's count, not the archive totals.
+        if let m = lower.firstMatch(of: /how many (?:e-?mails?|messages?) (?:did|has|have) (.+?) (?:send|sent|write|written)|(?:how many|(?:did|have) (?:i|we) (?:ever )?(?:get|got|receive|received)(?: any)?) (?:e-?mails?|messages?) (?:from|by) (.+?)(?:\?| in |$)/) {
+            let name = String(m.1 ?? m.2 ?? "").trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'"))
+            if !name.isEmpty, !["i", "me", "you", "we"].contains(name) {
+                var from = emails.filter { ($0.headers["From"] ?? "").lowercased().contains(name) }
+                if !years.isEmpty {
+                    from = from.filter { e in MBOXParser.parseDate(e.headers["Date"]).map { years.contains(Calendar.current.component(.year, from: $0)) } ?? false }
+                }
+                let dates = from.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+                let shown = query.range(of: name, options: .caseInsensitive).map { String(query[$0]) } ?? name
+                var answer = "**\(from.count) email\(from.count == 1 ? "" : "s") from \(shown)**"
+                if !years.isEmpty { answer += " in \(years.map(String.init).joined(separator: " and "))" }
+                if let lo = dates.min(), let hi = dates.max() { answer += ", \(fmtYear.string(from: lo)) – \(fmtYear.string(from: hi))" }
+                answer += from.isEmpty ? ". Check the spelling, or ask “Who emails me the most?”." : "."
+                return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(from.prefix(5).map(\.id)))
+            }
+        }
+        // Two or more years: compared side by side.
+        if years.count >= 2 {
+            let cal = Calendar.current
+            var answer = "**Emails by year** (out of \(emails.count) emails counted):\n\n"
+            for year in years {
+                let inYear = emails.filter { MBOXParser.parseDate($0.headers["Date"]).map { cal.component(.year, from: $0) == year } ?? false }
+                let sent = inYear.filter(isSentMail).count
+                answer += "- **\(year)**: \(inYear.count) emails — \(sent) sent, \(inYear.count - sent) received\n"
+            }
+            return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+        }
+        if let yearMatch = query.firstMatch(of: /\b(19|20)\d{2}\b/), let year = Int(query[yearMatch.range]) {
+            let cal = Calendar.current
+            let inYear = emails.filter { MBOXParser.parseDate($0.headers["Date"]).map { cal.component(.year, from: $0) == year } ?? false }
+            let isSent: (MBOXParser.RawEmail) -> Bool = {
+                $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent")
+            }
+            let sent = inYear.filter(isSent).count
+            let received = inYear.count - sent
+            let asksSent = lower.contains(" send") || lower.contains(" sent") || lower.contains("did i write")
+            let asksReceived = lower.contains("receive") || lower.contains("get ") || lower.contains("got ")
+            var answer: String
+            if asksSent && !asksReceived {
+                answer = "**You sent \(sent) email\(sent == 1 ? "" : "s") in \(year)**"
+            } else if asksReceived && !asksSent {
+                answer = "**You received \(received) email\(received == 1 ? "" : "s") in \(year)**"
+            } else {
+                answer = "**\(inYear.count) email\(inYear.count == 1 ? "" : "s") in \(year)**: \(sent) sent, \(received) received"
+            }
+            answer += " (out of \(emails.count) emails counted)."
+            if inYear.isEmpty, let newest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).max(),
+               let oldest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).min() {
+                let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+                answer += " This scope runs \(fmt.string(from: oldest)) – \(fmt.string(from: newest))."
+            }
+            let ids = inYear.filter { asksSent && !asksReceived ? isSent($0) : true }.prefix(5).map(\.id)
+            return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+        }
         let sent = emails.filter { $0.messageType == "sent" }.count
         let received = emails.filter { $0.messageType == "received" }.count
         let withAttachments = emails.filter { !$0.attachments.isEmpty }.count
@@ -1806,17 +2104,692 @@ struct AIAssistantView: View {
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
     }
 
-    nonisolated private static func smartTopSenders(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
-        var senderCounts: [String: Int] = [:]
-        for email in emails {
-            let from = email.headers["From"] ?? "Unknown"
-            senderCounts[from, default: 0] += 1
+    nonisolated private static func smartTopics(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // The owner's own name is in every signature: it is not a topic.
+        let ownNameWords: Set<String> = Set(emails
+            .filter { $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent") }
+            .prefix(200)
+            // The raw name: senderDisplayName now says "You" for the owner,
+            // which let "Sasmal" back into the topics (2026-10-07).
+            .flatMap { AIGroundingGate.senderName($0.headers["From"] ?? "").lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted) }
+            .filter { $0.count >= 3 })
+        // Counted once per conversation: one alert repeated 81 times is one
+        // conversation, not 81 mentions of its words.
+        let topics = EmailNLPEngine.extractTopicsByConversation(from: emails, limit: 24)
+            .filter { !ownNameWords.contains($0.word.lowercased()) }
+            .prefix(12)
+            .map { $0 }
+        guard !topics.isEmpty else {
+            return (query: query, answer: "Not enough message text in this scope to find topics.", timestamp: Date(), relatedEmailIDs: [])
         }
-        let sorted = senderCounts.sorted { $0.value > $1.value }
-        var answer = "**Top Senders** (out of \(Set(senderCounts.keys).count) unique):\n\n"
+        let conversationCount = Set(emails.map(EmailNLPEngine.conversationKey)).count
+        var answer = "**Most common topics** across \(emails.count) emails in \(conversationCount) conversations (words that recur in message bodies; a conversation counts once):\n\n"
+        for (i, t) in topics.enumerated() {
+            answer += "\(i + 1). **\(t.word.capitalized)** — \(t.conversations) conversations, \(t.emails) emails\n"
+        }
+        // Open the emails behind the top topic.
+        let top = topics[0].word
+        let ids = emails.filter { ($0.headers["Subject"] ?? "").lowercased().contains(top) || $0.plainBody.lowercased().contains(top) }.prefix(5).map(\.id)
+        answer += "\nAsk \"What's discussed about \(top)?\" for the details behind any topic."
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+    }
+
+    /// The label in "what is (my|the) <label> number" and, when the question
+    /// also asks when something happened ("…and when was it granted?"), the
+    /// event verb.
+    nonisolated static func slotRequest(in query: String) -> (label: String, verb: String?)? {
+        let lower = query.lowercased()
+        guard let match = lower.firstMatch(of: /\b(?:what|which)(?:\s+is|\s+was|'s)?\s+(?:the\s+|my\s+|our\s+)?([a-z][a-z ]{1,40}?)\s+(?:number|no\.?)\b/) else { return nil }
+        let qualifiers: Set<String> = ["granted", "official", "registered", "final", "correct", "full", "new", "old", "my", "the"]
+        guard let label = String(match.1).split(separator: " ").map(String.init).last(where: { !qualifiers.contains($0) }),
+              label.count >= 3, !["email", "emails", "message", "messages", "total", "phone"].contains(label) else { return nil }
+        let verbs = ["granted", "filed", "issued", "published", "registered", "approved", "allotted", "paid", "sent"]
+        let verb = lower.contains("when") ? verbs.first { lower.contains($0) } : nil
+        return (label, verb)
+    }
+
+    nonisolated private static func smartSlot(label: String, eventVerb: String?, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let escaped = NSRegularExpression.escapedPattern(for: label)
+        let pattern = "(?i)\\b\(escaped)\\s*(?:no\\.?|number|num\\.?|#)\\s*[:.\\-]?\\s*([A-Z0-9][A-Z0-9/\\-]{3,})"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return (query: query, answer: "Could not read that question.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        var byValue: [String: [MBOXParser.RawEmail]] = [:]
+        for email in emails {
+            let text = (email.headers["Subject"] ?? "") + "\n" + email.plainBody
+            var found = Set<String>()
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                guard let r = Range(match.range(at: 1), in: text) else { continue }
+                // "202331019665Applicant" is a value run into the next word
+                // (kalsmritikosh D-12): a letter run after the digits is cut.
+                let value = String(text[r]).trimmingCharacters(in: CharacterSet(charactersIn: ".-/"))
+                    .replacingOccurrences(of: #"(?<=\d)[A-Za-z]{4,}$"#, with: "", options: .regularExpression)
+                // A value needs a digit: "Patent No. Hybrid" is not a number.
+                guard value.rangeOfCharacter(from: .decimalDigits) != nil else { continue }
+                found.insert(value.uppercased())
+            }
+            for value in found { byValue[value, default: []].append(email) }
+        }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let human = label.prefix(1).uppercased() + label.dropFirst()
+        guard !byValue.isEmpty else {
+            return (query: query, answer: "**No \(label) number appears in this scope.** None of the \(emails.count) emails writes a \(label) number (\"\(human) No.\" or \"\(human) Number\" followed by a value).", timestamp: Date(), relatedEmailIDs: [])
+        }
+        func earliest(_ list: [MBOXParser.RawEmail]) -> MBOXParser.RawEmail? {
+            list.min { (MBOXParser.parseDate($0.headers["Date"]) ?? .distantFuture) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantFuture) }
+        }
+        let ranked = byValue.sorted { ($0.value.count, $1.key) > ($1.value.count, $0.key) }
+        var answer: String
+        let top = ranked[0]
+        // One value, or one that clearly dominates (3× the next): lead with
+        // it, and list the others as "also seen" rather than a conflict.
+        let dominant = ranked.count == 1 || top.value.count >= 3 * ranked[1].value.count
+        if dominant {
+            let first = earliest(top.value)
+            let when = first.flatMap { MBOXParser.parseDate($0.headers["Date"]) }.map { fmt.string(from: $0) } ?? "an undated email"
+            answer = "**\(human) No. \(top.key)** — written in \(top.value.count) email\(top.value.count == 1 ? "" : "s"), first on \(when) (“\(first?.headers["Subject"] ?? "")”)."
+            for (value, list) in ranked.dropFirst().prefix(3) {
+                answer += "\nAlso seen: \(value) in “\(earliest(list)?.headers["Subject"] ?? "")” (\(list.count) email\(list.count == 1 ? "" : "s"))."
+            }
+        } else {
+            answer = "**Different \(label) numbers appear** — check which one you mean:\n"
+            for (value, list) in ranked.prefix(4) {
+                let first = earliest(list)
+                let when = first.flatMap { MBOXParser.parseDate($0.headers["Date"]) }.map { fmt.string(from: $0) } ?? "undated"
+                answer += "- **\(value)** — \(list.count) email\(list.count == 1 ? "" : "s"), first \(when) (“\(first?.headers["Subject"] ?? "")”)\n"
+            }
+        }
+        if let verb = eventVerb {
+            // The sentence that states the event and a date, from the emails
+            // carrying the value — quoted, never inferred.
+            let stem = String(verb.prefix(5))
+            let datePattern = #"(?i)\b(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*,?\s+\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b"#
+            var statement: (sentence: String, date: String, email: MBOXParser.RawEmail)?
+            for email in top.value.sorted(by: { (MBOXParser.parseDate($0.headers["Date"]) ?? .distantFuture) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantFuture) }) {
+                let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+                let sentences = lines.joined(separator: " ").components(separatedBy: ". ")
+                if let hit = sentences.first(where: { $0.lowercased().contains(stem) && $0.range(of: datePattern, options: .regularExpression) != nil }),
+                   let dateRange = hit.range(of: datePattern, options: .regularExpression) {
+                    statement = (hit.trimmingCharacters(in: .whitespaces), String(hit[dateRange]), email)
+                    break
+                }
+            }
+            if let statement {
+                let sentence = statement.sentence.count > 220 ? String(statement.sentence.prefix(220)) + "…" : statement.sentence
+                answer += "\n\n**\(verb.capitalized) on \(statement.date)** — “\(sentence)” (\(senderDisplayName(statement.email.headers["From"] ?? "?")))"
+            } else {
+                answer += "\n\nNone of the emails carrying it states when it was \(verb)."
+            }
+        }
+        let ids = top.value.prefix(5).map(\.id)
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+    }
+
+    /// The topic in "find / show (me) the email(s) about <topic>".
+    nonisolated static func findRequestTopic(in query: String) -> String? {
+        guard let range = query.range(of: #"^\s*(find|show|open|get|search for)( me)?( the| an| any| all| my)? (e-?mails?|messages?|mails?|conversations?|threads?) (about|on|regarding|related to|mentioning|that mention|where)\s+"#,
+                                      options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let topic = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'“”"))
+        return topic.isEmpty ? nil : topic
+    }
+
+    nonisolated private static func smartFind(topic: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let words = EmailNLPEngine.extractSearchTerms(from: topic)
+            .map { $0.lowercased() }
+            .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+            .filter { $0.count >= 3 }
+        guard !words.isEmpty else {
+            return (query: query, answer: "What should the email be about? Try “find the email about the hospital claim”.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        // Score: each word in the subject counts 2, in the text 1. An email
+        // must contain at least half the words.
+        let needed = max(1, (words.count + 1) / 2)
+        let scored = emails.compactMap { email -> (email: MBOXParser.RawEmail, score: Int, hits: Int)? in
+            let subject = (email.headers["Subject"] ?? "").lowercased()
+            let body = email.plainBody.prefix(6000).lowercased()
+            var score = 0, hits = 0
+            for word in words {
+                let inSubject = subject.contains(word), inBody = body.contains(word)
+                if inSubject || inBody { hits += 1 }
+                score += (inSubject ? 2 : 0) + (inBody ? 1 : 0)
+            }
+            return hits >= needed ? (email, score, hits) : nil
+        }
+        guard !scored.isEmpty else {
+            return (query: query, answer: "**No email in this scope mentions “\(topic)”.** Checked the subjects and text of \(emails.count) emails for \(words.map { "“\($0)”" }.joined(separator: ", ")).", timestamp: Date(), relatedEmailIDs: [])
+        }
+        // One line per conversation, best match first.
+        var bestByThread: [String: (email: MBOXParser.RawEmail, score: Int, count: Int)] = [:]
+        for hit in scored {
+            let key = EmailNLPEngine.conversationKey(hit.email)
+            if let current = bestByThread[key] {
+                bestByThread[key] = hit.score > current.score ? (hit.email, hit.score, current.count + 1) : (current.email, current.score, current.count + 1)
+            } else {
+                bestByThread[key] = (hit.email, hit.score, 1)
+            }
+        }
+        let ranked = bestByThread.values.sorted { $0.score > $1.score }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var answer = ranked.count == 1
+            ? "**Found it** — one conversation matches “\(topic)”:\n\n"
+            : "**\(ranked.count) conversations match “\(topic)”**, best first:\n\n"
+        for hit in ranked.prefix(5) {
+            let subject = EmailNLPEngine.baseSubject(hit.email.headers["Subject"] ?? "")
+            let when = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            let line = hit.email.plainBody.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { $0.count > 20 && !$0.hasPrefix(">") && !$0.lowercased().hasPrefix("on ") } ?? ""
+            answer += "- **\(subject.isEmpty ? "(No Subject)" : subject)** — \(senderDisplayName(hit.email.headers["From"] ?? "?")) · \(when)"
+            if hit.count > 1 { answer += " (\(hit.count) emails)" }
+            if !line.isEmpty { answer += "\n  “\(line.prefix(140))”" }
+            answer += "\n"
+        }
+        if ranked.count > 5 { answer += "…and \(ranked.count - 5) more.\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: ranked.prefix(5).map(\.email.id))
+    }
+
+    /// For "how much did I pay (to) X (in total)?" — X, or "" for everyone.
+    nonisolated static func paymentQuestion(in query: String) -> String? {
+        let lower = query.lowercased()
+        guard let match = lower.firstMatch(of: /how much (?:money )?(?:did|have) (?:i|we) (?:pay|paid|spend|spent|send|sent|transfer|transferred)(?: to)?\s*(.*)$/) else { return nil }
+        var payee = String(match.1)
+        for tail in ["in total", "altogether", "overall", "so far", "?", "."] {
+            payee = payee.replacingOccurrences(of: tail, with: "")
+        }
+        // "…pay on Udemy", "…pay to X", "…spend at X": the name after the
+        // preposition is the payee.
+        if let m = payee.firstMatch(of: /^(?:on|at|to|for|with)\s+(.+)$/) { payee = String(m.1) }
+        payee = payee.replacingOccurrences(of: #"\b(for|on|in) .*$"#, with: "", options: .regularExpression)
+        payee = payee.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "What did I buy on Udemy and how much did I pay?": the payee was
+        // named earlier in the question.
+        if payee.isEmpty, let m = lower.firstMatch(of: /(?:buy|bought|order|ordered|purchase|purchased|subscribe|subscribed)\s+(?:[a-z]+\s+){0,3}?(?:on|from|at|to)\s+([a-z0-9&.\- ]{2,30}?)(?:\s+and\b|\?|$)/) {
+            payee = String(m.1).trimmingCharacters(in: .whitespaces)
+        }
+        return payee
+    }
+
+    nonisolated private static func smartPayments(payee: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // The payee's distinctive word ("khurana" from "khurana & khurana").
+        let payeeWord = payee.split(whereSeparator: { !$0.isLetter }).map { $0.lowercased() }.first { $0.count >= 3 } ?? ""
+        let scoped = payeeWord.isEmpty ? emails : emails.filter {
+            (($0.headers["From"] ?? "") + " " + ($0.headers["To"] ?? "") + " " + ($0.headers["Cc"] ?? "") + " " + ($0.headers["Subject"] ?? "")).lowercased().contains(payeeWord)
+        }
+        // Only statements that a payment HAPPENED; "please pay", "due" and
+        // invoices are requests, not payments.
+        // Payment statements, and receipt totals ("Your Price: ₹499.00",
+        // "Order total ₹…") for purchases.
+        let confirmed = #"(?i)(receipt of (?:a |the )?payment of|received (?:a |the )?(?:payment|amount) of|payment of|paid|transferred|remitted|credited|your price|order total|grand total|total paid|amount paid)\s*:?\s*(?:an amount of\s*)?(INR|Rs\.?|₹)\s?([\d,]+(?:\.\d{1,2})?)"#
+        let request = #"(?i)(request|please|kindly|due|make (?:the )?payment|to be paid|pay now|invoice|quotation|fee structure|per year|estimate)"#
+        guard let regex = try? NSRegularExpression(pattern: confirmed) else {
+            return (query: query, answer: "Could not read that question.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        struct Payment { let amount: Double; let shown: String; let sentence: String; let email: MBOXParser.RawEmail; let date: Date? }
+        // What is shown for a payment: the text leading up to the amount,
+        // links removed. A receipt's sentence began with a tracking link and
+        // was cut before the course name (2026-10-07).
+        func leadIn(_ sentence: String, upTo end: Int) -> String {
+            let ns = sentence as NSString
+            let head = ns.substring(to: min(end, ns.length))
+                .replacingOccurrences(of: #"\(?\s*https?://\S+\s*\)?"#, with: " ", options: .regularExpression)
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            guard head.count > 160 else { return head }
+            let tail = String(head.suffix(160))
+            return "…" + (tail.firstIndex(of: " ").map { String(tail[tail.index(after: $0)...]) } ?? tail)
+        }
+        var payments: [Payment] = []
+        for email in scoped {
+            let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+            // Whitespace collapsed: a line break inside "payment\r\nof" left a
+            // double space and the confirmation never matched.
+            let text = lines.joined(separator: " ").replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            for sentence in text.components(separatedBy: ". ") {
+                guard sentence.range(of: request, options: .regularExpression) == nil else { continue }
+                let ns = sentence as NSString
+                for match in regex.matches(in: sentence, range: NSRange(location: 0, length: ns.length)) {
+                    let digits = ns.substring(with: match.range(at: 3)).replacingOccurrences(of: ",", with: "")
+                    guard let amount = Double(digits), amount > 0 else { continue }
+                    payments.append(Payment(amount: amount, shown: ns.substring(with: match.range(at: 3)), sentence: leadIn(sentence, upTo: NSMaxRange(match.range)),
+                                            email: email, date: MBOXParser.parseDate(email.headers["Date"])))
+                }
+            }
+        }
+        // Each payment once (kalsmritikosh H-1): the same amount in the same
+        // conversation within 14 days is one payment confirmed twice.
+        var unique: [Payment] = []
+        for p in payments.sorted(by: { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }) {
+            let key = EmailNLPEngine.conversationKey(p.email)
+            let duplicate = unique.contains { u in
+                u.amount == p.amount && EmailNLPEngine.conversationKey(u.email) == key
+                    && abs((u.date ?? .distantPast).timeIntervalSince(p.date ?? .distantPast)) < 14 * 86_400
+            }
+            if !duplicate { unique.append(p) }
+        }
+        let who = payee.isEmpty ? "" : " to \(payee)"
+        guard !unique.isEmpty else {
+            return (query: query, answer: "**No payment\(who) is stated in these emails.** I looked for amounts written as paid, received, transferred or credited in \(scoped.count) email\(scoped.count == 1 ? "" : "s"); requests and fee quotes were left out.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let total = unique.reduce(0) { $0 + $1.amount }
+        let number = NumberFormatter(); number.numberStyle = .decimal; number.locale = Locale(identifier: "en_IN"); number.maximumFractionDigits = 2
+        var answer = "**₹\(number.string(from: NSNumber(value: total)) ?? String(total)) across \(unique.count) payment\(unique.count == 1 ? "" : "s")\(who)** — the sum of the amounts below, added by the app. Payments not written in your emails are not included.\n\n"
+        for p in unique.prefix(12) {
+            let when = p.date.map { fmt.string(from: $0) } ?? "undated"
+            answer += "- **₹\(p.shown)** — \(when) — “\(p.sentence)” (\(senderDisplayName(p.email.headers["From"] ?? "?")))\n"
+        }
+        if unique.count > 12 { answer += "…and \(unique.count - 12) more.\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(unique.prefix(5).map(\.email.id)))
+    }
+
+    /// The name in "who is <name>" / "tell me about <name>" (not "…emails from").
+    nonisolated static func whoIsName(in query: String) -> String? {
+        guard let range = query.range(of: #"^\s*(who is|who's|who was)\s+"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let name = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'“”"))
+        // "who is emailing me most" is a ranking question, not a person.
+        let lowered = name.lowercased()
+        // Whole words: a prefix check also refused real names ("Sendhil",
+        // "Sender 7") along with "who is sending me…".
+        let firstWord = lowered.split(separator: " ").first.map(String.init) ?? ""
+        let rankingWords: Set<String> = ["email", "emails", "emailing", "mail", "mails", "mailing", "sending", "sends", "writing",
+                                         "writes", "contacting", "contacts", "messaging", "the", "my", "most", "top"]
+        guard !name.isEmpty, name.split(separator: " ").count <= 5,
+              !rankingWords.contains(firstWord), !lowered.contains(" most") else { return nil }
+        return name
+    }
+
+    nonisolated private static func smartWhoIs(name: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let needle = name.lowercased()
+        let from = emails.filter { ($0.headers["From"] ?? "").lowercased().contains(needle) }
+        let to = emails.filter { (($0.headers["To"] ?? "") + " " + ($0.headers["Cc"] ?? "")).lowercased().contains(needle) }
+        let mentioned = emails.filter { $0.plainBody.lowercased().contains(needle) }
+        guard !from.isEmpty || !to.isEmpty || !mentioned.isEmpty else {
+            return (query: query, answer: "**\(name)** does not appear in this scope — not as a sender, a recipient or in any message text.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        func address(_ header: String) -> String? {
+            for part in header.components(separatedBy: ",") where part.lowercased().contains(needle) {
+                if let lt = part.firstIndex(of: "<") {
+                    return String(part[part.index(after: lt)...].prefix { $0 != ">" }).lowercased()
+                }
+                if part.contains("@") { return part.trimmingCharacters(in: .whitespaces).lowercased() }
+            }
+            return nil
+        }
+        let addresses = Set(from.compactMap { address($0.headers["From"] ?? "") } + to.compactMap { address(($0.headers["To"] ?? "") + "," + ($0.headers["Cc"] ?? "")) })
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let all = Array(Set((from + to).map(\.id)))
+        let involved = emails.filter { all.contains($0.id) }
+        let dates = involved.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        var answer = "**\(name)**"
+        if !addresses.isEmpty { answer += " — \(addresses.sorted().joined(separator: ", "))" }
+        answer += "\n\n"
+        answer += "- **\(from.count)** email\(from.count == 1 ? "" : "s") from them, **\(to.count)** to them"
+        if let first = dates.min(), let last = dates.max() {
+            answer += ", \(fmt.string(from: first)) – \(fmt.string(from: last))"
+        }
+        answer += "\n"
+        let domains = Set(addresses.compactMap { $0.split(separator: "@").last.map(String.init) })
+            .filter { !["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "rediffmail.com"].contains($0) }
+        if !domains.isEmpty { answer += "- Writes from **\(domains.sorted().joined(separator: ", "))**\n" }
+        let conversations = Dictionary(grouping: involved, by: EmailNLPEngine.conversationKey)
+            .sorted { $0.value.count > $1.value.count }
+            .prefix(4)
+        if !conversations.isEmpty {
+            answer += "- Conversations:\n"
+            for (_, members) in conversations {
+                let subject = EmailNLPEngine.baseSubject(members.first?.headers["Subject"] ?? "")
+                answer += "  - \(subject.isEmpty ? "(No Subject)" : subject) — \(members.count) email\(members.count == 1 ? "" : "s")\n"
+            }
+        }
+        if from.isEmpty && to.isEmpty {
+            answer += "- Named in the text of \(mentioned.count) email\(mentioned.count == 1 ? "" : "s"), never as sender or recipient.\n"
+        }
+        answer += "\nAsk: “Tell me about emails from \(name)”"
+        let ids = involved.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }.prefix(5).map(\.id)
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+    }
+
+    /// Emails whose text shows a password, passcode or PIN with a value.
+    nonisolated private static func smartSecrets(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let pattern = #"(?i)\b(password|passcode|passwd|pwd|pin)\b\s*(is|:|=|-)\s*(\S{3,})"#
+        var hits: [(email: MBOXParser.RawEmail, label: String, masked: String)] = []
+        var seen = Set<String>()
+        for email in emails {
+            let text = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let labelRange = Range(match.range(at: 1), in: text),
+                  let valueRange = Range(match.range(at: 3), in: text) else { continue }
+            let key = (email.headers["Message-ID"] ?? "") + (email.headers["Subject"] ?? "")
+            guard seen.insert(key).inserted else { continue }
+            let value = String(text[valueRange])
+            // Never repeat the secret itself: first character, then dots.
+            let masked = String(value.prefix(1)) + String(repeating: "•", count: max(3, value.count - 1))
+            hits.append((email, String(text[labelRange]).lowercased(), masked))
+        }
+        guard !hits.isEmpty else {
+            return (query: query, answer: "**No password found in message text.** Checked \(emails.count) emails for a password, passcode or PIN written out with its value. Attachments were not checked.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var answer = "**\(hits.count) email\(hits.count == 1 ? "" : "s") show\(hits.count == 1 ? "s" : "") a password or PIN in plain text:**\n\n"
+        for hit in hits.prefix(10) {
+            let date = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            answer += "- **\(hit.email.headers["Subject"] ?? "(No Subject)")** — \(senderDisplayName(hit.email.headers["From"] ?? "?")) · \(date) — \(hit.label): \(hit.masked)\n"
+        }
+        if hits.count > 10 { answer += "…and \(hits.count - 10) more.\n" }
+        answer += "\nIf any of these is still in use, change it. The values are masked here; open the email to see it."
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(hits.prefix(5).map(\.email.id)))
+    }
+
+    /// The person (and optional topic) in "what Ann and I discussed (about
+    /// X)", "my conversation/discussion/emails with Ann (about X)".
+    nonisolated static func discussionRequest(in query: String) -> (person: String, topic: String?)? {
+        let lower = query.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " ?.!"))
+        let patterns = [
+            #"what (?:did )?(.+?) and i (?:discussed|discuss|talked about|talk about|agreed|agree on|decided)(?: about| on| regarding)?(.*)$"#,
+            #"(?:my |our )?(?:conversations?|discussions?|correspondence|exchanges?) with (.+?)(?: about| on| regarding)\s+(.+)$"#,
+            #"(?:summari[sz]e|tell me about|recap) (?:my |our )?(?:conversations?|discussions?|correspondence|exchanges?) with (.+?)$"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
+                  let personRange = Range(match.range(at: 1), in: lower) else { continue }
+            var person = String(lower[personRange])
+            for lead in ["summarize ", "summarise ", "tell me ", "recap "] where person.hasPrefix(lead) { person.removeFirst(lead.count) }
+            person = person.trimmingCharacters(in: .whitespaces)
+            var topic: String?
+            if match.numberOfRanges > 2, let topicRange = Range(match.range(at: 2), in: lower) {
+                let t = String(lower[topicRange]).trimmingCharacters(in: .whitespaces)
+                topic = t.isEmpty ? nil : t
+            }
+            guard !person.isEmpty, person.split(separator: " ").count <= 4 else { continue }
+            return (person, topic)
+        }
+        return nil
+    }
+
+    nonisolated private static func smartDiscussion(person: String, topic: String?, query: String, emails: [MBOXParser.RawEmail]) async -> SmartQueryResult {
+        let needle = person.lowercased()
+        let involved = emails.filter {
+            (($0.headers["From"] ?? "") + " " + ($0.headers["To"] ?? "") + " " + ($0.headers["Cc"] ?? "")).lowercased().contains(needle)
+        }
+        guard !involved.isEmpty else {
+            return (query: query, answer: "**No emails with \(person)** in this scope — not as sender or recipient.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        // The conversations with them; with a topic, the one whose messages
+        // contain the most of the topic's words.
+        let groups = Dictionary(grouping: emails.filter { email in
+            let key = EmailNLPEngine.conversationKey(email)
+            return involved.contains { EmailNLPEngine.conversationKey($0) == key }
+        }, by: EmailNLPEngine.conversationKey)
+        let words = (topic.map { EmailNLPEngine.extractSearchTerms(from: $0) } ?? [])
+            .map { $0.lowercased() }
+            .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+            .filter { $0.count >= 3 }
+        func coverage(_ members: [MBOXParser.RawEmail]) -> Int {
+            let text = members.map { (($0.headers["Subject"] ?? "") + " " + $0.plainBody.prefix(3000)).lowercased() }.joined(separator: " ")
+            return words.filter { text.contains($0) }.count
+        }
+        guard let best = groups.values.max(by: { (coverage($0), $0.count) < (coverage($1), $1.count) }) else {
+            return (query: query, answer: "**No conversation with \(person)** in this scope.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        if !words.isEmpty && coverage(best) == 0 {
+            return (query: query, answer: "**No conversation with \(person) mentions “\(topic ?? "")”.** You have \(involved.count) email\(involved.count == 1 ? "" : "s") with them; ask “Who is \(person)?” to see their conversations.", timestamp: Date(), relatedEmailIDs: Array(involved.prefix(5).map(\.id)))
+        }
+        let thread = best.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        let ids = Array(thread.suffix(5).map(\.id))
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+            let header = FoundationModelEngine.episodeHeader(thread, isBusiest: false)
+            ModelScheduler.beginInteractive()
+            defer { ModelScheduler.endInteractive() }
+            let story = (try? await FoundationModelEngine.synthesizeThread(thread) { _ in }) ?? ""
+            return (query: query, answer: header + OwnerIdentity.rewritingOwnerNames(in: story), timestamp: Date(), relatedEmailIDs: ids)
+        }
+        #endif
+        return await smartThreadStory(subject: EmailNLPEngine.baseSubject(thread.first?.headers["Subject"] ?? ""), query: query, emails: thread)
+    }
+
+    /// Years named in a question ("2012 and 2023"), in order, without repeats.
+    nonisolated static func years(in query: String) -> [Int] {
+        var out: [Int] = []
+        for m in query.matches(of: /\b(19|20)\d{2}\b/) {
+            if let y = Int(query[m.range]), !out.contains(y) { out.append(y) }
+        }
+        return out
+    }
+
+    /// Corrects misspellings of the words questions are routed on — edit
+    /// distance 1 for short words, 2 for longer ones; names and other words
+    /// are left alone.
+    nonisolated static func normalizeTypos(_ query: String) -> String {
+        let vocabulary = ["patent", "number", "application", "invoice", "payment", "payments", "interview", "attachment",
+                          "attachments", "emails", "email", "password", "settlement", "booking", "ticket", "hospital",
+                          "claim", "granted", "receipt", "policy", "account", "summarize", "summary", "documents",
+                          "files", "contract", "deadline", "renewal", "insurance", "salary", "address", "meeting"]
+        func distance(_ a: [Character], _ b: [Character]) -> Int {
+            var prev = Array(0...b.count)
+            for (i, ca) in a.enumerated() {
+                var cur = [i + 1] + Array(repeating: 0, count: b.count)
+                for (j, cb) in b.enumerated() {
+                    cur[j + 1] = min(prev[j + 1] + 1, cur[j] + 1, prev[j] + (ca == cb ? 0 : 1))
+                }
+                prev = cur
+            }
+            return prev[b.count]
+        }
+        // Texting spellings of question words, too short for edit distance.
+        let shortForms = ["wat": "what", "wht": "what", "whn": "when", "wen": "when", "whr": "where",
+                          "hw": "how", "hwo": "how", "u": "you", "ur": "your", "abt": "about", "pls": "please", "plz": "please"]
+        var changed = false
+        let corrected = query.split(separator: " ", omittingEmptySubsequences: false).map { token -> String in
+            let word = String(token)
+            let core = word.trimmingCharacters(in: .punctuationCharacters)
+            let lowerCore = core.lowercased()
+            if let full = shortForms[lowerCore], !core.isEmpty {
+                changed = true
+                return word.replacingOccurrences(of: core, with: full)
+            }
+            // Inflections of a known word ("emailed", "patents") are spelled right.
+            guard core.count >= 4, core.allSatisfy(\.isLetter), !vocabulary.contains(where: { lowerCore.hasPrefix($0) }) else { return word }
+            let limit = core.count >= 7 ? 2 : 1
+            let letters = Array(lowerCore)
+            guard let best = vocabulary.min(by: { distance(letters, Array($0)) < distance(letters, Array($1)) }),
+                  distance(letters, Array(best)) <= limit, abs(best.count - core.count) <= limit else { return word }
+            changed = true
+            return word.replacingOccurrences(of: core, with: best)
+        }.joined(separator: " ")
+        return changed ? corrected : query
+    }
+
+    nonisolated private static func smartBusiestPeriod(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let byMonth = query.lowercased().contains("month")
+        let cal = Calendar.current
+        let fmt = DateFormatter(); fmt.dateFormat = byMonth ? "MMM yyyy" : "yyyy"
+        var counts: [String: (count: Int, date: Date)] = [:]
+        for email in emails {
+            guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
+            let key = byMonth ? fmt.string(from: date) : String(cal.component(.year, from: date))
+            counts[key, default: (0, date)].count += 1
+        }
+        let ranked = counts.sorted { $0.value.count > $1.value.count }
+        guard let top = ranked.first else {
+            return (query: query, answer: "No dated emails in this scope.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        var answer = "**\(top.key)** — \(top.value.count) emails, the most of any \(byMonth ? "month" : "year") (out of \(emails.count) counted).\n\n**Next:**\n"
+        for entry in ranked.dropFirst().prefix(4) { answer += "- \(entry.key): \(entry.value.count)\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+    }
+
+    /// Sentences that state an amount together with the question's words.
+    nonisolated private static func smartAmounts(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let stop: Set<String> = ["how", "much", "was", "is", "are", "the", "my", "for", "me", "did", "do", "does", "approved", "what", "amount", "money", "pay", "paid", "cost"]
+        let words = query.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+            .filter { $0.count >= 3 && !stop.contains($0) }
+            .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+        let amount = #"(?i)(?:INR|Rs\.?|₹)\s?[\d,]+(?:\.\d{1,2})?(?:/-)?"#
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var hits: [(sentence: String, email: MBOXParser.RawEmail, score: Int)] = []
+        var seen = Set<String>()
+        for email in emails {
+            let text = (email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody)
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "> \t*")) }
+                .joined(separator: " ")
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            // Short windows around each amount, not whole paragraphs.
+            for match in text.matches(of: try! Regex(amount)) {
+                let start = text.index(match.range.lowerBound, offsetBy: -120, limitedBy: text.startIndex) ?? text.startIndex
+                let end = text.index(match.range.upperBound, offsetBy: 40, limitedBy: text.endIndex) ?? text.endIndex
+                let window = String(text[start..<end])
+                let lowerWindow = window.lowercased()
+                let score = words.filter { lowerWindow.range(of: "\\b\($0)", options: .regularExpression) != nil }.count
+                guard score > 0 else { continue }
+                // One passage per conversation: its best-matching window. A
+                // forwarded letter's copies quoted it three times (2026-10-07).
+                var passage = window.trimmingCharacters(in: .whitespaces)
+                if start != text.startIndex, let space = passage.firstIndex(of: " ") { passage = String(passage[passage.index(after: space)...]) }
+                let conversation = EmailNLPEngine.conversationKey(email)
+                if let i = hits.firstIndex(where: { EmailNLPEngine.conversationKey($0.email) == conversation }) {
+                    if score > hits[i].score { hits[i] = (passage, email, score) }
+                    continue
+                }
+                let key = String(text[match.range]) + "|" + EmailNLPEngine.baseSubject(email.headers["Subject"] ?? "")
+                guard seen.insert(key).inserted else { continue }
+                hits.append((passage, email, score))
+            }
+        }
+        guard !hits.isEmpty else {
+            return (query: query, answer: "**No amount found** with \(words.map { "“\($0)”" }.joined(separator: ", ")) in this scope's emails.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let ranked = hits.sorted { ($0.score, MBOXParser.parseDate($0.email.headers["Date"]) ?? .distantPast) > ($1.score, MBOXParser.parseDate($1.email.headers["Date"]) ?? .distantPast) }.prefix(3)
+        var answer = "**Amounts stated in your emails** (quoted):\n\n"
+        for hit in ranked {
+            let when = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            answer += "- “…\(hit.sentence)…” — \(senderDisplayName(hit.email.headers["From"] ?? "?")), \(when) (“\(EmailNLPEngine.baseSubject(hit.email.headers["Subject"] ?? ""))”)\n"
+        }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: ranked.map(\.email.id))
+    }
+
+    /// The subject in "tell / narrate / show (me) the story of <subject>".
+    nonisolated static func threadStorySubject(in query: String) -> String? {
+        guard let range = query.range(of: #"^\s*(tell|narrate|show)( me)? the story of\s+"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let subject = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " “”\"'?.!"))
+        return subject.isEmpty ? nil : subject
+    }
+
+    nonisolated private static func smartThreadStory(subject: String, query: String, emails: [MBOXParser.RawEmail]) async -> SmartQueryResult {
+        guard let members = EmailNLPEngine.conversation(matching: subject, in: emails) else {
+            return (query: query, answer: "No conversation in this scope has a subject matching “\(subject)”.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let thread = members.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        let ids = Array(thread.suffix(5).map(\.id))
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+            let header = FoundationModelEngine.episodeHeader(thread, isBusiest: false)
+            ModelScheduler.beginInteractive()
+            defer { ModelScheduler.endInteractive() }
+            let story = (try? await FoundationModelEngine.synthesizeThread(thread) { _ in }) ?? ""
+            return (query: query, answer: header + OwnerIdentity.rewritingOwnerNames(in: story), timestamp: Date(), relatedEmailIDs: ids)
+        }
+        #endif
+        // No on-device model: the outline from the messages themselves.
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        var answer = "**Thread: “\(EmailNLPEngine.baseSubject(thread.first?.headers["Subject"] ?? subject))”** — \(thread.count) messages.\n\n"
+        for email in thread.prefix(12) {
+            let when = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            let line = email.plainBody.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.hasPrefix(">") } ?? ""
+            answer += "- \(when) — \(senderDisplayName(email.headers["From"] ?? "?")): \(line.prefix(140))\n"
+        }
+        if thread.count > 12 { answer += "- …and \(thread.count - 12) more messages\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: ids)
+    }
+
+    nonisolated private static func smartEmailsFrom(name: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let needle = name.lowercased()
+        let matches = emails.filter { ($0.headers["From"] ?? "").lowercased().contains(needle) }
+        guard !matches.isEmpty else {
+            return (query: query, answer: "No emails from **\(name)** in this scope. Check the spelling, or widen the scope to the whole archive.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let dated = matches.compactMap { e in MBOXParser.parseDate(e.headers["Date"]).map { (e, $0) } }.sorted { $0.1 > $1.1 }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var answer = "**\(matches.count) email\(matches.count == 1 ? "" : "s") from \(name)**"
+        if let newest = dated.first?.1, let oldest = dated.last?.1 {
+            answer += newest == oldest ? " (\(fmt.string(from: newest)))" : " (\(fmt.string(from: oldest)) – \(fmt.string(from: newest)))"
+        }
+        let withAttachments = matches.filter { !$0.attachments.isEmpty }.count
+        if withAttachments > 0 { answer += ", \(withAttachments) with attachments" }
+        answer += ".\n\n**Most recent:**\n"
+        let recent = (dated.isEmpty ? matches.map { ($0, Date.distantPast) } : dated).prefix(8)
+        for (email, date) in recent {
+            let subject = email.headers["Subject"] ?? "(No Subject)"
+            let when = date == .distantPast ? "" : " — \(fmt.string(from: date))"
+            answer += "- \(subject)\(when)\n"
+        }
+        if matches.count > 8 { answer += "\n…and \(matches.count - 8) more." }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: recent.map { $0.0.id })
+    }
+
+    nonisolated private static func smartTopSenders(query: String, emails allEmails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // "Who sent me the most emails in 2024?" — that year only.
+        let years = Self.years(in: query)
+        let emails = years.isEmpty ? allEmails : allEmails.filter { e in
+            MBOXParser.parseDate(e.headers["Date"]).map { years.contains(Calendar.current.component(.year, from: $0)) } ?? false
+        }
+        // Count by ADDRESS (one person, many display spellings) and leave out
+        // the archive owner: "who emails me" is about other people. The owner
+        // is whoever sent the archive's "sent" messages. Before, a Gmail Sent
+        // archive answered with the owner five times under different names.
+        func address(_ from: String) -> String {
+            if let lt = from.firstIndex(of: "<") {
+                return from[from.index(after: lt)...].prefix { $0 != ">" }.lowercased().trimmingCharacters(in: .whitespaces)
+            }
+            return from.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
+        }
+        let isOwn: (MBOXParser.RawEmail) -> Bool = { email in
+            if email.messageType == "sent" { return true }
+            let labels = (email.headers["X-Gmail-Labels"] ?? email.headers["X-gmail-labels"] ?? "").lowercased()
+            return labels.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == "sent" }
+        }
+        var ownAddresses = Set(emails.filter(isOwn).map { address($0.headers["From"] ?? "") })
+        if let configured = UserDefaults.standard.string(forKey: "defaultSenderEmail"), !configured.isEmpty {
+            ownAddresses.insert(configured.lowercased())
+        }
+        ownAddresses.remove("")
+        var counts: [String: Int] = [:]
+        var names: [String: String] = [:]
+        var considered = 0
+        for email in emails {
+            let from = email.headers["From"] ?? ""
+            let key = address(from)
+            guard !key.isEmpty, !ownAddresses.contains(key) else { continue }
+            considered += 1
+            counts[key, default: 0] += 1
+            if names[key] == nil {
+                let name = AIAssistantView.senderDisplayName(from)
+                names[key] = name.lowercased() == key ? key : "\(name) (\(key))"
+            }
+        }
+        let sorted = counts.sorted { $0.value > $1.value }
+        guard !sorted.isEmpty else {
+            return (query: query, answer: "Every message in this scope was sent by you, so there is no one else to rank.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        var answer = "**Who emails you the most**\(years.isEmpty ? "" : " in " + years.map(String.init).joined(separator: " and ")) (\(sorted.count) senders, your own sent mail excluded):\n\n"
         for (i, entry) in sorted.prefix(15).enumerated() {
-            let pct = emails.isEmpty ? 0 : Int(Double(entry.value) / Double(emails.count) * 100)
-            answer += "\(i + 1). **\(entry.key)** — \(entry.value) email\(entry.value == 1 ? "" : "s") (\(pct)%)\n"
+            let share = Double(entry.value) / Double(max(considered, 1)) * 100
+            let pct = share < 1 ? "<1%" : "\(Int(share.rounded()))%"
+            answer += "\(i + 1). **\(names[entry.key] ?? entry.key)** — \(entry.value) email\(entry.value == 1 ? "" : "s") (\(pct))\n"
         }
         if sorted.count > 15 { answer += "\n...and \(sorted.count - 15) more senders." }
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
@@ -1831,20 +2804,39 @@ struct AIAssistantView: View {
             answer = "**Security scan complete — no phishing detected.**\n\n"
             answer += "Scanned \(emails.count) emails. No high or medium risk emails found."
         } else {
-            answer = "**Security Scan Results:**\n\n"
+            answer = "**Security scan of \(emails.count) emails:**\n\n"
             answer += "- 🔴 **High risk:** \(high.count) email\(high.count == 1 ? "" : "s")\n"
             answer += "- 🟡 **Medium risk:** \(medium.count) email\(medium.count == 1 ? "" : "s")\n\n"
-            if !high.isEmpty {
-                answer += "**High-risk emails:**\n"
-                for (i, flag) in high.prefix(10).enumerated() {
-                    let subject = flag.email.headers["Subject"] ?? "(No Subject)"
-                    let from = flag.email.headers["From"] ?? "Unknown"
-                    let reasons = flag.reasons.prefix(2).joined(separator: ", ")
-                    answer += "\(i + 1). **\(subject)** from \(from) — \(reasons)\n"
+            // Every reason is shown: the answer is the evidence, and the user
+            // judges it. Two reasons hid what pushed a message to "high".
+            // One line per conversation, sender and finding (use-once): four
+            // replies quoting the same link were four identical lines.
+            func list(_ flags: [EmailNLPEngine.PhishingFlag], limit: Int) -> String {
+                var groups: [(flag: EmailNLPEngine.PhishingFlag, count: Int)] = []
+                var index: [String: Int] = [:]
+                for flag in flags {
+                    let key = EmailNLPEngine.conversationKey(flag.email) + "|" + (flag.email.headers["From"] ?? "") + "|" + flag.reasons.joined(separator: ";")
+                    if let i = index[key] { groups[i].count += 1 } else { index[key] = groups.count; groups.append((flag, 1)) }
                 }
+                var text = ""
+                for (i, group) in groups.prefix(limit).enumerated() {
+                    let subject = group.flag.email.headers["Subject"] ?? "(No Subject)"
+                    let from = group.flag.email.headers["From"] ?? "Unknown"
+                    let copies = group.count > 1 ? " (\(group.count) emails in this thread)" : ""
+                    text += "\(i + 1). **\(subject)** from \(from)\(copies) — \(group.flag.reasons.joined(separator: "; "))\n"
+                }
+                if groups.count > limit { text += "…and \(groups.count - limit) more.\n" }
+                return text
             }
+            if !high.isEmpty {
+                answer += "**High-risk emails:**\n" + list(high, limit: 10) + "\n"
+            }
+            if !medium.isEmpty {
+                answer += "**Medium-risk emails:**\n" + list(medium, limit: 8) + "\n"
+            }
+            answer += "These are warning signs found by rules (wording, links, sender and authentication headers), not a verdict. Don't open links or attachments in a flagged email until you have checked the sender another way."
         }
-        let relatedIDs = Array(high.prefix(5).map(\.email.id))
+        let relatedIDs = Array((high + medium).prefix(5).map(\.email.id))
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: relatedIDs)
     }
 
@@ -1876,6 +2868,59 @@ struct AIAssistantView: View {
     }
 
     nonisolated private static func smartAttachments(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // Filters named in the question: a file type, a year, a person. With
+        // any of them the answer lists the matching emails and their files;
+        // without, the summary. "PDF attachments from 2024" and "files
+        // Shabana Khan sent" got the archive summary (2026-10-07).
+        let lower = query.lowercased()
+        let typeWords: [(words: [String], exts: Set<String>, label: String)] = [
+            (["pdf", "pdfs"], ["pdf"], "PDF"),
+            (["photo", "photos", "image", "images", "picture", "pictures", "jpg", "jpeg", "png"], ["jpg", "jpeg", "png", "gif", "heic"], "image"),
+            (["word", "doc", "docx"], ["doc", "docx"], "Word"),
+            (["excel", "spreadsheet", "spreadsheets", "xlsx", "xls", "csv"], ["xls", "xlsx", "csv"], "spreadsheet"),
+            (["zip", "zips"], ["zip"], "zip"),
+            (["video", "videos", "mp4"], ["mp4", "mov", "3gp"], "video"),
+        ]
+        let words = Set(lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+        let wanted = typeWords.filter { !words.isDisjoint(with: $0.words) }
+        let exts = wanted.reduce(into: Set<String>()) { $0.formUnion($1.exts) }
+        let years = Self.years(in: query)
+        var person: String?
+        if let m = lower.firstMatch(of: /(?:did|has|have) (.+?) (?:send|sent|share|shared|attach|attached)|\bfrom ([a-z][a-z .&'-]{1,40}?)(?:\s+in\s+\d{4}|\?|$)/) {
+            let name = String(m.1 ?? m.2 ?? "").trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty, !["i", "me", "you", "we"].contains(name), Int(name) == nil { person = name }
+        }
+        if !exts.isEmpty || !years.isEmpty || person != nil {
+            let cal = Calendar.current
+            let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+            var matches: [(email: MBOXParser.RawEmail, files: [String])] = []
+            for email in emails where !email.attachments.isEmpty {
+                if let person, !(email.headers["From"] ?? "").lowercased().contains(person) { continue }
+                if !years.isEmpty, !(MBOXParser.parseDate(email.headers["Date"]).map { years.contains(cal.component(.year, from: $0)) } ?? false) { continue }
+                let files = email.attachments.map(\.filename).filter { name in
+                    exts.isEmpty || exts.contains((name as NSString).pathExtension.lowercased())
+                }
+                if !files.isEmpty { matches.append((email, files)) }
+            }
+            matches.sort { (MBOXParser.parseDate($0.email.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.email.headers["Date"]) ?? .distantPast) }
+            var filters: [String] = []
+            if !wanted.isEmpty { filters.append(wanted.map(\.label).joined(separator: "/") + " files") }
+            if let person { filters.append("from " + (query.range(of: person, options: .caseInsensitive).map { String(query[$0]) } ?? person)) }
+            if !years.isEmpty { filters.append("in " + years.map(String.init).joined(separator: " and ")) }
+            let description = filters.joined(separator: " ")
+            guard !matches.isEmpty else {
+                return (query: query, answer: "**No attachments \(description)** in this scope.", timestamp: Date(), relatedEmailIDs: [])
+            }
+            let fileCount = matches.reduce(0) { $0 + $1.files.count }
+            var answer = "**\(fileCount) file\(fileCount == 1 ? "" : "s") in \(matches.count) email\(matches.count == 1 ? "" : "s")** — \(description):\n\n"
+            for match in matches.prefix(15) {
+                let when = MBOXParser.parseDate(match.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                let subject = EmailNLPEngine.baseSubject(match.email.headers["Subject"] ?? "")
+                answer += "- \(when) — **\(subject.isEmpty ? "(No Subject)" : subject)** (\(senderDisplayName(match.email.headers["From"] ?? "?"))): \(match.files.joined(separator: ", "))\n"
+            }
+            if matches.count > 15 { answer += "…and \(matches.count - 15) more emails.\n" }
+            return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(matches.prefix(5).map(\.email.id)))
+        }
         let withAttach = emails.filter { !$0.attachments.isEmpty }
         var typeCounts: [String: Int] = [:]
         for email in withAttach {
@@ -1906,8 +2951,22 @@ struct AIAssistantView: View {
         if let first = dates.first, let last = dates.last {
             let days = Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
             answer = "**Email Timeline:**\n\n"
-            answer += "- **Oldest:** \(fmt.string(from: first))\n"
-            answer += "- **Newest:** \(fmt.string(from: last))\n"
+            // What they were, not only when: "When is my oldest email from
+            // and what was it?" got the date alone.
+            // Every email at that instant: a bounce notice carries the same
+            // time as the message it bounced (written in another time zone).
+            func describe(_ date: Date) -> String {
+                let atDate = emails.filter { MBOXParser.parseDate($0.headers["Date"]) == date }
+                    .sorted { OwnerIdentity.isOwner($0.headers["From"] ?? "") == false && OwnerIdentity.isOwner($1.headers["From"] ?? "") }
+                let named = atDate.prefix(2).map { email -> String in
+                    let subject = EmailNLPEngine.baseSubject(email.headers["Subject"] ?? "")
+                    return "“\(subject.isEmpty ? "(No Subject)" : subject)” from \(senderDisplayName(email.headers["From"] ?? "?"))"
+                }
+                guard !named.isEmpty else { return "" }
+                return " — " + named.joined(separator: " and ") + (atDate.count > 2 ? " (\(atDate.count) emails at that time)" : "")
+            }
+            answer += "- **Oldest:** \(fmt.string(from: first))\(describe(first))\n"
+            answer += "- **Newest:** \(fmt.string(from: last))\(describe(last))\n"
             answer += "- **Span:** \(days) days\n"
             answer += "- **Total:** \(emails.count) emails\n"
             if days > 0 {
@@ -1930,14 +2989,54 @@ struct AIAssistantView: View {
         return nil
     }
 
+    // MARK: - Metrics (audit defect 22)
+
+    /// Opens a metrics record for one query.
+    ///
+    /// `intent` is the engine or shortcut that handled it, so a summary can
+    /// never be read as if one engine produced all of it.
+    private func beginMetrics(_ intent: String, query: String) -> AIMetrics.QueryRecord {
+        var record = AIMetrics.shared.begin(
+            query: query,
+            intent: intent,
+            persona: personaManager.selectedPersona.rawValue,
+            archiveEmailCount: emailCount(for: emailScope))
+        record.reported.insert(AIMetrics.QueryRecord.Group.identity)
+        return record
+    }
+
+    /// Closes a record, stamping elapsed time and the answer's shape.
+    ///
+    /// Only the groups this call can actually see are marked reported —
+    /// `timing` and `output`. Findings, routing and compression are added by
+    /// the branches that measure them, and stay absent (not zero) elsewhere.
+    private func finishMetrics(_ record: AIMetrics.QueryRecord,
+                               startedAt: Date,
+                               answer: String,
+                               citedEmailIDs: [UUID],
+                               failed: Bool = false,
+                               fallbackUsed: Bool = false) {
+        var closing = record
+        closing.totalElapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        closing.answerCharCount = answer.count
+        closing.citedEmailCount = citedEmailIDs.count
+        closing.didFail = failed
+        closing.fallbackUsed = fallbackUsed
+        closing.reported.insert(AIMetrics.QueryRecord.Group.timing)
+        closing.reported.insert(AIMetrics.QueryRecord.Group.output)
+        AIMetrics.shared.finalize(closing)
+    }
+
     private func askAI() {
         let query = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
+        guard !query.isEmpty, !isProcessing else { return }
 
         switch Self.classifyConversational(query) {
         case .greeting:
             prompt = ""
             let totalCount = emailCount(for: emailScope)
+            let greetingMetrics = beginMetrics("greeting", query: query)
+            let greetingStart = Date()
             currentTask = Task {
                 let ws = await currentWorkingSet()
                 let sent = ws.filter { $0.messageType == "sent" }.count
@@ -1950,34 +3049,115 @@ struct AIAssistantView: View {
                         relatedEmailIDs: []
                     ))
                 }
+                finishMetrics(greetingMetrics, startedAt: greetingStart,
+                              answer: conversationHistory.last?.answer ?? "",
+                              citedEmailIDs: [])
             }
             return
         case .acknowledgment:
             prompt = ""
+            let ackMetrics = beginMetrics("acknowledgment", query: query)
+            let ackStart = Date()
+            let ackAnswer = "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries."
             withAnimation(AnimationTiming.normal) {
                 conversationHistory.append((
                     query: query,
-                    answer: "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries.",
+                    answer: ackAnswer,
                     timestamp: Date(),
                     relatedEmailIDs: []
                 ))
             }
+            finishMetrics(ackMetrics, startedAt: ackStart,
+                          answer: ackAnswer, citedEmailIDs: [])
             return
         case .notConversational:
             break
         }
 
-        if let smartResult = Self.handleSmartQuery(query: query) {
-            prompt = ""
+        // A question about a period ("…from the last month") that has no mail
+        // in it is answered here. The model, given no emails from the period,
+        // summarised older mail as if it were from it (found 2026-10-06).
+        // Emptiness is only claimed when the working set is the whole scope;
+        // otherwise, or when the period has mail, the question goes on as usual.
+        if periodCheckedQuery == query {
+            periodCheckedQuery = nil
+        } else if let range = EmailNLPEngine.parseDateRange(from: query.lowercased()) {
             isProcessing = true
             currentTask = Task {
-                defer { isProcessing = false }
+                let ws = await currentWorkingSet()
+                let dates = ws.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+                let hasMailInRange = dates.contains { $0 >= range.start && $0 <= range.end }
+                let isWholeScope = ws.count >= emailCount(for: emailScope)
+                isProcessing = false
+                guard !hasMailInRange, isWholeScope, !ws.isEmpty else {
+                    periodCheckedQuery = query
+                    prompt = query
+                    askAI()
+                    return
+                }
+                prompt = ""
+                let fmt = DateFormatter()
+                fmt.dateStyle = .long
+                fmt.timeStyle = .none
+                var answer = String(localized: "**No emails from \(range.label).** None of the \(ws.count) emails in this scope is dated in that period.")
+                if let newest = dates.max() {
+                    answer += " " + String(localized: "The newest one is from **\(fmt.string(from: newest))**.")
+                }
+                let newestIDs = ws
+                    .compactMap { e in MBOXParser.parseDate(e.headers["Date"]).map { (e.id, $0) } }
+                    .sorted { $0.1 > $1.1 }
+                    .prefix(5)
+                    .map(\.0)
+                withAnimation(AnimationTiming.normal) {
+                    conversationHistory.append((query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(newestIDs)))
+                }
+            }
+            return
+        }
+
+        // A named thread's story is narrated by the model, so it counts as an
+        // AI question for the free allowance, like Thread Story itself.
+        let isModelStory = Self.threadStorySubject(in: query) != nil
+        if isModelStory && !storeManager.isPremium && freeQueryCount >= Self.freeQueryLimit {
+            showUpgradePaywall = true
+            return
+        }
+
+        if let smartResult = Self.handleSmartQuery(query: query) {
+            prompt = ""
+            if isModelStory && !storeManager.isPremium { freeQueryCount += 1 }
+            isProcessing = true
+            let smartMetrics = beginMetrics("smartQuery", query: query)
+            let smartStart = Date()
+            // The question and "Thinking..." show at once, as for model
+            // answers: a thread story takes ~20 s, and the screen showed
+            // nothing until it finished (2026-10-07).
+            streamingQuery = query
+            streamingAnswer = "Thinking..."
+            currentTask = Task {
+                defer {
+                    isProcessing = false
+                    streamingQuery = ""
+                    streamingAnswer = ""
+                }
                 let emailsCopy = await currentWorkingSet()
-                let result = await smartResult(emailsCopy)
+                var result = await smartResult(emailsCopy)
+                // These answers count over the working set — the newest
+                // `workingSetCap` emails. On a larger scope, say so: "(of 2000
+                // in this scope)" would otherwise misstate a 100,000-email one.
+                let scopeTotal = emailCount(for: emailScope)
+                if scopeTotal > emailsCopy.count && !emailsCopy.isEmpty {
+                    result.answer += "\n\n_Counted over the newest \(emailsCopy.count.formatted()) of the \(scopeTotal.formatted()) emails in this scope. Narrow the scope (Filtered or Selected) to count older mail._"
+                }
                 await MainActor.run {
                     withAnimation(AnimationTiming.normal) {
                         conversationHistory.append(result)
                     }
+                    // The shortcut answers from the working set directly, so
+                    // its citations ARE the emails it named.
+                    finishMetrics(smartMetrics, startedAt: smartStart,
+                                  answer: result.answer,
+                                  citedEmailIDs: result.relatedEmailIDs)
                 }
             }
             return
@@ -1999,6 +3179,35 @@ struct AIAssistantView: View {
             ? resolveAutoEngine(query: currentQuery, emailCount: emailCount(for: emailScope))
             : rawEngine
 
+        // Apple Intelligence off or unavailable, engine on Auto: answer from
+        // the emails themselves, through the same relaxed retrieval the model
+        // path uses. The older NLP summary answered "Did I book a train
+        // ticket in 2018?" with "I found 15 emails involving <owner>" and the
+        // hospital claim with the patent thread (2026-10-07 check with Apple
+        // Intelligence off).
+        #if canImport(FoundationModels)
+        if rawEngine == .auto, !foundationModelAvailable, #available(macOS 26, iOS 26, *) {
+            let metrics = beginMetrics("evidenceFallback", query: currentQuery)
+            let started = Date()
+            streamingQuery = currentQuery
+            streamingAnswer = "Thinking..."
+            currentTask = Task {
+                defer {
+                    isProcessing = false
+                    streamingQuery = ""
+                    streamingAnswer = ""
+                }
+                let answer = await FoundationModelEngine.fallbackAnswer(for: currentQuery, reason: "Apple Intelligence isn’t available on this device right now")
+                guard !Task.isCancelled else { return }
+                withAnimation(AnimationTiming.normal) {
+                    conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: []))
+                }
+                finishMetrics(metrics, startedAt: started, answer: answer, citedEmailIDs: [], fallbackUsed: true)
+            }
+            return
+        }
+        #endif
+
         switch engine {
         // ━━━ Engine 1: Apple AI MoE ━━━
         // Full multi-session expert pipeline with fan-in, self-correction
@@ -2013,10 +3222,16 @@ struct AIAssistantView: View {
 
                 streamingQuery = currentQuery
                 streamingAnswer = ""
+                var metrics = beginMetrics("appleAIMoE", query: currentQuery)
+                let metricsStart = Date()
                 let emailsCopy = await currentWorkingSet()
+                let retrievalStart = Date()
                 let retrieved = await Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
+                metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelStreaming(currentQuery)
+                // A cancelled query is not recorded: it has no answer to
+                // measure, and counting it as a failure would be false.
                 guard !Task.isCancelled else { return }
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2026,8 +3241,13 @@ struct AIAssistantView: View {
                 streamingAnswer = ""
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
+                // The expert pipeline runs inside askFoundationModelStreaming,
+                // which this view cannot inspect — so routing and findings are
+                // NOT marked reported for this engine.
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs)
             }
 
         // ━━━ Engine 2: Apple AI (Direct) ━━━
@@ -2042,10 +3262,16 @@ struct AIAssistantView: View {
 
                 streamingQuery = currentQuery
                 streamingAnswer = ""
+                var metrics = beginMetrics("appleAI", query: currentQuery)
+                let metricsStart = Date()
                 let emailsCopy = await currentWorkingSet()
+                let retrievalStart = Date()
                 let retrieved = await Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
+                metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelDirect(currentQuery)
+                // A cancelled query is not recorded: it has no answer to
+                // measure, and counting it as a failure would be false.
                 guard !Task.isCancelled else { return }
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2055,8 +3281,10 @@ struct AIAssistantView: View {
                 streamingAnswer = ""
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs)
             }
 
         // ━━━ Engine 3: Hybrid (Best) ━━━
@@ -2071,6 +3299,13 @@ struct AIAssistantView: View {
                     streamingQuery = ""
                     streamingAnswer = ""
                 }
+
+                var metrics = beginMetrics("hybrid", query: currentQuery)
+                let metricsStart = Date()
+                // Hybrid falls back to its NLP baseline whenever the expert
+                // pipeline is unavailable, throws, or times out. Assume the
+                // fallback until the pipeline actually returns.
+                var usedFallback = true
 
                 // Layer 1: NLP foundation (deterministic — always runs as safety net)
                 let emailsCopy = await currentWorkingSet()
@@ -2089,7 +3324,9 @@ struct AIAssistantView: View {
                 if canUseAppleAI {
                     // Layer 2: Agentic RAG retrieval (parallel with NLP — evidence gathering)
                     let priorIDs = priorRetrievedEmailIDs
+                    let retrievalStart = Date()
                     let ragResult = await Self.agenticRetrieve(query: currentQuery, emails: emailsCopy, priorContext: priorContext, predictions: currentPredictions, priorRetrievedIDs: priorIDs)
+                    metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
 
                     priorRetrievedEmailIDs.formUnion(ragResult.retrievedEmails.map(\.id))
                     let ragIDs = Array(ragResult.retrievedEmails.prefix(5).map(\.id))
@@ -2132,6 +3369,12 @@ struct AIAssistantView: View {
                                 return result
                             }
                             answer = hybridResult.answer
+                            // The one engine that reports its findings, so the
+                            // one engine that marks them measured.
+                            metrics.totalFindings = hybridResult.totalFindings
+                            metrics.highRelevanceCount = hybridResult.highRelevanceCount
+                            metrics.reported.insert(AIMetrics.QueryRecord.Group.findings)
+                            usedFallback = hybridResult.layerCount == 0
 
                             // Layer 5: Self-correction — validate and fill gaps
                             streamingQuery = ""
@@ -2182,11 +3425,14 @@ struct AIAssistantView: View {
                 }
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs,
+                              fallbackUsed: usedFallback)
             }
 
-        #if !OFFLINE_MODE
+        #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
         // ━━━ Engine 4: Cloud AI (Enhanced with NLP + RAG) ━━━
         case .cloudAI:
             let priorCtxCloud = conversationHistory.suffix(3).map { "Q: \($0.query)\nA: \($0.answer)" }.joined(separator: "\n\n")
@@ -2197,6 +3443,10 @@ struct AIAssistantView: View {
                     streamingQuery = ""
                     streamingAnswer = ""
                 }
+
+                var metrics = beginMetrics("cloudAI", query: currentQuery)
+                let metricsStart = Date()
+                var usedFallback = false
 
                 // Layer 1: NLP baseline (deterministic foundation)
                 let emailsCopy = await currentWorkingSet()
@@ -2209,12 +3459,19 @@ struct AIAssistantView: View {
                 guard !Task.isCancelled else { return }
 
                 // Layer 2: RAG retrieval for focused email context
+                let retrievalStart = Date()
                 let retrieved = await Self.retrieveRelevantEmails(
                     query: currentQuery, emails: emailsCopy, priorContext: priorCtxCloud, predictions: cloudPredictions
                 )
+                metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
                 let retrievedIDs = Array(retrieved.prefix(10).map(\.id))
                 let targetEmails = retrieved.isEmpty ? emailsCopy : Array(retrieved.prefix(15))
                 let emailContext = CloudAIManager.buildEmailContext(from: targetEmails, maxEmails: 15)
+                // This path builds its context itself and synthesizes once,
+                // so both compression fields are genuinely known here.
+                metrics.contextChars = emailContext.count
+                metrics.synthesisLayerCount = 1
+                metrics.reported.insert(AIMetrics.QueryRecord.Group.compression)
 
                 // Layer 3: Cloud AI synthesis with NLP + RAG context
                 streamingQuery = currentQuery
@@ -2231,6 +3488,7 @@ struct AIAssistantView: View {
                         self.streamingAnswer = partial
                     }
                 } catch {
+                    usedFallback = true
                     answer = nlpResult.answer
                     if !answer.contains("error") {
                         answer = "*(Cloud AI unavailable — showing NLP analysis)*\n\n" + answer
@@ -2250,8 +3508,11 @@ struct AIAssistantView: View {
                 }
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs,
+                              fallbackUsed: usedFallback)
             }
         #endif
 
@@ -2271,6 +3532,8 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
+                let metrics = beginMetrics("nlp", query: currentQuery)
+                let metricsStart = Date()
                 let emailsCopy = await currentWorkingSet()
                 let enhanced = await Self.enhancedNLPPipeline(
                     query: currentQuery,
@@ -2293,8 +3556,10 @@ struct AIAssistantView: View {
                 }
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs)
             }
         }
     }
@@ -2323,8 +3588,15 @@ struct AIAssistantView: View {
         #if canImport(FoundationModels)
         if #available(macOS 26, iOS 26, *) {
             let specialAction = Self.detectSpecialAction(query)
+            // A question in flight: background model work waits for it.
+            ModelScheduler.beginInteractive()
+            defer { ModelScheduler.endInteractive() }
+            // At most five helper calls per question; the written answer
+            // itself is never counted (kalsmritikosh call budget).
+            let budget = ModelScheduler.CallBudget(limit: 5)
             do {
-                return try await withThrowingTaskGroup(of: String.self) { group in
+                return try await ModelScheduler.$budget.withValue(budget) {
+                try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {
                         switch specialAction {
                         case .triage:
@@ -2333,7 +3605,12 @@ struct AIAssistantView: View {
                                 self.streamingAnswer = partial
                             }
                         case .insights:
-                            return try await FoundationModelEngine.generateInsights { partial in
+                            // Built from counts, so it uses the assistant's
+                            // working set (as the other data answers do), not
+                            // the model's 200-email context cap.
+                            let ws = await self.currentWorkingSet()
+                            let total = await self.emailCount(for: self.emailScope)
+                            return try await FoundationModelEngine.generateInsights(ws, scopeTotal: total) { partial in
                                 self.streamingAnswer = partial
                             }
                         case .securityBrief:
@@ -2358,26 +3635,32 @@ struct AIAssistantView: View {
                         }
                     }
                     group.addTask {
-                        try await Task.sleep(for: .seconds(60))
+                        try await ActiveTimeDeadline.sleep(seconds: 60)
                         throw TimeoutError()
                     }
                     guard let result = try await group.next() else {
                         group.cancelAll()
-                        return await enhancedNLPFallback(query)
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence returned no answer")
                     }
                     group.cancelAll()
+                    // A refusal ("I cannot provide…") or an empty reply is
+                    // replaced by the answer from the emails themselves.
+                    if EvidenceFallback.isUnusable(result) {
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence declined or could not answer this one")
+                    }
                     return result
+                }
                 }
             } catch is CancellationError {
                 return streamingAnswer.isEmpty ? "" : streamingAnswer
             } catch is TimeoutError {
                 let partial = streamingAnswer
-                if !partial.isEmpty {
-                    return partial + "\n\n(Response timed out — partial result shown)"
+                if !EvidenceFallback.isUnusable(partial) {
+                    return partial + Self.timedOutNote
                 }
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence took too long")
             } catch {
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence could not answer (\(error.localizedDescription))")
             }
         }
         #endif
@@ -2396,26 +3679,31 @@ struct AIAssistantView: View {
                         }
                     }
                     group.addTask {
-                        try await Task.sleep(for: .seconds(30))
+                        try await ActiveTimeDeadline.sleep(seconds: 30)
                         throw TimeoutError()
                     }
                     guard let result = try await group.next() else {
                         group.cancelAll()
-                        return await enhancedNLPFallback(query)
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence returned no answer")
                     }
                     group.cancelAll()
+                    // A refusal ("I cannot provide…") or an empty reply is
+                    // replaced by the answer from the emails themselves.
+                    if EvidenceFallback.isUnusable(result) {
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence declined or could not answer this one")
+                    }
                     return result
                 }
             } catch is CancellationError {
                 return streamingAnswer.isEmpty ? "" : streamingAnswer
             } catch is TimeoutError {
                 let partial = streamingAnswer
-                if !partial.isEmpty {
-                    return partial + "\n\n(Response timed out — partial result shown)"
+                if !EvidenceFallback.isUnusable(partial) {
+                    return partial + Self.timedOutNote
                 }
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence took too long")
             } catch {
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence could not answer (\(error.localizedDescription))")
             }
         }
         #endif
@@ -2457,6 +3745,9 @@ struct AIAssistantView: View {
             "important", "urgent", "missed", "action", "summarize", "thread", "conversation", "summary",
             "overview", "analyze", "cleanup", "storage", "disk", "space", "biggest", "relationship",
             "communication", "mention", "positive", "negative",
+            // Thread Story's own prompt ("Narrate this conversation thread")
+            // scoped the answer to emails containing "story" and "narrate".
+            "story", "narrate", "narrative", "tell", "explain", "describe",
             "smallest", "shortest", "longest", "largest", "fewest", "heaviest", "long",
             "replied", "active", "busiest", "messages",
             "many", "much", "count", "total", "sent", "send", "received",
@@ -2779,7 +4070,7 @@ struct AIAssistantView: View {
                 result += "."
                 return result
             }
-            return "I couldn't find any date information in these emails."
+            return String(localized: "I couldn't find any date information in these emails.")
         }
 
         if lower.contains("reply") || lower.contains("statistic") {
@@ -4080,7 +5371,7 @@ struct AIAssistantView: View {
             let received = scopedEmails.filter { $0.messageType == "received" }.count
             return "Hello! I'm your email assistant. You have **\(scopedEmails.count) emails** loaded (\(sent) sent, \(received) received).\n\nI can help you with:\n- **Search**: \"Find emails about budget\" or \"emails from Sarah\"\n- **Analytics**: \"Who emails me most?\" or \"What topics come up?\"\n- **Sentiment**: \"What's the tone of my emails?\"\n- **Security**: \"Scan for phishing\" or \"Check for sensitive data\"\n- **Summary**: \"Give me a full overview\"\n\nWhat would you like to know?"
         case .acknowledgment:
-            return "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries."
+            return String(localized: "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries.")
         case .notConversational:
             break
         }
@@ -4359,7 +5650,7 @@ struct AIAssistantView: View {
 
         // MARK: - "Thank you" / acknowledgements
         if lower.hasPrefix("thank") || lower == "thanks" || lower == "ok" || lower == "okay" || lower == "got it" || lower == "cool" || lower == "great" || lower == "nice" {
-            return "You're welcome! Let me know if you'd like to explore anything else about your emails."
+            return String(localized: "You're welcome! Let me know if you'd like to explore anything else about your emails.")
         }
 
         if lower == "help" || lower == "?" || lower.hasPrefix("what can you") || lower.hasPrefix("what do you") {
@@ -4686,7 +5977,12 @@ struct AIAssistantView: View {
         for result in chunkResults.prefix(3) {
             let from = displayName(result.email.headers["From"])
             let subject = result.email.headers["Subject"] ?? "(No Subject)"
-            let snippet = String(result.chunk.prefix(250)).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Strip markup first: a Gmail chat transcript's body is XML, and
+            // the excerpt showed raw <con:conversation …> tags.
+            let readable = result.chunk
+                .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            let snippet = String(readable.trimmingCharacters(in: .whitespacesAndNewlines).prefix(250))
             if snippet.isEmpty { continue }
             evidence += "\n> **\(from)** — \"\(subject)\"\n> \"\(snippet)...\"\n"
             evidenceIDs.append(result.email.id)
@@ -5715,8 +7011,17 @@ struct AIAssistantView: View {
         conversationHistory = turns.map { (query: $0.query, answer: $0.answer, timestamp: $0.timestamp ?? Date(), relatedEmailIDs: $0.relatedEmailIDs ?? []) }
     }
 
+    /// Clear means a fresh conversation for the model too: the engine keeps
+    /// its own turn memory, and without this a cleared conversation still
+    /// steered the next answer (found 2026-10-06: "Summarize last month"
+    /// answered about the previous question's sender).
     nonisolated static func clearSavedConversation() {
         try? FileManager.default.removeItem(at: conversationURL)
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            FoundationModelEngine.clearConversationMemory()
+        }
+        #endif
     }
 
     // MARK: - Export
@@ -5744,7 +7049,7 @@ struct AIAssistantView: View {
         markdown += "*Report generated by mailin — privacy-first email archive analyzer*\n"
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.title = "Export AI Report"
         panel.nameFieldStringValue = "mailin-report-\(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none).replacingOccurrences(of: "/", with: "-")).md"
         panel.allowedContentTypes = [.plainText]

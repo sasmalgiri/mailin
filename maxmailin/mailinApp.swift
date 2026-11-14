@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  mailinApp.swift
 //  mailin
@@ -10,6 +11,7 @@
 
 import SwiftUI
 import Observation
+import os
 import CoreSpotlight
 import TipKit
 #if os(macOS)
@@ -39,27 +41,68 @@ struct mailinApp: App {
     @NSApplicationDelegateAdaptor(MailinAppDelegate.self) var appDelegate
     #endif
     @State private var appState = AppStateManager()
+    /// v3.0 §3.3: the one authority for which pages are active. Everything
+    /// optional is gated on this, so a Page-1-only user runs nothing else.
+    @State private var modules = ModuleRegistry()
     @StateObject private var storeManager = StoreManager()
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
     @ObservedObject private var compliance = LegalComplianceManager.shared
     @ObservedObject private var biometricLock = BiometricLockManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+
+    /// §3.3 R1 for menu items: true when the page that owns `dest` is off, so
+    /// the item is disabled rather than opening a tool of an inactive page.
+    private func pageOff(_ dest: HubDestination) -> Bool {
+        dest.owner != .archive && !modules.isEnabled(dest.owner)
+    }
     @AppStorage("hasSeenLaunchAnimation") private var hasSeenLaunchAnimation = false
     #if os(macOS)
     @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
     #endif
     @State private var showLaunchAnimation = false
+    /// 3.1: a .mailinpack / .mailinresponse / .mailinscript opened from Finder or Files.
+    @State private var incomingDocument: IncomingMailinDocument?
+    /// E2: why a mailin://email link could not open its email.
+    @State private var emailLinkMessage: String?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // C-1: the engine lives in the ArchiveCore package; hand it the app's
+        // store, storage authority and memory-pressure reader before any
+        // property wrapper above touches a repository.
+        ArchiveCoreBridge.install()
+        // §3-M2 / §3-S6: mark this launch's start before anything can run, so
+        // crash breadcrumbs and the Safe Mode counter see the right boundary.
+        _ = EngineGuard.launchDate
+        SafeMode.recordLaunchStart()
+        CapabilityWiring.applyStoreLevelEarly()
+        // Enterprise: the person's role guards permanent deletion and legal
+        // holds in the archive itself (OrgPolicy).
+        OrgPolicy.installStoreGate()
+        DiagnosticsCenter.start()
+        // §3-S4: the continued-processing handler must be registered exactly
+        // once, before launch finishes (a second registration terminates).
+        ContinuedProcessing.register()
+        // The background-analysis task handler, likewise before launch
+        // finishes (it is scheduled later, only when the analysis is wanted).
+        BackgroundAnalysisManager.shared.registerLaunchHandler()
+    }
+
     // MARK: - Scene Configuration
     var body: some Scene {
-        // Main window with proper sizing and controls
-        WindowGroup {
+        // Main window with proper sizing and controls. The id lets File ▸
+        // New Window reopen it after the user closes it (the standard New
+        // command is replaced by New Import below).
+        WindowGroup(id: "main") {
             ZStack {
-                ContentView()
+                // A1/A2: the four-page frame. For a Page-1-only install this
+                // renders ContentView with no added chrome; a switcher appears
+                // only once a second page is enabled.
+                FourPageShell()
                     .environment(appState)
+                    .environment(modules)
                     .environmentObject(storeManager)
                     .adaptiveLayout()
                     #if os(macOS)
@@ -75,7 +118,12 @@ struct mailinApp: App {
                     .sheet(item: Binding<LaunchSheet?>(
                         get: {
                             if compliance.needsTermsAcceptance { return .terms }
-                            if !personaManager.hasCompletedPersonaSelection { return .persona }
+                            // §3.3 R2: the persona picker belongs to Page 3.
+                            // A new customer lands in Archive and is never asked
+                            // to choose a persona (directive §0), so this sheet
+                            // only appears once Professional Workflows is on.
+                            if modules.isEnabled(.professional),
+                               !personaManager.hasCompletedPersonaSelection { return .persona }
                             return nil
                         },
                         set: { newValue in
@@ -100,9 +148,45 @@ struct mailinApp: App {
                     .onAppear {
                         StoreManager.resetDailyCountersIfNeeded()
                         configureAppearance()
+                        // §3.3 R1: install the page gate before any surface can
+                        // try to open a foreign page's feature.
+                        appState.isModuleEnabled = { [modules] module in
+                            modules.isEnabled(module)
+                        }
+                        // The second gate: the per-capability matrix switch.
+                        appState.isCapabilityOn = { [modules] capability in
+                            modules.isOn(capability)
+                        }
+                        // §3.3: map 2.x state forward exactly once, before any
+                        // gate is read. An existing install keeps what it was
+                        // already using; a fresh install gets Page 1 only.
+                        modules.mapLegacyStateIfNeeded(
+                            isExistingInstall: personaManager.hasCompletedPersonaSelection
+                                || UserDefaults.standard.bool(forKey: "hasSeenLaunchAnimation"),
+                            legacyAIEnabled: enableAIFeatures,
+                            legacyPersonaCompleted: personaManager.hasCompletedPersonaSelection
+                        )
+                        // AFTER the legacy mapping, so the initial arming sees
+                        // final page state: push every capability into the
+                        // machinery that reads a plain flag rather than the
+                        // registry (the synchronous attachment and export
+                        // readers). The registry re-pushes on every later
+                        // change, so this is only the initial arming.
+                        CapabilityWiring.applyAll(modules)
                         // Notification permission is opt-in via Settings → General
                         // → Notifications, not auto-prompted at launch.
-                        BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()
+                        // §3.3 R2: background analysis belongs to AI Insights,
+                        // and within it to the capabilities that consume it —
+                        // if the user has switched all of them off there is
+                        // nothing for the background pass to produce.
+                        // §3-S6: a Safe Mode launch runs no background work.
+                        if SafeMode.shared.allowsBackgroundWork,
+                           modules.isEnabled(.aiInsights),
+                           [Capability.anomalyDetection, .smartAutoTagger,
+                            .topicClusters, .threadSummarizer, .smartAlerts,
+                            .keywordMonitor, .aiDigest].contains(where: { modules.isOn($0) }) {
+                            BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()
+                        }
                         try? Tips.configure([
                             .displayFrequency(.weekly)
                         ])
@@ -128,6 +212,11 @@ struct mailinApp: App {
                         // re-prompt, not a feature. On critical pressure,
                         // also drop the profile cache and precomputation
                         // state.
+                        //
+                        // §3.3 R2: registering these hooks at all would pull
+                        // the AI types in on a Page-1-only launch, so both AI
+                        // hooks are registered only while AI Insights is on.
+                        if modules.isEnabled(.aiInsights) {
                         MemoryPressureHandler.shared.register { level in
                             #if canImport(FoundationModels)
                             if #available(macOS 26, iOS 26, *) {
@@ -151,6 +240,7 @@ struct mailinApp: App {
                                 }
                             }
                         }
+                        }   // end AI Insights pressure hooks
                         // (Part F: the legacy in-RAM EmailSearchIndex is no
                         // longer built in production, so its dedicated
                         // memory-pressure drop hook was removed with it.)
@@ -171,66 +261,23 @@ struct mailinApp: App {
                         // and the read cutover gate on `isActive`. Idempotent —
                         // a fast no-op once active.
                         let storageState = await StorageActivationCoordinator.shared.activate()
-                        _ = try? HMACChainAuditLog.shared.append(
-                            action: "v2.storage.activation",
-                            detail: "SQLite activation state: \(storageState.rawValue)"
-                        )
-
-                        // Repair archives imported by pre-full-fidelity builds:
-                        // re-extract message type / attachments / labels /
-                        // domains from the stored raw MIME (bounded pages;
-                        // O(1) no-op once nothing is pending). Fixes empty
-                        // folder buckets + type/attachment filters on old
-                        // archives without a re-import.
                         // UI-test harness: "--uitest" launches into a clean,
                         // deterministic state — onboarding suppressed, demo
                         // archive imported — so XCUITests can click through
                         // every surface against real data.
                         if storageState == .active,
                            ProcessInfo.processInfo.arguments.contains("--uitest") {
-                            UITestSupport.prepareForUITests()
+                            UITestSupport.prepareForUITests(modules: modules)
                         }
-                        if storageState == .active {
-                            let sender = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
-                            FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
-                            // Attachment-content index (in:attachments searches
-                            // file CONTENTS): bounded background extraction;
-                            // O(1) no-op once everything is indexed.
-                            AttachmentTextIndexJob.shared.kickIfNeeded()
-                            // Weekly saved-search digest (opt-in; ≤1/week).
-                            DigestScheduler.shared.checkAndDeliver()
-                            // Ship-ready workflows: the 5 built-in recipes are
-                            // seeded on launch so they're usable immediately —
-                            // no create/configure step. Idempotent upsert.
-                            Task { await WorkflowService.seedBuiltins() }
-                        }
-
-                        // Repair any store↔FTS drift (a crash between the
-                        // store commit and the FTS commit can leave a row in
-                        // the store but unsearchable). Only runs when drift is
-                        // detected; bounded so it can't load an unbounded
-                        // archive into memory.
-                        Task.detached(priority: .utility) {
-                            // Reconcile against the ACTIVE authority. Once SQLite
-                            // is active (Stage 5A), it is the canonical store the
-                            // FTS index must match; before activation, fall back
-                            // to the SwiftData store.
-                            let active = await StorageActivationCoordinator.shared.isActive
-                            let store: any EmailArchiveStore = active ? SQLiteEmailStore.shared : EmailStore.shared
-                            let storeCount = (try? await store.totalCount()) ?? 0
-                            let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
-                            if storeCount > ftsCount {
-                                // Bounded, paged, restartable — no archive-wide
-                                // Set<UUID>, no 100k ceiling. Best-effort at
-                                // launch; a failure just retries next launch.
-                                _ = try? await FTSReconciler.reconcile(store: store, fts: .shared)
-                            }
-                            // Collapse any duplicate FTS rows left by a pre-
-                            // idempotent build (registry-masked, so the reconcile
-                            // above can't see them). Bounded per year-shard; a
-                            // no-op once clean.
-                            _ = try? await FTSSearchIndex.shared.dedupeShards()
-                        }
+                        // C-2: every launch-time job — fidelity repair,
+                        // attachment-text index, store↔FTS reconcile, weekly
+                        // digest, workflow seed, audit-chain launch entry —
+                        // runs through ONE inventory, gated by its owning page
+                        // and registered in `modules.jobs` while it runs
+                        // (§3.3 R2/R6). See `LaunchJobs.inventory`.
+                        LaunchJobs.run(modules: modules,
+                                       storageActive: storageState == .active,
+                                       storageStateLabel: storageState.rawValue)
 
                         // Self-test exercises the v2 storage + search +
                         // import pipeline against the bundled sample once
@@ -242,33 +289,41 @@ struct mailinApp: App {
                         let selfTestResult: MaxmailinSelfTest.Result = .skipped
                         #endif
 
-                        // Tamper-evident HMAC chain genesis entry on first
-                        // launch; subsequent launches append a "launch" event
-                        // so the chain shows continuous operation.
-                        switch selfTestResult {
-                        case .passed:
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.selfTest.passed",
-                                detail: "Maxmailin v2 self-test passed"
-                            )
-                        case .failed(let msg):
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.selfTest.failed",
-                                detail: msg
-                            )
-                        case .skipped:
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.launch",
-                                detail: "maxmailin launched"
-                            )
+                        // Tamper-evident HMAC chain: a launch event so the chain
+                        // shows continuous operation *while Professional is on*.
+                        //
+                        // §3.3 R6: no append and no verification on a launch
+                        // where Professional is off — which also takes a
+                        // whole-chain walk off every cold launch, a cost that
+                        // grew with archive age. Verification now runs on demand
+                        // and when Page 3 opens.
+                        if modules.isEnabled(.professional) {
+                            switch selfTestResult {
+                            case .passed:
+                                _ = try? HMACChainAuditLog.shared.append(
+                                    action: "v2.selfTest.passed",
+                                    detail: String(localized: "Maxmailin v2 self-test passed")
+                                )
+                            case .failed(let msg):
+                                _ = try? HMACChainAuditLog.shared.append(
+                                    action: "v2.selfTest.failed",
+                                    detail: msg
+                                )
+                            case .skipped:
+                                _ = try? HMACChainAuditLog.shared.append(
+                                    action: "v2.launch",
+                                    detail: String(localized: "maxmailin launched")
+                                )
+                            }
                         }
-                        _ = HMACChainAuditLog.shared.verifyChain()
                     }
                     .onChange(of: scenePhase) { _, newPhase in
                         biometricLock.handleScenePhaseChange(newPhase)
+                        #if !ENTERPRISE_EDITION
                         if newPhase == .active {
                             Task { await storeManager.checkEntitlements() }
                         }
+                        #endif
                         #if os(iOS)
                         if newPhase == .background {
                             EmailPersistence.flushPendingSaves()
@@ -282,6 +337,27 @@ struct mailinApp: App {
                         if let emailID = SpotlightIndexer.shared.handleSpotlightActivity(activity) {
                             NotificationCenter.default.post(name: .spotlightEmailSelected, object: emailID)
                         }
+                    }
+
+                // 3.1: opened .mailinpack / .mailinresponse / .mailinscript. Its own
+                // host view, so it never stacks a second sheet on the shell
+                // (the shell's launch flow presents exactly one sheet).
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .sheet(item: $incomingDocument) { doc in
+                        IncomingDocumentView(document: doc)
+                            .environment(modules)
+                            #if os(macOS)
+                            .frame(minWidth: 680, minHeight: 520)
+                            #endif
+                    }
+                    .alert("Email Link", isPresented: Binding(get: { emailLinkMessage != nil },
+                                                             set: { if !$0 { emailLinkMessage = nil } })) {
+                        Button("OK") { emailLinkMessage = nil }
+                    } message: {
+                        Text(emailLinkMessage ?? "")
                     }
 
                 if showLaunchAnimation {
@@ -302,6 +378,9 @@ struct mailinApp: App {
                         .transition(.opacity)
                 }
             }
+            // The window's content is announced by name (audit, 2026-10-13).
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text(verbatim: "mailin"))
         }
         #if os(macOS)
         .windowResizability(.contentMinSize)
@@ -315,12 +394,23 @@ struct mailinApp: App {
         Settings {
             SettingsView()
                 .environment(appState)
+                // Same registry instance as the main window: Settings ▸ Modules
+                // must switch the live state, not a copy.
+                .environment(modules)
                 .environmentObject(storeManager)
+        }
+
+        // Import receipt window (A5): what the last import actually did, read
+        // from the durable receipt on disk rather than from in-memory state.
+        Window("Import Receipt", id: "import-receipt") {
+            LatestImportReceiptView()
+                .frame(minWidth: 520, idealWidth: 700, minHeight: 420, idealHeight: 760)
         }
 
         // About window
         Window("About mailin", id: "about") {
             AboutView()
+                .environmentObject(storeManager)
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 500)
@@ -347,6 +437,13 @@ struct mailinApp: App {
         }
         
         CommandGroup(replacing: .newItem) {
+            #if os(macOS)
+            Button("New Window") {
+                openWindow(id: "main")
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            #endif
+
             Button("New Import") {
                 appState.triggerNewImport = true
             }
@@ -355,7 +452,25 @@ struct mailinApp: App {
             Button("Open Email Archive...") {
                 appState.triggerFileImport = true
             }
-            .keyboardShortcut("o", modifiers: .command)
+            .menuShortcut(MenuShortcutPolicy.openArchive)   // IPAD-10: iPadOS owns ⌘O
+
+            // H3: the guided route from a mail client's own export.
+            Button("Import from Apple Mail or Thunderbird...") {
+                appState.showHandoffImport = true
+            }
+
+            Divider()
+
+            // A5: the receipt is the answer to "did that import actually get
+            // everything?", so it needs a way in that does not depend on
+            // catching a banner right after the import finishes.
+            Button("Last Import Receipt...") {
+                #if os(macOS)
+                openWindow(id: "import-receipt")
+                #else
+                ImportReceiptPresenter.shared.show()   // IPAD-06: a sheet on iPad
+                #endif
+            }
 
             Divider()
 
@@ -384,7 +499,13 @@ struct mailinApp: App {
             }
             .disabled(!appState.hasParsedEmails)
 
-            Button("Batch Print All Filtered...") {
+            // H4: verified mbox handoff with the client's import steps.
+            Button("Export to Apple Mail or Thunderbird...") {
+                appState.showHandoffExport = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Save All Filtered for Printing...") {
                 appState.triggerBatchPrint = true
             }
             .disabled(!appState.hasFilteredEmails)
@@ -394,13 +515,13 @@ struct mailinApp: App {
             Button("Find...") {
                 appState.triggerSearch = true
             }
-            .keyboardShortcut("f", modifiers: .command)
+            .menuShortcut(MenuShortcutPolicy.find)   // IPAD-10: iPadOS owns ⌘F
             .disabled(!appState.hasParsedEmails)
 
             Button("Select All") {
                 appState.triggerSelectAll = true
             }
-            .keyboardShortcut("a", modifiers: .command)
+            .menuShortcut(MenuShortcutPolicy.selectAll)   // IPAD-10: iPadOS owns ⌘A
             .disabled(!appState.hasParsedEmails)
         }
 
@@ -439,6 +560,9 @@ struct mailinApp: App {
         // Mail menu (Compose / Connect / Fetch) removed in v2 — mailin is
         // strictly offline by design.
 
+        // §3.3 R1: a menu item whose tool belongs to a page that is off is
+        // disabled (owner, 2026-09-28 — Visual Analytics opened with AI
+        // Insights off). Archive-owned items only need an open archive.
         CommandMenu("Analysis") {
             Button("Reply Statistics...") {
                 appState.showReplyStats = true
@@ -450,13 +574,13 @@ struct mailinApp: App {
                 appState.showAIAssistant = true
             }
             .keyboardShortcut("k", modifiers: .command)
-            .disabled(!appState.hasParsedEmails || !enableAIFeatures)
+            .disabled(!appState.hasParsedEmails || !enableAIFeatures || pageOff(.aiAssistant))
 
             Button("Visual Analytics...") {
                 appState.showAnalytics = true
             }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!appState.hasParsedEmails)
+            .menuShortcut(MenuShortcutPolicy.visualAnalytics)   // IPAD-10: iPadOS owns ⇧⌘G
+            .disabled(!appState.hasParsedEmails || pageOff(.emailAnalytics))
 
             Divider()
 
@@ -471,7 +595,7 @@ struct mailinApp: App {
             Button("Topic Clusters") {
                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.topicClusters))
 
             Button("Email Subjects") {
                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
@@ -486,7 +610,7 @@ struct mailinApp: App {
             Button("Predictive Coding (TAR)...") {
                 appState.showPredictiveCoding = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.predictiveCoding))
 
             Button("Attachment Browser...") {
                 appState.showAttachmentGrid = true
@@ -535,7 +659,7 @@ struct mailinApp: App {
             Button("IOC Extractor...") {
                 appState.showIOCExtractor = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.iocExtractor))
 
             Button("Guided Search...") {
                 appState.showGuidedSearch = true
@@ -545,12 +669,12 @@ struct mailinApp: App {
             Button("Thread Summary...") {
                 appState.showThreadSummarizer = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.threadSummarizer))
 
             Button("Smart Alerts...") {
                 appState.showSmartAlerts = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.smartAlerts))
 
             Divider()
 
@@ -562,17 +686,17 @@ struct mailinApp: App {
             Button("Anomaly Detection...") {
                 appState.showAnomalyDetection = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.anomalyDetection))
 
             Button("Smart Auto-Tagger...") {
                 appState.showSmartAutoTagger = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.smartAutoTagger))
 
             Button("Email Digest...") {
                 appState.showAIDigest = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.aiDigest))
 
             Divider()
 
@@ -589,12 +713,12 @@ struct mailinApp: App {
             Button("Keyword Monitor...") {
                 appState.showKeywordMonitor = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.keywordMonitor))
 
             Button("Report Builder...") {
                 appState.showReportBuilder = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.reportBuilder))
         }
 
         CommandMenu("Export") {
@@ -754,8 +878,31 @@ struct mailinApp: App {
 
     private func handleIncomingURL(_ url: URL) {
         // OAuth callback schemes were removed in v2 — mailin is strictly
-        // offline. The only incoming URLs we honour are file imports.
+        // offline. The incoming URLs we honour are file imports and, E2,
+        // mailin://email/<id> links (offline: they only select an email).
+        if let linked = EmailLink.emailID(from: url) {
+            Task { @MainActor in
+                let exists = DEVONthinkHandOff.isEnabled
+                    ? ((try? await SQLiteEmailStore.shared.summaries(ids: [linked]))?.isEmpty == false)
+                    : false
+                switch EmailLink.resolve(url, isEnabled: DEVONthinkHandOff.isEnabled, exists: { _ in exists }) {
+                case .open(let emailID):
+                    NotificationCenter.default.post(name: .spotlightEmailSelected, object: emailID)
+                case .switchedOff:
+                    emailLinkMessage = String(localized: "Email links are turned off. Turn on “Send to DEVONthink and email links” in Settings ▸ Modules to open them.")
+                case .missing:
+                    emailLinkMessage = String(localized: "The linked email is not in this archive.")
+                case .notALink:
+                    break
+                }
+            }
+            return
+        }
         let ext = url.pathExtension.lowercased()
+        if IncomingMailinDocument.extensions.contains(ext) {
+            incomingDocument = IncomingMailinDocument(url: url)
+            return
+        }
         if ParserFactory.allSupportedExtensions.contains(ext) {
             NotificationCenter.default.post(name: .importFileFromURL, object: url)
         }
@@ -781,10 +928,93 @@ struct mailinApp: App {
 @Observable
 @MainActor
 class AppStateManager {
+
+    // MARK: - Page ownership (v3.0 §3.3 R1)
+    //
+    // Every cross-page surface in the app opens through one of these flags, so
+    // gating the FLAG - rather than ~90 individual buttons - is what actually
+    // guarantees that Archive contains no AI or Professional features. A flag
+    // whose owning page is off refuses to be set, wherever it is set from:
+    // sidebar, toolbar, command palette, keyboard shortcut or menu.
+
+    /// Features that belong to an optional page.
+    enum OwnedFeature: String, CaseIterable, Sendable {
+        // AI Insights
+        case aiAssistant, aiDigest, anomalyDetection, smartAutoTagger
+        case predictiveCoding, topicClusters, threadSummarizer, smartAlerts
+        case keywordMonitor
+        // Professional Workflows
+        case custodianPanel, reviewBatches, auditTrail, eDiscovery
+        case batesNumbering, redaction, gdprReport, chainOfCustody
+        case investigationReport, reportBuilder
+
+        var module: AppModule {
+            switch self {
+            case .aiAssistant, .aiDigest, .anomalyDetection, .smartAutoTagger,
+                 .predictiveCoding, .topicClusters, .threadSummarizer,
+                 .smartAlerts, .keywordMonitor:
+                return .aiInsights
+            case .custodianPanel, .reviewBatches, .auditTrail, .eDiscovery,
+                 .batesNumbering, .redaction, .gdprReport, .chainOfCustody,
+                 .investigationReport, .reportBuilder:
+                return .professional
+            }
+        }
+
+        /// The matrix switch that governs this surface. Matched by raw value,
+        /// so the two enums cannot drift into disagreement without the
+        /// `ownedFeaturesAllMapToACapability` test noticing.
+        var capability: Capability? { Capability(rawValue: rawValue) }
+    }
+
+    /// Set once at launch by the app shell. Until then nothing is gated, which
+    /// keeps previews and tests that never install a registry working.
+    var isModuleEnabled: (@MainActor (AppModule) -> Bool)?
+
+    /// Second gate, also installed by the shell: the per-capability switch
+    /// from the on/off matrix. The page gate above answers "is this page on?";
+    /// this one answers "has the user switched this particular feature off?".
+    /// Both must pass, and the page gate is checked first so a capability can
+    /// never outlive its page.
+    var isCapabilityOn: (@MainActor (Capability) -> Bool)?
+
+    private var openFeatures: Set<OwnedFeature> = []
+
+    private func isOpen(_ feature: OwnedFeature) -> Bool {
+        openFeatures.contains(feature)
+    }
+
+    private func setOpen(_ feature: OwnedFeature, _ newValue: Bool) {
+        guard newValue else { openFeatures.remove(feature); return }
+        if let gate = isModuleEnabled, !gate(feature.module) {
+            // Refused and recorded. Deliberately NOT an assertion: a stale
+            // restored sheet or an old keyboard shortcut can legitimately
+            // arrive here, and crashing a Debug build for that would be worse
+            // than declining it. The visible surfaces are filtered separately;
+            // this is the backstop that makes the rule true regardless.
+            Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PageIsolation")
+                .fault("refused \(feature.rawValue, privacy: .public) — \(feature.module.rawValue, privacy: .public) is disabled")
+            return
+        }
+        // Every `OwnedFeature` has a same-named `Capability`, so the matrix
+        // switch governs this surface with no second table to keep in step.
+        // A future `OwnedFeature` with no matching capability is ungated here
+        // rather than silently blocked — the page gate above still applies.
+        if let capability = feature.capability, let gate = isCapabilityOn, !gate(capability) {
+            Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PageIsolation")
+                .info("declined \(feature.rawValue, privacy: .public) — capability switched off")
+            return
+        }
+        openFeatures.insert(feature)
+    }
+
     var triggerFileImport = false
     var triggerExport = false
     var showReplyStats = false
-    var showAIAssistant = false
+    var showAIAssistant: Bool {
+        get { isOpen(.aiAssistant) }
+        set { setOpen(.aiAssistant, newValue) }
+    }
     var showAnalytics = false
     var showReplyStatsSheet = false
     var hasFilteredEmails = false
@@ -797,10 +1027,22 @@ class AppStateManager {
     var triggerPrint = false
     var triggerNewImport = false
     var showDuplicateManager = false
-    var showTopicClusters = false
-    var showPredictiveCoding = false
-    var showCustodianPanel = false
-    var showReviewBatches = false
+    var showTopicClusters: Bool {
+        get { isOpen(.topicClusters) }
+        set { setOpen(.topicClusters, newValue) }
+    }
+    var showPredictiveCoding: Bool {
+        get { isOpen(.predictiveCoding) }
+        set { setOpen(.predictiveCoding, newValue) }
+    }
+    var showCustodianPanel: Bool {
+        get { isOpen(.custodianPanel) }
+        set { setOpen(.custodianPanel, newValue) }
+    }
+    var showReviewBatches: Bool {
+        get { isOpen(.reviewBatches) }
+        set { setOpen(.reviewBatches, newValue) }
+    }
     var triggerExportVCard = false
     var triggerExportICS = false
     var triggerExportHashManifest = false
@@ -814,28 +1056,70 @@ class AppStateManager {
     var showTimeline = false
     var showRelationshipGraph = false
     var showArchiveComparison = false
-    var showInvestigationReport = false
-    var showAuditTrail = false
+    var showInvestigationReport: Bool {
+        get { isOpen(.investigationReport) }
+        set { setOpen(.investigationReport, newValue) }
+    }
+    var showAuditTrail: Bool {
+        get { isOpen(.auditTrail) }
+        set { setOpen(.auditTrail, newValue) }
+    }
     // v7: Intelligence & Automation
     var showAutomationRules = false
     var showBatchOperations = false
-    var showThreadSummarizer = false
-    var showSmartAlerts = false
+    var showThreadSummarizer: Bool {
+        get { isOpen(.threadSummarizer) }
+        set { setOpen(.threadSummarizer, newValue) }
+    }
+    var showSmartAlerts: Bool {
+        get { isOpen(.smartAlerts) }
+        set { setOpen(.smartAlerts, newValue) }
+    }
     // v7: Forensics & Compliance
-    var showEDiscovery = false
-    var showBatesNumbering = false
-    var showRedaction = false
-    var showGDPRReport = false
-    var showChainOfCustody = false
+    var showEDiscovery: Bool {
+        get { isOpen(.eDiscovery) }
+        set { setOpen(.eDiscovery, newValue) }
+    }
+    var showBatesNumbering: Bool {
+        get { isOpen(.batesNumbering) }
+        set { setOpen(.batesNumbering, newValue) }
+    }
+    var showRedaction: Bool {
+        get { isOpen(.redaction) }
+        set { setOpen(.redaction, newValue) }
+    }
+    var showGDPRReport: Bool {
+        get { isOpen(.gdprReport) }
+        set { setOpen(.gdprReport, newValue) }
+    }
+    var showChainOfCustody: Bool {
+        get { isOpen(.chainOfCustody) }
+        set { setOpen(.chainOfCustody, newValue) }
+    }
     // v8: Intelligence & Polish
     var showNearDuplicates = false
-    var showAnomalyDetection = false
-    var showSmartAutoTagger = false
-    var showAIDigest = false
+    var showAnomalyDetection: Bool {
+        get { isOpen(.anomalyDetection) }
+        set { setOpen(.anomalyDetection, newValue) }
+    }
+    var showSmartAutoTagger: Bool {
+        get { isOpen(.smartAutoTagger) }
+        set { setOpen(.smartAutoTagger, newValue) }
+    }
+    var showAIDigest: Bool {
+        get { isOpen(.aiDigest) }
+        set { setOpen(.aiDigest, newValue) }
+    }
     // v9: Dashboard & Reporting
     var showExecutiveDashboard = false
-    var showReportBuilder = false
-    var showKeywordMonitor = false
+    var showReportBuilder: Bool {
+        get { isOpen(.reportBuilder) }
+        set { setOpen(.reportBuilder, newValue) }
+    }
+    var showKeywordMonitor: Bool {
+        get { isOpen(.keywordMonitor) }
+        set { setOpen(.keywordMonitor, newValue) }
+    }
     var showCommunicationPatterns = false
     // v9: Security & Workspaces
     var showWorkspaceManager = false
@@ -846,10 +1130,16 @@ class AppStateManager {
     var showAllAttachmentsGallery = false
     var showIOCExtractor = false
     var showGuidedSearch = false
+    /// H3/H4: guided handoff to and from Apple Mail / Thunderbird.
+    var showHandoffImport = false
+    var showHandoffExport = false
     var showExportProgress = false
     var exportProgressValue: Double = 0
     var exportProgressMessage: String = ""
-    var dockedBottomPanel: DockedPanel? = nil
+    /// Owner, 2026-09-30: the Subjects panel is always on; the panel is never
+    /// nil while an archive is open (Topics takes its place only while the
+    /// AI Insights page is on).
+    var dockedBottomPanel: DockedPanel? = .subjects
     // (Send/Receive & Cloud-Connect flags removed in v2 — mailin is
     // strictly offline.)
 
@@ -1000,6 +1290,8 @@ extension Notification.Name {
     static let importFileFromURL = Notification.Name("importFileFromURL")
     static let triggerFileImportFromShortcut = Notification.Name("triggerFileImportFromShortcut")
     static let spotlightEmailSelected = Notification.Name("spotlightEmailSelected")
+    /// The plan's reach changed (Free ↔ paid): views that load once read their data again.
+    static let accessScopeChanged = Notification.Name("mailin.accessScopeChanged")
     static let togglePinEmail = Notification.Name("togglePinEmail")
     static let addTagToEmail = Notification.Name("addTagToEmail")
     static let composeEmailSent = Notification.Name("composeEmailSent")

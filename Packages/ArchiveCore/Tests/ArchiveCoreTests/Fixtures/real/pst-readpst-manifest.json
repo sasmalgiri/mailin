@@ -1,0 +1,67 @@
+{
+ "Outlook_4483F2012G4_ladministrator.pst": {
+  "Personal Folders/Inbox": 1
+ },
+ "Outlook_4483F2012G5_Administrator.pst": {
+  "Personal Folders/Inbox": 1
+ },
+ "Outlook_4483F2012G5_Administrator_Outlookimap.gmail.com-00000002.pst": {
+  "imap.gmail.com": 1,
+  "imap.gmail.com/Inbox": 5
+ },
+ "Outlook_4483S2009G3_ladministrator.pst": {
+  "Personal Folders/Outbox": 1,
+  "Personal Folders/Inbox": 5,
+  "Personal Folders/Deleted Items": 4
+ },
+ "Outlook_4483S2009G3_ladministrator_outlamurphy.sbp_gmail.pst": {
+  "amurphy.sbp@gmail.com": 1
+ },
+ "Outlook_4483S2009G5_ladministrator.pst": {
+  "Personal Folders/Outbox": 3,
+  "Personal Folders/Sent Items": 10,
+  "Personal Folders/Inbox": 10,
+  "Personal Folders/Junk E-mail": 1,
+  "Personal Folders/Deleted Items": 1
+ },
+ "Outlook_4483S2009G5_xerox.pst": {
+  "Personal Folders/Outbox": 3,
+  "Personal Folders/Sent Items": 10,
+  "Personal Folders/Inbox": 10,
+  "Personal Folders/Junk E-mail": 1,
+  "Personal Folders/Deleted Items": 1
+ },
+ "Outlook_4483S2010G5_Administrator.pst": {},
+ "Outlook_4483S2010G5_Administrator_Outlstealin.your.cars@gmail.com.pst": {
+  "stealin.your.cars@gmail.com": 1,
+  "stealin.your.cars@gmail.com/[Gmail]/All Mail": 43,
+  "stealin.your.cars@gmail.com/[Gmail]/Sent Mail": 23
+ },
+ "Outlook_4483S2010G5_Administrator_backup.pst": {
+  "Personal Folders/Sent Items": 18,
+  "Personal Folders/Inbox": 21,
+  "Personal Folders/Deleted Items": 5
+ },
+ "Outlook_4483S2011G1_bill.jobs.pst": {},
+ "Outlook_4483S2011G1_bill.jobs_billjobs0@gmail.com.pst": {
+  "billjobs0@gmail.com": 1,
+  "billjobs0@gmail.com/Inbox": 50,
+  "billjobs0@gmail.com/[Gmail]/Trash": 11,
+  "billjobs0@gmail.com/[Gmail]/All Mail": 61,
+  "billjobs0@gmail.com/[Gmail]/Sent Mail": 13
+ },
+ "Outlook_4483S2011G2_johnblair68@hotmail.com.pst": {
+  "johnblair68@hotmail.com/Sent Items": 8,
+  "johnblair68@hotmail.com/Inbox": 5,
+  "johnblair68@hotmail.com/Deleted Items": 2
+ },
+ "Outlook_M57_Jean_Jean.pst": {
+  "Personal Folders/Outbox": 3,
+  "Personal Folders/Sent Items": 24,
+  "Personal Folders/Inbox": 223,
+  "Personal Folders/Deleted Items": 9
+ },
+ "Outlook_M57_Jean_admin.pst": {
+  "Personal Folders/Inbox": 1
+ }
+}

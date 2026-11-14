@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppConfig specification for mailin Enterprise (ENTERPRISE_TODO.md P-1).
+  Import this file in an MDM console that supports the AppConfig standard
+  (Intune, Workspace ONE, MobileIron/Ivanti, …) to get a form with every key
+  the app understands. The keys are documented in ENTERPRISE_DEPLOYMENT.md.
+-->
+<managedAppConfiguration>
+  <version>1</version>
+  <bundleId>com.ecosanskriti.mailin.enterprise</bundleId>
+  <dict>
+    <string keyName="orgName"><defaultValue><value></value></defaultValue></string>
+    <string keyName="examinerName"><defaultValue><value></value></defaultValue></string>
+    <string keyName="role"><defaultValue><value>examiner</value></defaultValue></string>
+    <boolean keyName="allowExport"><defaultValue><value>true</value></defaultValue></boolean>
+    <boolean keyName="allowPrint"><defaultValue><value>true</value></defaultValue></boolean>
+    <boolean keyName="requireBiometricLock"><defaultValue><value>true</value></defaultValue></boolean>
+    <boolean keyName="disableCloudAI"><defaultValue><value>true</value></defaultValue></boolean>
+    <string keyName="caseNumberPrefix"><defaultValue><value></value></defaultValue></string>
+    <string keyName="licenseKey"><defaultValue><value></value></defaultValue></string>
+    <stringArray keyName="disabledModules"/>
+  </dict>
+  <presentation defaultLocale="en-US">
+    <field keyName="orgName" type="input">
+      <label><language value="en-US">Organization name</language></label>
+      <description><language value="en-US">Shown in About and on every report and receipt.</language></description>
+    </field>
+    <field keyName="examinerName" type="input">
+      <label><language value="en-US">Examiner name</language></label>
+      <description><language value="en-US">The person's name on audit entries and sealed receipts. Usually a variable such as the user's full name.</language></description>
+    </field>
+    <field keyName="role" type="select">
+      <label><language value="en-US">Role</language></label>
+      <description><language value="en-US">viewer: read and search. reviewer: + tag, code, annotate. examiner: + import, export, print, legal holds, productions. administrator: + permanent deletion, releasing holds, modules, restore, license. An unknown value is treated as viewer.</language></description>
+      <options>
+        <option value="viewer"><language value="en-US">Viewer</language></option>
+        <option value="reviewer"><language value="en-US">Reviewer</language></option>
+        <option value="examiner"><language value="en-US">Examiner</language></option>
+        <option value="administrator"><language value="en-US">Administrator</language></option>
+      </options>
+    </field>
+    <field keyName="allowExport" type="checkbox">
+      <label><language value="en-US">Allow exporting and sharing</language></label>
+    </field>
+    <field keyName="allowPrint" type="checkbox">
+      <label><language value="en-US">Allow printing</language></label>
+    </field>
+    <field keyName="requireBiometricLock" type="checkbox">
+      <label><language value="en-US">Require the app lock (Touch ID / Face ID / passcode)</language></label>
+    </field>
+    <field keyName="disableCloudAI" type="checkbox">
+      <label><language value="en-US">Disable cloud AI (on-device only)</language></label>
+    </field>
+    <field keyName="caseNumberPrefix" type="input">
+      <label><language value="en-US">Case and Bates number prefix</language></label>
+    </field>
+    <field keyName="licenseKey" type="input">
+      <label><language value="en-US">License key</language></label>
+      <description><language value="en-US">The MAILIN1.… key issued for your organization.</language></description>
+    </field>
+    <field keyName="disabledModules" type="multiselect">
+      <label><language value="en-US">Pages switched off for everyone</language></label>
+      <options>
+        <option value="aiInsights"><language value="en-US">AI Insights</language></option>
+        <option value="professional"><language value="en-US">Professional Workflows</language></option>
+      </options>
+    </field>
+  </presentation>
+</managedAppConfiguration>

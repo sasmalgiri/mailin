@@ -1,0 +1,15 @@
+# Purchase-gate regression run — 2026-10-01, macOS, Debug test build (gates exercised via StoreManager(testTier:))
+# Command: xcodebuild test -scheme maxmailin -destination platform=macOS -only-testing PurchaseGateTests, ModuleGatingTests, V2VerificationTests, V2SearchTests, V2CutoverTests
+	 Executed 137 tests, with 1 test skipped and 0 failures (0 unexpected) in 110.183 (110.222) seconds
+	 Executed 63 tests, with 0 failures (0 unexpected) in 8.324 (8.347) seconds
+	 Executed 65 tests, with 1 test skipped and 0 failures (0 unexpected) in 101.742 (101.756) seconds
+	 Executed 9 tests, with 0 failures (0 unexpected) in 0.117 (0.119) seconds
+** TEST SUCCEEDED **
+✔ Suite "Module gating (v3.0 §3.3)" passed after 0.311 seconds.
+✔ Suite "Purchase gates (Free / Personal / Professional)" passed after 0.119 seconds.
+
+# Release (macOS) and iOS Simulator builds of the same tree:
+** BUILD SUCCEEDED **
+MAC-RELEASE EXIT 0
+** BUILD SUCCEEDED **
+IOS EXIT 0

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 /// Stage 5 W2-D: a lightweight duplicate-finding record. Duplicate review holds

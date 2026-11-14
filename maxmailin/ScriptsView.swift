@@ -1,0 +1,415 @@
+//
+//  ScriptsView.swift
+//  maxmailin
+//
+//  3.1 S6–S11 screen: the script library, an editor, dry run then apply over
+//  a search scope, import-time switch per script, no-code recipes, the
+//  on-device assistant, .mailinscript files and the run history with
+//  "Re-run and prove". Shown only while Capability.v31Scripts is on.
+//
+
+import SwiftUI
+import UniformTypeIdentifiers
+@testable import ArchiveCore
+
+struct ScriptsView: View {
+    @State private var library = ScriptLibraryStore.shared
+    @State private var selectedID: UUID?
+    @State private var editing: MailinScript?
+    @State private var showRecipe = false
+    @State private var showImport = false
+    @State private var history: [SQLiteEmailStore.ScriptRunRow] = []
+    @State private var status: String?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
+    var body: some View {
+        content
+            .navigationTitle(String(localized: "Scripts"))
+            .task { await reloadHistory() }
+            .modifier(ScriptsSheets(editing: $editing, showRecipe: $showRecipe, showImport: $showImport,
+                                    selectedID: $selectedID, status: $status, library: library))
+    }
+
+    @ViewBuilder private var content: some View {
+        #if os(iOS)
+        if sizeClass == .compact {
+            // iPhone: a split view nested in Settings' More stack renders
+            // nothing, so the list stands alone and a script opens as a sheet.
+            List {
+                Section { intro }
+                scriptSections(tappable: true)
+            }
+            .toolbar { addMenu }
+            .sheet(item: Binding(get: { library.scripts.first { $0.id == selectedID } },
+                                 set: { selectedID = $0?.id })) { s in
+                NavigationStack {
+                    detail(s)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button(String(localized: "Done")) { selectedID = nil }
+                            }
+                        }
+                }
+            }
+        } else {
+            split
+        }
+        #else
+        split
+        #endif
+    }
+
+    private var split: some View {
+        NavigationSplitView {
+            List(selection: $selectedID) { scriptSections(tappable: false) }
+                .toolbar { addMenu }
+        } detail: {
+            if let s = library.scripts.first(where: { $0.id == selectedID }) {
+                detail(s)
+            } else {
+                intro.padding()
+            }
+        }
+    }
+
+    /// Rows are buttons where a List has no selection outside edit mode (iPhone).
+    @ViewBuilder private func scriptSections(tappable: Bool) -> some View {
+        Section(String(localized: "Bundled")) {
+            ForEach(library.scripts.filter(\.builtIn)) { cell($0, tappable) }
+        }
+        Section(String(localized: "Yours")) {
+            ForEach(library.scripts.filter { !$0.builtIn }) { cell($0, tappable) }
+            if !library.scripts.contains(where: { !$0.builtIn }) {
+                Text("None yet. Use + to write one, build a recipe or import a .mailinscript file.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private func cell(_ s: MailinScript, _ tappable: Bool) -> some View {
+        if tappable {
+            Button { selectedID = s.id } label: { row(s).contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+        } else {
+            row(s)
+        }
+    }
+
+    private var addMenu: some View {
+        Menu {
+            Button(String(localized: "New script")) {
+                editing = MailinScript(name: String(localized: "New script"), source: "function process(email) {\n  \n}\n")
+            }
+            Button(String(localized: "New recipe (no code)…")) { showRecipe = true }
+            Button(String(localized: "Import .mailinscript…")) { showImport = true }
+        } label: { Label("Add", systemImage: "plus") }
+    }
+
+    private func detail(_ s: MailinScript) -> some View {
+        ScriptDetailView(script: s, edit: { editing = $0 }, history: history.filter { $0.name == s.name },
+                         onRun: { Task { await reloadHistory() } })
+    }
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            Text("Scripts run on this device only and never reach the network. Choose a script to run it over a search, or add your own.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Limits: a script is stopped when one email takes more than \(Int(ScriptPolicy.perEmailSeconds)) seconds, the app's memory passes \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB, or it builds an array or string of more than \(ScriptPolicy.maxElements) items. Tags, notes and column values can be up to 64 KB each.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let status { Text(status).font(.callout) }
+            if let err = library.saveError { Text(err).font(.callout).foregroundStyle(.red) }
+        }
+    }
+    private func row(_ s: MailinScript) -> some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text(s.name)
+                if s.runsAtImport { Image(systemName: "tray.and.arrow.down").help(String(localized: "Runs at import")) }
+            }
+            Text(s.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
+        .tag(s.id)
+    }
+
+    private func reloadHistory() async {
+        history = (try? await SQLiteEmailStore.shared.scriptRuns()) ?? []
+    }
+}
+
+struct ScriptDetailView: View {
+    let script: MailinScript
+    let edit: (MailinScript) -> Void
+    let history: [SQLiteEmailStore.ScriptRunRow]
+    let onRun: () -> Void
+    @State private var library = ScriptLibraryStore.shared
+    @State private var search = ""
+    @State private var scopeCount: Int?
+    @State private var dryRun: ScriptRunSummary?
+    @State private var result: String?
+    @State private var running = false
+    @State private var progress: Double = 0
+    @State private var runTask: Task<Void, Never>?
+
+    var body: some View {
+        Form {
+            Section {
+                Text(script.summary)
+                if let help = BundledScripts.help(for: script) {
+                    DisclosureGroup(String(localized: "How it works")) {
+                        Text(help).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                LabeledContent(String(localized: "Version"), value: script.version)
+                LabeledContent(String(localized: "SHA-256"), value: String(script.sha256.prefix(16)) + "…")
+                Toggle(String(localized: "Also run on newly imported mail"), isOn: Binding(
+                    get: { script.runsAtImport }, set: { library.setRunsAtImport(script.id, $0) }))
+                HStack {
+                    Button(script.builtIn ? String(localized: "Copy and edit…") : String(localized: "Edit…")) {
+                        var s = script
+                        if s.builtIn { s.id = UUID(); s.builtIn = false; s.name += String(localized: " (copy)") }
+                        edit(s)
+                    }
+                    Button(String(localized: "Export .mailinscript…")) {
+                        if let data = try? ScriptFile.export(script) {
+                            result = PlatformExport.save(data: data, suggestedName: "\(script.name).\(ScriptFile.fileExtension)")
+                                .message(String(localized: "Script"))
+                        }
+                    }
+                    if !script.builtIn {
+                        Button(String(localized: "Delete"), role: .destructive) { library.delete(script.id) }
+                    }
+                }
+            } header: { Text(script.label) }
+
+            Section {
+                TextField(String(localized: "Search (empty = whole archive)"), text: $search)
+                    .onSubmit { Task { await count() } }
+                if let scopeCount { Text("\(scopeCount) emails in scope.").font(.callout) }
+                if running {
+                    ProgressView(value: progress)
+                    Button(String(localized: "Stop")) { runTask?.cancel() }
+                } else {
+                    Button(String(localized: "Dry run (writes nothing)")) { start(apply: false) }
+                    if let dryRun {
+                        Text(dryRun.line).font(.callout)
+                        Text("\(dryRun.emailsChanged) emails would change.").font(.callout)
+                        Button(String(localized: "Apply to \(dryRun.processed) emails")) { start(apply: true) }
+                            .disabled(dryRun.emailsChanged == 0)
+                        if !dryRun.report.isEmpty {
+                            DisclosureGroup(String(localized: "Report (\(dryRun.report.count) lines)")) {
+                                Text(dryRun.report.prefix(500).joined(separator: "\n")).font(.caption.monospaced()).textSelection(.enabled)
+                            }
+                        }
+                        if !dryRun.errors.isEmpty {
+                            DisclosureGroup(String(localized: "Errors (\(dryRun.errors.count))")) {
+                                Text(dryRun.errors.joined(separator: "\n")).font(.caption.monospaced())
+                            }
+                        }
+                    }
+                }
+                if let result { Text(result).font(.callout).textSelection(.enabled) }
+            } header: { Text("Run") }
+
+            if !history.isEmpty {
+                Section {
+                    ForEach(history.prefix(20), id: \.runID) { r in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text("\(r.startedAt.formatted()) · v\(r.version) · \(r.processed) emails · \(r.startedBy)")
+                                Text(ScriptRunSummary.describe(changesJSON: r.changesJSON)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            Button(String(localized: "Re-run and prove")) {
+                                Task { result = (try? await ScriptEngine.prove(r, script: script)) ?? String(localized: "The run could not be repeated.") }
+                            }
+                        }
+                    }
+                } header: { Text("Runs") }
+            }
+
+            Section {
+                Text(script.source).font(.caption.monospaced()).textSelection(.enabled)
+            } header: { Text("Code") }
+        }
+        .formStyle(.grouped)
+        .task(id: script.id) { dryRun = nil; result = nil; await count() }
+    }
+
+    private var query: EmailQuery { ArchiveQueryCompiler.compile(search) }
+
+    private func count() async {
+        scopeCount = try? await ArchiveDataService.shared.count(query: query)
+    }
+
+    private func start(apply: Bool) {
+        running = true
+        progress = 0
+        runTask = Task {
+            defer { running = false; onRun() }
+            do {
+                let s = try await ScriptEngine.run(script, query: query, apply: apply) { done, total in
+                    progress = total > 0 ? Double(done) / Double(total) : 1
+                }
+                if apply {
+                    result = String(localized: "Applied: \(s.line).")
+                    dryRun = nil
+                } else {
+                    dryRun = s
+                }
+            } catch {
+                result = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct ScriptEditorView: View {
+    @State var script: MailinScript
+    let onSave: (MailinScript) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var check: String?
+    @State private var ask = ""
+    @State private var drafting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            TextField(String(localized: "Name"), text: $script.name)
+            TextField(String(localized: "What it does"), text: $script.summary)
+            TextEditor(text: $script.source).font(.body.monospaced())
+            if #available(macOS 26.0, iOS 26.0, *), ScriptAssistant.isAvailable {
+                HStack {
+                    TextField(String(localized: "Describe a script and let the on-device model draft it"), text: $ask, axis: .vertical)
+                    Button(drafting ? String(localized: "Drafting…") : String(localized: "Draft")) {
+                        drafting = true
+                        Task {
+                            defer { drafting = false }
+                            do {
+                                script.source = try await ScriptAssistant.draft(ask)
+                                check = String(localized: "Draft ready. Read it and press Check before saving.")
+                            } catch { check = error.localizedDescription }
+                        }
+                    }
+                    .disabled(ask.isEmpty || drafting)
+                }
+            }
+            if let check { Text(check).font(.callout) }
+            HStack {
+                Button(String(localized: "Check")) { check = validate() ?? String(localized: "The script compiles.") }
+                Spacer()
+                Button(String(localized: "Cancel")) { dismiss() }
+                Button(String(localized: "Save")) {
+                    if let problem = validate() { check = problem; return }
+                    onSave(script)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+    }
+
+    private func validate() -> String? {
+        do { _ = try ScriptRuntime(script); return nil } catch { return error.localizedDescription }
+    }
+}
+
+struct RecipeBuilderView: View {
+    let onSave: (MailinScript) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var recipe = ScriptRecipe()
+
+    var body: some View {
+        Form {
+            TextField(String(localized: "Name"), text: $recipe.name)
+            Picker(String(localized: "Match"), selection: $recipe.matchAll) {
+                Text("All conditions").tag(true)
+                Text("Any condition").tag(false)
+            }
+            Section {
+                ForEach($recipe.conditions) { $c in
+                    HStack {
+                        Picker("", selection: $c.field) { ForEach(ScriptRecipe.Field.allCases, id: \.self) { Text($0.label).tag($0) } }
+                        if c.field == .header {
+                            TextField(String(localized: "Header name"), text: Binding(get: { c.header ?? "" }, set: { c.header = $0 }))
+                                .frame(maxWidth: 140)
+                        }
+                        Picker("", selection: $c.op) { ForEach(ScriptRecipe.Op.allCases, id: \.self) { Text($0.label).tag($0) } }
+                        TextField(String(localized: "Value"), text: $c.value)
+                    }
+                }
+                Button(String(localized: "Add condition")) { recipe.conditions.append(.init(field: .subject, op: .contains, value: "")) }
+            } header: { Text("When") }
+            Section {
+                ForEach($recipe.actions) { $a in
+                    HStack {
+                        Picker("", selection: $a.kind) { ForEach(ScriptRecipe.ActionKind.allCases, id: \.self) { Text($0.label).tag($0) } }
+                        TextField(a.kind == .column ? String(localized: "Column") : String(localized: "Value"), text: $a.value)
+                        if a.kind == .column { TextField(String(localized: "Column value"), text: $a.value2) }
+                    }
+                }
+                Button(String(localized: "Add action")) { recipe.actions.append(.init(kind: .tag, value: "")) }
+            } header: { Text("Then") } footer: {
+                Text("A column value can be computed for each email: {sha1}, {sha256}, {sha512}, {received_ips} or {from_domain}. \"Is one of\" takes a list separated by commas or new lines; \"is in IP range\" takes ranges such as 10.0.0.0/8, 192.168.0.0/16.")
+                    .font(.caption)
+            }
+            Section {
+                Text(recipe.source).font(.caption.monospaced()).textSelection(.enabled)
+            } header: { Text("Generated code") }
+            HStack {
+                Button(String(localized: "Cancel")) { dismiss() }
+                Spacer()
+                Button(String(localized: "Save as script")) {
+                    onSave(MailinScript(name: recipe.name, summary: String(localized: "Recipe"), source: recipe.source))
+                    dismiss()
+                }
+                .disabled(recipe.actions.isEmpty)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// The editor, recipe and import presentations, shared by the iPhone list
+/// and the split view.
+private struct ScriptsSheets: ViewModifier {
+    @Binding var editing: MailinScript?
+    @Binding var showRecipe: Bool
+    @Binding var showImport: Bool
+    @Binding var selectedID: UUID?
+    @Binding var status: String?
+    let library: ScriptLibraryStore
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: $editing) { s in
+                ScriptEditorView(script: s) { saved in
+                    library.upsert(saved)
+                    selectedID = saved.id
+                }
+                .macSheetFrame(minWidth: 640, minHeight: 480)
+            }
+            .sheet(isPresented: $showRecipe) {
+                RecipeBuilderView { s in
+                    library.upsert(s)
+                    selectedID = s.id
+                }
+                .macSheetFrame(minWidth: 640, minHeight: 480)
+            }
+            .fileImporter(isPresented: $showImport, allowedContentTypes: [.data, .json, .item]) { result in
+                guard case .success(let url) = result else { return }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let s = try ScriptFile.importScript(try Data(contentsOf: url))
+                    library.upsert(s)
+                    selectedID = s.id
+                    status = String(localized: "Imported \(s.label). Read it before you run it.")
+                } catch {
+                    status = error.localizedDescription
+                }
+            }
+    }
+}

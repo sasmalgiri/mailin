@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import XCTest
 import CryptoKit
 @testable import maxmailin
@@ -63,6 +64,90 @@ final class V2ExportTests: XCTestCase {
 
     /// A "Select All minus deselected" CSV export contains EVERY matching id
     /// EXACTLY once — no drops, no duplicates, exclusions honored.
+    /// Audit F08: a resume is refused when the selection changed since the
+    /// run stopped; a fresh request, or one whose fingerprint still matches,
+    /// proceeds.
+    func testResumeIsCurrent_refusesAChangedSelection() async throws {
+        let env = try await makeEnv(count: 30)
+        let scope = ArchiveSelectionScope.query(.all, exclusions: [])
+        var request = ExportRequest(format: .csv, title: "CSV", scope: scope,
+                                    destination: env.root.appendingPathComponent("x.csv").path, isFolder: false, cap: nil)
+        let fresh = try await ExportJobRunner.resumeIsCurrent(request, archive: env.archive)
+        XCTAssertTrue(fresh, "a first run has nothing to compare")
+
+        // Recheck R2 / third review T1: `prepare` is the runner's one entry
+        // point. A fresh run is bound BEFORE writing; the resume request
+        // carries THAT fingerprint plus the partial's length and hash.
+        let bound = try await ExportJobRunner.prepare(request, archive: env.archive)
+        let boundFingerprint = try XCTUnwrap(bound.selectionFingerprint)
+        try Data("partial".utf8).write(to: URL(fileURLWithPath: bound.destination))
+        let stopped = try XCTUnwrap(ExportJobRunner.resumeRequest(for: bound, positions: 10))
+        XCTAssertEqual(stopped.skipFirst, 10)
+        XCTAssertEqual(stopped.selectionFingerprint, boundFingerprint, "the start-time fingerprint travels unchanged")
+        XCTAssertEqual(stopped.resumeArtifactBytes, 7)
+        XCTAssertEqual(stopped.resumeArtifactSHA256?.count, 64)
+        XCTAssertEqual(stopped.writeOptions.expectedAppendOffset, 7)
+        XCTAssertEqual(stopped.writeOptions.expectedAppendSHA256, stopped.resumeArtifactSHA256)
+        let prepared = try await ExportJobRunner.prepare(stopped, archive: env.archive)
+        XCTAssertEqual(prepared, stopped, "a valid resume passes prepare untouched")
+
+        // T1: a legacy resume with NO fingerprint must be refused by the
+        // runner's own entry point — not re-bound to the current archive.
+        var unbound = stopped
+        unbound.selectionFingerprint = nil
+        do {
+            _ = try await ExportJobRunner.prepare(unbound, archive: env.archive)
+            XCTFail("an unbound resume must be refused, not bound to the current archive")
+        } catch ExportJobRunner.ResumeError.unbound {}
+        let bind = try await ExportJobRunner.bindSelection(unbound, archive: env.archive)
+        XCTAssertNil(bind.selectionFingerprint, "bindSelection never binds a resume (skipFirst > 0)")
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: unbound, positions: 10), "an unbound run offers no resume")
+
+        // T2: a single-file resume without its boundary is refused.
+        var noBoundary = stopped
+        noBoundary.resumeArtifactSHA256 = nil
+        do {
+            _ = try await ExportJobRunner.prepare(noBoundary, archive: env.archive)
+            XCTFail()
+        } catch ExportJobRunner.ResumeError.boundaryMissing {}
+
+        // Five jobs OUT-02: the fresh run froze its query selection to the
+        // rows that existed at its start, so mail imported afterwards is
+        // OUTSIDE the selection — the positions still line up and the
+        // resume is accepted.
+        XCTAssertTrue(bound.scope.isFrozen, "prepare freezes a query scope")
+        let store = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
+        try await store.insertBatch([makeEmail(i: 777)], batchSize: 10)
+        let afterImport = try await ExportJobRunner.prepare(stopped, archive: env.archive)
+        XCTAssertEqual(afterImport, stopped, "a background import does not change a frozen selection")
+        let frozenCount = try await env.archive.count(scope: bound.scope)
+        XCTAssertEqual(frozenCount, 30)
+
+        // A selected message is removed → the positions no longer line up → refused.
+        try await env.archive.delete(ids: [env.fixtures[3].id])
+        do {
+            _ = try await ExportJobRunner.prepare(stopped, archive: env.archive)
+            XCTFail("a positional resume over a changed selection must be refused")
+        } catch ExportJobRunner.ResumeError.selectionChanged {}
+
+        // No partial artifact on disk → nothing to continue.
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: bound.destination))
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: bound, positions: 10))
+
+        // Folder formats need their manifest to offer a resume.
+        var folderRequest = bound
+        folderRequest.format = .emlFiles; folderRequest.isFolder = true
+        folderRequest.destination = env.root.appendingPathComponent("eml", isDirectory: true).path
+        try FileManager.default.createDirectory(at: folderRequest.destinationURL, withIntermediateDirectories: true)
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: folderRequest, positions: 10), "no manifest → no resume")
+        try Data("{}\n".utf8).write(to: folderRequest.destinationURL.appendingPathComponent(ExportFolderManifest.filename))
+        XCTAssertNotNil(ExportJobRunner.resumeRequest(for: folderRequest, positions: 10))
+
+        // Non-resumable formats never carry a resume request.
+        request.format = .json
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: request, positions: 10))
+    }
+
     func testCSVQueryScopeWithExclusionsExactlyOnce() async throws {
         let env = try await makeEnv()
         let excluded = Set(env.fixtures.prefix(10).map(\.id))

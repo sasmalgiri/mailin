@@ -1,10 +1,26 @@
+@testable import ArchiveCore
 import CoreSpotlight
 import UniformTypeIdentifiers
 
 @MainActor
 class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
     static let shared = SpotlightIndexer()
-    private let searchableIndex = CSSearchableIndex.default()
+    private let searchableIndex = SpotlightIndexer.makeIndex()
+
+    /// §3-Q1 (switch: `v3SemanticSearch`, read at launch): a named index with
+    /// a data-protection class (Apple: the default index "doesn't protect
+    /// data … use it only during prototyping"). Off: the default index, as
+    /// before. Switching changes index, so the archive is indexed again.
+    nonisolated static var useProtectedIndex: Bool {
+        ModuleStateStore(url: ModuleStateStore.productionURL).load().isCapabilitySet(.v3SemanticSearch)
+    }
+    nonisolated static let protectedIndexName = "com.ecosanskriti.mailin.archive"
+
+    nonisolated static func makeIndex() -> CSSearchableIndex {
+        useProtectedIndex
+            ? CSSearchableIndex(name: protectedIndexName, protectionClass: .completeUntilFirstUserAuthentication)
+            : CSSearchableIndex.default()
+    }
 
     private var aiSummaries: [String: String] = [:]
     private var aiPriorities: Set<String> = []
@@ -137,7 +153,7 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
                 }
 
                 do {
-                    try await CSSearchableIndex.default().indexSearchableItems(items)
+                    try await SpotlightIndexer.makeIndex().indexSearchableItems(items)
                 } catch {
                     // Silently continue on indexing errors
                 }
@@ -184,6 +200,9 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
     // MARK: - CSUserQuery Semantic Search (Apple Intelligence powered)
 
     func semanticSearch(query: String, limit: Int = 10) async -> [(id: String, title: String, snippet: String)] {
+        if Self.useProtectedIndex, #available(macOS 15, iOS 18, *) {
+            CSUserQuery.prepareProtectionClasses([.completeUntilFirstUserAuthentication])
+        }
         let context = CSUserQueryContext()
         context.fetchAttributes = ["title", "textContent", "authorNames", "contentDescription", "textContentSummary"]
         context.maxResultCount = limit
@@ -219,11 +238,16 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
 
     // MARK: - Removal
 
-    func removeAllIndexedEmails() {
+    /// Removes every indexed email. `completion` runs on the main actor once
+    /// the index has processed the deletion, so a caller that must re-index
+    /// survivors (legal-hold rows after a clear) can do so without the
+    /// deletion racing the re-add.
+    func removeAllIndexedEmails(completion: (@MainActor () -> Void)? = nil) {
         searchableIndex.deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailin.emails"]) { [weak self] _ in
             Task { @MainActor in
                 self?.aiSummaries.removeAll()
                 self?.aiPriorities.removeAll()
+                completion?()
             }
         }
     }

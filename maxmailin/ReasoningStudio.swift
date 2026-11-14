@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import os.log
 
@@ -345,7 +346,7 @@ struct ReasoningCaseEditorView: View {
                     .font(.caption2.weight(.bold))
                     .frame(width: 52, alignment: .leading)
                     .foregroundStyle(cell.isComplete ? Color.green : Color.orange)
-                TextField(cell.markedUnknown ? "UNKNOWN" : "Answer from the evidence…", text: Binding(
+                TextField(cell.markedUnknown ? "UNKNOWN" : String(localized: "Answer from the evidence…"), text: Binding(
                     get: { model.cell(key).answer },
                     set: { model.fiveW[key, default: FiveWCell()].answer = $0 }
                 ))
@@ -572,7 +573,7 @@ struct ReasoningCaseEditorView: View {
                     if isPosting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label(model.postedDocumentNumber == nil ? "Post numbered reasoning document" : "Post revision", systemImage: "number.square")
+                        Label(model.postedDocumentNumber == nil ? String(localized: "Post numbered reasoning document") : String(localized: "Post revision"), systemImage: "number.square")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -590,7 +591,7 @@ struct ReasoningCaseEditorView: View {
         defer { isPosting = false }
 
         var sections: [CapturedDocument.Section] = []
-        sections.append(.init(name: "Problem", fields: [
+        sections.append(.init(name: String(localized: "Problem"), fields: [
             .init(key: "Statement", value: model.problemStatement),
             .init(key: "Method note", value: "5W1H cells cite emails or are UNKNOWN; Why levels stop when unsupported; fishbone bones are candidates; any root-cause confirmation is a recorded human decision."),
         ]))
@@ -603,7 +604,7 @@ struct ReasoningCaseEditorView: View {
             }
         ))
         if !model.whys.isEmpty {
-            sections.append(.init(name: "Five Whys", fields:
+            sections.append(.init(name: String(localized: "Five Whys"), fields:
                 model.whys.enumerated().map { idx, w in
                     let locs = w.evidence.map(\.locatorLine).joined(separator: " | ")
                     let flag = w.unsupported ? " [UNSUPPORTED — conjecture]" : (locs.isEmpty ? "" : " [\(locs)]")
@@ -617,7 +618,7 @@ struct ReasoningCaseEditorView: View {
             ))
         }
         if !model.candidates.isEmpty {
-            sections.append(.init(name: "Root-cause assessment", fields:
+            sections.append(.init(name: String(localized: "Root-cause assessment"), fields:
                 model.candidates.map { c in
                     let confirmed = model.confirmedCandidateID == c.id
                     return .init(key: c.statement, value: confirmed

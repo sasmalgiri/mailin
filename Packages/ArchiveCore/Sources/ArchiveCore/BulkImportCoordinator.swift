@@ -1,0 +1,1412 @@
+//
+//  BulkImportCoordinator.swift
+//  maxmailin
+//
+//  THE production import engine. Coordinates the full pipeline:
+//
+//      file → SHA-256 → checkpoint check → ParserFactory.parseStreamingCallback →
+//             SQLiteEmailStore.insertBatch → FTSSearchIndex.indexBatch →
+//             checkpoint → signed ImportReceipt
+//
+//  Designed for the 1 TB-scale story:
+//   • Per-file pipelining — never holds more than one batch of parsed emails
+//     in memory at once. Only a bounded preview (Options.previewCap) is
+//     handed to the UI via callback; the coordinator never retains the corpus.
+//   • Resumable — files whose SHA-256 is fully checkpointed are skipped.
+//     Mid-file checkpoints are ordinal-bound (message index) and identity-bound
+//     (SHA-256 + size + parser + parser version + checkpoint schema), so a
+//     resume can never skip evidence — including when the batch size changed
+//     between sessions (Part B5).
+//   • Batched persistence and indexing — one transaction per batch.
+//   • No swallowed correctness errors (Part B3):
+//       - a SQLite insert failure is counted and fails that file (checkpoint
+//         stays at the last committed ordinal → exact retry);
+//       - a checkpoint write failure fail-stops the whole import (a batch is
+//         not committed until its checkpoint persists);
+//       - an FTS batch failure degrades (logged + counted + receipted); the
+//         launch FTSReconciler backfills the index (Part 1f);
+//       - store/FTS counts that cannot be read are reported as unavailable,
+//         never fabricated as 0;
+//       - a receipt that fails to sign or persist is surfaced in the run
+//         summary, warnings, and log.
+//   • Per-file error accumulation — one bad file never aborts the rest (1g).
+//   • Cooperative cancellation on Task.isCancelled.
+//   • Forensic SHA-256 of each source file recorded for chain of custody;
+//     committed batches are surfaced via callback so forensic email-hash
+//     coverage matches the persisted corpus, not just the preview (C1).
+//
+//  Pure-Swift, on-device, no network.
+//
+
+import Foundation
+import CryptoKit
+import Observation
+import os
+
+@MainActor
+@Observable
+final class BulkImportCoordinator {
+
+    private static let logger = Logger(subsystem: "com.ecosanskriti.mailin",
+                                       category: "BulkImport")
+
+    // MARK: - Injected storage (plan task A10)
+    //
+    // The coordinator used to reach for `SQLiteEmailStore.shared`,
+    // `FTSSearchIndex.shared` and `ImportCheckpointStore.shared` directly,
+    // which made the PRODUCTION import path impossible to measure or test
+    // against an isolated corpus — every fixture number was engine-path only.
+    // These default to the production singletons, so app behaviour is
+    // unchanged; a harness or test passes disposable instances instead.
+
+    private let store: SQLiteEmailStore
+    private let fts: FTSSearchIndex
+    private let checkpoints: ImportCheckpointStore
+    /// The storage-authority gate applies to the production store only: an
+    /// injected disposable store has no activation/migration state to wait for.
+    private let requiresStorageActivation: Bool
+
+    // MARK: - Adaptive batching state (P3.1)
+
+    private var batchController: AdaptiveBatchController?
+    private var lastBatchOutcome: BatchOutcome?
+    /// Set while the controller has paused the import. Observable so the queue
+    /// UI can show the reason instead of looking stalled.
+    private(set) var batchPauseReason: String?
+    /// True once a batch could not be indexed, so the controller can back off
+    /// while the index is behind.
+    private var indexBacklog = false
+    /// S2: the storage plan for the current run, so the import UI can show the
+    /// requirement and the refusal reason rather than a bare failure.
+    private(set) var storagePlan: StoragePlan?
+
+    init(store: SQLiteEmailStore = .shared,
+         fts: FTSSearchIndex = .shared,
+         checkpoints: ImportCheckpointStore = .shared,
+         requiresStorageActivation: Bool = true) {
+        self.store = store
+        self.fts = fts
+        self.checkpoints = checkpoints
+        self.requiresStorageActivation = requiresStorageActivation
+    }
+
+    enum Status: Equatable {
+        case idle
+        case hashing(file: String)
+        case parsing(file: String)
+        case persisting(processed: Int, total: Int)
+        case indexing(processed: Int, total: Int)
+        case completed(count: Int, skipped: Int)
+        case failed(String)
+        case cancelled
+    }
+
+    /// Everything the legacy ContentViewModel pipeline supported that the
+    /// coordinator now owns (Part 1a–1e).
+    struct Options {
+        /// Persist/index batch size. Clamped to 1...10_000. Used as the fixed
+        /// bound only when `adaptiveBatching` is off.
+        var batchSize: Int = 500
+        /// P3.1: bound each batch by parsed bytes AND count via
+        /// `AdaptiveBatchController`, shrinking under pressure and pausing at
+        /// hard limits. The fixed `batchSize` survives as a troubleshooting
+        /// override, which is what turning this off selects.
+        var adaptiveBatching: Bool = true
+        /// Used for sent/received classification during parsing (1a).
+        var senderEmail: String = ""
+        /// Free-tier cap: stop persisting once this many emails have been
+        /// committed this run (1c). Capped files are NOT marked complete, so
+        /// upgrading re-imports the remainder.
+        var maxEmails: Int? = nil
+        /// Upper bound on emails delivered through `onPreviewBatch` (1e).
+        var previewCap: Int = 5_000
+        /// §4: the user's duplicate policy, resolved at the entry point (the
+        /// legacy `removeDuplicates` toggle maps to .messageID / .preserveAll).
+        var dedupPolicy: DedupPolicy = .messageID
+        /// Optional account attribution for imported rows.
+        var accountID: String? = nil
+        /// S2: refuse an import that cannot finish, before it starts. This is
+        /// what makes S1's "not tested above N, proceeding" honest — something
+        /// still stops a run that genuinely does not fit. Off only for
+        /// harnesses measuring on deliberately small volumes.
+        var enforceStoragePreflight: Bool = true
+        /// Whether originals are copied into the library. Audit F03
+        /// (2026-09-28): 3.0 does NOT copy originals — the archive stores every
+        /// message under the full-parse ceiling itself and reads larger ones
+        /// from the source file — so this only shapes the space estimate and
+        /// defaults to the truth. A real copy is the 3.1 item I-1.
+        var copiesOriginals: Bool = false
+        /// S4, `Capability.offsetParser` (ON by default in 3.0). Index message
+        /// boundaries and parse headers only, so import memory stops scaling
+        /// with the largest message and a message over 100 MB is ARCHIVED
+        /// instead of being reported as damaged and dropped.
+        ///
+        /// Passed in rather than read from the registry because the
+        /// coordinator is not main-actor. The caller is the one place that
+        /// knows the switch position.
+        var useOffsetEngine: Bool = false
+        /// S4/S5: record where each message's original bytes are, so an
+        /// attachment or an export can be served from the source. Set whenever
+        /// `useOffsetEngine` is (F02): for a message above the ceiling the
+        /// locator is its only content. Meaningless without the engine, which
+        /// is the only producer of locators.
+        var recordLocators: Bool = false
+        /// Test hook: the offset engine's full-parse ceiling for this run, so a
+        /// small fixture can exercise the header-only (deferred) path. Nil
+        /// means the engine's default (100 MiB).
+        var fullParseCeilingBytes: Int64? = nil
+    }
+
+    /// UI/side-effect hooks. All are invoked on the main actor.
+    struct Callbacks {
+        /// (filename, fileIndex, fileCount, fraction 0...1 within this file).
+        var onFileProgress: (@MainActor (String, Int, Int, Double) -> Void)? = nil
+        /// Bounded preview of committed emails (never more than previewCap
+        /// total across the run) so the legacy in-RAM UI keeps working (1e).
+        var onPreviewBatch: (@MainActor ([MBOXParser.RawEmail]) -> Void)? = nil
+        /// A4: asked before each file for which of the remaining sources to
+        /// take next, so the queue's order (after the user reorders it) is the
+        /// order the run follows. nil or an unknown URL = the next in line.
+        var nextSource: (@MainActor ([URL]) -> URL?)? = nil
+        /// Every batch that was committed to the store this run — for
+        /// forensic hash registration over the persisted corpus (C1).
+        var onCommittedBatch: (@MainActor ([MBOXParser.RawEmail]) -> Void)? = nil
+    }
+
+    struct FileError: Equatable, Sendable {
+        var filename: String
+        var message: String
+    }
+
+    /// Per-run accounting (Part B4). All counts are THIS RUN, computed from
+    /// parser results and store deltas — never cumulative store-wide totals.
+    struct RunSummary {
+        /// Messages the parsers saw (parsed + damaged).
+        var discovered = 0
+        /// Messages successfully parsed.
+        var parsed = 0
+        /// Rows committed to the store this run (store delta); nil when the
+        /// store count was unavailable — never fabricated.
+        var inserted: Int? = nil
+        /// Exact-duplicate findings recorded this run (findings delta); nil
+        /// when unavailable.
+        var duplicates: Int? = nil
+        /// Unparseable messages skipped by parser recovery (1h).
+        var damaged = 0
+        /// Whole files skipped because their hash is fully checkpointed.
+        var skippedFiles = 0
+        /// Parsed messages whose store insert failed — hard error, counted.
+        var persistFailed = 0
+        /// Messages successfully FTS-indexed this run.
+        var indexed = 0
+        /// Emails handed to the store this run (upper bound on inserted).
+        var persistAttempted = 0
+        /// Emails skipped because the user previously deleted them (tombstone).
+        var blockedByTombstone = 0
+        var attachmentsSeen = 0
+        /// 3.1 R10: recovery kinds among committed rows (recovery switch on).
+        var recovery = RecoveryCounts()
+        /// 3.1 S5: import-time script actions, "script label" → kind → count.
+        var scriptActions: [String: [String: Int]] = [:]
+        /// S4: committed messages whose body was never decoded (header-only
+        /// import). These pass every other accounting check, so they need
+        /// their own counter or the verdict reports Complete for an import
+        /// that left bodies unread.
+        var bodiesNotDecoded = 0
+        /// FTS degraded mode (1f): failed index batches were logged and the
+        /// launch FTSReconciler will backfill.
+        var ftsDegraded = false
+        var ftsFailedBatchCount = 0
+        var resumed = false
+        var resumedDetail: String? = nil
+        var cappedAtLimit = false
+        var fileErrors: [FileError] = []
+        var warnings: [String] = []
+        var receipt: ImportReceipt? = nil
+        /// A5: Complete / Partial / Failed, reconciled from the receipt's
+        /// counts and index state - never "no exception was thrown".
+        var verdict: ImportVerdict = .complete
+        /// False when the receipt could not be written to disk (surfaced,
+        /// never `try?`-swallowed).
+        var receiptPersisted = false
+        /// v4.0 REC-02: where the receipt was written (nil when it was not),
+        /// so a recipe step can verify the import from the persisted file.
+        var receiptURL: URL? = nil
+        /// A4: files the user stopped mid-way (checkpoint kept).
+        var stoppedByUser: [StoppedSource] = []
+    }
+
+    struct StoppedSource: Equatable, Sendable {
+        let filename: String
+        let messagesCommitted: Int
+    }
+
+    var status: Status = .idle
+
+    // MARK: - A4 live control and statistics
+
+    /// Per-run, per-file figures the import queue shows: stage, throughput,
+    /// batch envelope, indexed fraction, ETA-as-estimate. Updated on the main
+    /// actor at file and batch boundaries only.
+    struct LiveStats: Equatable, Sendable {
+        var currentFile: String?
+        var currentPath: String?
+        var fileIndex = 0
+        var fileCount = 0
+        var fileBytes: Int64 = 0
+        var fileFraction: Double = 0
+        var fileStartedAt: Date?
+        var messagesThisFile = 0
+        var bytesCommittedThisFile = 0
+        var persistedThisRun = 0
+        var indexedThisRun = 0
+        var envelope: BatchEnvelope?
+        var indexBacklog = false
+
+        /// Bytes per second over this file so far, from committed batches.
+        var throughputBytesPerSecond: Double? {
+            guard let fileStartedAt, bytesCommittedThisFile > 0 else { return nil }
+            let elapsed = Date().timeIntervalSince(fileStartedAt)
+            return elapsed > 0.5 ? Double(bytesCommittedThisFile) / elapsed : nil
+        }
+        /// Seconds left for this file at the current rate — an estimate.
+        var estimatedSecondsRemaining: Double? {
+            guard let rate = throughputBytesPerSecond, rate > 0, fileBytes > 0 else { return nil }
+            let remaining = Double(fileBytes) * max(0, 1 - fileFraction)
+            return remaining / rate
+        }
+        var indexedFraction: Double? {
+            guard persistedThisRun > 0 else { return nil }
+            return Double(indexedThisRun) / Double(persistedThisRun)
+        }
+    }
+    private(set) var live = LiveStats()
+
+    /// True while the user has paused the run. Distinct from the controller's
+    /// pressure pause, which clears by itself.
+    private(set) var isPausedByUser = false
+    private var skipCurrentSourceRequested = false
+
+    /// Why nothing is moving, if nothing is: the user's pause or the
+    /// controller's pressure reason. nil while running.
+    var pauseReason: String? {
+        isPausedByUser ? "Paused by you" : batchPauseReason
+    }
+
+    func pause() { isPausedByUser = true }
+    func resume() { isPausedByUser = false }
+
+    /// Stop the file currently importing after its batch commits; the run
+    /// continues with the next file. The file keeps its checkpoint, so
+    /// importing it again resumes where it stopped.
+    func skipCurrentSource() { skipCurrentSourceRequested = true }
+
+    /// Blocks at a batch boundary while the user's pause is on.
+    private func waitWhilePaused() async {
+        while isPausedByUser && !isStopping {
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
+
+    /// B5 unplug-before-write: a batch never starts against a store whose
+    /// volume has gone. If the archive directory is not reachable (external
+    /// disk detached, disk image ejected) the run pauses with that reason and
+    /// polls until it is back or the run is cancelled. SQLite would otherwise
+    /// report the loss as a generic I/O error mid-transaction.
+    private func waitForStoreVolume() async {
+        let directory = store.storeDirectory
+        var announced = false
+        while !isStopping && !FileManager.default.fileExists(atPath: directory.path) {
+            if !announced {
+                batchPauseReason = "Archive volume detached — reconnect \(directory.deletingLastPathComponent().lastPathComponent) to continue"
+                Self.logger.notice("Import paused: archive directory unreachable at \(directory.path, privacy: .public)")
+                announced = true
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        if announced {
+            // The handles opened before the eject point at the old mount; a
+            // re-attached volume is a new one. Drop them so the next statement
+            // re-opens against the files that are back (found 2026-09-27 by
+            // the automated eject row: "disk I/O error" on every write after
+            // the reconnect).
+            await store.reopenConnection()
+            _ = await fts.sweepIdleShards(ttl: .zero)
+            batchPauseReason = nil
+            Self.logger.notice("Import resumed: archive directory reachable again")
+        }
+    }
+
+    /// B5 unplug DURING a batch: the insert fails with an I/O error because
+    /// the volume is gone. When the store directory is unreachable, wait for
+    /// it to return (re-opening the handles), then retry once. The v17
+    /// checkpoint rides the insert's transaction, so a failed batch left
+    /// nothing half-committed and the retry writes exactly the same rows.
+    private func retryingAfterVolumeLoss<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch {
+            guard !FileManager.default.fileExists(atPath: store.storeDirectory.path) else { throw error }
+            Self.logger.notice("Persist hit an unreachable archive volume (\(error.localizedDescription, privacy: .public)); waiting for it to return")
+            await waitForStoreVolume()
+            try Task.checkCancellation()
+            if cancelRequested { throw CancellationError() }
+            return try await body()
+        }
+    }
+
+    /// Thrown inside a file when `skipCurrentSource` was requested.
+    struct SkipSourceSignal: Error {}
+
+    var lastFinishedAt: Date?
+    /// The signed receipt from the most recent import run (Phase 12).
+    var lastReceipt: ImportReceipt?
+    /// Full accounting for the most recent run.
+    var lastRunSummary: RunSummary?
+    /// Source URLs of the most recent run keyed by file name, for the
+    /// receipt's Retry (A5(d)). Cleared by nothing: a later run replaces it.
+    private(set) var lastRunSourceURLs: [String: URL] = [:]
+    private var task: Task<Void, Never>?
+
+    /// Thrown internally when the free-tier cap is reached mid-parse.
+    private struct CapReachedSignal: Error {}
+    /// Wraps a store-insert failure so the per-file handler can distinguish
+    /// it from a parse failure (the batch was already counted).
+    private struct PersistFailureSignal: Error {
+        let underlying: Error
+    }
+
+    /// Fire-and-forget entry point (kept for SwiftDataDiagnosticsView).
+    /// Production callers should prefer `runImport` to receive the summary.
+    func startImport(urls: [URL], batchSize: Int = 500) {
+        cancel()
+        let options = Options(batchSize: batchSize)
+        task = Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.runImport(urls: urls, options: options)
+            // runImport sets status (completed/failed/cancelled) on every path.
+        }
+    }
+
+    /// Set by `cancel()`. `runImport` callers own their own Task, so cancelling
+    /// only `task` (the `startImport` one) reached nothing for them and a run
+    /// parked in a pause loop could never be stopped (found 2026-09-27 by the
+    /// ENOSPC row: the low-disk pause ignored the test's cancel for ever).
+    /// Every wait loop and batch boundary checks this flag as well.
+    private var cancelRequested = false
+    private var isStopping: Bool { Task.isCancelled || cancelRequested }
+
+    /// Cooperative cancellation. Safe to call at any point, however the run
+    /// was started.
+    func cancel() {
+        cancelRequested = true
+        task?.cancel()
+        task = nil
+    }
+
+    /// Run the full import pipeline and return per-run accounting. Status is
+    /// updated on every path (completed / failed / cancelled). Throws on
+    /// cancellation, storage-authority block, or checkpoint write failure.
+    func runImport(
+        urls: [URL],
+        options: Options = Options(),
+        callbacks: Callbacks = Callbacks()
+    ) async throws -> RunSummary {
+        defer {
+            // Restore interactive storage budgets whether the run completed,
+            // threw, or was cancelled - a finished import must not leave the
+            // app in import-mode caches.
+            if options.adaptiveBatching {
+                let store = self.store, fts = self.fts
+                Task {
+                    await store.setMemoryBudget(SQLiteEmailStore.interactiveBudget)
+                    await fts.endImportMode()
+                }
+            }
+        }
+        do {
+            let summary = try await run(urls: urls, options: options, callbacks: callbacks)
+            return summary
+        } catch is CancellationError {
+            status = .cancelled
+            throw CancellationError()
+        } catch {
+            status = .failed(error.localizedDescription)
+            throw error
+        }
+    }
+
+    // MARK: - Adaptive batching
+
+    /// Asked by the parser at every batch boundary. Blocks (with an explicit,
+    /// user-readable reason) while the controller says pause, so a low-disk or
+    /// critical-memory condition stops the import instead of pushing through
+    /// it. Resumes by itself when the condition clears.
+    private func nextEnvelope(storeDirectory: URL) async -> BatchEnvelope {
+        guard let controller = batchController else {
+            return BatchEnvelope(maxMessages: 500, maxBytes: Int.max)
+        }
+        while !isStopping {
+            let sample = LivePressureSampler.sample(
+                storeDirectory: storeDirectory,
+                indexBacklog: indexBacklog,
+                observedPressure: LivePressureSampler.currentPressure())
+            switch await controller.next(after: lastBatchOutcome, sample: sample) {
+            case .proceed(let envelope):
+                if batchPauseReason != nil {
+                    Self.logger.notice("Import resumed: pressure cleared")
+                    batchPauseReason = nil
+                }
+                live.envelope = envelope
+                live.indexBacklog = indexBacklog
+                return envelope
+            case .pause(let reason):
+                if batchPauseReason != reason {
+                    batchPauseReason = reason
+                    Self.logger.notice("Import paused: \(reason, privacy: .public)")
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+        // Cancelled while paused: hand back the floor so the parser can unwind
+        // quickly rather than committing another large batch.
+        return BatchEnvelope(maxMessages: 8, maxBytes: 1_048_576)
+    }
+
+    // MARK: - Pipeline
+
+    private func run(urls: [URL], options: Options, callbacks: Callbacks) async throws -> RunSummary {
+        // Clamp batchSize to a sane range. Values <= 0 would divide-by-zero
+        // in chunked Array operations downstream; absurdly large values
+        // defeat the streaming-pipeline memory bound.
+        let batchSize = max(1, min(options.batchSize, 10_000))
+        cancelRequested = false
+        var summary = RunSummary()
+        let startedAt = Date()
+        // A5(d): the receipt records failures by file NAME (it must stay
+        // readable without this app); "Retry failed sources" resolves those
+        // names back to the URLs of this run while the app is still open.
+        lastRunSourceURLs = Dictionary(urls.map { ($0.lastPathComponent, $0) }, uniquingKeysWith: { first, _ in first })
+
+        // 0. (1d) Storage-authority gate: never write SQLite against
+        //    unresolved storage. Fail explicitly — silently skipping persist
+        //    is how archives used to look imported without reaching the store.
+        // S2: storage preflight. Refuse only on real numbers, and say how
+        // many bytes are missing rather than failing partway through.
+        if options.enforceStoragePreflight {
+            let plan = StoragePlanner.plan(sources: urls,
+                                           destination: store.storeDirectory,
+                                           copyOriginals: options.copiesOriginals)
+            self.storagePlan = plan
+            if !plan.canProceed {
+                Self.logger.error("Import refused by storage preflight: \(plan.summary, privacy: .public)")
+                throw MaxmailinError.persistence(.containerUnavailable, detail: plan.summary)
+            }
+            if case .tight = plan {
+                summary.warnings.append(plan.summary)
+                Self.logger.notice("Storage preflight tight: \(plan.summary, privacy: .public)")
+            }
+        }
+
+        // P3.3: an import gets a tighter storage memory budget than
+        // interactive use - smaller page caches and fewer concurrent shard
+        // connections - restored when the run ends, however it ends.
+        if options.adaptiveBatching {
+            await store.setMemoryBudget(SQLiteEmailStore.importBudget)
+            await fts.beginImportMode()
+        }
+
+        // P3.1: one controller per run, so the envelope adapts across all of
+        // this run's sources rather than restarting per file.
+        batchController = options.adaptiveBatching ? AdaptiveBatchController() : nil
+        lastBatchOutcome = nil
+        batchPauseReason = nil
+        indexBacklog = false
+
+        if requiresStorageActivation {
+            guard await ArchiveCoreDefaults.storageAuthorityIsActive() else {
+                Self.logger.fault("Import blocked: storage authority is not active.")
+                throw MaxmailinError.persistence(.containerUnavailable,
+                    detail: "Storage is not ready yet. The import was blocked (not skipped) — retry once activation completes.")
+            }
+        }
+
+        // Surface (don't inherit) a corrupt checkpoint file: previously
+        // ingested files may be re-imported this run.
+        if await checkpoints.corruptionDetected() {
+            summary.warnings.append("The resume-checkpoint file was corrupt and has been quarantined; previously imported files may be re-imported (duplicates are deduplicated by the store).")
+        }
+
+        // Per-run baselines for inserted/duplicates accounting (B4). A read
+        // failure is recorded as unavailable — never fabricated as 0.
+        var storeBefore: Int? = nil
+        do { storeBefore = try await store.totalCount() } catch {
+            Self.logger.fault("Store count unavailable before import: \(error.localizedDescription, privacy: .public)")
+            summary.warnings.append("Store count unavailable before import — inserted/duplicate counts will be reported as unavailable.")
+        }
+        var dupBefore: Int? = nil
+        do { dupBefore = try await store.duplicatesCount() } catch {
+            Self.logger.error("Duplicate-findings count unavailable before import: \(error.localizedDescription, privacy: .public)")
+        }
+
+        var sources: [ImportReceipt.SourceRecord] = []
+        var previewRemaining = max(0, options.previewCap)
+
+        // A4: the run pulls its next source from what remains, so a reorder in
+        // the queue takes effect for every file not yet started.
+        var remaining = urls
+        var nextFileIndex = 0
+        isPausedByUser = false
+        skipCurrentSourceRequested = false
+        live = LiveStats(fileCount: urls.count)
+
+        fileLoop: while !remaining.isEmpty {
+            try Task.checkCancellation()
+            if cancelRequested { throw CancellationError() }
+            await waitWhilePaused()
+            if cancelRequested { throw CancellationError() }
+            let url: URL
+            if let pick = callbacks.nextSource,
+               let chosen = await MainActor.run(body: { pick(remaining) }),
+               let at = remaining.firstIndex(of: chosen) {
+                url = remaining.remove(at: at)
+            } else {
+                url = remaining.removeFirst()
+            }
+            let fileIndex = nextFileIndex
+            nextFileIndex += 1
+            let sourceName = url.lastPathComponent
+            live.currentFile = sourceName
+            live.currentPath = url.path
+            live.fileIndex = fileIndex
+            live.fileBytes = Int64(Self.sourceByteSize(of: url))
+            live.fileFraction = 0
+            live.fileStartedAt = Date()
+            live.messagesThisFile = 0
+            live.bytesCommittedThisFile = 0
+
+            // Per-file parse/persist state, visible to the batch closure.
+            var parsedInFile = 0            // parsed-message ordinal within this file
+            var committedOrdinal = 0        // leading messages persisted+indexed
+            var unreadableInFile = 0        // OPEN-05: items the parser marked unreadable/partial
+            var resumedFrom = 0             // OPEN-05: rows an earlier run had already committed
+            var fileError: Error? = nil
+            // OPEN-05: this file's record in the receipt, filled as the file goes.
+            func noteSource(_ change: (inout ImportReceipt.SourceRecord) -> Void) {
+                if let last = sources.indices.last, sources[last].filename == sourceName, sources[last].parser != "" {
+                    change(&sources[last])
+                }
+            }
+
+            do {
+                // 1. Hash this file for chain of custody + checkpoint lookup.
+                self.status = .hashing(file: sourceName)
+                callbacks.onFileProgress?(sourceName, fileIndex, urls.count, 0)
+                let hash = try await Self.sha256(of: url)
+                let sizeBytes: Int = Self.sourceByteSize(of: url)
+                // LIFE-01: self-contained archive — a single-file source is
+                // copied into managed storage (verified against the hash just
+                // computed) and parsed FROM THE COPY, so every byte locator
+                // points inside the archive and the original is not needed
+                // again. Directory sources hold no locators and are not copied.
+                var importURL = url
+                var isDirectory: ObjCBool = false
+                if SourceCopyPolicy.isEnabled,
+                   FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+                    let storeDirectory = store.storeDirectory
+                    importURL = try await Task.detached(priority: .utility) {
+                        try SourceCopies.copyIntoArchive(original: url, sha256: hash, storeDirectory: storeDirectory)
+                    }.value
+                }
+                // The identity of the engine that will ACTUALLY run, not the
+                // one the filename implies. Two reasons, both load-bearing:
+                //
+                //  • Checkpoints match on parser identity so a parser change
+                //    cannot resume mid-file against a different message
+                //    ordering. The offset engine imports oversized messages
+                //    that the streaming parser drops, so their ordinals
+                //    diverge — with both reporting ("mbox", 1) a resumed
+                //    import would skip the wrong messages.
+                //  • The receipt and the source record must name the parser
+                //    that produced the rows, or a later reader cannot tell
+                //    which engine's output they are looking at.
+                let parserID = ParserFactory.parserIdentity(
+                    for: url, useOffsetEngine: options.useOffsetEngine)
+                sources.append(ImportReceipt.SourceRecord(
+                    filename: sourceName, sizeBytes: sizeBytes,
+                    sha256: hash, parser: parserID.name, parserVersion: parserID.version
+                ))
+                // Directive 2026-11-07 §6: an Outlook file's protection is stated on the
+                // receipt — a password CRC is not encryption and the file is read in full;
+                // encoded blocks are decoded; Windows-protected files are named as locked.
+                if ["pst", "ost"].contains(url.pathExtension.lowercased()), let note = PSTProtection.receiptNote(fileURL: importURL) {
+                    summary.warnings.append("\(sourceName): \(note)")
+                }
+
+                // §3.1/§3.2: first-class source identity. Every row this file
+                // produces is stamped (source_id, source_ordinal), so resume /
+                // re-parse can never duplicate an occurrence — regardless of
+                // dedup policy — and forensic evidence stays locatable.
+                let sourceID = try await store.registerSource(
+                    SQLiteEmailStore.SourceDescriptor(
+                        sha256: hash, filename: sourceName, byteSize: sizeBytes,
+                        parser: parserID.name, parserVersion: parserID.version,
+                        accountID: options.accountID,
+                        sourceKind: url.pathExtension.lowercased()
+                    ))
+
+                // 2. Skip if we have already fully ingested this file.
+                if await checkpoints.isImported(sha256: hash) {
+                    summary.skippedFiles += 1
+                    noteSource { $0.skippedAlreadyImported = true }
+                    continue
+                }
+                try Task.checkCancellation()
+
+                // 3. (B5) Safe resume identity: ordinal-bound and bound to
+                //    SHA-256 + size + parser + parser version + schema. Any
+                //    mismatch restarts the file from scratch.
+                let identity = ImportCheckpointStore.ResumeIdentity(
+                    sha256: hash, sizeBytes: sizeBytes,
+                    parser: parserID.name, parserVersion: parserID.version
+                )
+                let resumeFrom = await checkpoints.resumePoint(for: identity)
+                if resumeFrom > 0 {
+                    summary.resumed = true
+                    summary.resumedDetail = "Resumed \(sourceName) at message \(resumeFrom) (identity-verified checkpoint)."
+                }
+                committedOrdinal = resumeFrom
+                resumedFrom = resumeFrom
+
+                // 4. Streaming parse → persist → index → checkpoint, one
+                //    bounded batch at a time. §7.7: the recovery report is
+                //    RETURNED per source — no global static, no race.
+                self.status = .parsing(file: sourceName)
+                var fileReport: MBOXParser.ParseRecoveryReport? = nil
+
+                do {
+                    let storeDirectory = store.storeDirectory
+                    // Hoisted (not inlined as a ternary): the type-checker
+                    // cannot infer a @Sendable async closure through `?:`.
+                    let envelopeProvider: (@Sendable () async -> BatchEnvelope)?
+                    if options.adaptiveBatching {
+                        envelopeProvider = { [weak self] in
+                            guard let self else {
+                                return BatchEnvelope(maxMessages: 500, maxBytes: Int.max)
+                            }
+                            return await self.nextEnvelope(storeDirectory: storeDirectory)
+                        }
+                    } else {
+                        envelopeProvider = nil
+                    }
+                    // S4: locators for the batch currently in flight, keyed by
+                    // email id. Filled by the offset engine immediately before
+                    // `persistBatch` runs, and saved only for rows the store
+                    // actually committed — a locator for a deduped row would
+                    // point at bytes no row owns.
+                    var batchLocators: [UUID: (locator: MessageLocator, bodyDecoded: Bool, parts: [PartLocator])] = [:]
+
+                    // The persist → index → checkpoint body, shared by both
+                    // engines. Extracted to a local closure rather than
+                    // duplicated, so the streaming and offset paths cannot
+                    // drift in how they commit, count or checkpoint.
+                    let persistBatch: ([MBOXParser.RawEmail]) async throws -> Void = { [weak self] batch in
+                        guard let self else { return }
+                        try Task.checkCancellation()
+                        if self.cancelRequested { throw CancellationError() }
+                        // A4: a user pause holds here, between batches, so the
+                        // rows already committed are exactly what the
+                        // checkpoint says. B5: so does a detached volume.
+                        await self.waitWhilePaused()
+                        await self.waitForStoreVolume()
+                        try Task.checkCancellation()
+                        if self.cancelRequested { throw CancellationError() }
+
+                        let batchStart = parsedInFile
+                        parsedInFile += batch.count
+
+                        // (B5) Skip only ordinals the checkpoint proves are
+                        // committed — exact for any batch size.
+                        let range = Self.pendingRange(
+                            batchStart: batchStart,
+                            batchCount: batch.count,
+                            resumeFrom: resumeFrom
+                        )
+                        guard !range.isEmpty else { return }
+
+                        // (1b) Per-email source-file annotation.
+                        var pending = Array(batch[range])
+                        for i in pending.indices {
+                            pending[i].headers["sourceFile"] = sourceName
+                            // OPEN-05: imported, but not whole — said so per source.
+                            if pending[i].recovery?.partial == true
+                                || pending[i].anomalies.contains(where: { $0.hasPrefix("PST item whose properties could not be read") }) {
+                                unreadableInFile += 1
+                            }
+                        }
+
+                        // (1c) Free-tier cap on committed emails this run.
+                        var capped = false
+                        if let cap = options.maxEmails {
+                            let remaining = cap - summary.persistAttempted
+                            if remaining <= 0 { throw CapReachedSignal() }
+                            if pending.count > remaining {
+                                pending = Array(pending.prefix(remaining))
+                                capped = true
+                            }
+                        }
+
+                        summary.attachmentsSeen += pending.reduce(0) { $0 + $1.attachments.count }
+
+                        let processedBefore = summary.persistAttempted
+                        await MainActor.run {
+                            self.status = .persisting(
+                                processed: processedBefore,
+                                total: processedBefore + pending.count
+                            )
+                        }
+
+                        // Persist. A store failure is a hard error for this
+                        // batch: counted, logged, and it fails THIS FILE. The
+                        // checkpoint stays at the last committed ordinal, so
+                        // a retry resumes exactly at the failure point.
+                        let insertResult: BatchInsertResult
+                        let commitStart = ContinuousClock().now
+                        let batchBytes = pending.reduce(0) {
+                            $0 + max($1.rawSource.utf8.count, $1.plainBody.utf8.count)
+                        }
+                        // v17 (backlog #7): when the checkpoint store writes
+                        // into THIS store, the ordinal rides the insert's
+                        // transaction — rows and checkpoint commit together.
+                        let atomicCheckpoint = await checkpoints.progressCheckpoint(
+                            identity: identity, sourceName: sourceName,
+                            firstOrdinal: batchStart + range.lowerBound, store: store)
+                        // F02: locators ride the insert's transaction, so a
+                        // committed row can never be without the one record
+                        // that says where its bytes are.
+                        let locatorRecords: [UUID: SQLiteEmailStore.LocatorRecord] = batchLocators.reduce(into: [:]) { acc, entry in
+                            acc[entry.key] = SQLiteEmailStore.LocatorRecord(locator: entry.value.locator,
+                                                                            bodyDecoded: entry.value.bodyDecoded,
+                                                                            parts: entry.value.parts)
+                        }
+                        do {
+                            insertResult = try await self.retryingAfterVolumeLoss {
+                              try await self.store.insertBatch(
+                                pending,
+                                sourceFileHash: hash,
+                                accountID: options.accountID,
+                                sourceID: sourceID,
+                                firstOrdinal: batchStart + range.lowerBound,
+                                dedupPolicy: options.dedupPolicy,
+                                batchSize: batchSize,
+                                progress: nil,
+                                progressCheckpoint: atomicCheckpoint,
+                                locators: locatorRecords
+                              )
+                            }
+                        } catch {
+                            summary.persistFailed += pending.count
+                            Self.logger.fault("Persist failed for \(sourceName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                            throw PersistFailureSignal(underlying: error)
+                        }
+                        let commitElapsed = commitStart.duration(to: ContinuousClock().now).components
+                        self.lastBatchOutcome = BatchOutcome(
+                            messages: pending.count,
+                            bytes: batchBytes,
+                            commitSeconds: Double(commitElapsed.seconds)
+                                + Double(commitElapsed.attoseconds) / 1e18
+                        )
+                        summary.persistAttempted += pending.count
+                        summary.blockedByTombstone += insertResult.blockedByTombstoneIDs.count
+                        let committedCount = pending.count
+                        let persistedSoFar = summary.persistAttempted
+                        await MainActor.run {
+                            self.live.messagesThisFile += committedCount
+                            self.live.bytesCommittedThisFile += batchBytes
+                            self.live.persistedThisRun = persistedSoFar
+                        }
+
+                        try Task.checkCancellation()
+
+                        // (1f) FTS degraded mode: rows ARE in the store; the
+                        // launch FTSReconciler backfills. Log + count +
+                        // receipt, keep importing.
+                        await MainActor.run {
+                            self.status = .indexing(
+                                processed: processedBefore,
+                                total: processedBefore + pending.count
+                            )
+                        }
+                        // §5.3: index ONLY rows the store actually committed —
+                        // a policy-deduped or resume-skipped row must never
+                        // become a ghost FTS hit.
+                        let insertedSet = Set(insertResult.insertedIDs)
+                        let toIndex = pending.filter { insertedSet.contains($0.id) }
+                        do {
+                            if !toIndex.isEmpty {
+                                // B5: an unplug between the insert and the
+                                // index write must not leave this batch
+                                // unsearchable until the next launch.
+                                try await self.retryingAfterVolumeLoss { try await self.fts.indexBatch(toIndex) }
+                            }
+                            summary.indexed += toIndex.count
+                            let indexedSoFar = summary.indexed
+                            await MainActor.run { self.live.indexedThisRun = indexedSoFar }
+                            // A6: per-source coverage record — committed and
+                            // indexed counts for THIS source, so the sidebar can
+                            // say "N of M searchable" per file. Best effort: a
+                            // failure here never fails an import that has
+                            // already committed its rows.
+                            try? await store.recordSourceCoverage(sourceID: sourceID, committed: insertedSet.count, indexed: toIndex.count)
+                        } catch {
+                            summary.ftsDegraded = true
+                            summary.ftsFailedBatchCount += 1
+                            Self.logger.warning("FTS index failed for a batch in \(sourceName, privacy: .public); store↔FTS drift will be repaired on next launch: \(error.localizedDescription, privacy: .public)")
+                        }
+
+                        // (B3) A batch is NOT committed until its checkpoint
+                        // persists. `recordProgress` throws on write failure,
+                        // which fail-stops the whole import.
+                        committedOrdinal = batchStart + range.lowerBound + pending.count
+                        if atomicCheckpoint == nil {
+                            // JSON-backed (isolated tests / legacy): the
+                            // separate write is the commit point.
+                            try await checkpoints.recordProgress(
+                                identity: identity,
+                                sourceName: sourceName,
+                                messagesIngested: committedOrdinal
+                            )
+                        }
+
+                        // (1e) Bounded preview + (C1) forensic coverage over
+                        // committed batches.
+                        if previewRemaining > 0 {
+                            let slice = Array(pending.prefix(previewRemaining))
+                            previewRemaining -= slice.count
+                            await MainActor.run { callbacks.onPreviewBatch?(slice) }
+                        }
+                        await MainActor.run { callbacks.onCommittedBatch?(pending) }
+                        // 3.1 S5: import-time scripts see committed rows only.
+                        if RecoveryPolicy.isEnabled { for e in toIndex { summary.recovery.add(e.recovery) } }
+                        if let scriptHook = ImportScriptHook.handler, !toIndex.isEmpty {
+                            let counts = await scriptHook(toIndex, sourceName)
+                            for (script, kinds) in counts {
+                                summary.scriptActions[script, default: [:]].merge(kinds, uniquingKeysWith: +)
+                            }
+                        }
+
+                        // S4/S5: the locators were written INSIDE the insert
+                        // transaction above (F02). What remains is the count:
+                        // against COMMITTED rows only, since a header-only
+                        // message that was deduped away is not a shortfall in
+                        // this archive.
+                        if !batchLocators.isEmpty {
+                            for id in insertResult.insertedIDs {
+                                guard let entry = batchLocators[id] else { continue }
+                                if !entry.bodyDecoded { summary.bodiesNotDecoded += 1 }
+                            }
+                        }
+
+                        if capped { throw CapReachedSignal() }
+                        // A4: "Stop this source" takes effect here, after the
+                        // batch and its checkpoint are committed.
+                        if await MainActor.run(body: { self.skipCurrentSourceRequested }) {
+                            await MainActor.run { self.skipCurrentSourceRequested = false }
+                            throw SkipSourceSignal()
+                        }
+                        // pending falls out of scope here — its storage is
+                        // released before the next batch begins.
+                    }
+
+                    // Engine choice. The offset engine only knows how to scan
+                    // line-structured mail, so a PST/NSF/MSG source still goes
+                    // through `ParserFactory` even when the capability is on —
+                    // it is an mbox/eml engine, and claiming otherwise would
+                    // route binary formats into a byte scanner.
+                    let classification = SourceFormatClassifier.classify(url: importURL)
+                    let offsetEligible = options.useOffsetEngine
+                        && ParserFactory.streamableExtensions.contains(classification.format.parserToken)
+                        && !SourceFormatClassifier.isDirectoryForm(classification.format)
+
+                    // CLOSE-01: one .emlx or .msg file above the full-parse
+                    // ceiling is imported by range (a .msg through a rendering
+                    // kept inside the archive), never read whole.
+                    var largeEngine = OffsetImportEngine()
+                    if let ceiling = options.fullParseCeilingBytes { largeEngine.fullParseCeilingBytes = ceiling }
+                    let largeKind = options.useOffsetEngine
+                        ? largeEngine.largeSingleMessageKind(fileURL: importURL, format: classification.format) : nil
+
+                    if let largeKind {
+                        let progressSink = MainActorSink<Double> { [weak self] prog in
+                            self?.live.fileFraction = prog
+                            callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                        }
+                        let batchSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
+                            batchLocators.removeAll(keepingCapacity: true)
+                            if options.recordLocators {
+                                for item in imported {
+                                    batchLocators[item.email.id] =
+                                        (item.locator, item.bodyWasDecoded, item.parts)
+                                }
+                            }
+                            try await persistBatch(imported.map(\.email))
+                        }
+                        let renderDirectory = SourceCopies.directory(in: store.storeDirectory)
+                            .appendingPathComponent(hash, isDirectory: true)
+                        fileReport = try await largeEngine.importLargeSingleMessage(
+                            fileURL: importURL,
+                            kind: largeKind,
+                            renderDirectory: renderDirectory,
+                            senderEmail: options.senderEmail,
+                            materializeAttachments: false,   // bulk import: no temp copy per attachment
+                            sourceDigest: hash,
+                            onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } }
+                        ) { @Sendable imported in
+                            try await batchSink.send(imported)
+                        }
+                    } else if offsetEligible {
+                        var engine = OffsetImportEngine()
+                        if let ceiling = options.fullParseCeilingBytes { engine.fullParseCeilingBytes = ceiling }
+                        // §3-P1: the engine parses off the main actor and hands
+                        // each batch to main-actor sinks (Sendable), so the
+                        // coordinator's state is only touched on the main actor.
+                        let progressSink = MainActorSink<Double> { [weak self] prog in
+                            self?.live.fileFraction = prog
+                            callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                        }
+                        let batchSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
+                            batchLocators.removeAll(keepingCapacity: true)
+                            if options.recordLocators {
+                                for item in imported {
+                                    batchLocators[item.email.id] =
+                                        (item.locator, item.bodyWasDecoded, item.parts)
+                                }
+                            }
+                            try await persistBatch(imported.map(\.email))
+                        }
+                        fileReport = try await engine.importMessages(
+                            fileURL: importURL,
+                            senderEmail: options.senderEmail,
+                            batchSize: batchSize,
+                            envelopeProvider: envelopeProvider,
+                            materializeAttachments: false,   // bulk import: no temp copy per attachment
+                            sourceDigest: hash,
+                            onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } }
+                        ) { @Sendable imported in
+                            try await batchSink.send(imported)
+                        }
+                    } else {
+                        let progressSink = MainActorSink<Double> { [weak self] prog in
+                            self?.live.fileFraction = prog
+                            callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                        }
+                        let batchSink = MainActorSink<[MBOXParser.RawEmail]> { batch in
+                            // Locators belong to the batch that set them (the large-message route below).
+                            batchLocators.removeAll(keepingCapacity: true)
+                            try await persistBatch(batch)
+                        }
+                        // CLOSE-01 follow-up: with the offset engine on, a large
+                        // .emlx in a library folder or .emlx/.msg inside an
+                        // archive is imported by range, as a file of its own is.
+                        var largeRoute: LargeMessageRoute? = nil
+                        if options.useOffsetEngine {
+                            let largeSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
+                                batchLocators.removeAll(keepingCapacity: true)
+                                if options.recordLocators {
+                                    for item in imported {
+                                        batchLocators[item.email.id] =
+                                            (item.locator, item.bodyWasDecoded, item.parts)
+                                    }
+                                }
+                                try await persistBatch(imported.map(\.email))
+                            }
+                            largeRoute = LargeMessageRoute(
+                                engine: largeEngine,
+                                keepDirectory: SourceCopies.directory(in: store.storeDirectory)
+                                    .appendingPathComponent(hash, isDirectory: true),
+                                copyLibraryMessages: SourceCopyPolicy.isEnabled,
+                                materializeAttachments: false,   // bulk import: no temp copy per attachment
+                                onImported: { @Sendable imported in try await largeSink.send(imported) })
+                        }
+                        // CLOSE-02: a container source resumes after the last
+                        // member whose messages are all committed, with its
+                        // ordinals continuing from the cursor — never ahead of
+                        // the ordinal checkpoint (a cursor that is, e.g. after
+                        // a store restore, is ignored and the walk starts over).
+                        var containerResume: ContainerWalkCursor? = nil
+                        if classification.format.isContainer {
+                            if let cursor = await checkpoints.containerCursor(for: identity), cursor.messagesEmitted <= resumeFrom {
+                                containerResume = cursor
+                                parsedInFile = cursor.messagesEmitted
+                                if resumeFrom > 0 {
+                                    summary.resumedDetail = "Resumed \(sourceName) at message \(resumeFrom) (identity-verified checkpoint), after archive member \(cursor.memberNames.joined(separator: " › "))."
+                                }
+                            } else {
+                                await checkpoints.clearContainerCursor(sha256: hash)
+                            }
+                        }
+                        let cursorStore = checkpoints
+                        let cursorSink = MainActorSink<ContainerWalkCursor> { cursor in
+                            await cursorStore.recordContainerCursor(cursor, identity: identity)
+                        }
+                        do {
+                            fileReport = try await ParserFactory.parseStreamingCallback(
+                                fileURL: importURL,
+                                senderEmail: options.senderEmail,
+                                batchSize: batchSize,
+                                envelopeProvider: envelopeProvider,
+                                materializeAttachments: false,   // bulk import: no temp copy per attachment
+                                onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } },
+                                containerResume: containerResume,
+                                onContainerMemberFinished: { @Sendable cursor in try await cursorSink.send(cursor) },
+                                largeMessages: largeRoute,
+                                onBatch: { @Sendable batch in try await batchSink.send(batch) }
+                            )
+                        } catch let error as ContainerWalkError {
+                            // The saved place no longer matches: drop it, so the
+                            // next import walks from the first member (the
+                            // ordinal checkpoint still skips what is committed).
+                            await checkpoints.clearContainerCursor(sha256: hash)
+                            throw error
+                        }
+                    }
+                } catch {
+                    fileError = error
+                }
+
+                // §7.7: aggregate this file's returned (source-scoped) report.
+                if let report = fileReport {
+                    summary.damaged += report.failed
+                    summary.discovered += report.totalMessages
+                    // FOLD-02: folders the source lists itself, empty ones too.
+                    if !report.declaredFolders.isEmpty {
+                        try await store.registerFolders(sourceID: sourceID, paths: report.declaredFolders)
+                    }
+                    // OPEN-05: this file's own accounting; container members that
+                    // were not mail, encrypted or nested are "unresolved", as are
+                    // Maildir tmp/ files the layout says are not messages.
+                    let unresolved = report.errorCategories.filter {
+                        $0.key.hasPrefix("container_") || $0.key.hasPrefix("maildir_") || $0.key == WholeMessageReadLimit.category
+                    }.values.reduce(0, +)
+                    // CLOSE-02: archive members not imported, each with its reason.
+                    if let line = Self.containerRefusalLine(sourceName: sourceName, categories: report.errorCategories) {
+                        summary.warnings.append(line)
+                    }
+                    // The previous engine's whole-read ceiling, inside a folder source.
+                    if let n = report.errorCategories[WholeMessageReadLimit.category], n > 0 {
+                        summary.warnings.append("\(sourceName): \(n) message\(n == 1 ? "" : "s") not imported — larger than the previous import engine reads whole into memory (\(ByteCountFormatter.string(fromByteCount: WholeMessageReadLimit.emlxBytes, countStyle: .file)) .emlx, \(ByteCountFormatter.string(fromByteCount: WholeMessageReadLimit.msgBytes, countStyle: .file)) .msg). Turn the offset import engine on to import \(n == 1 ? "it" : "them") by range.")
+                    }
+                    noteSource {
+                        $0.discovered = report.totalMessages
+                        $0.parsed = parsedInFile
+                        $0.committed = max(0, committedOrdinal - resumedFrom)
+                        $0.damaged = report.failed
+                        $0.unreadable = unreadableInFile
+                        $0.unresolved = unresolved
+                    }
+                } else {
+                    summary.discovered += parsedInFile
+                    // The read did not finish: the total stays unknown.
+                    noteSource {
+                        $0.parsed = parsedInFile
+                        $0.committed = max(0, committedOrdinal - resumedFrom)
+                        $0.unreadable = unreadableInFile
+                    }
+                }
+                summary.parsed += parsedInFile
+
+                if let fileError { throw fileError }
+
+                // 5. File fully ingested: record the completion checkpoint
+                //    (clears the in-progress one). Its write failure also
+                //    fail-stops (B3).
+                try await checkpoints.record(
+                    sha256: hash,
+                    sourceName: sourceName,
+                    emailCount: committedOrdinal
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as ImportCheckpointStore.CheckpointError {
+                // Checkpoint write failure: fail-stop the entire import — we
+                // must not advance past an unrecorded batch.
+                throw error
+            } catch is CapReachedSignal {
+                // Free-tier cap reached: stop the whole run. The current file
+                // keeps its in-progress checkpoint (NOT completed) so a
+                // premium upgrade resumes exactly where the cap cut off.
+                summary.cappedAtLimit = true
+                summary.warnings.append("Import stopped at the free-tier limit\(options.maxEmails.map { " (\($0) emails)" } ?? ""); upgrade to import the remainder.")
+                break fileLoop
+            } catch let error as PersistFailureSignal {
+                // (1g) One bad file must not abort the rest.
+                let message = "Could not save emails to the archive: \(error.underlying.localizedDescription)"
+                summary.fileErrors.append(FileError(filename: sourceName, message: message))
+                noteSource { $0.stoppedAtMessage = committedOrdinal; $0.error = message }
+            } catch is SkipSourceSignal {
+                // A4: stopped by the user after a committed batch. Not an
+                // error — the checkpoint stays, so importing the file again
+                // resumes exactly here. The run moves on to the next file.
+                summary.stoppedByUser.append(StoppedSource(filename: sourceName, messagesCommitted: committedOrdinal))
+                summary.warnings.append("\(sourceName) was stopped by you after \(committedOrdinal) messages; import it again to resume from there.")
+                noteSource { $0.stoppedAtMessage = committedOrdinal; $0.error = "Stopped by you; import again to resume." }
+            } catch {
+                summary.fileErrors.append(FileError(
+                    filename: sourceName,
+                    message: error.localizedDescription
+                ))
+                noteSource { $0.stoppedAtMessage = committedOrdinal; $0.error = error.localizedDescription }
+            }
+        }
+
+        // Per-run inserted/duplicates from store deltas (B4). Unreadable
+        // counts stay nil — reported as unavailable, never inflated.
+        let completedAt = Date()
+        var storeAfter: Int? = nil
+        do { storeAfter = try await store.totalCount() } catch {
+            Self.logger.fault("Store count unavailable after import: \(error.localizedDescription, privacy: .public)")
+            summary.warnings.append("Store count unavailable after import — inserted count is unavailable.")
+        }
+        var dupAfter: Int? = nil
+        do { dupAfter = try await store.duplicatesCount() } catch {
+            Self.logger.error("Duplicate-findings count unavailable after import: \(error.localizedDescription, privacy: .public)")
+        }
+        var ftsCount: Int? = nil
+        do { ftsCount = try await fts.rowCount() } catch {
+            Self.logger.error("FTS row count unavailable after import: \(error.localizedDescription, privacy: .public)")
+            summary.warnings.append("Search-index row count unavailable after import.")
+        }
+        if let before = storeBefore, let after = storeAfter {
+            summary.inserted = max(0, after - before)
+        }
+        if let before = dupBefore, let after = dupAfter {
+            summary.duplicates = max(0, after - before)
+        }
+        if summary.blockedByTombstone > 0 {
+            let n = summary.blockedByTombstone
+            summary.warnings.append("\(n) email\(n == 1 ? " was" : "s were") skipped because you previously deleted \(n == 1 ? "it" : "them"). To allow re-importing, use Settings ▸ Deleted Emails ▸ Forget deleted emails.")
+        }
+
+        // Phase 12: build, sign (self-hash) and persist the import receipt.
+        var receipt = ImportReceipt(startedAt: startedAt, completedAt: completedAt)
+        if let context = ImportReceipt.collectionContextProvider?() {
+            receipt.custodian = context.custodian
+            receipt.collectingTool = context.tool
+            receipt.collectionSettings = context.settings
+        }
+        receipt.sources = sources
+        receipt.discovered = summary.discovered
+        receipt.parsed = summary.parsed
+        receipt.inserted = summary.inserted
+        receipt.duplicates = summary.duplicates
+        receipt.damaged = summary.damaged
+        receipt.skipped = summary.skippedFiles
+        receipt.persistFailed = summary.persistFailed
+        receipt.indexed = summary.indexed
+        receipt.bodiesNotDecoded = summary.bodiesNotDecoded
+        receipt.attachmentsSeen = summary.attachmentsSeen
+        receipt.fileFailures = summary.fileErrors.map {
+            ImportReceipt.FileFailure(filename: $0.filename, message: $0.message)
+        }
+        receipt.resumed = summary.resumed
+        receipt.resumedDetail = summary.resumedDetail
+        receipt.ftsDegraded = summary.ftsDegraded
+        receipt.ftsFailedBatchCount = summary.ftsFailedBatchCount
+        receipt.reconciliationPending = summary.ftsDegraded
+        receipt.durationSeconds = completedAt.timeIntervalSince(startedAt)
+        receipt.storeCountBefore = storeBefore
+        receipt.storeCountAfter = storeAfter
+        receipt.ftsRowCount = ftsCount
+        receipt.warnings = summary.warnings
+        if summary.recovery.recovered > 0 { receipt.recovery = summary.recovery }
+        if !summary.scriptActions.isEmpty {
+            receipt.scriptActions = summary.scriptActions.keys.sorted().map { script in
+                let kinds = summary.scriptActions[script] ?? [:]
+                return script + ": " + kinds.keys.sorted().map { "\(kinds[$0] ?? 0) \($0)" }.joined(separator: ", ")
+            }
+        }
+        do {
+            try receipt.finalize()
+        } catch {
+            Self.logger.fault("Import receipt could not be signed: \(error.localizedDescription, privacy: .public)")
+            summary.warnings.append("Import receipt could not be signed — it will not verify.")
+        }
+        // A5: reconcile the run. A receipt that does not add up must say so.
+        summary.verdict = receipt.verdict
+        if !summary.verdict.isComplete {
+            let names = summary.verdict.shortfalls.map(\.rawValue).joined(separator: ",")
+            Self.logger.error("Import verdict \(summary.verdict.label, privacy: .public): \(names, privacy: .public)")
+            summary.warnings.append("Import \(summary.verdict.label.lowercased()): \(summary.verdict.summary)")
+        }
+        summary.receipt = receipt
+        do {
+            summary.receiptURL = try ImportReceiptStore.production.save(receipt)
+            summary.receiptPersisted = true
+        } catch {
+            // Surface, never swallow: the durable audit trail is missing.
+            summary.receiptPersisted = false
+            Self.logger.fault("Import receipt failed to persist: \(error.localizedDescription, privacy: .public)")
+            summary.warnings.append("Import receipt failed to persist: \(error.localizedDescription)")
+        }
+
+        // S3b: collect orphaned body blobs, AFTER the receipt is written so a
+        // GC failure can never cost the audit trail.
+        //
+        // This call was missing entirely. `collectBlobOrphans` existed and was
+        // reached only from a test, so every orphan the blob tier can create
+        // accumulated forever: one per crash between a blob write and its row
+        // commit, one per large message deduped away on re-import, one per
+        // deleted email whose body row went with it. The tier's own design
+        // note says "a crash leaves a COLLECTABLE orphan" — collectable only
+        // if something collects.
+        //
+        // End of import is the right moment: it is exactly when orphans are
+        // created, the user is already waiting, and the query is cheap because
+        // `idx_bodies_raw_blob` is partial — it indexes only rows that have a
+        // blob, so an archive with none scans nothing.
+        //
+        // Never fatal. An orphan costs disk; failing an import that has
+        // already committed its mail would cost far more.
+        do {
+            let collected = try await store.collectBlobOrphans()
+            if collected.deleted > 0 {
+                Self.logger.info("""
+                    reclaimed \(collected.deleted, privacy: .public) orphaned body blob(s), \
+                    \(collected.bytesReclaimed, privacy: .public) bytes
+                    """)
+            }
+        } catch {
+            Self.logger.warning("orphan blob collection failed: \(error.localizedDescription, privacy: .public)")
+        }
+
+        self.lastReceipt = receipt
+        self.lastRunSummary = summary
+        self.status = .completed(
+            count: summary.inserted ?? summary.persistAttempted,
+            skipped: summary.skippedFiles
+        )
+        self.lastFinishedAt = Date()
+        return summary
+    }
+
+    // MARK: - Resume arithmetic (pure, unit-tested)
+
+    /// Given a batch spanning parsed-message ordinals
+    /// `[batchStart, batchStart + batchCount)` and a checkpoint proving that
+    /// messages `[0, resumeFrom)` are already persisted + indexed, returns
+    /// the index range WITHIN the batch that still needs persisting.
+    ///
+    /// Exact for any batch size: changing the batch size between the crashed
+    /// session and the resume shifts batch boundaries but the union of
+    /// pending ranges is always exactly `[resumeFrom, total)` — no message is
+    /// ever skipped or double-committed by the resume arithmetic.
+    nonisolated static func pendingRange(batchStart: Int, batchCount: Int, resumeFrom: Int) -> Range<Int> {
+        let lower = min(max(resumeFrom - batchStart, 0), batchCount)
+        return lower..<batchCount
+    }
+
+    // MARK: - File hashing
+
+    /// Chain-of-custody digest of a source. A FILE hashes its bytes. A
+    /// DIRECTORY-form source (EML folder, Maildir, Apple Mail package, EMLX
+    /// folder) hashes `"<relative path>\n<member sha256>\n"` for every regular
+    /// file, sorted by relative path, so the same tree hashes the same anywhere
+    /// and one changed member changes the digest. The first version opened
+    /// every source with a file handle, which fails on a directory — every
+    /// folder import through the production path ended with "the file doesn't
+    /// exist" and zero messages (found 2026-09-27 by the 1 GB format rows).
+    private static func sha256(of url: URL) async throws -> String {
+        try await Task.detached(priority: .utility) {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return try directoryDigest(url)
+            }
+            return try fileDigest(url)
+        }.value
+    }
+
+    /// Chunked SHA-256 of a file. Each chunk is read inside an autorelease
+    /// pool: `FileHandle.read` returns autoreleased storage, and a background
+    /// task has no pool that drains between iterations — every chunk of a
+    /// 1.5 GB source stayed resident until the task ended (+1.9 GB peak,
+    /// found 2026-10-11). Internal for the regression test.
+    nonisolated static func fileDigest(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 1_048_576) }) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private nonisolated static func directoryDigest(_ root: URL) throws -> String {
+        var hasher = SHA256()
+        for (relative, member) in try regularFiles(under: root) {
+            hasher.update(data: Data("\(relative)\n".utf8))
+            hasher.update(data: Data("\(try fileDigest(member))\n".utf8))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Regular files under `root`, sorted by relative path; hidden files
+    /// skipped (Finder's `.DS_Store` is not evidence).
+    nonisolated static func regularFiles(under root: URL) throws -> [(relative: String, url: URL)] {
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
+                                                          options: [.skipsHiddenFiles]) else { return [] }
+        var files: [(String, URL)] = []
+        for case let item as URL in walker {
+            guard (try? item.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            let relative = item.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            files.append((relative, item))
+        }
+        return files.sorted { $0.0 < $1.0 }
+    }
+
+    /// Bytes of a source: the file's size, or the sum over a directory form.
+    nonisolated static func sourceByteSize(of url: URL) -> Int {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return 0 }
+        if !isDirectory.boolValue {
+            return (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        }
+        return ((try? regularFiles(under: url)) ?? []).reduce(0) {
+            $0 + ((try? $1.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+    }
+}
+
+extension BulkImportCoordinator {
+    /// CLOSE-02: "<source>: 3 archive members not imported — 1 encrypted, 1
+    /// volume missing, 1 unsafe path", plus archives skipped by the
+    /// self-containing guard; nil when every member was read.
+    nonisolated static func containerRefusalLine(sourceName: String, categories: [String: Int]) -> String? {
+        var parts = categories
+            .filter { $0.key.hasPrefix("reason:") && $0.value > 0 }
+            .sorted { $0.key < $1.key }
+            .map { "\($0.value) \($0.key.dropFirst("reason:".count))" }
+        if let n = categories["container_cycle_skipped"], n > 0 { parts.append("\(n) archive\(n == 1 ? "" : "s") that contain\(n == 1 ? "s" : "") itself") }
+        if let n = categories["container_nesting_guard_skipped"], n > 0 {
+            parts.append("\(n) archive\(n == 1 ? "" : "s") more than \(ContainerMailboxWalk.selfContainingGuardDepth) archives deep (treated as self-containing)")
+        }
+        guard !parts.isEmpty else { return nil }
+        let refused = categories["container_member_refused"] ?? 0
+        let skipped = (categories["container_cycle_skipped"] ?? 0) + (categories["container_nesting_guard_skipped"] ?? 0)
+        let n = refused + skipped
+        return "\(sourceName): \(n) archive member\(n == 1 ? "" : "s") not imported — \(parts.joined(separator: ", "))."
+    }
+}
+
+/// §3-P1: a main-actor endpoint that work running off the main actor can
+/// send values to. Being main-actor isolated it is Sendable, so the closures
+/// handed to a nonisolated engine capture only the sink — never the caller's
+/// mutable state — and every value is handled on the main actor.
+@MainActor
+final class MainActorSink<Input: Sendable> {
+    private let body: (Input) async throws -> Void
+    init(_ body: @escaping (Input) async throws -> Void) { self.body = body }
+    func send(_ input: Input) async throws { try await body(input) }
+}

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  StorageActivationCoordinator.swift
 //  maxmailin
@@ -215,7 +216,5 @@ actor StorageActivationCoordinator {
         return .active
     }
 
-    #if DEBUG
     func resetForTesting() { defaults.removeObject(forKey: stateKey) }
-    #endif
 }

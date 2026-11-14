@@ -1,0 +1,77 @@
+OpenPGP verification fixtures (GAP-PGP, owner decision 2026-11-07)
+Used by Packages/ArchiveCore/Tests/ArchiveCoreTests/OpenPGPVerificationTests.swift.
+PUBLIC KEYS ONLY are checked in. No secret key was ever written to disk.
+
+Sources (all independent of mailin's code):
+
+1. rfc9580/ - RFC 9580 Appendix A test vectors, cut verbatim from
+   https://www.rfc-editor.org/rfc/rfc9580.txt by rfc9580/extract_from_rfc9580.py:
+     curl -s https://www.rfc-editor.org/rfc/rfc9580.txt -o rfc9580.txt
+     python3 extract_from_rfc9580.py <dir>
+   A1 v4 Ed25519Legacy key (no self-signature), A2 its signature over "OpenPGP",
+   A3 v6 Ed25519 certificate (+X25519 subkey), A6 cleartext-signed, A7 inline-signed.
+
+2. pgpy/ - written by PGPy 0.6.0 (pure-Python OpenPGP) on pyca/cryptography 50.0.2.
+   GnuPG could not be installed on the build Mac (Homebrew prefix not writable from
+   the agent sandbox), so PGPy was used as the independent writer:
+     python3 -m venv /tmp/pgpvenv && /tmp/pgpvenv/bin/pip install pgpy==0.6.0
+     /tmp/pgpvenv/bin/python pgpy/gen_fixtures.py <outdir>     (keys exist in memory only)
+     /tmp/pgpvenv/bin/python pgpy/check_with_pgpy.py <outdir>  (PGPy verifies every file)
+   Keys: RSA 3072 (+ RSA 2048 signing subkey with back-signature), EdDSA Ed25519,
+   ECDSA P-256 / P-384 (SHA-384) / P-521 (SHA-512), an expired key (2020-01-01 + 1 day),
+   a revoked key (superseded). Signatures: detached binary and armored, cleartext,
+   inline (uncompressed, ZIP, ZLIB), PGP/MIME (RFC 3156) messages.
+
+3. gnupg-org/ - GnuPG's release-signing keys and a detached signature made by GnuPG:
+     curl -sfO https://versions.gnupg.org/swdb.lst
+     curl -sfO https://versions.gnupg.org/swdb.lst.sig
+     curl -sf https://gnupg.org/signature_key.asc -o gnupg_signature_key.asc
+   (fetched 2026-11-07)
+
+SHA-256
+6f57d0e17fefd2238bd037aebf03efa960641629dd61dd9d47f122a829f6e375  gnupg-org/gnupg_signature_key.asc
+5379f7e26aaf1f284b8eeb689892910d5e123b7dd992ced94221b95100006d06  gnupg-org/swdb.lst
+98b79e16abd18299e8214a617fbcf30e88c364f2273ab816cbd83c2d6e6b195c  gnupg-org/swdb.lst.sig
+005ae88fffb055250d1747a1ad736608317a28de96dbbcacc745acd0d3d4a0b9  pgpy/check_with_pgpy.py
+ab9eedc2be250aab1947743e315d447425a50215b832b48ec91967686fa0772c  pgpy/clearsigned.ed25519.asc
+3adf719f60cba872b38135c647f319166e0c40ca1a5e219ef9853831e48f5eed  pgpy/clearsigned.nistp256.asc
+261e7ea84d74a35a0e08fd222e213b0c05798145fc102ee777cd0aae1374d1ad  pgpy/clearsigned.rsa3072.asc
+30f0e5cfaa37645d7596d22137688e9eb5a08e7ccb4c8c292cc10a96e87845a3  pgpy/ed25519.pub.asc
+8ba6d61104dc74addb64b8a9a2dcdca729a1ebbd0409db0e03203ab516459ee1  pgpy/expired.pub.asc
+e19ad9922ccd10e7b649ac94c234a9b0dcb9c4d118a28a33bfc9ad66a91580b2  pgpy/gen_fixtures.py
+e4eba52c6c02502d1e62b381483764bdf8f2d573c0fab28cd936016fe878f49d  pgpy/inline.ed25519.asc
+976db2f67e1e3037ed73f4358ef6e19faee8bae0b337942e9e904f7109517ec1  pgpy/inline.ed25519.gpg
+db138396ce91cb656590f62d7f829e8868b8fc5a555cf8ec419918a095e5a288  pgpy/inline.nistp256.asc
+284a8ac86eed48fdec81e1450359be9e629abb272f317e726287002f60500f8e  pgpy/inline.nistp256.gpg
+44b85a195b56f7cb401538ca37b1dcb72b46c9ca1d19eb3e1e1771f36695af49  pgpy/inline.rsa3072.asc
+ee6c8d93c3db161d7c931ed0c1ae802572ee4517a82d49e77e8ce4930ea43114  pgpy/inline.rsa3072.gpg
+e2c05d2ccc33d69e73c60faefd66f3fc03cd1345f20f19ab56d5e3dacf611ec5  pgpy/memo.txt
+61d8b4038af61170f0b3a64a863339f3ffd8765799640e7bdc3ffae0cdb31e90  pgpy/memo.txt.ed25519.asc
+57a24f179827df27a88f2144cb2af585e8f8cd6a7f70efe03243a04d03ff0af4  pgpy/memo.txt.ed25519.sig
+f9c856d5ae79ac83510d41f3079a58f505401464094234f2e8682ff889bbb3c5  pgpy/memo.txt.expired-after.sig
+597ecb5f90cedf1a2dde5fb21fb9812af5c0a5f96dcf871ffaa157c04326596b  pgpy/memo.txt.expired-within.sig
+f7ea1769b40a3cdc725673d022be04a2e6b7d2bd78e0ef5c46c461375a35baff  pgpy/memo.txt.nistp256.asc
+d1c38d344aa2c1a78125ab93d92b7ef1e4ad9965dfb8b01c089b63c73044f0de  pgpy/memo.txt.nistp256.sig
+5ff1f1b29c6f2c7b5aa8a88f717ffccdd9bdfd0ee3f7227303b75bfd6efc9130  pgpy/memo.txt.nistp384.asc
+9ee92d0c01ca0a05d3b7eb0dbf38ca6a44709d86cdcf49dfb0c7f980d9de1daa  pgpy/memo.txt.nistp384.sig
+bc58190f507739ddf82fc1371ab2c7305b3bb42e2e18e31baa2ac15a79bade4a  pgpy/memo.txt.nistp521.asc
+84be11a043d9dac771c60417d92ceaca85366c5fe763b615c53e556ec463a31e  pgpy/memo.txt.nistp521.sig
+264c79c1bdabf02e31f656968cc812d007e3b313f3a9659717916c8e02756d33  pgpy/memo.txt.revoked-after.sig
+393aa9ac9cc1d3ccd46b67642ed6501b800d2f291b435a1ccf62a249b8acade0  pgpy/memo.txt.revoked-before.sig
+dc9103fdf8c9324cd30ed77b7f2e4bc797facc5f41a68027b9ecabbc63d48cec  pgpy/memo.txt.rsa3072-sha512.sig
+70ab729fe6ebd61c5b6dd914168b8e7df458a1f12154c43e62ea4b3efc2f6085  pgpy/memo.txt.rsa3072-subkey.sig
+8f89965e86ed8ea9c7300e09caa9efd0581d6f093f0ac10928c44014fbd1d546  pgpy/memo.txt.rsa3072.asc
+72ae15a96af83b586eb288becfc6f372024e01530bd36183f0c69bf8cb5792ff  pgpy/memo.txt.rsa3072.sig
+5ee049db7086874bb6c3f218ca429753bc697b6ec2908d479a33f60419f56f9a  pgpy/nistp256.pub.asc
+e14fd3d1616ff930760ce54ad7c9c8e5f272cc378c27a3953932e7a763278f84  pgpy/nistp384.pub.asc
+e77849f1428d4c4f7cdd6abd2c772d1926fbe5041bda8cdc269f532dd9db972b  pgpy/nistp521.pub.asc
+8db36f843576f08c3c689df9dc432a351211a89ab9ebddd68db6c3f3e73cc32b  pgpy/pgpmime.ed25519.eml
+fc4c0299b6bb22d7acf0c0fd8fa7bbf2d15168b5b4b4cd9e3301867ac56cca95  pgpy/pgpmime.rsa3072.eml
+82644da65af997fb01c2690a4bcc5aff7c2d49b8d8cf8b046c2b8b4422363f9f  pgpy/revoked.pub.asc
+1b3f89293376508fca10db35ef46e1f041e86ce81d22b40f738ba185b7a68293  pgpy/rsa3072.pub.asc
+35c56c2201a969ddc47fa87af99ad025935be2b58976a93fea1adbc3b4307e23  rfc9580/A1-v4-ed25519legacy.pub.asc
+d00a151ba88fc9d201d5a4f0ff3edad1cc5b4533d520c24f192c312866dd6c21  rfc9580/A2-v4-ed25519legacy-OpenPGP.sig.asc
+0e9fde2dcf7a10b8e2188cffd4091bbbeefb5e8c9e9dd18a40fe72403760dd7b  rfc9580/A3-v6-certificate.pub.asc
+0dbc0ed5f500f7e04cff372580199722c23ec619e93eb84909a546a4da261e8f  rfc9580/A6-cleartext-signed.asc
+8b6c4d6f67a3762138b53b181153be36c9be5a597394846e1d2330e07ec0cdbe  rfc9580/A7-inline-signed.asc
+66f0ba11d7e8fd5494e78121476609195aa4a997f4e857448a8fc653ecef2de8  rfc9580/extract_from_rfc9580.py

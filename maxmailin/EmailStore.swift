@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  EmailStore.swift
 //  maxmailin
@@ -79,13 +80,11 @@ actor EmailStore {
         self.storeURL = storeDirectory.appendingPathComponent("mailin.store")
     }
 
-    #if DEBUG
     /// Test-only: build an in-memory store so unit tests don't touch the real
     /// on-disk store. Set before first container use.
     nonisolated(unsafe) static var testInMemory = false
     /// Test-only: drop the cached container so the next use rebuilds it.
     func resetForTesting() { container = nil }
-    #endif
 
     /// Lazy container initialization. Called once on first use; safe to call
     /// repeatedly. Container path lives in Application Support so iOS Data
@@ -107,11 +106,9 @@ actor EmailStore {
                 cloudKitDatabase: .none
             )
         } else {
-            #if DEBUG
+            // R10: compiled in every configuration so the tests also build
+            // against Release; false unless a test sets it.
             let inMemory = EmailStore.testInMemory
-            #else
-            let inMemory = false
-            #endif
             config = ModelConfiguration(
                 schema: schema,
                 isStoredInMemoryOnly: inMemory,

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct SubjectsListView: View {
@@ -54,7 +55,28 @@ struct SubjectsListView: View {
         }
     }
 
+    // §3-A8: every subject in the archive when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    /// §3-M3: the whole-archive list failed; the previous view is shown.
+    @State private var wholeFailed: String?
+
     var body: some View {
+        if v3Modules?.isOn(.v3AnalysisQueries) ?? false, wholeFailed == nil {
+            ArchiveSubjectGroupsView(onSelect: { ids in clusterFilterIDs = ids }, onFailure: { error in
+                wholeFailed = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            })
+        } else {
+            VStack(spacing: 0) {
+                if let wholeFailed {
+                    Text(wholeFailed).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(Spacing.xSmall)
+                }
+                windowBody
+            }
+        }
+    }
+
+    private var windowBody: some View {
         VStack(spacing: 0) {
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "magnifyingglass")
@@ -81,7 +103,7 @@ struct SubjectsListView: View {
                             sortOrder = order
                         } label: {
                             HStack {
-                                Text(order.rawValue)
+                                Text(LocalizedStringKey(order.rawValue))
                                 if sortOrder == order {
                                     Image(systemName: "checkmark")
                                 }
@@ -163,7 +185,7 @@ struct SubjectsListView: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.subject), from \(senderName(item.from))")
-        .accessibilityHint(isFiltered ? "Double tap to clear filter" : "Double tap to filter by this email")
+        .accessibilityHint(isFiltered ? String(localized: "Double tap to clear filter") : String(localized: "Double tap to filter by this email"))
         .accessibilityAddTraits(isFiltered ? .isSelected : [])
     }
 

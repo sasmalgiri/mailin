@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 import os.log
 
@@ -24,12 +25,12 @@ enum AdmiraltyReliability: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .a: return "A — Completely reliable"
-        case .b: return "B — Usually reliable"
-        case .c: return "C — Fairly reliable"
-        case .d: return "D — Not usually reliable"
-        case .e: return "E — Unreliable"
-        case .f: return "F — Cannot be judged"
+        case .a: return String(localized: "A — Completely reliable")
+        case .b: return String(localized: "B — Usually reliable")
+        case .c: return String(localized: "C — Fairly reliable")
+        case .d: return String(localized: "D — Not usually reliable")
+        case .e: return String(localized: "E — Unreliable")
+        case .f: return String(localized: "F — Cannot be judged")
         }
     }
 }
@@ -39,12 +40,12 @@ enum AdmiraltyCredibility: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .one: return "1 — Confirmed by other sources"
-        case .two: return "2 — Probably true"
-        case .three: return "3 — Possibly true"
-        case .four: return "4 — Doubtful"
-        case .five: return "5 — Improbable"
-        case .six: return "6 — Cannot be judged"
+        case .one: return String(localized: "1 — Confirmed by other sources")
+        case .two: return String(localized: "2 — Probably true")
+        case .three: return String(localized: "3 — Possibly true")
+        case .four: return String(localized: "4 — Doubtful")
+        case .five: return String(localized: "5 — Improbable")
+        case .six: return String(localized: "6 — Cannot be judged")
         }
     }
 }
@@ -169,8 +170,17 @@ enum SourceReliabilitySeeder {
     /// Aggregates the working set by sender and derives an auth-pass hint.
     /// The Admiralty rating itself stays empty — rating is a human decision.
     static func seed(from emails: [MBOXParser.RawEmail]) -> [SourceReliabilityEntry] {
-        struct Tally { var count = 0; var pass = 0; var fail = 0 }
-        var bySender: [String: Tally] = [:]
+        var tallies: [String: Tally] = [:]
+        tally(emails, into: &tallies)
+        return entries(from: tallies)
+    }
+
+    /// Per-sender counts; Codable so a whole-archive job can checkpoint it.
+    struct Tally: Codable, Sendable { var count = 0; var pass = 0; var fail = 0 }
+
+    /// Adds one batch to the per-sender tallies (§3-L18: the 3.0 engine feeds
+    /// the whole archive through this, batch by batch).
+    static func tally(_ emails: [MBOXParser.RawEmail], into bySender: inout [String: Tally]) {
         for email in emails {
             let from = (email.headers["From"] ?? "?").lowercased()
             let addr: String
@@ -190,7 +200,11 @@ enum SourceReliabilitySeeder {
             }
             bySender[addr] = tally
         }
-        return bySender
+    }
+
+    /// The top 100 senders as entries (ratings left empty — a human decision).
+    static func entries(from bySender: [String: Tally]) -> [SourceReliabilityEntry] {
+        bySender
             .sorted { $0.value.count > $1.value.count }
             .prefix(100)
             .map { addr, t in
@@ -202,6 +216,22 @@ enum SourceReliabilitySeeder {
                 }
                 return SourceReliabilityEntry(source: addr, emailCount: t.count, authHint: hint)
             }
+    }
+}
+
+/// §3-L18 (switch: `v3EvidenceDesks`): seed from the whole scope.
+@MainActor
+enum EvidenceDesksEngine {
+    struct State: Codable, Sendable { var tallies: [String: SourceReliabilitySeeder.Tally] = [:] }
+
+    static func seed(scope: ArchiveScope) async throws -> (entries: [SourceReliabilityEntry], senders: Int, receipt: ScopeJobReceipt) {
+        let result = try await ScopeJob.run(
+            key: "evidencedesks.seed", title: String(localized: "Seed sources"),
+            capability: .v3EvidenceDesks, query: scope.query, initialState: State()
+        ) { state, batch in
+            SourceReliabilitySeeder.tally(batch, into: &state.tallies)
+        }
+        return (SourceReliabilitySeeder.entries(from: result.state.tallies), result.state.tallies.count, result.receipt)
     }
 }
 
@@ -300,6 +330,11 @@ struct EvidenceDeskEditorView: View {
     @State private var showPostConfirm = false
     @State private var postResult: String?
     @State private var isPosting = false
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var seedStatus: String?
+    @State private var isSeeding = false
+    private var v3: Bool { modules?.isOn(.v3EvidenceDesks) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -383,14 +418,44 @@ struct EvidenceDeskEditorView: View {
                     .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 Spacer()
                 Button {
+                    if v3 {
+                        isSeeding = true
+                        Task { @MainActor in
+                            defer { isSeeding = false }
+                            do {
+                                let r = try await EvidenceDesksEngine.seed(scope: scope)
+                                let known = Set(model.sources.map(\.source))
+                                model.sources.append(contentsOf: r.entries.filter { !known.contains($0.source) })
+                                onSave(model)
+                                seedStatus = String(localized: "Top \(r.entries.count) of \(r.senders) senders — \(r.receipt.coverageLine)")
+                            } catch is CancellationError {
+                                seedStatus = nil
+                            } catch {
+                                // §3-M3: the previous engine seeds from the working set.
+                                seedStatus = EngineGuard.fellBack(.v3EvidenceDesks, error: error)
+                                let seeded = SourceReliabilitySeeder.seed(from: workingSet)
+                                let known = Set(model.sources.map(\.source))
+                                model.sources.append(contentsOf: seeded.filter { !known.contains($0.source) })
+                                onSave(model)
+                            }
+                        }
+                        return
+                    }
                     let seeded = SourceReliabilitySeeder.seed(from: workingSet)
                     let known = Set(model.sources.map(\.source))
                     model.sources.append(contentsOf: seeded.filter { !known.contains($0.source) })
                     onSave(model)
                 } label: {
-                    Label("Seed from working set (\(workingSet.count) emails)", systemImage: "wand.and.stars")
+                    if v3 {
+                        Label(String(localized: "Seed from the whole scope"), systemImage: "wand.and.stars")
+                    } else {
+                        Label("Seed from working set (\(workingSet.count) emails)", systemImage: "wand.and.stars")
+                    }
                 }
-                .disabled(workingSet.isEmpty)
+                .disabled(isSeeding || (!v3 && workingSet.isEmpty))
+            }
+            if let seedStatus {
+                Text(seedStatus).font(Typography.caption2).foregroundStyle(.secondary)
             }
 
             if model.sources.isEmpty {
@@ -560,7 +625,7 @@ struct EvidenceDeskEditorView: View {
                     if isPosting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label(model.postedDocumentNumber == nil ? "Post numbered desk document" : "Post revision", systemImage: "number.square")
+                        Label(model.postedDocumentNumber == nil ? String(localized: "Post numbered desk document") : String(localized: "Post revision"), systemImage: "number.square")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -578,13 +643,13 @@ struct EvidenceDeskEditorView: View {
         defer { isPosting = false }
 
         var sections: [CapturedDocument.Section] = []
-        sections.append(.init(name: "Method", fields: [
+        sections.append(.init(name: String(localized: "Method"), fields: [
             .init(key: "Source ratings", value: "Admiralty/NATO scale (reliability A–F × credibility 1–6); archive auth signals are advisory hints, ratings are human decisions."),
             .init(key: "Contradictions", value: "Both sides preserved with locators; never averaged or auto-resolved."),
             .init(key: "Gaps", value: "Each gap records an absence within a searched scope — not a conclusion."),
         ]))
         if !model.sources.isEmpty {
-            sections.append(.init(name: "Source reliability", fields:
+            sections.append(.init(name: String(localized: "Source reliability"), fields:
                 model.sources.map { .init(key: $0.source, value: "\($0.ratingCode) · \($0.authHint)\($0.note.isEmpty ? "" : " · \($0.note)")") }
             ))
         }
@@ -596,7 +661,7 @@ struct EvidenceDeskEditorView: View {
             ]))
         }
         if !model.gaps.isEmpty {
-            sections.append(.init(name: "Gap register", fields:
+            sections.append(.init(name: String(localized: "Gap register"), fields:
                 model.gaps.map { .init(key: $0.expected, value: "searched: \($0.searchedNote.isEmpty ? "—" : $0.searchedNote) · absence within scope, not proof") }
             ))
         }

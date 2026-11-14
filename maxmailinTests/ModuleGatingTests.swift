@@ -1,0 +1,2317 @@
+@testable import ArchiveCore
+//
+//  ModuleGatingTests.swift
+//  maxmailinTests
+//
+//  v3.0 §3.3 R1–R6: proves the page-independence rule mechanically rather than
+//  by review. If the user has activated nothing but Page 1, every other page
+//  must report disabled, refuse to build its feature host, and hold no jobs.
+//
+
+import Testing
+import Foundation
+import NaturalLanguage
+import StoreKit
+import StoreKitTest
+@testable import maxmailin
+
+@MainActor
+private func makeRegistry(file: String = #function) -> (ModuleRegistry, URL) {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("moduletests-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("modules.v1.json")
+    let registry = ModuleRegistry(store: ModuleStateStore(url: url),
+                                  excludedByBuild: [], trapsOnMisuse: false)
+    return (registry, url)
+}
+
+@Suite("Module gating (v3.0 §3.3)")
+@MainActor
+struct ModuleGatingTests {
+
+    // MARK: R2 — nothing exists until activated
+
+    @Test("Fresh install: Archive on, every optional page off")
+    func freshInstallDefaults() {
+        let (registry, _) = makeRegistry()
+
+        #expect(registry.isEnabled(.archive))
+        #expect(!registry.isEnabled(.aiInsights))
+        #expect(!registry.isEnabled(.professional))
+        #expect(!registry.isEnabled(.liveMail))
+        #expect(registry.isArchiveOnly)
+        #expect(registry.enabledModules == [.archive])
+    }
+
+    @Test("A page compiled out of the edition has no tab; an org lock keeps its tab")
+    func buildExcludedPagesHaveNoTab() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("moduletests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("modules.v1.json")
+        let noNetwork = ModuleRegistry(store: ModuleStateStore(url: url),
+                                       excludedByBuild: [.liveMail], trapsOnMisuse: false)
+        #expect(noNetwork.isExcludedByBuild(.liveMail))
+        #expect(noNetwork.shippedModules == [.archive, .aiInsights, .professional])
+        #expect(noNetwork.activation(.liveMail) == .unavailable(reason: "not included in this edition"))
+
+        // (Whether THIS build excludes Live Mail is EnterpriseDeploymentTests'
+        // job — the flag is defined on the app target, not the test bundle.)
+
+        // A page that merely is not enabled still has a tab (it asks first).
+        let (full, _) = makeRegistry()
+        #expect(full.shippedModules == AppModule.allCases)
+        #expect(!full.isExcludedByBuild(.liveMail))
+    }
+
+    @Test("Persona home hub belongs to Professional Workflows")
+    func personaHubOwnedByProfessional() {
+        #expect(HubDestination.personaHub.owner == .professional)
+    }
+
+    // MARK: Audit F12 — a managed hard-off stops running work
+
+    @Test("A managed hard-off cancels the page's jobs, drops its host and rewires — without a relaunch")
+    func policyHardOffTearsDownRunningWork() throws {
+        let defaults = UserDefaults.standard
+        let original = defaults.dictionary(forKey: ManagedConfig.managedDefaultsKey)
+        defer {
+            if let original { defaults.set(original, forKey: ManagedConfig.managedDefaultsKey) }
+            else { defaults.removeObject(forKey: ManagedConfig.managedDefaultsKey) }
+        }
+        defaults.removeObject(forKey: ManagedConfig.managedDefaultsKey)
+
+        let (registry, _) = makeRegistry()
+        try registry.enable(.aiInsights)
+        final class Host {}
+        registry.register(.aiInsights) { Host() }
+        _ = try registry.host(for: .aiInsights)
+        var cancelled = false
+        registry.jobs.register(id: "test.job", module: .aiInsights, label: "test") { cancelled = true }
+        #expect(registry.hasLiveHost(.aiInsights))
+        #expect(registry.jobs.jobs(for: .aiInsights).count == 1)
+
+        // Policy arrives while the page is running.
+        defaults.set(["disabledModules": ["aiInsights"]], forKey: ManagedConfig.managedDefaultsKey)
+        registry.reloadPolicy()
+
+        #expect(!registry.isEnabled(.aiInsights))
+        #expect(cancelled, "the running job was cancelled by the policy change")
+        #expect(registry.jobs.jobs(for: .aiInsights).isEmpty)
+        #expect(!registry.hasLiveHost(.aiInsights), "the feature host was released")
+
+        // Policy lifts: the page is enabled again (the user's on survived) and
+        // a host can be built afresh.
+        defaults.removeObject(forKey: ManagedConfig.managedDefaultsKey)
+        registry.reloadPolicy()
+        #expect(registry.isEnabled(.aiInsights))
+        _ = try registry.host(for: .aiInsights)
+        #expect(registry.hasLiveHost(.aiInsights))
+    }
+
+    // MARK: Audit F13 — the semantic index catches up after a completed walk
+
+    private func semanticEmail(_ i: Int, date: String) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<sem-\(i)-\(UUID().uuidString)@test>", "Subject": "Semantic subject \(i)",
+                      "From": "a@example.com", "To": "b@example.com", "Date": date],
+            rawSource: "Subject: Semantic subject \(i)\n\nA sentence about topic number \(i) for the embedder.\n",
+            messageType: "email", attachments: [], timestamp: "", domains: ["example.com"],
+            plainBody: "A sentence about topic number \(i) for the embedder.", htmlBody: "")
+    }
+
+    private func waitUntilIdle(_ controller: SemanticIndexController) async {
+        for _ in 0..<300 {
+            if !controller.isRunning { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    @Test("A completed walk clears its cursor; the next run embeds later imports and drops deleted messages")
+    func semanticIndexCatchesUpAfterCompletion() async throws {
+        guard NLEmbedding.sentenceEmbedding(for: .english) != nil else { return }   // no on-device model here
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: SemanticIndexController.enabledKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: SemanticIndexController.enabledKey) }
+            else { defaults.removeObject(forKey: SemanticIndexController.enabledKey) }
+        }
+        defaults.set(true, forKey: SemanticIndexController.enabledKey)
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("semantic-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let first = [semanticEmail(1, date: "Wed, 01 Jan 2020 10:00:00 +0000"),
+                     semanticEmail(2, date: "Thu, 02 Jan 2020 10:00:00 +0000"),
+                     semanticEmail(3, date: "Fri, 03 Jan 2020 10:00:00 +0000")]
+        try await store.insertBatch(first, batchSize: 10)
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let vectors = EmbeddingStore(directory: root.appendingPathComponent("embeddings", isDirectory: true))
+        let controller = SemanticIndexController(archive: archive, store: vectors)
+        let (registry, _) = makeRegistry()
+        try registry.enable(.aiInsights)
+
+        controller.resume(modules: registry)
+        await waitUntilIdle(controller)
+        #expect(controller.lastError == nil, Comment(rawValue: controller.lastError ?? ""))
+        let afterFirst = try await vectors.count()
+        #expect(afterFirst == 3)
+        let cursor = try await vectors.meta(SemanticIndexController.cursorDateKey)
+        #expect(cursor == nil, "a completed walk forgets its cursor")
+
+        // Later imports: one NEWER and one OLDER than anything indexed —
+        // the case the old cursor could never reach.
+        let later = [semanticEmail(4, date: "Sat, 04 Jan 2021 10:00:00 +0000"),
+                     semanticEmail(5, date: "Tue, 01 Jan 2019 10:00:00 +0000")]
+        try await store.insertBatch(later, batchSize: 10)
+        // And one message deleted from the archive.
+        try await archive.delete(ids: [first[0].id])
+
+        controller.resume(modules: registry)
+        await waitUntilIdle(controller)
+        #expect(controller.lastError == nil, Comment(rawValue: controller.lastError ?? ""))
+        let afterSecond = try await vectors.count()
+        #expect(afterSecond == 4, "2 + 2 later imports, minus the deleted one")
+        let present = try await vectors.existingIDs(among: later.map(\.id) + [first[0].id])
+        #expect(present.contains(later[0].id) && present.contains(later[1].id))
+        #expect(!present.contains(first[0].id), "the deleted message's vector is swept")
+        #expect(controller.pending == 0)
+    }
+
+    // MARK: Audit F14 — reports read the scoped corpus
+
+    @Test("The report query carries the Page 2 scope and applies the date range before any cap")
+    func reportQueryCarriesScopeAndDates() {
+        let scope = ArchiveQueryCompiler.compile("source:Sent.mbox")
+        let from = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 1))!
+        let to = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 31))!
+        let query = ReportBuilderView.reportQuery(scope: scope, useDateRange: true, from: from, to: to)
+        #expect(query.afterDate == Calendar.current.startOfDay(for: from))
+        #expect(query.beforeDate == Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: to)))
+        // The scope's own filter survives the date narrowing.
+        var expected = scope
+        expected.afterDate = query.afterDate
+        expected.beforeDate = query.beforeDate
+        #expect(query == expected)
+
+        let whole = ReportBuilderView.reportQuery(scope: nil, useDateRange: false, from: from, to: to)
+        #expect(whole == .all)
+
+        // Recheck R9: the report's dates NARROW a page scope, never widen it.
+        var lastWeek = EmailQuery.all
+        lastWeek.afterDate = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 20))
+        lastWeek.beforeDate = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 27))
+        let wider = ReportBuilderView.reportQuery(scope: lastWeek, useDateRange: true,
+                                                  from: Calendar.current.date(from: DateComponents(year: 2018, month: 1, day: 1))!,
+                                                  to: Calendar.current.date(from: DateComponents(year: 2020, month: 12, day: 31))!)
+        #expect(wider.afterDate == lastWeek.afterDate, "a wider report range cannot reach before the page scope")
+        #expect(wider.beforeDate == lastWeek.beforeDate, "nor after it")
+        let narrower = ReportBuilderView.reportQuery(scope: lastWeek, useDateRange: true,
+                                                     from: Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 22))!,
+                                                     to: Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 23))!)
+        #expect(narrower.afterDate == Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 22)))
+        #expect(narrower.beforeDate == Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 24)))
+
+        #expect(ReportBuilderView.coverageNote(matching: 120, processed: 120).hasPrefix("All 120"))
+        #expect(ReportBuilderView.coverageNote(matching: 12_000, processed: 5_000).contains("newest 5,000 of 12,000"))
+    }
+
+    @Test("Email Analytics (sentiment + NLP passes) belongs to AI Insights")
+    func emailAnalyticsOwnedByAIInsights() {
+        #expect(HubDestination.emailAnalytics.owner == .aiInsights)
+        // Owner, 2026-09-30: topic discovery is NLP clustering, so the docked
+        // Topics panel and the hub tool both belong to AI Insights.
+        #expect(HubDestination.topicClusters.owner == .aiInsights)
+        // The pure-count tools stay with the archive.
+        for dest in [HubDestination.timeline, .communicationPatterns, .relationshipGraph, .duplicateManager] {
+            #expect(dest.owner == .archive, "\(dest.rawValue)")
+        }
+    }
+
+    @Test("A disabled page never yields a feature host")
+    func hostRefusedWhileDisabled() {
+        let (registry, _) = makeRegistry()
+        final class Host {}
+        var built = 0
+        registry.register(.aiInsights) { built += 1; return Host() }
+
+        // Registration alone must not construct anything (R2).
+        #expect(built == 0)
+        #expect(!registry.hasLiveHost(.aiInsights))
+
+        // Asking for the host while disabled fails and still builds nothing.
+        #expect(throws: ModuleRegistry.Failure.hostWhileDisabled(.aiInsights)) {
+            _ = try registry.host(for: .aiInsights)
+        }
+        #expect(built == 0)
+        #expect(!registry.hasLiveHost(.aiInsights))
+    }
+
+    @Test("Enabling builds the host lazily, exactly once")
+    func hostBuiltOnceAfterEnable() throws {
+        let (registry, _) = makeRegistry()
+        final class Host {}
+        var built = 0
+        registry.register(.professional) { built += 1; return Host() }
+
+        try registry.enable(.professional)
+        #expect(built == 0, "enabling must not eagerly construct the feature")
+
+        let first = try registry.host(for: .professional)
+        let second = try registry.host(for: .professional)
+        #expect(built == 1)
+        #expect(first === second)
+    }
+
+    // MARK: R4 — disabling returns to the baseline
+
+    @Test("Disabling cancels the page's jobs and drops its host")
+    func disableStopsWorkAndReleasesHost() throws {
+        let (registry, _) = makeRegistry()
+        final class Host {}
+        registry.register(.aiInsights) { Host() }
+        try registry.enable(.aiInsights)
+        _ = try registry.host(for: .aiInsights)
+
+        var cancelled = 0
+        registry.jobs.register(id: "ai.digest", module: .aiInsights, label: "Digest") {
+            cancelled += 1
+        }
+        registry.jobs.register(id: "archive.import", module: .archive, label: "Import") {
+            cancelled += 100   // must NOT be cancelled by an AI disable
+        }
+
+        registry.disable(.aiInsights)
+
+        #expect(cancelled == 1, "only the disabled page's jobs may be cancelled")
+        #expect(!registry.hasLiveHost(.aiInsights))
+        #expect(!registry.isEnabled(.aiInsights))
+        #expect(registry.jobs.jobs(for: .aiInsights).isEmpty)
+        #expect(registry.jobs.jobs(for: .archive).count == 1, "Page 1 work is untouched")
+    }
+
+    @Test("Archive cannot be disabled")
+    func archiveIsMandatory() {
+        let (registry, _) = makeRegistry()
+        registry.disable(.archive)
+        #expect(registry.isEnabled(.archive))
+    }
+
+    // MARK: R3 — resource snapshot
+
+    @Test("Page-1-only snapshot holds no optional hosts and no optional jobs")
+    func archiveOnlySnapshotIsClean() throws {
+        let (registry, _) = makeRegistry()
+        final class Host {}
+        for module in AppModule.allCases where module.isOptional {
+            registry.register(module) { Host() }
+        }
+        registry.jobs.register(id: "archive.import", module: .archive, label: "Import") {}
+
+        let snapshot = registry.resourceSnapshot()
+        #expect(snapshot.enabled == [.archive])
+        #expect(snapshot.liveHosts.isEmpty)
+        #expect(snapshot.jobsByModule[.archive] == 1)
+        #expect(snapshot.jobsByModule[.aiInsights] == 0)
+        #expect(snapshot.jobsByModule[.professional] == 0)
+        #expect(snapshot.jobsByModule[.liveMail] == 0)
+        #expect(snapshot.footprintBytes > 0, "footprint must be readable for the R3 table")
+        #expect(snapshot.isArchiveOnlyClean)
+    }
+
+    @Test("Enabling a page shows up in the snapshot; disabling returns it to clean")
+    func snapshotTracksActivation() throws {
+        let (registry, _) = makeRegistry()
+        final class Host {}
+        registry.register(.aiInsights) { Host() }
+
+        try registry.enable(.aiInsights)
+        _ = try registry.host(for: .aiInsights)
+        registry.jobs.register(id: "ai.digest", module: .aiInsights, label: "Digest") {}
+
+        var snapshot = registry.resourceSnapshot()
+        #expect(snapshot.enabled.contains(.aiInsights))
+        #expect(snapshot.liveHosts == [.aiInsights])
+        #expect(snapshot.jobsByModule[.aiInsights] == 1)
+        #expect(!snapshot.isArchiveOnlyClean)
+
+        registry.disable(.aiInsights)
+        snapshot = registry.resourceSnapshot()
+        #expect(snapshot.isArchiveOnlyClean, "disabling must return to the all-off baseline")
+    }
+
+    // MARK: Persistence
+
+    @Test("Activation survives a relaunch")
+    func statePersists() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("moduletests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("modules.v1.json")
+        let store = ModuleStateStore(url: url)
+
+        let first = ModuleRegistry(store: store, excludedByBuild: [], trapsOnMisuse: false)
+        try first.enable(.professional)
+
+        let second = ModuleRegistry(store: store, excludedByBuild: [], trapsOnMisuse: false)
+        #expect(second.isEnabled(.professional))
+        #expect(!second.isEnabled(.aiInsights))
+        #expect(!second.isEnabled(.liveMail))
+    }
+
+    @Test("State written by a newer build is ignored, not guessed at")
+    func futureVersionFallsBackToAllOff() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("moduletests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("modules.v1.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let future = """
+        {"version": 99, "enabled": {"liveMail": true}, "didMapLegacyDefaults": true}
+        """
+        try Data(future.utf8).write(to: url)
+
+        let registry = ModuleRegistry(store: ModuleStateStore(url: url),
+                                      excludedByBuild: [], trapsOnMisuse: false)
+        #expect(!registry.isEnabled(.liveMail))
+        #expect(registry.isArchiveOnly)
+    }
+
+    // MARK: Build exclusion and org policy
+
+    @Test("A page excluded by the build is unavailable, not merely off")
+    func buildExclusionIsNotUserSwitchable() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("moduletests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("modules.v1.json")
+        let registry = ModuleRegistry(store: ModuleStateStore(url: url),
+                                      excludedByBuild: [.liveMail], trapsOnMisuse: false)
+
+        #expect(registry.activation(.liveMail).isUserSwitchable == false)
+        #expect(!registry.isEnabled(.liveMail))
+        #expect(throws: (any Error).self) { try registry.enable(.liveMail) }
+    }
+
+    // MARK: Legacy mapping (directive §8.2)
+
+    @Test("Fresh install ignores 2.x defaults entirely")
+    func legacyMappingSkippedOnFreshInstall() {
+        let (registry, _) = makeRegistry()
+        registry.mapLegacyStateIfNeeded(isExistingInstall: false,
+                                        legacyAIEnabled: true,
+                                        legacyPersonaCompleted: true)
+        #expect(registry.isArchiveOnly)
+    }
+
+    @Test("Existing install keeps what it was using; Live Mail never auto-enables")
+    func legacyMappingPreservesPriorUse() {
+        let (registry, _) = makeRegistry()
+        registry.mapLegacyStateIfNeeded(isExistingInstall: true,
+                                        legacyAIEnabled: true,
+                                        legacyPersonaCompleted: true)
+        #expect(registry.isEnabled(.aiInsights))
+        #expect(registry.isEnabled(.professional))
+        #expect(!registry.isEnabled(.liveMail), "network access is never inherited")
+    }
+
+    @Test("Legacy mapping runs once and cannot re-enable a user's choice")
+    func legacyMappingIsIdempotent() {
+        let (registry, _) = makeRegistry()
+        registry.mapLegacyStateIfNeeded(isExistingInstall: true,
+                                        legacyAIEnabled: true,
+                                        legacyPersonaCompleted: false)
+        #expect(registry.isEnabled(.aiInsights))
+
+        registry.disable(.aiInsights)
+        // A second launch must not resurrect it from the old default.
+        registry.mapLegacyStateIfNeeded(isExistingInstall: true,
+                                        legacyAIEnabled: true,
+                                        legacyPersonaCompleted: false)
+        #expect(!registry.isEnabled(.aiInsights))
+    }
+}
+
+
+@Suite("Page isolation of feature flags (§3.3 R1)")
+@MainActor
+struct PageIsolationTests {
+
+    private func gatedState(enabled: [AppModule]) throws -> AppStateManager {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("isolation-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("modules.v1.json")
+        let registry = ModuleRegistry(store: ModuleStateStore(url: url),
+                                      excludedByBuild: [], trapsOnMisuse: false)
+        for module in enabled { try registry.enable(module) }
+        let state = AppStateManager()
+        state.isModuleEnabled = { registry.isEnabled($0) }
+        return state
+    }
+
+    @Test("Archive-only: no AI or Professional feature can be opened")
+    func archiveOnlyRefusesForeignFeatures() throws {
+        let state = try gatedState(enabled: [])
+
+        // Every owned feature refuses. The assertion trap is off in tests via
+        // the registry, and the state gate itself simply declines.
+        state.showAIAssistant = true
+        state.showAIDigest = true
+        state.showAnomalyDetection = true
+        state.showPredictiveCoding = true
+        state.showCustodianPanel = true
+        state.showAuditTrail = true
+        state.showEDiscovery = true
+        state.showBatesNumbering = true
+        state.showChainOfCustody = true
+        state.showReviewBatches = true
+
+        #expect(!state.showAIAssistant)
+        #expect(!state.showAIDigest)
+        #expect(!state.showAnomalyDetection)
+        #expect(!state.showPredictiveCoding)
+        #expect(!state.showCustodianPanel)
+        #expect(!state.showAuditTrail)
+        #expect(!state.showEDiscovery)
+        #expect(!state.showBatesNumbering)
+        #expect(!state.showChainOfCustody)
+        #expect(!state.showReviewBatches)
+    }
+
+    @Test("Archive's own features are never gated")
+    func archiveFeaturesAlwaysWork() throws {
+        let state = try gatedState(enabled: [])
+
+        state.showDuplicateManager = true
+        state.showAttachmentGrid = true
+        state.showTimeline = true
+        state.showAllAttachmentsGallery = true
+        state.triggerExport = true
+        state.triggerSearch = true
+
+        #expect(state.showDuplicateManager)
+        #expect(state.showAttachmentGrid, "reading attachments is Page 1 work")
+        #expect(state.showTimeline)
+        #expect(state.showAllAttachmentsGallery)
+        #expect(state.triggerExport, "export is Page 1 work")
+        #expect(state.triggerSearch, "search is Page 1 work")
+    }
+
+    @Test("Enabling AI Insights opens exactly its own features, not Professional's")
+    func enablingOnePageDoesNotOpenAnother() throws {
+        let state = try gatedState(enabled: [.aiInsights])
+
+        state.showAIAssistant = true
+        state.showAIDigest = true
+        state.showCustodianPanel = true
+        state.showAuditTrail = true
+
+        #expect(state.showAIAssistant)
+        #expect(state.showAIDigest)
+        #expect(!state.showCustodianPanel, "Professional stays closed")
+        #expect(!state.showAuditTrail, "Professional stays closed")
+    }
+
+    @Test("Enabling Professional opens its features, not AI's")
+    func professionalDoesNotOpenAI() throws {
+        let state = try gatedState(enabled: [.professional])
+
+        state.showCustodianPanel = true
+        state.showAuditTrail = true
+        state.showAIAssistant = true
+
+        #expect(state.showCustodianPanel)
+        #expect(state.showAuditTrail)
+        #expect(!state.showAIAssistant, "AI Insights stays closed")
+    }
+
+    @Test("A feature already open closes when its page is switched off")
+    func closingIsAlwaysAllowed() throws {
+        let state = try gatedState(enabled: [.aiInsights])
+        state.showAIAssistant = true
+        #expect(state.showAIAssistant)
+
+        // Closing must never be refused, whatever the page state.
+        state.showAIAssistant = false
+        #expect(!state.showAIAssistant)
+    }
+
+    @Test("Every owned feature declares an owning page")
+    func ownershipIsComplete() {
+        for feature in AppStateManager.OwnedFeature.allCases {
+            #expect(feature.module.isOptional,
+                    "\(feature.rawValue) must belong to an optional page, not Archive")
+        }
+    }
+}
+
+
+@Suite("Page activation matrix honesty")
+@MainActor
+struct PageFeatureCatalogTests {
+
+    @Test("Every page publishes a feature matrix")
+    func everyPageHasFeatures() {
+        for module in AppModule.allCases {
+            #expect(!PageFeatureCatalog.features(for: module).isEmpty,
+                    "\(module.rawValue) must tell the user what it contains")
+        }
+    }
+
+    @Test("Live Mail's rows all say they are not in this build")
+    func liveMailIsHonestlyUnbuilt() {
+        let rows = PageFeatureCatalog.features(for: .liveMail)
+        #expect(rows.allSatisfy { $0.availability == .notInThisBuild },
+                "no Live Mail capability may be advertised as included")
+        let consequences = PageFeatureCatalog.consequences(for: .liveMail)
+        #expect(consequences.contains { $0.contains("Nothing in this build") })
+    }
+
+    @Test("Archive costs nothing to have on")
+    func archiveHasNoConsequences() {
+        #expect(PageFeatureCatalog.consequences(for: .archive).isEmpty)
+        #expect(PageFeatureCatalog.features(for: .archive)
+            .allSatisfy { $0.availability == .available },
+            "Page 1 must not gate its own basics behind a purchase")
+    }
+
+    @Test("Optional pages disclose what they start doing")
+    func optionalPagesDiscloseConsequences() {
+        for module in AppModule.allCases where module.isOptional {
+            #expect(!PageFeatureCatalog.consequences(for: module).isEmpty,
+                    "\(module.rawValue) must say what turning it on starts")
+        }
+    }
+
+    @Test("Professional discloses that holds and cases survive being switched off")
+    func professionalDisclosesRetention() {
+        let lines = PageFeatureCatalog.consequences(for: .professional).joined(separator: " ")
+        #expect(lines.contains("hold"))
+        #expect(lines.lowercased().contains("kept") || lines.lowercased().contains("keeps"))
+    }
+
+    @Test("Every availability state has a user-facing label")
+    func availabilityLabels() {
+        #expect(PageFeature.Availability.available.label == "Included")
+        #expect(PageFeature.Availability.requiresProfessional.label == "Professional")
+        #expect(PageFeature.Availability.notInThisBuild.label == "Not in this build")
+    }
+}
+
+// MARK: - Owner's screenshot review 2026-09-29 — "Running now" rows exist only while a job works
+
+/// These tests drive the two shared launch-job singletons. Swift Testing runs
+/// tests in parallel by default and each singleton is one object, so the
+/// suite is serialized: two of these interleaving at an `await` would hand
+/// the job a different test's registry mid-flight (seen once in a full run).
+@Suite("Running-now job lifecycle", .serialized)
+@MainActor
+struct RunningJobLifecycleTests {
+
+
+    private func disposableStore(_ tag: String) -> (SQLiteEmailStore, URL) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("jobs-\(tag)-\(UUID().uuidString)", isDirectory: true)
+        return (SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true)), root)
+    }
+
+    @Test("Attachment indexing registers while it runs and clears its row when there is nothing to do")
+    func attachmentIndexRowClearsOnNothingToDo() async throws {
+        let (registry, _) = makeRegistry()
+        let (store, root) = disposableStore("attach"); defer { try? FileManager.default.removeItem(at: root) }
+        AttachmentTextIndexJob.testStoreOverride = store; defer { AttachmentTextIndexJob.testStoreOverride = nil }
+        let job = AttachmentTextIndexJob.shared
+        job.cancel()   // a clean start regardless of what the host app kicked
+
+        job.kickIfNeeded(registry: registry.jobs)
+        #expect(registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "the row appears when the run starts")
+        let run = try #require(job.currentRun)
+        await run.value
+        // In the full suite, imports run by OTHER tests post `.parsingFinished`,
+        // whose observer re-kicks this shared job at any moment; each re-kick
+        // over the empty test store ends at once. Drain any such run before
+        // asserting, so the assertion is about lifecycle, not about timing.
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "an empty archive: the run ends at once and its row is gone")
+        #expect(job.currentRun == nil)
+
+        // A later re-kick (what an import does) registers again without being handed the registry.
+        job.kickIfNeeded()
+        #expect(registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID))
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID))
+    }
+
+    @Test("Cancelling a job clears its row immediately, and the cancelled run cannot clear a newer one")
+    func attachmentIndexRowClearsOnCancel() async throws {
+        let (registry, _) = makeRegistry()
+        let (store, root) = disposableStore("attach-cancel"); defer { try? FileManager.default.removeItem(at: root) }
+        AttachmentTextIndexJob.testStoreOverride = store; defer { AttachmentTextIndexJob.testStoreOverride = nil }
+        let job = AttachmentTextIndexJob.shared
+        job.cancel()
+
+        job.kickIfNeeded(registry: registry.jobs)
+        let first = try #require(job.currentRun)
+        registry.jobs.entries.first { $0.id == AttachmentTextIndexJob.jobID }?.cancel()   // the Stop button
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "Stop clears the row at once")
+
+        job.kickIfNeeded(registry: registry.jobs)
+        #expect(registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "a new run has its own row")
+        await first.value   // the cancelled run's completion must not touch the new row
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID))
+    }
+
+    @Test("Repair job clears its row when the archive is already clean, without any notification")
+    func fidelityRepairRowClearsOnNothingToDo() async throws {
+        let (registry, _) = makeRegistry()
+        let (store, root) = disposableStore("fidelity"); defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = try #require(UserDefaults(suiteName: "test.fidelity.\(UUID().uuidString)"))
+        defaults.set(FidelityBackfillJob.headerPassVersion, forKey: FidelityBackfillJob.headerPassKey)   // header sweep already done
+        FidelityBackfillJob.testStoreOverride = store; defer { FidelityBackfillJob.testStoreOverride = nil }
+        FidelityBackfillJob.testDefaultsOverride = defaults; defer { FidelityBackfillJob.testDefaultsOverride = nil }
+        let job = FidelityBackfillJob.shared
+        job.cancel()
+
+        var completions = 0
+        let token = NotificationCenter.default.addObserver(forName: .fidelityBackfillCompleted, object: nil, queue: .main) { _ in completions += 1 }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        job.kickIfNeeded(senderEmail: "", registry: registry.jobs)
+        #expect(registry.jobs.isRunning(id: FidelityBackfillJob.jobID))
+        let run = try #require(job.currentRun)
+        await run.value
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: FidelityBackfillJob.jobID), "nothing to repair: the row is cleared even though no completion notification was posted")
+        #expect(completions == 0, "the UI-refresh notification is not what clears the row")
+    }
+
+    @Test("A job's progress detail is shown on its row and dropped with it")
+    func jobDetailUpdates() {
+        let (registry, _) = makeRegistry()
+        registry.jobs.register(id: "x", module: .archive, label: "X") {}
+        registry.jobs.update(id: "x", detail: "12 done")
+        #expect(registry.jobs.entries.first?.detail == "12 done")
+        registry.jobs.update(id: "y", detail: "ignored")   // unknown id: no-op
+        #expect(registry.jobs.entries.count == 1)
+        registry.jobs.finish(id: "x")
+        #expect(registry.jobs.isIdle)
+    }
+}
+
+// MARK: - Purchase gates on the 3.0 pages (audit 2026-09-30)
+
+/// A user who has not purchased must be restricted the same way whichever
+/// page, strip, workflow step or list launches the work. These tests use the
+/// deterministic `StoreManager(testTier:)` fixture, which never touches
+/// StoreKit and does not take the Debug all-unlocked shortcut, so a denial is
+/// actually exercised here rather than assumed from a lock label.
+@Suite("Purchase gates (Free / Personal / Professional)")
+@MainActor
+struct PurchaseGateTests {
+
+    @Test("Free: nothing paid passes, and a denied gate shows the paywall")
+    func freeTierIsDenied() {
+        let store = StoreManager(testTier: .free)
+        #expect(store.effectiveTier == .free)
+        #expect(!store.isPremium)
+        #expect(!store.isProfessional)
+        #expect(store.require(.free))
+        #expect(!store.showPaywall, "a Free-tier gate never shows the paywall")
+        #expect(!store.require(.personal))
+        #expect(store.showPaywall, "a denied gate must surface the paywall, not fail silently")
+        store.showPaywall = false
+        #expect(!store.requirePremium())
+        #expect(!store.requireProfessional())
+        #expect(store.showPaywall)
+    }
+
+    @Test("Personal: Premium passes, Professional is denied")
+    func personalTierStopsAtProfessional() {
+        let store = StoreManager(testTier: .personal)
+        #expect(store.isPremium)
+        #expect(!store.isProfessional)
+        #expect(store.require(.personal))
+        #expect(!store.require(.professional))
+        #expect(store.showPaywall)
+    }
+
+    @Test("Professional: every gate passes and no paywall appears")
+    func professionalTierPassesEverything() {
+        let store = StoreManager(testTier: .professional)
+        #expect(store.isPremium && store.isProfessional)
+        #expect(store.require(.professional) && store.requirePremium() && store.requireProfessional())
+        #expect(!store.showPaywall)
+    }
+
+    @Test("The test fixture never becomes the app's live store manager")
+    func testFixtureDoesNotClaimLive() {
+        let store = StoreManager(testTier: .free)
+        #expect(StoreManager.live !== store)
+    }
+
+    @Test("Every tool the Professional page can launch is paid, at the tier the Archive hub charges")
+    func professionalPageToolsArePaidLikeTheHub() {
+        let tools = ProfessionalPageView.toolDestinations
+        #expect(tools.count == 12, "strip lists 5 studios + 7 tools")
+        // The Archive page's hub (ContentView) charges these three at
+        // Personal and the rest at Professional; Page 3 must answer the same.
+        let personalOnHub: Set<HubDestination> = [.actionRegister, .reasoningStudio, .redaction]
+        for destination in tools {
+            let tier = StoreManager.requiredTier(for: destination)
+            #expect(tier > .free, "\(destination.rawValue) must never run for a Free user from Page 3")
+            #expect(tier == (personalOnHub.contains(destination) ? .personal : .professional),
+                    "\(destination.rawValue) opened from Page 3 must be gated like the Archive hub gates it")
+        }
+    }
+
+    @Test("Hub tier mapping mirrors the Archive page: Work Center free, AI surfaces Personal")
+    func hubTierMappingMirrorsArchiveHub() {
+        #expect(StoreManager.requiredTier(for: .workCenter) == .free)
+        #expect(StoreManager.requiredTier(for: .settings) == .free)
+        #expect(StoreManager.requiredTier(for: .aiDigest) == .personal)
+        #expect(StoreManager.requiredTier(for: .reportBuilder) == .personal)
+        #expect(StoreManager.requiredTier(for: .aiAssistant) == .personal)
+        #expect(StoreManager.requiredTier(for: .custodianPanel) == .professional)
+        #expect(StoreManager.requiredTier(for: .batesNumbering) == .professional)
+        #expect(StoreManager.requiredTier(for: .chainOfCustody) == .professional)
+        #expect(StoreManager.requiredTier(for: .eDiscovery) == .professional)
+    }
+
+    @Test("The Free browse depth is the same number the Advanced list and exports use")
+    func freeDepthIsOneNumber() {
+        #expect(StoreManager.freeEmailLimit == 500)
+    }
+
+    @Test("An export run honours the tier in force when it starts, not the cap saved in its request")
+    func exportCapFollowsCurrentTier() throws {
+        // A request built (or a receipt written) while Personal was active
+        // carries no cap; if the entitlement has lapsed by the time it is
+        // started or resumed, the Free cap applies anyway.
+        #expect(try ExportJobRunner.enforcedCap(savedCap: nil, isPremium: false) == StoreManager.freeEmailLimit)
+        // A request built while Free carries the cap; once Personal is bought
+        // the resume runs to the end of the selection.
+        #expect(try ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: true) == nil)
+        // No change in tier, no change in behaviour.
+        #expect(try ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: false) == StoreManager.freeEmailLimit)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: nil, isPremium: true) == nil)
+    }
+
+    @Test("A fresh run or a resume with no tier to check is refused, never run on its saved cap")
+    func exportWithoutATierIsRefused() throws {
+        let scope = ArchiveSelectionScope.query(.all, exclusions: [])
+        // A fresh request that was built uncapped (as a Personal host builds it).
+        let fresh = ExportRequest(format: .csv, title: "CSV", scope: scope,
+                                  destination: NSTemporaryDirectory() + "refused.csv", isFolder: false, cap: nil)
+        #expect(throws: ExportJobRunner.AuthorizationError.self) {
+            _ = try ExportJobRunner.authorized(fresh, isPremium: nil)
+        }
+        // A resume from a receipt that recorded no cap: the saved cap says
+        // "unlimited", and the receipt alone must not be enough to run.
+        var resume = fresh
+        resume.skipFirst = 500
+        resume.selectionFingerprint = "fp"
+        #expect(throws: ExportJobRunner.AuthorizationError.self) {
+            _ = try ExportJobRunner.authorized(resume, isPremium: nil)
+        }
+        // With a tier to check, the same requests run under that tier's cap.
+        #expect(try ExportJobRunner.authorized(resume, isPremium: false).cap == StoreManager.freeEmailLimit)
+        #expect(try ExportJobRunner.authorized(resume, isPremium: true).cap == nil)
+        #expect(try ExportJobRunner.authorized(resume, isPremium: false).skipFirst == 500)
+    }
+}
+
+// MARK: - Purchase presentation coordinator (directive 2026-09-30, part 2)
+
+/// One request, one presenter per window, no duplicates, nothing dropped.
+@Suite("Purchase presentation coordinator")
+@MainActor
+struct PurchasePresentationTests {
+
+    @Test("A denied gate raises a request carrying tier, feature, reason and window")
+    func deniedGateRaisesContextualRequest() {
+        let store = StoreManager(testTier: .free)
+        let allowed = store.require(.professional, feature: "Chain of Custody", reason: "Needs Professional", target: .window("Chain of Custody"))
+        #expect(!allowed)
+        #expect(store.paywallRequest == PurchaseRequest(requiredTier: .professional, feature: "Chain of Custody",
+                                                        reason: "Needs Professional", target: .window("Chain of Custody")))
+    }
+
+    @Test("A second request while the sheet is up updates it in place and keeps its window")
+    func secondRequestUpdatesInPlace() {
+        let store = StoreManager(testTier: .free)
+        store.requestPurchase(.personal, feature: "Summaries", reason: "r1", target: .main)
+        store.requestPurchase(.professional, feature: "Bates Numbering", reason: "r2", target: .window("Bates"))
+        let request = store.paywallRequest
+        #expect(request?.requiredTier == .professional, "the higher tier wins")
+        #expect(request?.feature == "Bates Numbering")
+        #expect(request?.reason == "r2")
+        #expect(request?.target == .main, "the sheet already showing in the main window stays there — no duplicate")
+    }
+
+    @Test("A plain request never lowers the tier of a specific one")
+    func plainRequestKeepsSpecificTier() {
+        let store = StoreManager(testTier: .free)
+        store.requestPurchase(.professional, feature: "eDiscovery", reason: "needs pro", target: .main)
+        store.showPaywall = true   // legacy gate: "show plans"
+        #expect(store.paywallRequest?.requiredTier == .professional)
+        #expect(store.paywallRequest?.feature == "eDiscovery")
+    }
+
+    @Test("Dismiss clears the request; the legacy flag reads it")
+    func dismissClears() {
+        let store = StoreManager(testTier: .free)
+        #expect(!store.showPaywall)
+        store.showPaywall = true
+        #expect(store.showPaywall)
+        #expect(store.paywallRequest == PurchaseRequest(requiredTier: .free, feature: nil, reason: nil, target: .main))
+        store.dismissPaywall()
+        #expect(!store.showPaywall)
+        #expect(store.paywallRequest == nil)
+    }
+
+    @Test("Only the presenter whose window matches shows the request")
+    func presenterTargetMatching() {
+        let store = StoreManager(testTier: .free)
+        store.requestPurchase(.personal, target: .settings)
+        #expect(store.paywallRequest?.target == .settings)
+        #expect(store.paywallRequest?.target != .main)
+        #expect(store.paywallRequest?.target != .window("Production"))
+    }
+
+    @Test("Plan badge: Free upgrades, Personal sees Professional, Professional sees its plan")
+    func planBadge() {
+        #expect(StoreManager.planBadgeLabel(tier: .free, lifetime: false) == "Free · Upgrade")
+        #expect(StoreManager.planBadgeLabel(tier: .personal, lifetime: false) == "Personal")
+        #expect(StoreManager.planBadgeLabel(tier: .personal, lifetime: true) == "Personal · Lifetime")
+        #expect(StoreManager.planBadgeLabel(tier: .professional, lifetime: true) == "Professional · Lifetime")
+        #expect(StoreManager.planBadgeRequestTier(current: .free) == .personal)
+        #expect(StoreManager.planBadgeRequestTier(current: .personal) == .professional)
+        #expect(StoreManager.planBadgeRequestTier(current: .professional) == .free, "plan details, not an upgrade demand")
+    }
+
+    @Test("Purchase screen opens on the minimum tier the feature needs, never below the next unowned tier")
+    func initialSelectedTier() {
+        let pro = PurchaseRequest(requiredTier: .professional, feature: "Bates", reason: nil, target: .main)
+        let personal = PurchaseRequest(requiredTier: .personal, feature: "Summaries", reason: nil, target: .main)
+        #expect(PaywallView.initialSelectedTier(request: pro, currentTier: .free) == .professional)
+        #expect(PaywallView.initialSelectedTier(request: personal, currentTier: .free) == .personal)
+        #expect(PaywallView.initialSelectedTier(request: nil, currentTier: .free) == .personal)
+        #expect(PaywallView.initialSelectedTier(request: personal, currentTier: .personal) == .professional,
+                "a Personal owner is never offered Personal again")
+        #expect(PaywallView.initialSelectedTier(request: nil, currentTier: .personal) == .professional)
+        #expect(PaywallView.initialSelectedTier(request: pro, currentTier: .professional) == nil,
+                "a Professional owner has nothing to buy")
+    }
+
+    @Test("Restore outcomes are three distinct messages")
+    func restoreOutcomes() {
+        #expect(RestoreOutcome.restored(.personal).isSuccess)
+        #expect(!RestoreOutcome.nothingFound.isSuccess)
+        #expect(!RestoreOutcome.failed("x").isSuccess)
+        #expect(RestoreOutcome.restored(.professional).message.contains("Professional"))
+        #expect(RestoreOutcome.nothingFound.message.contains("No eligible purchases"))
+        #expect(RestoreOutcome.failed("offline").message.contains("offline"))
+    }
+
+    @Test("Lifetime fixture is reported as lifetime, not a subscription")
+    func lifetimeFixture() {
+        let store = StoreManager(testTier: .personal, lifetime: true)
+        #expect(store.isLifetimePurchase)
+        #expect(store.isPremium && !store.isProfessional)
+    }
+
+    @Test("Debug launch override simulates a tier on the live manager; Release has no such code")
+    func debugLaunchOverride() {
+        let store = StoreManager(testTier: .professional)
+        #if DEBUG
+        store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "free"])
+        #expect(store.effectiveTier == .free)
+        #expect(!store.isPremium)
+        store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "personal", "-mailinSimulateLifetime"])
+        #expect(store.effectiveTier == .personal)
+        #expect(store.isLifetimePurchase)
+        store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "bogus"])
+        #expect(store.effectiveTier == .personal, "an unknown value changes nothing")
+        #else
+        // Release (R10): the override does not exist; the tier is exactly the
+        // one StoreKit (here the fixture) proved, with no unlock.
+        #expect(store.effectiveTier == .professional)
+        let free = StoreManager(testTier: .free)
+        #expect(free.effectiveTier == .free)
+        #expect(!free.isPremium)
+        #endif
+    }
+}
+
+// MARK: - Free input allowance (owner decision 2026-10-01: 100 MB of input)
+
+@Suite("Free input allowance (100 MB)")
+struct ImportAllowanceTests {
+
+    @Test("The limit is 100 MB, decimal, and only the Free tier has one")
+    @MainActor
+    func limitPerTier() {
+        #expect(StoreManager.freeInputByteLimit == 100_000_000)
+        #expect(StoreManager(testTier: .free).inputByteLimit == 100_000_000)
+        #expect(StoreManager(testTier: .personal).inputByteLimit == nil)
+        #expect(StoreManager(testTier: .professional).inputByteLimit == nil)
+    }
+
+    @Test("Cumulative: what the archive holds plus this import must fit; no limit means always allowed")
+    func evaluateIsCumulative() {
+        let limit = StoreManager.freeInputByteLimit
+        #expect(ImportAllowance.evaluate(requestedBytes: limit, ingestedBytes: 0, limitBytes: limit) == .allowed, "exactly the limit fits")
+        #expect(ImportAllowance.evaluate(requestedBytes: limit + 1, ingestedBytes: 0, limitBytes: limit).denial != nil)
+        #expect(ImportAllowance.evaluate(requestedBytes: 1, ingestedBytes: limit, limitBytes: limit).denial != nil, "a full archive admits nothing more")
+        #expect(ImportAllowance.evaluate(requestedBytes: 40_000_000, ingestedBytes: 70_000_000, limitBytes: limit).denial != nil, "70 + 40 > 100")
+        #expect(ImportAllowance.evaluate(requestedBytes: 30_000_000, ingestedBytes: 70_000_000, limitBytes: limit) == .allowed, "70 + 30 = 100")
+        #expect(ImportAllowance.evaluate(requestedBytes: 5_000_000_000, ingestedBytes: 5_000_000_000, limitBytes: nil) == .allowed, "paid tiers: no limit")
+    }
+
+    @Test("A denial names the figures and the way out")
+    func denialMessage() {
+        let d = ImportAllowance.evaluate(requestedBytes: 40_000_000, ingestedBytes: 70_000_000, limitBytes: 100_000_000).denial
+        #expect(d?.remainingBytes == 30_000_000)
+        let message = d?.message ?? ""
+        #expect(message.contains("100 MB"))
+        #expect(message.contains("70 MB"))
+        #expect(message.contains("40 MB"))
+        #expect(message.contains("30 MB"))
+        #expect(message.contains("Personal and Professional"))
+        let fresh = ImportAllowance.evaluate(requestedBytes: 250_000_000, ingestedBytes: 0, limitBytes: 100_000_000).denial
+        #expect(fresh?.message.contains("250 MB") == true)
+    }
+
+    @Test("Input bytes: files by size, folders by their regular contents, symlinks never followed")
+    func totalBytesMeasuresInput() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("allowance-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("eml", isDirectory: true)
+        let nested = folder.appendingPathComponent("more", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let single = root.appendingPathComponent("a.mbox")
+        try Data(count: 1_000).write(to: single)
+        try Data(count: 300).write(to: folder.appendingPathComponent("1.eml"))
+        try Data(count: 200).write(to: nested.appendingPathComponent("2.eml"))
+        // A symlink inside the folder to a large file outside it must not count.
+        let outside = root.appendingPathComponent("huge.bin")
+        try Data(count: 50_000).write(to: outside)
+        try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("link.eml"), withDestinationURL: outside)
+
+        #expect(ImportAllowance.totalBytes(of: [single]) == 1_000)
+        #expect(ImportAllowance.totalBytes(of: [folder]) == 500)
+        #expect(ImportAllowance.totalBytes(of: [single, folder]) == 1_500)
+        // A top-level symlink is not input either.
+        let topLink = root.appendingPathComponent("top.mbox")
+        try FileManager.default.createSymbolicLink(at: topLink, withDestinationURL: outside)
+        #expect(ImportAllowance.totalBytes(of: [topLink]) == 0)
+        #expect(ImportAllowance.totalBytes(of: [root.appendingPathComponent("missing.mbox")]) == 0)
+    }
+}
+
+// MARK: - Interface localization
+
+/// The App Store listing says the interface ships in 11 languages. This suite
+/// pins that claim to the string catalog: every key that is meant to be
+/// translated has a value in each of the ten non-English languages, and every
+/// translation keeps the same format placeholders as its English key, so a
+/// localized `String(format:)` can never crash or print the wrong argument.
+@Suite("Interface localization — 11 languages")
+struct InterfaceLocalizationTests {
+    static let languages = ["de", "es", "fr", "hi", "it", "ja", "ko", "pt-BR", "zh-Hans", "zh-Hant"]
+
+    private struct Catalog: Decodable {
+        struct Entry: Decodable {
+            struct Localization: Decodable {
+                struct Unit: Decodable { let state: String; let value: String }
+                struct Variant: Decodable { let stringUnit: Unit? }
+                struct Variations: Decodable { let plural: [String: Variant]? }
+                let stringUnit: Unit?
+                let variations: Variations?
+                /// The plain value, or a plural entry's `other` form.
+                var text: String? { stringUnit?.value ?? variations?.plural?["other"]?.stringUnit?.value }
+            }
+            let shouldTranslate: Bool?
+            let extractionState: String?
+            let localizations: [String: Localization]?
+        }
+        let sourceLanguage: String
+        let strings: [String: Entry]
+    }
+
+    private static func loadCatalog() throws -> Catalog {
+        // The catalog is a source file; the test reads it from the repo so the
+        // check runs against what will be compiled, not against a built product.
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()          // maxmailinTests
+            .deletingLastPathComponent()          // repo root
+            .appendingPathComponent("maxmailin/Localizable.xcstrings")
+        return try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: url))
+    }
+
+    /// Format placeholders with their positional index removed, so "%1$lld"
+    /// and "%lld" compare equal — translations may reorder arguments.
+    private static func placeholders(_ s: String) -> [String] {
+        let regex = try! NSRegularExpression(pattern: #"%(?:\d+\$)?(@|lld|ld|d|f|\.\d+f|s|u|llu|lu|%)"#)
+        let ns = s as NSString
+        return regex.matches(in: s, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range(at: 1)) }
+            .sorted()
+    }
+
+    private static func translatableKeys(_ catalog: Catalog) -> [String] {
+        catalog.strings.compactMap { key, entry in
+            if entry.shouldTranslate == false { return nil }
+            if entry.extractionState == "stale" { return nil }
+            if key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+            return key
+        }.sorted()
+    }
+
+    @Test("The catalog's source language is English and it is not a token effort")
+    func catalogShape() throws {
+        let catalog = try Self.loadCatalog()
+        #expect(catalog.sourceLanguage == "en")
+        // Fewer than this means the interface strings were not extracted.
+        #expect(Self.translatableKeys(catalog).count > 2_500)
+    }
+
+    @Test("Every translatable key has a value in all ten languages")
+    func everyKeyTranslated() throws {
+        let catalog = try Self.loadCatalog()
+        var missing: [String: [String]] = [:]
+        for key in Self.translatableKeys(catalog) {
+            let locs = catalog.strings[key]?.localizations ?? [:]
+            for lang in Self.languages {
+                let value = locs[lang]?.text ?? ""
+                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    missing[lang, default: []].append(key)
+                }
+            }
+        }
+        for lang in Self.languages {
+            let keys = missing[lang] ?? []
+            #expect(keys.isEmpty, "\(lang): \(keys.count) untranslated, e.g. \(keys.prefix(5))")
+        }
+    }
+
+    @Test("Every translation keeps its English placeholders")
+    func placeholdersPreserved() throws {
+        let catalog = try Self.loadCatalog()
+        var broken: [String] = []
+        for key in Self.translatableKeys(catalog) {
+            let expected = Self.placeholders(key)
+            let locs = catalog.strings[key]?.localizations ?? [:]
+            for lang in Self.languages {
+                guard let value = locs[lang]?.text, !value.isEmpty else { continue }
+                if Self.placeholders(value) != expected {
+                    broken.append("\(lang): \(key)")
+                }
+            }
+        }
+        #expect(broken.isEmpty, "\(broken.count) placeholder mismatches, e.g. \(broken.prefix(5))")
+    }
+
+    @Test("The built app declares all eleven interface languages")
+    func bundleDeclaresLanguages() {
+        let declared = Set(Bundle.main.localizations)
+        for lang in ["en"] + Self.languages {
+            #expect(declared.contains(lang), "Bundle.main.localizations lacks \(lang)")
+        }
+    }
+}
+
+
+// MARK: - Real StoreKit 2 purchase flows (local StoreKit test environment)
+
+/// Purchases, upgrades, refunds, expiry, Ask to Buy and Restore Purchases run
+/// through StoreKit 2 against `maxmailin/Products.storekit` with
+/// `SKTestSession`, and the app's own `StoreManager` decides the tier from
+/// `Transaction.currentEntitlements` with the Debug all-unlocked shortcut
+/// switched off — the same code path the App Store build takes. What this
+/// does NOT cover: the App Store sandbox and Apple Account sign-in, which
+/// need TestFlight.
+///
+/// Both platforms: on macOS `Product.purchase()` needs a window to anchor its
+/// confirmation sheet and the hosted test runner has none, so there the
+/// purchase step is `SKTestSession.buyProduct` (the same local store, no
+/// sheet) and everything after it — `Transaction.currentEntitlements`, the
+/// transaction listener, the expiry re-check, Restore Purchases — is the
+/// app's own code. Ask to Buy needs `purchase()` and stays iOS-only.
+@Suite("StoreKit purchase flows (local StoreKit test environment)", .serialized)
+@MainActor
+struct StoreKitPurchaseFlowTests {
+
+    private static var configURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/Products.storekit")
+    }
+
+    /// One test's StoreKit session plus what it must put back. The test host
+    /// IS the app (same bundle id, same preferences), so every live
+    /// `StoreManager` a test creates writes `entitlement.lastPaidTier` into the
+    /// app's real defaults; a later `StoreManager()` reads it at init and then
+    /// reports `.lapsed` instead of `.free`. The fixture clears that key for
+    /// the test and restores the owner's value afterwards, and leaves the
+    /// session with no transactions, real-time clock and default settings.
+    @MainActor
+    struct Fixture {
+        let session: SKTestSession
+        let savedPaidTier: Any?
+
+        func tearDown() {
+            session.timeRate = .realTime
+            for id in StoreManager.subscriptionProductIDs { try? session.expireSubscription(productIdentifier: id) }
+            session.clearTransactions()
+            session.resetToDefaultState()
+            if let savedPaidTier {
+                UserDefaults.standard.set(savedPaidTier, forKey: StoreManager.lastPaidTierKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+            }
+        }
+    }
+
+    /// What the app's own StoreKit API sees right now (verified only).
+    private static func storeKitView() async -> (all: [StoreKit.Transaction], current: [StoreKit.Transaction]) {
+        var all: [StoreKit.Transaction] = [], current: [StoreKit.Transaction] = []
+        for await result in StoreKit.Transaction.all { if case .verified(let t) = result { all.append(t) } }
+        for await result in StoreKit.Transaction.currentEntitlements { if case .verified(let t) = result { current.append(t) } }
+        return (all, current)
+    }
+
+    /// Waits until the app's StoreKit view satisfies `condition`. On macOS a
+    /// change made through `SKTestSession` (buy, clear, refund, expire) reaches
+    /// `Transaction.all` / `currentEntitlements` a second or more later, via
+    /// storekitagent — measured 2026-11-08: a purchase was invisible right
+    /// after `buyProduct` and visible 3 s later; likewise the previous test's
+    /// transactions were still in `Transaction.all` when the next test began,
+    /// so its fresh manager read them as "a plan was held" (`.lapsed`). That
+    /// lag was the suite's cross-test leak.
+    @discardableResult
+    private func settleStoreKit(_ seconds: Double = 20,
+                                _ condition: (_ all: [StoreKit.Transaction], _ current: [StoreKit.Transaction]) -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            let view = await Self.storeKitView()
+            if condition(view.all, view.current) { return true }
+            if Date() >= deadline { return false }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    private func freshSession() async throws -> Fixture {
+        let session = try SKTestSession(contentsOf: Self.configURL)
+        session.resetToDefaultState()
+        // A subscription an earlier test left auto-renewing (accelerated
+        // time) could renew after its test cleared it and leak a live
+        // Personal entitlement into the next test — expire every one first.
+        session.timeRate = .realTime
+        for id in StoreManager.subscriptionProductIDs { try? session.expireSubscription(productIdentifier: id) }
+        session.clearTransactions()
+        session.disableDialogs = true
+        session.askToBuyEnabled = false
+        // Start only once the app's StoreKit view is empty too (see settleStoreKit).
+        let cleared = await settleStoreKit { all, current in all.isEmpty && current.isEmpty }
+        #expect(cleared, "the previous test's transactions are still visible to StoreKit")
+        let saved = UserDefaults.standard.object(forKey: StoreManager.lastPaidTierKey)
+        UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+        return Fixture(session: session, savedPaidTier: saved)
+    }
+
+    /// Buys `id` from the local store. iOS: the app's `StoreManager.purchase`.
+    /// macOS: `SKTestSession.buyProduct` (no sheet), then the app's own
+    /// entitlement pass, which is what `purchase` runs after a success.
+    private func buy(_ id: String, in store: StoreManager, session: SKTestSession) async throws -> PurchaseOutcome {
+        #if os(iOS)
+        return await store.purchase(try product(id, in: store))
+        #else
+        let before = await Self.storeKitView().all.count
+        _ = try await session.buyProduct(identifier: id)
+        let seen = await settleStoreKit { all, current in all.count > before && current.contains { $0.productID == id } }
+        #expect(seen, "the purchase of \(id) never reached Transaction.currentEntitlements")
+        await store.checkEntitlements()
+        return .success(store.currentTier)
+        #endif
+    }
+
+    /// The live manager as the App Store build runs it: StoreKit products,
+    /// StoreKit entitlements, no Debug unlock.
+    private func liveStore() async -> StoreManager {
+        let store = StoreManager()
+        #if DEBUG
+        store.debugUnlocksAllTiers = false   // Release has no unlock to turn off
+        #endif
+        await store.loadProducts()
+        await store.checkEntitlements()
+        return store
+    }
+
+    private func product(_ id: String, in store: StoreManager) throws -> Product {
+        try #require(store.products.first { $0.id == id }, "product \(id) loads from the StoreKit file")
+    }
+
+    /// Polls until `condition` holds (the transaction listener is async).
+    private func eventually(_ seconds: Double = 8, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return condition()
+    }
+
+    @Test("A fresh install is Free: all six products load, nothing is unlocked, exports are capped")
+    func freshInstallIsFree() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let store = await liveStore()
+        #expect(Set(store.products.map(\.id)) == StoreManager.allProductIDs)
+        #expect(store.effectiveTier == .free)
+        #expect(store.entitlementState == .free, "no remembered tier: \(store.entitlementState)")
+        #expect(!store.isPremium)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: nil, isPremium: store.isPremium) == StoreManager.freeEmailLimit)
+    }
+
+    @Test("Buying Personal yearly unlocks Personal (not Professional) with a renewal date")
+    func buyPersonalYearly() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+        let outcome = try await buy(StoreManager.personalYearlyID, in: store, session: session)
+        #expect(outcome == .success(.personal), "outcome: \(outcome)")
+        #expect(store.isPremium)
+        #expect(!store.isProfessional)
+        #expect(!store.isLifetimePurchase)
+        #expect(store.subscriptionExpirationDate != nil)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: store.isPremium) == nil)
+    }
+
+    @Test("Upgrading Personal to Professional lifetime unlocks Professional for life")
+    func upgradeToProfessionalLifetime() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+        _ = try await buy(StoreManager.personalMonthlyID, in: store, session: session)
+        let outcome = try await buy(StoreManager.professionalLifetimeID, in: store, session: session)
+        #expect(outcome == .success(.professional), "outcome: \(outcome)")
+        #expect(store.isProfessional)
+        #expect(store.isLifetimePurchase)
+        #expect(store.subscriptionExpirationDate == nil)
+    }
+
+    @Test("A refunded (revoked) purchase takes access away")
+    func refundRevokesAccess() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+        _ = try await buy(StoreManager.personalLifetimeID, in: store, session: session)
+        #expect(store.isPremium)
+        let transaction = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalLifetimeID })
+        try session.refundTransaction(identifier: transaction.identifier)
+        await settleStoreKit { all, _ in all.contains { $0.productID == StoreManager.personalLifetimeID && $0.revocationDate != nil } }
+        await store.checkEntitlements()
+        #expect(await eventually { store.effectiveTier == .free }, "tier after refund: \(store.effectiveTier)")
+    }
+
+    @Test("A cancelled subscription lapses on its own at the end of the period, with the app left running")
+    func cancelledSubscriptionLapsesWhileRunning() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        // One monthly period = 30 real seconds.
+        session.timeRate = .monthlyRenewalEveryThirtySeconds
+        let store = await liveStore()
+        _ = try await buy(StoreManager.professionalMonthlyID, in: store, session: session)
+        #expect(store.isProfessional)
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.professionalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        // No checkEntitlements call from here on: the app must notice by itself.
+        #expect(await eventually(60) { store.effectiveTier == .free },
+                "tier after the period ended: \(store.effectiveTier); expiry \(String(describing: store.subscriptionExpirationDate)); now \(Date())")
+    }
+
+    @Test("A subscription that renews keeps access and moves its renewal date forward")
+    func renewalKeepsAccess() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        // One monthly period = 30 real seconds; auto-renew stays on.
+        session.timeRate = .monthlyRenewalEveryThirtySeconds
+        let store = await liveStore()
+        _ = try await buy(StoreManager.personalMonthlyID, in: store, session: session)
+        #expect(store.isPremium)
+        let firstExpiry = try #require(store.subscriptionExpirationDate)
+        // Past the first period: the renewal must have arrived through the
+        // transaction listener (no checkEntitlements call from here on).
+        let renewed = await eventually(60) {
+            (store.subscriptionExpirationDate ?? .distantPast) > firstExpiry
+        }
+        #expect(renewed, "renewal date did not move: first \(firstExpiry), now \(String(describing: store.subscriptionExpirationDate))")
+        #expect(store.isPremium, "access must not lapse across a renewal")
+        #expect(!store.isLifetimePurchase)
+        #expect(session.allTransactions().filter { $0.productIdentifier == StoreManager.personalMonthlyID }.count >= 2,
+                "StoreKit recorded the renewal as a second transaction")
+    }
+
+    @Test("An expired subscription grants nothing once the app is next active")
+    func expiredSubscriptionOnActivation() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+        _ = try await buy(StoreManager.personalMonthlyID, in: store, session: session)
+        #expect(store.isPremium)
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        try session.expireSubscription(productIdentifier: StoreManager.personalMonthlyID)
+        // Wait until StoreKit itself no longer grants it (macOS: storekitagent lag).
+        await settleStoreKit { _, current in !current.contains { $0.productID == StoreManager.personalMonthlyID && ($0.expirationDate ?? .distantFuture) > Date() } }
+        await store.checkEntitlements()   // what the app does on becoming active
+        #expect(store.effectiveTier == .free, "tier: \(store.effectiveTier)")
+    }
+
+    #if os(iOS)
+    @Test("Ask to Buy: pending unlocks nothing; approval unlocks through the transaction listener")
+    func askToBuyPendingThenApproved() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        session.askToBuyEnabled = true
+        let store = await liveStore()
+        let outcome = await store.purchase(try product(StoreManager.personalYearlyID, in: store))
+        #expect(outcome == .pending, "outcome: \(outcome)")
+        #expect(store.purchasePending)
+        #expect(store.effectiveTier == .free, "nothing unlocks while pending")
+        let pending = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalYearlyID })
+        try session.approveAskToBuyTransaction(identifier: pending.identifier)
+        #expect(await eventually { store.effectiveTier == .personal }, "tier after approval: \(store.effectiveTier)")
+    }
+    #endif
+
+    @Test("Restore Purchases on a new install finds the purchase; with none it says so")
+    func restorePurchases() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let buyer = await liveStore()
+        _ = try await buy(StoreManager.professionalYearlyID, in: buyer, session: session)
+
+        // A second manager stands in for the same Apple Account on a fresh install.
+        let reinstall = StoreManager()
+        #if DEBUG
+        reinstall.debugUnlocksAllTiers = false
+        #endif
+        let restored = await reinstall.restorePurchases()
+        #expect(restored == .restored(.professional), "restore outcome: \(restored)")
+        #expect(reinstall.lastRestoreOutcome == restored)
+
+        session.clearTransactions()
+        await settleStoreKit { all, current in all.isEmpty && current.isEmpty }
+        let nobody = StoreManager()
+        #if DEBUG
+        nobody.debugUnlocksAllTiers = false
+        #endif
+        let none = await nobody.restorePurchases()
+        #expect(none == .nothingFound, "restore with no purchases: \(none)")
+    }
+
+    // MARK: LIFE-06 — expiry → lapsed → restore, refund → lapsed (local StoreKit)
+
+    /// The access table LIFE-06 promises once a plan has ended: the whole
+    /// archive readable and searchable (no Free 500 scope), attachments
+    /// saved freely, .eml / mbox exports uncapped, reports on the Free cap,
+    /// no new paid work, maintenance open.
+    private func expectLapsedAccess(_ store: StoreManager, previous: PurchaseTier,
+                                    sourceLocation: SourceLocation = #_sourceLocation) throws {
+        #expect(store.entitlementState == .lapsed(previous: previous), "state: \(store.entitlementState)", sourceLocation: sourceLocation)
+        let policy = store.accessPolicy
+        #expect(policy.isLapsed, sourceLocation: sourceLocation)
+        #expect(policy.archiveReadLimit == nil, "lapsed: the whole archive stays readable and searchable", sourceLocation: sourceLocation)
+        #expect(policy.readsWholeArchive, sourceLocation: sourceLocation)
+        #expect(policy.attachmentDownloadLimit(usedToday: 50, freeAllowance: StoreManager.freeAttachmentDownloadsPerDay) == nil, sourceLocation: sourceLocation)
+        #expect(!policy.allowsPaidWork, "new paid work stops", sourceLocation: sourceLocation)
+        #expect(policy.allowsMaintenance, sourceLocation: sourceLocation)
+        #expect(!store.isPremium, sourceLocation: sourceLocation)
+        let eml = ExportRequest(format: .emlFiles, title: "t", scope: .explicit([UUID()]), destination: "/tmp/x", isFolder: true, cap: nil)
+        var mbox = eml; mbox.format = .mbox; mbox.isFolder = false
+        var pdf = eml; pdf.format = .pdfFiles
+        #expect(try ExportJobRunner.authorized(eml, policy: policy).cap == nil, ".eml export uncapped", sourceLocation: sourceLocation)
+        #expect(try ExportJobRunner.authorized(mbox, policy: policy).cap == nil, "mbox export uncapped", sourceLocation: sourceLocation)
+        #expect(try ExportJobRunner.authorized(pdf, policy: policy).cap == StoreManager.freeEmailLimit, "reports follow the Free cap", sourceLocation: sourceLocation)
+    }
+
+    @Test("LIFE-06: buy a subscription → active; it expires → lapsed with the archive open; re-buy and Restore → active again")
+    func life06_subscriptionExpiryLapsesThenRestoreReactivates() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+
+        // Never paid: Free, newest-500 scope.
+        #expect(store.entitlementState == .free, "state: \(store.entitlementState)")
+        #expect(store.accessPolicy.archiveReadLimit == StoreManager.freeEmailLimit)
+
+        // Buy Professional monthly → active, whole archive, paid work allowed.
+        let outcome = try await buy(StoreManager.professionalMonthlyID, in: store, session: session)
+        #expect(outcome == .success(.professional), "outcome: \(outcome)")
+        #expect(store.entitlementState == .active(.professional), "state: \(store.entitlementState)")
+        #expect(store.accessPolicy.allowsPaidWork)
+        #expect(store.accessPolicy.exportCap(for: .pdfFiles) == nil)
+        #expect(store.subscriptionExpirationDate != nil)
+
+        // The subscription expires (auto-renew off, then StoreKit expires it).
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.professionalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        try session.expireSubscription(productIdentifier: StoreManager.professionalMonthlyID)
+        // Wait until StoreKit itself no longer grants it (macOS: storekitagent lag).
+        await settleStoreKit { _, current in !current.contains { $0.productID == StoreManager.professionalMonthlyID && ($0.expirationDate ?? .distantFuture) > Date() } }
+        await store.checkEntitlements()   // what the app does on becoming active
+        #expect(store.effectiveTier == .free, "tier after expiry: \(store.effectiveTier)")
+        try expectLapsedAccess(store, previous: .professional)
+        // The expired purchase stays in StoreKit's history (nothing on the store side is removed).
+        #expect(session.allTransactions().contains { $0.productIdentifier == StoreManager.professionalMonthlyID })
+
+        // Re-subscribe → active again, on the same manager.
+        let again = try await buy(StoreManager.professionalMonthlyID, in: store, session: session)
+        #expect(again == .success(.professional), "re-buy outcome: \(again)")
+        #expect(store.entitlementState == .active(.professional), "state after re-buy: \(store.entitlementState)")
+        #expect(store.accessPolicy.allowsPaidWork)
+
+        // Restore Purchases on a clean install (no remembered tier) finds the live plan.
+        UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+        let reinstall = StoreManager()
+        #if DEBUG
+        reinstall.debugUnlocksAllTiers = false
+        #endif
+        let restored = await reinstall.restorePurchases()
+        #expect(restored == .restored(.professional), "restore outcome: \(restored)")
+        #expect(reinstall.entitlementState == .active(.professional), "state after restore: \(reinstall.entitlementState)")
+    }
+
+    @Test("LIFE-06: a clean install after the subscription expired reads the history and is lapsed, not Free")
+    func life06_cleanInstallAfterExpiryIsLapsed() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let buyer = await liveStore()
+        _ = try await buy(StoreManager.personalMonthlyID, in: buyer, session: session)
+        #expect(buyer.entitlementState == .active(.personal), "state: \(buyer.entitlementState)")
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        try session.expireSubscription(productIdentifier: StoreManager.personalMonthlyID)
+        // Wait until StoreKit itself no longer grants it (macOS: storekitagent lag).
+        await settleStoreKit { _, current in !current.contains { $0.productID == StoreManager.personalMonthlyID && ($0.expirationDate ?? .distantFuture) > Date() } }
+
+        // A08: no preferences on this install — the App Store history alone proves a plan was held.
+        UserDefaults.standard.removeObject(forKey: StoreManager.lastPaidTierKey)
+        let clean = await liveStore()
+        #expect(clean.effectiveTier == .free, "tier: \(clean.effectiveTier)")
+        try expectLapsedAccess(clean, previous: .personal)
+    }
+
+    @Test("LIFE-06: a refunded lifetime purchase → lapsed with the archive open; buying again → lifetime")
+    func life06_refundLapsesThenRepurchase() async throws {
+        let fixture = try await freshSession()
+        defer { fixture.tearDown() }
+        let session = fixture.session
+        let store = await liveStore()
+        #expect(store.entitlementState == .free, "state: \(store.entitlementState)")
+
+        _ = try await buy(StoreManager.personalLifetimeID, in: store, session: session)
+        #expect(store.entitlementState == .lifetime(.personal), "state: \(store.entitlementState)")
+        #expect(store.subscriptionExpirationDate == nil)
+
+        let transaction = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalLifetimeID })
+        try session.refundTransaction(identifier: transaction.identifier)
+        await settleStoreKit { all, _ in all.contains { $0.productID == StoreManager.personalLifetimeID && $0.revocationDate != nil } }
+        await store.checkEntitlements()
+        #expect(await eventually { store.effectiveTier == .free }, "tier after refund: \(store.effectiveTier)")
+        try expectLapsedAccess(store, previous: .personal)
+
+        // Buying Professional lifetime afterwards → lifetime, paid work back.
+        let outcome = try await buy(StoreManager.professionalLifetimeID, in: store, session: session)
+        #expect(outcome == .success(.professional), "outcome: \(outcome)")
+        #expect(store.entitlementState == .lifetime(.professional), "state: \(store.entitlementState)")
+        #expect(store.accessPolicy.allowsPaidWork)
+    }
+}
+
+#if os(macOS)
+import AppKit
+import SwiftUI
+
+/// Every Mac tool window is a new SwiftUI root built by ToolWindowPresenter.
+/// Found 2026-10-04 (owner clicking Compare): the store was attached INSIDE
+/// the purchase presenter that reads it, so every tool window crashed with
+/// "No ObservableObject of type StoreManager found" the moment it rendered.
+@Suite("Tool windows render with the store attached")
+@MainActor
+struct ToolWindowEnvironmentTests {
+    @Test("A tool window renders its root (purchase presenter included) without crashing")
+    func toolWindowRendersWithStore() throws {
+        let store = StoreManager(testTier: .free)
+        let previous = StoreManager.live
+        StoreManager.live = store
+        defer { StoreManager.live = previous }
+
+        let title = "ToolWindowEnvironmentTests-\(UUID().uuidString)"
+        ToolWindowPresenter.shared.open(title: title, size: CGSize(width: 700, height: 540)) {
+            Text("probe")
+        }
+        let window = try #require(NSApp.windows.first { $0.title == title }, "the tool window opened")
+        // Rendering evaluates PurchasePresenterModifier.body, which reads the store.
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        #expect(window.contentView != nil)
+        ToolWindowPresenter.shared.close(title: title)
+    }
+
+    /// A view that reads both shared objects the way EmailDetailView and the
+    /// studios do; any missing one traps when it renders.
+    private struct EnvironmentProbe: View {
+        @EnvironmentObject var store: StoreManager
+        @Environment(ModuleRegistry.self) private var modules
+        var body: some View { Text("\(store.effectiveTier.rawValue) \(modules.enabledModules.count)") }
+    }
+
+    @Test("Every secondary window root provides the store AND the page registry")
+    func windowRootProvidesStoreAndRegistry() throws {
+        let store = StoreManager(testTier: .professional)
+        let previousStore = StoreManager.live
+        StoreManager.live = store
+        defer { StoreManager.live = previousStore }
+        let (registry, _) = makeRegistry()
+        let previousModules = ModuleRegistry.live
+        ModuleRegistry.live = registry
+        defer { ModuleRegistry.live = previousModules }
+
+        let host = NSHostingView(rootView: ToolWindowPresenter.windowRoot(EnvironmentProbe(), title: "probe"))
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+        host.layoutSubtreeIfNeeded()
+        #expect(host.fittingSize.width > 0)
+    }
+}
+#endif
+
+@Suite("Professional page profession filter")
+@MainActor
+struct ProfessionFilterTests {
+    @Test("Every tool appears for at least one profession, and All tools shows everything")
+    func everyToolHasAProfession() {
+        for destination in ProfessionalPageView.toolDestinations {
+            #expect(ProfessionalPageView.isRelevant(destination, to: nil))
+            let owners = ProfessionalPageView.professions.filter { ProfessionalPageView.isRelevant(destination, to: $0) }
+            #expect(!owners.isEmpty, "\(destination.rawValue) is shown to no profession")
+        }
+        #expect(ProfessionalPageView.showsProduction(for: nil))
+        #expect(ProfessionalPageView.showsProduction(for: .legal))
+    }
+
+    @Test("Choosing a profession narrows the strip")
+    func professionNarrows() {
+        for p in ProfessionalPageView.professions {
+            let shown = ProfessionalPageView.toolDestinations.filter { ProfessionalPageView.isRelevant($0, to: p) }
+            #expect(shown.count < ProfessionalPageView.toolDestinations.count, "\(p.rawValue) shows every tool")
+        }
+    }
+}
+
+@Suite("AI suggestion sender names")
+struct AISuggestionSenderTests {
+    @Test("Display name without quotes, else the address, else empty")
+    func senderNames() {
+        #expect(AIAssistantView.senderDisplayName("\"Ann Lee\" <ann@example.org>") == "Ann Lee")
+        #expect(AIAssistantView.senderDisplayName("Ann Lee <ann@example.org>") == "Ann Lee")
+        #expect(AIAssistantView.senderDisplayName("<ann@example.org>") == "ann@example.org")
+        #expect(AIAssistantView.senderDisplayName("ann@example.org") == "ann@example.org")
+        #expect(AIAssistantView.senderDisplayName("") == "")
+    }
+}
+
+
+// MARK: - AI answers count each conversation once (kalsmritikosh H-1 / D-13)
+
+struct ConversationCountingTests {
+    private func email(_ subject: String, from: String = "a@example.com", body: String) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "To": "me@example.com", "Subject": subject,
+                      "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<\(UUID().uuidString)@example.com>"],
+            rawSource: "", messageType: "received", attachments: [],
+            timestamp: "Tue, 14 Mar 2017 09:41:00 +0000", domains: ["example.com"],
+            plainBody: body, htmlBody: "")
+    }
+
+    @Test("Reply and forward prefixes, case and spacing do not split a conversation")
+    func conversationKey() {
+        let a = EmailNLPEngine.conversationKey(email("Patent  filing", body: "x"))
+        #expect(EmailNLPEngine.conversationKey(email("RE: Fwd: patent filing", body: "x")) == a)
+        #expect(EmailNLPEngine.conversationKey(email("Re[2]: PATENT FILING", body: "x")) == a)
+        #expect(EmailNLPEngine.conversationKey(email("Patent filing 2", body: "x")) != a)
+        // No subject: each email is its own conversation.
+        #expect(EmailNLPEngine.conversationKey(email("", body: "x")) != EmailNLPEngine.conversationKey(email("", body: "x")))
+    }
+
+    @Test("A repeated alert's words count once, below words used across conversations")
+    func repeatedTemplateCountsOnce() {
+        var emails = (0..<40).map { _ in email("Alert generated", from: "alerts@example.com", body: "Expiry of licence photocard for the vehicle owner") }
+        emails += ["Grant notice", "Hearing notice", "Annuity reminder"].map {
+            email($0, body: "The patent application was reviewed by the attorney")
+        }
+        emails += ["Lunch", "Weekend", "Books", "Travel", "Music"].map { email($0, body: "Plans with family") }
+        let topics = EmailNLPEngine.extractTopicsByConversation(from: emails, limit: 10)
+        let patent = topics.first { $0.word == "patent" }
+        #expect(patent?.conversations == 3)
+        // "photocard" lives in one conversation, however many copies: not a topic.
+        #expect(!topics.contains { $0.word == "photocard" || $0.word == "licence" })
+    }
+
+    @Test("Entity gate drops mail brands, hosts, digits and joined sentence fragments")
+    func entityGate() {
+        #expect(EmailNLPEngine.isPresentableEntity("Shabana Khan"))
+        #expect(EmailNLPEngine.isPresentableEntity("Khurana & Khurana"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Gmail"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Google Payments"))
+        #expect(!EmailNLPEngine.isPresentableEntity("smtp.example.net"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Expiry of Driving Licence Photocardon"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Order 4471"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Monday"))
+    }
+
+    @Test("Each cited source is listed once, with its date")
+    func citationLinesUseOnce() {
+        let id = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let ref = EvidenceReference(id: id, messageID: nil, subject: "Grant notice", sender: "Lalan Prasad",
+                                    date: date, excerpt: "", hasAttachments: false)
+        let later = EvidenceReference(id: UUID(), messageID: nil, subject: "Grant notice", sender: "Lalan Prasad",
+                                      date: date.addingTimeInterval(86_400 * 3), excerpt: "", hasAttachments: false)
+        // One line per conversation: subject once, sender, date range, count.
+        let lines = AIGroundingGate.citationLines([ref, ref, later])
+        #expect(lines.count == 1)
+        #expect(lines.first?.hasPrefix("Grant notice — Lalan Prasad · ") == true)
+        #expect(lines.first?.hasSuffix("(2 emails)") == true)
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Thread Story picks one conversation with replies, and narrates each message once")
+    func threadStoryCharter() {
+        let alerts = (0..<9).map { _ in email("Alert generated", from: "alerts@example.com", body: "x") }
+        let thread = [
+            email("Hearing notice", from: "Ann <ann@example.com>", body: "The hearing is on Monday."),
+            email("Re: Hearing notice", from: "Bob <bob@example.com>", body: "Noted, I will attend.\nOn 3 Mar 2024, Ann wrote:\n> The hearing is on Monday."),
+        ]
+        let picked = FoundationModelEngine.busiestConversation(in: alerts + thread)
+        #expect(picked?.count == 2)
+        #expect(FoundationModelEngine.busiestConversation(in: alerts) == nil)
+        #expect(FoundationModelEngine.withoutQuotedReply("Noted, I will attend. On 3 Mar 2024, Ann wrote: The hearing is on Monday.") == "Noted, I will attend.")
+        let header = FoundationModelEngine.episodeHeader(thread)
+        #expect(header.contains("Hearing notice"))
+        #expect(header.contains("Ann, Bob"))
+    }
+}
+
+// MARK: - Security scan and thread choice (2026-10-06 "fix all")
+
+struct SecurityScanAndThreadChoiceTests {
+    private func email(_ subject: String, from: String, to: String = "me@example.com", body: String,
+                       type: String = "received", messageID: String? = nil) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "To": to, "Subject": subject,
+                      "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": messageID ?? "<\(UUID().uuidString)@example.com>"],
+            rawSource: "", messageType: type, attachments: [],
+            timestamp: "Tue, 14 Mar 2017 09:41:00 +0000", domains: ["example.com"],
+            plainBody: body, htmlBody: "")
+    }
+
+    @Test("\"t.co\" inside a domain is not a shortened link; a t.co link is")
+    func shortenerIsAHost() {
+        let plain = email("Fees", from: "Ann <ann@lawfirm.example>", body: "See patent.com and contact.com for details. Please act now.")
+        let reasons = EmailNLPEngine.detectPhishing(in: [plain]).flatMap(\.reasons)
+        #expect(!reasons.contains { $0.hasPrefix("Shortened URL") })
+        let short = email("Fees", from: "x@spam.example", body: "Act now, verify your account: https://t.co/abc click here to verify")
+        #expect(EmailNLPEngine.detectPhishing(in: [short]).flatMap(\.reasons).contains("Shortened URL detected: t.co"))
+    }
+
+    @Test("A quoted display name with the sender's own address is not a mismatch")
+    func quotedDisplayName() {
+        let e = email("Interview", from: "\"hr@corp.example\" <hr@corp.example>", body: "Urgent: interview on Monday. Click here to verify")
+        #expect(!EmailNLPEngine.detectPhishing(in: [e]).flatMap(\.reasons).contains("Display name domain mismatch"))
+    }
+
+    @Test("The same message twice is flagged once")
+    func duplicateFlaggedOnce() {
+        let body = "Urgent: verify your account. Click here to verify. Enter your password."
+        let a = email("Account", from: "x@spam.example", body: body, messageID: "<dup@spam.example>")
+        let b = email("Account", from: "x@spam.example", body: body, messageID: "<dup@spam.example>")
+        #expect(EmailNLPEngine.detectPhishing(in: [a, b]).count == 1)
+    }
+
+    @Test("Wording alone does not make a correspondent's mail high-risk")
+    func correspondentNotHighOnWording() {
+        let body = "Urgent: confirm your details and send money by wire transfer immediately."
+        let sent = email("Fees", from: "me@example.com", to: "Ann <ann@lawfirm.example>", body: "Attached.", type: "sent")
+        let reply = email("Re: Fees", from: "Ann <ann@lawfirm.example>", body: body)
+        let stranger = email("Fees", from: "x@spam.example", body: body)
+        let flags = EmailNLPEngine.detectPhishing(in: [sent, reply, stranger])
+        let annFlag = flags.first { ($0.email.headers["From"] ?? "").contains("ann@") }
+        #expect(annFlag == nil || annFlag?.riskLevel != .high)
+        #expect(flags.contains { ($0.email.headers["From"] ?? "").contains("spam") })
+    }
+
+    @Test("Conversations rank by people taking part; a subject finds its thread")
+    func conversationChoice() {
+        let alerts = (0..<6).map { _ in email("Alert", from: "alerts@example.com", body: "x") }
+        let small = [email("Lunch", from: "a@x.example", body: "x"), email("Re: Lunch", from: "b@x.example", body: "x")]
+        let big = [email("Hearing notice", from: "a@x.example", body: "x"), email("Re: Hearing notice", from: "b@x.example", body: "x"),
+                   email("RE: Hearing notice", from: "c@x.example", body: "x")]
+        let ranked = EmailNLPEngine.conversationsByActivity(in: alerts + small + big)
+        #expect(ranked.count == 2)
+        #expect(ranked.first?.count == 3)
+        #expect(EmailNLPEngine.conversation(matching: "“hearing notice”", in: alerts + small + big)?.count == 3)
+        #expect(EmailNLPEngine.conversation(matching: "hearing", in: alerts + small + big)?.count == 3)
+        #expect(EmailNLPEngine.conversation(matching: "budget", in: alerts + small + big) == nil)
+        #expect(EmailNLPEngine.baseSubject("RE: Fwd:  Hearing   notice") == "Hearing notice")
+    }
+
+    @Test("Story requests and follow-up lines are recognised")
+    func storyAndFollowUpParsing() {
+        #expect(AIAssistantView.threadStorySubject(in: "Tell the story of “Hearing notice”") == "Hearing notice")
+        #expect(AIAssistantView.threadStorySubject(in: "tell me the story of lunch?") == "lunch")
+        #expect(AIAssistantView.threadStorySubject(in: "Tell me about emails from Ann") == nil)
+        #expect(AIAssistantView.followUpQuestion(in: "- Ask: “Tell the story of Lunch” (2 messages)") == "Tell the story of Lunch")
+        #expect(AIAssistantView.followUpQuestion(in: "Ask: “Tell me about emails from Shabana Khan”") == "Tell me about emails from Shabana Khan")
+        #expect(AIAssistantView.followUpQuestion(in: "We will ask: later") == nil)
+    }
+}
+
+struct LinkMismatchTests {
+    @Test("A link written as its own address is not a mismatch; a disguised one is")
+    func linkHosts() {
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="https://www.example.org/a">https://example.org/a</a>"#) == nil)
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="https://mail.example.org/x">www.example.org</a>"#) == nil)
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="https://www.google.com/url?q=https://example.org/p&amp;sa=D">https://example.org/p</a>"#) == nil)
+        let bad = EmailNLPEngine.mismatchedLink(in: #"<a href="http://login-verify.example.net/x">https://www.paypal.com</a>"#)
+        #expect(bad?.shown == "paypal.com")
+        #expect(bad?.actual == "login-verify.example.net")
+    }
+}
+
+struct BrandAndWrappedLinkTests {
+    @Test("Gmail is Google's own domain; long link text split by <wbr> keeps its host")
+    func brandAndWbr() {
+        let drive = MBOXParser.RawEmail(
+            headers: ["From": "\"Ann (via Google Drive)\" <ann@gmail.com>", "Subject": "Shared", "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<d@x>"],
+            rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [], plainBody: "Urgent: open the shared file. Click here to verify", htmlBody: "")
+        #expect(!EmailNLPEngine.detectPhishing(in: [drive]).flatMap(\.reasons).contains { $0.hasPrefix("Brand impersonation") })
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="http://www.apminfrastructure.com">www.a<wbr>pminfrastructure.com</a>"#) == nil)
+    }
+}
+
+struct TypedQuestionRoutingTests {
+    @Test("Slot questions name the label; 'when' adds the event")
+    func slots() {
+        let a = AIAssistantView.slotRequest(in: "What is my granted patent number and when was it granted?")
+        #expect(a?.label == "patent")
+        #expect(a?.verb == "granted")
+        #expect(AIAssistantView.slotRequest(in: "What is the application number of my patent?")?.label == "application")
+        #expect(AIAssistantView.slotRequest(in: "What is the total number of emails?") == nil)
+        #expect(AIAssistantView.slotRequest(in: "Summarize my emails") == nil)
+    }
+
+    @Test("Who-is names a person, not a ranking question")
+    func whoIs() {
+        #expect(AIAssistantView.whoIsName(in: "Who is Shabana Khan?") == "Shabana Khan")
+        #expect(AIAssistantView.whoIsName(in: "Who is emailing me the most?") == nil)
+        #expect(AIAssistantView.whoIsName(in: "Who is Sendhil Kumar?") == "Sendhil Kumar")
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Relaxed search keeps content words and adds synonyms; pipeline labels are removed")
+    func relaxedTermsAndLabels() {
+        let terms = FoundationModelEngine.relaxedSearchTerms(for: "Did I book a train ticket in 2018? From where to where?")
+        #expect(terms.contains("train") && terms.contains("irctc") && terms.contains("2018"))
+        #expect(!terms.contains("did") && !terms.contains("where") && !terms.contains("book"))
+        let cleaned = FoundationModelEngine.withoutPipelineLabels("Deadline passed (from timelineExpert). Request sent (via sentimentExpert) and (via Find emails involving Ann).")
+        #expect(!cleaned.contains("Expert") && !cleaned.contains("via Find"))
+    }
+}
+
+struct PaymentQuestionTests {
+    @Test("Payment questions name the payee")
+    func payee() {
+        #expect(AIAssistantView.paymentQuestion(in: "How much did I pay Khurana & Khurana in total?") == "khurana & khurana")
+        #expect(AIAssistantView.paymentQuestion(in: "How much have I spent?") == "")
+        #expect(AIAssistantView.paymentQuestion(in: "Who emails me the most?") == nil)
+    }
+}
+
+@MainActor
+struct NavigationHistoryTests {
+    @Test("Back and Forward walk the places visited; the same place is one entry")
+    func backAndForward() {
+        let h = NavigationHistory()
+        #expect(!h.canGoBack && !h.canGoForward)
+        h.record(page: .archive, section: "home")
+        h.record(page: .archive, section: "home")          // same place twice: one entry
+        h.record(page: .archive, section: "emailInbox")
+        h.record(page: .aiInsights, section: nil)           // page first…
+        h.record(page: .aiInsights, section: "Ask")         // …then its section: refined, not stacked
+        #expect(h.entries.count == 3)
+        #expect(h.goBack() == NavigationLocation(page: .archive, section: "emailInbox"))
+        #expect(h.canGoForward)
+        h.pending = nil
+        #expect(h.goBack() == NavigationLocation(page: .archive, section: "home"))
+        h.pending = nil
+        #expect(!h.canGoBack)
+        #expect(h.goForward() == NavigationLocation(page: .archive, section: "emailInbox"))
+        h.pending = nil
+    }
+
+    @Test("A new place after going back drops the forward entries, as in a browser")
+    func newPlaceTruncatesForward() {
+        let h = NavigationHistory()
+        h.record(page: .archive, section: "home")
+        h.record(page: .aiInsights, section: "Ask")
+        h.record(page: .professional, section: "0")
+        _ = h.goBack(); h.pending = nil
+        _ = h.goBack(); h.pending = nil
+        h.record(page: .professional, section: "3")
+        #expect(h.entries.map(\.section) == ["home", "3"])
+        #expect(!h.canGoForward)
+    }
+
+    @Test("While a page is being steered by Back, nothing is recorded")
+    func pendingSuppressesRecording() {
+        let h = NavigationHistory()
+        h.record(page: .archive, section: "home")
+        h.record(page: .aiInsights, section: "Reports")
+        _ = h.goBack()                                        // pending = archive/home
+        h.record(page: .archive, section: "emailInbox")      // the page's default state on appear: ignored
+        #expect(h.entries.count == 2 && h.index == 0)
+        h.pending = nil
+        #expect(h.goForward() == NavigationLocation(page: .aiInsights, section: "Reports"))
+    }
+
+    @Test("A page placing itself (Archive landing on the inbox) replaces the entry; no Back step")
+    func automaticLandingReplaces() {
+        let h = NavigationHistory()
+        h.record(page: .archive, section: "home")
+        h.replaceCurrent(page: .archive, section: "emailInbox")
+        #expect(h.entries == [NavigationLocation(page: .archive, section: "emailInbox")])
+        #expect(!h.canGoBack)
+        h.record(page: .aiInsights, section: "Ask")
+        h.record(page: .archive, section: "home")
+        h.replaceCurrent(page: .archive, section: "emailInbox")
+        #expect(h.entries.count == 3 && h.index == 2)
+        // Replacing into a copy of the entry before it collapses the two.
+        let g = NavigationHistory()
+        g.record(page: .archive, section: "emailInbox")
+        g.record(page: .archive, section: "home")
+        g.replaceCurrent(page: .archive, section: "emailInbox")
+        #expect(g.entries.count == 1 && g.index == 0)
+    }
+}
+
+struct BroaderQuestionTests {
+    private func email(_ subject: String, from: String, date: String, body: String, type: String = "received") -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "Subject": subject, "Date": date, "Message-ID": "<\(UUID().uuidString)@x>"],
+            rawSource: "", messageType: type, attachments: [], timestamp: date, domains: [], plainBody: body, htmlBody: "")
+    }
+
+    @Test("Misspelled routing words are corrected; names and inflections are not")
+    func typos() {
+        #expect(AIAssistantView.normalizeTypos("wat is my patnt numbr") == "what is my patent number")
+        #expect(AIAssistantView.slotRequest(in: AIAssistantView.normalizeTypos("wat is my patnt numbr"))?.label == "patent")
+        #expect(AIAssistantView.normalizeTypos("Who emailed me about patents?") == "Who emailed me about patents?")
+        #expect(AIAssistantView.normalizeTypos("Who is Shabana Khan?") == "Who is Shabana Khan?")
+    }
+
+    @Test("Years, payees after a preposition, and which-year questions")
+    func routing() {
+        #expect(AIAssistantView.years(in: "Compare 2012 and 2023, then 2012 again") == [2012, 2023])
+        #expect(AIAssistantView.paymentQuestion(in: "What did I buy on Udemy and how much did I pay?") == "udemy")
+        #expect(AIAssistantView.paymentQuestion(in: "How much did I pay on Udemy?") == "udemy")
+    }
+
+    @Test("A receipt names what was bought; tied oldest emails are both named")
+    func receiptAndTies() async {
+        let receipt = email("Order complete! Start learning now.", from: "Udemy <hello@alerts.udemy.com>", date: "Mon, 18 Mar 2024 13:49:21 +0000",
+                            body: "Ready to jump in? Start learning ( https://ablink.alerts.udemy.com/ls/click?upn=\(String(repeating: "x9", count: 120)) )\nCourse name\nMake Money Online: Secrets to Making Money On Fiverr Fast      List Price:\n₹799.00 Your Price:\n₹499.00\nTotal:\n₹499.00")
+        let paid = await AIAssistantView.handleSmartQuery(query: "What did I buy on Udemy and how much did I pay?")!([receipt]).answer
+        #expect(paid.contains("Secrets to Making Money On Fiverr Fast") && paid.contains("₹499") && !paid.contains("https://"))
+        let bounce = email("Delivery Status Notification (Failure)", from: "Mail Delivery Subsystem <d@x>", date: "Mon, 23 Jul 2007 09:00:06 -0700", body: "a")
+        let mine = email("", from: "Me <me@x>", date: "Mon, 23 Jul 2007 21:30:06 +0530", body: "b", type: "sent")
+        let later = email("Later", from: "A <a@x>", date: "Tue, 24 Jul 2007 10:00:00 +0530", body: "c")
+        let oldest = await AIAssistantView.handleSmartQuery(query: "When is my oldest email from?")!([later, mine, bounce]).answer
+        #expect(oldest.contains("Delivery Status Notification (Failure)") && oldest.contains("(No Subject)"))
+        #expect(AIAssistantView.handleSmartQuery(query: "Which year did I get the most emails?") != nil)
+        #expect(AIAssistantView.handleSmartQuery(query: "How much loan was approved for me?") != nil)
+    }
+
+    @Test("Busiest year, sender counts, several years, oldest email described")
+    func counts() async {
+        let emails = [
+            email("Hello", from: "Hatigarm <h@x>", date: "Tue, 14 Mar 2023 09:41:00 +0000", body: "a"),
+            email("Again", from: "Hatigarm <h@x>", date: "Wed, 15 Mar 2023 09:41:00 +0000", body: "b"),
+            email("Old one", from: "Mail Delivery Subsystem <d@x>", date: "Mon, 23 Jul 2007 09:41:00 +0000", body: "c"),
+            email("Mine", from: "Me <me@x>", date: "Fri, 1 Jun 2012 09:41:00 +0000", body: "d", type: "sent"),
+        ]
+        let busiest = await AIAssistantView.handleSmartQuery(query: "Which year did I get the most emails?")!(emails).answer
+        #expect(busiest.hasPrefix("**2023** — 2 emails"))
+        let fromHatigarm = await AIAssistantView.handleSmartQuery(query: "How many emails did Hatigarm send me?")!(emails).answer
+        #expect(fromHatigarm.hasPrefix("**2 emails from Hatigarm**"))
+        let compared = await AIAssistantView.handleSmartQuery(query: "Compare how many emails I sent in 2012 and 2023")!(emails).answer
+        #expect(compared.contains("**2012**: 1 emails — 1 sent") && compared.contains("**2023**: 2 emails — 0 sent"))
+        let amazon = await AIAssistantView.handleSmartQuery(query: "Did I get any emails from Amazon?")!(emails).answer
+        #expect(amazon.hasPrefix("**0 emails from Amazon**"))
+        let oldest = await AIAssistantView.handleSmartQuery(query: "When is my oldest email from?")!(emails).answer
+        #expect(oldest.contains("“Old one” from Mail Delivery Subsystem"))
+    }
+
+    @Test("A how-much question quotes the stated amount")
+    func amounts() async {
+        let emails = [email("Loan", from: "Bank <b@x>", date: "Tue, 4 Aug 2015 09:41:00 +0000",
+                            body: "Dear customer,\nLoan amount approved Rs. 100000 under FLEXI LOAN.\nRegards"),
+                      email("Other", from: "Shop <s@x>", date: "Tue, 4 Aug 2015 09:41:00 +0000", body: "Your bill is Rs. 250.")]
+        let answer = await AIAssistantView.handleSmartQuery(query: "How much loan was approved for me?")!(emails).answer
+        #expect(answer.contains("Rs. 100000") && !answer.contains("Rs. 250"))
+        #expect(answer.components(separatedBy: "\n- ").count == 2)  // one passage per email
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("History questions get the app's timeline; not-found claims are recognised")
+    func historyAndNotFound() {
+        #expect(FoundationModelEngine.isHistoryQuestion("Tell me the journey of my patent from start to finish"))
+        #expect(!FoundationModelEngine.isHistoryQuestion("What is my patent number?"))
+        let emails = [email("FER for 202331019665", from: "Firm <f@x>", date: "Tue, 12 Sep 2023 09:41:00 +0000", body: "First report on the patent."),
+                      email("Worst food delivered", from: "Me <m@x>", date: "Thu, 22 Aug 2019 09:41:00 +0000", body: "Salted noodles."),
+                      email("Grant of 202331019665", from: "Firm <f@x>", date: "Fri, 29 Nov 2024 09:41:00 +0000", body: "Your patent has been granted. Congratulations.")]
+        let timeline = FoundationModelEngine.matterTimeline(query: "journey of my patent", emails: emails)
+        let fer = timeline.range(of: "FER for")!, grant = timeline.range(of: "Grant of")!
+        #expect(fer.lowerBound < grant.lowerBound)
+        #expect(!timeline.contains("Worst food"))
+        #expect(timeline.contains("**Milestones**") && timeline.contains("has been granted"))
+        #expect(FoundationModelEngine.claimsNothingFound("The search did not return any information about your purchase."))
+        #expect(!FoundationModelEngine.claimsNothingFound("You bought a course for ₹499."))
+    }
+}
+
+struct OwnerAndMatterTests {
+    private func email(_ subject: String, from: String, type: String = "received") -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "Subject": subject, "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<\(UUID().uuidString)@x>"],
+            rawSource: "", messageType: type, attachments: [], timestamp: "", domains: [], plainBody: "x", htmlBody: "")
+    }
+
+    @Test("The owner's own mail reads as You, in names and in prose")
+    func ownerAsYou() {
+        // A scoped identity: a parallel test that runs the model engine refreshes the shared one.
+        OwnerIdentity.$scoped.withValue(OwnerIdentity.snapshot(from: [email("Fees", from: "Everything Media <owner@example.com>", type: "sent"), email("Re: Fees", from: "Ann Lee <ann@example.com>")])) {
+            #expect(OwnerIdentity.isOwner("Everything Media <owner@example.com>"))
+            #expect(!OwnerIdentity.isOwner("Ann Lee <ann@example.com>"))
+            #expect(AIAssistantView.senderDisplayName("Everything Media <owner@example.com>") == "You")
+            let text = OwnerIdentity.rewritingOwnerNames(in: "Everything Media promised to pay. Later, Ann thanked Everything Media.")
+            #expect(text == "You promised to pay. Later, Ann thanked you.")
+        }
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Pending questions are recognised; a matter's shared reference is found")
+    func matter() {
+        #expect(FoundationModelEngine.isPendingQuestion("What do I still need to do for my patent?"))
+        #expect(!FoundationModelEngine.isPendingQuestion("Who is Shabana Khan?"))
+        let emails = [email("Re: Patent requirement : Mr. Sasmal", from: "a@x"),
+                      email("[Our Ref: TIN23/2367] Hearing Notice of Patent Application-202331019665", from: "b@x"),
+                      email("[Our Ref: TIN23/2367] Grant of Patent Application-202331019665", from: "c@x")]
+        #expect(FoundationModelEngine.matterKey(in: emails) == "202331019665")
+    }
+}
+
+struct FindRequestTests {
+    @Test("Find requests name the topic")
+    func topic() {
+        #expect(AIAssistantView.findRequestTopic(in: "Find the email about the Bengali manga translation") == "the Bengali manga translation")
+        #expect(AIAssistantView.findRequestTopic(in: "show me emails mentioning Hyderabad?") == "Hyderabad")
+        #expect(AIAssistantView.findRequestTopic(in: "Find emails from Ann") == nil)
+    }
+}
+
+struct PendingFactsTests {
+    private func email(_ date: String, _ body: String) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(headers: ["From": "Docket <d@firm.example>", "Subject": "Grant", "Date": date, "Message-ID": "<\(UUID().uuidString)@x>"],
+                            rawSource: "", messageType: "received", attachments: [], timestamp: date, domains: [],
+                            plainBody: body, htmlBody: "")
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Done facts are quoted newest first; recurring costs are quoted")
+    func doneAndRecurring() {
+        let emails = [
+            email("Thu, 05 Dec 2024 10:00:00 +0530", "The application has been granted by the Patent Office on 29th November 2024. Fees: INR 800 per year from the 3rd year."),
+            email("Fri, 07 Feb 2025 10:00:00 +0530", "Annuity payment till 03rd *year* has been successfully paid to the Patent Office."),
+        ]
+        let (facts, newest) = FoundationModelEngine.completedFactList(in: emails)
+        #expect(facts.count == 2)
+        #expect(facts.first?.contains("till 03rd year has been successfully paid") == true)
+        #expect(newest?.contains("Grant") == true)
+        #expect(FoundationModelEngine.recurringObligation(in: emails)?.contains("INR 800 per year") == true)
+    }
+}
+
+/// A 5,000-email archive with recent mail: the app-built answers stay
+/// correct and fast past the 2,000-email working set (owner, 2026-10-07).
+struct LargeRecentArchiveTests {
+    private static func archive() -> [MBOXParser.RawEmail] {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        let now = Date()
+        return (0..<5_000).map { i in
+            let date = fmt.string(from: now.addingTimeInterval(-Double(i) * 3_600 * 6))   // one every 6 hours, ~3.4 years
+            let sent = i % 4 == 0
+            let from = sent ? "Me Person <me@example.com>" : "Sender \(i % 40) <s\(i % 40)@corp.example>"
+            var body = "Weekly update number \(i) about the warehouse project and the supplier invoice."
+            if i == 4_321 { body += " Your password: hunter22 for the portal." }
+            if i % 500 == 0 { body += " We confirm the safe receipt of a payment of INR 1,000 via UPI 9\(i) in our account." }
+            return MBOXParser.RawEmail(
+                headers: ["From": from, "To": sent ? "s1@corp.example" : "me@example.com",
+                          "Subject": i % 500 == 0 ? "Payment \(i) for Corp" : "Warehouse update \(i % 50)",
+                          "Date": date, "Message-ID": "<m\(i)@example.com>"],
+                rawSource: "", messageType: sent ? "sent" : "received", attachments: [],
+                timestamp: date, domains: ["corp.example"], plainBody: body, htmlBody: "")
+        }
+    }
+
+    private func ask(_ q: String, _ emails: [MBOXParser.RawEmail]) async -> (String, Double) {
+        guard let handler = AIAssistantView.handleSmartQuery(query: q) else { return ("<no handler>", 0) }
+        let start = Date()
+        let answer = await handler(emails).answer
+        return (answer, Date().timeIntervalSince(start))
+    }
+
+    @Test("Counts, payments, passwords, people and search over 5,000 emails")
+    func answersAtScale() async {
+        let emails = Self.archive()
+        // A scoped identity: a parallel test that runs the model engine refreshes the shared one.
+        await OwnerIdentity.$scoped.withValue(OwnerIdentity.snapshot(from: emails)) {
+            let year = Calendar.current.component(.year, from: Date())
+
+            let (sent, t1) = await ask("How many emails did I send in \(year)?", emails)
+            let expectedSent = emails.filter { $0.messageType == "sent" && (MBOXParser.parseDate($0.headers["Date"]).map { Calendar.current.component(.year, from: $0) == year } ?? false) }.count
+            #expect(sent.contains("You sent \(expectedSent) email"))
+
+            let (paid, t2) = await ask("How much did I pay Corp in total?", emails)
+            #expect(paid.contains("₹10,000 across 10 payments"))
+
+            let (secret, t3) = await ask("Do any emails contain a password?", emails)
+            #expect(secret.contains("1 email shows a password") && !secret.contains("hunter22"))
+
+            let (who, t4) = await ask("Who is Sender 7?", emails)
+            #expect(who.contains("emails from them"))
+
+            let (found, t5) = await ask("Find the email about the supplier invoice", emails)
+            #expect(found.contains("conversations match") || found.contains("Found it"))
+
+            // Each app-built answer over 5,000 emails stays interactive.
+            for t in [t1, t2, t3, t4, t5] { #expect(t < 3.0, "took \(t) s") }
+        }
+    }
+}
+
+struct OwnerNameNotATopicTests {
+    @Test("With the owner known, their own name is never a topic")
+    func ownerNameExcluded() async {
+        let emails = (0..<12).map { i in
+            MBOXParser.RawEmail(
+                headers: ["From": i % 2 == 0 ? "Shirshendu Sasmal <me@example.com>" : "Ann Lee <ann@x.example>",
+                          "Subject": "Topic \(i % 6)", "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<t\(i)@x>"],
+                rawSource: "", messageType: i % 2 == 0 ? "sent" : "received", attachments: [], timestamp: "", domains: [],
+                // "contract" in 3 of the 6 conversations: a topic, not boilerplate.
+                plainBody: (i % 6 < 3 ? "The warehouse contract needs review. " : "Lunch on Friday. ") + "Regards, Shirshendu Sasmal.", htmlBody: "")
+        }
+        // A scoped identity: a parallel test that runs the model engine refreshes the shared one.
+        await OwnerIdentity.$scoped.withValue(OwnerIdentity.snapshot(from: emails)) {
+            guard let handler = AIAssistantView.handleSmartQuery(query: "What are the most common topics in my inbox?") else {
+                Issue.record("no topic handler"); return
+            }
+            let answer = await handler(emails).answer.lowercased()
+            #expect(!answer.contains("sasmal") && !answer.contains("shirshendu"))
+            #expect(answer.contains("contract") || answer.contains("warehouse"))
+        }
+    }
+}
+
+struct RecentInboxTriageTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("With mail from this week, Smart Triage uses the model's urgency groups, not the old-archive list")
+    func recentTriage() async throws {
+        guard FoundationModelEngine.isAvailable else { return }   // needs Apple Intelligence on this Mac
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        let now = Date()
+        let emails = (0..<12).map { i in
+            let date = fmt.string(from: now.addingTimeInterval(-Double(i) * 3_600 * 20))
+            let body = i == 0
+                ? "Please sign and return the lease renewal by Friday; the deadline is this week."
+                : "Weekly team update \(i): notes from the meeting."
+            return MBOXParser.RawEmail(
+                headers: ["From": "Landlord \(i) <l\(i)@x.example>", "To": "me@example.com",
+                          "Subject": i == 0 ? "Action required: lease renewal deadline" : "Team update \(i)",
+                          "Date": date, "Message-ID": "<r\(i)@x>"],
+                rawSource: "", messageType: "received", attachments: [], timestamp: date, domains: [],
+                plainBody: body, htmlBody: "")
+        }
+        let answer = try await FoundationModelEngine.triageEmails(emails) { _ in }
+        #expect(!answer.contains("Nothing needs action now"))
+        #expect(answer.localizedCaseInsensitiveContains("lease"))
+    }
+}
+
+struct DiscussionAndOpenerTests {
+    @Test("Discussion questions name the person and the topic")
+    func discussion() {
+        let a = AIAssistantView.discussionRequest(in: "Summarize what Hatigarm and I discussed about translating manga into Bengali")
+        #expect(a?.person == "hatigarm")
+        #expect(a?.topic == "translating manga into bengali")
+        let b = AIAssistantView.discussionRequest(in: "Summarize my conversation with Shabana Khan")
+        #expect(b?.person == "shabana khan" && b?.topic == nil)
+        #expect(AIAssistantView.discussionRequest(in: "Who emails me the most?") == nil)
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("A not-found opener is dropped only when the answer names a retrieved email")
+    func opener() {
+        let ref = EvidenceReference(id: UUID(), messageID: nil, subject: "Re: Hatigarm Scans Bengali translation of Chinese manga",
+                                    sender: "Hatigarm", date: Date(), excerpt: "", hasAttachments: false)
+        let found = FoundationModelEngine.withoutFalseNotFoundOpener(
+            "I couldn't find any emails specifically about manga. However, the thread Hatigarm Scans Bengali translation of Chinese manga covers it.",
+            evidence: [ref])
+        #expect(found.hasPrefix("The thread Hatigarm Scans"))
+        let honest = "I couldn't find any emails about the budget."
+        #expect(FoundationModelEngine.withoutFalseNotFoundOpener(honest, evidence: [ref]) == honest)
+    }
+}
+
+struct FallbackAndFiguresTests {
+    @Test("Refusals and empty answers are unusable; real answers are not")
+    func unusable() {
+        #expect(EvidenceFallback.isUnusable("I cannot provide information about requests for content."))
+        #expect(EvidenceFallback.isUnusable("Not enough evidence in this archive to answer that confidently.\n(Response timed out — partial result shown)"))
+        #expect(EvidenceFallback.isUnusable("   "))
+        #expect(!EvidenceFallback.isUnusable("The settlement amount was Rs.1500/-."))
+    }
+
+    @Test("The fallback quotes the emails and names its reason")
+    func fallback() {
+        let email = MBOXParser.RawEmail(
+            headers: ["From": "APML <k@packers.example>", "Subject": "FULL AND FINAL SETTLEMENT FOR AMOUNT RS.1500/-", "Date": "Sat, 25 Apr 2015 10:00:00 +0530", "Message-ID": "<p@x>"],
+            rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [],
+            plainBody: "Dear Sir, the full and final settlement amount of Rs.1500 has been approved for your shifting claim.", htmlBody: "")
+        let answer = EvidenceFallback.build(query: "What was the settlement amount with the packers?", emails: [email], reason: "Apple Intelligence took too long")
+        #expect(answer.contains("Apple Intelligence took too long"))
+        #expect(answer.localizedCaseInsensitiveContains("settlement"))
+        #expect(answer.localizedCaseInsensitiveContains("rs.1500"))
+        #expect(answer.contains("not written by AI"))
+    }
+
+    @Test("Sentences with figures the emails don't contain are removed")
+    func figures() {
+        let sources = ["we confirm the safe receipt of a payment of INR 10,000", "a payment of INR 20,000", "a payment of INR 3,800"]
+        let answer = "You paid INR 10,000 in October. The total paid is INR 47,600.\n- INR 3,800 in February"
+        let (text, removed) = AIGroundingGate.removingUnsupportedFigures(answer, sources: sources)
+        #expect(removed == 1)
+        #expect(text.contains("INR 10,000") && text.contains("INR 3,800") && !text.contains("47,600"))
+        #expect(text.contains("1 statement removed"))
+    }
+}
+
+struct BudgetAndDisplayTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("The call budget allows exactly its limit")
+    func budget() {
+        let b = ModelScheduler.CallBudget(limit: 2)
+        #expect(b.take() && b.take() && !b.take())
+    }
+
+    @Test("Routing tags are hidden from the user")
+    func display() {
+        #expect(AIAssistantView.displayQuestion("[Smart Triage] Prioritize my emails and suggest actions") == "Prioritize my emails and suggest actions")
+        #expect(AIAssistantView.displayQuestion("Who emails me the most?") == "Who emails me the most?")
+    }
+
+    @Test("Background analysis does not call the model")
+    func background() {
+        #expect(DerivedAIAnalysis.usesModelInBackground == false)
+    }
+}
+
+struct FillerTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("Trailing filler is removed, the answer is kept")
+    func filler() {
+        let text = "The settlement amount was Rs.1500. Let me know if you'd like further assistance!"
+        #expect(FoundationModelEngine.withoutFiller(text) == "The settlement amount was Rs.1500.")
+        #expect(FoundationModelEngine.withoutFiller("Let me know.") == "Let me know.")
+    }
+}
+
+struct UnwitnessedDateTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("A date no email in the thread carries is removed from the story")
+    func dates() {
+        let email = MBOXParser.RawEmail(headers: ["From": "A <a@x>", "Subject": "S", "Date": "Mon, 18 Sep 2017 20:00:00 -0700", "Message-ID": "<d@x>"],
+                                        rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [], plainBody: "x", htmlBody: "")
+        let story = "On 12 Mar, Hatigarm asked a question. On 19 Sep, the time was confirmed."
+        let fixed = FoundationModelEngine.withoutUnwitnessedDates(story, thread: [email])
+        #expect(fixed == "Hatigarm asked a question. On 19 Sep, the time was confirmed.")
+    }
+}
+
+struct RedactedExportTests {
+    private func email(_ i: Int, body: String, html: String = "", from: String = "Ann Lee <ann@corp.example>") -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "To": "me@example.com", "Subject": "Case \(i)", "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<r\(i)@x>"],
+            rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [],
+            plainBody: body, htmlBody: html)
+    }
+
+    @Test("HTML-only bodies export as text; IDs are not phones")
+    func bodyAndIDs() {
+        let html = "<html><head><style>p{color:red}</style></head><body><p>Call 9123861172</p><div>App No. 202331019665</div><img src=\"x.png\"></body></html>"
+        let r = RedactionEngine.redactEmail(email(1, body: "", html: html), rules: RedactionEngine.defaultRules)
+        #expect(!r.body.contains("<") && !r.body.contains("color:red"))
+        #expect(r.body.contains("[REDACTED-PHONE]"))
+        #expect(r.body.contains("202331019665"))
+        #expect(r.date == "Tue, 14 Mar 2017 09:41:00 +0000")
+    }
+
+    @Test("Every email is written, with dates and totals; a surviving name blocks the export")
+    func writeAndBlock() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("redact-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let emails = (0..<450).map { email($0, body: "Reach me at ann@corp.example or 9123861172.") }
+        let text = dir.appendingPathComponent("e.txt"), log = dir.appendingPathComponent("l.csv")
+        let ok = await RedactionEngine.writeExport(textURL: text, logURL: log, query: nil, emails: emails,
+                                                   rules: RedactionEngine.defaultRules, person: nil)
+        #expect(ok.emails == 450 && ok.leaks.isEmpty && ok.failure == nil)
+        let out = try String(contentsOf: text, encoding: .utf8)
+        #expect(out.components(separatedBy: "\nDate: ").count - 1 == 450)
+        #expect(out.hasSuffix("Total Emails: 450\nTotal Redactions: \(ok.redactions)\n"))
+        #expect(!out.contains("ann@corp.example") && !out.contains("9123861172"))
+        let csv = try String(contentsOf: log, encoding: .utf8)
+        #expect(csv.components(separatedBy: "EmailID,Field").count - 1 == 1)
+
+        // Person target "Ann Lee" is in the From display name, which no
+        // default rule removes: the export is blocked and both files deleted.
+        let blocked = await RedactionEngine.writeExport(textURL: text, logURL: log, query: nil, emails: emails,
+                                                        rules: RedactionEngine.defaultRules, person: ("Ann Lee", nil))
+        #expect(!blocked.leaks.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: text.path) && !FileManager.default.fileExists(atPath: log.path))
+    }
+}

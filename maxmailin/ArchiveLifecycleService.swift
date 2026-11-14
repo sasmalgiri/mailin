@@ -1,3 +1,5 @@
+@testable import ArchiveCore
+import MailConnectivity
 //
 //  ArchiveLifecycleService.swift
 //  maxmailin
@@ -30,6 +32,7 @@
 //
 
 import Foundation
+import MailConnectivity
 import os.log
 
 @MainActor
@@ -115,8 +118,23 @@ final class ArchiveLifecycleService {
             await fm.bootstrapFromStore()
         }
 
-        // 3. Spotlight.
-        SpotlightIndexer.shared.removeAllIndexedEmails()
+        // 3. Spotlight. The domain delete takes every item, including the
+        //    held rows that are still in the archive; re-add those once the
+        //    delete has landed (v2.1 backlog #13 — they used to reappear only
+        //    on the next launch's full pass).
+        let heldForSpotlight = Array(held)
+        let spotlightStore = store
+        SpotlightIndexer.shared.removeAllIndexedEmails {
+            guard !heldForSpotlight.isEmpty else { return }
+            Task { @MainActor in
+                for start in stride(from: 0, to: heldForSpotlight.count, by: 200) {
+                    let page = Array(heldForSpotlight[start..<min(start + 200, heldForSpotlight.count)])
+                    if let emails = try? await spotlightStore.emails(withIDs: page), !emails.isEmpty {
+                        SpotlightIndexer.shared.indexEmails(emails)
+                    }
+                }
+            }
+        }
 
         // 4. Active import checkpoints — a fresh import must re-ingest.
         do { try await ImportCheckpointStore.shared.reset() }
@@ -162,6 +180,9 @@ final class ArchiveLifecycleService {
     @discardableResult
     func eraseAllData() async -> ClearOutcome {
         var outcome = ClearOutcome()
+        // Connected mail stops first (captures waited for, outbox driver off):
+        // nothing may write into the archive or send while it is erased.
+        await ConnectedMailRuntime.suspendForArchiveChange()
         do {
             outcome = try await clearArchive(respectLegalHolds: false, auditTheClear: false)
         } catch {
@@ -178,6 +199,43 @@ final class ArchiveLifecycleService {
         // tombstone and migration flags — so they are re-stamped below.
         LegalComplianceManager.shared.deleteAllUserData()
         UserDefaults.standard.set(true, forKey: Self.migrationTombstoneKey)
+        // Connected-account sign-in data (tokens, passwords) lives in its own
+        // Keychain service; the erase removes it too.
+        if let warning = Self.eraseConnectedMailSecrets(KeychainCredentialStore()) { outcome.warnings.append(warning) }
+        // Connected accounts, folders, provider identities, cursors and runs,
+        // and the drafts / outbox / lifecycle / server-action folders: an
+        // account added again starts from nothing and captures its mail again.
+        outcome.warnings += await Self.eraseConnectedMailData(store: store)
         return outcome
+    }
+
+    /// The connected-mail folders under the store (drafts, outbox, lifecycle
+    /// ledger, server-action journal).
+    nonisolated static let connectedMailFolders = [DraftStore.folderName, OutboxStore.folderName,
+                                                   ConnectedLifecycle.folderName, RemoteOperationJournal.folderName]
+
+    /// Delete All Data's connected part: every connected-mail row, then the
+    /// connected folders. Failures are stated warnings, never silent.
+    static func eraseConnectedMailData(store: SQLiteEmailStore) async -> [String] {
+        var warnings: [String] = []
+        do { try await store.eraseConnectedMailRows() } catch {
+            warnings.append("Connected-mail accounts and their records could not be erased: \(error.localizedDescription)")
+        }
+        let fm = FileManager.default
+        for name in connectedMailFolders {
+            let folder = store.storeDirectory.appendingPathComponent(name, isDirectory: true)
+            guard fm.fileExists(atPath: folder.path) else { continue }
+            do { try fm.removeItem(at: folder) } catch {
+                warnings.append("The connected-mail folder \(name) could not be erased: \(error.localizedDescription)")
+            }
+        }
+        return warnings
+    }
+
+    /// Removes every connected-account secret; a failure is a stated warning.
+    static func eraseConnectedMailSecrets(_ store: KeychainCredentialStore) -> String? {
+        do { try store.deleteAll(); return nil } catch {
+            return "Connected-account sign-in data could not be erased: \(error.localizedDescription)"
+        }
     }
 }

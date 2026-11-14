@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  MemoryPressureHandler.swift
 //  maxmailin
@@ -113,6 +114,9 @@ final class MemoryPressureHandler {
         case warning, critical, thermal
     }
 
+    /// Test seam: runs the same path as a system pressure event.
+    func simulatePressure(level: PressureLevel) { handlePressure(level: level) }
+
     private func handlePressure(level: PressureLevel) {
         logger.warning("Memory pressure: \(level.rawValue, privacy: .public) — dropping caches.")
         lastObservedLevel = level
@@ -130,11 +134,10 @@ final class MemoryPressureHandler {
         // System-wide URL cache.
         URLCache.shared.removeAllCachedResponses()
 
-        // SwiftData metadata caches are managed by the framework; nudging
-        // the runtime via clearing temp dirs helps.
-        let tempDir = FileManager.default.temporaryDirectory
-        try? FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)
-            .forEach { try? FileManager.default.removeItem(at: $0) }
+        // Files in the temporary folder are never deleted here: they belong to
+        // work in progress (export staging, extraction scratch, open stores), and
+        // deleting them under pressure unlinked live databases. Expired temp files
+        // are removed by `FileUtils.cleanupExpiredTempFiles()` only.
 
         if aggressive {
             // Hint the system that thumbnails / image caches can go.

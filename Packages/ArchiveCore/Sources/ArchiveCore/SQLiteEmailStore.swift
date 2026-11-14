@@ -1,0 +1,7333 @@
+//
+//  SQLiteEmailStore.swift
+//  maxmailin
+//
+//  Stage 4B (v2-core-cutover): the direct-SQLite/blob canonical store that
+//  replaces SwiftData behind `EmailRepository`. Chosen because the stress
+//  harness proved SwiftData couldn't scale import (O(N²) unindexed dedup) or
+//  keyset paging (O(N) unindexed date) on the macOS 14.6 / iOS 17.6 target,
+//  where SwiftData exposes no secondary-index API. Here we `CREATE INDEX`
+//  freely:
+//    • a PARTIAL UNIQUE index on message_id (WHERE message_id IS NOT NULL) turns
+//      dedup into a single `INSERT OR IGNORE` — O(1) per row, and NULLs (no
+//      Message-ID) are never collapsed, so no data loss;
+//    • an index on (date, id) makes the keyset page an O(log N) seek.
+//
+//  Bounded memory by construction: bodies live in a separate `email_bodies`
+//  table, so summary/paging/count/reconcile scans never touch blob data. The
+//  same actor-isolated contract as `EmailStore` (see `EmailArchiveStore`), so
+//  the repository and UI are unchanged.
+//
+
+import Foundation
+import SQLite3
+import CryptoKit
+import os.log
+
+private let sqliteStoreLog = Logger(subsystem: "com.ecosanskriti.mailin", category: "SQLiteEmailStore")
+
+private extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [self] }
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
+        }
+    }
+}
+
+actor SQLiteEmailStore: EmailArchiveStore {
+
+    private let directory: URL
+    private var db: OpaquePointer?
+
+    /// The production store, under Application Support (Data Protection applies).
+    /// Kept in its own `sqlite/` subdir, separate from the SwiftData store so a
+    /// non-destructive migration can read the old store while writing the new.
+    static let shared = SQLiteEmailStore(directory: SQLiteEmailStore.productionDirectory)
+
+    /// The default location, always under Application Support.
+    static var defaultProductionDirectory: URL {
+        let appSupport = UITestStorageRoot.applicationSupport
+        return appSupport
+            .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
+            .appendingPathComponent("sqlite", isDirectory: true)
+    }
+
+    /// Where the production store actually lives.
+    ///
+    /// Honours a location chosen through B5 (`ArchiveLocationStore`) — but
+    /// ONLY when the default location holds no archive yet. That condition is
+    /// the whole safety of the feature: adopting a new path while an archive
+    /// exists at the old one would make that archive invisible, and a user
+    /// whose mail vanished after picking a folder would reasonably conclude
+    /// the app had destroyed it.
+    ///
+    /// Before this, the chosen location was recorded and then never read, so
+    /// `ArchiveLocationView` telling the user "mailin will use the new
+    /// location for archives created from now on" was simply false. It is now
+    /// true as written: new archives go there, existing ones do not move.
+    ///
+    /// 3.0 (B5): the rules live in `ArchiveLayout.resolveRoot`, shared with
+    /// the FTS shards so the database and the index always sit under ONE
+    /// root. A verified `ArchiveRelocator` move is honoured when its
+    /// destination is reachable; otherwise the copy on this Mac is used.
+    static var productionDirectory: URL {
+        ArchiveLayout.sqliteDirectory(under: ArchiveLayout.productionRoot)
+    }
+
+    /// Isolated on-disk store under `directory` (harness/test), or the shared
+    /// production store via `.shared`.
+    init(directory: URL) {
+        self.directory = directory
+    }
+
+    /// The on-disk location of this store. Used by the activation coordinator's
+    /// reopen gate to prove durability with a fresh connection.
+    nonisolated var storeDirectory: URL { directory }
+
+    // MARK: - Raw-MIME blob tier (S3b)
+    //
+    // SQLite's default maximum BLOB length is 1 GB, and that is also its
+    // maximum ROW size — no page size makes a 1.5 GB message storable as a
+    // row. So raw MIME above `BlobStore.inlineThresholdBytes` goes to the
+    // content-addressed store beside the database and the row keeps a
+    // reference.
+    //
+    // Invariants every path below depends on:
+    //  1. Exactly one of `raw` / `raw_blob_digest` is non-empty for a row.
+    //  2. The blob is written and fsynced BEFORE the row that references it
+    //     commits, so a crash in between leaves a collectable orphan rather
+    //     than a row pointing at nothing. Orphans cost disk; dangling
+    //     references lose evidence.
+    //  3. `raw_blob_length` is in the row, so size predicates and byte-budget
+    //     paging never open a blob to learn how big it is.
+
+    /// `<store>/blobs`. Same directory as the database, so a store copied or
+    /// moved carries its bodies with it.
+    nonisolated var blobStore: BlobStore { BlobStore.production(storeDirectory: directory) }
+
+    /// The raw MIME for a row, from whichever tier holds it.
+    ///
+    /// Returns "" when the row genuinely has no raw source (pre-v2 migrated
+    /// rows), which the fidelity and header-recovery passes treat as work to
+    /// do. A blob-backed row whose blob is MISSING throws instead of returning
+    /// "" — silently reporting a stored message as having no source would send
+    /// the backfills off to "heal" a row that is merely unreadable.
+    nonisolated func rawMIME(inline: String?, digest: String?, blobLength: Int64) throws -> String {
+        if let inline, !inline.isEmpty { return inline }
+        guard let digest, !digest.isEmpty else { return "" }
+        let data = try blobStore.read(BlobReference(digest: digest, length: blobLength))
+        // Raw MIME is stored as bytes; decode leniently because a mailbox may
+        // carry any charset and a strict UTF-8 failure must not read as
+        // "no source".
+        return String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? ""
+    }
+
+    /// The tier a raw source belongs in, with the blob already durable.
+    ///
+    /// Called INSIDE the insert loop but the blob write happens outside the
+    /// SQLite transaction — deliberately. A blob written inside a transaction
+    /// that then rolls back is an orphan either way, and holding a write
+    /// transaction open across an fsync of a multi-gigabyte file would block
+    /// every reader for the duration.
+    private struct RawTier {
+        var inline: Data?
+        var digest: String?
+        var length: Int64
+    }
+
+    private func rawTier(for rawSource: String) throws -> RawTier {
+        guard let data = rawSource.data(using: .utf8) else {
+            return RawTier(inline: nil, digest: nil, length: 0)
+        }
+        guard data.count > BlobStore.inlineThresholdBytes else {
+            return RawTier(inline: data, digest: nil, length: 0)
+        }
+        let reference = try blobStore.write(data)
+        return RawTier(inline: nil, digest: reference.digest, length: reference.length)
+    }
+
+    /// Every digest still referenced by a row — the input orphan collection
+    /// needs to be safe. A blob is deleted only if it appears in no row.
+    func referencedBlobDigests() throws -> Set<String> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT raw_blob_digest FROM email_bodies WHERE raw_blob_digest IS NOT NULL AND raw_blob_digest <> '';")
+        defer { sqlite3_finalize(stmt) }
+        var digests: Set<String> = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let text = sqlite3_column_text(stmt, 0) {
+                digests.insert(String(cString: text))
+            }
+        }
+        return digests
+    }
+
+    /// Deletes blobs no row references. Safe to call at any time: it asks the
+    /// database for the live set first, so a blob written by an import that is
+    /// still in flight is only collected if that import never committed.
+    @discardableResult
+    func collectBlobOrphans() throws -> (deleted: Int, bytesReclaimed: Int64) {
+        let referenced = try referencedBlobDigests()
+        return blobStore.collectOrphans(referenced: referenced)
+    }
+
+    /// Total bytes held in the blob tier — `StoragePlanner` counts this as
+    /// part of the archive's footprint, because it is.
+    nonisolated func blobTierBytes() -> Int64 { blobStore.totalBytes() }
+
+    // MARK: - Message locators (S4/S5)
+    //
+    // Optional per message. A row without a locator is served exactly as
+    // before, from its stored raw MIME — which is every message imported
+    // before the offset parser was switched on. Nothing here changes how an
+    // existing archive behaves.
+
+    /// Everything the import knows about where one committed message's bytes
+    /// live. Handed to `insertBatch` so it is written in the SAME transaction
+    /// as the row (audit F02, 2026-09-28): a message above the full-parse
+    /// ceiling has no stored content, so a row without its locator is a
+    /// message that exists in name only.
+    struct LocatorRecord: Sendable {
+        var locator: MessageLocator
+        var bodyDecoded: Bool
+        var parts: [PartLocator] = []
+    }
+
+    /// Records (or replaces) where one message's original bytes live.
+    func saveLocator(_ locator: MessageLocator, emailID: UUID, bodyDecoded: Bool) throws {
+        let db = try ensureDB()
+        try writeLocator(db, locator, emailID: emailID, bodyDecoded: bodyDecoded)
+    }
+
+    /// The statement behind `saveLocator`, for callers that already hold a
+    /// transaction (`insertBatch`).
+    private func writeLocator(_ db: OpaquePointer, _ locator: MessageLocator, emailID: UUID, bodyDecoded: Bool) throws {
+        let stmt = try prepare(db, """
+            INSERT INTO message_locators(
+                email_id, source_path, source_digest,
+                msg_offset, msg_length, header_offset, header_length,
+                body_offset, body_length, envelope_offset, envelope_length,
+                ordinal, body_decoded
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                source_path = excluded.source_path,
+                source_digest = excluded.source_digest,
+                msg_offset = excluded.msg_offset, msg_length = excluded.msg_length,
+                header_offset = excluded.header_offset, header_length = excluded.header_length,
+                body_offset = excluded.body_offset, body_length = excluded.body_length,
+                envelope_offset = excluded.envelope_offset, envelope_length = excluded.envelope_length,
+                ordinal = excluded.ordinal, body_decoded = excluded.body_decoded;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, emailID.uuidString)
+        bindText(stmt, 2, locator.sourcePath)
+        bindTextOrNull(stmt, 3, locator.sourceDigest)
+        sqlite3_bind_int64(stmt, 4, locator.messageRange.offset)
+        sqlite3_bind_int64(stmt, 5, locator.messageRange.length)
+        sqlite3_bind_int64(stmt, 6, locator.headerRange.offset)
+        sqlite3_bind_int64(stmt, 7, locator.headerRange.length)
+        sqlite3_bind_int64(stmt, 8, locator.bodyRange.offset)
+        sqlite3_bind_int64(stmt, 9, locator.bodyRange.length)
+        if let envelope = locator.envelopeRange {
+            sqlite3_bind_int64(stmt, 10, envelope.offset)
+            sqlite3_bind_int64(stmt, 11, envelope.length)
+        } else {
+            sqlite3_bind_null(stmt, 10)
+            sqlite3_bind_null(stmt, 11)
+        }
+        sqlite3_bind_int64(stmt, 12, Int64(locator.ordinal))
+        sqlite3_bind_int(stmt, 13, bodyDecoded ? 1 : 0)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    /// Records (or replaces) where each of one message's MIME parts lives.
+    ///
+    /// Replaces rather than appends: a resumed or re-run import must not leave
+    /// a message with two generations of parts, which would make "the third
+    /// attachment" ambiguous.
+    func savePartLocators(_ parts: [PartLocator], emailID: UUID) throws {
+        let db = try ensureDB()
+        try inExclusiveTransaction(db) {
+            try writePartLocators(db, parts, emailID: emailID)
+        }
+    }
+
+    /// The statements behind `savePartLocators`, for callers that already
+    /// hold a transaction (`insertBatch`).
+    func writePartLocators(_ db: OpaquePointer, _ parts: [PartLocator], emailID: UUID) throws {
+            let clear = try prepare(db, "DELETE FROM part_locators WHERE email_id = ?;")
+            bindText(clear, 1, emailID.uuidString)
+            let cleared = sqlite3_step(clear) == SQLITE_DONE
+            sqlite3_finalize(clear)
+            guard cleared else { throw SQLiteStoreError.step(lastError(db)) }
+
+            guard !parts.isEmpty else { return }
+            let stmt = try prepare(db, """
+                INSERT INTO part_locators(
+                    email_id, part_index, mime_path, mime_type, filename, content_id,
+                    encoding, content_offset, content_length, header_offset, header_length
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (index, part) in parts.enumerated() {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, emailID.uuidString)
+                sqlite3_bind_int64(stmt, 2, Int64(index))
+                // The MIME path is structure, not a number — "1.0" and "1"
+                // are different positions — so it is stored as written.
+                bindText(stmt, 3, part.path.map(String.init).joined(separator: "."))
+                bindText(stmt, 4, part.mimeType)
+                bindTextOrNull(stmt, 5, part.filename)
+                bindTextOrNull(stmt, 6, part.contentID)
+                bindTextOrNull(stmt, 7, part.contentTransferEncoding)
+                sqlite3_bind_int64(stmt, 8, part.contentRange.offset)
+                sqlite3_bind_int64(stmt, 9, part.contentRange.length)
+                sqlite3_bind_int64(stmt, 10, part.headerRange.offset)
+                sqlite3_bind_int64(stmt, 11, part.headerRange.length)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw SQLiteStoreError.step(lastError(db))
+                }
+            }
+    }
+
+    /// One message's parts, in document order. Empty means "no parts
+    /// recorded", which a caller must treat as "use the whole-message path"
+    /// and never as "this message has no attachments".
+    func partLocators(forEmailID id: UUID) throws -> [PartLocator] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT mime_path, mime_type, filename, content_id, encoding,
+                   content_offset, content_length, header_offset, header_length
+            FROM part_locators WHERE email_id = ? ORDER BY part_index;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+
+        var parts: [PartLocator] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let path = columnText(stmt, 0)
+                .split(separator: ".")
+                .compactMap { Int($0) }
+            parts.append(PartLocator(
+                messageID: id,
+                path: path,
+                mimeType: columnText(stmt, 1),
+                filename: columnTextOptional(stmt, 2),
+                contentID: columnTextOptional(stmt, 3),
+                contentTransferEncoding: columnTextOptional(stmt, 4),
+                contentRange: ByteRange(offset: sqlite3_column_int64(stmt, 5),
+                                        length: sqlite3_column_int64(stmt, 6)),
+                headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 7),
+                                       length: sqlite3_column_int64(stmt, 8))))
+        }
+        return parts
+    }
+
+    /// How many messages have their parts recorded — for the storage screen
+    /// and for judging whether the per-part read path is actually in use.
+    func partLocatorMessageCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(DISTINCT email_id) FROM part_locators;")
+    }
+
+    func locator(forEmailID id: UUID) throws -> MessageLocator? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT source_path, source_digest, msg_offset, msg_length,
+                   header_offset, header_length, body_offset, body_length,
+                   envelope_offset, envelope_length, ordinal
+            FROM message_locators WHERE email_id = ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        let envelope: ByteRange? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+            ? nil
+            : ByteRange(offset: sqlite3_column_int64(stmt, 8),
+                        length: sqlite3_column_int64(stmt, 9))
+
+        return MessageLocator(
+            id: id,
+            sourceDigest: columnTextOptional(stmt, 1),
+            sourcePath: columnText(stmt, 0),
+            messageRange: ByteRange(offset: sqlite3_column_int64(stmt, 2),
+                                    length: sqlite3_column_int64(stmt, 3)),
+            envelopeRange: envelope,
+            headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 4),
+                                   length: sqlite3_column_int64(stmt, 5)),
+            bodyRange: ByteRange(offset: sqlite3_column_int64(stmt, 6),
+                                 length: sqlite3_column_int64(stmt, 7)),
+            ordinal: Int(sqlite3_column_int64(stmt, 10))
+        )
+    }
+
+    /// Messages archived from their headers only, whose bodies were never
+    /// decoded. Surfaced honestly rather than left as an invisible partial
+    /// state: the receipt and the message itself both say so, and this is the
+    /// work list for processing them later.
+    func deferredBodyCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM message_locators WHERE body_decoded = 0;")
+    }
+
+    /// Synchronous locator read on its own read-only connection.
+    ///
+    /// Needed because the attachment and export readers are synchronous UI
+    /// paths and the store is an actor — the same pattern
+    /// `FTSSearchIndex.partiallyIndexedCountSnapshot` uses. Read-only, so it
+    /// cannot interfere with a running import, and it returns nil on any
+    /// problem rather than throwing into a view body: a missing locator means
+    /// "fall back to the stored raw MIME", which is always a valid answer.
+    nonisolated static func locatorSnapshot(emailID: UUID,
+                                            storeDirectory: URL = SQLiteEmailStore.productionDirectory)
+        -> MessageLocator? {
+        let path = storeDirectory.appendingPathComponent("emails.db").path
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let handle else { return nil }
+        defer { sqlite3_close(handle) }
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT source_path, source_digest, msg_offset, msg_length,
+                   header_offset, header_length, body_offset, body_length,
+                   envelope_offset, envelope_length, ordinal
+            FROM message_locators WHERE email_id = ?;
+        """
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            return nil
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, emailID.uuidString, -1, Self.staticSQLiteTransient)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        func text(_ index: Int32) -> String? {
+            guard let raw = sqlite3_column_text(stmt, index) else { return nil }
+            return String(cString: raw)
+        }
+        guard let sourcePath = text(0) else { return nil }
+
+        let envelope: ByteRange? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+            ? nil
+            : ByteRange(offset: sqlite3_column_int64(stmt, 8),
+                        length: sqlite3_column_int64(stmt, 9))
+
+        return MessageLocator(
+            id: emailID,
+            sourceDigest: text(1),
+            sourcePath: sourcePath,
+            messageRange: ByteRange(offset: sqlite3_column_int64(stmt, 2),
+                                    length: sqlite3_column_int64(stmt, 3)),
+            envelopeRange: envelope,
+            headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 4),
+                                   length: sqlite3_column_int64(stmt, 5)),
+            bodyRange: ByteRange(offset: sqlite3_column_int64(stmt, 6),
+                                 length: sqlite3_column_int64(stmt, 7)),
+            ordinal: Int(sqlite3_column_int64(stmt, 10))
+        )
+    }
+
+    /// Part ranges for one message, read without touching the actor — the
+    /// same read-only snapshot route as `locatorSnapshot`, for the same
+    /// reason: `AttachmentHydrator` is called from synchronous UI paths that
+    /// cannot await the store.
+    nonisolated static func partSnapshot(emailID: UUID,
+                                         storeDirectory: URL = SQLiteEmailStore.productionDirectory)
+        -> [PartLocator] {
+        let path = storeDirectory.appendingPathComponent("emails.db").path
+        guard FileManager.default.fileExists(atPath: path) else { return [] }
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let handle else { return [] }
+        defer { sqlite3_close(handle) }
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT mime_path, mime_type, filename, content_id, encoding,
+                   content_offset, content_length, header_offset, header_length
+            FROM part_locators WHERE email_id = ? ORDER BY part_index;
+        """
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            return []
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, emailID.uuidString, -1, Self.staticSQLiteTransient)
+
+        func text(_ index: Int32) -> String? {
+            guard let raw = sqlite3_column_text(stmt, index) else { return nil }
+            return String(cString: raw)
+        }
+
+        var parts: [PartLocator] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            parts.append(PartLocator(
+                messageID: emailID,
+                path: (text(0) ?? "").split(separator: ".").compactMap { Int($0) },
+                mimeType: text(1) ?? "application/octet-stream",
+                filename: text(2),
+                contentID: text(3),
+                contentTransferEncoding: text(4),
+                contentRange: ByteRange(offset: sqlite3_column_int64(stmt, 5),
+                                        length: sqlite3_column_int64(stmt, 6)),
+                headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 7),
+                                       length: sqlite3_column_int64(stmt, 8))))
+        }
+        return parts
+    }
+
+    func deferredBodyIDs(limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT email_id FROM message_locators
+            WHERE body_decoded = 0 ORDER BY ordinal LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [UUID] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let id = columnUUID(stmt, 0) { out.append(id) }
+        }
+        return out
+    }
+
+    /// The handle as the nonisolated `deinit` may read it: the actor's last
+    /// reference is gone by then, so nothing else can touch it (§3-P1).
+    nonisolated(unsafe) private var handleForDeinit: OpaquePointer?
+    deinit { if let handleForDeinit { sqlite3_close(handleForDeinit) } }
+
+    /// B5: after the archive's volume was detached and re-attached, the open
+    /// handle still points at the OLD mount and every statement fails with
+    /// "disk I/O error". Close it; the next call re-opens lazily against the
+    /// re-mounted file (SQLite's WAL recovery makes that safe).
+    func reopenConnection() {
+        if let db { sqlite3_close(db) }
+        db = nil
+        handleForDeinit = nil
+    }
+
+    // MARK: - Open / schema
+
+    func ensureDB() throws -> OpaquePointer {
+        if let db { return db }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // W3: the canonical store is read by background analysis/reconcile
+        // jobs after device lock → background-readable class on iOS; new
+        // files (emails.db + its -wal/-shm) inherit the directory's class.
+        // macOS: 700 so no other local user can open the archive.
+        ArtifactProtection.applyBackgroundReadable(to: directory)
+        let url = directory.appendingPathComponent("emails.db")
+        var handle: OpaquePointer?
+        let rc = sqlite3_open_v2(
+            url.path, &handle,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil
+        )
+        guard rc == SQLITE_OK, let handle else {
+            throw SQLiteStoreError.open("sqlite3_open_v2 rc=\(rc)")
+        }
+        // Owner-only on the DB file itself. SQLite creates -wal/-shm with the
+        // database file's permissions, so setting emails.db before the first
+        // write covers them too; the explicit calls handle files that already
+        // existed from an earlier version.
+        ArtifactProtection.applyBackgroundReadable(to: url)
+        ArtifactProtection.applyBackgroundReadable(to: URL(fileURLWithPath: url.path + "-wal"))
+        ArtifactProtection.applyBackgroundReadable(to: URL(fileURLWithPath: url.path + "-shm"))
+        try exec(handle, "PRAGMA journal_mode = WAL;")
+        try exec(handle, "PRAGMA synchronous = NORMAL;")
+        try exec(handle, "PRAGMA foreign_keys = OFF;")
+        // The default 8 MB page cache is far too small for a multi-GB archive:
+        // random inserts into the UUID-PK / message_id / (date,id) B-trees fall
+        // off a cache cliff and go disk-bound. A fixed 128 MB cache + memory-
+        // mapped reads keep import throughput and deep-page seeks flat. Both are
+        // CONSTANT regardless of archive size, so resident memory stays bounded.
+        try applyMemoryBudget(Self.interactiveBudget, to: handle)
+        try exec(handle, "PRAGMA temp_store = MEMORY;")
+        try exec(handle, "PRAGMA busy_timeout = 5000;")
+        SQLiteHygiene.apply(to: handle)
+        // FIND-08: the phrase matcher the chunk-index literals are verified with.
+        SectionBoundary.register(on: handle)
+        // §3-S1: an existing archive about to be upgraded gets a snapshot first.
+        // A failed snapshot does not block opening (the archive must stay
+        // usable); it is logged and the Health page shows the missing snapshot.
+        if ArchiveSnapshotPolicy.isEnabled,
+           let v = try? scalarInt(handle, "PRAGMA user_version;"),
+           v >= 1, v < Self.currentSchemaVersion {
+            do {
+                _ = try writeSnapshot(handle, reason: "before-upgrade-v\(v)-to-v\(Self.currentSchemaVersion)")
+                ArchiveSnapshotPolicy.upgradeSnapshotFailure = nil
+            } catch {
+                ArchiveSnapshotPolicy.upgradeSnapshotFailure = error.localizedDescription
+            }
+        }
+        try migrateSchema(handle)
+        // §3-S6: Safe Mode opens the archive read-only (after any migration,
+        // so an upgrade still completes); writes fail with a named error.
+        if readOnly { try exec(handle, "PRAGMA query_only = ON;") }
+        self.db = handle
+        handleForDeinit = handle
+        return handle
+    }
+
+    /// §3-S6: Safe Mode — no write can reach the archive while on.
+    private(set) var readOnly = false
+    func setReadOnly(_ on: Bool) throws {
+        readOnly = on
+        if let db { try exec(db, on ? "PRAGMA query_only = ON;" : "PRAGMA query_only = OFF;") }
+    }
+
+    // MARK: - Snapshots (§3-S1)
+
+    /// Where snapshots live: beside the store, never inside a cloud folder
+    /// (the store itself refuses cloud locations).
+    nonisolated var snapshotDirectory: URL { directory.appendingPathComponent("Snapshots", isDirectory: true) }
+
+    /// §3-S1: where the next snapshot is written — the user's chosen folder
+    /// when it is reachable, otherwise beside the store, so a detached disk
+    /// never costs a snapshot.
+    nonisolated var snapshotWriteDirectory: URL { ArchiveSnapshotPolicy.reachableExternalDirectory ?? snapshotDirectory }
+
+    /// Every folder snapshots are listed (and pruned) from.
+    nonisolated var snapshotDirectories: [URL] {
+        [snapshotDirectory] + [ArchiveSnapshotPolicy.reachableExternalDirectory].compactMap { $0 }
+    }
+
+    /// Writes a consistent copy of the live database with `VACUUM INTO` (safe
+    /// while other connections read and write; the copy is compact and
+    /// self-contained, with no -wal to lose).
+    @discardableResult
+    func snapshot(reason: String = "scheduled") throws -> ArchiveSnapshot {
+        let handle = try ensureDB()
+        let snap = try writeSnapshot(handle, reason: reason)
+        if reason == "scheduled" { pruneRollingSnapshots() }
+        return snap
+    }
+
+    private func writeSnapshot(_ handle: OpaquePointer, reason: String) throws -> ArchiveSnapshot {
+        let fm = FileManager.default
+        let target = snapshotWriteDirectory
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        ArtifactProtection.applyBackgroundReadable(to: target)
+        let dbURL = directory.appendingPathComponent("emails.db")
+        let size = ((try? fm.attributesOfItem(atPath: dbURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        let available = (try? target.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage ?? Int64.max
+        let needed = size + ArchiveSnapshotPolicy.headroomBytes
+        guard available >= needed else {
+            throw ArchiveSnapshotError.notEnoughSpace(neededBytes: needed, availableBytes: available)
+        }
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let safeReason = reason.replacingOccurrences(of: "[^A-Za-z0-9-]", with: "-", options: .regularExpression)
+        var url = target.appendingPathComponent("emails-\(stamp)-\(safeReason).db")
+        // Two snapshots within one second (a repair run twice) must not collide: VACUUM INTO refuses
+        // an existing file, and the earlier snapshot is never overwritten.
+        var serial = 1
+        while fm.fileExists(atPath: url.path) {
+            serial += 1
+            url = target.appendingPathComponent("emails-\(stamp)-\(safeReason)-\(serial).db")
+        }
+        let escaped = url.path.replacingOccurrences(of: "'", with: "''")
+        do {
+            try exec(handle, "VACUUM INTO '\(escaped)';")
+        } catch {
+            try? fm.removeItem(at: url)
+            throw ArchiveSnapshotError.snapshotFailed(error.localizedDescription)
+        }
+        ArtifactProtection.applyBackgroundReadable(to: url)
+        let bytes = ((try? fm.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        return ArchiveSnapshot(url: url, date: Date(), reason: reason, bytes: bytes)
+    }
+
+    /// Snapshots on disk, newest first.
+    nonisolated func snapshots() -> [ArchiveSnapshot] {
+        let fm = FileManager.default
+        let files = snapshotDirectories.flatMap {
+            (try? fm.contentsOfDirectory(at: $0, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])) ?? []
+        }
+        return files.filter { $0.pathExtension == "db" && $0.lastPathComponent.hasPrefix("emails-") }
+            .map { url in
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let name = url.deletingPathExtension().lastPathComponent
+                // Only files named "-scheduled" are rolling: a manual snapshot
+                // must never be pruned by the daily schedule.
+                let reason = name.contains("before-upgrade") ? "before upgrade"
+                    : name.contains("before-restore") ? "before restore"
+                    : name.hasSuffix("-scheduled") ? "scheduled"
+                    : name.hasSuffix("-manual") ? "manual" : "other"
+                return ArchiveSnapshot(url: url, date: values?.contentModificationDate ?? .distantPast,
+                                       reason: reason, bytes: Int64(values?.fileSize ?? 0))
+            }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// Keeps only the newest `rollingKeep` scheduled snapshots. Upgrade and
+    /// restore snapshots are never pruned here.
+    private func pruneRollingSnapshots() {
+        let rolling = snapshots().filter { $0.reason == "scheduled" }
+        for old in rolling.dropFirst(ArchiveSnapshotPolicy.rollingKeep) {
+            try? FileManager.default.removeItem(at: old.url)
+        }
+    }
+
+    /// Restores a snapshot. Nothing is destroyed: the current database is
+    /// first saved as a "before-restore" snapshot, the snapshot is
+    /// integrity-checked BEFORE it replaces anything, and the store reopens on
+    /// the restored file.
+    func restore(from snapshot: URL) throws {
+        let fm = FileManager.default
+        // 1. Check the snapshot on its own connection.
+        var check: OpaquePointer?
+        guard sqlite3_open_v2(snapshot.path, &check, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let check else {
+            throw ArchiveSnapshotError.restoreFailed("the snapshot could not be opened")
+        }
+        let verdict: String
+        do {
+            let stmt = try prepare(check, "PRAGMA integrity_check;")
+            defer { sqlite3_finalize(stmt) }
+            verdict = sqlite3_step(stmt) == SQLITE_ROW ? columnText(stmt, 0) : "no result"
+        } catch {
+            sqlite3_close(check)
+            throw ArchiveSnapshotError.restoreFailed(error.localizedDescription)
+        }
+        sqlite3_close(check)
+        guard verdict == "ok" else { throw ArchiveSnapshotError.integrityCheckFailed(verdict) }
+
+        // 2. Keep the current database. If that copy cannot be written (no
+        // space, folder gone) the restore stops: replacing the database
+        // without it would destroy data (rule 1).
+        let current = try ensureDB()
+        _ = try writeSnapshot(current, reason: "before-restore")
+
+        // 3. Swap files with the connection closed.
+        reopenConnection()
+        let dbURL = directory.appendingPathComponent("emails.db")
+        let staged = directory.appendingPathComponent("emails.restore-staging.db")
+        try? fm.removeItem(at: staged)
+        do {
+            try fm.copyItem(at: snapshot, to: staged)
+            for suffix in ["-wal", "-shm"] {
+                try? fm.removeItem(at: URL(fileURLWithPath: dbURL.path + suffix))
+            }
+            _ = try fm.replaceItemAt(dbURL, withItemAt: staged)
+        } catch {
+            try? fm.removeItem(at: staged)
+            throw ArchiveSnapshotError.restoreFailed(error.localizedDescription)
+        }
+        // 4. Reopen (runs migrations if the snapshot predates an upgrade).
+        _ = try ensureDB()
+    }
+
+    // MARK: - Memory budget (plan task P3.3)
+    //
+    // Measured 2026-09-24: an import of a 90.5 MiB / 19-year corpus peaked at
+    // ~420 MiB of footprint, and shrinking batches did not move it. The store's
+    // own page cache and mmap window are a large part of that, and unlike batch
+    // residency they are configuration we control directly.
+    //
+    // Interactive use keeps the large cache (deep-page seeks stay flat). An
+    // import lowers it: during import the access pattern is append-heavy and
+    // the win from a huge cache is smaller than the cost of holding it while
+    // 19 shard connections are also open.
+
+    struct MemoryBudget: Sendable, Equatable {
+        /// Page cache in KB (SQLite reads a negative cache_size as KB).
+        var cacheKB: Int
+        /// Memory-mapped I/O window in bytes.
+        var mmapBytes: Int
+    }
+
+    static let interactiveBudget = MemoryBudget(cacheKB: 131_072, mmapBytes: 268_435_456)
+    /// Import-time budget: 32 MB cache, 64 MB mmap window.
+    static let importBudget = MemoryBudget(cacheKB: 32_768, mmapBytes: 67_108_864)
+
+    private(set) var activeBudget: MemoryBudget = SQLiteEmailStore.interactiveBudget
+
+    private func applyMemoryBudget(_ budget: MemoryBudget, to handle: OpaquePointer) throws {
+        try exec(handle, "PRAGMA cache_size = -\(budget.cacheKB);")
+        try exec(handle, "PRAGMA mmap_size = \(budget.mmapBytes);")
+        activeBudget = budget
+    }
+
+    /// Switches the live connection to the given budget. Safe to call mid-run:
+    /// both pragmas take effect on the open connection.
+    func setMemoryBudget(_ budget: MemoryBudget) {
+        guard let db else { activeBudget = budget; return }
+        try? applyMemoryBudget(budget, to: db)
+        if budget.cacheKB < Self.interactiveBudget.cacheKB {
+            // Release pages the smaller cache no longer permits, rather than
+            // waiting for eviction to happen naturally.
+            sqlite3_db_release_memory(db)
+        }
+    }
+
+    // MARK: - Versioned schema migrations (§2)
+
+    /// Explicit, transactional, restart-safe schema versioning via
+    /// `PRAGMA user_version`:
+    ///   v1 = the original direct-SQLite store (implicit schema of the first
+    ///        v2-core-cutover builds)
+    ///   v2 = full-fidelity + source identity + dedup policy + review state
+    /// Each step runs inside one EXCLUSIVE transaction whose COMMIT also
+    /// publishes the new user_version, so a crash mid-migration leaves the
+    /// store fully at the previous version — never half-migrated, and a user
+    /// DB is NEVER silently recreated. A store newer than this build refuses
+    /// to open instead of guessing.
+    /// MUST be bumped in the same change as a new migration step. Leaving it
+    /// behind is not a cosmetic slip: the migration writes the new
+    /// `user_version`, and the guard below then refuses to open anything
+    /// above this number — so the app would migrate its own store and then
+    /// refuse to reopen it on the next launch. Adding v14/v15 without
+    /// bumping this did exactly that, caught by the existing
+    /// `testFreshStore_atLatestSchemaVersion_integrityOK`.
+    ///
+    ///   v14 = raw-MIME blob tier (S3b)
+    ///   v15 = message locators (S4/S5)
+    ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
+    static let currentSchemaVersion = 26   // v21: FOLD-02 folders; v22/v23: FIND-07 search chunks; v24: contiguous chunks (R02); v25: attachment children; v26: connected mail (V4-03)
+
+    private func migrateSchema(_ handle: OpaquePointer) throws {
+        var v = try scalarInt(handle, "PRAGMA user_version;")
+        if v > Self.currentSchemaVersion {
+            throw SQLiteStoreError.schema(
+                "store schema v\(v) is newer than this app supports (v\(Self.currentSchemaVersion)); refusing to open")
+        }
+        if v == 0 {
+            // Either a brand-new database or a store created before schema
+            // versioning existed (whose implicit schema is v1). Every v1 DDL
+            // statement is IF NOT EXISTS, so running it unconditionally also
+            // repairs a partially-created old store without touching data.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV1(handle)
+                try exec(handle, "PRAGMA user_version = 1;")
+            }
+            v = 1
+        }
+        if v == 1 {
+            try inExclusiveTransaction(handle) {
+                try migrateV1toV2(handle)
+                try exec(handle, "PRAGMA user_version = 2;")
+            }
+            v = 2
+        }
+        if v == 2 {
+            try inExclusiveTransaction(handle) {
+                try migrateV2toV3(handle)
+                try exec(handle, "PRAGMA user_version = 3;")
+            }
+            v = 3
+        }
+        if v == 3 {
+            try inExclusiveTransaction(handle) {
+                // §16: priority sort keyset support.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_priority ON derived(priority, email_id);")
+                try exec(handle, "PRAGMA user_version = 4;")
+            }
+            v = 4
+        }
+        if v == 4 {
+            try inExclusiveTransaction(handle) {
+                // v5: fidelity-backfill work list. Rows persisted by pre-v2
+                // builds carry message_type = '' (their structured metadata
+                // was never stored); FidelityBackfillJob re-extracts it from
+                // the raw MIME already in email_bodies. Partial index keeps
+                // the "anything left?" probe O(1) at any archive size.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_fidelity_pending ON emails(id) WHERE message_type = '';")
+                try exec(handle, "PRAGMA user_version = 5;")
+            }
+            v = 5
+        }
+        if v == 5 {
+            try inExclusiveTransaction(handle) {
+                // v6: attachment-content search. Extracted attachment text
+                // (PDF/plain-text families) is indexed into a dedicated FTS5
+                // table; the state registry is the extraction job's work-list
+                // complement (an email row here = extraction attempted).
+                try exec(handle, """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS attachment_search USING fts5(
+                        email_id UNINDEXED,
+                        filename,
+                        content,
+                        tokenize='porter unicode61 remove_diacritics 1'
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS attachment_text_state(
+                        email_id   TEXT PRIMARY KEY,
+                        indexed_at INTEGER NOT NULL DEFAULT 0,
+                        text_count INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 6;")
+            }
+            v = 6
+        }
+        if v == 6 {
+            try inExclusiveTransaction(handle) {
+                // v7: the document registry (SAP-style). Every completed
+                // workflow posts a typed, numbered document (IMP-2026-0001,
+                // VRD-…, EXP-…, RPT-…, STY-…, CLN-…). Number ranges are
+                // per-type-per-year counters, advanced in the same
+                // transaction as the insert — numbers never repeat or skip
+                // (a gap would itself be evidence).
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS documents(
+                        doc_number  TEXT PRIMARY KEY,
+                        doc_type    TEXT NOT NULL,
+                        created_at  INTEGER NOT NULL,
+                        summary     TEXT NOT NULL,
+                        refs        TEXT NOT NULL DEFAULT ''
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at DESC);")
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS doc_counters(
+                        doc_type TEXT NOT NULL,
+                        year     INTEGER NOT NULL,
+                        next_seq INTEGER NOT NULL,
+                        PRIMARY KEY(doc_type, year)
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 7;")
+            }
+            v = 7
+        }
+        if v == 7 {
+            try inExclusiveTransaction(handle) {
+                // v8: the workflow engine (SAP process-order model) plus the
+                // document lifecycle. Definitions are the master recipe;
+                // instances are one run each (WF-YYYY-####), confirmed per
+                // operation with who/when/result. Documents gain who-stamps,
+                // reversal links, and append-only notes — records are never
+                // edited in place; a correction posts a reversal.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_definitions(
+                        def_id     TEXT PRIMARY KEY,
+                        name       TEXT NOT NULL,
+                        persona    TEXT NOT NULL,
+                        builtin    INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL,
+                        created_by TEXT NOT NULL DEFAULT ''
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_operations(
+                        def_id         TEXT NOT NULL,
+                        seq            INTEGER NOT NULL,
+                        op_key         TEXT NOT NULL,
+                        title          TEXT NOT NULL,
+                        hint           TEXT NOT NULL DEFAULT '',
+                        posts_doc_type TEXT,
+                        PRIMARY KEY(def_id, seq)
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_instances(
+                        wf_number  TEXT PRIMARY KEY,
+                        def_id     TEXT NOT NULL,
+                        title      TEXT NOT NULL,
+                        status     TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        created_by TEXT NOT NULL DEFAULT '',
+                        updated_at INTEGER NOT NULL,
+                        reverses   TEXT
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_wf_instances_status ON workflow_instances(status, updated_at DESC);")
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_confirmations(
+                        wf_number    TEXT NOT NULL,
+                        seq          INTEGER NOT NULL,
+                        confirmed_at INTEGER NOT NULL,
+                        confirmed_by TEXT NOT NULL DEFAULT '',
+                        result       TEXT NOT NULL DEFAULT '',
+                        note         TEXT NOT NULL DEFAULT '',
+                        doc_number   TEXT,
+                        PRIMARY KEY(wf_number, seq)
+                    );
+                """)
+                // Document lifecycle additions (task #41).
+                try exec(handle, "ALTER TABLE documents ADD COLUMN created_by TEXT NOT NULL DEFAULT '';")
+                try exec(handle, "ALTER TABLE documents ADD COLUMN reverses TEXT;")
+                try exec(handle, "ALTER TABLE documents ADD COLUMN reversed_by TEXT;")
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS doc_notes(
+                        doc_number TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        created_by TEXT NOT NULL DEFAULT '',
+                        note       TEXT NOT NULL
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_doc_notes ON doc_notes(doc_number, created_at);")
+                try exec(handle, "PRAGMA user_version = 8;")
+            }
+            v = 8
+        }
+        if v == 8 {
+            try inExclusiveTransaction(handle) {
+                // v9: captured field values per workflow operation — the data
+                // the user enters at each step, saved into the completion
+                // document so the whole run is reusable and reportable later.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_field_values(
+                        wf_number TEXT NOT NULL,
+                        seq       INTEGER NOT NULL,
+                        field_key TEXT NOT NULL,
+                        value     TEXT NOT NULL DEFAULT '',
+                        PRIMARY KEY(wf_number, seq, field_key)
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 9;")
+            }
+            v = 9
+        }
+        if v == 9 {
+            try inExclusiveTransaction(handle) {
+                // v10: workflow status history — every status transition of an
+                // instance (open→released→confirmed), who/when, for the
+                // governed state machine and its audit.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_status_history(
+                        wf_number  TEXT NOT NULL,
+                        changed_at INTEGER NOT NULL,
+                        changed_by TEXT NOT NULL DEFAULT '',
+                        from_status TEXT NOT NULL DEFAULT '',
+                        to_status  TEXT NOT NULL
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_wf_status_hist ON workflow_status_history(wf_number, changed_at);")
+                try exec(handle, "PRAGMA user_version = 10;")
+            }
+            v = 10
+        }
+        if v == 10 {
+            try inExclusiveTransaction(handle) {
+                // v11: selection variants — a saved parameter set for a
+                // workflow definition, so a recurring job starts pre-filled.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_variants(
+                        variant_id  TEXT PRIMARY KEY,
+                        def_id      TEXT NOT NULL,
+                        name        TEXT NOT NULL,
+                        created_at  INTEGER NOT NULL,
+                        created_by  TEXT NOT NULL DEFAULT '',
+                        values_json TEXT NOT NULL DEFAULT '{}'
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_wf_variants_def ON workflow_variants(def_id, name);")
+                try exec(handle, "PRAGMA user_version = 11;")
+            }
+            v = 11
+        }
+        if v == 11 {
+            try inExclusiveTransaction(handle) {
+                // v12: full-work payload for a document — so opening any
+                // document number reproduces the complete work behind it
+                // (the SAP "open the document, see everything" promise).
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS doc_payload(
+                        doc_number   TEXT PRIMARY KEY,
+                        content_type TEXT NOT NULL DEFAULT 'text/markdown',
+                        body         TEXT NOT NULL DEFAULT '',
+                        created_at   INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 12;")
+            }
+            v = 12
+        }
+        if v == 12 {
+            try inExclusiveTransaction(handle) {
+                // v13: deletion tombstones — remember the identity of emails the
+                // user deleted so re-importing the same source never silently
+                // resurrects them. Keyed by dedup_key and/or Message-ID; either
+                // match blocks re-insertion until the user clears the history.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS deletion_tombstones(
+                        dedup_key   TEXT,
+                        message_id  TEXT,
+                        deleted_at  INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_tombstone_dedup ON deletion_tombstones(dedup_key) WHERE dedup_key IS NOT NULL;")
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_tombstone_mid ON deletion_tombstones(message_id) WHERE message_id IS NOT NULL;")
+                try exec(handle, "PRAGMA user_version = 13;")
+            }
+            v = 13
+        }
+        if v == 13 {
+            try inExclusiveTransaction(handle) {
+                // v14 (S3b): the raw-MIME blob tier. A message whose raw source
+                // exceeds `BlobStore.inlineThresholdBytes` is stored in the
+                // content-addressed blob store and the row keeps a reference,
+                // because SQLite's default maximum BLOB length (1 GB) is also
+                // its maximum ROW size — a 1.5 GB message cannot be a row at
+                // any page size.
+                //
+                // Purely additive: existing inline `raw` values stay inline and
+                // are never rewritten. Every read path handles both tiers, so
+                // there is no migration of user data and no version of the app
+                // that can see a row it cannot read.
+                try exec(handle, "ALTER TABLE email_bodies ADD COLUMN raw_blob_digest TEXT;")
+                try exec(handle, "ALTER TABLE email_bodies ADD COLUMN raw_blob_length INTEGER NOT NULL DEFAULT 0;")
+                // Orphan GC asks "which digests are still referenced?" — that
+                // query must not table-scan a million-row table.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_bodies_raw_blob ON email_bodies(raw_blob_digest) WHERE raw_blob_digest IS NOT NULL;")
+                try exec(handle, "PRAGMA user_version = 14;")
+            }
+            v = 14
+        }
+        if v == 14 {
+            try inExclusiveTransaction(handle) {
+                // v15 (S4/S5): where a message's ORIGINAL bytes are, so an
+                // attachment or an export can be served from the source
+                // instead of from a re-parse — and so a message too large to
+                // decode at import can still be archived and later read.
+                //
+                // Additive and independent: no row is required to have a
+                // locator. Every read path falls back to the stored raw MIME
+                // when there is none, which is every message imported before
+                // the offset parser was switched on.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS message_locators(
+                        email_id       TEXT PRIMARY KEY,
+                        source_path    TEXT NOT NULL,
+                        source_digest  TEXT,
+                        msg_offset     INTEGER NOT NULL,
+                        msg_length     INTEGER NOT NULL,
+                        header_offset  INTEGER NOT NULL,
+                        header_length  INTEGER NOT NULL,
+                        body_offset    INTEGER NOT NULL,
+                        body_length    INTEGER NOT NULL,
+                        envelope_offset INTEGER,
+                        envelope_length INTEGER,
+                        ordinal        INTEGER NOT NULL DEFAULT 0,
+                        body_decoded   INTEGER NOT NULL DEFAULT 1
+                    );
+                """)
+                // "Which messages still need their body processed?" must not
+                // table-scan; the deferred-body work list is driven by this.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_locators_deferred ON message_locators(body_decoded) WHERE body_decoded = 0;")
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_locators_source ON message_locators(source_digest);")
+                try exec(handle, "PRAGMA user_version = 15;")
+            }
+            v = 15
+        }
+        if v == 15 {
+            try inExclusiveTransaction(handle) {
+                // v16 (S5 completion): where each MIME PART's bytes are, so an
+                // attachment is read without its siblings. Recorded at import,
+                // where the body is already in hand, so a later open costs the
+                // part's own bytes instead of a pass over the whole message.
+                //
+                // Additive like v15: a row with no parts falls back to the
+                // whole-message path, which is every message imported before
+                // this existed.
+                //
+                // `part_index` is the position in document order and, with
+                // `email_id`, the primary key — so re-recording a message's
+                // parts REPLACES them rather than accumulating duplicates when
+                // an import is resumed or re-run.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS part_locators(
+                        email_id        TEXT NOT NULL,
+                        part_index      INTEGER NOT NULL,
+                        mime_path       TEXT NOT NULL,
+                        mime_type       TEXT NOT NULL,
+                        filename        TEXT,
+                        content_id      TEXT,
+                        encoding        TEXT,
+                        content_offset  INTEGER NOT NULL,
+                        content_length  INTEGER NOT NULL,
+                        header_offset   INTEGER NOT NULL,
+                        header_length   INTEGER NOT NULL,
+                        PRIMARY KEY (email_id, part_index)
+                    );
+                """)
+                // The read path asks "the parts of this message, in order".
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_parts_email ON part_locators(email_id, part_index);")
+                try exec(handle, "PRAGMA user_version = 16;")
+            }
+            v = 16
+        }
+        if v == 16 {
+            try inExclusiveTransaction(handle) {
+                // v17 (v2.1 backlog #7): import checkpoints move from a JSON
+                // file into the store, so a batch's rows and the ordinal that
+                // says "these are committed" are ONE transaction. With the
+                // file, a crash between the store commit and the checkpoint
+                // write left a batch persisted but unrecorded (re-imported and
+                // deduplicated on resume — safe, but a lie in the receipt's
+                // resume provenance). `import_sessions` = fully ingested
+                // sources; `import_progress` = mid-file ordinal, identity-bound
+                // exactly as the JSON schema v2 was.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS import_sessions(
+                        sha256        TEXT PRIMARY KEY,
+                        source_name   TEXT NOT NULL,
+                        email_count   INTEGER NOT NULL,
+                        completed_at  INTEGER NOT NULL
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS import_progress(
+                        sha256            TEXT PRIMARY KEY,
+                        source_name       TEXT NOT NULL,
+                        schema_version    INTEGER NOT NULL,
+                        size_bytes        INTEGER NOT NULL,
+                        parser            TEXT NOT NULL,
+                        parser_version    INTEGER NOT NULL,
+                        messages_ingested INTEGER NOT NULL,
+                        updated_at        INTEGER NOT NULL
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 17;")
+            }
+            v = 17
+        }
+        if v < 18 {
+            // v18 (3.0 A6): per-source index coverage. The FTS registry lives
+            // in the shard databases, so "how many of THIS source's messages
+            // are searchable" cannot be joined in SQL; the coordinator records
+            // it here as each batch commits and is indexed, and the sidebar
+            // reads it in one query. `committed` counts rows the store took
+            // from the source; `indexed` counts rows the FTS index accepted.
+            try exec(handle, """
+                CREATE TABLE IF NOT EXISTS source_coverage(
+                    source_id   INTEGER PRIMARY KEY,
+                    committed   INTEGER NOT NULL DEFAULT 0,
+                    indexed     INTEGER NOT NULL DEFAULT 0,
+                    updated_at  INTEGER NOT NULL
+                );
+            """)
+            try exec(handle, "PRAGMA user_version = 18;")
+            v = 18
+        }
+        if v < 19 {
+            // v19 (3.0 F4/F5/F6): additive only — new tables, no existing
+            // column or row changes, so a 2.x/3.0-switch-off code path reads
+            // the database exactly as before. A snapshot is taken before this
+            // runs when snapshots are on (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV19(handle)
+                try exec(handle, "PRAGMA user_version = 19;")
+            }
+            v = 19
+        }
+        if v < 20 {
+            // v20 (3.1 R1/S5/S7): additive only — recovery records, script
+            // custom values and script runs in new tables. Snapshot first as
+            // for every upgrade (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV20(handle)
+                try exec(handle, "PRAGMA user_version = 20;")
+            }
+            v = 20
+        }
+        if v < 21 {
+            // v21 (five jobs FOLD-02): additive only — folders per source and
+            // memberships in new tables, backfilled from the parser tags.
+            // Snapshot first as for every upgrade (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV21(handle)
+                try exec(handle, "PRAGMA user_version = 21;")
+            }
+            v = 21
+        }
+        if v < 22 {
+            // v22 (five jobs FIND-07): additive only — the chunked search
+            // index and its per-document state, filled by the backfill job.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV22(handle)
+                try exec(handle, "PRAGMA user_version = 22;")
+            }
+            v = 22
+        }
+        if v < 23 {
+            // v23 (five jobs FIND-04): the chunk tokeniser keeps combining
+            // marks, so Hindi and Bengali words stay whole. v22 never shipped;
+            // its tables are recreated and the backfill refills them.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV23(handle)
+                try exec(handle, "PRAGMA user_version = 23;")
+            }
+            v = 23
+        }
+        if v == 23 {
+            // v24 (R02, handoff 7481852): search chunks become contiguous so
+            // a literal of any length is verified on the stored text with no
+            // offset arithmetic; multi-chunk documents are re-chunked.
+            try inExclusiveTransaction(handle) {
+                try migrateSearchChunksToContiguous(handle)
+                try exec(handle, "PRAGMA user_version = 24;")
+            }
+            v = 24
+        }
+        if v == 24 {
+            // v25 (plan v4 §13.3 (5)): files inside attachments get their own
+            // identity — a table and their own search documents.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV25(handle)
+                try exec(handle, "PRAGMA user_version = 25;")
+            }
+            v = 25
+        }
+        if v == 25 {
+            // v26 (plan v4 V4-03): additive only — connected-mail accounts,
+            // remote folders, account-qualified provider identities, their
+            // memberships, sync checkpoints and capture receipts. No existing
+            // table or row changes. Snapshot first as for every upgrade (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV26(handle)
+                try exec(handle, "PRAGMA user_version = 26;")
+            }
+            v = 26
+        }
+    }
+
+    /// v19 tables. Every statement is IF NOT EXISTS.
+    private func createSchemaV19(_ handle: OpaquePointer) throws {
+        // F4 — legal state in the database (the JSON files stay as a mirror).
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS legal_holds(
+                email_id  TEXT PRIMARY KEY,
+                matter    TEXT NOT NULL DEFAULT '',
+                placed_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS evidence_seals(
+                email_id  TEXT PRIMARY KEY,
+                sha256    TEXT NOT NULL,
+                sealed_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS custodian_assignments(
+                email_id    TEXT PRIMARY KEY,
+                custodian   TEXT NOT NULL,
+                assigned_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_custodian_name ON custodian_assignments(custodian);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS custody_events(
+                event_id TEXT PRIMARY KEY,
+                email_id TEXT,
+                at       INTEGER NOT NULL,
+                payload  BLOB NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_custody_events_email ON custody_events(email_id, at);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS review_coding(
+                workspace  TEXT NOT NULL,
+                email_id   TEXT NOT NULL,
+                field      TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(workspace, email_id, field)
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_review_coding_field ON review_coding(workspace, field, value);")
+        // F5 — fingerprint tree: one leaf per email, one root per month.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS fingerprints(
+                email_id TEXT PRIMARY KEY,
+                leaf     TEXT NOT NULL,
+                bucket   INTEGER NOT NULL,
+                built_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_fingerprints_bucket ON fingerprints(bucket);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS fingerprint_buckets(
+                bucket   INTEGER PRIMARY KEY,
+                root     TEXT NOT NULL,
+                leaves   INTEGER NOT NULL,
+                built_at INTEGER NOT NULL
+            );
+        """)
+        // F6 — per-email feature index (versioned, incremental).
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS features(
+                email_id        TEXT PRIMARY KEY,
+                feature_version INTEGER NOT NULL,
+                pii_flags       INTEGER NOT NULL DEFAULT 0,
+                privilege       INTEGER NOT NULL DEFAULT 0,
+                language        TEXT,
+                spf             TEXT,
+                dkim            TEXT,
+                dmarc           TEXT,
+                threat_score    REAL,
+                mih             TEXT,
+                ioc_count       INTEGER NOT NULL DEFAULT 0,
+                embedding       BLOB,
+                updated_at      INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_version ON features(feature_version);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_pii ON features(pii_flags) WHERE pii_flags != 0;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_priv ON features(privilege) WHERE privilege != 0;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_mih ON features(mih);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS ioc_rows(
+                email_id TEXT NOT NULL,
+                kind     TEXT NOT NULL,
+                value    TEXT NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_ioc_kind_value ON ioc_rows(kind, value);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_ioc_email ON ioc_rows(email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS minhash_bands(
+                band     INTEGER NOT NULL,
+                hash     INTEGER NOT NULL,
+                email_id TEXT NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_minhash_band ON minhash_bands(band, hash);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_minhash_email ON minhash_bands(email_id);")
+    }
+
+    // MARK: - Per-source index coverage (v18, 3.0 A6)
+
+    struct SourceCoverage: Sendable, Equatable {
+        let sourceID: Int64
+        let committed: Int
+        let indexed: Int
+        var pending: Int { max(0, committed - indexed) }
+    }
+
+    /// Adds one batch's figures to a source's running totals.
+    func recordSourceCoverage(sourceID: Int64, committed: Int, indexed: Int) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO source_coverage(source_id, committed, indexed, updated_at)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                committed = committed + excluded.committed,
+                indexed = indexed + excluded.indexed,
+                updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, sourceID)
+        sqlite3_bind_int64(stmt, 2, Int64(committed))
+        sqlite3_bind_int64(stmt, 3, Int64(indexed))
+        sqlite3_bind_int64(stmt, 4, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw SQLiteStoreError.step("source_coverage upsert: \(String(cString: sqlite3_errmsg(db)))")
+        }
+    }
+
+    /// Every source's coverage, one row each.
+    func sourceCoverage() throws -> [SourceCoverage] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT source_id, committed, indexed FROM source_coverage;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [SourceCoverage] = []
+        while try stepRow(stmt, db) {
+            out.append(SourceCoverage(sourceID: sqlite3_column_int64(stmt, 0),
+                                      committed: Int(sqlite3_column_int64(stmt, 1)),
+                                      indexed: Int(sqlite3_column_int64(stmt, 2))))
+        }
+        return out
+    }
+
+    // MARK: - Import checkpoints (v17, v2.1 backlog #7)
+
+    /// Mid-file progress written INSIDE `insertBatch`'s transaction: the rows
+    /// and the ordinal that vouches for them commit together or not at all.
+    struct ImportProgressCheckpoint: Sendable, Equatable {
+        let sha256: String
+        let sourceName: String
+        let sizeBytes: Int
+        let parser: String
+        let parserVersion: Int
+        let schemaVersion: Int
+        /// Ordinal of the first message in the batch; the recorded value is
+        /// this plus the number of messages committed so far in the call.
+        let firstOrdinal: Int
+    }
+
+    func importCheckpointIsImported(sha256: String) throws -> Bool {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT 1 FROM import_sessions WHERE sha256 = ? LIMIT 1;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, sha256)
+        return try stepRow(stmt, db)
+    }
+
+    /// Leading messages already committed for this source, or 0 unless EVERY
+    /// identity field matches — a different size, parser, parser version or
+    /// checkpoint schema restarts the file rather than guessing.
+    func importCheckpointResumePoint(sha256: String, sizeBytes: Int, parser: String,
+                                     parserVersion: Int, schemaVersion: Int) throws -> Int {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT messages_ingested FROM import_progress
+            WHERE sha256 = ? AND schema_version = ? AND size_bytes = ? AND parser = ? AND parser_version = ?;
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, sha256)
+        sqlite3_bind_int(stmt, 2, Int32(schemaVersion))
+        sqlite3_bind_int64(stmt, 3, Int64(sizeBytes))
+        bindText(stmt, 4, parser)
+        sqlite3_bind_int(stmt, 5, Int32(parserVersion))
+        guard try stepRow(stmt, db) else { return 0 }
+        return max(0, Int(sqlite3_column_int64(stmt, 0)))
+    }
+
+    /// Standalone progress write (own transaction) — for callers that could
+    /// not ride the batch insert.
+    func importCheckpointRecordProgress(_ checkpoint: ImportProgressCheckpoint, messagesIngested: Int) throws {
+        let db = try ensureDB()
+        try writeImportProgress(db, checkpoint, messagesIngested: messagesIngested)
+    }
+
+    private func writeImportProgress(_ db: OpaquePointer, _ cp: ImportProgressCheckpoint, messagesIngested: Int) throws {
+        let stmt = try prepare(db, """
+            INSERT OR REPLACE INTO import_progress(sha256, source_name, schema_version, size_bytes, parser, parser_version, messages_ingested, updated_at)
+            VALUES (?,?,?,?,?,?,?,?);
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, cp.sha256)
+        bindText(stmt, 2, cp.sourceName)
+        sqlite3_bind_int(stmt, 3, Int32(cp.schemaVersion))
+        sqlite3_bind_int64(stmt, 4, Int64(cp.sizeBytes))
+        bindText(stmt, 5, cp.parser)
+        sqlite3_bind_int(stmt, 6, Int32(cp.parserVersion))
+        sqlite3_bind_int64(stmt, 7, Int64(messagesIngested))
+        sqlite3_bind_int64(stmt, 8, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw SQLiteStoreError.schema("import_progress write failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+    }
+
+    /// A source fully ingested: recorded as a session, its in-progress row gone.
+    func importCheckpointRecord(sha256: String, sourceName: String, emailCount: Int) throws {
+        let db = try ensureDB()
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let stmt = try prepare(db, "INSERT OR REPLACE INTO import_sessions(sha256, source_name, email_count, completed_at) VALUES (?,?,?,?);")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, sha256)
+            bindText(stmt, 2, sourceName)
+            sqlite3_bind_int64(stmt, 3, Int64(emailCount))
+            sqlite3_bind_int64(stmt, 4, Int64(Date().timeIntervalSince1970))
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw SQLiteStoreError.schema("import_sessions write failed: \(String(cString: sqlite3_errmsg(db)))")
+            }
+            let clear = try prepare(db, "DELETE FROM import_progress WHERE sha256 = ?;")
+            defer { sqlite3_finalize(clear) }
+            bindText(clear, 1, sha256)
+            _ = sqlite3_step(clear)
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+    }
+
+    func importCheckpointReset() throws {
+        let db = try ensureDB()
+        try exec(db, "DELETE FROM import_sessions; DELETE FROM import_progress;")
+    }
+
+    func importCheckpointSessionCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM import_sessions;")
+    }
+
+    /// v2 → v3 (§21): forensic state moves from whole-in-memory JSON maps to
+    /// indexed durable tables — evidence tags, examiner annotations, per-email
+    /// hashes, source-file hashes, and the HMAC-chained audit log.
+    private func migrateV2toV3(_ handle: OpaquePointer) throws {
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_email_hashes(
+                email_id   TEXT PRIMARY KEY,
+                md5        TEXT NOT NULL DEFAULT '',
+                sha1       TEXT NOT NULL DEFAULT '',
+                sha256     TEXT NOT NULL DEFAULT '',
+                byte_count INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_evidence_tags(
+                email_id  TEXT PRIMARY KEY,
+                tag       TEXT NOT NULL,
+                tagged_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_forensic_tag ON forensic_evidence_tags(tag, email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_annotations(
+                email_id   TEXT PRIMARY KEY,
+                note       TEXT NOT NULL DEFAULT '',
+                examiner   TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_source_hashes(
+                id          INTEGER PRIMARY KEY,
+                filename    TEXT NOT NULL DEFAULT '',
+                file_size   INTEGER NOT NULL DEFAULT 0,
+                md5         TEXT NOT NULL DEFAULT '',
+                sha1        TEXT NOT NULL DEFAULT '',
+                sha256      TEXT NOT NULL,
+                imported_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_forensic_source_sha ON forensic_source_hashes(sha256);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_audit_log(
+                seq       INTEGER PRIMARY KEY,
+                entry_id  TEXT NOT NULL,
+                ts        REAL NOT NULL,
+                action    TEXT NOT NULL,
+                detail    TEXT NOT NULL,
+                examiner  TEXT NOT NULL,
+                prev_hash TEXT NOT NULL,
+                entry_hash TEXT NOT NULL
+            );
+        """)
+    }
+
+    func inExclusiveTransaction(_ handle: OpaquePointer, _ body: () throws -> Void) throws {
+        try exec(handle, "BEGIN EXCLUSIVE TRANSACTION;")
+        do { try body(); try exec(handle, "COMMIT;") }
+        catch { try? exec(handle, "ROLLBACK;"); throw error }
+    }
+
+    /// The original (pre-versioning) schema, byte-for-byte what the first
+    /// v2-core-cutover builds created. Only ever executed for stores that are
+    /// genuinely empty; existing v1 stores are detected and left untouched.
+    private func createSchemaV1(_ handle: OpaquePointer) throws {
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS emails(
+                id            TEXT PRIMARY KEY,
+                message_id    TEXT,
+                subject       TEXT NOT NULL DEFAULT '',
+                from_addr     TEXT NOT NULL DEFAULT '',
+                to_addr       TEXT NOT NULL DEFAULT '',
+                cc_addr       TEXT,
+                bcc_addr      TEXT,
+                date          INTEGER NOT NULL,
+                body_preview  TEXT NOT NULL DEFAULT '',
+                has_attach    INTEGER NOT NULL DEFAULT 0,
+                size_bytes    INTEGER NOT NULL DEFAULT 0,
+                in_reply_to   TEXT,
+                references_ids TEXT,
+                account_id    TEXT,
+                source_hash   TEXT
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_bodies(
+                id           TEXT PRIMARY KEY,
+                plain        BLOB,
+                html         BLOB,
+                raw          BLOB,
+                headers_json BLOB
+            );
+        """)
+        // The S3b blob-tier columns (`raw_blob_digest`, `raw_blob_length`) are
+        // added by the v14 migration, NOT declared here. Declaring them in
+        // both places made a FRESH database get them from this CREATE and then
+        // fail the v14 `ALTER TABLE` with "duplicate column name" — the
+        // migration chain runs from user_version 0 on a new file, so it walks
+        // v13 → v14 regardless of what this statement created. Same reason the
+        // `emails` table leaves `message_type`, `dedup_key` and the rest to
+        // the v2 migration.
+        // Keyset paging index: (date DESC, id DESC) is served by this.
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_date_id ON emails(date, id);")
+        // v1 dedup index: unique on Message-ID where present. Replaced in v2
+        // by the policy-driven dedup_key index.
+        try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_msgid ON emails(message_id) WHERE message_id IS NOT NULL;")
+        // Meta (corpus revision etc.) + per-email derived analysis state.
+        try exec(handle, "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS derived(
+                email_id         TEXT PRIMARY KEY,
+                corpus_revision  INTEGER NOT NULL DEFAULT 0,
+                analysis_version INTEGER NOT NULL DEFAULT 0,
+                sentiment        TEXT,
+                classification   TEXT,
+                priority         INTEGER,
+                phishing         INTEGER,
+                topic            TEXT,
+                thread_id        TEXT,
+                predictive       REAL,
+                smart_tags       TEXT,
+                updated_at       INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_topic ON derived(topic);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_thread ON derived(thread_id);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_rev ON derived(corpus_revision);")
+        // Persistent exact-dedup findings (Phase 10): rows dropped at import time
+        // because their Message-ID already existed.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS duplicates(
+                id           INTEGER PRIMARY KEY,
+                duplicate_id TEXT,
+                message_id   TEXT,
+                source_hash  TEXT,
+                created_at   INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        // Part L: persisted thread relationships. One stable thread key per
+        // email, derived from Message-ID / In-Reply-To / References (subject
+        // fallback at lower confidence). Indexed so threadKey → members is an
+        // O(log N) seek, never a runtime archive-wide grouping.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS thread_keys(
+                email_id   TEXT PRIMARY KEY,
+                thread_key TEXT NOT NULL,
+                confidence INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_thread_keys_key ON thread_keys(thread_key);")
+        // Part K: predictive-coding (TAR) records — compact features + human
+        // label + model score per email, versioned. Never whole messages.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS predictive_records(
+                email_id        TEXT PRIMARY KEY,
+                label           INTEGER,
+                score           REAL,
+                features        TEXT,
+                model_version   INTEGER NOT NULL DEFAULT 0,
+                feature_version INTEGER NOT NULL DEFAULT 0,
+                corpus_revision INTEGER NOT NULL DEFAULT 0,
+                updated_at      INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_predictive_score ON predictive_records(score);")
+        // Part M: persisted near-duplicate findings — one row per group member
+        // (representative flagged), with similarity + algorithm version, so the
+        // review UI pages persisted findings instead of recomputing.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS near_dup_findings(
+                id                INTEGER PRIMARY KEY,
+                group_key         TEXT NOT NULL,
+                email_id          TEXT NOT NULL,
+                is_representative INTEGER NOT NULL DEFAULT 0,
+                similarity        REAL NOT NULL DEFAULT 0,
+                algo_version      INTEGER NOT NULL DEFAULT 0,
+                corpus_revision   INTEGER NOT NULL DEFAULT 0,
+                created_at        INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_near_dup_group ON near_dup_findings(group_key);")
+    }
+
+    /// v1 → v2: full RawEmail fidelity (message type, attachments metadata,
+    /// tags, domains, participants), first-class source identity
+    /// (§3.1/§3.2), policy-driven dedup (§4), per-email content revisions
+    /// (§22), review state (§19) and sort indexes (§16).
+    private func migrateV1toV2(_ handle: OpaquePointer) throws {
+        try exec(handle, "ALTER TABLE emails ADD COLUMN message_type TEXT NOT NULL DEFAULT '';")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN dedup_key TEXT;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN source_id INTEGER;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN source_ordinal INTEGER;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN attachment_count INTEGER NOT NULL DEFAULT 0;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN imported_at INTEGER NOT NULL DEFAULT 0;")
+        // Rows that exist under v1 were deduped by raw Message-ID; carrying
+        // that value into dedup_key preserves their semantics exactly (and is
+        // guaranteed collision-free because v1 enforced uniqueness on it).
+        try exec(handle, "UPDATE emails SET dedup_key = message_id WHERE message_id IS NOT NULL;")
+        try exec(handle, "UPDATE emails SET attachment_count = has_attach WHERE has_attach = 1;")
+        // message_id becomes a lookup index; uniqueness moves to dedup_key so
+        // `preserveAll` imports can legitimately store repeated Message-IDs.
+        try exec(handle, "DROP INDEX IF EXISTS idx_emails_msgid;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_msgid_lookup ON emails(message_id) WHERE message_id IS NOT NULL;")
+        try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_dedup_key ON emails(dedup_key) WHERE dedup_key IS NOT NULL;")
+        // Stable source occurrence: crash-resume / repeated parses of the same
+        // source re-hit this constraint instead of duplicating evidence.
+        try exec(handle, """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_source_occurrence
+            ON emails(source_id, source_ordinal)
+            WHERE source_id IS NOT NULL AND source_ordinal IS NOT NULL;
+        """)
+        // §16 DB-native sort keysets.
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_subject_id ON emails(subject COLLATE NOCASE, id);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_size_id ON emails(size_bytes, id);")
+        // §3.1 first-class sources.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS sources(
+                source_id      INTEGER PRIMARY KEY,
+                sha256         TEXT NOT NULL,
+                filename       TEXT NOT NULL DEFAULT '',
+                byte_size      INTEGER NOT NULL DEFAULT 0,
+                parser         TEXT NOT NULL DEFAULT '',
+                parser_version INTEGER NOT NULL DEFAULT 0,
+                account_id     TEXT,
+                imported_at    INTEGER NOT NULL DEFAULT 0,
+                source_kind    TEXT NOT NULL DEFAULT ''
+            );
+        """)
+        try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_sha ON sources(sha256);")
+        // §3.5 bounded attachment metadata (bytes stay reconstructable from raw MIME).
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS attachments(
+                attachment_id INTEGER PRIMARY KEY,
+                email_id      TEXT NOT NULL,
+                position      INTEGER NOT NULL DEFAULT 0,
+                filename      TEXT NOT NULL DEFAULT '',
+                mime_type     TEXT NOT NULL DEFAULT '',
+                size_bytes    INTEGER NOT NULL DEFAULT 0,
+                content_id    TEXT,
+                is_inline     INTEGER NOT NULL DEFAULT 0,
+                content_hash  TEXT
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_attachments_email ON attachments(email_id);")
+        // §3.4 normalized participants — the query basis for sender/recipient
+        // filters and contact analytics, instead of re-parsing To:/Cc: strings.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_participants(
+                email_id           TEXT NOT NULL,
+                role               TEXT NOT NULL,
+                address            TEXT NOT NULL,
+                display_name       TEXT,
+                normalized_address TEXT NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_participants_lookup ON email_participants(role, normalized_address, email_id);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_participants_email ON email_participants(email_id);")
+        // §3.6 queryable multi-value state.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_tags(
+                email_id TEXT NOT NULL,
+                tag      TEXT NOT NULL,
+                PRIMARY KEY(email_id, tag)
+            ) WITHOUT ROWID;
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_email_tags_tag ON email_tags(tag, email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_domains(
+                email_id TEXT NOT NULL,
+                domain   TEXT NOT NULL,
+                PRIMARY KEY(email_id, domain)
+            ) WITHOUT ROWID;
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_email_domains_domain ON email_domains(domain, email_id);")
+        // §19 review state: pinned/read/archived/trashed + user tags +
+        // annotations, indexed and page-addressable. Trash is a soft state —
+        // never silent evidence destruction.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_review_state(
+                email_id   TEXT PRIMARY KEY,
+                pinned     INTEGER NOT NULL DEFAULT 0,
+                is_read    INTEGER NOT NULL DEFAULT 0,
+                archived   INTEGER NOT NULL DEFAULT 0,
+                trashed    INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_review_trashed ON email_review_state(trashed) WHERE trashed = 1;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_review_pinned ON email_review_state(pinned) WHERE pinned = 1;")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_user_tags(
+                email_id TEXT NOT NULL,
+                tag      TEXT NOT NULL,
+                PRIMARY KEY(email_id, tag)
+            ) WITHOUT ROWID;
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_user_tags_tag ON email_user_tags(tag, email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_annotations(
+                email_id   TEXT PRIMARY KEY,
+                note       TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+    }
+
+    /// `PRAGMA integrity_check` — "ok" means healthy. Exposed for the
+    /// activation gate and diagnostics (§49.1).
+    func integrityCheck() throws -> String {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "PRAGMA integrity_check;")
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return "no result" }
+        return columnText(stmt, 0)
+    }
+
+    /// Current `PRAGMA user_version` — exposed for tests/diagnostics.
+    func schemaVersion() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "PRAGMA user_version;")
+    }
+
+    // MARK: - Duplicate findings (Phase 10)
+
+    struct StoredDuplicate: Sendable, Equatable {
+        let duplicateID: String
+        let messageID: String?
+        let sourceHash: String?
+    }
+
+    func duplicatesCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM duplicates;")
+    }
+
+    func recentDuplicates(limit: Int) throws -> [StoredDuplicate] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT duplicate_id, message_id, source_hash FROM duplicates ORDER BY id DESC LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [StoredDuplicate] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredDuplicate(duplicateID: columnText(stmt, 0),
+                                       messageID: columnTextOptional(stmt, 1),
+                                       sourceHash: columnTextOptional(stmt, 2)))
+        }
+        return out
+    }
+
+    // MARK: - Corpus revision
+
+    func corpusRevision() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT value FROM meta WHERE key = 'corpus_revision';")
+    }
+
+    // MARK: - LIFE-06 archive-level access record (audit 2026-11-06 A08)
+
+    /// The highest paid tier (raw value) under which this archive was used,
+    /// kept IN the archive so a restore onto a clean installation keeps the
+    /// "you keep what you imported" policy without the old preferences or a
+    /// live store connection. 0 / absent = never.
+    func paidTierRecord() throws -> Int {
+        let db = try ensureDB()
+        return (try? scalarInt(db, "SELECT value FROM meta WHERE key = 'paid_tier_record';")) ?? 0
+    }
+
+    /// Records `tier` when it is higher than what the archive already knows.
+    func recordPaidTier(_ tier: Int) throws {
+        guard tier > 0 else { return }
+        let db = try ensureDB()
+        try exec(db, """
+            INSERT INTO meta(key, value) VALUES ('paid_tier_record', \(tier))
+            ON CONFLICT(key) DO UPDATE SET value = max(value, \(tier));
+        """)
+    }
+
+    @discardableResult
+    func bumpCorpusRevision() throws -> Int {
+        let db = try ensureDB()
+        try exec(db, """
+            INSERT INTO meta(key, value) VALUES ('corpus_revision', 1)
+            ON CONFLICT(key) DO UPDATE SET value = value + 1;
+        """)
+        return try corpusRevision()
+    }
+
+    /// Reconcile the revision with the store's cardinality: if the row count
+    /// changed since it was last observed (an import/delete path that didn't
+    /// bump explicitly), bump once and remember the new count. Two O(1)
+    /// aggregates — safe to call on every derived-state read. Content edits
+    /// that keep the count constant (redaction) must still call
+    /// `bumpCorpusRevision()` explicitly.
+    @discardableResult
+    func reconcileCorpusRevisionWithCount() throws -> Int {
+        let db = try ensureDB()
+        let total = try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+        let observed = try scalarInt(db, "SELECT value FROM meta WHERE key = 'corpus_observed_count';")
+        guard total != observed else { return try corpusRevision() }
+        try exec(db, """
+            INSERT INTO meta(key, value) VALUES ('corpus_observed_count', \(total))
+            ON CONFLICT(key) DO UPDATE SET value = \(total);
+        """)
+        return try bumpCorpusRevision()
+    }
+
+    // MARK: - Derived state (per-email analysis)
+
+    func derivedUpsert(_ records: [DerivedRecord]) throws {
+        guard !records.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO derived(email_id, corpus_revision, analysis_version, sentiment, classification,
+                priority, phishing, topic, thread_id, predictive, smart_tags, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                corpus_revision=excluded.corpus_revision, analysis_version=excluded.analysis_version,
+                sentiment=excluded.sentiment, classification=excluded.classification, priority=excluded.priority,
+                phishing=excluded.phishing, topic=excluded.topic, thread_id=excluded.thread_id,
+                predictive=excluded.predictive, smart_tags=excluded.smart_tags, updated_at=excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for r in records {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, r.emailID.uuidString)
+                sqlite3_bind_int64(stmt, 2, Int64(r.corpusRevision))
+                sqlite3_bind_int64(stmt, 3, Int64(r.analysisVersion))
+                bindTextOrNull(stmt, 4, r.sentiment)
+                bindTextOrNull(stmt, 5, r.classification)
+                if let p = r.priority { sqlite3_bind_int64(stmt, 6, Int64(p)) } else { sqlite3_bind_null(stmt, 6) }
+                if let ph = r.phishing { sqlite3_bind_int(stmt, 7, ph ? 1 : 0) } else { sqlite3_bind_null(stmt, 7) }
+                bindTextOrNull(stmt, 8, r.topic)
+                bindTextOrNull(stmt, 9, r.threadID)
+                if let pv = r.predictiveScore { sqlite3_bind_double(stmt, 10, pv) } else { sqlite3_bind_null(stmt, 10) }
+                bindTextOrNull(stmt, 11, r.smartTags.isEmpty ? nil : r.smartTags.joined(separator: "\u{1F}"))
+                sqlite3_bind_int64(stmt, 12, Int64(r.updatedAt))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func derivedFetch(ids: [EmailID]) throws -> [EmailID: DerivedRecord] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [EmailID: DerivedRecord] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT email_id, corpus_revision, analysis_version, sentiment, classification, priority,
+                       phishing, topic, thread_id, predictive, smart_tags, updated_at
+                FROM derived WHERE email_id IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = DerivedRecord(
+                    emailID: id,
+                    corpusRevision: Int(sqlite3_column_int64(stmt, 1)),
+                    analysisVersion: Int(sqlite3_column_int64(stmt, 2)),
+                    sentiment: columnTextOptional(stmt, 3),
+                    classification: columnTextOptional(stmt, 4),
+                    priority: sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 5)),
+                    phishing: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : (sqlite3_column_int(stmt, 6) != 0),
+                    topic: columnTextOptional(stmt, 7),
+                    threadID: columnTextOptional(stmt, 8),
+                    predictiveScore: sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 9),
+                    smartTags: columnTextOptional(stmt, 10).map { $0.split(separator: "\u{1F}").map(String.init) } ?? [],
+                    updatedAt: Int(sqlite3_column_int64(stmt, 11))
+                )
+            }
+        }
+        return out
+    }
+
+    /// Email ids whose derived state is missing or stale relative to `revision`
+    /// — the work list for a background analysis job. Joined to `emails` so
+    /// deleted rows never appear. `minAnalysisVersion` (Part I/K) marks records
+    /// produced by an older analysis/model version as stale, so bumping the
+    /// version constant triggers an incremental recompute.
+    func derivedStaleIDs(below revision: Int, minAnalysisVersion: Int = 0, limit: Int) throws -> [EmailID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id FROM emails e
+            LEFT JOIN derived d ON d.email_id = e.id
+            WHERE d.email_id IS NULL OR d.corpus_revision < ? OR d.analysis_version < ?
+            LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(revision))
+        sqlite3_bind_int64(stmt, 2, Int64(minAnalysisVersion))
+        sqlite3_bind_int(stmt, 3, Int32(limit))
+        var out: [EmailID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    /// Partial upsert (Part J): set ONLY the topic column for the given emails,
+    /// preserving every other derived field a different producer persisted.
+    func derivedSetTopics(_ topics: [EmailID: String]) throws {
+        guard !topics.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO derived(email_id, topic, updated_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET topic = excluded.topic, updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for (id, topic) in topics {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindText(stmt, 2, topic)
+                sqlite3_bind_int64(stmt, 3, Int64(now))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Partial upsert (§3-A10): set ONLY the smart-tag column, preserving
+    /// every other derived field.
+    func derivedSetSmartTags(_ tags: [EmailID: [String]]) throws {
+        guard !tags.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO derived(email_id, smart_tags, updated_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET smart_tags = excluded.smart_tags, updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for (id, list) in tags {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindTextOrNull(stmt, 2, list.isEmpty ? nil : list.joined(separator: "\u{1F}"))
+                sqlite3_bind_int64(stmt, 3, Int64(now))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func derivedCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM derived;")
+    }
+
+    func derivedDelete(ids: Set<EmailID>) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in Array(ids).chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "DELETE FROM derived WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    // MARK: - Thread keys (Part L)
+
+    struct ThreadKeyRow: Sendable, Equatable {
+        let emailID: EmailID
+        let threadKey: String
+        let confidence: Int
+    }
+
+    /// Header fields needed to derive a thread key — no bodies hydrated.
+    struct ThreadKeySource: Sendable {
+        let id: EmailID
+        let messageID: String?
+        let inReplyTo: String?
+        let references: String?
+        let subject: String
+    }
+
+    /// One bounded page of emails that don't have a thread key yet — the work
+    /// list for the thread-key backfill job.
+    func threadKeyMissingPage(limit: Int) throws -> [ThreadKeySource] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.subject
+            FROM emails e LEFT JOIN thread_keys t ON t.email_id = e.id
+            WHERE t.email_id IS NULL LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [ThreadKeySource] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append(ThreadKeySource(
+                id: id,
+                messageID: columnTextOptional(stmt, 1),
+                inReplyTo: columnTextOptional(stmt, 2),
+                references: columnTextOptional(stmt, 3),
+                subject: columnText(stmt, 4)
+            ))
+        }
+        return out
+    }
+
+    func threadKeysUpsert(_ rows: [ThreadKeyRow]) throws {
+        guard !rows.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO thread_keys(email_id, thread_key, confidence, updated_at) VALUES (?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                thread_key = excluded.thread_key, confidence = excluded.confidence, updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for row in rows {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, row.emailID.uuidString)
+                bindText(stmt, 2, row.threadKey)
+                sqlite3_bind_int64(stmt, 3, Int64(row.confidence))
+                sqlite3_bind_int64(stmt, 4, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func threadKey(for id: EmailID) throws -> ThreadKeyRow? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, thread_key, confidence FROM thread_keys WHERE email_id = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard try stepRow(stmt, db), let rid = columnUUID(stmt, 0) else { return nil }
+        return ThreadKeyRow(emailID: rid, threadKey: columnText(stmt, 1), confidence: Int(sqlite3_column_int64(stmt, 2)))
+    }
+
+    /// Members of a thread, newest first, paginated — the indexed query path
+    /// that replaces archive-wide runtime grouping.
+    func threadEmailIDs(threadKey: String, limit: Int, offset: Int) throws -> [EmailID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT t.email_id FROM thread_keys t
+            JOIN emails e ON e.id = t.email_id
+            WHERE t.thread_key = ? ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, threadKey)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var out: [EmailID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func threadKeyCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM thread_keys;")
+    }
+
+    // MARK: - Predictive coding records (Part K)
+
+    struct PredictiveRecordRow: Sendable, Equatable {
+        let emailID: EmailID
+        var label: Int? = nil          // 1 relevant / 0 irrelevant / nil unlabeled
+        var score: Double? = nil
+        var features: String? = nil    // compact JSON tf-idf features (labeled rows)
+        var modelVersion: Int = 0
+        var featureVersion: Int = 0
+        var corpusRevision: Int = 0
+        var updatedAt: Int = 0
+    }
+
+    /// Upsert human labels (+ compact features). Preserves any model score a
+    /// scoring job already persisted for the row.
+    func predictiveUpsertLabels(_ rows: [PredictiveRecordRow]) throws {
+        guard !rows.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO predictive_records(email_id, label, features, model_version, feature_version, corpus_revision, updated_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                label = excluded.label, features = excluded.features,
+                feature_version = excluded.feature_version, corpus_revision = excluded.corpus_revision,
+                updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for row in rows {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, row.emailID.uuidString)
+                if let l = row.label { sqlite3_bind_int64(stmt, 2, Int64(l)) } else { sqlite3_bind_null(stmt, 2) }
+                bindTextOrNull(stmt, 3, row.features)
+                sqlite3_bind_int64(stmt, 4, Int64(row.modelVersion))
+                sqlite3_bind_int64(stmt, 5, Int64(row.featureVersion))
+                sqlite3_bind_int64(stmt, 6, Int64(row.corpusRevision))
+                sqlite3_bind_int64(stmt, 7, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Upsert model scores from a (bounded) scoring pass. Preserves any human
+    /// label / features already persisted for the row.
+    func predictiveUpsertScores(_ scores: [EmailID: Double], modelVersion: Int, featureVersion: Int, corpusRevision: Int) throws {
+        guard !scores.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO predictive_records(email_id, score, model_version, feature_version, corpus_revision, updated_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                score = excluded.score, model_version = excluded.model_version,
+                feature_version = excluded.feature_version, corpus_revision = excluded.corpus_revision,
+                updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for (id, score) in scores {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                sqlite3_bind_double(stmt, 2, score)
+                sqlite3_bind_int64(stmt, 3, Int64(modelVersion))
+                sqlite3_bind_int64(stmt, 4, Int64(featureVersion))
+                sqlite3_bind_int64(stmt, 5, Int64(corpusRevision))
+                sqlite3_bind_int64(stmt, 6, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    private func predictiveRow(_ stmt: OpaquePointer?) -> PredictiveRecordRow? {
+        guard let id = columnUUID(stmt, 0) else { return nil }
+        return PredictiveRecordRow(
+            emailID: id,
+            label: sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 1)),
+            score: sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 2),
+            features: columnTextOptional(stmt, 3),
+            modelVersion: Int(sqlite3_column_int64(stmt, 4)),
+            featureVersion: Int(sqlite3_column_int64(stmt, 5)),
+            corpusRevision: Int(sqlite3_column_int64(stmt, 6)),
+            updatedAt: Int(sqlite3_column_int64(stmt, 7))
+        )
+    }
+
+    private static let predictiveColumns =
+        "email_id, label, score, features, model_version, feature_version, corpus_revision, updated_at"
+
+    func predictiveFetch(ids: [EmailID]) throws -> [EmailID: PredictiveRecordRow] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [EmailID: PredictiveRecordRow] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT \(Self.predictiveColumns) FROM predictive_records WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) { if let row = predictiveRow(stmt) { out[row.emailID] = row } }
+        }
+        return out
+    }
+
+    /// Scored records paged by score (highest first) — the view's read path.
+    func predictivePage(limit: Int, offset: Int) throws -> [PredictiveRecordRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT \(Self.predictiveColumns) FROM predictive_records
+            WHERE score IS NOT NULL ORDER BY score DESC, email_id ASC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [PredictiveRecordRow] = []
+        while try stepRow(stmt, db) { if let row = predictiveRow(stmt) { out.append(row) } }
+        return out
+    }
+
+    /// All labeled training rows — bounded by the number of human labels.
+    func predictiveLabeled() throws -> [PredictiveRecordRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT \(Self.predictiveColumns) FROM predictive_records WHERE label IS NOT NULL;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [PredictiveRecordRow] = []
+        while try stepRow(stmt, db) { if let row = predictiveRow(stmt) { out.append(row) } }
+        return out
+    }
+
+    func predictiveCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM predictive_records;")
+    }
+
+    // MARK: - Near-duplicate findings (Part M)
+
+    struct NearDupMemberRow: Sendable, Equatable {
+        let groupKey: String
+        let emailID: EmailID
+        let isRepresentative: Bool
+        let similarity: Double
+    }
+
+    /// Replace the persisted near-duplicate findings wholesale (one analysis
+    /// run = one findings set), stamping algorithm version + corpus revision.
+    func nearDuplicatesReplace(_ rows: [NearDupMemberRow], algoVersion: Int, corpusRevision: Int) throws {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            try exec(db, "DELETE FROM near_dup_findings;")
+            let stmt = try prepare(db, """
+                INSERT INTO near_dup_findings(group_key, email_id, is_representative, similarity, algo_version, corpus_revision, created_at)
+                VALUES (?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for row in rows {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, row.groupKey)
+                bindText(stmt, 2, row.emailID.uuidString)
+                sqlite3_bind_int(stmt, 3, row.isRepresentative ? 1 : 0)
+                sqlite3_bind_double(stmt, 4, row.similarity)
+                sqlite3_bind_int64(stmt, 5, Int64(algoVersion))
+                sqlite3_bind_int64(stmt, 6, Int64(corpusRevision))
+                sqlite3_bind_int64(stmt, 7, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// One page of group keys, largest groups first — the review UI pages these.
+    func nearDuplicateGroupKeysPage(limit: Int, offset: Int) throws -> [String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT group_key FROM near_dup_findings
+            GROUP BY group_key ORDER BY COUNT(*) DESC, group_key ASC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [String] = []
+        while try stepRow(stmt, db) { out.append(columnText(stmt, 0)) }
+        return out
+    }
+
+    func nearDuplicateMembers(groupKeys: [String]) throws -> [NearDupMemberRow] {
+        guard !groupKeys.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out: [NearDupMemberRow] = []
+        for chunk in groupKeys.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT group_key, email_id, is_representative, similarity
+                FROM near_dup_findings WHERE group_key IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, key) in chunk.enumerated() { bindText(stmt, Int32(i + 1), key) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 1) else { continue }
+                out.append(NearDupMemberRow(
+                    groupKey: columnText(stmt, 0),
+                    emailID: id,
+                    isRepresentative: sqlite3_column_int(stmt, 2) != 0,
+                    similarity: sqlite3_column_double(stmt, 3)
+                ))
+            }
+        }
+        return out
+    }
+
+    func nearDuplicateGroupCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(DISTINCT group_key) FROM near_dup_findings;")
+    }
+
+    /// Version/revision the persisted findings were produced at (0/0 = none).
+    func nearDuplicateMeta() throws -> (algoVersion: Int, corpusRevision: Int) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT MAX(algo_version), MAX(corpus_revision) FROM near_dup_findings;")
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return (0, 0) }
+        let algo = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? 0 : Int(sqlite3_column_int64(stmt, 0))
+        let rev = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? 0 : Int(sqlite3_column_int64(stmt, 1))
+        return (algo, rev)
+    }
+
+    // MARK: - Sources (§3.1)
+
+    struct SourceDescriptor: Sendable {
+        let sha256: String
+        var filename: String = ""
+        var byteSize: Int = 0
+        var parser: String = ""
+        var parserVersion: Int = 0
+        var accountID: String? = nil
+        var sourceKind: String = ""
+    }
+
+    /// Register (or re-touch) an import source, keyed by content SHA-256 —
+    /// two files both named `Inbox.mbox` stay distinguishable (§21.2).
+    /// Returns the stable source_id.
+    @discardableResult
+    func registerSource(_ s: SourceDescriptor) throws -> Int64 {
+        let db = try ensureDB()
+        let upsert = try prepare(db, """
+            INSERT INTO sources(sha256, filename, byte_size, parser, parser_version, account_id, imported_at, source_kind)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(sha256) DO UPDATE SET imported_at = excluded.imported_at;
+        """)
+        defer { sqlite3_finalize(upsert) }
+        bindText(upsert, 1, s.sha256)
+        bindText(upsert, 2, s.filename)
+        sqlite3_bind_int64(upsert, 3, Int64(s.byteSize))
+        bindText(upsert, 4, s.parser)
+        sqlite3_bind_int64(upsert, 5, Int64(s.parserVersion))
+        bindTextOrNull(upsert, 6, s.accountID)
+        sqlite3_bind_int64(upsert, 7, Int64(Date().timeIntervalSince1970))
+        bindText(upsert, 8, s.sourceKind)
+        guard sqlite3_step(upsert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        let lookup = try prepare(db, "SELECT source_id FROM sources WHERE sha256 = ?;")
+        defer { sqlite3_finalize(lookup) }
+        bindText(lookup, 1, s.sha256)
+        guard try stepRow(lookup, db) else { throw SQLiteStoreError.step("source row vanished after upsert") }
+        return sqlite3_column_int64(lookup, 0)
+    }
+
+    struct StoredSource: Sendable, Equatable {
+        let sourceID: Int64
+        let sha256: String
+        let filename: String
+        let byteSize: Int
+        let parser: String
+        let importedAt: Date
+    }
+
+    func sources() throws -> [StoredSource] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT source_id, sha256, filename, byte_size, parser, imported_at FROM sources ORDER BY imported_at DESC;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [StoredSource] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredSource(
+                sourceID: sqlite3_column_int64(stmt, 0),
+                sha256: columnText(stmt, 1),
+                filename: columnText(stmt, 2),
+                byteSize: Int(sqlite3_column_int64(stmt, 3)),
+                parser: columnText(stmt, 4),
+                importedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 5)))
+            ))
+        }
+        return out
+    }
+
+    // MARK: - Insertion
+
+    /// Protocol witness — legacy signature, Message-ID dedup (v1 semantics).
+    func insertBatch(
+        _ emails: [MBOXParser.RawEmail],
+        sourceFileHash: String?,
+        accountID: String?,
+        batchSize: Int,
+        progress: (@Sendable (Int, Int) -> Void)?
+    ) throws {
+        _ = try insertBatch(
+            emails, sourceFileHash: sourceFileHash, accountID: accountID,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: batchSize, progress: progress)
+    }
+
+    /// Full-fidelity, policy-driven insert (§3/§4/§5.3).
+    ///
+    /// When `sourceID`/`firstOrdinal` are provided, each email is stamped with
+    /// its stable source occurrence `(source_id, firstOrdinal + i)`; a re-run
+    /// over the same source (crash resume, repeated parse) hits the occurrence
+    /// uniqueness and is reported in `existingSourceOccurrenceIDs` rather than
+    /// duplicating evidence — even under `.preserveAll`.
+    @discardableResult
+    func insertBatch(
+        _ emails: [MBOXParser.RawEmail],
+        sourceFileHash: String?,
+        accountID: String?,
+        sourceID: Int64?,
+        firstOrdinal: Int?,
+        dedupPolicy: DedupPolicy,
+        respectTombstones: Bool = true,
+        batchSize: Int,
+        progress: (@Sendable (Int, Int) -> Void)?,
+        progressCheckpoint: ImportProgressCheckpoint? = nil,
+        locators: [UUID: LocatorRecord] = [:],
+        rawBlobs: [UUID: BlobReference] = [:],
+        beforeCommit: (OpaquePointer, BatchInsertResult) throws -> Void = { _, _ in }
+    ) throws -> BatchInsertResult {
+        let db = try ensureDB()
+        let total = emails.count
+        var processed = 0
+        var result = BatchInsertResult(attempted: total)
+        // Previously-deleted identities — skip them so a re-import can't silently
+        // resurrect deleted mail (cleared via "Forget deleted emails").
+        let tombstones: (keys: Set<String>, mids: Set<String>) =
+            respectTombstones ? ((try? loadTombstones()) ?? (keys: [], mids: [])) : (keys: [], mids: [])
+
+        let insertEmail = try prepare(db, """
+            INSERT OR IGNORE INTO emails(
+                id, message_id, subject, from_addr, to_addr, cc_addr, bcc_addr,
+                date, body_preview, has_attach, size_bytes, in_reply_to,
+                references_ids, account_id, source_hash,
+                message_type, dedup_key, source_id, source_ordinal,
+                attachment_count, content_revision, imported_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?);
+        """)
+        let insertBody = try prepare(db, """
+            INSERT OR IGNORE INTO email_bodies(id, plain, html, raw, headers_json, raw_blob_digest, raw_blob_length)
+            VALUES (?,?,?,?,?,?,?);
+        """)
+        let insertDup = try prepare(db, """
+            INSERT INTO duplicates(duplicate_id, message_id, source_hash, created_at)
+            VALUES (?,?,?,?);
+        """)
+        let insertAttachment = try prepare(db, """
+            INSERT INTO attachments(email_id, position, filename, mime_type, size_bytes, content_id, is_inline)
+            VALUES (?,?,?,?,?,?,?);
+        """)
+        let insertParticipant = try prepare(db, """
+            INSERT INTO email_participants(email_id, role, address, display_name, normalized_address)
+            VALUES (?,?,?,?,?);
+        """)
+        let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
+        let insertDomain = try prepare(db, "INSERT OR IGNORE INTO email_domains(email_id, domain) VALUES (?,?);")
+        let occurrenceExists = try prepare(db, "SELECT 1 FROM emails WHERE source_id = ? AND source_ordinal = ?;")
+        // FOLD-02: memberships next to the tags (dual write).
+        let insertFolder = try prepare(db, "INSERT OR IGNORE INTO email_folders(email_id, folder_id) VALUES (?,?);")
+        var folderCache: [String: Int64] = [:]
+        defer {
+            sqlite3_finalize(insertEmail); sqlite3_finalize(insertBody); sqlite3_finalize(insertDup)
+            sqlite3_finalize(insertAttachment); sqlite3_finalize(insertParticipant)
+            sqlite3_finalize(insertTag); sqlite3_finalize(insertDomain); sqlite3_finalize(occurrenceExists)
+            sqlite3_finalize(insertFolder)
+        }
+        let now = Int64(Date().timeIntervalSince1970)
+
+        var offset = 0
+        for chunk in emails.chunked(into: max(1, batchSize)) {
+            try exec(db, SQLiteHygiene.beginWrite)
+            do {
+                for (i, email) in chunk.enumerated() {
+                    let idStr = email.id.uuidString
+                    let mid = email.headers["Message-ID"].flatMap {
+                        $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+                    }
+                    let dedupKey = Self.dedupKey(for: email, messageID: mid, policy: dedupPolicy)
+                    // Skip anything the user previously deleted (tombstone match
+                    // on dedup_key or Message-ID) unless the override is on.
+                    if respectTombstones,
+                       (dedupKey.map { tombstones.keys.contains($0) } ?? false)
+                        || (mid.map { tombstones.mids.contains($0) } ?? false) {
+                        result.blockedByTombstoneIDs.append(email.id)
+                        continue
+                    }
+                    let ordinal: Int64? = firstOrdinal.map { Int64($0 + offset + i) }
+                    let date = MBOXParser.effectiveDate(for: email) ?? Date.distantPast
+                    let dateInt = Int64(date.timeIntervalSince1970.rounded())
+
+                    sqlite3_reset(insertEmail); sqlite3_clear_bindings(insertEmail)
+                    bindText(insertEmail, 1, idStr)
+                    bindTextOrNull(insertEmail, 2, mid)
+                    bindText(insertEmail, 3, email.headers["Subject"] ?? "(No Subject)")
+                    bindText(insertEmail, 4, email.headers["From"] ?? "")
+                    bindText(insertEmail, 5, email.headers["To"] ?? "")
+                    bindTextOrNull(insertEmail, 6, email.headers["Cc"])
+                    bindTextOrNull(insertEmail, 7, email.headers["Bcc"])
+                    sqlite3_bind_int64(insertEmail, 8, dateInt)
+                    bindText(insertEmail, 9, String(email.plainBody.prefix(400)))
+                    sqlite3_bind_int(insertEmail, 10, email.attachments.isEmpty ? 0 : 1)
+                    sqlite3_bind_int64(insertEmail, 11, rawBlobs[email.id]?.length ?? Int64(email.rawSource.utf8.count))
+                    bindTextOrNull(insertEmail, 12, email.headers["In-Reply-To"])
+                    bindTextOrNull(insertEmail, 13, email.headers["References"])
+                    bindTextOrNull(insertEmail, 14, accountID)
+                    bindTextOrNull(insertEmail, 15, sourceFileHash)
+                    bindText(insertEmail, 16, email.messageType)
+                    bindTextOrNull(insertEmail, 17, dedupKey)
+                    if let sourceID { sqlite3_bind_int64(insertEmail, 18, sourceID) } else { sqlite3_bind_null(insertEmail, 18) }
+                    if let ordinal { sqlite3_bind_int64(insertEmail, 19, ordinal) } else { sqlite3_bind_null(insertEmail, 19) }
+                    sqlite3_bind_int64(insertEmail, 20, Int64(email.attachments.count))
+                    sqlite3_bind_int64(insertEmail, 21, now)
+                    guard sqlite3_step(insertEmail) == SQLITE_DONE else {
+                        throw SQLiteStoreError.step(lastError(db))
+                    }
+                    if sqlite3_changes(db) == 1 {
+                        result.insertedIDs.append(email.id)
+                        // S3b: the raw source goes inline or to the blob tier.
+                        // `rawTier` has already written and fsynced the blob by
+                        // the time this row is bound, so the reference can
+                        // never outlive its bytes.
+                        // V4-03: a connected capture has already published its
+                        // exact bytes to the blob tier (`ConnectedArchiveSink`);
+                        // the row references them instead of re-encoding a String.
+                        let tier = try rawBlobs[email.id].map { RawTier(inline: nil, digest: $0.digest, length: $0.length) }
+                            ?? rawTier(for: email.rawSource)
+                        sqlite3_reset(insertBody); sqlite3_clear_bindings(insertBody)
+                        bindText(insertBody, 1, idStr)
+                        bindBlob(insertBody, 2, email.plainBody.data(using: .utf8))
+                        bindBlob(insertBody, 3, email.htmlBody.data(using: .utf8))
+                        bindBlob(insertBody, 4, tier.inline)
+                        bindBlob(insertBody, 5, try? JSONEncoder().encode(email.headers))
+                        bindTextOrNull(insertBody, 6, tier.digest)
+                        sqlite3_bind_int64(insertBody, 7, tier.length)
+                        guard sqlite3_step(insertBody) == SQLITE_DONE else {
+                            throw SQLiteStoreError.step(lastError(db))
+                        }
+                        for (pos, att) in email.attachments.enumerated() {
+                            sqlite3_reset(insertAttachment); sqlite3_clear_bindings(insertAttachment)
+                            bindText(insertAttachment, 1, idStr)
+                            sqlite3_bind_int64(insertAttachment, 2, Int64(pos))
+                            bindText(insertAttachment, 3, att.filename)
+                            bindText(insertAttachment, 4, att.mimeType)
+                            sqlite3_bind_int64(insertAttachment, 5, Int64(att.size))
+                            bindTextOrNull(insertAttachment, 6, att.contentID)
+                            sqlite3_bind_int(insertAttachment, 7, att.isInline ? 1 : 0)
+                            guard sqlite3_step(insertAttachment) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                        for (role, header) in [("FROM", "From"), ("TO", "To"), ("CC", "Cc"), ("BCC", "Bcc")] {
+                            guard let raw = email.headers[header], !raw.isEmpty else { continue }
+                            for p in Self.parseAddressList(raw) {
+                                sqlite3_reset(insertParticipant); sqlite3_clear_bindings(insertParticipant)
+                                bindText(insertParticipant, 1, idStr)
+                                bindText(insertParticipant, 2, role)
+                                bindText(insertParticipant, 3, p.address)
+                                bindTextOrNull(insertParticipant, 4, p.display)
+                                bindText(insertParticipant, 5, p.address.lowercased())
+                                guard sqlite3_step(insertParticipant) == SQLITE_DONE else {
+                                    throw SQLiteStoreError.step(lastError(db))
+                                }
+                            }
+                        }
+                        // 3.1 R1: how the email was found (only non-live is stored).
+                        if let recovery = email.recovery {
+                            try insertRecovery(db, emailID: idStr, info: recovery)
+                        }
+                        // FOLD-02: the folder path is a tag too, so the previous
+                        // sidebar, the tag: operator and a rebuild see it.
+                        let folderPaths = Self.folderPaths(for: email)
+                        var tags = email.tags
+                        for path in folderPaths where !tags.contains(path) { tags.append(path) }
+                        for tag in tags where !tag.isEmpty {
+                            sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
+                            bindText(insertTag, 1, idStr); bindText(insertTag, 2, tag)
+                            guard sqlite3_step(insertTag) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                        for path in folderPaths {
+                            let fid = try folderID(db, sourceID: sourceID ?? 0, path: path, declared: false, cache: &folderCache)
+                            sqlite3_reset(insertFolder); sqlite3_clear_bindings(insertFolder)
+                            bindText(insertFolder, 1, idStr); sqlite3_bind_int64(insertFolder, 2, fid)
+                            guard sqlite3_step(insertFolder) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                        // FIND-07: the message's searchable documents, whole, in chunks.
+                        if SearchChunkPolicy.isEnabled {
+                            try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false)
+                        }
+                        for domain in email.domains where !domain.isEmpty {
+                            sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
+                            bindText(insertDomain, 1, idStr); bindText(insertDomain, 2, domain)
+                            guard sqlite3_step(insertDomain) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                        // F02: the locator commits with the row it describes.
+                        // Only for rows this statement inserted — a deduped or
+                        // resume-skipped row must not gain a locator pointing
+                        // at bytes no row owns.
+                        if let record = locators[email.id] {
+                            if !record.parts.isEmpty {
+                                try writePartLocators(db, record.parts, emailID: email.id)
+                            }
+                            try writeLocator(db, record.locator, emailID: email.id, bodyDecoded: record.bodyDecoded)
+                        }
+                    } else {
+                        // INSERT OR IGNORE skipped the row. Distinguish "this
+                        // exact source occurrence is already stored" (resume)
+                        // from "the dedup policy dropped it" (duplicate).
+                        var isExistingOccurrence = false
+                        if let sourceID, let ordinal {
+                            sqlite3_reset(occurrenceExists); sqlite3_clear_bindings(occurrenceExists)
+                            sqlite3_bind_int64(occurrenceExists, 1, sourceID)
+                            sqlite3_bind_int64(occurrenceExists, 2, ordinal)
+                            isExistingOccurrence = try stepRow(occurrenceExists, db)
+                        }
+                        if isExistingOccurrence {
+                            result.existingSourceOccurrenceIDs.append(email.id)
+                        } else {
+                            result.duplicateIDs.append(email.id)
+                            sqlite3_reset(insertDup); sqlite3_clear_bindings(insertDup)
+                            bindText(insertDup, 1, idStr)
+                            bindTextOrNull(insertDup, 2, mid)
+                            bindTextOrNull(insertDup, 3, sourceFileHash)
+                            sqlite3_bind_int64(insertDup, 4, dateInt)
+                            guard sqlite3_step(insertDup) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                    }
+                }
+                // v17: the checkpoint commits WITH the rows it vouches for.
+                if let cp = progressCheckpoint {
+                    try writeImportProgress(db, cp, messagesIngested: cp.firstOrdinal + processed + chunk.count)
+                }
+                // V4-03: the caller's own rows (connected-capture occurrence and
+                // item outcome) commit in the SAME transaction as the record.
+                try beforeCommit(db, result)
+                try exec(db, "COMMIT;")
+            } catch {
+                try? exec(db, "ROLLBACK;")
+                throw error
+            }
+            offset += chunk.count
+            processed += chunk.count
+            progress?(processed, total)
+        }
+        return result
+    }
+
+    // MARK: - Dedup key / address parsing helpers
+
+    /// §4/§4.1: the nullable dedup key. NULL never collides (SQLite partial
+    /// unique index), so `.preserveAll` stores everything.
+    // MARK: - Workflow engine (v8)
+
+    struct StoredDefinition: Sendable, Identifiable {
+        var id: String { defID }
+        let defID: String
+        let name: String
+        let persona: String
+        let builtin: Bool
+        let operations: [StoredOperation]
+    }
+    struct StoredOperation: Sendable {
+        let seq: Int
+        let key: String
+        let title: String
+        let hint: String
+        let postsDocType: String?
+    }
+    struct StoredInstance: Sendable, Identifiable {
+        var id: String { wfNumber }
+        let wfNumber: String
+        let defID: String
+        let title: String
+        let status: String
+        let createdAt: Date
+        let createdBy: String
+        let updatedAt: Date
+        let reverses: String?
+    }
+    struct StoredConfirmation: Sendable {
+        let seq: Int
+        let confirmedAt: Date
+        let confirmedBy: String
+        let result: String
+        let note: String
+        let docNumber: String?
+    }
+
+    /// Persist a definition (built-in seed or user clone). Idempotent on defID.
+    func upsertDefinition(defID: String, name: String, persona: String, builtin: Bool,
+                          operations: [StoredOperation], createdBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            let up = try prepare(db, """
+                INSERT INTO workflow_definitions(def_id, name, persona, builtin, created_at, created_by)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(def_id) DO UPDATE SET name=excluded.name, persona=excluded.persona;
+            """)
+            defer { sqlite3_finalize(up) }
+            bindText(up, 1, defID); bindText(up, 2, name); bindText(up, 3, persona)
+            sqlite3_bind_int(up, 4, builtin ? 1 : 0)
+            sqlite3_bind_int64(up, 5, Int64(now.timeIntervalSince1970))
+            bindText(up, 6, createdBy)
+            guard sqlite3_step(up) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try exec(db, "DELETE FROM workflow_operations WHERE def_id = '\(defID)';")
+            for op in operations {
+                let oi = try prepare(db, """
+                    INSERT INTO workflow_operations(def_id, seq, op_key, title, hint, posts_doc_type)
+                    VALUES (?,?,?,?,?,?);
+                """)
+                defer { sqlite3_finalize(oi) }
+                bindText(oi, 1, defID); sqlite3_bind_int64(oi, 2, Int64(op.seq))
+                bindText(oi, 3, op.key); bindText(oi, 4, op.title); bindText(oi, 5, op.hint)
+                bindTextOrNull(oi, 6, op.postsDocType)
+                guard sqlite3_step(oi) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func definitions(persona: String? = nil) throws -> [StoredDefinition] {
+        let db = try ensureDB()
+        let clause = persona.map { "WHERE persona = '\($0)'" } ?? ""
+        let stmt = try prepare(db, "SELECT def_id, name, persona, builtin FROM workflow_definitions \(clause) ORDER BY builtin DESC, name;")
+        defer { sqlite3_finalize(stmt) }
+        var defs: [(String, String, String, Bool)] = []
+        while try stepRow(stmt, db) {
+            defs.append((columnText(stmt, 0), columnText(stmt, 1), columnText(stmt, 2), sqlite3_column_int(stmt, 3) == 1))
+        }
+        return try defs.map { d in
+            StoredDefinition(defID: d.0, name: d.1, persona: d.2, builtin: d.3, operations: try operations(defID: d.0))
+        }
+    }
+
+    func operations(defID: String) throws -> [StoredOperation] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT seq, op_key, title, hint, posts_doc_type FROM workflow_operations WHERE def_id = ? ORDER BY seq;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, defID)
+        var out: [StoredOperation] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredOperation(
+                seq: Int(sqlite3_column_int64(stmt, 0)), key: columnText(stmt, 1),
+                title: columnText(stmt, 2), hint: columnText(stmt, 3),
+                postsDocType: sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : columnText(stmt, 4)))
+        }
+        return out
+    }
+
+    /// Start one run of a definition — issues its WF number.
+    func createInstance(defID: String, title: String, createdBy: String = "", now: Date = Date()) throws -> String {
+        let wf = try issueDocument(type: "WF", summary: "Workflow: \(title)", refs: defID, createdBy: createdBy, now: now)
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO workflow_instances(wf_number, def_id, title, status, created_at, created_by, updated_at, reverses)
+            VALUES (?,?,?,?,?,?,?,NULL);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf); bindText(stmt, 2, defID); bindText(stmt, 3, title)
+        bindText(stmt, 4, "open")
+        sqlite3_bind_int64(stmt, 5, Int64(now.timeIntervalSince1970))
+        bindText(stmt, 6, createdBy)
+        sqlite3_bind_int64(stmt, 7, Int64(now.timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return wf
+    }
+
+    /// Confirm one operation (CO11). Idempotent per (wf, seq) — a re-confirm
+    /// overwrites. When it confirms the last operation the instance is marked
+    /// confirmed.
+    func confirmOperation(wf: String, seq: Int, totalOps: Int, result: String, note: String,
+                          docNumber: String?, confirmedBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO workflow_confirmations(wf_number, seq, confirmed_at, confirmed_by, result, note, doc_number)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(wf_number, seq) DO UPDATE SET
+                confirmed_at=excluded.confirmed_at, confirmed_by=excluded.confirmed_by,
+                result=excluded.result, note=excluded.note, doc_number=excluded.doc_number;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf); sqlite3_bind_int64(stmt, 2, Int64(seq))
+        sqlite3_bind_int64(stmt, 3, Int64(now.timeIntervalSince1970))
+        bindText(stmt, 4, confirmedBy); bindText(stmt, 5, result); bindText(stmt, 6, note)
+        bindTextOrNull(stmt, 7, docNumber)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        let done = try scalarInt(db, "SELECT COUNT(*) FROM workflow_confirmations WHERE wf_number = '\(wf)';")
+        let newStatus = done >= totalOps ? "confirmed" : "released"
+        let prior = columnScalarText(db, "SELECT status FROM workflow_instances WHERE wf_number = '\(wf)';") ?? ""
+        try exec(db, "UPDATE workflow_instances SET status = '\(newStatus)', updated_at = \(Int64(now.timeIntervalSince1970)) WHERE wf_number = '\(wf)';")
+        if prior != newStatus {
+            let hist = try prepare(db, """
+                INSERT INTO workflow_status_history(wf_number, changed_at, changed_by, from_status, to_status)
+                VALUES (?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(hist) }
+            bindText(hist, 1, wf); sqlite3_bind_int64(hist, 2, Int64(now.timeIntervalSince1970))
+            bindText(hist, 3, confirmedBy); bindText(hist, 4, prior); bindText(hist, 5, newStatus)
+            _ = sqlite3_step(hist)
+        }
+    }
+
+    struct StoredVariant: Sendable, Identifiable {
+        var id: String { variantID }
+        let variantID: String
+        let defID: String
+        let name: String
+        let values: [String: String]   // flattened "seq|key" -> value
+    }
+
+    func saveVariant(defID: String, name: String, values: [String: String],
+                     createdBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        let json = String(data: (try? JSONEncoder().encode(values)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
+        let vid = "\(defID)#\(name.lowercased())"
+        let stmt = try prepare(db, """
+            INSERT INTO workflow_variants(variant_id, def_id, name, created_at, created_by, values_json)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(variant_id) DO UPDATE SET values_json=excluded.values_json, created_at=excluded.created_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, vid); bindText(stmt, 2, defID); bindText(stmt, 3, name)
+        sqlite3_bind_int64(stmt, 4, Int64(now.timeIntervalSince1970)); bindText(stmt, 5, createdBy)
+        bindText(stmt, 6, json)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func variants(defID: String) throws -> [StoredVariant] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT variant_id, def_id, name, values_json FROM workflow_variants WHERE def_id = ? ORDER BY name;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, defID)
+        var out: [StoredVariant] = []
+        while try stepRow(stmt, db) {
+            let json = columnText(stmt, 3)
+            let values = (try? JSONDecoder().decode([String: String].self, from: Data(json.utf8))) ?? [:]
+            out.append(StoredVariant(variantID: columnText(stmt, 0), defID: columnText(stmt, 1),
+                                     name: columnText(stmt, 2), values: values))
+        }
+        return out
+    }
+
+    func instances(status: String? = nil, limit: Int = 200, offset: Int = 0) throws -> [StoredInstance] {
+        let db = try ensureDB()
+        let clause = status.map { "WHERE status = '\($0.replacingOccurrences(of: "'", with: "''"))'" } ?? ""
+        let stmt = try prepare(db, "SELECT wf_number, def_id, title, status, created_at, created_by, updated_at, reverses FROM workflow_instances \(clause) ORDER BY updated_at DESC LIMIT \(limit) OFFSET \(max(0, offset));")
+        defer { sqlite3_finalize(stmt) }
+        var out: [StoredInstance] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredInstance(
+                wfNumber: columnText(stmt, 0), defID: columnText(stmt, 1), title: columnText(stmt, 2),
+                status: columnText(stmt, 3),
+                createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                createdBy: columnText(stmt, 5),
+                updatedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 6))),
+                reverses: sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : columnText(stmt, 7)))
+        }
+        return out
+    }
+
+    func instance(wf: String) throws -> StoredInstance? {
+        try instances(status: nil, limit: 10000).first { $0.wfNumber == wf }
+    }
+
+    /// Persist the values entered at one operation (upsert per field).
+    func saveFieldValues(wf: String, seq: Int, values: [String: String]) throws {
+        let db = try ensureDB()
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            for (key, value) in values {
+                let stmt = try prepare(db, """
+                    INSERT INTO workflow_field_values(wf_number, seq, field_key, value)
+                    VALUES (?,?,?,?)
+                    ON CONFLICT(wf_number, seq, field_key) DO UPDATE SET value=excluded.value;
+                """)
+                defer { sqlite3_finalize(stmt) }
+                bindText(stmt, 1, wf); sqlite3_bind_int64(stmt, 2, Int64(seq))
+                bindText(stmt, 3, key); bindText(stmt, 4, value)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// All captured values for a run, keyed by operation seq then field key.
+    func fieldValues(wf: String) throws -> [Int: [String: String]] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT seq, field_key, value FROM workflow_field_values WHERE wf_number = ? ORDER BY seq;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf)
+        var out: [Int: [String: String]] = [:]
+        while try stepRow(stmt, db) {
+            let seq = Int(sqlite3_column_int64(stmt, 0))
+            out[seq, default: [:]][columnText(stmt, 1)] = columnText(stmt, 2)
+        }
+        return out
+    }
+
+    private func columnScalarText(_ db: OpaquePointer, _ sql: String) -> String? {
+        guard let stmt = try? prepare(db, sql) else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        guard (try? stepRow(stmt, db)) == true else { return nil }
+        return sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : columnText(stmt, 0)
+    }
+
+    func confirmations(wf: String) throws -> [StoredConfirmation] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT seq, confirmed_at, confirmed_by, result, note, doc_number FROM workflow_confirmations WHERE wf_number = ? ORDER BY seq;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf)
+        var out: [StoredConfirmation] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredConfirmation(
+                seq: Int(sqlite3_column_int64(stmt, 0)),
+                confirmedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1))),
+                confirmedBy: columnText(stmt, 2), result: columnText(stmt, 3),
+                note: columnText(stmt, 4),
+                docNumber: sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : columnText(stmt, 5)))
+        }
+        return out
+    }
+
+    // MARK: - Document registry (v7)
+
+    struct IssuedDocument: Sendable, Identifiable {
+        var id: String { number }
+        let number: String
+        let type: String
+        let createdAt: Date
+        let summary: String
+        let refs: String
+        var createdBy: String = ""
+        var reverses: String? = nil
+        var reversedBy: String? = nil
+    }
+
+    struct DocNote: Sendable, Identifiable {
+        var id: String { "\(docNumber)-\(createdAt.timeIntervalSince1970)" }
+        let docNumber: String
+        let createdAt: Date
+        let createdBy: String
+        let note: String
+    }
+
+    /// Issue the next number in the type's yearly range and record the
+    /// document — one transaction, so numbers never repeat or skip.
+    func issueDocument(type: String, summary: String, refs: String = "",
+                       createdBy: String = "", reverses: String? = nil,
+                       now: Date = Date()) throws -> String {
+        let db = try ensureDB()
+        let year = Calendar.current.component(.year, from: now)
+        var number = ""
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            try exec(db, "INSERT OR IGNORE INTO doc_counters(doc_type, year, next_seq) VALUES ('\(type)', \(year), 1);")
+            let seq = try scalarInt(db, "SELECT next_seq FROM doc_counters WHERE doc_type = '\(type)' AND year = \(year);")
+            number = DocumentNumberFormat.format(type: type, year: year, sequence: seq)
+            let insert = try prepare(db, """
+                INSERT INTO documents(doc_number, doc_type, created_at, summary, refs, created_by, reverses)
+                VALUES (?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(insert) }
+            bindText(insert, 1, number)
+            bindText(insert, 2, type)
+            sqlite3_bind_int64(insert, 3, Int64(now.timeIntervalSince1970))
+            bindText(insert, 4, summary)
+            bindText(insert, 5, refs)
+            bindText(insert, 6, createdBy)
+            bindTextOrNull(insert, 7, reverses)
+            if let reverses {
+                try exec(db, "UPDATE documents SET reversed_by = '\(number)' WHERE doc_number = '\(reverses)';")
+            }
+            guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try exec(db, "UPDATE doc_counters SET next_seq = next_seq + 1 WHERE doc_type = '\(type)' AND year = \(year);")
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+        return number
+    }
+
+    /// §3-H2: exact number of workflow runs (optionally by status).
+    func instanceCount(status: String? = nil) throws -> Int {
+        let db = try ensureDB()
+        guard let status else { return try scalarInt(db, "SELECT COUNT(*) FROM workflow_instances;") }
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM workflow_instances WHERE status = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, status)
+        return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0
+    }
+
+    func recentDocuments(limit: Int = 200, offset: Int = 0) throws -> [IssuedDocument] {
+        try documentQuery(where: "1=1", bind: nil, limit: limit, offset: offset)
+    }
+
+    /// §3-H1: exact number of documents (optionally matching), for "N of M".
+    func documentCount(matching needle: String? = nil) throws -> Int {
+        let db = try ensureDB()
+        guard let needle, !needle.isEmpty else { return try scalarInt(db, "SELECT COUNT(*) FROM documents;") }
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM documents WHERE doc_number LIKE ? COLLATE NOCASE OR summary LIKE ? COLLATE NOCASE;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, "%\(needle)%"); bindText(stmt, 2, "%\(needle)%")
+        return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0
+    }
+
+    /// Case-insensitive match on number or summary — the "display document"
+    /// lookup.
+    func lookupDocuments(matching needle: String, limit: Int = 200, offset: Int = 0) throws -> [IssuedDocument] {
+        try documentQuery(
+            where: "doc_number LIKE ? COLLATE NOCASE OR summary LIKE ? COLLATE NOCASE",
+            bind: "%\(needle)%", limit: limit, offset: offset)
+    }
+
+    /// Every document of one type, newest first — deliberately uncapped, so
+    /// a cross-document report never silently drops older documents.
+    func documents(ofType type: String) throws -> [IssuedDocument] {
+        try documentQuery(where: "doc_type = ?", bind: type, limit: nil)
+    }
+
+    private func documentQuery(where clause: String, bind: String?, limit: Int?, offset: Int = 0) throws -> [IssuedDocument] {
+        let db = try ensureDB()
+        let limitClause = limit.map { " LIMIT \($0) OFFSET \(max(0, offset))" } ?? ""
+        let stmt = try prepare(db, """
+            SELECT doc_number, doc_type, created_at, summary, refs, created_by, reverses, reversed_by
+            FROM documents WHERE \(clause)
+            ORDER BY created_at DESC, doc_number DESC\(limitClause);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if let bind {
+            // Bind the value to every placeholder the clause declares.
+            for i in 0..<sqlite3_bind_parameter_count(stmt) {
+                bindText(stmt, i + 1, bind)
+            }
+        }
+        var out: [IssuedDocument] = []
+        while try stepRow(stmt, db) {
+            out.append(IssuedDocument(
+                number: columnText(stmt, 0),
+                type: columnText(stmt, 1),
+                createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2))),
+                summary: columnText(stmt, 3),
+                refs: columnText(stmt, 4),
+                createdBy: columnText(stmt, 5),
+                reverses: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : columnText(stmt, 6),
+                reversedBy: sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : columnText(stmt, 7)))
+        }
+        return out
+    }
+
+    /// Post a reversal (storno) referencing the original — the correction
+    /// model; documents are never edited in place.
+    func reverseDocument(_ original: String, type: String, reason: String,
+                         createdBy: String = "", now: Date = Date()) throws -> String {
+        try issueDocument(type: type, summary: "Reversal of \(original): \(reason)",
+                          refs: original, createdBy: createdBy, reverses: original, now: now)
+    }
+
+    /// Enrich a document's searchable text — used when a workflow completes,
+    /// so it becomes findable by client/matter, job comment, and the inner
+    /// field data the user entered (Documents-tab lookup LIKE-matches both).
+    func updateDocumentSearchText(_ docNumber: String, summary: String, refs: String) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "UPDATE documents SET summary = ?, refs = ? WHERE doc_number = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, summary); bindText(stmt, 2, refs); bindText(stmt, 3, docNumber)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func addDocumentNote(_ docNumber: String, note: String, createdBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "INSERT INTO doc_notes(doc_number, created_at, created_by, note) VALUES (?,?,?,?);")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber)
+        sqlite3_bind_int64(stmt, 2, Int64(now.timeIntervalSince1970))
+        bindText(stmt, 3, createdBy)
+        bindText(stmt, 4, note)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func documentNotes(_ docNumber: String) throws -> [DocNote] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT created_at, created_by, note FROM doc_notes WHERE doc_number = ? ORDER BY created_at;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber)
+        var out: [DocNote] = []
+        while try stepRow(stmt, db) {
+            out.append(DocNote(
+                docNumber: docNumber,
+                createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 0))),
+                createdBy: columnText(stmt, 1),
+                note: columnText(stmt, 2)))
+        }
+        return out
+    }
+
+    /// Store (or replace) the full-work payload behind a document number, so
+    /// opening the document later reproduces exactly what was done.
+    func attachDocumentPayload(_ docNumber: String, contentType: String = "text/markdown",
+                               body: String, now: Date = Date()) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO doc_payload(doc_number, content_type, body, created_at) VALUES (?,?,?,?)
+            ON CONFLICT(doc_number) DO UPDATE SET content_type = excluded.content_type,
+                body = excluded.body, created_at = excluded.created_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber); bindText(stmt, 2, contentType); bindText(stmt, 3, body)
+        sqlite3_bind_int64(stmt, 4, Int64(now.timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    /// The saved work behind a document (content-type, body), or nil if none.
+    func documentPayload(_ docNumber: String) throws -> (contentType: String, body: String)? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT content_type, body FROM doc_payload WHERE doc_number = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber)
+        guard try stepRow(stmt, db) else { return nil }
+        return (columnText(stmt, 0), columnText(stmt, 1))
+    }
+
+    /// One row per source that ever entered this archive — the MB51-style
+    /// movement register: what arrived, when, how many rows it holds now,
+    /// and how many duplicates the policy skipped.
+    struct IntakeRow: Sendable, Identifiable {
+        var id: Int64 { sourceID }
+        let sourceID: Int64
+        let filename: String
+        let sha256: String
+        let kind: String
+        let importedAt: Date
+        let byteSize: Int
+        let storedCount: Int
+        let duplicateCount: Int
+    }
+
+    func intakeRegister() throws -> [IntakeRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT s.source_id, s.filename, s.sha256, s.source_kind,
+                   s.imported_at, s.byte_size,
+                   (SELECT COUNT(*) FROM emails e WHERE e.source_id = s.source_id),
+                   (SELECT COUNT(*) FROM duplicates d WHERE d.source_hash = s.sha256)
+            FROM sources s ORDER BY s.imported_at DESC;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [IntakeRow] = []
+        while try stepRow(stmt, db) {
+            out.append(IntakeRow(
+                sourceID: sqlite3_column_int64(stmt, 0),
+                filename: columnText(stmt, 1),
+                sha256: columnText(stmt, 2),
+                kind: columnText(stmt, 3),
+                importedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                byteSize: Int(sqlite3_column_int64(stmt, 5)),
+                storedCount: Int(sqlite3_column_int64(stmt, 6)),
+                duplicateCount: Int(sqlite3_column_int64(stmt, 7))))
+        }
+        return out
+    }
+
+    /// Rows without source identity (v1 migration) — the register's
+    /// synthetic "Migration" movement.
+    func migratedRowCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE source_id IS NULL;")
+    }
+
+    /// Where one email came from and when it arrived — the root of its
+    /// document-flow history.
+    struct EmailProvenance: Sendable {
+        let importedAt: Date?
+        let sourceFilename: String?
+        let sourceSHA256: String?
+        let sourceOrdinal: Int?
+    }
+
+    func provenance(for id: EmailID) throws -> EmailProvenance? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.imported_at, s.filename, s.sha256, e.source_ordinal
+            FROM emails e LEFT JOIN sources s ON s.source_id = e.source_id
+            WHERE e.id = ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard try stepRow(stmt, db) else { return nil }
+        let importedRaw = sqlite3_column_int64(stmt, 0)
+        let filename = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : columnText(stmt, 1)
+        let sha = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : columnText(stmt, 2)
+        let ordinal = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 3))
+        return EmailProvenance(
+            importedAt: importedRaw > 0 ? Date(timeIntervalSince1970: Double(importedRaw)) : nil,
+            sourceFilename: filename,
+            sourceSHA256: sha,
+            sourceOrdinal: ordinal)
+    }
+
+    /// Archive-wide exact duplicates: rows sharing a Message-ID beyond the
+    /// best copy. Keeps the source-identified row (full fidelity, from a real
+    /// import) over migrated rows without source identity, then the earliest
+    /// import. Returns the ids to DELETE. Fixes the migrated-archive +
+    /// re-imported-original doubling (each copy passes the occurrence guard,
+    /// and preserveAll skips message-id dedup at insert).
+    func exactMessageIDDuplicateIDs() throws -> [EmailID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY message_id
+                    ORDER BY (source_id IS NULL) ASC, imported_at ASC, rowid ASC
+                ) AS rn
+                FROM emails
+                WHERE message_id IS NOT NULL AND trim(message_id) <> ''
+            ) WHERE rn > 1;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [EmailID] = []
+        while try stepRow(stmt, db) {
+            if let id = UUID(uuidString: columnText(stmt, 0)) { out.append(id) }
+        }
+        return out
+    }
+
+    /// Five jobs, DUP-01: the same rows as `exactMessageIDDuplicateIDs`, but
+    /// as whole groups so each can be compared in full before anything is
+    /// removed. Within a group the first id is the copy to keep (the same
+    /// rule: source-identified over migrated, then earliest import).
+    func messageIDDuplicateGroups() throws -> [[EmailID]] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT id, message_id FROM emails
+            WHERE message_id IN (
+                SELECT message_id FROM emails
+                WHERE message_id IS NOT NULL AND trim(message_id) <> ''
+                GROUP BY message_id HAVING COUNT(*) > 1
+            )
+            ORDER BY message_id, (source_id IS NULL) ASC, imported_at ASC, rowid ASC;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var groups: [[EmailID]] = []
+        var currentKey: String?
+        while try stepRow(stmt, db) {
+            guard let id = UUID(uuidString: columnText(stmt, 0)) else { continue }
+            let key = columnText(stmt, 1)
+            if key == currentKey, !groups.isEmpty {
+                groups[groups.count - 1].append(id)
+            } else {
+                groups.append([id])
+                currentKey = key
+            }
+        }
+        return groups.filter { $0.count > 1 }
+    }
+
+    static func dedupKey(for email: MBOXParser.RawEmail, messageID: String?, policy: DedupPolicy) -> String? {
+        let normalizedMID = messageID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch policy {
+        case .preserveAll:
+            return nil
+        case .messageID:
+            return (normalizedMID?.isEmpty == false) ? normalizedMID : nil
+        case .messageIDOrCanonicalFingerprint:
+            if let normalizedMID, !normalizedMID.isEmpty { return normalizedMID }
+            return "fp:" + canonicalFingerprint(for: email)
+        }
+    }
+
+    /// §4.2 canonical fallback fingerprint: SHA-256 over normalized
+    /// From|To|Date|Subject plus a hash of the plain body. Deterministic and
+    /// documented; collisions require all five normalized inputs to match,
+    /// which is the product definition of "the same message without an ID".
+    static func canonicalFingerprint(for email: MBOXParser.RawEmail) -> String {
+        func norm(_ s: String?) -> String {
+            (s ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let bodyHash = sha256Hex(Data(email.plainBody.utf8))
+        let material = [
+            norm(email.headers["From"]), norm(email.headers["To"]),
+            norm(email.headers["Date"]), norm(email.headers["Subject"]),
+            bodyHash
+        ].joined(separator: "|")
+        return sha256Hex(Data(material.utf8))
+    }
+
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Minimal RFC-5322-ish address-list split for participant rows: handles
+    /// `Name <a@b>`, bare `a@b`, and comma-separated lists. Quoted display
+    /// names containing commas are treated best-effort (split then re-checked
+    /// for an @-bearing token), which is sufficient for filter/analytics use.
+    static func parseAddressList(_ raw: String) -> [(display: String?, address: String)] {
+        var out: [(String?, String)] = []
+        for piece in raw.components(separatedBy: ",") {
+            let part = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !part.isEmpty else { continue }
+            if let lt = part.firstIndex(of: "<"), let gt = part.lastIndex(of: ">"), lt < gt {
+                let addr = String(part[part.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
+                guard addr.contains("@") else { continue }
+                var display: String? = String(part[part.startIndex..<lt])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+                if display?.isEmpty == true { display = nil }
+                out.append((display, addr))
+            } else if part.contains("@") {
+                out.append((nil, part.trimmingCharacters(in: CharacterSet(charactersIn: " \"'<>"))))
+            }
+        }
+        return out
+    }
+
+    // MARK: - Counts
+
+    /// Test-only: the schema version this file is at.
+    func userVersionForTesting() throws -> Int {
+        try scalarInt(try ensureDB(), "PRAGMA user_version;")
+    }
+
+    func totalCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+    }
+
+    /// Browse count — excludes trashed rows (§19.1). `totalCount()` remains
+    /// the physical row count for activation/reconcile gates.
+    func count(after: Date?, before: Date?) throws -> Int {
+        let db = try ensureDB()
+        let lo = after.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.min
+        let hi = before.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.max
+        let stmt = try prepare(db, """
+            SELECT COUNT(*) FROM emails e
+            WHERE e.date >= ? AND e.date < ? AND \(Self.notTrashedPredicate);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, lo)
+        sqlite3_bind_int64(stmt, 2, hi)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// §19.1: browse surfaces hide trashed rows. Correlated NOT EXISTS keeps
+    /// the (date,id) keyset plan intact (review-state rows are sparse).
+    static let notTrashedPredicate =
+        "NOT EXISTS (SELECT 1 FROM email_review_state r WHERE r.email_id = e.id AND r.trashed = 1)"
+    /// The Trash mailbox's positive form of the same predicate.
+    static let trashedPredicate =
+        "EXISTS (SELECT 1 FROM email_review_state r WHERE r.email_id = e.id AND r.trashed = 1)"
+
+    // MARK: - Aggregates (DB-side; never stream bodies to count metadata)
+
+    /// Min/max stored date as unix seconds.
+    func dateRangeSeconds() throws -> (min: Int64?, max: Int64?) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT MIN(date), MAX(date) FROM emails;")
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return (nil, nil) }
+        let lo = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 0)
+        let hi = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 1)
+        return (lo, hi)
+    }
+
+    func attachmentCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE has_attach = 1;")
+    }
+
+    /// Email volume per calendar month ("YYYY-MM" → count) — a DB GROUP BY, not
+    /// a corpus scan. Powers analytics time-series without streaming bodies.
+    func monthlyCounts() throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT strftime('%Y-%m', date, 'unixepoch') AS m, COUNT(*) AS c
+            FROM emails GROUP BY m ORDER BY m;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// §3-I1: email volume per month for a NON-TEXT query (sender,
+    /// recipient, dates, tags …) — one GROUP BY, whole archive.
+    func monthlyCounts(query: EmailQuery) throws -> [AggregateBucket] {
+        precondition(query.text?.isEmpty ?? true, "text scopes are counted from their hits")
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            SELECT strftime('%Y-%m', e.date, 'unixepoch') AS m, COUNT(*) AS c
+            FROM emails e WHERE \(whereSQL) GROUP BY m ORDER BY m;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// Total stored size in bytes (SUM aggregate — never streams bodies).
+    func totalSizeBytes() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COALESCE(SUM(size_bytes), 0) FROM emails;")
+    }
+
+    /// Emails whose From header contains `needle` (case-insensitive) — the
+    /// DB-side equivalent of the legacy `from.contains(sender)` sent/received
+    /// annotation, as a COUNT aggregate.
+    func countFromContains(_ needle: String) throws -> Int {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM emails WHERE instr(lower(from_addr), lower(?)) > 0;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, needle)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Per-sender rollup (count, total bytes, latest date) — GROUP BY aggregate
+    /// powering the cleanup view without a corpus scan. Bounded by `limit`.
+    struct SenderRollup: Sendable, Equatable {
+        let sender: String
+        let count: Int
+        let totalSizeBytes: Int
+        let latestDate: Date?
+    }
+
+    func senderRollups(limit requested: Int) throws -> [SenderRollup] {
+        // §3-H5: one row per distinct sender — complete under v3PagedLists.
+        let limit = Self.unboundedIDLookups ? Int(Int32.max) : requested
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT from_addr, COUNT(*) AS c, COALESCE(SUM(size_bytes), 0), MAX(date)
+            FROM emails WHERE from_addr <> '' GROUP BY from_addr
+            ORDER BY c DESC, from_addr ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [SenderRollup] = []
+        while try stepRow(stmt, db) {
+            let ts = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 3)
+            out.append(SenderRollup(
+                sender: columnText(stmt, 0),
+                count: Int(sqlite3_column_int64(stmt, 1)),
+                totalSizeBytes: Int(sqlite3_column_int64(stmt, 2)),
+                latestDate: ts.map { Date(timeIntervalSince1970: Double($0)) }
+            ))
+        }
+        return out
+    }
+
+    /// To-field frequencies of emails whose From contains `senderContains`
+    /// (case-insensitive) — the bounded GROUP BY behind reply-frequency stats.
+    /// Buckets are raw To strings; the caller splits multi-recipient fields.
+    func recipientFieldCounts(senderContains: String, limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT to_addr, COUNT(*) AS c FROM emails
+            WHERE instr(lower(from_addr), lower(?)) > 0 AND to_addr <> ''
+            GROUP BY to_addr ORDER BY c DESC, to_addr ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, senderContains)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// Parser tags (Gmail labels etc.) with archive-wide counts — the folder
+    /// tree's Labels subtree, as one GROUP BY (never a corpus walk).
+    func parserTagCounts(limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT t.tag, COUNT(*) AS c FROM email_tags t
+            JOIN emails e ON e.id = t.email_id
+            GROUP BY t.tag ORDER BY c DESC, t.tag ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// Five jobs FOLD-01: how many distinct labels/folders the archive has,
+    /// optionally only those whose name contains `filter` (case-insensitive).
+    /// The sidebar shows this total so a page of folders never looks like all
+    /// of them.
+    func parserTagTotal(matching filter: String? = nil) throws -> Int {
+        let db = try ensureDB()
+        let pattern = Self.likePattern(containing: filter)
+        let stmt = try prepare(db, """
+            SELECT COUNT(DISTINCT t.tag) FROM email_tags t
+            JOIN emails e ON e.id = t.email_id
+            \(pattern == nil ? "" : "WHERE t.tag LIKE ? ESCAPE '\\'");
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if let pattern { sqlite3_bind_text(stmt, 1, pattern, -1, Self.staticSQLiteTransient) }
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Five jobs FOLD-01: one page of labels/folders, busiest first, optionally
+    /// filtered by name. Paging from `offset` with `limit` rows lets the sidebar
+    /// reach every folder without rendering them all at once.
+    func parserTagCounts(matching filter: String?, offset: Int, limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let pattern = Self.likePattern(containing: filter)
+        let stmt = try prepare(db, """
+            SELECT t.tag, COUNT(*) AS c FROM email_tags t
+            JOIN emails e ON e.id = t.email_id
+            \(pattern == nil ? "" : "WHERE t.tag LIKE ? ESCAPE '\\'")
+            GROUP BY t.tag ORDER BY c DESC, t.tag ASC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var index: Int32 = 1
+        if let pattern { sqlite3_bind_text(stmt, index, pattern, -1, Self.staticSQLiteTransient); index += 1 }
+        sqlite3_bind_int(stmt, index, Int32(clamping: limit)); index += 1
+        sqlite3_bind_int(stmt, index, Int32(clamping: offset))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// `%filter%` with the LIKE wildcards in the filter itself escaped, so a
+    /// folder called "100%" is searched for literally. Nil for an empty filter.
+    static func likePattern(containing filter: String?) -> String? {
+        guard let filter = filter?.trimmingCharacters(in: .whitespacesAndNewlines), !filter.isEmpty else { return nil }
+        var escaped = ""
+        for ch in filter {
+            if ch == "\\" || ch == "%" || ch == "_" { escaped.append("\\") }
+            escaped.append(ch)
+        }
+        return "%" + escaped + "%"
+    }
+
+    /// Archive-wide sent/received/unknown counts (folder tree Inbox/Sent).
+    func messageTypeCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT message_type, COUNT(*) FROM emails GROUP BY message_type;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// Emails per source file (name resolved via the sources/forensic tables
+    /// where known) — the folder tree's Source Files subtree.
+    func sourceFileCounts(limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT COALESCE(NULLIF(s.filename, ''), NULLIF(f.filename, ''), 'Unknown source') AS name, COUNT(*) AS c
+            FROM emails e
+            LEFT JOIN sources s ON s.sha256 = e.source_hash
+            LEFT JOIN forensic_source_hashes f ON f.sha256 = e.source_hash
+            GROUP BY name ORDER BY c DESC, name ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// How much of the archive the AI analysis has covered — the archive-wide
+    /// AI chips surface an honest notice while coverage is incomplete.
+    func derivedAnalysisCoverage() throws -> (analyzed: Int, total: Int) {
+        let db = try ensureDB()
+        let analyzed = try scalarInt(db, "SELECT COUNT(*) FROM derived WHERE priority IS NOT NULL;")
+        let total = try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+        return (analyzed, total)
+    }
+
+    /// Whitelisted grouping columns — the raw value is the actual column, so no
+    /// user string is ever interpolated into SQL.
+    enum GroupColumn: String, Sendable { case fromAddr = "from_addr", subject = "subject", toAddr = "to_addr" }
+
+    /// Top `limit` values of a column by frequency (GROUP BY … ORDER BY count).
+    func topGrouped(_ column: GroupColumn, limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT \(column.rawValue) AS v, COUNT(*) AS c FROM emails
+            WHERE v IS NOT NULL AND v <> '' GROUP BY v ORDER BY c DESC, v ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    // MARK: - §13 filtered queries (SQL-compiled; no field silently ignored)
+
+    enum QueryBind {
+        case text(String)
+        case int(Int64)
+    }
+
+    /// Compile every non-text EmailQuery field into WHERE clauses + binds.
+    /// The email row is aliased `e`. Text is handled by FTS upstream.
+    private static func filterClauses(_ q: EmailQuery) -> (sql: [String], binds: [QueryBind]) {
+        var sql: [String] = []
+        var binds: [QueryBind] = []
+        if let after = q.afterDate {
+            sql.append("e.date >= ?")
+            binds.append(.int(Int64(after.timeIntervalSince1970.rounded())))
+        }
+        if let before = q.beforeDate {
+            sql.append("e.date < ?")
+            binds.append(.int(Int64(before.timeIntervalSince1970.rounded())))
+        }
+        // Purchase-tier scope: the newest N emails of the archive, whatever
+        // else the query asks. One predicate here reaches every path —
+        // pages, counts, FTS verification, streams — so the Free tier is
+        // bounded once, not per screen (owner, 2026-10-08).
+        if let newest = q.newestLimit {
+            // SEARCH-02: a frozen selection freezes the tier's window too —
+            // the newest N of the archive AS IT WAS at the bound. Without it
+            // newer mail imported afterwards pushed older matches out of the
+            // window and the frozen selection shrank.
+            let frozen = q.snapshotMaxRowID != nil ? " AND n.rowid <= ?" : ""
+            sql.append("""
+                e.id IN (SELECT n.id FROM emails n WHERE \(notTrashedPredicate.replacingOccurrences(of: "e.id", with: "n.id"))\(frozen)
+                         ORDER BY n.date DESC, n.id DESC LIMIT ?)
+                """)
+            if let bound = q.snapshotMaxRowID { binds.append(.int(bound)) }
+            binds.append(.int(Int64(max(0, newest))))
+        }
+        // OUT-02: a frozen selection sees only rows that existed at its start.
+        if let bound = q.snapshotMaxRowID {
+            sql.append("e.rowid <= ?")
+            binds.append(.int(bound))
+        }
+        if let sender = q.sender, !sender.isEmpty {
+            sql.append("instr(lower(e.from_addr), lower(?)) > 0")
+            binds.append(.text(sender))
+        }
+        if let recipient = q.recipient, !recipient.isEmpty {
+            sql.append("""
+                EXISTS (SELECT 1 FROM email_participants p WHERE p.email_id = e.id
+                        AND p.role IN ('TO','CC','BCC') AND instr(p.normalized_address, lower(?)) > 0)
+                """)
+            binds.append(.text(recipient))
+        }
+        if let subject = q.subjectContains, !subject.isEmpty {
+            sql.append("instr(lower(e.subject), lower(?)) > 0")
+            binds.append(.text(subject))
+        }
+        if let domain = q.domain, !domain.isEmpty {
+            sql.append("EXISTS (SELECT 1 FROM email_domains dm WHERE dm.email_id = e.id AND dm.domain = ?)")
+            binds.append(.text(domain))
+        }
+        if let tag = q.userTag, !tag.isEmpty {
+            // User tags OR parser labels (Gmail labels) — the folder tree's
+            // Labels subtree and the in-memory tag: filter are parser tags.
+            sql.append("""
+                (EXISTS (SELECT 1 FROM email_user_tags ut WHERE ut.email_id = e.id AND ut.tag = ?)
+                 OR EXISTS (SELECT 1 FROM email_tags pt WHERE pt.email_id = e.id AND pt.tag = ?))
+                """)
+            binds.append(.text(tag))
+            binds.append(.text(tag))
+        }
+        // Sidebar multi-selections: each list ORs internally, ANDs with the
+        // rest — matching v1's whole-corpus checkbox semantics in SQL.
+        if !q.senders.isEmpty {
+            let ors = q.senders.map { _ in "instr(lower(e.from_addr), lower(?)) > 0" }.joined(separator: " OR ")
+            sql.append("(\(ors))")
+            binds.append(contentsOf: q.senders.map { .text($0) })
+        }
+        if !q.recipients.isEmpty {
+            let ors = q.recipients.map { _ in "instr(p.normalized_address, lower(?)) > 0" }.joined(separator: " OR ")
+            sql.append("""
+                EXISTS (SELECT 1 FROM email_participants p WHERE p.email_id = e.id
+                        AND p.role IN ('TO','CC','BCC') AND (\(ors)))
+                """)
+            binds.append(contentsOf: q.recipients.map { .text($0) })
+        }
+        if !q.subjects.isEmpty {
+            let ors = q.subjects.map { _ in "instr(lower(e.subject), lower(?)) > 0" }.joined(separator: " OR ")
+            sql.append("(\(ors))")
+            binds.append(contentsOf: q.subjects.map { .text($0) })
+        }
+        if !q.domains.isEmpty {
+            let marks = Array(repeating: "?", count: q.domains.count).joined(separator: ",")
+            sql.append("EXISTS (SELECT 1 FROM email_domains dm WHERE dm.email_id = e.id AND dm.domain IN (\(marks)))")
+            binds.append(contentsOf: q.domains.map { .text($0) })
+        }
+        if !q.tags.isEmpty {
+            let marks = Array(repeating: "?", count: q.tags.count).joined(separator: ",")
+            sql.append("""
+                (EXISTS (SELECT 1 FROM email_user_tags ut WHERE ut.email_id = e.id AND ut.tag IN (\(marks)))
+                 OR EXISTS (SELECT 1 FROM email_tags pt WHERE pt.email_id = e.id AND pt.tag IN (\(marks))))
+                """)
+            binds.append(contentsOf: q.tags.map { .text($0) })
+            binds.append(contentsOf: q.tags.map { .text($0) })
+        }
+        // FOLD-02: one folder of one source (the sidebar's folder tree).
+        if let folderID = q.folderID {
+            sql.append("EXISTS (SELECT 1 FROM email_folders ef WHERE ef.email_id = e.id AND ef.folder_id = ?)")
+            binds.append(.int(folderID))
+        }
+        // One archive source by id (the sidebar's Sources row) — never by a
+        // file-name substring, which also matched other sources.
+        if let sourceID = q.sourceID {
+            sql.append("e.source_id = ?")
+            binds.append(.int(sourceID))
+        }
+        // FIND-04: the typed search model, compiled as asked, confirmed only.
+        if let spec = q.spec, !spec.isEmpty {
+            let compiled = specClauses(spec)
+            sql.append(contentsOf: compiled.sql)
+            binds.append(contentsOf: compiled.binds)
+        }
+        // v1's Min Reply Count: sender-frequency filter as a HAVING subquery —
+        // archive-wide, exactly the per-sender counts the sidebar shows.
+        if let minSender = q.minSenderMessages, minSender > 0 {
+            sql.append("""
+                e.from_addr IN (SELECT from_addr FROM emails
+                                GROUP BY from_addr HAVING COUNT(*) >= ?)
+                """)
+            binds.append(.int(Int64(minSender)))
+        }
+        // Derived-analysis filters: EXISTS over the persisted `derived` rows.
+        if let minPriority = q.minPriority {
+            sql.append("EXISTS (SELECT 1 FROM derived d2 WHERE d2.email_id = e.id AND d2.priority >= ?)")
+            binds.append(.int(Int64(minPriority)))
+        }
+        if q.phishingOnly {
+            sql.append("EXISTS (SELECT 1 FROM derived d3 WHERE d3.email_id = e.id AND d3.phishing = 1)")
+        }
+        if let sentimentBelow = q.sentimentBelow {
+            sql.append("""
+                EXISTS (SELECT 1 FROM derived d4 WHERE d4.email_id = e.id
+                        AND d4.sentiment IS NOT NULL AND CAST(d4.sentiment AS REAL) < ?)
+                """)
+            binds.append(.text(String(sentimentBelow)))
+        }
+        if !q.classifications.isEmpty {
+            let marks = Array(repeating: "?", count: q.classifications.count).joined(separator: ",")
+            sql.append("EXISTS (SELECT 1 FROM derived d5 WHERE d5.email_id = e.id AND d5.classification IN (\(marks)))")
+            binds.append(contentsOf: q.classifications.map { .text($0) })
+        }
+        if let sourceName = q.sourceFileName, !sourceName.isEmpty {
+            sql.append("""
+                e.source_hash IN (
+                    SELECT sha256 FROM sources WHERE instr(lower(filename), lower(?)) > 0
+                    UNION
+                    SELECT sha256 FROM forensic_source_hashes WHERE instr(lower(filename), lower(?)) > 0)
+                """)
+            binds.append(.text(sourceName))
+            binds.append(.text(sourceName))
+        }
+        if let etag = q.evidenceTag, !etag.isEmpty {
+            sql.append("EXISTS (SELECT 1 FROM forensic_evidence_tags ft WHERE ft.email_id = e.id AND ft.tag = ?)")
+            binds.append(.text(etag))
+        }
+        if let hasAttach = q.hasAttachments {
+            sql.append("e.has_attach = \(hasAttach ? 1 : 0)")
+        }
+        if let rec = q.recovery, !rec.isEmpty {
+            if rec == "any" {
+                sql.append("EXISTS (SELECT 1 FROM email_recovery rc WHERE rc.email_id = e.id)")
+            } else {
+                sql.append("EXISTS (SELECT 1 FROM email_recovery rc WHERE rc.email_id = e.id AND rc.state = ?)")
+                binds.append(.text(rec))
+            }
+        }
+        if let name = q.attachmentFilename?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            // A7 `filename:`. A bare extension ("pdf") matches the suffix as
+            // well as a substring, so "filename:pdf" finds report.PDF.
+            sql.append("EXISTS (SELECT 1 FROM attachments at WHERE at.email_id = e.id AND instr(lower(at.filename), lower(?)) > 0)")
+            binds.append(.text(name))
+        }
+        if let type = q.messageType, !type.isEmpty {
+            sql.append("e.message_type = ?")
+            binds.append(.text(type))
+        }
+        if q.pinnedOnly {
+            sql.append("EXISTS (SELECT 1 FROM email_review_state rv WHERE rv.email_id = e.id AND rv.pinned = 1)")
+        }
+        if q.trashedOnly {
+            // A2 Trash mailbox: only rows the user moved to Trash.
+            sql.append(trashedPredicate)
+        } else if !q.includeTrashed {
+            sql.append(notTrashedPredicate)
+        }
+        // §3-Q4: exclusions — the negation of the matching include filter.
+        for ex in q.exclusions ?? [] {
+            switch ex.field {
+            case .sender:
+                sql.append("NOT (instr(lower(coalesce(e.from_addr, '')), lower(?)) > 0)")
+                binds.append(.text(ex.value))
+            case .recipient:
+                sql.append("""
+                    NOT EXISTS (SELECT 1 FROM email_participants px WHERE px.email_id = e.id
+                                AND px.role IN ('TO','CC','BCC') AND instr(px.normalized_address, lower(?)) > 0)
+                    """)
+                binds.append(.text(ex.value))
+            case .subject:
+                sql.append("NOT (instr(lower(coalesce(e.subject, '')), lower(?)) > 0)")
+                binds.append(.text(ex.value))
+            case .domain:
+                sql.append("NOT EXISTS (SELECT 1 FROM email_domains dx WHERE dx.email_id = e.id AND dx.domain = ?)")
+                binds.append(.text(ex.value))
+            case .tag:
+                sql.append("""
+                    NOT (EXISTS (SELECT 1 FROM email_user_tags utx WHERE utx.email_id = e.id AND utx.tag = ?)
+                         OR EXISTS (SELECT 1 FROM email_tags ptx WHERE ptx.email_id = e.id AND ptx.tag = ?))
+                    """)
+                binds.append(.text(ex.value))
+                binds.append(.text(ex.value))
+            case .attachments:
+                sql.append("e.has_attach = 0")
+            case .source:
+                sql.append("""
+                    coalesce(e.source_hash, '') NOT IN (
+                        SELECT sha256 FROM sources WHERE instr(lower(filename), lower(?)) > 0
+                        UNION
+                        SELECT sha256 FROM forensic_source_hashes WHERE instr(lower(filename), lower(?)) > 0)
+                    """)
+                binds.append(.text(ex.value))
+                binds.append(.text(ex.value))
+            case .evidence:
+                sql.append("NOT EXISTS (SELECT 1 FROM forensic_evidence_tags ftx WHERE ftx.email_id = e.id AND ftx.tag = ?)")
+                binds.append(.text(ex.value))
+            case .type:
+                sql.append("coalesce(e.message_type, '') <> ?")
+                binds.append(.text(ex.value))
+            case .filename:
+                sql.append("NOT EXISTS (SELECT 1 FROM attachments atx WHERE atx.email_id = e.id AND instr(lower(atx.filename), lower(?)) > 0)")
+                binds.append(.text(ex.value))
+            case .before:
+                // NOT (date < X): on or after the bound.
+                sql.append("e.date >= ?")
+                binds.append(.int(Int64(ex.value) ?? 0))
+            case .after:
+                // NOT (date >= X): strictly before the bound.
+                sql.append("e.date < ?")
+                binds.append(.int(Int64(ex.value) ?? 0))
+            case .pinned:
+                sql.append("NOT EXISTS (SELECT 1 FROM email_review_state rvx WHERE rvx.email_id = e.id AND rvx.pinned = 1)")
+            case .recovered:
+                if ex.value.isEmpty || ex.value == "any" {
+                    sql.append("NOT EXISTS (SELECT 1 FROM email_recovery rcx WHERE rcx.email_id = e.id)")
+                } else {
+                    sql.append("NOT EXISTS (SELECT 1 FROM email_recovery rcx WHERE rcx.email_id = e.id AND rcx.state = ?)")
+                    binds.append(.text(ex.value))
+                }
+            }
+        }
+        return (sql, binds)
+    }
+
+    /// FIND-04 (plan rule 10): rows that pass the positive part of the search
+    /// but cannot be confirmed yet because relevant text is not indexed —
+    /// shown as "may still match", never counted as matches or as absent.
+    func specUnresolvedCount(_ query: EmailQuery) throws -> Int {
+        guard let spec = query.spec, let unresolved = Self.unresolvedClauses(spec) else { return 0 }
+        var scoped = query
+        scoped.spec = nil
+        let (scopeSQL, scopeBinds) = Self.filterClauses(scoped)
+        let db = try ensureDB()
+        let clauses = scopeSQL + unresolved.sql
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM emails e" + (clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND ")) + ";")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, scopeBinds + unresolved.binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// v4.0 REC-07: which of `candidates` the spec cannot decide yet (their
+    /// text is not indexed) — `specUnresolvedCount` for an id batch, so a
+    /// capture rule never records "no match" for a message it could not read.
+    func specUnresolvedIDs(among candidates: [UUID], query: EmailQuery) throws -> Set<UUID> {
+        guard !candidates.isEmpty, let spec = query.spec, let unresolved = Self.unresolvedClauses(spec) else { return [] }
+        var scoped = query
+        scoped.spec = nil
+        let (scopeSQL, scopeBinds) = Self.filterClauses(scoped)
+        let db = try ensureDB()
+        var out = Set<UUID>()
+        for chunk in candidates.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let clauses = ["e.id IN (\(placeholders))"] + scopeSQL + unresolved.sql
+            let stmt = try prepare(db, "SELECT e.id FROM emails e WHERE " + clauses.joined(separator: " AND ") + ";")
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            for id in chunk { bindText(stmt, idx, id.uuidString); idx += 1 }
+            _ = bindQueryValues(stmt, scopeBinds + unresolved.binds, startingAt: idx)
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        }
+        return out
+    }
+
+    /// R7 / §13.3 (8): files inside attachments by state, for the messages in
+    /// `scope` (its filters only — the search's own conditions and free text
+    /// are left out, so the counts describe where the search looked).
+    func attachmentChildStateCounts(scope: EmailQuery) throws -> [String: Int] {
+        var scoped = scope
+        scoped.spec = nil
+        scoped.text = nil
+        let (scopeSQL, scopeBinds) = Self.filterClauses(scoped)
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT c.state, COUNT(*) FROM attachment_children c JOIN emails e ON e.id = c.email_id"
+                               + (scopeSQL.isEmpty ? "" : " WHERE " + scopeSQL.joined(separator: " AND ")) + " GROUP BY c.state;")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, scopeBinds, startingAt: 1)
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// ORDER BY + keyset predicate for each §16 sort. `sortKey` is the cursor
+    /// boundary value (subject string / decimal size / decimal priority).
+    private static func sortSQL(_ sort: EmailSortOrder) -> (orderBy: String, keyset: String, joins: String) {
+        switch sort {
+        case .dateDesc:
+            return ("e.date DESC, e.id DESC", "(e.date < ? OR (e.date = ? AND e.id < ?))", "")
+        case .dateAsc:
+            return ("e.date ASC, e.id ASC", "(e.date > ? OR (e.date = ? AND e.id > ?))", "")
+        case .subjectAZ:
+            return ("e.subject COLLATE NOCASE ASC, e.id ASC",
+                    "(e.subject > ? COLLATE NOCASE OR (e.subject = ? COLLATE NOCASE AND e.id > ?))", "")
+        case .sizeDesc:
+            return ("e.size_bytes DESC, e.id DESC",
+                    "(e.size_bytes < ? OR (e.size_bytes = ? AND e.id < ?))", "")
+        case .priorityDesc:
+            return ("COALESCE(d.priority, -1) DESC, e.id DESC",
+                    "(COALESCE(d.priority, -1) < ? OR (COALESCE(d.priority, -1) = ? AND e.id < ?))",
+                    "LEFT JOIN derived d ON d.email_id = e.id")
+        }
+    }
+
+    func bindQueryValues(_ stmt: OpaquePointer?, _ binds: [QueryBind], startingAt index: Int32) -> Int32 {
+        var idx = index
+        for bind in binds {
+            switch bind {
+            case .text(let s): bindText(stmt, idx, s)
+            case .int(let i): sqlite3_bind_int64(stmt, idx, i)
+            }
+            idx += 1
+        }
+        return idx
+    }
+
+    /// One keyset page of a fully SQL-compiled filtered query (§13/§16).
+    /// Returns the summaries and each row's sort key so the caller can build
+    /// the continuation cursor for any sort order.
+    func filteredSummaryPage(
+        _ query: EmailQuery, cursorSortKey: String?, cursorID: UUID?, limit: Int
+    ) throws -> [(summary: EmailSummary, sortKey: String)] {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let (orderBy, keyset, joins) = Self.sortSQL(query.sort)
+        let sortKeyExpr: String
+        switch query.sort {
+        case .dateDesc, .dateAsc: sortKeyExpr = "CAST(e.date AS TEXT)"
+        case .subjectAZ: sortKeyExpr = "e.subject"
+        case .sizeDesc: sortKeyExpr = "CAST(e.size_bytes AS TEXT)"
+        case .priorityDesc: sortKeyExpr = "CAST(COALESCE(d.priority, -1) AS TEXT)"
+        }
+        var whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let hasCursor = (cursorSortKey != nil && cursorID != nil)
+        if hasCursor { whereSQL += " AND " + keyset }
+        let sql = """
+            SELECT e.id, e.message_id, e.subject, e.from_addr, e.date, e.body_preview,
+                   e.has_attach, e.size_bytes, \(sortKeyExpr)
+            FROM emails e \(joins)
+            WHERE \(whereSQL)
+            ORDER BY \(orderBy) LIMIT ?;
+        """
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        var idx = bindQueryValues(stmt, binds, startingAt: 1)
+        if hasCursor, let key = cursorSortKey, let cid = cursorID {
+            // The keyset predicates take (key, key, id) in every sort.
+            switch query.sort {
+            case .subjectAZ:
+                bindText(stmt, idx, key); idx += 1
+                bindText(stmt, idx, key); idx += 1
+            default:
+                guard let intKey = Int64(key) else {
+                    throw SQLiteStoreError.schema("unparseable sort cursor '\(key)' for \(query.sort.rawValue)")
+                }
+                sqlite3_bind_int64(stmt, idx, intKey); idx += 1
+                sqlite3_bind_int64(stmt, idx, intKey); idx += 1
+            }
+            bindText(stmt, idx, cid.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+
+        var out: [(EmailSummary, String)] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            let summary = EmailSummary(
+                id: id,
+                messageID: columnTextOptional(stmt, 1),
+                subject: columnText(stmt, 2),
+                from: columnText(stmt, 3),
+                date: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                bodyPreview: columnText(stmt, 5),
+                hasAttachments: sqlite3_column_int(stmt, 6) != 0,
+                sizeBytes: Int(sqlite3_column_int64(stmt, 7))
+            )
+            out.append((summary, columnText(stmt, 8)))
+        }
+        return out
+    }
+
+    /// Exact COUNT(*) for a fully SQL-compiled filtered query (§14.2 for the
+    /// non-text case) — an aggregate, never a materialization.
+    func filteredCount(_ query: EmailQuery) throws -> Int {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM emails e WHERE \(whereSQL);")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Which of `candidates` satisfy the query's NON-TEXT filters — used to
+    /// verify FTS candidates (text queries) and scope exclusions (§15) with
+    /// one bounded IN query per chunk.
+    func matchingIDs(among candidates: [UUID], query: EmailQuery) throws -> Set<UUID> {
+        guard !candidates.isEmpty else { return [] }
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        var out = Set<UUID>()
+        for chunk in candidates.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            var whereSQL = "e.id IN (\(placeholders))"
+            if !clauses.isEmpty { whereSQL += " AND " + clauses.joined(separator: " AND ") }
+            let stmt = try prepare(db, "SELECT e.id FROM emails e WHERE \(whereSQL);")
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            for id in chunk { bindText(stmt, idx, id.uuidString); idx += 1 }
+            _ = bindQueryValues(stmt, binds, startingAt: idx)
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        }
+        return out
+    }
+
+    // MARK: - Paging
+
+    func summaryPage(after: Date?, before: Date?, cursorDate: Date?, cursorID: UUID?, limit: Int) throws -> [EmailSummary] {
+        let db = try ensureDB()
+        let lo = after.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.min
+        let hi = before.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.max
+        var sql = """
+            SELECT e.id, e.message_id, e.subject, e.from_addr, e.date, e.body_preview, e.has_attach, e.size_bytes
+            FROM emails e WHERE e.date >= ? AND e.date < ? AND \(Self.notTrashedPredicate)
+        """
+        let hasCursor = (cursorDate != nil && cursorID != nil)
+        if hasCursor { sql += " AND (e.date < ? OR (e.date = ? AND e.id < ?))" }
+        sql += " ORDER BY e.date DESC, e.id DESC LIMIT ?;"
+
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, lo)
+        sqlite3_bind_int64(stmt, 2, hi)
+        var idx: Int32 = 3
+        if hasCursor, let cd = cursorDate, let ci = cursorID {
+            let cdInt = Int64(cd.timeIntervalSince1970.rounded())
+            sqlite3_bind_int64(stmt, idx, cdInt); idx += 1
+            sqlite3_bind_int64(stmt, idx, cdInt); idx += 1
+            bindText(stmt, idx, ci.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+
+        var out: [EmailSummary] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append(EmailSummary(
+                id: id,
+                messageID: columnTextOptional(stmt, 1),
+                subject: columnText(stmt, 2),
+                from: columnText(stmt, 3),
+                date: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                bodyPreview: columnText(stmt, 5),
+                hasAttachments: sqlite3_column_int(stmt, 6) != 0,
+                sizeBytes: Int(sqlite3_column_int64(stmt, 7))
+            ))
+        }
+        return out
+    }
+
+    func reconcilePage(beforeDate: Date?, beforeID: UUID?, limit: Int) throws -> [(id: UUID, date: Date)] {
+        let db = try ensureDB()
+        var sql = "SELECT id, date FROM emails"
+        let hasCursor = (beforeDate != nil && beforeID != nil)
+        if hasCursor { sql += " WHERE (date < ? OR (date = ? AND id < ?))" }
+        sql += " ORDER BY date DESC, id DESC LIMIT ?;"
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if hasCursor, let bd = beforeDate, let bi = beforeID {
+            let bdInt = Int64(bd.timeIntervalSince1970.rounded())
+            sqlite3_bind_int64(stmt, idx, bdInt); idx += 1
+            sqlite3_bind_int64(stmt, idx, bdInt); idx += 1
+            bindText(stmt, idx, bi.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(id: UUID, date: Date)] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append((id, Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1)))))
+        }
+        return out
+    }
+
+    // MARK: - Lookups by id
+
+    func summaries(ids: [UUID]) throws -> [EmailSummary] {
+        guard !ids.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out: [EmailSummary] = []
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT id, message_id, subject, from_addr, date, body_preview, has_attach, size_bytes
+                FROM emails WHERE id IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out.append(EmailSummary(
+                    id: id,
+                    messageID: columnTextOptional(stmt, 1),
+                    subject: columnText(stmt, 2),
+                    from: columnText(stmt, 3),
+                    date: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                    bodyPreview: columnText(stmt, 5),
+                    hasAttachments: sqlite3_column_int(stmt, 6) != 0,
+                    sizeBytes: Int(sqlite3_column_int64(stmt, 7))
+                ))
+            }
+        }
+        return out
+    }
+
+    func existingIDs(among ids: [UUID]) throws -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let db = try ensureDB()
+        var found = Set<UUID>()
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT id FROM emails WHERE id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                if let id = columnUUID(stmt, 0) { found.insert(id) }
+            }
+        }
+        return found
+    }
+
+    func emails(withIDs ids: [UUID]) throws -> [MBOXParser.RawEmail] {
+        guard !ids.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out: [MBOXParser.RawEmail] = []
+        for chunk in ids.chunked(into: 200) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.date,
+                       b.plain, b.html, b.raw, b.headers_json,
+                       e.message_type, t.thread_key,
+                       b.raw_blob_digest, b.raw_blob_length
+                FROM emails e
+                LEFT JOIN email_bodies b ON e.id = b.id
+                LEFT JOIN thread_keys t ON e.id = t.email_id
+                WHERE e.id IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            var base: [MBOXParser.RawEmail] = []
+            while try stepRow(stmt, db) {
+                if let email = rawEmailFromRow(stmt) { base.append(email) }
+            }
+            try hydrateSideTables(db, into: &base)
+            // Fourth review (found by the Q2 regression): SQLite returns an
+            // `IN (...)` match in its own order, which depends on which ids
+            // share the chunk. Callers page ids in a stable order (date, id)
+            // and a positional export resume relies on that order — so the
+            // rows go back in the order they were asked for.
+            var byID: [UUID: MBOXParser.RawEmail] = [:]
+            byID.reserveCapacity(base.count)
+            for email in base { byID[email.id] = email }
+            out.append(contentsOf: chunk.compactMap { byID[$0] })
+        }
+        return out
+    }
+
+    /// OUT-04: the rows whose Message-ID matches one of `messageIDs`, keyed by
+    /// the identifier without angle brackets or surrounding whitespace (the
+    /// stored header keeps its brackets, so both spellings are bound). One IN
+    /// query per 400 identifiers; callers pass a page at a time.
+    func emailIDs(forMessageIDs messageIDs: [String]) throws -> [String: UUID] {
+        func bare(_ s: String) -> String {
+            s.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "<>")).trimmingCharacters(in: .whitespaces)
+        }
+        let wanted = Array(Set(messageIDs.map(bare).filter { !$0.isEmpty }))
+        guard !wanted.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [String: UUID] = [:]
+        var start = 0
+        while start < wanted.count {
+            let slice = wanted[start..<min(start + 400, wanted.count)]
+            start += 400
+            let bound = slice.flatMap { [$0, "<\($0)>"] }
+            let placeholders = Array(repeating: "?", count: bound.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT id, message_id FROM emails WHERE message_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (index, value) in bound.enumerated() { bindText(stmt, Int32(index + 1), value) }
+            while try stepRow(stmt, db) {
+                let key = bare(columnText(stmt, 1))
+                if out[key] == nil, let id = UUID(uuidString: columnText(stmt, 0)) { out[key] = id }
+            }
+        }
+        return out
+    }
+
+    func fullEmail(id: UUID) throws -> MBOXParser.RawEmail? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.date,
+                   b.plain, b.html, b.raw, b.headers_json,
+                   e.message_type, t.thread_key,
+                   b.raw_blob_digest, b.raw_blob_length
+            FROM emails e
+            LEFT JOIN email_bodies b ON e.id = b.id
+            LEFT JOIN thread_keys t ON e.id = t.email_id
+            WHERE e.id = ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard try stepRow(stmt, db) else { return nil }
+        guard let email = rawEmailFromRow(stmt) else { return nil }
+        var one = [email]
+        try hydrateSideTables(db, into: &one)
+        return one.first
+    }
+
+    /// §3 full fidelity: attach the normalized side-table state (attachments
+    /// metadata, parser tags, domains) to hydrated rows — one IN query per
+    /// table per chunk, never per-email round-trips.
+    private func hydrateSideTables(_ db: OpaquePointer, into emails: inout [MBOXParser.RawEmail]) throws {
+        guard !emails.isEmpty else { return }
+        let idStrings = emails.map { $0.id.uuidString }
+        let placeholders = Array(repeating: "?", count: idStrings.count).joined(separator: ",")
+
+        var attachmentsByEmail: [String: [AttachmentMetadata]] = [:]
+        let attStmt = try prepare(db, """
+            SELECT email_id, filename, mime_type, size_bytes, content_id, is_inline
+            FROM attachments WHERE email_id IN (\(placeholders)) ORDER BY email_id, position;
+        """)
+        defer { sqlite3_finalize(attStmt) }
+        for (i, id) in idStrings.enumerated() { bindText(attStmt, Int32(i + 1), id) }
+        while try stepRow(attStmt, db) {
+            attachmentsByEmail[columnText(attStmt, 0), default: []].append(AttachmentMetadata(
+                filename: columnText(attStmt, 1),
+                mimeType: columnText(attStmt, 2),
+                size: Int(sqlite3_column_int64(attStmt, 3)),
+                isInline: sqlite3_column_int(attStmt, 5) != 0,
+                contentID: columnTextOptional(attStmt, 4)
+            ))
+        }
+
+        var tagsByEmail: [String: [String]] = [:]
+        let tagStmt = try prepare(db, "SELECT email_id, tag FROM email_tags WHERE email_id IN (\(placeholders));")
+        defer { sqlite3_finalize(tagStmt) }
+        for (i, id) in idStrings.enumerated() { bindText(tagStmt, Int32(i + 1), id) }
+        while try stepRow(tagStmt, db) {
+            tagsByEmail[columnText(tagStmt, 0), default: []].append(columnText(tagStmt, 1))
+        }
+
+        var domainsByEmail: [String: [String]] = [:]
+        let domStmt = try prepare(db, "SELECT email_id, domain FROM email_domains WHERE email_id IN (\(placeholders));")
+        defer { sqlite3_finalize(domStmt) }
+        for (i, id) in idStrings.enumerated() { bindText(domStmt, Int32(i + 1), id) }
+        while try stepRow(domStmt, db) {
+            domainsByEmail[columnText(domStmt, 0), default: []].append(columnText(domStmt, 1))
+        }
+
+        for i in emails.indices {
+            let key = emails[i].id.uuidString
+            emails[i].attachments = attachmentsByEmail[key] ?? []
+            emails[i].tags = (tagsByEmail[key] ?? []).sorted()
+            emails[i].domains = (domainsByEmail[key] ?? []).sorted()
+        }
+    }
+
+    // MARK: - Review state (§19)
+
+    enum ReviewFlag: String, Sendable, CaseIterable {
+        case pinned
+        case isRead = "is_read"
+        case archived
+        case trashed
+    }
+
+    struct ReviewStateRow: Sendable, Equatable {
+        var pinned = false
+        var isRead = false
+        var archived = false
+        var trashed = false
+    }
+
+    func reviewSetFlag(_ flag: ReviewFlag, ids: [UUID], value: Bool) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO email_review_state(email_id, \(flag.rawValue), updated_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET \(flag.rawValue) = excluded.\(flag.rawValue), updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                sqlite3_bind_int(stmt, 2, value ? 1 : 0)
+                sqlite3_bind_int64(stmt, 3, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func reviewStates(ids: [UUID]) throws -> [UUID: ReviewStateRow] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: ReviewStateRow] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT email_id, pinned, is_read, archived, trashed
+                FROM email_review_state WHERE email_id IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = ReviewStateRow(
+                    pinned: sqlite3_column_int(stmt, 1) != 0,
+                    isRead: sqlite3_column_int(stmt, 2) != 0,
+                    archived: sqlite3_column_int(stmt, 3) != 0,
+                    trashed: sqlite3_column_int(stmt, 4) != 0
+                )
+            }
+        }
+        return out
+    }
+
+    /// IDs carrying a flag, newest-email first, paged — powers Trash /
+    /// Pinned views without materializing archive-sized sets.
+    /// A (date, id) keyset cursor for newest-first listings. Take it from the
+    /// last row of one page to fetch the next; `nil` starts at the top.
+    struct DateIDCursor: Sendable, Equatable {
+        let date: Date
+        let id: UUID
+    }
+
+    /// Review-flagged IDs newest first, keyset-paged (v2.1 backlog #10). With
+    /// LIMIT/OFFSET a restore or delete between two Trash pages shifted every
+    /// later row by one, so a page could skip a row or show one twice.
+    func reviewIDs(where flag: ReviewFlag, after cursor: DateIDCursor?, limit: Int) throws -> [(id: UUID, date: Date)] {
+        let db = try ensureDB()
+        var sql = """
+            SELECT r.email_id, e.date FROM email_review_state r
+            JOIN emails e ON e.id = r.email_id
+            WHERE r.\(flag.rawValue) = 1
+            """
+        if cursor != nil { sql += " AND (e.date < ? OR (e.date = ? AND e.id < ?))" }
+        sql += " ORDER BY e.date DESC, e.id DESC LIMIT ?;"
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let cursor {
+            let d = Int64(cursor.date.timeIntervalSince1970.rounded())
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            bindText(stmt, idx, cursor.id.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Date)] = []
+        while try stepRow(stmt, db) {
+            if let id = columnUUID(stmt, 0) {
+                out.append((id, Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1)))))
+            }
+        }
+        return out
+    }
+
+    func reviewCount(of flag: ReviewFlag) throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM email_review_state WHERE \(flag.rawValue) = 1;")
+    }
+
+    // MARK: - User tags / annotations (§19)
+
+    func userTagAdd(_ tag: String, ids: [UUID]) throws {
+        try userTagMutate("INSERT OR IGNORE INTO email_user_tags(email_id, tag) VALUES (?,?);", tag: tag, ids: ids)
+    }
+
+    func userTagRemove(_ tag: String, ids: [UUID]) throws {
+        try userTagMutate("DELETE FROM email_user_tags WHERE email_id = ? AND tag = ?;", tag: tag, ids: ids)
+    }
+
+    private func userTagMutate(_ sql: String, tag: String, ids: [UUID]) throws {
+        guard !ids.isEmpty, !tag.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindText(stmt, 2, tag)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func userTagsClear(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "DELETE FROM email_user_tags WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    func userTags(ids: [UUID]) throws -> [UUID: Set<String>] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: Set<String>] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, tag FROM email_user_tags WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id, default: []].insert(columnText(stmt, 1))
+            }
+        }
+        return out
+    }
+
+    /// Distinct tag vocabulary (bounded) — a DB aggregate, not a corpus scan.
+    func distinctUserTags(limit: Int) throws -> [String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT tag FROM email_user_tags ORDER BY tag LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        // §3-H6: the whole tag vocabulary under v3PagedLists.
+        sqlite3_bind_int(stmt, 1, Self.unboundedIDLookups ? Int32.max : Int32(limit))
+        var out: [String] = []
+        while try stepRow(stmt, db) { out.append(columnText(stmt, 0)) }
+        return out
+    }
+
+    /// IDs carrying a user tag, newest first, keyset-paged; see `reviewIDs`.
+    func idsWithUserTag(_ tag: String, after cursor: DateIDCursor?, limit: Int) throws -> [(id: UUID, date: Date)] {
+        let db = try ensureDB()
+        var sql = """
+            SELECT t.email_id, e.date FROM email_user_tags t
+            JOIN emails e ON e.id = t.email_id
+            WHERE t.tag = ?
+            """
+        if cursor != nil { sql += " AND (e.date < ? OR (e.date = ? AND e.id < ?))" }
+        sql += " ORDER BY e.date DESC, e.id DESC LIMIT ?;"
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        bindText(stmt, idx, tag); idx += 1
+        if let cursor {
+            let d = Int64(cursor.date.timeIntervalSince1970.rounded())
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            bindText(stmt, idx, cursor.id.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Date)] = []
+        while try stepRow(stmt, db) {
+            if let id = columnUUID(stmt, 0) {
+                out.append((id, Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1)))))
+            }
+        }
+        return out
+    }
+
+    func annotationSet(_ note: String?, id: UUID) throws {
+        let db = try ensureDB()
+        if let note, !note.isEmpty {
+            let stmt = try prepare(db, """
+                INSERT INTO email_annotations(email_id, note, updated_at) VALUES (?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            bindText(stmt, 2, note)
+            sqlite3_bind_int64(stmt, 3, Int64(Date().timeIntervalSince1970))
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        } else {
+            let stmt = try prepare(db, "DELETE FROM email_annotations WHERE email_id = ?;")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    func annotations(ids: [UUID]) throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: String] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, note FROM email_annotations WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = columnText(stmt, 1)
+            }
+        }
+        return out
+    }
+
+    /// §20 one-shot legacy import — the JSON review file lands in one
+    /// transaction so a crash can't leave half-migrated state.
+    func reviewBulkImport(
+        pinned: [UUID], read: [UUID], archived: [UUID], trashed: [UUID],
+        tags: [UUID: Set<String>], annotations annots: [UUID: String]
+    ) throws {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let flagStmt = try prepare(db, """
+                INSERT INTO email_review_state(email_id, pinned, is_read, archived, trashed, updated_at)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET
+                    pinned = MAX(pinned, excluded.pinned),
+                    is_read = MAX(is_read, excluded.is_read),
+                    archived = MAX(archived, excluded.archived),
+                    trashed = MAX(trashed, excluded.trashed),
+                    updated_at = excluded.updated_at;
+            """)
+            defer { sqlite3_finalize(flagStmt) }
+            var flagValues: [UUID: (Bool, Bool, Bool, Bool)] = [:]
+            for id in pinned { flagValues[id, default: (false, false, false, false)].0 = true }
+            for id in read { flagValues[id, default: (false, false, false, false)].1 = true }
+            for id in archived { flagValues[id, default: (false, false, false, false)].2 = true }
+            for id in trashed { flagValues[id, default: (false, false, false, false)].3 = true }
+            for (id, f) in flagValues {
+                sqlite3_reset(flagStmt); sqlite3_clear_bindings(flagStmt)
+                bindText(flagStmt, 1, id.uuidString)
+                sqlite3_bind_int(flagStmt, 2, f.0 ? 1 : 0)
+                sqlite3_bind_int(flagStmt, 3, f.1 ? 1 : 0)
+                sqlite3_bind_int(flagStmt, 4, f.2 ? 1 : 0)
+                sqlite3_bind_int(flagStmt, 5, f.3 ? 1 : 0)
+                sqlite3_bind_int64(flagStmt, 6, now)
+                guard sqlite3_step(flagStmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            let tagStmt = try prepare(db, "INSERT OR IGNORE INTO email_user_tags(email_id, tag) VALUES (?,?);")
+            defer { sqlite3_finalize(tagStmt) }
+            for (id, set) in tags {
+                for tag in set where !tag.isEmpty {
+                    sqlite3_reset(tagStmt); sqlite3_clear_bindings(tagStmt)
+                    bindText(tagStmt, 1, id.uuidString)
+                    bindText(tagStmt, 2, tag)
+                    guard sqlite3_step(tagStmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+            }
+            let noteStmt = try prepare(db, """
+                INSERT INTO email_annotations(email_id, note, updated_at) VALUES (?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at;
+            """)
+            defer { sqlite3_finalize(noteStmt) }
+            for (id, note) in annots where !note.isEmpty {
+                sqlite3_reset(noteStmt); sqlite3_clear_bindings(noteStmt)
+                bindText(noteStmt, 1, id.uuidString)
+                bindText(noteStmt, 2, note)
+                sqlite3_bind_int64(noteStmt, 3, now)
+                guard sqlite3_step(noteStmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func reviewTotals() throws -> (states: Int, tags: Int, annotations: Int) {
+        let db = try ensureDB()
+        return (
+            try scalarInt(db, "SELECT COUNT(*) FROM email_review_state;"),
+            try scalarInt(db, "SELECT COUNT(*) FROM email_user_tags;"),
+            try scalarInt(db, "SELECT COUNT(*) FROM email_annotations;")
+        )
+    }
+
+    // MARK: - Fidelity backfill (legacy rows: message_type == '')
+
+    struct FidelityCandidate: Sendable {
+        let id: UUID
+        let raw: String
+    }
+
+    /// Legacy rows still awaiting fidelity extraction, with their raw MIME —
+    /// plus the ids whose raw source is missing (the CALLER marks those
+    /// 'unknown' so the outcome accounting sees them).
+    func fidelityBackfillCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.message_type = '' LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        // M2: pages are bounded by BYTES as well as rows — raw MIME with
+        // base64 attachments can run tens of MB per message.
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024,
+                                      context: "fidelity backfill")
+    }
+
+    /// Drains a `(id, raw, raw_blob_digest, raw_blob_length)` result set into
+    /// candidates, reading whichever tier holds each raw source.
+    ///
+    /// One funnel for all three backfill work lists (fidelity, attachment
+    /// text, participants), because the S3b failure mode is identical in each:
+    /// a blob-backed row that is reported as having NO raw source gets marked
+    /// 'unknown' / done, and the backfill then never touches a message it
+    /// could have processed perfectly well.
+    ///
+    /// The byte budget is enforced against `raw_blob_length` from the row
+    /// BEFORE the blob is opened — a 1.5 GB body must not be pulled into
+    /// memory just to discover it overruns the page.
+    private func drainRawCandidates(
+        _ stmt: OpaquePointer?,
+        _ db: OpaquePointer,
+        maxPageBytes: Int,
+        context: String
+    ) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        var out: [FidelityCandidate] = []
+        var rawless: [UUID] = []
+        var pageBytes = 0
+
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            let inline = columnBlobString(stmt, 1)
+            let digest = columnTextOptional(stmt, 2)
+            let blobLength = sqlite3_column_int64(stmt, 3)
+
+            if let inline, !inline.isEmpty {
+                out.append(FidelityCandidate(id: id, raw: inline))
+                pageBytes += inline.utf8.count
+            } else if let digest, !digest.isEmpty {
+                // Never return an empty page: if the very first candidate is
+                // larger than the whole budget it is still taken, because
+                // skipping it forever would leave it permanently unprocessed.
+                if !out.isEmpty, pageBytes + Int(blobLength) > maxPageBytes { break }
+                do {
+                    let raw = try rawMIME(inline: nil, digest: digest, blobLength: blobLength)
+                    out.append(FidelityCandidate(id: id, raw: raw))
+                    pageBytes += raw.utf8.count
+                } catch {
+                    // The row references bytes that are gone: damage, not
+                    // absence. The job cannot process it either way, so it
+                    // leaves the work list — but loudly, not silently.
+                    sqliteStoreLog.error("\(context, privacy: .public): blob missing for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    rawless.append(id)
+                }
+            } else {
+                rawless.append(id)
+            }
+            if pageBytes >= maxPageBytes { break }
+        }
+        return (out, rawless)
+    }
+
+    struct HeaderFidelityCandidate: Sendable {
+        let id: UUID
+        let headersJSON: String
+    }
+
+    /// Header-recovery pass source: rows with NO raw MIME (pre-v2 migrated
+    /// archives never stored it) whose persisted headers survive. Labels,
+    /// the attachment flag and the source filename are recoverable from the
+    /// headers alone. Keyset-paged by id; byte-capped.
+    func headerFidelityCandidates(afterID: String?, limit: Int) throws -> [HeaderFidelityCandidate] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, CAST(b.headers_json AS TEXT) FROM emails e
+            JOIN email_bodies b ON b.id = e.id
+            WHERE (b.raw IS NULL OR length(b.raw) = 0)
+              -- S3b: a blob-backed row HAS raw MIME. Without this clause the
+              -- header-recovery pass would treat every large message as a
+              -- pre-v2 row with no source and "recover" headers it already has.
+              AND (b.raw_blob_digest IS NULL OR b.raw_blob_digest = '')
+              AND b.headers_json IS NOT NULL AND length(b.headers_json) > 2
+              AND e.id > ?
+            ORDER BY e.id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, afterID ?? "")
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [HeaderFidelityCandidate] = []
+        let maxPageBytes = 8 * 1024 * 1024
+        var pageBytes = 0
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            let json = columnText(stmt, 1)
+            guard !json.isEmpty else { continue }
+            out.append(HeaderFidelityCandidate(id: id, headersJSON: json))
+            pageBytes += json.utf8.count
+            if pageBytes >= maxPageBytes { break }
+        }
+        return out
+    }
+
+    struct HeaderFidelityUpdate: Sendable {
+        let id: UUID
+        let tags: [String]
+        let hasAttachment: Bool
+        let sourceFilename: String?
+    }
+
+    /// Write one page of header-recovered fidelity in a single transaction.
+    /// Additive and idempotent: tags INSERT OR IGNORE, has_attach only ever
+    /// upgrades 0→1, and source identity is only filled where absent (a
+    /// synthetic `legacy-header:` source keyed by filename — pre-v2 imports
+    /// never recorded a content hash).
+    func applyHeaderFidelity(_ updates: [HeaderFidelityUpdate]) throws {
+        guard !updates.isEmpty else { return }
+        let db = try ensureDB()
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
+            defer { sqlite3_finalize(insertTag) }
+            let setAttach = try prepare(db, "UPDATE emails SET has_attach = 1 WHERE id = ? AND has_attach = 0;")
+            defer { sqlite3_finalize(setAttach) }
+            let upsertSource = try prepare(db, """
+                INSERT INTO sources(sha256, filename, source_kind, imported_at)
+                VALUES (?,?, 'legacy-header', ?)
+                ON CONFLICT(sha256) DO NOTHING;
+            """)
+            defer { sqlite3_finalize(upsertSource) }
+            let setHash = try prepare(db, """
+                UPDATE emails SET source_hash = ?
+                WHERE id = ? AND (source_hash IS NULL OR source_hash = '');
+            """)
+            defer { sqlite3_finalize(setHash) }
+            let now = Int64(Date().timeIntervalSince1970)
+
+            for update in updates {
+                let idStr = update.id.uuidString
+                for tag in update.tags where !tag.isEmpty {
+                    sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
+                    bindText(insertTag, 1, idStr); bindText(insertTag, 2, tag)
+                    guard sqlite3_step(insertTag) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+                if update.hasAttachment {
+                    sqlite3_reset(setAttach); sqlite3_clear_bindings(setAttach)
+                    bindText(setAttach, 1, idStr)
+                    guard sqlite3_step(setAttach) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+                if let filename = update.sourceFilename, !filename.isEmpty {
+                    let syntheticSHA = "legacy-header:" + filename
+                    sqlite3_reset(upsertSource); sqlite3_clear_bindings(upsertSource)
+                    bindText(upsertSource, 1, syntheticSHA)
+                    bindText(upsertSource, 2, filename)
+                    sqlite3_bind_int64(upsertSource, 3, now)
+                    guard sqlite3_step(upsertSource) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                    sqlite3_reset(setHash); sqlite3_clear_bindings(setHash)
+                    bindText(setHash, 1, syntheticSHA)
+                    bindText(setHash, 2, idStr)
+                    guard sqlite3_step(setHash) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+            }
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+    }
+
+    struct FidelityHealResult: Sendable, Equatable {
+        var healed = 0        // matched an existing row and restored fidelity
+        var alreadyFull = 0   // matched but the row already has raw source
+        var unmatched = 0     // no existing row (not imported — heal skips it)
+    }
+
+    /// Full Fidelity Restore: match re-parsed ORIGINAL messages to existing
+    /// rows (Message-ID identity) and heal them in place — raw MIME, bodies,
+    /// headers, then the full §3 fidelity (type/attachments/tags/domains/
+    /// participants). Never inserts, never duplicates, never touches review
+    /// or forensic state. Rows that already carry raw source are left alone.
+    func healFidelity(from emails: [MBOXParser.RawEmail]) throws -> FidelityHealResult {
+        let db = try ensureDB()
+        var result = FidelityHealResult()
+        // S3b: "does this row already have raw source?" must count the blob
+        // tier. With `COALESCE(length(b.raw), 0)` alone, every blob-backed row
+        // read as length 0 and heal would OVERWRITE a stored large message
+        // with whatever the caller re-parsed — the one thing this function
+        // promises never to do ("rows that already carry raw source are left
+        // alone").
+        let lookup = try prepare(db, """
+            SELECT e.id, COALESCE(length(b.raw), 0) + COALESCE(b.raw_blob_length, 0) FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.message_id = ? LIMIT 1;
+        """)
+        defer { sqlite3_finalize(lookup) }
+        let upsertBody = try prepare(db, """
+            INSERT INTO email_bodies(id, plain, html, raw, headers_json, raw_blob_digest, raw_blob_length)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                plain = excluded.plain, html = excluded.html,
+                raw = excluded.raw, headers_json = excluded.headers_json,
+                raw_blob_digest = excluded.raw_blob_digest,
+                raw_blob_length = excluded.raw_blob_length;
+        """)
+        defer { sqlite3_finalize(upsertBody) }
+
+        for email in emails {
+            guard let mid = email.headers["Message-ID"], !mid.isEmpty else {
+                result.unmatched += 1
+                continue
+            }
+            sqlite3_reset(lookup); sqlite3_clear_bindings(lookup)
+            bindText(lookup, 1, mid)
+            guard try stepRow(lookup, db), let existingID = columnUUID(lookup, 0) else {
+                result.unmatched += 1
+                continue
+            }
+            let rawLength = sqlite3_column_int64(lookup, 1)
+            if rawLength > 0 {
+                result.alreadyFull += 1
+                continue
+            }
+            // Healing a large message must use the same tier rule as import,
+            // or the heal itself would fail on the 1 GB row limit.
+            let tier = try rawTier(for: email.rawSource)
+            sqlite3_reset(upsertBody); sqlite3_clear_bindings(upsertBody)
+            bindText(upsertBody, 1, existingID.uuidString)
+            bindBlob(upsertBody, 2, Data(email.plainBody.utf8))
+            bindBlob(upsertBody, 3, Data(email.htmlBody.utf8))
+            bindBlob(upsertBody, 4, tier.inline)
+            bindBlob(upsertBody, 5, try? JSONEncoder().encode(email.headers))
+            bindTextOrNull(upsertBody, 6, tier.digest)
+            sqlite3_bind_int64(upsertBody, 7, tier.length)
+            guard sqlite3_step(upsertBody) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try applyFidelity(id: existingID, from: email)
+            result.healed += 1
+        }
+        return result
+    }
+
+    func fidelityPendingCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE message_type = '';")
+    }
+
+    /// Rows that cannot be re-extracted (no raw source) exit the work list
+    /// honestly — "unknown", never a fabricated classification.
+    func markFidelityUnknown(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "UPDATE emails SET message_type = 'unknown' WHERE id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    /// Apply re-extracted fidelity for one legacy row, in one transaction:
+    /// message type + attachment flags on the email row, plus the normalized
+    /// attachments/tags/domains side tables (§3 parity for old imports).
+    func applyFidelity(id: UUID, from email: MBOXParser.RawEmail) throws {
+        let db = try ensureDB()
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let idStr = id.uuidString
+            let update = try prepare(db, """
+                UPDATE emails SET message_type = ?, has_attach = ?, attachment_count = ?
+                WHERE id = ?;
+            """)
+            defer { sqlite3_finalize(update) }
+            bindText(update, 1, email.messageType.isEmpty ? "unknown" : email.messageType)
+            sqlite3_bind_int(update, 2, email.attachments.isEmpty ? 0 : 1)
+            sqlite3_bind_int64(update, 3, Int64(email.attachments.count))
+            bindText(update, 4, idStr)
+            guard sqlite3_step(update) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+
+            let clearAtt = try prepare(db, "DELETE FROM attachments WHERE email_id = ?;")
+            defer { sqlite3_finalize(clearAtt) }
+            bindText(clearAtt, 1, idStr)
+            guard sqlite3_step(clearAtt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            let insertAtt = try prepare(db, """
+                INSERT INTO attachments(email_id, position, filename, mime_type, size_bytes, content_id, is_inline)
+                VALUES (?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(insertAtt) }
+            for (pos, att) in email.attachments.enumerated() {
+                sqlite3_reset(insertAtt); sqlite3_clear_bindings(insertAtt)
+                bindText(insertAtt, 1, idStr)
+                sqlite3_bind_int64(insertAtt, 2, Int64(pos))
+                bindText(insertAtt, 3, att.filename)
+                bindText(insertAtt, 4, att.mimeType)
+                sqlite3_bind_int64(insertAtt, 5, Int64(att.size))
+                bindTextOrNull(insertAtt, 6, att.contentID)
+                sqlite3_bind_int(insertAtt, 7, att.isInline ? 1 : 0)
+                guard sqlite3_step(insertAtt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+
+            let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
+            defer { sqlite3_finalize(insertTag) }
+            for tag in email.tags where !tag.isEmpty {
+                sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
+                bindText(insertTag, 1, idStr); bindText(insertTag, 2, tag)
+                guard sqlite3_step(insertTag) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            let insertDomain = try prepare(db, "INSERT OR IGNORE INTO email_domains(email_id, domain) VALUES (?,?);")
+            defer { sqlite3_finalize(insertDomain) }
+            for domain in email.domains where !domain.isEmpty {
+                sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
+                bindText(insertDomain, 1, idStr); bindText(insertDomain, 2, domain)
+                guard sqlite3_step(insertDomain) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            // Participants too — sender auto-detect and recipient filters
+            // depend on them (legacy rows never had these).
+            let clearPart = try prepare(db, "DELETE FROM email_participants WHERE email_id = ?;")
+            defer { sqlite3_finalize(clearPart) }
+            bindText(clearPart, 1, idStr)
+            guard sqlite3_step(clearPart) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            let insertPart = try prepare(db, """
+                INSERT INTO email_participants(email_id, role, address, display_name, normalized_address)
+                VALUES (?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(insertPart) }
+            var participantsInserted = 0
+            for (role, header) in [("FROM", "From"), ("TO", "To"), ("CC", "Cc"), ("BCC", "Bcc")] {
+                guard let raw = email.headers[header], !raw.isEmpty else { continue }
+                for participant in Self.parseAddressList(raw) {
+                    sqlite3_reset(insertPart); sqlite3_clear_bindings(insertPart)
+                    bindText(insertPart, 1, idStr)
+                    bindText(insertPart, 2, role)
+                    bindText(insertPart, 3, participant.address)
+                    bindTextOrNull(insertPart, 4, participant.display)
+                    bindText(insertPart, 5, participant.address.lowercased())
+                    guard sqlite3_step(insertPart) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                    participantsInserted += 1
+                }
+            }
+            if participantsInserted == 0 {
+                // Sentinel so the participants work list converges (see
+                // markParticipantsNone).
+                sqlite3_reset(insertPart); sqlite3_clear_bindings(insertPart)
+                bindText(insertPart, 1, idStr)
+                bindText(insertPart, 2, "NONE")
+                bindText(insertPart, 3, "")
+                sqlite3_bind_null(insertPart, 4)
+                bindText(insertPart, 5, "")
+                guard sqlite3_step(insertPart) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Test fixture: strip the structured fidelity fields so rows look like
+    /// they were persisted by a pre-full-fidelity build.
+    func simulateLegacyRowsForTesting() throws {
+        let db = try ensureDB()
+        try exec(db, "UPDATE emails SET message_type = '', has_attach = 0, attachment_count = 0;")
+        try exec(db, "DELETE FROM attachments;")
+        try exec(db, "DELETE FROM email_tags;")
+        try exec(db, "DELETE FROM email_domains;")
+        try exec(db, "DELETE FROM email_participants;")
+    }
+
+    /// Test fixture: drop participants only, KEEPING `message_type`, which is
+    /// the exact state `participantsBackfillCandidates` exists for (a row
+    /// classified by an earlier build, or by SQL reclassification, which skips
+    /// participant extraction). `simulateLegacyRowsForTesting` cannot stand in
+    /// for it: that also blanks `message_type`, which the work list excludes.
+    func clearParticipantsForTesting() throws {
+        let db = try ensureDB()
+        try exec(db, "DELETE FROM email_participants;")
+    }
+
+    // MARK: - Attachment-content search (v6)
+
+    /// Emails with attachments whose text extraction hasn't been attempted —
+    /// with raw MIME, byte-capped pages (the extraction job's work list).
+    func attachmentTextCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.has_attach = 1
+              AND NOT EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM message_locators l WHERE l.email_id = e.id AND l.body_decoded = 0)
+            LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024,
+                                      context: "attachment text")
+    }
+
+    /// Record one email's extracted attachment texts (possibly none) — FTS
+    /// rows + the attempted-state marker in ONE transaction, idempotent via
+    /// delete-then-insert.
+    func attachmentTextIndex(emailID: UUID, texts: [(filename: String, content: String)]) throws {
+        let db = try ensureDB()
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            let clear = try prepare(db, "DELETE FROM attachment_search WHERE email_id = ?;")
+            defer { sqlite3_finalize(clear) }
+            bindText(clear, 1, emailID.uuidString)
+            guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+
+            let insert = try prepare(db, "INSERT INTO attachment_search(email_id, filename, content) VALUES (?,?,?);")
+            defer { sqlite3_finalize(insert) }
+            for text in texts {
+                sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+                bindText(insert, 1, emailID.uuidString)
+                bindText(insert, 2, text.filename)
+                bindText(insert, 3, SectionBoundary.hidden(text.content))   // FIND-08: boundaries belong to the chunk index
+                guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            let state = try prepare(db, """
+                INSERT INTO attachment_text_state(email_id, indexed_at, text_count) VALUES (?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET indexed_at = excluded.indexed_at, text_count = excluded.text_count;
+            """)
+            defer { sqlite3_finalize(state) }
+            bindText(state, 1, emailID.uuidString)
+            sqlite3_bind_int64(state, 2, Int64(Date().timeIntervalSince1970))
+            sqlite3_bind_int64(state, 3, Int64(texts.count))
+            guard sqlite3_step(state) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Emails whose attachment FILENAME or extracted CONTENT matches the FTS
+    /// query — bounded by `limit`, never a materialized result set.
+    /// §3-H (switch: `v3PagedLists`): id-set lookups, sender rollups and the
+    /// tag vocabulary return every row — one per distinct id / sender / tag,
+    /// never per email body, so the old fixed limits only hid data.
+    nonisolated(unsafe) static var unboundedIDLookups = false
+
+    /// CAP-01: no window by default — every matching id (ids only, bounded by
+    /// the matches, never by a constant). A caller may still ask for a bound.
+    func attachmentTextSearch(_ ftsQuery: String, limit requested: Int? = nil) throws -> Set<UUID> {
+        let limit = requested.map { Self.unboundedIDLookups ? Int(Int32.max) : $0 } ?? Int(Int32.max)
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        do {
+            return try attachmentTextMatch(trimmed, limit: limit)
+        } catch {
+            // Raw user text can be FTS5 syntax (hyphens = column filters,
+            // stray quotes). Retry with every token phrase-quoted — a search
+            // must degrade to literal matching, never throw at the user.
+            let quoted = trimmed.split(separator: " ")
+                .map { "\"" + $0.replacingOccurrences(of: "\"", with: "") + "\"" }
+                .joined(separator: " ")
+            return try attachmentTextMatch(quoted, limit: limit)
+        }
+    }
+
+    private func attachmentTextMatch(_ query: String, limit: Int) throws -> Set<UUID> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT email_id FROM attachment_search WHERE attachment_search MATCH ? LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, query)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out = Set<UUID>()
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        return out
+    }
+
+    /// (attempted, pending) — powers the honest indexing-progress notice.
+    /// Attachment counts by family (A5(d), receipt coverage): what kinds of
+    /// attachments the archive holds, so "attachments seen" is not one number.
+    /// Families are derived from MIME type with the file extension as the
+    /// fallback; the mapping is the pure `attachmentFamily(mimeType:filename:)`.
+    func attachmentFamilyCounts() throws -> [(family: String, count: Int)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT mime_type, filename, COUNT(*) FROM attachments GROUP BY mime_type, filename;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) {
+            let family = Self.attachmentFamily(mimeType: columnText(stmt, 0), filename: columnText(stmt, 1))
+            out[family, default: 0] += Int(sqlite3_column_int64(stmt, 2))
+        }
+        return out.map { (family: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.family < $1.family }
+    }
+
+    nonisolated static func attachmentFamily(mimeType: String, filename: String) -> String {
+        let mime = mimeType.lowercased()
+        let ext = (filename as NSString).pathExtension.lowercased()
+        if mime.contains("pdf") || ext == "pdf" { return "PDF" }
+        if mime.hasPrefix("image/") || ["png", "jpg", "jpeg", "gif", "heic", "tiff", "tif", "bmp", "webp"].contains(ext) { return "Images" }
+        if mime.contains("word") || mime.contains("excel") || mime.contains("powerpoint") || mime.contains("officedocument")
+            || mime.contains("opendocument") || ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf"].contains(ext) { return "Office documents" }
+        if mime.contains("zip") || mime.contains("compressed") || mime.contains("tar") || mime.contains("gzip")
+            || ["zip", "gz", "tgz", "7z", "rar", "tar"].contains(ext) { return "Archives" }
+        if mime.hasPrefix("text/") || ["txt", "csv", "md", "log", "json", "xml", "html", "htm"].contains(ext) { return "Text" }
+        if mime.contains("calendar") || ext == "ics" { return "Calendar" }
+        if mime.contains("vcard") || ext == "vcf" { return "Contacts" }
+        if mime.hasPrefix("audio/") || mime.hasPrefix("video/") { return "Media" }
+        if mime.contains("pkcs7") || mime.contains("signature") || ext == "p7s" || ext == "p7m" { return "Signatures" }
+        if mime.contains("message/") || ext == "eml" || ext == "msg" { return "Attached messages" }
+        return "Other"
+    }
+
+    func attachmentTextProgress() throws -> (attempted: Int, pending: Int) {
+        let db = try ensureDB()
+        let attempted = try scalarInt(db, "SELECT COUNT(*) FROM attachment_text_state;")
+        let pending = try scalarInt(db, """
+            SELECT COUNT(*) FROM emails e WHERE e.has_attach = 1
+              AND NOT EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id);
+        """)
+        return (attempted, pending)
+    }
+
+    // MARK: - E1: OCR second pass (attachment text already attempted without OCR)
+
+    /// SQL predicate: the email has an attachment OCR can read (an image or a PDF).
+    private static let ocrAttachmentPredicate = """
+        EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id AND (
+            lower(a.mime_type) LIKE 'image/%' OR lower(a.mime_type) LIKE '%pdf%'
+            OR lower(a.filename) LIKE '%.pdf' OR lower(a.filename) LIKE '%.png' OR lower(a.filename) LIKE '%.jpg'
+            OR lower(a.filename) LIKE '%.jpeg' OR lower(a.filename) LIKE '%.tif' OR lower(a.filename) LIKE '%.tiff'
+            OR lower(a.filename) LIKE '%.heic' OR lower(a.filename) LIKE '%.heif'))
+        """
+
+    /// The OCR pass's own state file, beside the archive. Kept outside `emails.db` so the archive
+    /// schema does not change: an earlier build opens the archive as before and ignores this file.
+    var attachmentOCRStateURL: URL { directory.appendingPathComponent("attachment-ocr.sqlite") }
+
+    /// FIND-03: per-attachment coverage states, beside the archive like the OCR state.
+    var attachmentCoverageURL: URL { directory.appendingPathComponent("attachment-coverage.sqlite") }
+
+    /// FIND-03: forget that these emails' attachment text was attempted, so the
+    /// work list offers them again (a newer extractor retrying what an older
+    /// one could not read). Their indexed text, if any, stays until replaced.
+    func attachmentTextStateReset(emailIDs: [UUID]) throws {
+        guard !emailIDs.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in emailIDs.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "DELETE FROM attachment_text_state WHERE email_id IN (\(marks));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    /// IDs (ascending, after `cursor`) of emails whose attachment text was already extracted and
+    /// that hold an image or PDF — the OCR second pass's work list, without loading any message.
+    func attachmentOCRCandidateIDs(after cursor: String?, limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id FROM emails e
+            WHERE e.has_attach = 1 AND e.id > ?
+              AND EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
+              AND \(Self.ocrAttachmentPredicate)
+            ORDER BY e.id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, cursor ?? "")
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    /// How many emails the OCR second pass covers (for "X of Y").
+    func attachmentOCRCandidateCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, """
+            SELECT COUNT(*) FROM emails e WHERE e.has_attach = 1
+              AND EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
+              AND \(Self.ocrAttachmentPredicate);
+        """)
+    }
+
+    /// FIND-03: one email's attachment list from the side table (name, type,
+    /// size), in position order — what the coverage record falls back on when
+    /// the message itself cannot be read.
+    func attachmentMetadata(forEmailID id: UUID) throws -> [AttachmentMetadata] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT filename, mime_type, size_bytes, content_id, is_inline
+            FROM attachments WHERE email_id = ? ORDER BY position;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        var out: [AttachmentMetadata] = []
+        while try stepRow(stmt, db) {
+            out.append(AttachmentMetadata(
+                filename: columnText(stmt, 0), mimeType: columnText(stmt, 1),
+                size: Int(sqlite3_column_int64(stmt, 2)),
+                isInline: sqlite3_column_int(stmt, 4) != 0, contentID: columnTextOptional(stmt, 3)))
+        }
+        return out
+    }
+
+    /// Raw MIME for the given emails, in byte-capped pages like the extraction job's work list;
+    /// IDs not returned (page full) are simply asked for again.
+    func rawCandidates(ids: [UUID]) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        guard !ids.isEmpty else { return ([], []) }
+        let db = try ensureDB()
+        let marks = Array(repeating: "?", count: ids.count).joined(separator: ",")
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.id IN (\(marks)) ORDER BY e.id;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        for (i, id) in ids.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024, context: "attachment OCR")
+    }
+
+    // MARK: - Forensic state (§21)
+
+    struct ForensicEmailHashRow: Sendable, Equatable {
+        let md5: String
+        let sha1: String
+        let sha256: String
+        let byteCount: Int
+    }
+
+    func forensicHashUpsert(_ hashes: [UUID: ForensicEmailHashRow]) throws {
+        guard !hashes.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO forensic_email_hashes(email_id, md5, sha1, sha256, byte_count)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(email_id) DO NOTHING;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for (id, h) in hashes {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindText(stmt, 2, h.md5)
+                bindText(stmt, 3, h.sha1)
+                bindText(stmt, 4, h.sha256)
+                sqlite3_bind_int64(stmt, 5, Int64(h.byteCount))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func forensicHashes(ids: [UUID]) throws -> [UUID: ForensicEmailHashRow] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: ForensicEmailHashRow] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, md5, sha1, sha256, byte_count FROM forensic_email_hashes WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = ForensicEmailHashRow(
+                    md5: columnText(stmt, 1), sha1: columnText(stmt, 2),
+                    sha256: columnText(stmt, 3), byteCount: Int(sqlite3_column_int64(stmt, 4)))
+            }
+        }
+        return out
+    }
+
+    func forensicHashCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM forensic_email_hashes;")
+    }
+
+    func forensicTagSet(_ tag: String?, ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let sql = tag == nil
+            ? "DELETE FROM forensic_evidence_tags WHERE email_id = ?;"
+            : """
+              INSERT INTO forensic_evidence_tags(email_id, tag, tagged_at) VALUES (?,?,?)
+              ON CONFLICT(email_id) DO UPDATE SET tag = excluded.tag, tagged_at = excluded.tagged_at;
+              """
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                if let tag {
+                    bindText(stmt, 2, tag)
+                    sqlite3_bind_int64(stmt, 3, now)
+                }
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func forensicTags(ids: [UUID]) throws -> [UUID: (tag: String, taggedAt: Date)] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: (String, Date)] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, tag, tagged_at FROM forensic_evidence_tags WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = (columnText(stmt, 1), Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2))))
+            }
+        }
+        return out
+    }
+
+    /// All (email_id, tag) pairs, keyset-paged by `email_id` — bounded
+    /// hydration/scan path. Pass the last row's id as `after` for the next
+    /// page; a row deleted or inserted between pages can no longer shift the
+    /// window and make a later page skip or repeat rows (v2.1 backlog #10).
+    func forensicTagsPage(after: UUID?, limit: Int) throws -> [(id: UUID, tag: String, taggedAt: Date)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT email_id, tag, tagged_at FROM forensic_evidence_tags
+            WHERE (? IS NULL OR email_id > ?) ORDER BY email_id LIMIT ?;
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bindTextOrNull(stmt, 1, after?.uuidString)
+        bindTextOrNull(stmt, 2, after?.uuidString)
+        sqlite3_bind_int(stmt, 3, Int32(limit))
+        var out: [(UUID, String, Date)] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append((id, columnText(stmt, 1), Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2)))))
+        }
+        return out
+    }
+
+    func forensicTagCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT tag, COUNT(*) FROM forensic_evidence_tags GROUP BY tag;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// Keyset-paged by `email_id`; see `forensicTagsPage(after:limit:)`.
+    func forensicIDs(withTag tag: String, after: UUID?, limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT email_id FROM forensic_evidence_tags
+            WHERE tag = ? AND (? IS NULL OR email_id > ?) ORDER BY email_id LIMIT ?;
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, tag)
+        bindTextOrNull(stmt, 2, after?.uuidString)
+        bindTextOrNull(stmt, 3, after?.uuidString)
+        sqlite3_bind_int(stmt, 4, Int32(limit))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func forensicAnnotationSet(_ note: String?, examiner: String, id: UUID) throws {
+        let db = try ensureDB()
+        if let note, !note.isEmpty {
+            let stmt = try prepare(db, """
+                INSERT INTO forensic_annotations(email_id, note, examiner, created_at) VALUES (?,?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET note = excluded.note, examiner = excluded.examiner, created_at = excluded.created_at;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            bindText(stmt, 2, note)
+            bindText(stmt, 3, examiner)
+            sqlite3_bind_int64(stmt, 4, Int64(Date().timeIntervalSince1970))
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        } else {
+            let stmt = try prepare(db, "DELETE FROM forensic_annotations WHERE email_id = ?;")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    func forensicAnnotations(ids: [UUID]) throws -> [UUID: (note: String, examiner: String, createdAt: Date)] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: (String, String, Date)] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, note, examiner, created_at FROM forensic_annotations WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = (columnText(stmt, 1), columnText(stmt, 2),
+                           Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3))))
+            }
+        }
+        return out
+    }
+
+    func forensicAnnotationCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM forensic_annotations;")
+    }
+
+    /// Keyset-paged by `email_id`; see `forensicTagsPage(after:limit:)`.
+    func forensicAnnotationsPage(after: UUID?, limit: Int) throws -> [(id: UUID, note: String, examiner: String, createdAt: Date)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT email_id, note, examiner, created_at FROM forensic_annotations
+            WHERE (? IS NULL OR email_id > ?) ORDER BY email_id LIMIT ?;
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bindTextOrNull(stmt, 1, after?.uuidString)
+        bindTextOrNull(stmt, 2, after?.uuidString)
+        sqlite3_bind_int(stmt, 3, Int32(limit))
+        var out: [(UUID, String, String, Date)] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append((id, columnText(stmt, 1), columnText(stmt, 2),
+                        Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3)))))
+        }
+        return out
+    }
+
+    // MARK: - Forensic source hashes + audit log (§21.1/§21.2)
+
+    struct ForensicSourceHashRow: Sendable, Equatable {
+        let filename: String
+        let fileSize: Int64
+        let md5: String
+        let sha1: String
+        let sha256: String
+        let importedAt: Date
+    }
+
+    func forensicSourceHashUpsert(_ row: ForensicSourceHashRow) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO forensic_source_hashes(filename, file_size, md5, sha1, sha256, imported_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(sha256) DO UPDATE SET imported_at = excluded.imported_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, row.filename)
+        sqlite3_bind_int64(stmt, 2, row.fileSize)
+        bindText(stmt, 3, row.md5)
+        bindText(stmt, 4, row.sha1)
+        bindText(stmt, 5, row.sha256)
+        sqlite3_bind_int64(stmt, 6, Int64(row.importedAt.timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func forensicSourceHashes() throws -> [ForensicSourceHashRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT filename, file_size, md5, sha1, sha256, imported_at FROM forensic_source_hashes ORDER BY imported_at DESC;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [ForensicSourceHashRow] = []
+        while try stepRow(stmt, db) {
+            out.append(ForensicSourceHashRow(
+                filename: columnText(stmt, 0), fileSize: sqlite3_column_int64(stmt, 1),
+                md5: columnText(stmt, 2), sha1: columnText(stmt, 3), sha256: columnText(stmt, 4),
+                importedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 5)))))
+        }
+        return out
+    }
+
+    struct ForensicAuditRow: Sendable, Equatable {
+        let seq: Int
+        let entryID: UUID
+        let timestamp: Date
+        let action: String
+        let detail: String
+        let examiner: String
+        let previousHash: String
+        let entryHash: String
+    }
+
+    /// Append one audit entry. `seq` is the PRIMARY KEY, so a duplicated or
+    /// out-of-order append fails loudly instead of corrupting the chain.
+    func forensicAuditAppend(_ row: ForensicAuditRow) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO forensic_audit_log(seq, entry_id, ts, action, detail, examiner, prev_hash, entry_hash)
+            VALUES (?,?,?,?,?,?,?,?);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(row.seq))
+        bindText(stmt, 2, row.entryID.uuidString)
+        sqlite3_bind_double(stmt, 3, row.timestamp.timeIntervalSince1970)
+        bindText(stmt, 4, row.action)
+        bindText(stmt, 5, row.detail)
+        bindText(stmt, 6, row.examiner)
+        bindText(stmt, 7, row.previousHash)
+        bindText(stmt, 8, row.entryHash)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    private func forensicAuditRow(_ stmt: OpaquePointer?) -> ForensicAuditRow? {
+        guard let entryID = columnUUID(stmt, 1) else { return nil }
+        return ForensicAuditRow(
+            seq: Int(sqlite3_column_int64(stmt, 0)),
+            entryID: entryID,
+            timestamp: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2)),
+            action: columnText(stmt, 3), detail: columnText(stmt, 4),
+            examiner: columnText(stmt, 5),
+            previousHash: columnText(stmt, 6), entryHash: columnText(stmt, 7))
+    }
+
+    private static let auditColumns = "seq, entry_id, ts, action, detail, examiner, prev_hash, entry_hash"
+
+    /// Ordered page for streamed verification (ascending from `fromSeq`).
+    func forensicAuditPage(fromSeq: Int, limit: Int) throws -> [ForensicAuditRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT \(Self.auditColumns) FROM forensic_audit_log WHERE seq >= ? ORDER BY seq ASC LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(fromSeq))
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [ForensicAuditRow] = []
+        while try stepRow(stmt, db) { if let r = forensicAuditRow(stmt) { out.append(r) } }
+        return out
+    }
+
+    /// Most recent entries for UI display (descending).
+    func forensicAuditRecent(limit: Int) throws -> [ForensicAuditRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT \(Self.auditColumns) FROM forensic_audit_log ORDER BY seq DESC LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [ForensicAuditRow] = []
+        while try stepRow(stmt, db) { if let r = forensicAuditRow(stmt) { out.append(r) } }
+        return out
+    }
+
+    func forensicAuditCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM forensic_audit_log;")
+    }
+
+    func forensicAuditLast() throws -> ForensicAuditRow? {
+        try forensicAuditRecent(limit: 1).first
+    }
+
+    func forensicClearAll() throws {
+        let db = try ensureDB()
+        for table in ["forensic_email_hashes", "forensic_evidence_tags", "forensic_annotations",
+                      "forensic_source_hashes", "forensic_audit_log"] {
+            try exec(db, "DELETE FROM \(table);")
+        }
+    }
+
+    /// Rows that HAVE a message type but NO participants rows (classified by
+    /// an earlier build or by SQL reclassification, which skips extraction).
+    /// Returns (id, raw) pages plus raw-less ids the caller marks done via a
+    /// sentinel so the list converges.
+    func participantsBackfillCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.message_type <> ''
+              AND NOT EXISTS (SELECT 1 FROM email_participants p WHERE p.email_id = e.id)
+            LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024,
+                                      context: "participants backfill")
+    }
+
+    /// Sentinel participant row (role NONE, empty address) — marks an email as
+    /// "extraction attempted, nothing parseable" so the participants work list
+    /// converges. Every consumer filters real roles / LIKE '%@%', so the
+    /// sentinel is invisible to queries.
+    func markParticipantsNone(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO email_participants(email_id, role, address, display_name, normalized_address)
+            VALUES (?,'NONE','',NULL,'');
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// v1-parity auto-detect: the archive owner's address. Primary heuristic:
+    /// the normalized participant present in the most emails (the owner is on
+    /// nearly every message — From when sent, To/Cc when received). Fallback
+    /// (participants empty, e.g. pre-backfill): v1's exact heuristic — the
+    /// most common raw From header.
+    func detectOwnerAddress() throws -> String? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT normalized_address, COUNT(DISTINCT email_id) AS c
+            FROM email_participants
+            WHERE normalized_address LIKE '%@%'
+            GROUP BY normalized_address
+            ORDER BY c DESC, COUNT(DISTINCT role) DESC, normalized_address
+            LIMIT 1;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if try stepRow(stmt, db) {
+            let addr = columnText(stmt, 0)
+            if !addr.isEmpty { return addr }
+        }
+        return try topGrouped(.fromAddr, limit: 1).first?.value
+    }
+
+    /// M1: sent/received is derivable from from_addr in pure SQL — when the
+    /// user's address changes, every already-classified row reclassifies in
+    /// one statement (no re-parse). Rows still pending ('') are untouched;
+    /// the backfill classifies them with the new address.
+    func reclassifyMessageTypes(senderEmail: String) throws {
+        let needle = senderEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            UPDATE emails SET message_type =
+                CASE WHEN instr(lower(from_addr), lower(?)) > 0 THEN 'sent' ELSE 'received' END
+            WHERE message_type IN ('sent', 'received', 'unknown');
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, needle)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    /// M6: per-email forensic rows for EXACTLY the given ids (used when a
+    /// clear preserves legal-hold rows — their forensic state must survive).
+    func forensicPerEmailDelete(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            for table in ["forensic_email_hashes", "forensic_evidence_tags", "forensic_annotations"] {
+                let stmt = try prepare(db, "DELETE FROM \(table) WHERE email_id IN (\(placeholders));")
+                defer { sqlite3_finalize(stmt) }
+                for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+        }
+    }
+
+    /// §11.1: clear only the per-email forensic state (rows reference deleted
+    /// emails); the audit log + source-hash history remain as evidence.
+    func forensicPerEmailClear() throws {
+        let db = try ensureDB()
+        for table in ["forensic_email_hashes", "forensic_evidence_tags", "forensic_annotations"] {
+            try exec(db, "DELETE FROM \(table);")
+        }
+    }
+
+    // MARK: - Mutation
+
+    /// §3-F4: whether `legal_holds` is the live, verified copy of the legal
+    /// state (set by the legal-data engine while it is on). Only then does
+    /// delete refuse held emails on its own — with the engine off the files
+    /// are the truth and a hold released there must not keep blocking.
+    private(set) var enforcesDatabaseLegalHolds = false
+    func setEnforcesDatabaseLegalHolds(_ on: Bool) { enforcesDatabaseLegalHolds = on }
+
+    /// Deletes `ids`. Returns the ids that were NOT deleted because they are
+    /// under a legal hold in the database (empty unless the legal-data engine
+    /// is on), so callers can say "X of Y deleted".
+    func delete(ids requested: Set<UUID>) throws {
+        try deleteReportingHeld(ids: requested)
+    }
+
+    /// `recordTombstones` false: no Message-ID tombstone is written (a
+    /// connected account's archive deletion — the same mail imported later is
+    /// stored again rather than silently refused).
+    @discardableResult
+    func deleteReportingHeld(ids requested: Set<UUID>, recordTombstones: Bool = true) throws -> Set<UUID> {
+        guard !requested.isEmpty else { return [] }
+        try StorePolicyGate.enforce(.deleteEmails)
+        let db = try ensureDB()
+        // 3.0 F4: defence in depth — an email under a legal hold recorded in
+        // the database is never deleted, whichever caller asks.
+        let held = enforcesDatabaseLegalHolds ? try legalHeldAmong(Array(requested)) : []
+        let ids = requested.subtracting(held)
+        guard !ids.isEmpty else { return held }
+        try ensureEntityTable(db)
+        let now = Int64(Date().timeIntervalSince1970)
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for chunk in Array(ids).chunked(into: 500) {
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                // Record a deletion tombstone for each row BEFORE removing it, so
+                // re-importing the same source can't silently resurrect it.
+                if recordTombstones {
+                    let ts = try prepare(db, """
+                        INSERT OR IGNORE INTO deletion_tombstones(dedup_key, message_id, deleted_at)
+                        SELECT dedup_key, message_id, \(now) FROM emails WHERE id IN (\(placeholders));
+                    """)
+                    for (i, id) in chunk.enumerated() { bindText(ts, Int32(i + 1), id.uuidString) }
+                    let tsOK = sqlite3_step(ts) == SQLITE_DONE
+                    sqlite3_finalize(ts)
+                    guard tsOK else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+                // §3-F5: a month that loses a leaf loses its stored root, so
+                // the next refresh recomputes it — otherwise the archive root
+                // would still vouch for the deleted email.
+                let fb = try prepare(db, """
+                    DELETE FROM fingerprint_buckets WHERE bucket IN
+                        (SELECT bucket FROM fingerprints WHERE email_id IN (\(placeholders)));
+                """)
+                for (i, id) in chunk.enumerated() { bindText(fb, Int32(i + 1), id.uuidString) }
+                let fbOK = sqlite3_step(fb) == SQLITE_DONE
+                sqlite3_finalize(fb)
+                guard fbOK else { throw SQLiteStoreError.step(lastError(db)) }
+                // (table, id column) — derived tables are keyed by email_id.
+                // `duplicates` is keyed by duplicate_id (clears orphan bookkeeping).
+                for (table, col) in [("emails", "id"), ("email_bodies", "id"), ("derived", "email_id"),
+                                     ("thread_keys", "email_id"), ("predictive_records", "email_id"),
+                                     ("near_dup_findings", "email_id"),
+                                     ("attachments", "email_id"), ("email_participants", "email_id"),
+                                     ("email_tags", "email_id"), ("email_domains", "email_id"),
+                                     ("email_review_state", "email_id"), ("email_user_tags", "email_id"),
+                                     ("email_annotations", "email_id"), ("duplicates", "duplicate_id"),
+                                     ("attachment_search", "email_id"), ("attachment_text_state", "email_id"),
+                                     ("features", "email_id"), ("ioc_rows", "email_id"),
+                                     ("minhash_bands", "email_id"), ("fingerprints", "email_id"),
+                                     ("entity_rows", "email_id")] {
+                    let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
+                    defer { sqlite3_finalize(stmt) }
+                    for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+            }
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+        return held
+    }
+
+    func clearAll() throws {
+        let db = try ensureDB()
+        try ensureEntityTable(db)
+        for table in ["emails", "email_bodies", "derived", "duplicates", "thread_keys",
+                      "predictive_records", "near_dup_findings", "sources", "attachments",
+                      "email_participants", "email_tags", "email_domains",
+                      "email_review_state", "email_user_tags", "email_annotations",
+                      "attachment_search", "attachment_text_state", "deletion_tombstones",
+                      "features", "ioc_rows", "minhash_bands", "fingerprints", "fingerprint_buckets", "entity_rows"] {
+            try exec(db, "DELETE FROM \(table);")
+        }
+    }
+
+    // MARK: - Deletion tombstones (no-resurrection on re-import)
+
+    /// How many deleted-email identities are currently remembered.
+    func tombstoneCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM deletion_tombstones;")
+    }
+
+    /// Forget every deletion tombstone — the "allow re-import" override. After
+    /// this, re-importing a previously-deleted source re-adds those emails.
+    func clearDeletionTombstones() throws {
+        let db = try ensureDB()
+        try exec(db, "DELETE FROM deletion_tombstones;")
+    }
+
+    /// The set of remembered (dedup_key, message_id) identities, loaded once per
+    /// insert so re-imports can skip previously-deleted mail without per-row SQL.
+    fileprivate func loadTombstones() throws -> (keys: Set<String>, mids: Set<String>) {
+        let db = try ensureDB()
+        var keys = Set<String>(); var mids = Set<String>()
+        let stmt = try prepare(db, "SELECT dedup_key, message_id FROM deletion_tombstones;")
+        defer { sqlite3_finalize(stmt) }
+        while try stepRow(stmt, db) {
+            if let k = columnTextOptional(stmt, 0), !k.isEmpty { keys.insert(k) }
+            if let m = columnTextOptional(stmt, 1), !m.isEmpty { mids.insert(m) }
+        }
+        return (keys, mids)
+    }
+
+    /// Fold the WAL back into the main db file. Keeps the on-disk footprint
+    /// honest and bounds WAL growth after a large import.
+    func checkpoint() throws {
+        let db = try ensureDB()
+        try exec(db, "PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    /// §3-S9: a PASSIVE checkpoint (never waits for or blocks a reader or
+    /// writer), for when the app is idle.
+    func checkpointPassive() throws {
+        guard let db else { return }   // nothing open, nothing to fold
+        try exec(db, "PRAGMA wal_checkpoint(PASSIVE);")
+    }
+
+    // MARK: - Row → RawEmail
+
+    /// Base-row hydration. Side-table state (attachments/tags/domains) is
+    /// attached afterwards by `hydrateSideTables` — this only reads columns.
+    /// `message_type` is empty for rows persisted by pre-v2 builds (their
+    /// structured metadata was never stored); those hydrate as "stored".
+    private func rawEmailFromRow(_ stmt: OpaquePointer?) -> MBOXParser.RawEmail? {
+        guard let id = columnUUID(stmt, 0) else { return nil }
+        let messageID = columnTextOptional(stmt, 1)
+        let inReplyTo = columnTextOptional(stmt, 2)
+        let references = columnTextOptional(stmt, 3)
+        let date = Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4)))
+        let plain = columnBlobString(stmt, 5) ?? ""
+        let html = columnBlobString(stmt, 6) ?? ""
+        let messageType = columnTextOptional(stmt, 9).flatMap { $0.isEmpty ? nil : $0 } ?? "stored"
+        let threadKey = columnTextOptional(stmt, 10)
+
+        // S3b: the raw MIME is inline or in the blob tier. A missing blob is
+        // recorded as an anomaly on the message rather than thrown, because
+        // one unreadable body must not make a whole page of mail unopenable —
+        // and reporting it as "no raw source" would send the fidelity
+        // backfills off to heal a row that is merely damaged.
+        var raw = columnBlobString(stmt, 7) ?? ""
+        var rawAnomalies: [String] = []
+        let blobDigest = columnTextOptional(stmt, 11)
+        if raw.isEmpty, let blobDigest, !blobDigest.isEmpty {
+            let blobLength = sqlite3_column_int64(stmt, 12)
+            do {
+                raw = try rawMIME(inline: nil, digest: blobDigest, blobLength: blobLength)
+            } catch {
+                rawAnomalies.append("Raw source unreadable: \(error.localizedDescription)")
+                sqliteStoreLog.error("blob read failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        var headers: [String: String] = [:]
+        if let hdata = columnBlobData(stmt, 8),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: hdata) {
+            headers = decoded
+        } else if let messageID { headers["Message-ID"] = messageID }
+
+        return MBOXParser.RawEmail(
+            id: id,
+            headers: headers,
+            rawSource: raw,
+            messageType: messageType,
+            attachments: [],
+            timestamp: ISO8601DateFormatter().string(from: date),
+            domains: [],
+            plainBody: plain,
+            htmlBody: html,
+            mimeRoot: nil, mimeSummary: nil, mimeDiagnostics: [],
+            threadID: threadKey ?? messageID,
+            inReplyTo: inReplyTo,
+            references: references.map { $0.components(separatedBy: "\n") },
+            tags: [], anomalies: rawAnomalies
+        )
+    }
+
+    // MARK: - Date parsing (aligned with FTS shard-year)
+
+    static func parsedDate(from raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        return MBOXParser.parseDate(raw)
+    }
+
+    // MARK: - SQLite helpers
+
+    func exec(_ db: OpaquePointer, _ sql: String) throws {
+        var err: UnsafeMutablePointer<CChar>?
+        let rc = sqlite3_exec(db, sql, nil, nil, &err)
+        if rc != SQLITE_OK {
+            let msg = err.map { String(cString: $0) } ?? "sqlite3_exec rc=\(rc)"
+            sqlite3_free(err)
+            throw SQLiteStoreError.exec(msg)
+        }
+    }
+
+    func prepare(_ db: OpaquePointer, _ sql: String) throws -> OpaquePointer? {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw SQLiteStoreError.prepare(lastError(db))
+        }
+        return stmt
+    }
+
+    func scalarInt(_ db: OpaquePointer, _ sql: String) throws -> Int {
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Step expecting rows: true = a row is available, false = DONE. Throws on
+    /// any error (disk full, I/O, interrupt) instead of letting the caller's
+    /// `while == SQLITE_ROW` loop silently mistake a failure for end-of-rows —
+    /// which would return a partial result set as if it were complete.
+    func stepRow(_ stmt: OpaquePointer?, _ db: OpaquePointer) throws -> Bool {
+        switch sqlite3_step(stmt) {
+        case SQLITE_ROW:  return true
+        case SQLITE_DONE: return false
+        default:          throw SQLiteStoreError.step(lastError(db))
+        }
+    }
+
+    private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    /// Same value, reachable from the `nonisolated static` snapshot readers
+    /// (`locatorSnapshot`), which cannot touch an instance member.
+    nonisolated static let staticSQLiteTransient =
+        unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String) {
+        sqlite3_bind_text(stmt, index, value, -1, sqliteTransient)
+    }
+    func bindTextOrNull(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
+        if let value { sqlite3_bind_text(stmt, index, value, -1, sqliteTransient) }
+        else { sqlite3_bind_null(stmt, index) }
+    }
+    func bindBlob(_ stmt: OpaquePointer?, _ index: Int32, _ data: Data?) {
+        guard let data, !data.isEmpty else { sqlite3_bind_null(stmt, index); return }
+        data.withUnsafeBytes { raw in
+            _ = sqlite3_bind_blob(stmt, index, raw.baseAddress, Int32(data.count), sqliteTransient)
+        }
+    }
+
+    func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String {
+        guard let c = sqlite3_column_text(stmt, index) else { return "" }
+        return String(cString: c)
+    }
+    private func columnTextOptional(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
+        guard sqlite3_column_type(stmt, index) != SQLITE_NULL,
+              let c = sqlite3_column_text(stmt, index) else { return nil }
+        return String(cString: c)
+    }
+    func columnUUID(_ stmt: OpaquePointer?, _ index: Int32) -> UUID? {
+        guard let c = sqlite3_column_text(stmt, index) else { return nil }
+        return UUID(uuidString: String(cString: c))
+    }
+    private func columnBlobData(_ stmt: OpaquePointer?, _ index: Int32) -> Data? {
+        guard sqlite3_column_type(stmt, index) != SQLITE_NULL,
+              let bytes = sqlite3_column_blob(stmt, index) else { return nil }
+        let count = Int(sqlite3_column_bytes(stmt, index))
+        guard count > 0 else { return nil }
+        return Data(bytes: bytes, count: count)
+    }
+    private func columnBlobString(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
+        columnBlobData(stmt, index).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    func lastError(_ db: OpaquePointer) -> String {
+        guard let c = sqlite3_errmsg(db) else { return "unknown error" }
+        return String(cString: c)
+    }
+}
+
+// MARK: - 3.0 engines: legal state (F4), fingerprint tree (F5), feature index (F6)
+//
+// In this file because the SQLite helpers above are private. Only the v3
+// engines call these; with their switches off the v19 tables stay empty.
+
+extension SQLiteEmailStore {
+
+    // MARK: Shared batch helpers
+
+    /// Runs one prepared statement per id (chunks of 500 per transaction).
+    private func perID(_ db: OpaquePointer, _ sql: String, _ ids: [UUID],
+                       bind: (OpaquePointer?, UUID) -> Void = { _, _ in }) throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        var changed = 0
+        for chunk in ids.chunked(into: 500) {
+            try exec(db, SQLiteHygiene.beginWrite)
+            do {
+                for id in chunk {
+                    sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                    bindText(stmt, 1, id.uuidString)
+                    bind(stmt, id)
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                    changed += Int(sqlite3_changes(db))
+                }
+                try exec(db, "COMMIT;")
+            } catch { try? exec(db, "ROLLBACK;"); throw error }
+        }
+        return changed
+    }
+
+    /// The ids among `ids` present in `table` (keyed by email_id).
+    private func present(in table: String, among ids: [UUID]) throws -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out = Set<UUID>()
+        for chunk in ids.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id FROM \(table) WHERE email_id IN (\(marks));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        }
+        return out
+    }
+
+    private func allIDs(in table: String) throws -> Set<UUID> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id FROM \(table);")
+        defer { sqlite3_finalize(stmt) }
+        var out = Set<UUID>()
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        return out
+    }
+
+    // MARK: F4 — legal holds
+
+    /// Places holds; returns how many were newly placed.
+    @discardableResult
+    /// `sync`: mirroring holds already placed through the files (authorised
+    /// where they were placed), not a new decision — the role gate is skipped.
+    func legalHoldsAdd(_ ids: [UUID], matter: String = "", sync: Bool = false) throws -> Int {
+        if !sync { try StorePolicyGate.enforce(.placeHold) }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        return try perID(db, "INSERT OR IGNORE INTO legal_holds(email_id, matter, placed_at) VALUES (?,?,?);", ids) { stmt, _ in
+            self.bindText(stmt, 2, matter)
+            sqlite3_bind_int64(stmt, 3, now)
+        }
+    }
+
+    /// Places holds on every email matching a NON-TEXT query in one statement
+    /// (text scopes go through ScopeJob.runIDs + `legalHoldsAdd(_:)`).
+    @discardableResult
+    func legalHoldsAdd(query: EmailQuery, matter: String = "") throws -> Int {
+        try StorePolicyGate.enforce(.placeHold)
+        precondition(query.text?.isEmpty ?? true, "text scopes must be resolved to ids first")
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            INSERT OR IGNORE INTO legal_holds(email_id, matter, placed_at)
+            SELECT e.id, ?, ? FROM emails e WHERE \(whereSQL);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, matter)
+        sqlite3_bind_int64(stmt, 2, Int64(Date().timeIntervalSince1970))
+        _ = bindQueryValues(stmt, binds, startingAt: 3)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return Int(sqlite3_changes(db))
+    }
+
+    @discardableResult
+    func legalHoldsRemove(_ ids: [UUID], sync: Bool = false) throws -> Int {
+        if !sync { try StorePolicyGate.enforce(.releaseHold) }
+        let db = try ensureDB()
+        return try perID(db, "DELETE FROM legal_holds WHERE email_id = ?;", ids)
+    }
+
+    func legalHeldAmong(_ ids: [UUID]) throws -> Set<UUID> { try present(in: "legal_holds", among: ids) }
+    func legalHoldIDs() throws -> Set<UUID> { try allIDs(in: "legal_holds") }
+    func legalHoldCount() throws -> Int { try scalarInt(try ensureDB(), "SELECT COUNT(*) FROM legal_holds;") }
+
+    // MARK: F4 — evidence seals (set once)
+
+    /// Records seals that do not exist yet; an existing seal is NEVER
+    /// overwritten (rule: a re-hold must not hide a modification). Returns
+    /// how many were newly recorded.
+    @discardableResult
+    func sealsSetOnce(_ seals: [UUID: String]) throws -> Int {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        return try perID(db, "INSERT OR IGNORE INTO evidence_seals(email_id, sha256, sealed_at) VALUES (?,?,?);",
+                         Array(seals.keys)) { stmt, id in
+            self.bindText(stmt, 2, seals[id] ?? "")
+            sqlite3_bind_int64(stmt, 3, now)
+        }
+    }
+
+    @discardableResult
+    func sealsRemove(_ ids: [UUID]) throws -> Int {
+        let db = try ensureDB()
+        return try perID(db, "DELETE FROM evidence_seals WHERE email_id = ?;", ids)
+    }
+
+    func seals(for ids: [UUID]) throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: String] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, sha256 FROM evidence_seals WHERE email_id IN (\(marks));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        }
+        return out
+    }
+
+    func allSeals() throws -> [UUID: String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, sha256 FROM evidence_seals;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [UUID: String] = [:]
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        return out
+    }
+
+    // MARK: F4 — custodians
+
+    @discardableResult
+    func custodiansAssign(_ assignments: [UUID: String]) throws -> Int {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        return try perID(db, """
+            INSERT INTO custodian_assignments(email_id, custodian, assigned_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET custodian = excluded.custodian, assigned_at = excluded.assigned_at;
+        """, Array(assignments.keys)) { stmt, id in
+            self.bindText(stmt, 2, assignments[id] ?? "")
+            sqlite3_bind_int64(stmt, 3, now)
+        }
+    }
+
+    /// Assigns `custodian` to every email matching a NON-TEXT query.
+    @discardableResult
+    func custodiansAssign(_ custodian: String, query: EmailQuery) throws -> Int {
+        precondition(query.text?.isEmpty ?? true, "text scopes must be resolved to ids first")
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            INSERT INTO custodian_assignments(email_id, custodian, assigned_at)
+            SELECT e.id, ?, ? FROM emails e WHERE \(whereSQL)
+            ON CONFLICT(email_id) DO UPDATE SET custodian = excluded.custodian, assigned_at = excluded.assigned_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, custodian)
+        sqlite3_bind_int64(stmt, 2, Int64(Date().timeIntervalSince1970))
+        _ = bindQueryValues(stmt, binds, startingAt: 3)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return Int(sqlite3_changes(db))
+    }
+
+    @discardableResult
+    func custodiansRemove(_ ids: [UUID]) throws -> Int {
+        let db = try ensureDB()
+        return try perID(db, "DELETE FROM custodian_assignments WHERE email_id = ?;", ids)
+    }
+
+    func allCustodianAssignments() throws -> [UUID: String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, custodian FROM custodian_assignments;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [UUID: String] = [:]
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        return out
+    }
+
+    struct CustodianTotals: Sendable, Equatable {
+        let custodian: String
+        let emails: Int
+        let held: Int
+        let firstDate: Date?
+        let lastDate: Date?
+    }
+
+    /// Per-custodian totals for the whole archive in one grouped query.
+    func custodianTotals() throws -> [CustodianTotals] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT c.custodian, COUNT(*), COUNT(h.email_id), MIN(e.date), MAX(e.date)
+            FROM custodian_assignments c
+            JOIN emails e ON e.id = c.email_id
+            LEFT JOIN legal_holds h ON h.email_id = c.email_id
+            GROUP BY c.custodian ORDER BY c.custodian;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [CustodianTotals] = []
+        while try stepRow(stmt, db) {
+            let first = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3)))
+            let last = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4)))
+            out.append(CustodianTotals(custodian: columnText(stmt, 0), emails: Int(sqlite3_column_int64(stmt, 1)),
+                                       held: Int(sqlite3_column_int64(stmt, 2)), firstDate: first, lastDate: last))
+        }
+        return out
+    }
+
+    /// Emails in the archive with no custodian.
+    func unassignedCustodianCount() throws -> Int {
+        try scalarInt(try ensureDB(), """
+            SELECT COUNT(*) FROM emails e WHERE NOT EXISTS
+              (SELECT 1 FROM custodian_assignments c WHERE c.email_id = e.id);
+        """)
+    }
+
+    // MARK: F4 — custody events and review coding
+
+    func custodyEventsAppend(_ events: [(id: String, emailID: UUID?, at: Date, payload: Data)]) throws {
+        guard !events.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, "INSERT OR IGNORE INTO custody_events(event_id, email_id, at, payload) VALUES (?,?,?,?);")
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for e in events {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, e.id)
+                bindTextOrNull(stmt, 2, e.emailID?.uuidString)
+                sqlite3_bind_int64(stmt, 3, Int64(e.at.timeIntervalSince1970))
+                bindBlob(stmt, 4, e.payload)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func custodyEventCount() throws -> Int { try scalarInt(try ensureDB(), "SELECT COUNT(*) FROM custody_events;") }
+
+    func custodyEventPayloads(emailID: UUID? = nil) throws -> [Data] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, emailID == nil
+            ? "SELECT payload FROM custody_events ORDER BY at, event_id;"
+            : "SELECT payload FROM custody_events WHERE email_id = ? ORDER BY at, event_id;")
+        defer { sqlite3_finalize(stmt) }
+        if let emailID { bindText(stmt, 1, emailID.uuidString) }
+        var out: [Data] = []
+        while try stepRow(stmt, db) { if let d = columnBlobData(stmt, 0) { out.append(d) } }
+        return out
+    }
+
+    func reviewCodingSet(workspace: String, field: String, values: [UUID: String?]) throws {
+        guard !values.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let upsert = try prepare(db, """
+            INSERT INTO review_coding(workspace, email_id, field, value, updated_at) VALUES (?,?,?,?,?)
+            ON CONFLICT(workspace, email_id, field) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+        """)
+        let remove = try prepare(db, "DELETE FROM review_coding WHERE workspace = ? AND email_id = ? AND field = ?;")
+        defer { sqlite3_finalize(upsert); sqlite3_finalize(remove) }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for (id, value) in values {
+                let stmt = value == nil ? remove : upsert
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, workspace)
+                bindText(stmt, 2, id.uuidString)
+                bindText(stmt, 3, field)
+                if let value {
+                    bindText(stmt, 4, value)
+                    sqlite3_bind_int64(stmt, 5, now)
+                }
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func reviewCoding(workspace: String, field: String) throws -> [UUID: String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, value FROM review_coding WHERE workspace = ? AND field = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, workspace)
+        bindText(stmt, 2, field)
+        var out: [UUID: String] = [:]
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        return out
+    }
+
+    /// value → count for one coding field (Legal Review statistics, L14).
+    func reviewCodingCounts(workspace: String, field: String) throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT r.value, COUNT(*) FROM review_coding r JOIN emails e ON e.id = r.email_id
+            WHERE r.workspace = ? AND r.field = ? GROUP BY r.value;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, workspace)
+        bindText(stmt, 2, field)
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    struct LegalStateCounts: Sendable, Equatable {
+        let holds: Int, seals: Int, custodians: Int, custodyEvents: Int, codings: Int
+    }
+
+    func legalStateCounts() throws -> LegalStateCounts {
+        let db = try ensureDB()
+        return LegalStateCounts(
+            holds: try scalarInt(db, "SELECT COUNT(*) FROM legal_holds;"),
+            seals: try scalarInt(db, "SELECT COUNT(*) FROM evidence_seals;"),
+            custodians: try scalarInt(db, "SELECT COUNT(*) FROM custodian_assignments;"),
+            custodyEvents: try scalarInt(db, "SELECT COUNT(*) FROM custody_events;"),
+            codings: try scalarInt(db, "SELECT COUNT(*) FROM review_coding;"))
+    }
+
+    // MARK: F4 — review workspaces (Legal Review, Journalist)
+
+    /// Created on first use (additive; no schema bump needed).
+    private func ensureWorkspaceTable(_ db: OpaquePointer) throws {
+        try exec(db, """
+            CREATE TABLE IF NOT EXISTS workspace_snapshots (
+                name     TEXT PRIMARY KEY,
+                json     BLOB NOT NULL,
+                saved_at INTEGER NOT NULL
+            );
+        """)
+    }
+
+    /// Stores a workspace's whole snapshot (the second copy of its file).
+    func workspaceSave(name: String, json: Data) throws {
+        let db = try ensureDB()
+        try ensureWorkspaceTable(db)
+        let stmt = try prepare(db, "INSERT OR REPLACE INTO workspace_snapshots(name, json, saved_at) VALUES (?,?,?);")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, name)
+        bindBlob(stmt, 2, json)
+        sqlite3_bind_int64(stmt, 3, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func workspaceLoad(name: String) throws -> Data? {
+        let db = try ensureDB()
+        try ensureWorkspaceTable(db)
+        let stmt = try prepare(db, "SELECT json FROM workspace_snapshots WHERE name = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, name)
+        return try stepRow(stmt, db) ? columnBlobData(stmt, 0) : nil
+    }
+
+    /// Makes `review_coding(workspace, field)` exactly `values` (rows not in
+    /// `values` are removed) — per-email coding queryable across the archive.
+    func reviewCodingReplace(workspace: String, field: String, values: [UUID: String]) throws {
+        let current = try reviewCoding(workspace: workspace, field: field)
+        var change: [UUID: String?] = [:]
+        for (id, value) in values where current[id] != value { change[id] = value }
+        for id in current.keys where values[id] == nil { change[id] = .some(nil) }
+        if !change.isEmpty { try reviewCodingSet(workspace: workspace, field: field, values: change) }
+    }
+
+    // MARK: F5 — fingerprint tree
+
+    /// Month bucket (yyyymm, UTC) for an epoch second.
+    nonisolated static func fingerprintBucket(epoch: Int64) -> Int {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        let c = cal.dateComponents([.year, .month], from: Date(timeIntervalSince1970: Double(epoch)))
+        return (c.year ?? 1970) * 100 + (c.month ?? 1)
+    }
+
+    private static func hex(_ digest: SHA256.Digest) -> String {
+        digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The leaf for one stored email. Raw MIME is the evidence: the leaf is
+    /// SHA-256 of the raw bytes — identical whether they are inline or in the
+    /// blob tier (whose digest IS that SHA-256). Rows stored without raw MIME
+    /// hash their length-prefixed plain/html/headers instead ("p:" prefix).
+    private func fingerprintLeaf(raw: Data?, digest: String?, plain: Data?, html: Data?, headers: Data?) -> String {
+        if let digest, !digest.isEmpty { return digest }
+        if let raw, !raw.isEmpty { return Self.hex(SHA256.hash(data: raw)) }
+        var h = SHA256()
+        for part in [plain, html, headers] {
+            let d = part ?? Data()
+            var len = UInt64(d.count).bigEndian
+            h.update(data: Data(bytes: &len, count: 8))
+            h.update(data: d)
+        }
+        return "p:" + Self.hex(h.finalize())
+    }
+
+    /// Computes leaves for up to `limit` emails that have none (incremental:
+    /// call until it returns 0). Returns how many leaves were written.
+    @discardableResult
+    func fingerprintBuildMissing(limit: Int = 1_000) throws -> Int {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, e.date, b.raw, b.raw_blob_digest, b.plain, b.html, b.headers_json
+            FROM emails e JOIN email_bodies b ON b.id = e.id
+            WHERE NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.email_id = e.id)
+            LIMIT ?;
+        """)
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var rows: [(UUID, String, Int)] = []
+        do {
+            defer { sqlite3_finalize(stmt) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                let leaf = fingerprintLeaf(raw: columnBlobData(stmt, 2), digest: columnTextOptional(stmt, 3),
+                                           plain: columnBlobData(stmt, 4), html: columnBlobData(stmt, 5),
+                                           headers: columnBlobData(stmt, 6))
+                rows.append((id, leaf, Self.fingerprintBucket(epoch: sqlite3_column_int64(stmt, 1))))
+            }
+        }
+        guard !rows.isEmpty else { return 0 }
+        let ins = try prepare(db, "INSERT OR REPLACE INTO fingerprints(email_id, leaf, bucket, built_at) VALUES (?,?,?,?);")
+        defer { sqlite3_finalize(ins) }
+        let now = Int64(Date().timeIntervalSince1970)
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for (id, leaf, bucket) in rows {
+                sqlite3_reset(ins); sqlite3_clear_bindings(ins)
+                bindText(ins, 1, id.uuidString)
+                bindText(ins, 2, leaf)
+                sqlite3_bind_int64(ins, 3, Int64(bucket))
+                sqlite3_bind_int64(ins, 4, now)
+                guard sqlite3_step(ins) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            // Buckets that gained leaves must be recomputed.
+            let buckets = Set(rows.map(\.2))
+            try exec(db, "DELETE FROM fingerprint_buckets WHERE bucket IN (\(buckets.map(String.init).joined(separator: ",")));")
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+        return rows.count
+    }
+
+    /// Emails still without a leaf.
+    func fingerprintMissingCount() throws -> Int {
+        try scalarInt(try ensureDB(), """
+            SELECT COUNT(*) FROM emails e WHERE NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.email_id = e.id);
+        """)
+    }
+
+    /// Merkle root over hex leaves (pairs hashed as "L|R", odd one promoted).
+    nonisolated static func merkleRoot(_ leaves: [String]) -> String {
+        guard !leaves.isEmpty else { return hexOfEmpty }
+        var level = leaves
+        while level.count > 1 {
+            var next: [String] = []
+            next.reserveCapacity((level.count + 1) / 2)
+            var i = 0
+            while i < level.count {
+                if i + 1 < level.count {
+                    next.append(SHA256.hash(data: Data((level[i] + "|" + level[i + 1]).utf8))
+                        .map { String(format: "%02x", $0) }.joined())
+                } else {
+                    next.append(level[i])
+                }
+                i += 2
+            }
+            level = next
+        }
+        return level[0]
+    }
+
+    private nonisolated static var hexOfEmpty: String {
+        SHA256.hash(data: Data()).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Recomputes every bucket root that is missing (after new leaves) and
+    /// drops leaves of deleted emails. Leaves inside a bucket are ordered by
+    /// (date, id), so the root is reproducible.
+    func fingerprintRefreshBuckets() throws {
+        let db = try ensureDB()
+        // Leaves whose email is gone (whatever removed it): their months'
+        // roots are stale too.
+        try exec(db, """
+            DELETE FROM fingerprint_buckets WHERE bucket IN (SELECT f.bucket FROM fingerprints f
+                WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.id = f.email_id));
+        """)
+        try exec(db, "DELETE FROM fingerprints WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.id = fingerprints.email_id);")
+        let stale = try prepare(db, """
+            SELECT DISTINCT f.bucket FROM fingerprints f
+            WHERE NOT EXISTS (SELECT 1 FROM fingerprint_buckets b WHERE b.bucket = f.bucket);
+        """)
+        var buckets: [Int] = []
+        do {
+            defer { sqlite3_finalize(stale) }
+            while try stepRow(stale, db) { buckets.append(Int(sqlite3_column_int64(stale, 0))) }
+        }
+        // Buckets whose leaves were all deleted.
+        try exec(db, "DELETE FROM fingerprint_buckets WHERE NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.bucket = fingerprint_buckets.bucket);")
+        let now = Int64(Date().timeIntervalSince1970)
+        for bucket in buckets {
+            let leaves = try fingerprintLeaves(bucket: bucket).map(\.leaf)
+            try exec(db, """
+                INSERT OR REPLACE INTO fingerprint_buckets(bucket, root, leaves, built_at)
+                VALUES (\(bucket), '\(Self.merkleRoot(leaves))', \(leaves.count), \(now));
+            """)
+        }
+    }
+
+    /// Leaves of one bucket in tree order.
+    func fingerprintLeaves(bucket: Int) throws -> [(id: UUID, leaf: String)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.leaf FROM fingerprints f JOIN emails e ON e.id = f.email_id
+            WHERE f.bucket = ? ORDER BY e.date, e.id;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(bucket))
+        var out: [(UUID, String)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append((id, columnText(stmt, 1))) } }
+        return out.map { (id: $0.0, leaf: $0.1) }
+    }
+
+    struct FingerprintTree: Sendable, Equatable {
+        let root: String
+        let leaves: Int
+        let buckets: [(bucket: Int, root: String, leaves: Int)]
+        static func == (a: Self, b: Self) -> Bool {
+            a.root == b.root && a.leaves == b.leaves && a.buckets.map(\.root) == b.buckets.map(\.root)
+        }
+    }
+
+    /// The archive root over all bucket roots (ascending by month).
+    func fingerprintTree() throws -> FingerprintTree {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT bucket, root, leaves FROM fingerprint_buckets ORDER BY bucket;")
+        defer { sqlite3_finalize(stmt) }
+        var buckets: [(Int, String, Int)] = []
+        while try stepRow(stmt, db) {
+            buckets.append((Int(sqlite3_column_int64(stmt, 0)), columnText(stmt, 1), Int(sqlite3_column_int64(stmt, 2))))
+        }
+        return FingerprintTree(root: Self.merkleRoot(buckets.map(\.1)),
+                               leaves: buckets.reduce(0) { $0 + $1.2 },
+                               buckets: buckets.map { (bucket: $0.0, root: $0.1, leaves: $0.2) })
+    }
+
+    enum FingerprintMismatch: Sendable, Equatable {
+        case changed(UUID)        // content no longer matches its leaf
+        case unreadable(UUID)     // blob missing or unreadable
+    }
+
+    /// Re-hashes the stored content of `ids` against their leaves and returns
+    /// exactly the emails that changed (F5 pinpoint). Blob-tier rows are read
+    /// and their digest re-verified.
+    func fingerprintVerify(ids: [UUID]) throws -> [FingerprintMismatch] {
+        guard !ids.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out: [FingerprintMismatch] = []
+        let blobs = blobStore
+        for chunk in ids.chunked(into: 200) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT f.email_id, f.leaf, b.raw, b.raw_blob_digest, b.raw_blob_length, b.plain, b.html, b.headers_json
+                FROM fingerprints f JOIN email_bodies b ON b.id = f.email_id
+                WHERE f.email_id IN (\(marks));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                let expected = columnText(stmt, 1)
+                if let digest = columnTextOptional(stmt, 3), !digest.isEmpty {
+                    // The blob must still exist and still hash to its digest,
+                    // and the digest must still be the leaf.
+                    let ref = BlobReference(digest: digest, length: sqlite3_column_int64(stmt, 4))
+                    do { _ = try blobs.read(ref, verify: true) } catch { out.append(.unreadable(id)); continue }
+                    if digest != expected { out.append(.changed(id)) }
+                    continue
+                }
+                let actual = fingerprintLeaf(raw: columnBlobData(stmt, 2), digest: nil,
+                                             plain: columnBlobData(stmt, 5), html: columnBlobData(stmt, 6),
+                                             headers: columnBlobData(stmt, 7))
+                if actual != expected { out.append(.changed(id)) }
+            }
+        }
+        return out
+    }
+
+    /// Ids with a leaf, in tree order, one page at a time (for verify jobs).
+    func fingerprintIDPage(afterBucket: Int?, afterID: UUID?, limit: Int) throws -> [(id: UUID, bucket: Int)] {
+        let db = try ensureDB()
+        let hasCursor = afterBucket != nil && afterID != nil
+        let stmt = try prepare(db, """
+            SELECT email_id, bucket FROM fingerprints
+            \(hasCursor ? "WHERE (bucket > ? OR (bucket = ? AND email_id > ?))" : "")
+            ORDER BY bucket, email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if hasCursor, let b = afterBucket, let a = afterID {
+            sqlite3_bind_int64(stmt, idx, Int64(b)); idx += 1
+            sqlite3_bind_int64(stmt, idx, Int64(b)); idx += 1
+            bindText(stmt, idx, a.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Int)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append((id, Int(sqlite3_column_int64(stmt, 1)))) } }
+        return out.map { (id: $0.0, bucket: $0.1) }
+    }
+
+    // MARK: F6 — feature index
+
+    struct FeatureRecord: Sendable, Equatable {
+        var emailID: UUID
+        var version: Int
+        var piiFlags: Int = 0
+        var privilege: Int = 0
+        var language: String?
+        var spf: String?
+        var dkim: String?
+        var dmarc: String?
+        var threatScore: Double?
+        var mih: String?
+        var iocs: [(kind: String, value: String)] = []
+        var minhashBands: [Int64] = []
+        var embedding: Data?
+        /// §3-F6: named entities (kind = "person" / "organization" / "place").
+        var entities: [(kind: String, value: String)] = []
+
+        static func == (a: Self, b: Self) -> Bool {
+            a.emailID == b.emailID && a.version == b.version && a.piiFlags == b.piiFlags
+                && a.privilege == b.privilege && a.language == b.language && a.spf == b.spf
+                && a.dkim == b.dkim && a.dmarc == b.dmarc && a.threatScore == b.threatScore && a.mih == b.mih
+                && a.iocs.map { $0.kind + "\u{1F}" + $0.value } == b.iocs.map { $0.kind + "\u{1F}" + $0.value }
+                && a.minhashBands == b.minhashBands && a.embedding == b.embedding
+                && a.entities.map { $0.kind + "\u{1F}" + $0.value } == b.entities.map { $0.kind + "\u{1F}" + $0.value }
+        }
+    }
+
+    /// §3-F6: named entities per email (created on first use; additive).
+    private func ensureEntityTable(_ db: OpaquePointer) throws {
+        try exec(db, """
+            CREATE TABLE IF NOT EXISTS entity_rows(
+                email_id TEXT NOT NULL,
+                kind     TEXT NOT NULL,
+                value    TEXT NOT NULL
+            );
+        """)
+        try exec(db, "CREATE INDEX IF NOT EXISTS idx_entity_kind_value ON entity_rows(kind, value);")
+        try exec(db, "CREATE INDEX IF NOT EXISTS idx_entity_email ON entity_rows(email_id);")
+    }
+
+    /// The most frequent entities of `kind` across the archive, with the
+    /// number of emails each appears in and the number of distinct values.
+    func entityTop(kind: String, limit: Int, offset: Int = 0) throws -> (rows: [(value: String, emails: Int)], distinct: Int) {
+        let db = try ensureDB()
+        try ensureEntityTable(db)
+        let stmt = try prepare(db, """
+            SELECT value, COUNT(DISTINCT email_id) AS n FROM entity_rows WHERE kind = ?
+            GROUP BY value ORDER BY n DESC, value LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, kind)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var rows: [(String, Int)] = []
+        while try stepRow(stmt, db) { rows.append((columnText(stmt, 0), Int(sqlite3_column_int64(stmt, 1)))) }
+        let count = try prepare(db, "SELECT COUNT(DISTINCT value) FROM entity_rows WHERE kind = ?;")
+        defer { sqlite3_finalize(count) }
+        bindText(count, 1, kind)
+        let distinct = try stepRow(count, db) ? Int(sqlite3_column_int64(count, 0)) : 0
+        return (rows.map { (value: $0.0, emails: $0.1) }, distinct)
+    }
+
+    /// Writes feature rows, replacing each email's IOC rows and MinHash bands.
+    func featuresUpsert(_ records: [FeatureRecord]) throws {
+        guard !records.isEmpty else { return }
+        let db = try ensureDB()
+        try ensureEntityTable(db)
+        let delEntity = try prepare(db, "DELETE FROM entity_rows WHERE email_id = ?;")
+        let insEntity = try prepare(db, "INSERT INTO entity_rows(email_id, kind, value) VALUES (?,?,?);")
+        defer { sqlite3_finalize(delEntity); sqlite3_finalize(insEntity) }
+        let up = try prepare(db, """
+            INSERT OR REPLACE INTO features(email_id, feature_version, pii_flags, privilege, language,
+                spf, dkim, dmarc, threat_score, mih, ioc_count, embedding, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);
+        """)
+        let delIOC = try prepare(db, "DELETE FROM ioc_rows WHERE email_id = ?;")
+        let insIOC = try prepare(db, "INSERT INTO ioc_rows(email_id, kind, value) VALUES (?,?,?);")
+        let delBand = try prepare(db, "DELETE FROM minhash_bands WHERE email_id = ?;")
+        let insBand = try prepare(db, "INSERT INTO minhash_bands(band, hash, email_id) VALUES (?,?,?);")
+        defer { [up, delIOC, insIOC, delBand, insBand].forEach { sqlite3_finalize($0) } }
+        let now = Int64(Date().timeIntervalSince1970)
+        func run(_ s: OpaquePointer?) throws {
+            guard sqlite3_step(s) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for r in records {
+                let id = r.emailID.uuidString
+                sqlite3_reset(up); sqlite3_clear_bindings(up)
+                bindText(up, 1, id)
+                sqlite3_bind_int64(up, 2, Int64(r.version))
+                sqlite3_bind_int64(up, 3, Int64(r.piiFlags))
+                sqlite3_bind_int64(up, 4, Int64(r.privilege))
+                bindTextOrNull(up, 5, r.language)
+                bindTextOrNull(up, 6, r.spf)
+                bindTextOrNull(up, 7, r.dkim)
+                bindTextOrNull(up, 8, r.dmarc)
+                if let t = r.threatScore { sqlite3_bind_double(up, 9, t) } else { sqlite3_bind_null(up, 9) }
+                bindTextOrNull(up, 10, r.mih)
+                sqlite3_bind_int64(up, 11, Int64(r.iocs.count))
+                bindBlob(up, 12, r.embedding)
+                sqlite3_bind_int64(up, 13, now)
+                try run(up)
+
+                sqlite3_reset(delIOC); sqlite3_clear_bindings(delIOC)
+                bindText(delIOC, 1, id); try run(delIOC)
+                for ioc in r.iocs {
+                    sqlite3_reset(insIOC); sqlite3_clear_bindings(insIOC)
+                    bindText(insIOC, 1, id); bindText(insIOC, 2, ioc.kind); bindText(insIOC, 3, ioc.value)
+                    try run(insIOC)
+                }
+                sqlite3_reset(delEntity); sqlite3_clear_bindings(delEntity)
+                bindText(delEntity, 1, id); try run(delEntity)
+                for entity in r.entities {
+                    sqlite3_reset(insEntity); sqlite3_clear_bindings(insEntity)
+                    bindText(insEntity, 1, id); bindText(insEntity, 2, entity.kind); bindText(insEntity, 3, entity.value)
+                    try run(insEntity)
+                }
+                sqlite3_reset(delBand); sqlite3_clear_bindings(delBand)
+                bindText(delBand, 1, id); try run(delBand)
+                for (band, hash) in r.minhashBands.enumerated() {
+                    sqlite3_reset(insBand); sqlite3_clear_bindings(insBand)
+                    sqlite3_bind_int64(insBand, 1, Int64(band))
+                    sqlite3_bind_int64(insBand, 2, hash)
+                    bindText(insBand, 3, id)
+                    try run(insBand)
+                }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Emails whose features are missing or older than `version`.
+    func featureStaleIDs(version: Int, limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id FROM emails e LEFT JOIN features f ON f.email_id = e.id
+            WHERE f.email_id IS NULL OR f.feature_version < ?
+            ORDER BY e.date DESC, e.id DESC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(version))
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func featureCoverage(version: Int) throws -> (indexed: Int, total: Int) {
+        let db = try ensureDB()
+        let total = try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+        let indexed = try scalarInt(db, """
+            SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE f.feature_version >= \(version);
+        """)
+        return (indexed, total)
+    }
+
+    func featureFetch(ids: [UUID]) throws -> [UUID: FeatureRecord] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: FeatureRecord] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT email_id, feature_version, pii_flags, privilege, language, spf, dkim, dmarc,
+                       threat_score, mih, embedding FROM features WHERE email_id IN (\(marks));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = FeatureRecord(
+                    emailID: id, version: Int(sqlite3_column_int64(stmt, 1)),
+                    piiFlags: Int(sqlite3_column_int64(stmt, 2)), privilege: Int(sqlite3_column_int64(stmt, 3)),
+                    language: columnTextOptional(stmt, 4), spf: columnTextOptional(stmt, 5),
+                    dkim: columnTextOptional(stmt, 6), dmarc: columnTextOptional(stmt, 7),
+                    threatScore: sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 8),
+                    mih: columnTextOptional(stmt, 9), embedding: columnBlobData(stmt, 10))
+            }
+        }
+        return out
+    }
+
+    /// Emails whose PII flags include every bit of `mask` (0 = any PII),
+    /// newest first, one page at a time.
+    func featurePIIPage(mask: Int, offset: Int, limit: Int) throws -> [(id: UUID, flags: Int)] {
+        let db = try ensureDB()
+        let cond = mask == 0 ? "f.pii_flags != 0" : "(f.pii_flags & \(mask)) = \(mask)"
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.pii_flags FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE \(cond) ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [(UUID, Int)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append((id, Int(sqlite3_column_int64(stmt, 1)))) } }
+        return out.map { (id: $0.0, flags: $0.1) }
+    }
+
+    /// Count of emails per PII bit (bits 0…15).
+    func featurePIIBitCounts() throws -> [Int: Int] {
+        let db = try ensureDB()
+        var out: [Int: Int] = [:]
+        for bit in 0..<16 {
+            let n = try scalarInt(db, """
+                SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE (f.pii_flags & \(1 << bit)) != 0;
+            """)
+            if n > 0 { out[bit] = n }
+        }
+        return out
+    }
+
+    func featurePrivilegedCount(minimum: Int = 1) throws -> Int {
+        try scalarInt(try ensureDB(), """
+            SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE f.privilege >= \(minimum);
+        """)
+    }
+
+    func featurePrivilegedIDs(minimum: Int = 1) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT f.email_id FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.privilege >= ? ORDER BY e.date, e.id;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(minimum))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    /// Distinct indicator values of one kind with how many emails carry
+    /// each, highest first, plus the total distinct (L16).
+    func iocTop(kind: String, limit: Int, offset: Int = 0) throws -> (rows: [(value: String, emails: Int)], distinct: Int) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT i.value, COUNT(DISTINCT i.email_id) AS n FROM ioc_rows i JOIN emails e ON e.id = i.email_id
+            WHERE i.kind = ? GROUP BY i.value ORDER BY n DESC, i.value LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, kind)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var rows: [(String, Int)] = []
+        while try stepRow(stmt, db) { rows.append((columnText(stmt, 0), Int(sqlite3_column_int64(stmt, 1)))) }
+        let cstmt = try prepare(db, "SELECT COUNT(DISTINCT value) FROM ioc_rows WHERE kind = ?;")
+        defer { sqlite3_finalize(cstmt) }
+        bindText(cstmt, 1, kind)
+        let distinct = try stepRow(cstmt, db) ? Int(sqlite3_column_int64(cstmt, 0)) : 0
+        return (rows.map { (value: $0.0, emails: $0.1) }, distinct)
+    }
+
+    func iocKindCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT kind, COUNT(DISTINCT value) FROM ioc_rows GROUP BY kind;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// Emails carrying an indicator value (any kind).
+    func iocEmails(value: String, limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT email_id FROM ioc_rows WHERE value = ? LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, value)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    /// Candidate near-duplicate pairs: emails sharing at least one MinHash
+    /// band bucket (LSH). The caller verifies each pair with exact Jaccard.
+    /// Keyset-paged on (first, second) so no pair is skipped or repeated.
+    func minhashCandidatePairs(after: (UUID, UUID)?, limit: Int) throws -> [(UUID, UUID)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT DISTINCT a.email_id, b.email_id FROM minhash_bands a
+            JOIN minhash_bands b ON a.band = b.band AND a.hash = b.hash AND a.email_id < b.email_id
+            \(after == nil ? "" : "WHERE (a.email_id > ? OR (a.email_id = ? AND b.email_id > ?))")
+            ORDER BY a.email_id, b.email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let after {
+            bindText(stmt, idx, after.0.uuidString); idx += 1
+            bindText(stmt, idx, after.0.uuidString); idx += 1
+            bindText(stmt, idx, after.1.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, UUID)] = []
+        while try stepRow(stmt, db) {
+            if let a = columnUUID(stmt, 0), let b = columnUUID(stmt, 1) { out.append((a, b)) }
+        }
+        return out
+    }
+
+    /// Exact-duplicate groups by EDRM MIH, largest first (L19).
+    func mihDuplicateGroups(limit: Int, offset: Int) throws -> (groups: [(mih: String, ids: [UUID])], totalGroups: Int) {
+        let db = try ensureDB()
+        let total = try scalarInt(db, """
+            SELECT COUNT(*) FROM (SELECT f.mih FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.mih IS NOT NULL GROUP BY f.mih HAVING COUNT(*) > 1);
+        """)
+        let stmt = try prepare(db, """
+            SELECT f.mih, GROUP_CONCAT(f.email_id) FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.mih IS NOT NULL GROUP BY f.mih HAVING COUNT(*) > 1
+            ORDER BY COUNT(*) DESC, f.mih LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var groups: [(String, [UUID])] = []
+        while try stepRow(stmt, db) {
+            let ids = columnText(stmt, 1).split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+            groups.append((columnText(stmt, 0), ids))
+        }
+        return (groups.map { (mih: $0.0, ids: $0.1) }, total)
+    }
+
+    /// Authentication result counts (SPF/DKIM/DMARC) for IT Admin (A9).
+    func authResultCounts() throws -> [String: [String: Int]] {
+        let db = try ensureDB()
+        var out: [String: [String: Int]] = [:]
+        for col in ["spf", "dkim", "dmarc"] {
+            let stmt = try prepare(db, """
+                SELECT COALESCE(f.\(col), 'none'), COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id GROUP BY 1;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            var m: [String: Int] = [:]
+            while try stepRow(stmt, db) { m[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+            out[col] = m
+        }
+        return out
+    }
+
+    /// Highest threat scores (A9), with the number of scored emails.
+    func topThreats(limit: Int) throws -> (rows: [(id: UUID, score: Double)], scored: Int) {
+        let db = try ensureDB()
+        let scored = try scalarInt(db, "SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE f.threat_score IS NOT NULL;")
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.threat_score FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.threat_score IS NOT NULL ORDER BY f.threat_score DESC, f.email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var rows: [(UUID, Double)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { rows.append((id, sqlite3_column_double(stmt, 1))) } }
+        return (rows.map { (id: $0.0, score: $0.1) }, scored)
+    }
+
+    /// Language → count (A11).
+    func languageCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT COALESCE(f.language, 'und'), COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id GROUP BY 1;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// Embeddings page for semantic search (Q2), keyed by email id.
+    func embeddingPage(afterID: UUID?, limit: Int) throws -> [(id: UUID, vector: Data)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.embedding FROM features f
+            WHERE f.embedding IS NOT NULL \(afterID == nil ? "" : "AND f.email_id > ?")
+            ORDER BY f.email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let afterID { bindText(stmt, idx, afterID.uuidString); idx += 1 }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Data)] = []
+        while try stepRow(stmt, db) {
+            if let id = columnUUID(stmt, 0), let d = columnBlobData(stmt, 1) { out.append((id, d)) }
+        }
+        return out.map { (id: $0.0, vector: $0.1) }
+    }
+
+    // MARK: Grouped archive aggregates (F3 in SQL; A7/A8/A12)
+
+    /// Subjects grouped (normalised: Re:/Fwd: stripped, lowercased), largest
+    /// first, with the number of distinct subjects.
+    func subjectGroups(query: EmailQuery = .all, limit: Int, offset: Int) throws -> (rows: [(subject: String, count: Int)], distinct: Int) {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let norm = """
+            LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(e.subject,
+              'RE:',''),'Re:',''),'re:',''),'FW:',''),'Fwd:',''),'Fw:','')))
+            """
+        let dstmt = try prepare(db, "SELECT COUNT(DISTINCT \(norm)) FROM emails e WHERE \(whereSQL);")
+        defer { sqlite3_finalize(dstmt) }
+        _ = bindQueryValues(dstmt, binds, startingAt: 1)
+        let distinct = try stepRow(dstmt, db) ? Int(sqlite3_column_int64(dstmt, 0)) : 0
+        let stmt = try prepare(db, """
+            SELECT \(norm) AS s, COUNT(*) AS n FROM emails e WHERE \(whereSQL)
+            GROUP BY s ORDER BY n DESC, s LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        let next = bindQueryValues(stmt, binds, startingAt: 1)
+        sqlite3_bind_int(stmt, next, Int32(limit))
+        sqlite3_bind_int(stmt, next + 1, Int32(offset))
+        var rows: [(String, Int)] = []
+        while try stepRow(stmt, db) { rows.append((columnText(stmt, 0), Int(sqlite3_column_int64(stmt, 1)))) }
+        return (rows.map { (subject: $0.0, count: $0.1) }, distinct)
+    }
+
+    struct AttachmentRow: Sendable, Equatable {
+        let rowID: Int64
+        let emailID: UUID
+        let position: Int
+        let filename: String
+        let mimeType: String
+        let sizeBytes: Int
+        let emailDate: Date
+        let emailSubject: String
+    }
+
+    /// Every attachment in the archive, keyset-paged by row id (§3-A7),
+    /// optionally filtered by file name / type (contains, case-insensitive).
+    func attachmentRowsPage(after rowID: Int64?, nameContains: String?, limit: Int) throws -> [AttachmentRow] {
+        let db = try ensureDB()
+        var conditions = ["1=1"]
+        if rowID != nil { conditions.append("a.attachment_id > ?") }
+        let filter = nameContains?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if !filter.isEmpty { conditions.append("(instr(lower(a.filename), ?) > 0 OR instr(lower(a.mime_type), ?) > 0)") }
+        let stmt = try prepare(db, """
+            SELECT a.attachment_id, a.email_id, a.position, a.filename, a.mime_type, a.size_bytes, e.date, e.subject
+            FROM attachments a JOIN emails e ON e.id = a.email_id
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY a.attachment_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let rowID { sqlite3_bind_int64(stmt, idx, rowID); idx += 1 }
+        if !filter.isEmpty { bindText(stmt, idx, filter); idx += 1; bindText(stmt, idx, filter); idx += 1 }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [AttachmentRow] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 1) else { continue }
+            out.append(AttachmentRow(rowID: sqlite3_column_int64(stmt, 0), emailID: id,
+                                     position: Int(sqlite3_column_int64(stmt, 2)), filename: columnText(stmt, 3),
+                                     mimeType: columnText(stmt, 4), sizeBytes: Int(sqlite3_column_int64(stmt, 5)),
+                                     emailDate: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 6))),
+                                     emailSubject: columnText(stmt, 7)))
+        }
+        return out
+    }
+
+    /// Exact count and total bytes for `attachmentRowsPage` with the same filter.
+    func attachmentRowsTotals(nameContains: String?) throws -> (count: Int, bytes: Int64) {
+        let db = try ensureDB()
+        let filter = nameContains?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let stmt = try prepare(db, """
+            SELECT COUNT(*), COALESCE(SUM(a.size_bytes), 0) FROM attachments a JOIN emails e ON e.id = a.email_id
+            \(filter.isEmpty ? "" : "WHERE instr(lower(a.filename), ?) > 0 OR instr(lower(a.mime_type), ?) > 0");
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if !filter.isEmpty { bindText(stmt, 1, filter); bindText(stmt, 2, filter) }
+        guard try stepRow(stmt, db) else { return (0, 0) }
+        return (Int(sqlite3_column_int64(stmt, 0)), sqlite3_column_int64(stmt, 1))
+    }
+
+    struct ArchiveOverview: Sendable, Equatable {
+        let emails: Int
+        let attachments: Int
+        let distinctSenders: Int
+        let firstDate: Date?
+        let lastDate: Date?
+    }
+
+    /// Whole-scope overview figures in two aggregate queries (§3-A11).
+    func archiveOverview(query: EmailQuery = .all) throws -> ArchiveOverview {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            SELECT COUNT(*), COUNT(DISTINCT lower(e.from_addr)),
+                   MIN(CASE WHEN e.date > 0 THEN e.date END), MAX(CASE WHEN e.date > 0 THEN e.date END)
+            FROM emails e WHERE \(whereSQL);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return ArchiveOverview(emails: 0, attachments: 0, distinctSenders: 0, firstDate: nil, lastDate: nil) }
+        let emails = Int(sqlite3_column_int64(stmt, 0))
+        let senders = Int(sqlite3_column_int64(stmt, 1))
+        let first = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2)))
+        let last = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3)))
+        let astmt = try prepare(db, "SELECT COUNT(*) FROM attachments a JOIN emails e ON e.id = a.email_id WHERE \(whereSQL);")
+        defer { sqlite3_finalize(astmt) }
+        _ = bindQueryValues(astmt, binds, startingAt: 1)
+        let attachments = try stepRow(astmt, db) ? Int(sqlite3_column_int64(astmt, 0)) : 0
+        return ArchiveOverview(emails: emails, attachments: attachments, distinctSenders: senders, firstDate: first, lastDate: last)
+    }
+
+    enum GroupField: String, Sendable { case sender, domain }
+
+    /// Counts grouped by sender address or sender domain over a scope, paged,
+    /// with the number of distinct values (§3-I1 tools, §3-H5 rollups).
+    func groupedCounts(query: EmailQuery = .all, by field: GroupField, limit: Int, offset: Int = 0)
+        throws -> (rows: [AggregateBucket], distinct: Int) {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let key: String
+        switch field {
+        case .sender: key = "lower(e.from_addr)"
+        case .domain: key = "lower(substr(e.from_addr, instr(e.from_addr, '@') + 1))"
+        }
+        let dstmt = try prepare(db, "SELECT COUNT(DISTINCT \(key)) FROM emails e WHERE \(whereSQL) AND e.from_addr <> '';")
+        defer { sqlite3_finalize(dstmt) }
+        _ = bindQueryValues(dstmt, binds, startingAt: 1)
+        let distinct = try stepRow(dstmt, db) ? Int(sqlite3_column_int64(dstmt, 0)) : 0
+        let stmt = try prepare(db, """
+            SELECT \(key) AS k, COUNT(*) AS c FROM emails e WHERE \(whereSQL) AND e.from_addr <> ''
+            GROUP BY k ORDER BY c DESC, k LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        let next = bindQueryValues(stmt, binds, startingAt: 1)
+        sqlite3_bind_int(stmt, next, Int32(limit))
+        sqlite3_bind_int(stmt, next + 1, Int32(offset))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) { out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1)))) }
+        return (out, distinct)
+    }
+
+    /// §3-E5: the EXACT stored raw MIME bytes of one email (inline column or
+    /// blob file, digest-verified) — for preservation copies. nil when the
+    /// row was stored without raw MIME.
+    func rawBytes(id: UUID) throws -> Data? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT raw, raw_blob_digest, raw_blob_length FROM email_bodies WHERE id = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard try stepRow(stmt, db) else { return nil }
+        if let inline = columnBlobData(stmt, 0), !inline.isEmpty { return inline }
+        guard let digest = columnTextOptional(stmt, 1), !digest.isEmpty else { return nil }
+        return try blobStore.read(BlobReference(digest: digest, length: sqlite3_column_int64(stmt, 2)), verify: true)
+    }
+
+    /// Hour-of-day × weekday activity for the whole archive (UTC), A12.
+    func activityMatrix(query: EmailQuery = .all) throws -> [[Int]] {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            SELECT CAST(strftime('%w', e.date, 'unixepoch') AS INTEGER),
+                   CAST(strftime('%H', e.date, 'unixepoch') AS INTEGER), COUNT(*)
+            FROM emails e WHERE \(whereSQL) GROUP BY 1, 2;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        var m = Array(repeating: Array(repeating: 0, count: 24), count: 7)
+        while try stepRow(stmt, db) {
+            let w = Int(sqlite3_column_int64(stmt, 0)), h = Int(sqlite3_column_int64(stmt, 1))
+            if (0..<7).contains(w), (0..<24).contains(h) { m[w][h] = Int(sqlite3_column_int64(stmt, 2)) }
+        }
+        return m
+    }
+}
+
+enum SQLiteStoreError: LocalizedError {
+    case open(String), exec(String), prepare(String), step(String), schema(String)
+    var errorDescription: String? {
+        switch self {
+        case .open(let m): return "SQLite open failed: \(m)"
+        case .exec(let m): return "SQLite exec failed: \(m)"
+        case .prepare(let m): return "SQLite prepare failed: \(m)"
+        case .step(let m): return "SQLite step failed: \(m)"
+        case .schema(let m): return "SQLite schema error: \(m)"
+        }
+    }
+}

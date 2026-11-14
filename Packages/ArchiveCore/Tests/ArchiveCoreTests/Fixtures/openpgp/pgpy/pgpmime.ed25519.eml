@@ -1,0 +1,29 @@
+From: Ed <ed@example.org>
+To: Bob <bob@example.org>
+Subject: PGP/MIME signed
+Date: Sat, 07 Nov 2026 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/signed; micalg=pgp-sha256;
+ protocol="application/pgp-signature"; boundary="=-sig-boundary-42"
+
+This is an OpenPGP/MIME signed message (RFC 4880 and 3156)
+--=-sig-boundary-42
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+The contract is attached in spirit.
+Caf=C3=A9 meeting at 10.
+
+--=-sig-boundary-42
+Content-Type: application/pgp-signature; name="signature.asc"
+Content-Description: OpenPGP digital signature
+
+-----BEGIN PGP SIGNATURE-----
+
+wnUEABYIAB0FAmrvdC0WIQRzv69I8UNHtdajoqPyVPBpEcAJ7wAKCRDyVPBpEcAJ
+75amAP919mCWrn+eZfremTdaYQiNL/af474sdDAhi3iUEpyWSgD/aLExtRxsUZZA
+FZD/agOFTbgQvmXL40sopC9wkrynxQs=
+=TW+z
+-----END PGP SIGNATURE-----
+
+--=-sig-boundary-42--

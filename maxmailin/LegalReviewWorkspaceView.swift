@@ -1,6 +1,13 @@
+@testable import ArchiveCore
 import SwiftUI
 
 struct LegalReviewWorkspaceView: View {
+    // §3-L9: whole-archive privilege scan when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var v3Scope
+    /// §3-L14: statistics over every coded email and the whole archive.
+    private var v3Stats: Bool { v3Modules?.isOn(.v3LegalReview) ?? false }
+    private var statsTotal: Int { v3Stats ? max(archiveTotal, workingSet.count) : workingSet.count }
     // v2: no injected corpus. Review list is a growable paged full-email window
     // from the store (reaches EVERY email for privilege review); the legal
     // analysis engines + stats + export run over a bounded working set.
@@ -11,6 +18,8 @@ struct LegalReviewWorkspaceView: View {
     @State private var workingSet: [MBOXParser.RawEmail] = []
     @State private var archiveTotal = 0
     @State private var searchHits: [MBOXParser.RawEmail] = []
+    // §3-H4: every search hit, paged (3.0 engine) — ids first, bodies per page.
+    @State private var v3SearchIDs: [UUID] = []
     @State private var selectedFullEmail: MBOXParser.RawEmail?
 
     /// Emails shown in the review list: FTS hits when filtering, else the paged
@@ -109,6 +118,11 @@ struct LegalReviewWorkspaceView: View {
     @State private var isRunningAIScan = false
     @State private var scanResultMessage: String?
     @State private var reviewStartTime: Date = Date()
+    /// Coding is saved to disk (ReviewWorkspaceStore) and restored on open.
+    @State private var legalStateLoaded = false
+    @State private var skipNextPrivilegeMirror = false
+    @State private var legalSaveError: String?
+    @State private var legalExportStatus: String?
 
     // v3: KG + NLP + Anomaly
     @State private var graph = KnowledgeGraph()
@@ -195,15 +209,96 @@ struct LegalReviewWorkspaceView: View {
         .sheet(isPresented: $showPrivilegeLog) { privilegeLogSheet }
         .sheet(isPresented: $showDashboard) { reviewDashboardSheet }
         .sheet(isPresented: $showPDFExport) { pdfPrivilegeReportSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task { await loadInitial() }
         .task { await loadV3Data() }
         .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
         .onChange(of: selectedEmailIDs) { _, ids in Task { await hydrateSelected(ids.first) } }
+        .onChange(of: privilegeAssignments) { old, new in
+            mirrorPrivilegeToEvidenceTags(old: old, new: new)
+            saveLegalState()
+        }
+        .onChange(of: responsivenessAssignments) { _, _ in saveLegalState() }
+        .onChange(of: issueTagAssignments) { _, _ in saveLegalState() }
+        .onChange(of: legalNotes) { _, _ in saveLegalState() }
+        .onChange(of: definedIssueTags) { _, _ in saveLegalState() }
+        .onChange(of: auditTrail.count) { _, _ in saveLegalState() }
+    }
+
+    // MARK: - Durable coding (ReviewWorkspaceStore)
+
+    private static let privilegedDesignations: Set<PrivilegeDesignation> =
+        [.attorneyClient, .workProduct, .jointDefense, .partiallyPrivileged]
+
+    private func restoreLegalState() {
+        guard !legalStateLoaded else { return }
+        if ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName) == nil {
+            // §3-F4: the file is gone — recover the database copy, once.
+            Task { @MainActor in
+                guard let s = await ReviewWorkspaceStore.loadFromDatabase(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName) else { return }
+                ReviewWorkspaceStore.save(s, name: LegalReviewSnapshot.fileName)
+                legalStateLoaded = false
+                restoreLegalState()
+            }
+        }
+        if let s = ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName) {
+            let privilege = s.privilege.compactMapValues(PrivilegeDesignation.init(rawValue:))
+            skipNextPrivilegeMirror = !privilege.isEmpty   // restoring is not a new decision
+            privilegeAssignments = privilege
+            responsivenessAssignments = s.responsiveness.compactMapValues(ResponsivenessTag.init(rawValue:))
+            issueTagAssignments = s.issueTags.mapValues(Set.init)
+            legalNotes = s.notes
+            if let tags = s.definedIssueTags { definedIssueTags = tags }
+            auditTrail = s.audit.map { ($0.date, $0.emailID, $0.field, $0.oldValue, $0.newValue) }
+        }
+        legalStateLoaded = true
+    }
+
+    private func saveLegalState() {
+        guard legalStateLoaded else { return }
+        let snapshot = LegalReviewSnapshot(
+            privilege: privilegeAssignments.mapValues(\.rawValue),
+            responsiveness: responsivenessAssignments.mapValues(\.rawValue),
+            issueTags: issueTagAssignments.mapValues { Array($0).sorted() },
+            notes: legalNotes,
+            definedIssueTags: definedIssueTags,
+            audit: auditTrail.map { .init(date: $0.date, emailID: $0.emailID, field: $0.field,
+                                          oldValue: $0.oldValue, newValue: $0.newValue) })
+        if let error = ReviewWorkspaceStore.save(snapshot, name: LegalReviewSnapshot.fileName) {
+            legalSaveError = String(localized: "Your review coding couldn't be saved: \(error.localizedDescription)")
+        } else {
+            legalSaveError = nil
+        }
+    }
+
+    /// Privileged calls become the app's Privileged evidence tag, so the
+    /// Privilege Log, Case Bundle and tagged exports include them; a call
+    /// changed to not-privileged clears a Privileged tag this workspace set.
+    /// Each change is written to the tamper-evident audit log.
+    private func mirrorPrivilegeToEvidenceTags(old: [UUID: PrivilegeDesignation], new: [UUID: PrivilegeDesignation]) {
+        guard legalStateLoaded else { return }
+        if skipNextPrivilegeMirror { skipNextPrivilegeMirror = false; return }
+        var changed = 0
+        for id in Set(old.keys).union(new.keys) where old[id] != new[id] {
+            changed += 1
+            let isPrivileged = new[id].map { Self.privilegedDesignations.contains($0) } ?? false
+            let current = forensicManager.evidenceTags[id]
+            if isPrivileged, current != .privileged {
+                forensicManager.tag(id, as: .privileged)
+            } else if !isPrivileged, current == .privileged {
+                forensicManager.tag(id, as: .none)
+            }
+        }
+        if changed > 0 {
+            forensicManager.logAction("Legal Review: privilege coding",
+                                      detail: "\(changed) designation\(changed == 1 ? "" : "s") changed")
+        }
     }
 
     // MARK: - v2 bounded loaders
 
     private func loadInitial() async {
+        restoreLegalState()
         archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
         if pagedEmails.isEmpty { await loadNextPage() }
         if workingSet.isEmpty {
@@ -220,6 +315,12 @@ struct LegalReviewWorkspaceView: View {
         guard canLoadMore, !isLoadingPage else { return }
         isLoadingPage = true
         defer { isLoadingPage = false }
+        if !v3SearchIDs.isEmpty, !searchHits.isEmpty {
+            let next = Array(v3SearchIDs.dropFirst(searchHits.count).prefix(100))
+            searchHits += (try? await ArchiveDataService.shared.fullEmails(ids: next)) ?? []
+            canLoadMore = searchHits.count < v3SearchIDs.count
+            return
+        }
         guard let page = try? await ArchiveDataService.shared.page(query: .all, cursor: pageCursor, limit: 100) else { return }
         let full = (try? await ArchiveDataService.shared.fullEmails(ids: page.summaries.map(\.id))) ?? []
         pagedEmails.append(contentsOf: full)
@@ -227,9 +328,41 @@ struct LegalReviewWorkspaceView: View {
         canLoadMore = page.nextCursor != nil
     }
 
+
+    /// §3-H4: every hit id of `query` (paged lists). nil = the 3.0 path
+    /// failed: the fallback is recorded and the previous ranked search runs
+    /// (§3-M3) — it used to show a silently partial list.
+    private func pagedSearchIDs(_ query: EmailQuery) async -> [UUID]? {
+        var ids: [UUID] = []
+        do {
+            for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 1_000) {
+                ids.append(contentsOf: page.map(\.id))
+            }
+            return ids
+        } catch is CancellationError {
+            return ids
+        } catch {
+            _ = EngineGuard.fellBack(.v3PagedLists, error: error)
+            return nil
+        }
+    }
+
     private func runSearch() async {
         let q = filterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { searchHits = []; return }
+        guard !q.isEmpty else {
+            searchHits = []
+            if !v3SearchIDs.isEmpty { v3SearchIDs = []; canLoadMore = pageCursor != nil || pagedEmails.isEmpty }
+            return
+        }
+        var pagedQuery = EmailQuery.all
+        pagedQuery.text = q
+        if V3Paging.isOn, let ids = await pagedSearchIDs(pagedQuery) {
+            v3SearchIDs = ids
+            let first = Array(ids.prefix(100))
+            searchHits = (try? await ArchiveDataService.shared.fullEmails(ids: first)) ?? []
+            canLoadMore = ids.count > searchHits.count
+            return
+        }
         searchHits = ((try? await ArchiveRetrievalService.shared.retrieve(q, limit: 200)) ?? []).map(\.email)
     }
 
@@ -267,16 +400,16 @@ struct LegalReviewWorkspaceView: View {
 
         coordinator.begin(steps: 7, color: .indigo)
 
-        coordinator.advance(step: 1, label: "Detecting PII...")
+        coordinator.advance(step: 1, label: String(localized: "Detecting PII..."))
         guard let pii = await coordinator.runDetached({ EmailNLPEngine.detectPII(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Extracting entities...")
+        coordinator.advance(step: 2, label: String(localized: "Extracting entities..."))
         guard let ents = await coordinator.runDetached({ EmailNLPEngine.extractEntities(from: emailsCopy, limit: 15) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Running anomaly detection...")
+        coordinator.advance(step: 3, label: String(localized: "Running anomaly detection..."))
         guard let anom = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Extracting legal topics...")
+        coordinator.advance(step: 4, label: String(localized: "Extracting legal topics..."))
         guard let topics = await coordinator.runDetached({ EmailNLPEngine.extractTopics(from: emailsCopy, limit: 15) }) else { coordinator.finish(); return }
 
         piiFindings = pii; entities = ents; anomalies = anom; nlpTopics = topics
@@ -284,15 +417,15 @@ struct LegalReviewWorkspaceView: View {
 
         // Archive-wide: classify EVERY document for privilege (bounded stream),
         // then derive holds/custodians from the same archive-wide set.
-        coordinator.advance(step: 5, label: "Classifying privilege (archive-wide)...")
+        coordinator.advance(step: 5, label: String(localized: "Classifying privilege (archive-wide)..."))
         let privClass = (try? await LegalAnalysisFeatures.classifyPrivilege(from: .shared)) ?? []
         let privCopy = privClass
         let pcEmails = privClass.map(\.email)
 
-        coordinator.advance(step: 6, label: "Detecting legal holds...")
+        coordinator.advance(step: 6, label: String(localized: "Detecting legal holds..."))
         guard let holds = await coordinator.runDetached({ LegalAnalysisFeatures.detectLegalHolds(in: pcEmails) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 7, label: "Analyzing custodians...")
+        coordinator.advance(step: 7, label: String(localized: "Analyzing custodians..."))
         guard let custodians = await coordinator.runDetached({ LegalAnalysisFeatures.analyzeCustodians(emails: pcEmails, privilegeClassifications: privCopy) }) else { coordinator.finish(); return }
 
         privilegeClassifications = privClass
@@ -407,7 +540,7 @@ struct LegalReviewWorkspaceView: View {
                     filterResponsiveness = resp
                 } label: {
                     HStack {
-                        Text(resp.rawValue)
+                        Text(LocalizedStringKey(resp.rawValue))
                         if filterResponsiveness == resp { Image(systemName: "checkmark") }
                     }
                 }
@@ -598,7 +731,7 @@ struct LegalReviewWorkspaceView: View {
                     } label: {
                         HStack(spacing: 2) {
                             Image(systemName: priv.icon).font(.system(size: 9))
-                            Text(priv.rawValue).font(.system(size: 8))
+                            Text(LocalizedStringKey(priv.rawValue)).font(.system(size: 8))
                         }
                         .foregroundColor(priv.color)
                     }
@@ -611,7 +744,7 @@ struct LegalReviewWorkspaceView: View {
             Spacer()
 
             Button {
-                forensicManager.runPrivilegeScan(on: workingSet)
+                PrivilegeScanEngine.run(modules: v3Modules, query: v3Scope.query, loaded: workingSet)
                 runAISuggestions()
             } label: {
                 HStack(spacing: 2) {
@@ -636,11 +769,11 @@ struct LegalReviewWorkspaceView: View {
         HStack(spacing: 6) {
             Image(systemName: "keyboard").font(.system(size: 9)).foregroundColor(.secondary)
             Text("Quick Tag:").font(.system(size: 8)).foregroundColor(.secondary)
-            legalKeyBadge("1", label: "Attorney-Client", color: .orange)
-            legalKeyBadge("2", label: "Work Product", color: .blue)
-            legalKeyBadge("3", label: "Joint Defense", color: .purple)
-            legalKeyBadge("4", label: "Not Privileged", color: .green)
-            legalKeyBadge("␣", label: "Preview", color: .blue)
+            legalKeyBadge("1", label: String(localized: "Attorney-Client"), color: .orange)
+            legalKeyBadge("2", label: String(localized: "Work Product"), color: .blue)
+            legalKeyBadge("3", label: String(localized: "Joint Defense"), color: .purple)
+            legalKeyBadge("4", label: String(localized: "Not Privileged"), color: .green)
+            legalKeyBadge("␣", label: String(localized: "Preview"), color: .blue)
         }
         .help("Select a document, then press a number key to quickly assign its privilege designation")
     }
@@ -862,7 +995,7 @@ struct LegalReviewWorkspaceView: View {
                     } label: {
                         HStack(spacing: 3) {
                             Image(systemName: priv.icon).font(.system(size: 10))
-                            Text(priv.rawValue).font(.system(size: 9, weight: currentPriv == priv ? .bold : .regular))
+                            Text(LocalizedStringKey(priv.rawValue)).font(.system(size: 9, weight: currentPriv == priv ? .bold : .regular))
                         }
                         .foregroundColor(currentPriv == priv ? .white : priv.color)
                         .frame(maxWidth: .infinity)
@@ -910,7 +1043,7 @@ struct LegalReviewWorkspaceView: View {
                     Button {
                         responsivenessAssignments[email.id] = resp
                     } label: {
-                        Text(resp.rawValue)
+                        Text(LocalizedStringKey(resp.rawValue))
                             .font(.system(size: 9, weight: currentResp == resp ? .bold : .regular))
                             .foregroundColor(currentResp == resp ? .white : resp.color)
                             .padding(.horizontal, 6).padding(.vertical, 4)
@@ -1162,44 +1295,39 @@ struct LegalReviewWorkspaceView: View {
                 Text("Privilege Review Report").font(.title3).fontWeight(.bold)
                 Spacer()
                 Button("Generate PDF") {
-                    Task {
-                        let privilegedEmails = workingSet.filter {
-                            let priv = privilegeAssignments[$0.id] ?? .unreviewed
-                            return priv != .unreviewed && priv != .notPrivileged
-                        }
-                        let target = privilegedEmails.isEmpty ? workingSet : privilegedEmails
-                        let data = await InvestigationReportGenerator.generateReport(
-                            emails: target,
-                            title: "Privilege Review Report",
-                            investigatorName: "Legal Reviewer"
-                        )
-                        #if os(macOS)
-                        _ = PlatformFileSaver.saveData(data, suggestedName: "privilege_report.pdf")
-                        #endif
-                    }
+                    Task { await generatePrivilegeReportPDF() }
                 }
                 .buttonStyle(.borderedProminent).tint(.indigo)
                 Button("Done") { showPDFExport = false }
             }
             VStack(alignment: .leading, spacing: 6) {
-                let reviewed = workingSet.filter { privilegeAssignments[$0.id] != nil && privilegeAssignments[$0.id] != .unreviewed }.count
-                let privileged = workingSet.filter {
-                    let p = privilegeAssignments[$0.id] ?? .unreviewed
-                    return p == .attorneyClient || p == .workProduct || p == .jointDefense || p == .partiallyPrivileged
-                }.count
+                let reviewed = v3Stats
+                    ? privilegeAssignments.values.filter { $0 != .unreviewed }.count
+                    : workingSet.filter { privilegeAssignments[$0.id] != nil && privilegeAssignments[$0.id] != .unreviewed }.count
+                let privileged = v3Stats
+                    ? privilegeAssignments.values.filter { $0 == .attorneyClient || $0 == .workProduct || $0 == .jointDefense || $0 == .partiallyPrivileged }.count
+                    : workingSet.filter {
+                        let p = privilegeAssignments[$0.id] ?? .unreviewed
+                        return p == .attorneyClient || p == .workProduct || p == .jointDefense || p == .partiallyPrivileged
+                    }.count
                 Text("Report Summary").font(.headline)
-                Text("Total emails: \(workingSet.count)")
+                Text("Total emails: \(statsTotal)")
                 Text("Reviewed: \(reviewed)")
                 Text("Privileged: \(privileged)")
                 Text("PII findings: \(piiFindings.count)")
                 Text("Audit trail entries: \(auditTrail.count)")
+                if let legalExportStatus {
+                    Text(legalExportStatus).foregroundColor(.secondary).padding(.top, 4)
+                }
             }
             .font(.system(size: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
     }
 
     // MARK: - PII Warning (v3)
@@ -1219,7 +1347,7 @@ struct LegalReviewWorkspaceView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8))
                             .foregroundColor(finding.contextualRiskScore > 7 ? .red : .orange)
-                        Text(finding.type.rawValue).font(.system(size: 9, weight: .semibold))
+                        Text(LocalizedStringKey(finding.type.rawValue)).font(.system(size: 9, weight: .semibold))
                             .foregroundColor(finding.contextualRiskScore > 7 ? .red : .orange)
                         Text(finding.value.prefix(20) + (finding.value.count > 20 ? "..." : ""))
                             .font(.system(size: 8, design: .monospaced)).foregroundColor(.secondary)
@@ -1297,7 +1425,7 @@ struct LegalReviewWorkspaceView: View {
                     ForEach(emailAnomalies) { anomaly in
                         HStack(spacing: 3) {
                             Image(systemName: anomaly.type.icon).font(.system(size: 7))
-                            Text(anomaly.type.rawValue).font(.system(size: 8, weight: .medium))
+                            Text(LocalizedStringKey(anomaly.type.rawValue)).font(.system(size: 8, weight: .medium))
                         }
                         .foregroundColor(anomaly.severity > 0.7 ? .red : anomaly.severity > 0.4 ? .orange : .yellow)
                         .padding(.horizontal, 5).padding(.vertical, 2)
@@ -1344,7 +1472,7 @@ struct LegalReviewWorkspaceView: View {
                     .help("The app's AI analyzed this email and predicts whether it's privileged — use this as a suggestion, but always verify with your own judgment")
                 Spacer()
                 if let cls = classification {
-                    Text(cls.confidenceLevel.rawValue)
+                    Text(LocalizedStringKey(cls.confidenceLevel.rawValue))
                         .font(.system(size: 8, weight: .bold))
                         .foregroundColor(cls.confidenceLevel == .high ? .green : cls.confidenceLevel == .medium ? .orange : .red)
                         .padding(.horizontal, 5).padding(.vertical, 2)
@@ -1356,7 +1484,7 @@ struct LegalReviewWorkspaceView: View {
             if let cls = classification {
                 HStack(spacing: 6) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(cls.classification.rawValue)
+                        Text(LocalizedStringKey(cls.classification.rawValue))
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(privilegeTypeColor(cls.classification))
                         Text("Privilege Score: \(String(format: "%.0f%%", cls.score * 100))")
@@ -1407,7 +1535,7 @@ struct LegalReviewWorkspaceView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.lock.fill").font(.system(size: 9))
                         .foregroundColor(hold.severity > 0.85 ? .red : .orange)
-                    Text(hold.holdType.rawValue)
+                    Text(LocalizedStringKey(hold.holdType.rawValue))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(hold.severity > 0.85 ? .red : .orange)
                     Spacer()
@@ -1574,13 +1702,13 @@ struct LegalReviewWorkspaceView: View {
     private func aiSuggestionReason(for email: MBOXParser.RawEmail) -> String {
         let body = email.plainBody.lowercased()
         if body.contains("attorney") || body.contains("legal advice") || body.contains("privileged") {
-            return "Contains attorney-client communication markers"
+            return String(localized: "Contains attorney-client communication markers")
         }
         if body.contains("work product") || body.contains("draft") || body.contains("litigation strategy") {
-            return "Contains work product indicators"
+            return String(localized: "Contains work product indicators")
         }
         if body.contains("joint defense") || body.contains("common interest") {
-            return "Contains joint defense agreement language"
+            return String(localized: "Contains joint defense agreement language")
         }
         return ""
     }
@@ -1758,17 +1886,25 @@ struct LegalReviewWorkspaceView: View {
         let reviewed = privilegeAssignments.values.filter { $0 != .unreviewed }.count
         let responsive = responsivenessAssignments.values.filter { $0 == .responsive || $0 == .partiallyResponsive }.count
         let privileged = privilegeAssignments.values.filter { $0 == .attorneyClient || $0 == .workProduct || $0 == .jointDefense || $0 == .partiallyPrivileged }.count
-        let progress = workingSet.isEmpty ? 0.0 : Double(reviewed) / Double(workingSet.count)
+        let progress = statsTotal == 0 ? 0.0 : min(1.0, Double(reviewed) / Double(statsTotal))
         let progressPct = Int(progress * 100)
 
         return VStack(spacing: 0) {
             Divider()
+            if let note = legalSaveError ?? legalExportStatus {
+                Text(note)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(legalSaveError != nil ? .orange : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, 3)
+            }
             HStack(spacing: Spacing.small) {
                 HStack(spacing: 4) {
                     ProgressView(value: progress)
                         .frame(width: 80)
                         .tint(progress >= 1.0 ? .green : .indigo)
-                    Text("\(reviewed) of \(workingSet.count) reviewed (\(progressPct)%)")
+                    Text("\(reviewed) of \(statsTotal) reviewed (\(progressPct)%)")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(.secondary)
                 }
@@ -1777,10 +1913,10 @@ struct LegalReviewWorkspaceView: View {
                 Divider().frame(height: 12)
 
                 HStack(spacing: 5) {
-                    statusDot(.orange, count: privilegeAssignments.values.filter { $0 == .attorneyClient }.count, label: "Attorney-Client")
-                    statusDot(.blue, count: privilegeAssignments.values.filter { $0 == .workProduct }.count, label: "Work Product")
-                    statusDot(.purple, count: privilegeAssignments.values.filter { $0 == .jointDefense }.count, label: "Joint Defense")
-                    statusDot(.green, count: privilegeAssignments.values.filter { $0 == .notPrivileged }.count, label: "Not Privileged")
+                    statusDot(.orange, count: privilegeAssignments.values.filter { $0 == .attorneyClient }.count, label: String(localized: "Attorney-Client"))
+                    statusDot(.blue, count: privilegeAssignments.values.filter { $0 == .workProduct }.count, label: String(localized: "Work Product"))
+                    statusDot(.purple, count: privilegeAssignments.values.filter { $0 == .jointDefense }.count, label: String(localized: "Joint Defense"))
+                    statusDot(.green, count: privilegeAssignments.values.filter { $0 == .notPrivileged }.count, label: String(localized: "Not Privileged"))
                 }
                 .help("How your documents are distributed across privilege categories")
 
@@ -1854,7 +1990,7 @@ struct LegalReviewWorkspaceView: View {
                             HStack {
                                 let priv = privilegeAssignments[email.id] ?? .unreviewed
                                 Image(systemName: priv.icon).foregroundColor(priv.color)
-                                Text(priv.rawValue).font(.system(size: 11, weight: .semibold)).foregroundColor(priv.color)
+                                Text(LocalizedStringKey(priv.rawValue)).font(.system(size: 11, weight: .semibold)).foregroundColor(priv.color)
                                 Spacer()
                                 if let bates = batesManager.getBatesNumber(for: email.id) {
                                     Text(bates).font(.system(size: 10, design: .monospaced)).foregroundColor(.purple)
@@ -1876,7 +2012,7 @@ struct LegalReviewWorkspaceView: View {
                 List(logEntries) { entry in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text(entry.privilegeType.rawValue)
+                            Text(LocalizedStringKey(entry.privilegeType.rawValue))
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(privilegeTypeColor(entry.privilegeType))
                             Spacer()
@@ -1908,7 +2044,9 @@ struct LegalReviewWorkspaceView: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 700, height: 550)
+        #endif
     }
 
     // MARK: - Dashboard Sheet
@@ -1943,7 +2081,7 @@ struct LegalReviewWorkspaceView: View {
                     let pct = total > 0 ? Double(count) / Double(total) : 0
                     HStack {
                         Image(systemName: priv.icon).foregroundColor(priv.color).frame(width: 20)
-                        Text(priv.rawValue).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                        Text(LocalizedStringKey(priv.rawValue)).font(.system(size: 12)).frame(width: 120, alignment: .leading)
                         ProgressView(value: pct).frame(width: 120).tint(priv.color)
                         Text("\(count)").font(.system(size: 12, weight: .medium, design: .monospaced)).frame(width: 40, alignment: .trailing)
                     }
@@ -1977,7 +2115,9 @@ struct LegalReviewWorkspaceView: View {
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 450)
+        #endif
     }
 
     private func dashStat(_ title: String, value: String, color: Color) -> some View {
@@ -2083,22 +2223,97 @@ struct LegalReviewWorkspaceView: View {
         return terms.filter { body.contains($0) }
     }
 
-    private func exportPrivilegeLog() {
-        var csv = "Bates Number,From,To,Date,Subject,Privilege Designation,Basis\n"
-        for email in workingSet {
-            let priv = privilegeAssignments[email.id] ?? .unreviewed
-            guard priv != .unreviewed && priv != .notPrivileged else { continue }
-            let bates = batesManager.getBatesNumber(for: email.id) ?? ""
-            let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let to = (email.headers["To"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let date = email.headers["Date"] ?? ""
-            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let basis = (legalNotes[email.id] ?? "").replacingOccurrences(of: ",", with: ";")
-            csv += "\(bates),\(from),\(to),\(date),\(subject),\(priv.rawValue),\(basis)\n"
+    /// Every email coded privileged in this workspace — hydrated by id from
+    /// the store, so calls made on list pages beyond the 2,000-email working
+    /// set are included.
+    private func codedPrivilegedEmails() async -> [MBOXParser.RawEmail] {
+        let ids = privilegeAssignments.filter { Self.privilegedDesignations.contains($0.value) }.map(\.key)
+        guard !ids.isEmpty else { return [] }
+        let emails = (try? await ArchiveDataService.shared.fullEmails(ids: ids)) ?? []
+        func date(_ e: MBOXParser.RawEmail) -> Date {
+            e.headers["Date"].flatMap { MBOXParser.parseDate($0) } ?? .distantPast
         }
-        #if os(macOS)
-        _ = PlatformFileSaver.saveText(csv, suggestedName: "privilege_log.csv")
-        #endif
+        return emails.sorted { date($0) < date($1) }
+    }
+
+    private func exportPrivilegeLog() {
+        Task { @MainActor in
+            let emails = await codedPrivilegedEmails()
+            guard !emails.isEmpty else {
+                legalExportStatus = String(localized: "No emails are coded privileged yet — code them first.")
+                return
+            }
+            // RFC 4180 quoting: commas inside names, subjects and RFC 2822
+            // dates stay intact instead of being rewritten or shifting columns.
+            var csv = csvRow(["Bates Number", "From", "To", "Date", "Subject", "Privilege Designation", "Basis"])
+            for email in emails {
+                let priv = privilegeAssignments[email.id] ?? .unreviewed
+                csv += csvRow([batesManager.getBatesNumber(for: email.id) ?? "",
+                               email.headers["From"] ?? "", email.headers["To"] ?? "",
+                               email.headers["Date"] ?? "", email.headers["Subject"] ?? "",
+                               priv.rawValue, legalNotes[email.id] ?? ""])
+            }
+            let outcome = PlatformExport.save(text: csv, suggestedName: "privilege_log.csv")
+            if let url = outcome.url {
+                forensicManager.logAction("Legal Review: privilege log exported",
+                                          detail: "\(emails.count) privileged emails → \(url.lastPathComponent)")
+                await DocumentRegistry.capture(.export, summary: "Privilege log — \(emails.count) emails", body: csv,
+                                               refs: url.lastPathComponent)
+            }
+            legalExportStatus = outcome.message(String(localized: "Privilege log"))
+        }
+    }
+
+    /// The Privilege Review Report: every privileged call with its basis,
+    /// Bates number and the email's identifying headers — not a generic
+    /// investigation report. Bates-stamped and SHA-256 verified on write.
+    private func generatePrivilegeReportPDF() async {
+        let emails = await codedPrivilegedEmails()
+        guard !emails.isEmpty else {
+            legalExportStatus = String(localized: "No emails are coded privileged yet — code them first.")
+            return
+        }
+        let examiner = forensicManager.examinerName
+        var counts: [PrivilegeDesignation: Int] = [:]
+        for email in emails { counts[privilegeAssignments[email.id] ?? .unreviewed, default: 0] += 1 }
+        let reviewed = privilegeAssignments.values.filter { $0 != .unreviewed }.count
+        var lines = ["PRIVILEGE REVIEW REPORT", ""]
+        lines.append("Generated:  \(ISO8601DateFormatter().string(from: Date()))\(examiner.isEmpty ? "" : " by \(examiner)")")
+        if !forensicManager.caseNumber.isEmpty { lines.append("Case:       \(forensicManager.caseNumber)") }
+        lines.append("Reviewed:   \(reviewed) emails coded")
+        lines.append("Privileged: \(emails.count)")
+        for d in PrivilegeDesignation.allCases where (counts[d] ?? 0) > 0 {
+            lines.append("  \(d.rawValue): \(counts[d] ?? 0)")
+        }
+        lines += ["", "PRIVILEGED EMAILS"]
+        for email in emails {
+            lines.append("")
+            let bates = batesManager.getBatesNumber(for: email.id)
+            lines.append("\(bates.map { "\($0)  ·  " } ?? "")\((privilegeAssignments[email.id] ?? .unreviewed).rawValue)")
+            lines.append("  Date:    \(email.headers["Date"] ?? "")")
+            lines.append("  From:    \(email.headers["From"] ?? "")")
+            lines.append("  To:      \(email.headers["To"] ?? "")")
+            lines.append("  Subject: \(email.headers["Subject"] ?? "")")
+            let basis = legalNotes[email.id] ?? ""
+            lines.append("  Basis:   \(basis.isEmpty ? "— (no basis recorded)" : basis)")
+        }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("privilege_report.pdf")
+        do {
+            let rendered = try BatesPDFRenderer.renderVerified(
+                lines: lines,
+                metadata: .init(batesNumber: "PRIVILEGE REPORT", caseNumber: forensicManager.caseNumber, examiner: examiner),
+                to: temp)
+            let outcome = PlatformExport.save(data: try Data(contentsOf: temp), suggestedName: "privilege_report.pdf")
+            if let url = outcome.url {
+                forensicManager.logAction("Legal Review: privilege report",
+                                          detail: "\(emails.count) privileged emails, \(rendered.pages) pages, SHA-256 \(rendered.sha256Hex) → \(url.lastPathComponent)")
+                await DocumentRegistry.capture(.report, summary: "Privilege review report — \(emails.count) privileged emails",
+                                               body: lines.joined(separator: "\n"), refs: url.lastPathComponent)
+            }
+            legalExportStatus = outcome.message(String(localized: "Privilege report"))
+        } catch {
+            legalExportStatus = String(localized: "The privilege report couldn't be created: \(error.localizedDescription)")
+        }
     }
 }
 

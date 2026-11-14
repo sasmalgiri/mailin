@@ -1,0 +1,77 @@
+{
+  "created_for_this_request": true,
+  "tool_source": "https://github.com/ip7z/7zip/releases/download/26.05/7z2605-linux-x64.tar.xz",
+  "download_sha256": "22cf82fcc6eb7474f1d5bb4f02c0f8ebd573a718089d6833dc30f8350a3b232e",
+  "source_digest_match": true,
+  "fixtures": [
+    {
+      "path": "02_archives/7zip_generated/7zip_AES256.zip",
+      "producer_version_banner": [
+        "",
+        "7-Zip (z) 26.05 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-10-21",
+        " 64-bit locale=C.UTF-8 Threads:9 OPEN_MAX:16384, ASM",
+        "",
+        "Usage: 7zz <command> [<switches>...] <archive_name> [<file_names>...] [@listfile]"
+      ],
+      "creation_arguments": [
+        "a",
+        "-tzip",
+        "-mem=AES256",
+        "-pmailin-fixture-2026",
+        "/workspace/scratch/80b65a74426a/Mailin_Public_Test_Fixtures_2026-11-07/02_archives/7zip_generated/7zip_AES256.zip",
+        "README.txt",
+        "nested/W05_tracked_retained.docx"
+      ],
+      "correct_password_test_exit": 0,
+      "wrong_password_test_exit": 2,
+      "password": "mailin-fixture-2026",
+      "sha256": "57b0c377e4eb1721b049e18781bc2c34c7580252ebd722bdbb6b4608324829a7"
+    },
+    {
+      "path": "02_archives/7zip_generated/7zip_ZipCrypto.zip",
+      "producer_version_banner": [
+        "",
+        "7-Zip (z) 26.05 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-10-21",
+        " 64-bit locale=C.UTF-8 Threads:9 OPEN_MAX:16384, ASM",
+        "",
+        "Usage: 7zz <command> [<switches>...] <archive_name> [<file_names>...] [@listfile]"
+      ],
+      "creation_arguments": [
+        "a",
+        "-tzip",
+        "-mem=ZipCrypto",
+        "-pmailin-fixture-2026",
+        "/workspace/scratch/80b65a74426a/Mailin_Public_Test_Fixtures_2026-11-07/02_archives/7zip_generated/7zip_ZipCrypto.zip",
+        "README.txt",
+        "nested/W05_tracked_retained.docx"
+      ],
+      "correct_password_test_exit": 0,
+      "wrong_password_test_exit": 2,
+      "password": "mailin-fixture-2026",
+      "sha256": "0bbdc9a8fd0170228e640dce5b382091d40365efafe3391fe39e9dfea528dbe4"
+    },
+    {
+      "path": "02_archives/7zip_generated/7zip_AES256_header_encrypted.7z",
+      "producer_version_banner": [
+        "",
+        "7-Zip (z) 26.05 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-10-21",
+        " 64-bit locale=C.UTF-8 Threads:9 OPEN_MAX:16384, ASM",
+        "",
+        "Usage: 7zz <command> [<switches>...] <archive_name> [<file_names>...] [@listfile]"
+      ],
+      "creation_arguments": [
+        "a",
+        "-t7z",
+        "-mhe=on",
+        "-pmailin-fixture-2026",
+        "/workspace/scratch/80b65a74426a/Mailin_Public_Test_Fixtures_2026-11-07/02_archives/7zip_generated/7zip_AES256_header_encrypted.7z",
+        "README.txt",
+        "nested/W05_tracked_retained.docx"
+      ],
+      "correct_password_test_exit": 0,
+      "wrong_password_test_exit": 2,
+      "password": "mailin-fixture-2026",
+      "sha256": "3476741a33be8198bba549bb6182a90fb397bc559f7886f245b0e522518b21ce"
+    }
+  ]
+}

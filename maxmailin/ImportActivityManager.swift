@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import UserNotifications
 
 // MARK: - Import Progress Notification System

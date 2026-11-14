@@ -1,0 +1,9 @@
+{
+  "id" : "63e72b5b-ea09-49fe-9de5-12e8e95db3aa",
+  "targets" : [
+    {
+      "id" : "ED230C7A-91F5-4A19-B5B6-5F7CDA54E8CA",
+      "name" : "mailin"
+    }
+  ]
+}
