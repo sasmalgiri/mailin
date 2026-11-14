@@ -12,12 +12,16 @@
 //     202 Accepted = accepted FOR PROCESSING, not delivered; Exchange files
 //     the Sent copy itself. The request body is limited to 4 MB, so the
 //     base64 overhead counts — a larger message is refused before sending,
-//     with the limit stated.
+//     with the limit stated (`GraphSendSubmitter.sizeCheck`, callable before
+//     the message is queued).
 //   • One request per submission; a 401 refreshes the token once (a 401 means
 //     the provider did not take the message) and repeats the request once.
 //   • A transport failure that may have reached the provider, or a 5xx, is
-//     `.uncertain` — the outbox reconciles with the provider's Sent before
-//     any resend. Only failures known to happen before any byte left are retried.
+//     `.uncertain` and never resent by itself. The user can check the
+//     provider's Sent only where the account's route has a Sent lookup:
+//     `GraphSentLookup` (Sent Items by internetMessageId) for Microsoft;
+//     without one the check reports that Sent could not be searched.
+//     Only failures known to happen before any byte left are retried.
 //
 
 import Foundation
@@ -184,7 +188,34 @@ public struct GmailSendSubmitter: MessageSubmitter {
 public struct GraphSendSubmitter: MessageSubmitter {
     /// Graph's per-request body limit; the base64 MIME must fit.
     public static let maximumRequestBytes = 4 * 1024 * 1024
+    /// The same limit, named for the check before queueing.
+    public static let maxEncodedBytes = maximumRequestBytes
+    /// Starts the `.rejected` reason of a message over the limit (the app words it).
+    public static let tooLargePrefix = "graphSendTooLarge"
     public static let endpoint = URL(string: "https://graph.microsoft.com/v1.0/me/sendMail")!
+
+    /// The request body size of a message of `messageBytes` bytes (base64, no line breaks).
+    public static func encodedByteCount(messageBytes: Int) -> Int { 4 * ((max(0, messageBytes) + 2) / 3) }
+
+    public enum SizeCheck: Sendable, Equatable {
+        case fits(encodedBytes: Int)
+        case tooLarge(encodedBytes: Int)
+    }
+
+    /// Pure: whether a composed message of `messageBytes` bytes can be sent
+    /// through Graph. Call it before queueing; `submit` refuses the same messages.
+    /// (The submitted bytes include the API Bcc header, if any, on top.)
+    public static func sizeCheck(messageBytes: Int) -> SizeCheck {
+        let encoded = encodedByteCount(messageBytes: messageBytes)
+        return encoded <= maxEncodedBytes ? .fits(encodedBytes: encoded) : .tooLarge(encodedBytes: encoded)
+    }
+
+    /// The encoded size named in a `tooLargePrefix` reason; nil for any other reason.
+    public static func tooLargeEncodedBytes(inReason reason: String) -> Int? {
+        guard reason.hasPrefix(tooLargePrefix) else { return nil }
+        let digits = reason.dropFirst(tooLargePrefix.count).drop { !$0.isNumber }.prefix { $0.isNumber }
+        return Int(digits)
+    }
     let core: APISendCore
 
     public init(tokens: any AccessTokenSource, transport: any SendHTTPTransport, permission: @escaping NetworkPermission,
@@ -196,11 +227,12 @@ public struct GraphSendSubmitter: MessageSubmitter {
     struct ErrorBody: Decodable { struct Inner: Decodable { var code: String?; var message: String? }; var error: Inner? }
 
     public func submit(_ message: OutboundMessage, checkpoint: @escaping SubmissionCheckpoint) async -> SubmissionOutcome {
-        let body = message.bytes.base64EncodedData()
-        guard body.count <= Self.maximumRequestBytes else {
-            return .rejected(reason: "the message is \(message.bytes.count) bytes (\(body.count) once encoded); Microsoft's send limit for one request is 4 MB encoded",
+        guard case .fits = Self.sizeCheck(messageBytes: message.bytes.count) else {
+            let encoded = Self.encodedByteCount(messageBytes: message.bytes.count)
+            return .rejected(reason: "\(Self.tooLargePrefix): \(encoded) bytes once encoded (the message is \(message.bytes.count) bytes); Microsoft's send limit for one request is 4 MB encoded",
                              rejectedRecipients: [])
         }
+        let body = message.bytes.base64EncodedData()
         return await core.run(message, checkpoint: checkpoint, request: { token in
             SendHTTPRequest(method: "POST", url: Self.endpoint,
                             headers: ["Authorization": "Bearer \(token)", "Content-Type": "text/plain"], body: body)
@@ -225,5 +257,81 @@ public struct GraphSendSubmitter: MessageSubmitter {
         }
         if (400..<500).contains(r.status) { return .rejected(reason: "Microsoft refused the message (\(detail))", rejectedRecipients: []) }
         return .uncertain(reason: "Microsoft answered \(detail) — the message may or may not have been sent")
+    }
+}
+
+// MARK: - Microsoft Graph Sent lookup
+
+/// Searches the account's Sent Items by Message-ID (audit 2026-11-14), so a
+/// Graph send that is `accepted` (202) or `outcomeUncertain` can be checked
+/// against Sent before the user decides to send it again:
+/// `GET /me/mailFolders/sentitems/messages?$filter=internetMessageId eq '<id>'&$select=id`.
+/// Needs Mail.Read (or Mail.ReadBasic). Register it as the account's
+/// `lookup:` with the Graph submitter; `Outbox.reconcile` uses it.
+public struct GraphSentLookup: SentMessageLookup {
+    public let host: String
+    let authorizationHost: String
+    let audience: String
+    let tokens: any AccessTokenSource
+    let transport: any SendHTTPTransport
+    let permission: NetworkPermission
+
+    public init(tokens: any AccessTokenSource, transport: any SendHTTPTransport, permission: @escaping NetworkPermission,
+                audience: String = "https://graph.microsoft.com", authorizationHost: String = "login.microsoftonline.com",
+                graphHost: String = "graph.microsoft.com") {
+        self.host = graphHost.lowercased(); self.authorizationHost = authorizationHost; self.audience = audience
+        self.tokens = tokens; self.transport = transport; self.permission = permission
+    }
+
+    public struct LookupFailed: Error, LocalizedError, Sendable, Equatable {
+        public var reason: String
+        public var errorDescription: String? { reason }
+    }
+
+    /// The request URL for `messageID` (OData string literal: `'` doubled).
+    public func url(for messageID: String) throws -> URL {
+        let literal = "'" + messageID.replacingOccurrences(of: "'", with: "''") + "'"
+        var allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        allowed.insert(charactersIn: "-._~$,")
+        func q(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s }
+        var c = URLComponents()
+        c.scheme = "https"; c.host = host
+        c.percentEncodedPath = "/v1.0/me/mailFolders/sentitems/messages"
+        c.percentEncodedQuery = "\(q("$filter"))=\(q("internetMessageId eq \(literal)"))&\(q("$select"))=id"
+        guard let url = c.url else { throw LookupFailed(reason: "the Sent search could not be built") }
+        return url
+    }
+
+    public func findSent(messageID: String, accountID: UUID) async throws -> SentLookupResult {
+        let url = try url(for: messageID)
+        var refreshed = false
+        var token = try await obtainToken(accountID, refresh: false)
+        while true {
+            try permission(NetworkAsk(accountID: accountID, host: host, destination: .mailServer, operation: refreshed ? .retry : .request))
+            let response = try await transport.perform(SendHTTPRequest(
+                method: "GET", url: url,
+                headers: ["Authorization": "Bearer \(token)", "Accept": "application/json", "Prefer": #"IdType="ImmutableId""#],
+                body: Data()))
+            if response.status == 401 && !refreshed {
+                refreshed = true
+                token = try await obtainToken(accountID, refresh: true)
+                continue
+            }
+            guard (200..<300).contains(response.status) else {
+                throw LookupFailed(reason: "Microsoft Graph answered HTTP \(response.status) to the Sent search")
+            }
+            struct Page: Decodable { struct Item: Decodable { var id: String? }; var value: [Item]? }
+            guard let page = try? JSONDecoder().decode(Page.self, from: response.body), let items = page.value else {
+                throw LookupFailed(reason: "Microsoft Graph's answer to the Sent search could not be read")
+            }
+            guard let first = items.first else { return .notFound }
+            return .found(providerReference: first.id)
+        }
+    }
+
+    private func obtainToken(_ account: UUID, refresh: Bool) async throws -> String {
+        try permission(NetworkAsk(accountID: account, host: authorizationHost, destination: .authorization, operation: .oauthRefresh))
+        return refresh ? try await tokens.refreshAfterRejection(account: account, audience: audience)
+                       : try await tokens.accessToken(for: account, audience: audience)
     }
 }

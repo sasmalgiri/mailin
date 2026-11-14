@@ -114,9 +114,36 @@ public enum SyncOutcome: Sendable, Equatable {
     }
 }
 
+/// Why a run failed, typed (audit 2026-11-14): the app words it with its own
+/// localised sentence; the `.failed(String)` text is the English log form
+/// and may carry provider detail (codes, HTTP statuses) nobody can act on.
+public enum SyncFailureCause: Sendable, Equatable {
+    case provider(MailProviderError)
+    case signIn(OAuthError)
+
+    public var error: Error {
+        switch self {
+        case .provider(let e): return e
+        case .signIn(let e): return e
+        }
+    }
+
+    /// The typed cause of `error`, when it has one.
+    static func of(_ error: Error) -> SyncFailureCause? {
+        switch error {
+        case let e as MailProviderError: return .provider(e)
+        case let e as SyncEngine.RetriesExhausted: return e.cause.map(SyncFailureCause.provider)
+        case let e as OAuthError: return .signIn(e)
+        default: return nil
+        }
+    }
+}
+
 public struct SyncRunReport: Sendable {
     public var runID: String?
     public var outcome: SyncOutcome
+    /// When `outcome` is `.failed`: the typed reason, for the app's wording.
+    public var failureCause: SyncFailureCause? = nil
     /// The run's durable counts (nil when the run could not even begin).
     public var receipt: CaptureRunReceipt?
     /// The capture interval: mailboxes change while read, so coverage is
@@ -160,6 +187,8 @@ public actor SyncEngine {
     public var isRunning: Bool { running }
     /// V4-12: the drive named by the last `.driveUnavailable` pause.
     public private(set) var missingDrive: ArchiveDriveIdentity?
+    /// The typed reason of the last `.failed` state (nil otherwise).
+    public private(set) var failureCause: SyncFailureCause?
     private var running = false
     /// V4-12: bytes the downloads in flight may still need on the archive
     /// volume (staged copy + published copy each), so parallel downloads
@@ -212,6 +241,8 @@ public actor SyncEngine {
     /// A request that kept failing transiently.
     struct RetriesExhausted: Error, LocalizedError {
         let reason: String
+        /// The last transient failure, typed.
+        var cause: MailProviderError? = nil
         var errorDescription: String? { reason }
     }
 
@@ -231,6 +262,7 @@ public actor SyncEngine {
         self.selection = selection
         state = .syncing
         missingDrive = nil
+        failureCause = nil
         largestWriteNeed = 0
         throttleWaited = 0
         var runID: String?
@@ -280,7 +312,9 @@ public actor SyncEngine {
             case .needsSignIn: outcome = .needsSignIn; state = .needsSignIn
             case .notPermitted(let why): outcome = .notPermitted(why); state = .notPermitted(why)
             case .cancelled: outcome = .cancelled; state = .cancelled
-            case .failed(let why): outcome = .failed(why); state = .failed(why)
+            case .failed(let why):
+                outcome = .failed(why); state = .failed(why)
+                failureCause = SyncFailureCause.of(error)
             case .aborted: outcome = .aborted
             }
             var receipt: CaptureRunReceipt?
@@ -289,7 +323,8 @@ public actor SyncEngine {
                 if receipt != nil { receipt?.state = .partial }
                 try? await sink.markRunStopped(runID, reason: "\(outcome)")
             }
-            return SyncRunReport(runID: runID, outcome: outcome, receipt: receipt, startedAt: started, endedAt: Date(),
+            return SyncRunReport(runID: runID, outcome: outcome, failureCause: failureCause, receipt: receipt,
+                                 startedAt: started, endedAt: Date(),
                                  reconciledTo: nil, fullEnumeration: false, selection: selection.description,
                                  missingDrive: outcome == .paused(.driveUnavailable) ? storage.drive : nil,
                                  suggestedRetry: retryDelay(after: stop, error: error))
@@ -417,6 +452,16 @@ public actor SyncEngine {
         try await backoff.sleep(delay)
     }
 
+    /// A failure that passes by itself: wait (backoff), or give up once the
+    /// run's transient budget is spent (the account is retried later on its own).
+    private func transient(_ why: String, failures: inout Int) async throws {
+        failures += 1
+        guard failures < backoff.transientAttempts else {
+            throw RetriesExhausted(reason: "\(why) (\(failures) attempts)", cause: .transient(why))
+        }
+        try await transientWait(failures)
+    }
+
     /// Runs one provider request with the policy check, token, 401 refresh,
     /// throttling and transient backoff. Every attempt — the first and each
     /// retry — asks the network policy first.
@@ -429,7 +474,16 @@ public actor SyncEngine {
             try Task.checkCancellation()
             try await waitForThrottle()
             try ask(attempt == 0 ? operation : .retry)
-            let token = try await currentToken()
+            // The token is fetched (and maybe refreshed) here, outside the
+            // provider request: a network failure on the way to the token
+            // endpoint is transient too, never a failed run (audit 2026-11-14).
+            let token: String?
+            do { token = try await currentToken() } catch {
+                guard !(error is Stop), isTransientTokenFailure(error) else { throw error }
+                try await transient("the sign-in service could not be reached: \(error.localizedDescription)", failures: &transientFailures)
+                attempt += 1
+                continue
+            }
             do {
                 return try await body(ProviderRequestContext(accountID: accountID, accessToken: token, attempt: attempt))
             } catch let error as MailProviderError {
@@ -437,15 +491,16 @@ public actor SyncEngine {
                 case .unauthorized:
                     guard !refreshed, adapter.tokenAudience != nil else { throw Stop.needsSignIn }
                     refreshed = true
-                    try await refreshToken(rejected: token)
+                    do { try await refreshToken(rejected: token) } catch {
+                        guard !(error is Stop), isTransientTokenFailure(error) else { throw error }
+                        // The refresh itself did not get through: try it again after the wait.
+                        refreshed = false
+                        try await transient("the sign-in service could not be reached: \(error.localizedDescription)", failures: &transientFailures)
+                    }
                 case .rateLimited(let after):
                     try await throttle(retryAfter: after, attempt: attempt + 1)
                 case .transient(let why):
-                    transientFailures += 1
-                    guard transientFailures < backoff.transientAttempts else {
-                        throw RetriesExhausted(reason: "\(why) (\(transientFailures) attempts)")
-                    }
-                    try await transientWait(transientFailures)
+                    try await transient(why, failures: &transientFailures)
                 default:
                     throw error
                 }
@@ -769,6 +824,7 @@ public actor SyncEngine {
         let export = await exportVerification?(accountID)
         var status = CaptureStatus(accountID: accountID, state: state, completeness: completeness, search: search, export: export)
         if case .paused(.driveUnavailable) = state { status.missingDrive = missingDrive }
+        if case .failed = state { status.failureCause = failureCause }
         return status
     }
 }
@@ -861,6 +917,8 @@ public struct SelectiveCaptureListing: Sendable {
 /// A listing that stopped before its end — never a partial preview.
 public struct SelectiveListingStopped: Error, Sendable {
     public var outcome: SyncOutcome
+    /// When `outcome` is `.failed`: the typed reason, for the app's wording.
+    public var cause: SyncFailureCause? = nil
 }
 
 extension SyncEngine {
@@ -871,7 +929,7 @@ extension SyncEngine {
             limits = await adapter.limits()
             return try await listAllFolders()
         } catch {
-            throw SelectiveListingStopped(outcome: outcome(of: classify(error)))
+            throw stopped(error)
         }
     }
 
@@ -933,7 +991,7 @@ extension SyncEngine {
         } catch let stopped as SelectiveListingStopped {
             throw stopped
         } catch {
-            throw SelectiveListingStopped(outcome: outcome(of: classify(error)))
+            throw stopped(error)
         }
     }
 
@@ -957,6 +1015,7 @@ extension SyncEngine {
         defer { running = false }
         state = .syncing
         missingDrive = nil
+        failureCause = nil
         largestWriteNeed = 0
         throttleWaited = 0
         var runID: String?
@@ -998,7 +1057,9 @@ extension SyncEngine {
             case .needsSignIn: state = .needsSignIn
             case .notPermitted(let why): state = .notPermitted(why)
             case .cancelled: state = .cancelled
-            case .failed(let why): state = .failed(why)
+            case .failed(let why):
+                state = .failed(why)
+                failureCause = SyncFailureCause.of(error)
             case .aborted: break
             }
             var receipt: CaptureRunReceipt?
@@ -1007,10 +1068,17 @@ extension SyncEngine {
                 if receipt != nil { receipt?.state = .partial }
                 try? await sink.markRunStopped(runID, reason: "\(outcome)")
             }
-            return SyncRunReport(runID: runID, outcome: outcome, receipt: receipt, startedAt: started, endedAt: Date(),
+            return SyncRunReport(runID: runID, outcome: outcome, failureCause: failureCause, receipt: receipt,
+                                 startedAt: started, endedAt: Date(),
                                  reconciledTo: nil, fullEnumeration: false, selection: label,
                                  missingDrive: outcome == .paused(.driveUnavailable) ? storage.drive : nil)
         }
+    }
+
+    private func stopped(_ error: Error) -> SelectiveListingStopped {
+        let outcome = outcome(of: classify(error))
+        guard case .failed = outcome else { return SelectiveListingStopped(outcome: outcome) }
+        return SelectiveListingStopped(outcome: outcome, cause: SyncFailureCause.of(error))
     }
 
     private func outcome(of stop: Stop) -> SyncOutcome {

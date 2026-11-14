@@ -463,4 +463,49 @@ final class MailAccountCredentialTests: XCTestCase {
         XCTAssertEqual(keychain.stored["com.ecosanskriti.mailin|legacy"], Data("other".utf8))
         XCTAssertNoThrow(try store.deleteAll(), "nothing left is not an error")
     }
+
+    /// Audit 2026-11-14 #2: Microsoft's refusal detail (error_description with
+    /// its AADSTS code, or `error_codes` alone) is kept for the app's wording.
+    func testAudit1114_tokenRefusal_keepsErrorDescriptionAndAADSTSCode() async throws {
+        let body = #"{"error":"invalid_grant","error_description":"AADSTS53003: Access has been blocked by Conditional Access policies.","error_codes":[53003]}"#
+        do { _ = try decodeTokenResponse(status: 400, body: Data(body.utf8)); XCTFail() } catch {
+            guard case OAuthError.tokenEndpoint(400, "invalid_grant", let description?) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(description.hasPrefix("AADSTS53003"), description)
+            XCTAssertEqual(microsoftRefusalCode(description), 53003)
+        }
+        do { _ = try decodeTokenResponse(status: 400, body: Data(#"{"error":"invalid_request","error_codes":[90094]}"#.utf8)); XCTFail() } catch {
+            guard case OAuthError.tokenEndpoint(_, _, let description) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(microsoftRefusalCode(description), 90094)
+        }
+        XCTAssertNil(microsoftRefusalCode("The user denied access"))
+        XCTAssertNil(microsoftRefusalCode(nil))
+
+        // Through a refresh that is refused for a reason other than a lost grant.
+        let endpoint = FakeTokenEndpoint()
+        let coordinator = TokenRefreshCoordinator(credentials: InMemoryCredentialStore(), transport: endpoint)
+        let account = UUID()
+        await coordinator.register(account: account, configuration: Fixtures.google)
+        try await coordinator.store(Fixtures.expiredSet(account, refresh: "r-1"))
+        await endpoint.respond(to: "r-1", status: 400,
+                               json: #"{"error":"unauthorized_client","error_description":"AADSTS700016: Application with identifier 'x' was not found in the directory 'contoso'."}"#)
+        do { _ = try await coordinator.accessToken(for: account, audience: Fixtures.google.audience); XCTFail() } catch {
+            guard case OAuthError.tokenEndpoint(400, "unauthorized_client", let description) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(microsoftRefusalCode(description), 700016)
+        }
+    }
+
+    /// Audit 2026-11-14 #5: which token failures pass by themselves.
+    func testAudit1114_transientTokenFailures() {
+        XCTAssertTrue(isTransientTokenFailure(URLError(.notConnectedToInternet)))
+        XCTAssertTrue(isTransientTokenFailure(URLError(.timedOut)))
+        XCTAssertTrue(isTransientTokenFailure(NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)))
+        XCTAssertTrue(isTransientTokenFailure(OAuthError.tokenEndpoint(status: 503, error: nil)))
+        XCTAssertTrue(isTransientTokenFailure(OAuthError.tokenEndpoint(status: 429, error: nil)))
+        XCTAssertTrue(isTransientTokenFailure(OAuthError.tokenEndpoint(status: 400, error: "temporarily_unavailable")))
+        XCTAssertFalse(isTransientTokenFailure(OAuthError.tokenEndpoint(status: 400, error: "invalid_client")))
+        XCTAssertFalse(isTransientTokenFailure(OAuthError.reauthorisationNeeded(UUID())))
+        XCTAssertFalse(isTransientTokenFailure(URLError(.cancelled)))
+        XCTAssertFalse(isTransientTokenFailure(URLError(.serverCertificateUntrusted)))
+        XCTAssertFalse(isTransientTokenFailure(NSError(domain: "policy", code: 1)))
+    }
 }

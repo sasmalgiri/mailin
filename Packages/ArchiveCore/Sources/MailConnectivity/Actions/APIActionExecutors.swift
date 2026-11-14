@@ -369,8 +369,18 @@ public actor GraphActionExecutor: RemoteActionExecutor {
 /// The app's transport for server actions: an ephemeral session that never
 /// follows a redirect (the 3xx comes back and is refused), so a bearer token
 /// never reaches another host.
+///
+/// A URLSession keeps its delegate (this object) until the session is
+/// invalidated, so an instance is never released by itself: use `shared`
+/// (one session for every account — it holds no cookies, cache or
+/// credentials, each request carries its own token), or call `invalidate()`
+/// when an instance made for one use is done.
 public final class NoRedirectSendHTTPTransport: NSObject, SendHTTPTransport, URLSessionTaskDelegate, @unchecked Sendable {
-    private var session: URLSession!
+    /// The app's one transport for sends, Sent lookups and server actions.
+    public static let shared = NoRedirectSendHTTPTransport()
+
+    private let lock = NSLock()
+    private var session: URLSession?
 
     public init(timeout: TimeInterval = 60) {
         super.init()
@@ -384,12 +394,22 @@ public final class NoRedirectSendHTTPTransport: NSObject, SendHTTPTransport, URL
 
     deinit { session?.invalidateAndCancel() }
 
+    /// Ends the session (and releases this transport). Requests afterwards
+    /// are refused before anything is sent. Never call it on `shared`.
+    public func invalidate() {
+        let ending: URLSession? = lock.withLock { defer { session = nil }; return session }
+        ending?.invalidateAndCancel()
+    }
+
+    public var isInvalidated: Bool { lock.withLock { session == nil } }
+
     public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                            newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
     }
 
     public func perform(_ request: SendHTTPRequest) async throws -> SendHTTPResponse {
+        guard let session = lock.withLock({ self.session }) else { throw NotSentError("the network session is closed") }
         var r = URLRequest(url: request.url)
         r.httpMethod = request.method
         r.httpShouldHandleCookies = false

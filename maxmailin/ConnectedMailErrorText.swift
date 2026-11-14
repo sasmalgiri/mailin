@@ -38,7 +38,9 @@ enum ConnectedMailErrorText {
         case is GraphConfigurationError, is GmailOAuth.ConfigurationError:
             return String(localized: "Sign-in for this provider is not set up in this build.")
         case let e as SenderAuthorisationError: return sender(e)
-        case let e as SelectiveListingStopped: return outcome(e.outcome)
+        case let e as SelectiveListingStopped:
+            if case .failed = e.outcome, let cause = e.cause { return sentence(for: cause.error) }
+            return outcome(e.outcome)
         case is CancellationError: return String(localized: "Stopped before it finished. Nothing was lost.")
         // The app's own errors already carry a localised sentence.
         case let e as MailWorkspaceError: return e.text
@@ -96,17 +98,43 @@ enum ConnectedMailErrorText {
 
     // MARK: Sign-in
 
+    /// Microsoft's sign-in refusals that need someone else (an administrator)
+    /// or another step, by AADSTS code / OAuth error. Never shows the code.
+    static func microsoftRefusal(error: String?, description: String?) -> String? {
+        switch microsoftRefusalCode(description) {
+        case 65001?, 90094?, 90095?:
+            return microsoftAdminApprovalNeeded
+        case let code? where (53000...53003).contains(code):
+            return String(localized: "Your organisation's sign-in rules blocked this sign-in, for example from this device or network. Ask your IT administrator, or sign in from a device your organisation allows. Nothing was changed.")
+        case 50076?, 50079?:
+            return String(localized: "Microsoft needs extra verification for this account. Sign in again and complete the verification step Microsoft shows. Nothing was changed.")
+        case 700016?:
+            return String(localized: "mailin is not available in your organisation's Microsoft directory. Ask your IT administrator to allow mailin, or sign in with another account. Nothing was changed.")
+        case 50020?:
+            return String(localized: "This account is not part of the organisation it tried to sign in to. Sign in with an account of that organisation, or with a personal Microsoft account. Nothing was changed.")
+        default:
+            return error == "consent_required" ? microsoftAdminApprovalNeeded : nil
+        }
+    }
+
+    static var microsoftAdminApprovalNeeded: String {
+        String(localized: "Your organisation's administrator must approve mailin before this account can sign in. Ask your IT administrator to approve mailin, then sign in again. Nothing was changed.")
+    }
+
     private static func oauth(_ e: OAuthError) -> String {
         switch e {
         case .cancelled:
             return String(localized: "Sign-in was cancelled. Nothing was changed.")
+        case .denied(let code, let description) where microsoftRefusal(error: code, description: description) != nil:
+            return microsoftRefusal(error: code, description: description) ?? fallback
         case .denied(let code, _) where code == "access_denied":
             return String(localized: "You did not allow mailin access at the provider, so nothing was changed.")
         case .denied:
             return String(localized: "The provider did not allow the sign-in. Nothing was changed.")
         case .reauthorisationNeeded:
             return String(localized: "This account's sign-in has expired or was withdrawn. Sign in again; saved mail remains available.")
-        case .tokenEndpoint(let status, let error):
+        case .tokenEndpoint(let status, let error, let description):
+            if let refusal = microsoftRefusal(error: error, description: description) { return refusal }
             if let error, ["invalid_grant", "interaction_required", "consent_required", "login_required"].contains(error) {
                 return String(localized: "This account's sign-in has expired or was withdrawn. Sign in again; saved mail remains available.")
             }
@@ -169,9 +197,42 @@ enum ConnectedMailErrorText {
             return String(localized: "A folder is no longer on the server.")
         case .permanent(let reason) where reason.hasPrefix(GraphAdapter.noMailboxPrefix):
             return String(localized: "This Microsoft account has no Outlook mailbox — it signs in with another provider's address. Add an Outlook.com address to the account at account.microsoft.com, or connect that other mailbox directly.")
+        case .permanent(let reason) where reason.hasPrefix(GraphAdapter.mailboxAccessDeniedPrefix):
+            return String(localized: "This account is not allowed to read that mailbox. The mailbox owner or an administrator must give it access. Saved mail remains available.")
         case .permanent:
             return String(localized: "The mail server refused the request.")
         }
+    }
+
+    // MARK: Capture status (audit 2026-11-14)
+
+    /// The headline of a capture that stopped: the typed cause's sentence,
+    /// never the provider's raw text (codes, HTTP statuses, enum names).
+    static func stoppedHeadline(_ why: String, cause: SyncFailureCause?) -> String {
+        let reason = cause.map { sentence(for: $0.error) } ?? (isPresentable(why) ? why : fallback)
+        return String(localized: "Last capture stopped; saved mail remains available. \(reason)")
+    }
+
+    // MARK: Outbox (audit 2026-11-14)
+
+    /// The sentence for a message over Microsoft's 4 MB send limit.
+    static func graphMessageTooLarge(encodedBytes: Int) -> String {
+        let size = ByteCountFormatter.string(fromByteCount: Int64(encodedBytes), countStyle: .binary)
+        let limit = ByteCountFormatter.string(fromByteCount: Int64(GraphSendSubmitter.maxEncodedBytes), countStyle: .binary)
+        return String(localized: "Not sent: this message is \(size) once prepared for sending, and Microsoft accepts at most \(limit) per message sent from mailin. Remove or shrink attachments and send it again.")
+    }
+
+    /// The sentence for a `.rejected` outbox reason the app words itself;
+    /// nil for a reason without special wording.
+    static func outboxRejection(_ reason: String) -> String? {
+        GraphSendSubmitter.tooLargeEncodedBytes(inReason: reason).map(graphMessageTooLarge(encodedBytes:))
+    }
+
+    /// The pre-queue check: the sentence when `messageBytes` cannot be sent
+    /// through Microsoft Graph, nil when it fits.
+    static func graphSizeRefusal(messageBytes: Int) -> String? {
+        guard case .tooLarge(let encoded) = GraphSendSubmitter.sizeCheck(messageBytes: messageBytes) else { return nil }
+        return graphMessageTooLarge(encodedBytes: encoded)
     }
 
     /// The sentence for an HTTP status a provider answered with (nil = no special wording).

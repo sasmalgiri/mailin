@@ -81,6 +81,9 @@ public struct CaptureStatus: Sendable, Equatable {
     public var export: ExportVerificationSnapshot?
     /// V4-12: the archive drive to reconnect, when capture paused because it is gone.
     public var missingDrive: ArchiveDriveIdentity? = nil
+    /// When the last run failed: its typed reason. The app words
+    /// `.lastRunStopped` from this, never from the provider's raw text.
+    public var failureCause: SyncFailureCause? = nil
 
     public var lastSuccessfulSync: Date? { completeness.runs.lastSuccessfulAt }
     public var lastAttemptedSync: Date? { completeness.runs.lastAttemptedAt }

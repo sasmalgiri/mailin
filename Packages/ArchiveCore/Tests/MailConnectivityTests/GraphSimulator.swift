@@ -59,6 +59,14 @@ actor GraphSimulator: GraphHTTPTransport {
     var acceptedToken: String?
     private var failures: [Failure] = []
     private var redirects: [(pathContains: String, location: String)] = []
+    /// `/$value` gzip-encoded on the wire (as URLSession hands it over:
+    /// decoded bytes, Content-Length of the compressed body) unless the
+    /// request asks for `Accept-Encoding: identity` — or always, when set.
+    var gzipValues = false
+    var gzipEvenForIdentity = false
+    /// Messages deleted just before the folder listing page at `$skip` is served.
+    private var deletesBeforeListing: [(skip: Int, id: String)] = []
+    private(set) var valueAcceptEncodings: [String?] = []
 
     // Observations.
     private(set) var requests: [GraphHTTPRequest] = []
@@ -89,6 +97,8 @@ actor GraphSimulator: GraphHTTPTransport {
     func setEmptyContinuationPages(_ n: Int) { emptyContinuationPages = n }
     func setSupportsLatest(_ v: Bool) { supportsLatestDeltaToken = v }
     func setAcceptedToken(_ t: String?) { acceptedToken = t }
+    func setGzipValues(_ on: Bool, evenForIdentity: Bool = false) { gzipValues = on; gzipEvenForIdentity = evenForIdentity }
+    func deleteDuringListing(_ id: String, beforeSkip skip: Int) { deletesBeforeListing.append((skip, id)) }
 
     @discardableResult
     func addFolder(_ id: String, name: String, parent: String? = nil, hidden: Bool = false, wellKnown: String? = nil,
@@ -245,7 +255,8 @@ actor GraphSimulator: GraphHTTPTransport {
 
         func folderJSON(_ f: Folder) -> [String: Any] {
             let children = box.folderOrder.filter { box.folders[$0]?.parent == f.id && (hidden || box.folders[$0]?.hidden == false) }
-            return ["id": f.id, "displayName": f.name, "parentFolderId": f.parent, "childFolderCount": children.count]
+            return ["id": f.id, "displayName": f.name, "parentFolderId": f.parent, "childFolderCount": children.count,
+                    "totalItemCount": box.messages.values.filter { $0.folder == f.id }.count]
         }
         func folderID(_ s: String) -> String? { box.wellKnown[s] ?? (box.folders[s] != nil ? s : nil) }
         func listFolders(parent: String, path: String) -> GraphHTTPResponse {
@@ -279,6 +290,12 @@ actor GraphSimulator: GraphHTTPTransport {
             return listFolders(parent: id, path: "mailFolders/\(GraphAdapter.escape(rest[1]))/childFolders")
         case 3 where rest[0] == "mailFolders" && rest[2] == "messages":
             guard let id = folderID(rest[1]) else { return error(404, "ErrorItemNotFound") }
+            if let i = deletesBeforeListing.firstIndex(where: { $0.skip == skip }) {
+                let doomed = deletesBeforeListing.remove(at: i).id
+                delete(doomed, mailbox: key)
+                requests.removeLast()          // served once, below
+                return try await send(request)
+            }
             let all = box.messages.values.filter { $0.folder == id }.sorted { $0.created < $1.created }
             let page = all.dropFirst(skip).prefix(top)
             var out: [String: Any] = ["value": page.map { ["id": wireID($0, immutable: immutable), "changeKey": "ck\($0.changeKey)", "parentFolderId": $0.folder] }]
@@ -300,6 +317,14 @@ actor GraphSimulator: GraphHTTPTransport {
         case 3 where rest[0] == "messages" && rest[2] == "$value":
             guard let m = resolve(rest[1], in: box) else { return error(404, "ErrorItemNotFound") }
             valueDownloads[m.id, default: 0] += 1
+            let acceptEncoding = request.header("Accept-Encoding")
+            valueAcceptEncodings.append(acceptEncoding)
+            if gzipValues && (acceptEncoding?.lowercased() != "identity" || gzipEvenForIdentity) {
+                // What URLSession delivers for a gzip response: the decoded
+                // bytes, with the headers of the compressed body.
+                return body(200, m.mime, headers: ["content-type": "message/rfc822", "content-encoding": "gzip",
+                                                   "content-length": String(max(1, m.mime.count / 3))], chunk: chunkSize)
+            }
             return body(200, m.mime, headers: ["content-type": "message/rfc822", "content-length": String(m.mime.count)], chunk: chunkSize)
         case 3 where rest[0] == "messages" && rest[2] == "attachments":
             guard let m = resolve(rest[1], in: box) else { return error(404, "ErrorItemNotFound") }

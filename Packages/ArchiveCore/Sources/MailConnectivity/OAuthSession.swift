@@ -145,7 +145,9 @@ public enum OAuthError: LocalizedError, Equatable {
     case callbackMismatch(String)
     case missingCode
     case noPendingAuthorization
-    case tokenEndpoint(status: Int, error: String?)
+    /// `description` keeps the provider's error_description (Microsoft puts
+    /// its AADSTS code there) for the app's wording and the log — never shown as is.
+    case tokenEndpoint(status: Int, error: String?, description: String? = nil)
     case invalidTokenResponse(String)
     case reauthorisationNeeded(UUID)
     case notRegistered(UUID)
@@ -163,7 +165,7 @@ public enum OAuthError: LocalizedError, Equatable {
         case .callbackMismatch(let why): return "The sign-in response came back to the wrong place (\(why)) and was ignored."
         case .missingCode: return "The sign-in response carried no authorisation code."
         case .noPendingAuthorization: return "No sign-in is in progress for this account."
-        case .tokenEndpoint(let status, let error): return "The provider refused the token request (HTTP \(status)\(error.map { ", \($0)" } ?? ""))."
+        case .tokenEndpoint(let status, let error, _): return "The provider refused the token request (HTTP \(status)\(error.map { ", \($0)" } ?? ""))."
         case .invalidTokenResponse(let why): return "The provider's token response could not be read: \(why)."
         case .reauthorisationNeeded: return "This account needs you to sign in again."
         case .notRegistered(let id): return "Account \(id.uuidString) has no sign-in configuration."
@@ -190,7 +192,47 @@ struct TokenResponse: Decodable {
     var token_type: String?
     var error: String?
     var error_description: String?
+    /// Microsoft: the AADSTS numbers of the refusal (`error_codes: [65001]`).
+    var error_codes: [Int]?
+
+    /// error_description, or the AADSTS code alone when only `error_codes` was sent.
+    var refusalDescription: String? {
+        if let d = error_description, !d.isEmpty { return d }
+        return error_codes?.first.map { "AADSTS\($0)" }
+    }
 }
+
+/// Microsoft's AADSTS number in an error_description ("AADSTS65001: The user
+/// or administrator has not consented…"), nil when there is none.
+public func microsoftRefusalCode(_ description: String?) -> Int? {
+    guard let description, let r = description.range(of: #"AADSTS(\d+)"#, options: .regularExpression) else { return nil }
+    return Int(description[r].dropFirst("AADSTS".count))
+}
+
+/// Failures to obtain a token that pass by themselves: the network (offline,
+/// timeout, dropped connection, DNS), the token endpoint's 5xx / 429, or its
+/// `temporarily_unavailable` / `server_error`. The sync engine retries these
+/// with backoff instead of failing the run (audit 2026-11-14).
+public func isTransientTokenFailure(_ error: Error) -> Bool {
+    switch error {
+    case MailProviderError.transient, MailProviderError.rateLimited:
+        return true
+    case OAuthError.tokenEndpoint(let status, let code, _):
+        return status == 429 || (500...599).contains(status)
+            || ["temporarily_unavailable", "server_error"].contains(code ?? "")
+    case let e as URLError:
+        return transientURLErrorCodes.contains(e.code)
+    default:
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && transientURLErrorCodes.contains(URLError.Code(rawValue: ns.code))
+    }
+}
+
+let transientURLErrorCodes: Set<URLError.Code> = [
+    .timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost,
+    .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff, .badServerResponse, .resourceUnavailable,
+    .cannotLoadFromNetwork,
+]
 
 /// Token-endpoint errors that mean the grant itself is gone — sign in again.
 let reauthorisationErrors: Set<String> = ["invalid_grant", "interaction_required", "consent_required", "login_required"]
@@ -202,7 +244,7 @@ func decodeTokenResponse(status: Int, body: Data) throws -> TokenResponse {
         throw OAuthError.tokenEndpoint(status: status, error: nil)
     }
     guard (200..<300).contains(status), response.error == nil else {
-        throw OAuthError.tokenEndpoint(status: status, error: response.error)
+        throw OAuthError.tokenEndpoint(status: status, error: response.error, description: response.refusalDescription)
     }
     guard response.access_token?.isEmpty == false else { throw OAuthError.invalidTokenResponse("no access_token") }
     return response
@@ -423,12 +465,12 @@ public actor TokenRefreshCoordinator {
         refreshes[account, default: 0] += 1
         let (status, body) = try await transport.postForm(configuration.tokenEndpoint, body: FormURLEncoding.encode(form))
         let response: TokenResponse
-        do { response = try decodeTokenResponse(status: status, body: body) } catch OAuthError.tokenEndpoint(let code, let error) {
+        do { response = try decodeTokenResponse(status: status, body: body) } catch OAuthError.tokenEndpoint(let code, let error, let description) {
             if let error, reauthorisationErrors.contains(error) {
                 try await markNeedsReauthorisation(account)
                 throw OAuthError.reauthorisationNeeded(account)
             }
-            throw OAuthError.tokenEndpoint(status: code, error: error)
+            throw OAuthError.tokenEndpoint(status: code, error: error, description: description)
         }
         let next = OAuthTokenSet(accountID: account, issuer: current.issuer, audience: current.audience,
                                  accessToken: response.access_token ?? "",

@@ -266,7 +266,7 @@ enum MailStatusText {
         case .savedWithFailures(_, let failed): return String(localized: "Saved locally; \(failed) could not be downloaded yet")
         case .savedTextPending: return String(localized: "Saved locally; attachment text pending")
         case .upToDate(let saved, _): return String(localized: "Up to date: \(saved) saved from the selected folders")
-        case .lastRunStopped(let why): return String(localized: "Last capture stopped (\(why)); saved mail remains available")
+        case .lastRunStopped(let why): return ConnectedMailErrorText.stoppedHeadline(why, cause: status.failureCause)
         }
     }
 
