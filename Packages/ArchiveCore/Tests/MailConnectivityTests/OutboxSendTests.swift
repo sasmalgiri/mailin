@@ -619,3 +619,116 @@ final class OutboxSendTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Audit 2026-11-14 (Graph send)
+
+extension OutboxSendTests {
+
+    static func sentPage(_ ids: [String]) -> SendHTTPResponse {
+        SendHTTPResponse(status: 200, headers: ["content-type": "application/json"],
+                         body: Data(("{\"value\":[" + ids.map { "{\"id\":\"\($0)\"}" }.joined(separator: ",") + "]}").utf8))
+    }
+
+    /// #3: a Graph send can be checked against Sent Items by Message-ID —
+    /// uncertain and accepted (202) sends reconcile through `GraphSentLookup`.
+    func testAudit1114_graphSentLookup_reconcilesUncertainAndAcceptedSends() async throws {
+        let perm = PermissionLog()
+        let clock = TestClock()
+        let (box, _) = try outbox(clock, perm)
+
+        // A dropped connection → uncertain; the lookup finds it in Sent Items.
+        let u = try await prepare(bcc: [])
+        let flaky = FakeHTTP([.failure(URLError(.networkConnectionLost))])
+        let lookupHTTP = FakeHTTP([.success(SendHTTPResponse(status: 401)), .success(Self.sentPage(["AAMk-sent-1"]))])
+        let tokens = FakeTokens()
+        let lookup = GraphSentLookup(tokens: tokens, transport: lookupHTTP, permission: perm.permission)
+        await box.register(account: u.account.id, submitter: GraphSendSubmitter(tokens: FakeTokens(), transport: flaky, permission: perm.permission),
+                           lookup: lookup)
+        let uop = try await box.enqueue(u.composed, draft: u.draft, route: .graphAPI)
+        try await box.runDue()
+        guard case .outcomeUncertain = try await box.operation(uop.id).state else { return XCTFail() }
+        let found = try await box.reconcile(uop.id)
+        guard case .sentReconciled(_, .foundInSent) = found.state else { return XCTFail("\(found.state)") }
+        XCTAssertEqual(found.providerReference, "AAMk-sent-1")
+        XCTAssertEqual(flaky.requests.count, 1, "never resent")
+        // The request: Sent Items, filtered by the exact Message-ID, ids only, refreshed once after a 401.
+        XCTAssertEqual(lookupHTTP.requests.count, 2)
+        let request = lookupHTTP.requests[1]
+        XCTAssertEqual(request.method, "GET")
+        XCTAssertEqual(request.url.host, "graph.microsoft.com")
+        XCTAssertEqual(request.url.path, "/v1.0/me/mailFolders/sentitems/messages")
+        let items = URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.first { $0.name == "$filter" }?.value, "internetMessageId eq '\(u.composed.messageID)'")
+        XCTAssertEqual(items.first { $0.name == "$select" }?.value, "id")
+        XCTAssertEqual(request.headers["Authorization"], "Bearer token-2")
+        XCTAssertTrue(perm.asks.contains { $0.host == "graph.microsoft.com" && $0.destination == .mailServer })
+
+        // Not in Sent: recorded, and only then may the user send again.
+        let n = try await prepare(bcc: [])
+        await box.register(account: n.account.id, submitter: GraphSendSubmitter(tokens: FakeTokens(), transport: FakeHTTP([.failure(URLError(.networkConnectionLost))]),
+                                                                               permission: perm.permission),
+                           lookup: GraphSentLookup(tokens: FakeTokens(), transport: FakeHTTP([.success(Self.sentPage([]))]), permission: perm.permission))
+        let nop = try await box.enqueue(n.composed, draft: n.draft, route: .graphAPI)
+        try await box.runDue()
+        let missing = try await box.reconcile(nop.id)
+        guard case .outcomeUncertain(_, .notFound) = missing.state else { return XCTFail("\(missing.state)") }
+
+        // Accepted (202) → confirmed in Sent.
+        let a = try await prepare(bcc: [])
+        await box.register(account: a.account.id, submitter: GraphSendSubmitter(tokens: FakeTokens(), transport: FakeHTTP([.success(SendHTTPResponse(status: 202))]),
+                                                                               permission: perm.permission),
+                           lookup: GraphSentLookup(tokens: FakeTokens(), transport: FakeHTTP([.success(Self.sentPage(["AAMk-a"]))]), permission: perm.permission))
+        let aop = try await box.enqueue(a.composed, draft: a.draft, route: .graphAPI)
+        try await box.runDue()
+        guard case .accepted = try await box.operation(aop.id).state else { return XCTFail() }
+        let confirmed = try await box.reconcile(aop.id)
+        guard case .sentReconciled(_, .foundInSent) = confirmed.state else { return XCTFail("\(confirmed.state)") }
+
+        // A quote in a Message-ID is an OData literal, never the end of the filter.
+        let quoted = try lookup.url(for: "<o'brien@x.example>")
+        let filter = URLComponents(url: quoted, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "$filter" }?.value
+        XCTAssertEqual(filter, "internetMessageId eq '<o''brien@x.example>'")
+    }
+
+    /// #4: Graph's 4 MB encoded limit is a pure check the app runs before
+    /// queueing; `submit` refuses the same messages with a reason the app words.
+    func testAudit1114_graphSendSizeCheck_beforeQueueing_andTheRefusalIsRecognisable() async throws {
+        for n in [0, 1, 2, 3, 4, 1_000, 3_145_727, 3_145_728] {
+            XCTAssertEqual(GraphSendSubmitter.encodedByteCount(messageBytes: n), Data(count: n).base64EncodedData().count, "\(n)")
+        }
+        XCTAssertEqual(GraphSendSubmitter.maxEncodedBytes, 4 * 1024 * 1024)
+        XCTAssertEqual(GraphSendSubmitter.sizeCheck(messageBytes: 3_145_728), .fits(encodedBytes: 4_194_304), "exactly 4 MB encoded fits")
+        XCTAssertEqual(GraphSendSubmitter.sizeCheck(messageBytes: 3_145_729), .tooLarge(encodedBytes: 4_194_308))
+
+        let http = FakeHTTP([.success(SendHTTPResponse(status: 202))])
+        let submitter = GraphSendSubmitter(tokens: FakeTokens(), transport: http, permission: PermissionLog().permission)
+        let big = OutboundMessage(operationID: UUID(), accountID: UUID(), messageID: "<m@x.example>", envelopeFrom: "a@x.example",
+                                  envelopeRecipients: ["b@x.example"], requiresSMTPUTF8: false, bytes: Data(count: 3_145_729))
+        let outcome = await submitter.submit(big) { _ in }
+        guard case .rejected(let reason, _) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertEqual(GraphSendSubmitter.tooLargeEncodedBytes(inReason: reason), 4_194_308)
+        XCTAssertNil(GraphSendSubmitter.tooLargeEncodedBytes(inReason: "Microsoft refused the message (HTTP 400)"))
+        XCTAssertTrue(http.requests.isEmpty, "nothing was sent")
+    }
+
+    /// #6: the no-redirect transport can be ended (a URLSession keeps its
+    /// delegate until invalidated), and the app shares one instance.
+    func testAudit1114_noRedirectTransport_invalidateReleasesIt_sharedInstance() async throws {
+        XCTAssertTrue(NoRedirectSendHTTPTransport.shared === NoRedirectSendHTTPTransport.shared)
+        weak var released: NoRedirectSendHTTPTransport?
+        do {
+            let transport = NoRedirectSendHTTPTransport()
+            released = transport
+            transport.invalidate()
+            XCTAssertTrue(transport.isInvalidated)
+            do {
+                _ = try await transport.perform(SendHTTPRequest(method: "GET", url: URL(string: "https://graph.microsoft.com/v1.0/me")!,
+                                                                headers: [:], body: Data()))
+                XCTFail("a closed transport sent a request")
+            } catch is NotSentError {}
+        }
+        var waited = 0
+        while released != nil, waited < 300 { try await Task.sleep(nanoseconds: 10_000_000); waited += 1 }
+        XCTAssertNil(released, "the transport is released once its session is ended")
+    }
+}

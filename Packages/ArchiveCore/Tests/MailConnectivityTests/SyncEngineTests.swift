@@ -754,3 +754,101 @@ extension SyncEngineTests {
         XCTAssertNil(r5.suggestedRetry)
     }
 }
+
+// MARK: - Audit 2026-11-14
+
+/// A token endpoint that fails `failures` times (network or server), then answers.
+actor FlakyTokenEndpoint: TokenTransport {
+    let failure: @Sendable () throws -> (status: Int, body: Data)
+    var failuresLeft: Int
+    private(set) var calls = 0
+    init(failures: Int, failure: @escaping @Sendable () throws -> (status: Int, body: Data)) {
+        self.failuresLeft = failures; self.failure = failure
+    }
+    func postForm(_ url: URL, body: Data) async throws -> (status: Int, body: Data) {
+        calls += 1
+        if failuresLeft > 0 { failuresLeft -= 1; return try failure() }
+        return (200, Data(Fixtures.tokenJSON(access: "fresh").utf8))
+    }
+}
+
+extension SyncEngineTests {
+
+    func flakyAccount(_ sink: ConnectedArchiveSink, failures: Int,
+                      failure: @escaping @Sendable () throws -> (status: Int, body: Data)) async throws
+        -> (FakeMailProvider, TokenRefreshCoordinator, FlakyTokenEndpoint) {
+        let endpoint = FlakyTokenEndpoint(failures: failures, failure: failure)
+        let coordinator = TokenRefreshCoordinator(credentials: InMemoryCredentialStore(), transport: endpoint)
+        let fake = FakeMailProvider(pageSize: 10, tokenAudience: Fixtures.google.audience)
+        await seed(fake, folders: 1, perFolder: 3)
+        await fake.setRequiredToken("fresh")
+        await coordinator.register(account: fake.accountID, configuration: Fixtures.google)
+        try await coordinator.store(Fixtures.expiredSet(fake.accountID, refresh: "refresh-1"))   // refresh due now
+        try await register(fake, in: sink)
+        return (fake, coordinator, endpoint)
+    }
+
+    /// #5: the token is fetched outside the request's retry handling; a network
+    /// failure on the way to the token endpoint is transient — backoff, then the run goes on.
+    func testAudit1114_networkFailureDuringTokenRefresh_isTransient_backoffThenCompletes() async throws {
+        let sink = makeSink()
+        let failures: [@Sendable () throws -> (status: Int, body: Data)] = [
+            { throw URLError(.notConnectedToInternet) },
+            { throw URLError(.timedOut) },
+            { (503, Data()) },
+            { (400, Data(#"{"error":"temporarily_unavailable"}"#.utf8)) },
+        ]
+        for failure in failures {
+            let (fake, coordinator, endpoint) = try await flakyAccount(sink, failures: 2, failure: failure)
+            let waits = Box<[TimeInterval]>([])
+            let report = await makeEngine(fake, sink, tokens: coordinator, waits: waits).sync()
+            XCTAssertEqual(report.outcome, .completed, "the run went on after the sign-in service came back")
+            XCTAssertEqual(waits.value.count, 2, "one backoff wait per failed token request: \(waits.value)")
+            let calls = await endpoint.calls
+            XCTAssertEqual(calls, 3)
+            let ids = try await capturedIDs(sink, account: fake.accountID)
+            XCTAssertEqual(ids.count, 3)
+        }
+
+        // Still unreachable after the run's budget: a failure that is retried
+        // later on its own, with its typed cause — never "needs sign-in".
+        let (fake, coordinator, _) = try await flakyAccount(sink, failures: 100) { throw URLError(.notConnectedToInternet) }
+        let report = await makeEngine(fake, sink, tokens: coordinator).sync()
+        guard case .failed = report.outcome, case .provider(.transient)? = report.failureCause else {
+            return XCTFail("\(report.outcome) \(String(describing: report.failureCause))")
+        }
+        XCTAssertEqual(report.suggestedRetry, 60, "scheduled retry after the backoff's longest step")
+        let requiresSignIn = await coordinator.requiresReauthorisation(fake.accountID)
+        XCTAssertFalse(requiresSignIn)
+
+        // A refusal that does not pass by itself is not retried.
+        let (refused, refusedTokens, refusedEndpoint) = try await flakyAccount(sink, failures: 100) {
+            (400, Data(#"{"error":"invalid_client","error_description":"AADSTS700016: Application not found in the directory."}"#.utf8))
+        }
+        let r2 = await makeEngine(refused, sink, tokens: refusedTokens).sync()
+        guard case .signIn(.tokenEndpoint(400, "invalid_client", let description))? = r2.failureCause else {
+            return XCTFail("\(r2.outcome) \(String(describing: r2.failureCause))")
+        }
+        XCTAssertEqual(microsoftRefusalCode(description), 700016)
+        let refusedCalls = await refusedEndpoint.calls
+        XCTAssertEqual(refusedCalls, 1, "not retried")
+    }
+
+    /// #1: the typed cause is cleared by the next run and reaches `status()`.
+    func testAudit1114_failureCause_inStatus_clearedByNextRun() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 10)
+        await seed(fake, folders: 1, perFolder: 2)
+        try await register(fake, in: sink)
+        await fake.failNextRequests([.permanent("graphX: HTTP 418")])
+        let engine = makeEngine(fake, sink)
+        let failed = await engine.sync()
+        XCTAssertEqual(failed.failureCause, .provider(.permanent("graphX: HTTP 418")))
+        let status = try await engine.status()
+        XCTAssertEqual(status.failureCause, .provider(.permanent("graphX: HTTP 418")))
+        let ok = await engine.sync()
+        XCTAssertEqual(ok.outcome, .completed)
+        let after = try await engine.status()
+        XCTAssertNil(after.failureCause)
+    }
+}

@@ -10537,3 +10537,114 @@ final class NoOutlookMailboxTextTests: XCTestCase {
         XCTAssertNotEqual(text, ConnectedMailErrorText.text(for: MailProviderError.permanent("something else")))
     }
 }
+
+/// Audit 2026-11-14 (Graph): what the Mail page shows when an Outlook capture
+/// stops, a Microsoft sign-in is refused, or a message is too large to send —
+/// from the engine's report to the displayed sentence, never a code.
+final class GraphFailureTextTests: XCTestCase {
+    /// Microsoft Graph answering every request with one error.
+    struct RefusingGraph: GraphHTTPTransport {
+        let status: Int
+        let code: String
+        func send(_ request: GraphHTTPRequest) async throws -> GraphHTTPResponse {
+            let body = Data(#"{"error":{"code":"\#(code)","message":"\#(code) (HTTP \#(status))"}}"#.utf8)
+            return GraphHTTPResponse(status: status, headers: ["content-type": "application/json"],
+                                     body: AsyncThrowingStream { $0.yield(body); $0.finish() })
+        }
+    }
+
+    struct Tokens: AccessTokenSource {
+        func accessToken(for account: UUID, audience: String) async throws -> String { "graph-access-token" }
+        func refreshAfterRejection(account: UUID, audience: String) async throws -> String { "graph-access-token" }
+    }
+
+    /// One real capture run (GraphAdapter + SyncEngine + archive) against
+    /// `RefusingGraph`, and the Mail page's headline for its status.
+    func headline(status: Int, code: String) async throws -> String {
+        MailStatusText.headline(try await capture(status: status, code: code))
+    }
+
+    func capture(status: Int, code: String) async throws -> CaptureStatus {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("graph-text-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sink = ConnectedArchiveSink(storeDirectory: dir)
+        let account = UUID()
+        try await sink.saveAccount(ConnectedAccountRecord(accountID: account, provider: .microsoftGraph,
+                                                          issuer: "https://login.microsoftonline.com/common/v2.0",
+                                                          displayIdentity: "asha@example.com", enabledModes: ["capture"],
+                                                          connectionState: "connected", createdAt: Date(), updatedAt: Date()))
+        let adapter = GraphAdapter(accountID: account, transport: RefusingGraph(status: status, code: code), permission: { _ in })
+        let engine = SyncEngine(adapter: adapter, sink: sink, scheduler: FairDownloadScheduler(totalSlots: 2), tokens: Tokens(),
+                                permission: { _ in }, backoff: BackoffPolicy(sleep: { _ in }),
+                                storage: StorageProbe(reserveBytes: 1_024, availableBytes: { _ in 1 << 40 }))
+        let report = await engine.sync()
+        guard case .failed = report.outcome else { XCTFail("\(report.outcome)"); return try await engine.status() }
+        XCTAssertNotNil(report.failureCause, "the report carries the typed cause")
+        return try await engine.status()
+    }
+
+    func testCaptureStopped_headlineIsTheSentence_neverTheProviderText() async throws {
+        let noMailbox = try await headline(status: 404, code: "MailboxNotEnabledForRESTAPI")
+        XCTAssertTrue(noMailbox.contains("account.microsoft.com"), noMailbox)
+        let denied = try await headline(status: 403, code: "ErrorAccessDenied")
+        XCTAssertTrue(denied.contains(ConnectedMailErrorText.sentence(for: MailProviderError.permanent(GraphAdapter.mailboxAccessDeniedPrefix))), denied)
+        for text in [noMailbox, denied] {
+            XCTAssertTrue(ConnectedMailErrorText.isPresentable(text), text)
+            for leak in ["MailboxNotEnabledForRESTAPI", GraphAdapter.noMailboxPrefix, GraphAdapter.mailboxAccessDeniedPrefix,
+                         "ErrorAccessDenied", "HTTP", "403", "404", "permanent("] {
+                XCTAssertFalse(text.contains(leak), "“\(leak)” on screen: \(text)")
+            }
+        }
+        // Without a typed cause, raw provider text is screened out too.
+        var status = try await capture(status: 418, code: "Teapot")
+        status.state = .failed("Microsoft Graph HTTP 418 Teapot")
+        status.failureCause = nil
+        XCTAssertFalse(MailStatusText.headline(status).contains("HTTP 418"))
+        status.failureCause = .provider(.transient("Microsoft Graph HTTP 503"))
+        XCTAssertTrue(MailStatusText.headline(status).contains(ConnectedMailErrorText.sentence(for: MailProviderError.transient(""))))
+    }
+
+    func testMicrosoftSignInRefusals_namedByCause_codesNeverShown() {
+        let admin = ConnectedMailErrorText.microsoftAdminApprovalNeeded
+        let cases: [(Error, String?)] = [
+            (OAuthError.denied(code: "consent_required", description: "AADSTS65001: The user or administrator has not consented to use the application."), admin),
+            (OAuthError.denied(code: "access_denied", description: "AADSTS90094: The grant requires admin permission."), admin),
+            (OAuthError.tokenEndpoint(status: 400, error: "invalid_grant", description: "AADSTS90095: Admin consent is required."), admin),
+            (OAuthError.denied(code: "consent_required", description: nil), admin),
+            (OAuthError.denied(code: "access_denied", description: "AADSTS53003: Access has been blocked by Conditional Access policies."), nil),
+            (OAuthError.tokenEndpoint(status: 400, error: "invalid_grant", description: "AADSTS53000: Device is not in required device state."), nil),
+            (OAuthError.tokenEndpoint(status: 400, error: "interaction_required", description: "AADSTS50076: Due to a configuration change made by your administrator, you must use multi-factor authentication."), nil),
+            (OAuthError.denied(code: "invalid_request", description: "AADSTS50079: The user is required to use multi-factor authentication."), nil),
+            (OAuthError.tokenEndpoint(status: 400, error: "unauthorized_client", description: "AADSTS700016: Application with identifier 'x' was not found in the directory 'contoso'."), nil),
+            (OAuthError.denied(code: "invalid_request", description: "AADSTS50020: User account from identity provider does not exist in tenant."), nil),
+        ]
+        var sentences = Set<String>()
+        for (error, expected) in cases {
+            let text = ConnectedMailErrorText.sentence(for: error)
+            if let expected { XCTAssertEqual(text, expected, "\(error)") }
+            XCTAssertTrue(ConnectedMailErrorText.isPresentable(text), text)
+            for leak in ["AADSTS", "65001", "53003", "50076", "700016", "50020", "consent_required", "invalid_grant", "HTTP"] {
+                XCTAssertFalse(text.contains(leak), "\(error) shows “\(leak)”: \(text)")
+            }
+            XCTAssertNotEqual(text, ConnectedMailErrorText.sentence(for: OAuthError.denied(code: "server_error", description: nil)),
+                              "\(error) has its own sentence")
+            sentences.insert(text)
+        }
+        XCTAssertEqual(sentences.count, 5, "admin approval, organisation policy, extra verification, app not in the organisation, account not in the organisation")
+        // The user's own "no" stays the user's own "no".
+        XCTAssertEqual(ConnectedMailErrorText.sentence(for: OAuthError.denied(code: "access_denied", description: "The user denied access")),
+                       "You did not allow mailin access at the provider, so nothing was changed.")
+    }
+
+    func testGraphMessageTooLarge_checkedBeforeQueueing_andTheRefusalIsTranslatedText() async {
+        XCTAssertNil(ConnectedMailErrorText.graphSizeRefusal(messageBytes: 10_000))
+        let refusal = ConnectedMailErrorText.graphSizeRefusal(messageBytes: 3_500_000)
+        XCTAssertNotNil(refusal)
+        XCTAssertTrue(refusal?.contains("Microsoft accepts at most") == true, refusal ?? "")
+        let reason = "\(GraphSendSubmitter.tooLargePrefix): 4666668 bytes once encoded (the message is 3500000 bytes); Microsoft's send limit for one request is 4 MB encoded"
+        let text = ConnectedMailErrorText.outboxRejection(reason)
+        XCTAssertEqual(text, refusal)
+        XCTAssertFalse(text?.contains(GraphSendSubmitter.tooLargePrefix) ?? true)
+        XCTAssertNil(ConnectedMailErrorText.outboxRejection("Microsoft refused the message (HTTP 400)"))
+    }
+}

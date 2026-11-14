@@ -708,3 +708,172 @@ final class GraphAdapterTests: XCTestCase {
     }
 }
 
+// MARK: - Audit 2026-11-14 (Graph fixes)
+
+extension GraphAdapterTests {
+
+    /// #1: a provider error that stops the run travels TYPED to the status,
+    /// so the app words it — not "noOutlookMailbox: … (MailboxNotEnabledForRESTAPI)".
+    func testAudit1114_runFailureCause_isTypedInReportAndStatus() async throws {
+        let sim = GraphSimulator()
+        await sim.fail("mailFolders", status: 404, code: "MailboxNotEnabledForRESTAPI", times: 50)
+        let sink = makeSink()
+        let account = UUID()
+        try await register(account, in: sink)
+        let engine = makeEngine(makeAdapter(sim, account: account), sink)
+        let report = await engine.sync()
+        guard case .failed = report.outcome, case .provider(.permanent(let reason))? = report.failureCause else {
+            return XCTFail("\(report.outcome) \(String(describing: report.failureCause))")
+        }
+        XCTAssertTrue(reason.hasPrefix(GraphAdapter.noMailboxPrefix), reason)
+        let status = try await engine.status()
+        XCTAssertEqual(status.failureCause, report.failureCause, "the status carries the typed cause")
+        guard case .lastRunStopped = status.headline else { return XCTFail("\(status.headline)") }
+
+        // 403 on a shared mailbox: typed too, with its own prefix.
+        let denied = GraphSimulator()
+        await denied.addMailbox("shared@contoso.com")
+        await denied.deny("shared@contoso.com")
+        let second = UUID()
+        try await register(second, in: sink)
+        let r2 = await makeEngine(makeAdapter(denied, account: second, mailbox: .user("shared@contoso.com")), sink).sync()
+        guard case .provider(.permanent(let why))? = r2.failureCause else { return XCTFail("\(String(describing: r2.failureCause))") }
+        XCTAssertTrue(why.hasPrefix(GraphAdapter.mailboxAccessDeniedPrefix), why)
+
+        // A later successful run clears it.
+        let ok = GraphSimulator()
+        await standardFolders(ok)
+        let third = UUID()
+        try await register(third, in: sink)
+        let okEngine = makeEngine(makeAdapter(ok, account: third), sink)
+        let r3 = await okEngine.sync()
+        XCTAssertEqual(r3.outcome, .completed)
+        XCTAssertNil(r3.failureCause)
+        let okStatus = try await okEngine.status()
+        XCTAssertNil(okStatus.failureCause)
+    }
+
+    /// #7: a guest UPN is never an address; a UPN alone is unconfirmed.
+    func testAudit1114_profile_guestUPNRefused_UPNOnlyUnconfirmed() async throws {
+        XCTAssertEqual(GraphAdapter.profileAddress(mail: "asha@contoso.com", userPrincipalName: "asha@contoso.com"),
+                       GraphProfileAddress(address: "asha@contoso.com", source: .mail))
+        let upnOnly = GraphAdapter.profileAddress(mail: nil, userPrincipalName: "ravi@contoso.onmicrosoft.com")
+        XCTAssertEqual(upnOnly?.source, .userPrincipalName)
+        XCTAssertEqual(upnOnly?.isConfirmed, false, "a sign-in name alone is not a confirmed mailbox address")
+        XCTAssertNil(GraphAdapter.profileAddress(mail: nil, userPrincipalName: "ravi_gmail.com#EXT#@contoso.onmicrosoft.com"),
+                     "a guest UPN is not an address")
+        XCTAssertNil(GraphAdapter.profileAddress(mail: "  ", userPrincipalName: "ravi_gmail.com#ext#@contoso.onmicrosoft.com"))
+        XCTAssertEqual(GraphAdapter.profileAddress(mail: "ravi@gmail.com", userPrincipalName: "ravi_gmail.com#EXT#@contoso.onmicrosoft.com")?.isConfirmed,
+                       true)
+        // Through the service: `mail` is stated, so it is confirmed.
+        let sim = GraphSimulator(primary: "ravi@contoso.com")
+        let profile = try await makeAdapter(sim).profile(context: ctx)
+        XCTAssertEqual(profile, GraphProfileAddress(address: "ravi@contoso.com", source: .mail))
+    }
+
+    /// #8: a 200 collection page without `value` is an error, never an empty page.
+    func testAudit1114_collectionPageWithoutValue_isAnError_notAnEmptyFolder() async throws {
+        let sim = GraphSimulator()
+        await standardFolders(sim)
+        await sim.addMessage("e1", folder: "AAMk-inbox")
+        let adapter = makeAdapter(sim)
+        let inbox = RemoteFolderOccurrence(serverID: "AAMk-inbox", displayPath: "Inbox")
+        await sim.fail("/messages", status: 200, code: "Glitch")
+        do {
+            let page = try await adapter.enumerate(folder: inbox, cursor: "https://graph.microsoft.com/v1.0/me/mailFolders/AAMk-inbox/messages?$top=10",
+                                                   pageSize: 10, context: ctx)
+            XCTFail("read as an empty page: \(page.items.count) items, next \(String(describing: page.nextCursor))")
+        } catch {
+            guard case .transient? = error as? MailProviderError else { return XCTFail("\(error)") }
+        }
+        let page = try await adapter.enumerate(folder: inbox, cursor: nil, pageSize: 10, context: ctx)
+        XCTAssertEqual(page.items.count, 1)
+    }
+
+    /// #9: an empty `$value` body is a failed transfer (retried), never a preserved record.
+    func testAudit1114_emptyMIMEBody_isTransient_neverPreserved() async throws {
+        let sim = GraphSimulator()
+        await standardFolders(sim)
+        await sim.addMessage("e0", folder: "AAMk-inbox", mime: Data())
+        await sim.addMessage("e1", folder: "AAMk-inbox")
+        let sink = makeSink()
+        let adapter = makeAdapter(sim)
+        let inbox = RemoteFolderOccurrence(serverID: "AAMk-inbox", displayPath: "Inbox")
+        let bytes = RawByteSink(writer: try sink.makeStagingWriter())
+        defer { bytes.discard() }
+        do {
+            _ = try await adapter.fetchRaw(RemoteItemRef(identity: .graph(mailbox: "me", immutableID: "e0"), folder: inbox),
+                                           into: bytes, context: ctx)
+            XCTFail("an empty body was accepted")
+        } catch {
+            guard case .transient? = error as? MailProviderError else { return XCTFail("\(error)") }
+        }
+        // Through the engine: e0 fails with a reason (retried next run), e1 is saved.
+        let account = UUID()
+        try await register(account, in: sink)
+        let report = await makeEngine(makeAdapter(sim, account: account), sink).sync()
+        XCTAssertEqual(report.outcome, .completedWithFailures(failed: 1))
+        let ids = try await capturedIDs(sink, account: account)
+        XCTAssertEqual(ids, ["e1"])
+    }
+
+    /// #10: `$value` asks for `identity`; a gzip answer anyway (decoded by the
+    /// transport, Content-Length of the compressed body) is not a length mismatch.
+    func testAudit1114_gzipValue_identityRequested_andEncodedLengthNotCompared() async throws {
+        let sim = GraphSimulator()
+        await standardFolders(sim)
+        for i in 1...4 { await sim.addMessage("g\(i)", folder: "AAMk-inbox") }
+        await sim.setGzipValues(true)
+        let sink = makeSink()
+        let account = UUID()
+        try await register(account, in: sink)
+        let r1 = await makeEngine(makeAdapter(sim, account: account), sink).sync()
+        XCTAssertEqual(r1.outcome, .completed)
+        let encodings = await sim.valueAcceptEncodings
+        XCTAssertFalse(encodings.isEmpty)
+        XCTAssertTrue(encodings.allSatisfy { $0 == "identity" }, "\(encodings)")
+        let ids = try await capturedIDs(sink, account: account)
+        XCTAssertEqual(Set(ids), ["g1", "g2", "g3", "g4"])
+        try await assertBytesExact(sink, sim, account: account)
+
+        // A server that compresses regardless: still saved, byte-exact.
+        let stubborn = GraphSimulator()
+        await standardFolders(stubborn)
+        for i in 1...3 { await stubborn.addMessage("s\(i)", folder: "AAMk-inbox") }
+        await stubborn.setGzipValues(true, evenForIdentity: true)
+        let sink2 = makeSink("gzip-anyway")
+        let account2 = UUID()
+        try await register(account2, in: sink2)
+        let r2 = await makeEngine(makeAdapter(stubborn, account: account2), sink2).sync()
+        XCTAssertEqual(r2.outcome, .completed)
+        try await assertBytesExact(sink2, stubborn, account: account2)
+        XCTAssertNil(GraphAdapter.expectedByteCount(GraphHTTPResponse(status: 200, headers: ["Content-Encoding": "gzip", "Content-Length": "10"],
+                                                                      body: AsyncThrowingStream { $0.finish() })))
+        XCTAssertEqual(GraphAdapter.expectedByteCount(GraphHTTPResponse(status: 200, headers: ["Content-Length": "10"],
+                                                                        body: AsyncThrowingStream { $0.finish() })), 10)
+    }
+
+    /// #11: a message deleted while a folder is paged with `$skip` shifts the
+    /// next page; the message after the gap is not lost — the walk is checked
+    /// against the folder's count and started again.
+    func testAudit1114_skipPagingShift_folderRewalked_nothingMissed() async throws {
+        let sim = GraphSimulator()
+        await standardFolders(sim)
+        for i in 1...7 { await sim.addMessage("m\(i)", folder: "AAMk-inbox") }
+        // Page 1 ($skip=0) lists m1…m3; m1 is deleted before page 2 ($skip=3)
+        // is served, so page 2 would start at m5.
+        await sim.deleteDuringListing("m1", beforeSkip: 3)
+        let sink = makeSink()
+        let account = UUID()
+        try await register(account, in: sink)
+        let adapter = makeAdapter(sim, account: account)
+        let report = await makeEngine(adapter, sink).sync()
+        XCTAssertTrue(report.outcome.isCompletion, "\(report.outcome)")
+        let ids = Set(try await capturedIDs(sink, account: account))
+        XCTAssertTrue(ids.isSuperset(of: ["m2", "m3", "m4", "m5", "m6", "m7"]), "m4 fell between two pages: \(ids.sorted())")
+        let shortfalls = await adapter.enumerationShortfalls
+        XCTAssertTrue(shortfalls.isEmpty, "\(shortfalls)")
+        try await assertBytesExact(sink, sim, account: account)
+    }
+}
+

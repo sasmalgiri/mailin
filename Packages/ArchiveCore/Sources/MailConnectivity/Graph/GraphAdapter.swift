@@ -92,6 +92,21 @@ public struct GraphAdapterOptions: Sendable, Equatable {
     }
 }
 
+/// The address Microsoft Graph states for the signed-in user (`/me`).
+public struct GraphProfileAddress: Sendable, Equatable {
+    public enum Source: String, Sendable, Equatable {
+        /// `mail`: the mailbox's own address.
+        case mail
+        /// `userPrincipalName` only: a sign-in name, not confirmed to receive mail.
+        case userPrincipalName
+    }
+    public var address: String
+    public var source: Source
+    /// True only when Graph stated it as the mailbox's address (`mail`).
+    public var isConfirmed: Bool { source == .mail }
+    public init(address: String, source: Source) { self.address = address; self.source = source }
+}
+
 // MARK: - Wire models
 
 struct GraphCollection<T: Decodable>: Decodable {
@@ -101,7 +116,12 @@ struct GraphCollection<T: Decodable>: Decodable {
     enum CodingKeys: String, CodingKey { case value, nextLink = "@odata.nextLink", deltaLink = "@odata.deltaLink" }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        value = try c.decodeIfPresent([T].self, forKey: .value) ?? []
+        // A collection page without its `value` list is not an empty page:
+        // reading it as one would end a folder's listing early and silently.
+        guard c.contains(.value) else {
+            throw MailProviderError.transient("Microsoft Graph sent a collection page without its list of items")
+        }
+        value = try c.decode([T].self, forKey: .value)
         nextLink = try c.decodeIfPresent(String.self, forKey: .nextLink)
         deltaLink = try c.decodeIfPresent(String.self, forKey: .deltaLink)
     }
@@ -218,17 +238,34 @@ public actor GraphAdapter: MailProviderAdapter {
     /// The signed-in mailbox's own address as Microsoft Graph states it (`/me`:
     /// `mail`, else `userPrincipalName`; needs User.Read), so the account is
     /// named by the provider's answer. Nil when Graph states no address.
+    /// Use `profile(context:)` to know whether the address is confirmed.
     public func profileAddress(context: ProviderRequestContext) async throws -> String? {
+        try await profile(context: context)?.address
+    }
+
+    /// The address Graph states for `/me`, and where it came from (audit
+    /// 2026-11-14). `mail` is the mailbox's address (confirmed). A
+    /// `userPrincipalName` alone is only a sign-in name — it may not receive
+    /// mail — so it is returned unconfirmed. A guest UPN (`…#EXT#@tenant`) is
+    /// never an address and is refused. Nil when Graph states no usable address.
+    public func profile(context: ProviderRequestContext) async throws -> GraphProfileAddress? {
         let response = try await get(try url([], query: [("$select", "mail,userPrincipalName")]), context: context)
         guard (200..<300).contains(response.status) else {
             throw await failure(response, notFound: .permanent("Microsoft Graph states no profile for this account"))
         }
         struct Me: Decodable { let mail: String?; let userPrincipalName: String? }
         let me = try await decode(Me.self, response)
-        for candidate in [me.mail, me.userPrincipalName] {
-            let address = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if address.contains("@") { return address }
+        return Self.profileAddress(mail: me.mail, userPrincipalName: me.userPrincipalName)
+    }
+
+    static func profileAddress(mail: String?, userPrincipalName: String?) -> GraphProfileAddress? {
+        func usable(_ s: String?) -> String? {
+            let address = s?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard address.contains("@"), !address.uppercased().contains("#EXT#") else { return nil }
+            return address
         }
+        if let m = usable(mail) { return GraphProfileAddress(address: m, source: .mail) }
+        if let upn = usable(userPrincipalName) { return GraphProfileAddress(address: upn, source: .userPrincipalName) }
         return nil
     }
 
@@ -289,7 +326,8 @@ public actor GraphAdapter: MailProviderAdapter {
     /// One GET with the token, the immutable-ID preference, the policy check,
     /// and same-host redirects only.
     func get(_ start: URL, context: ProviderRequestContext, operation: SyncNetworkOperation = .request,
-             maxPageSize: Int? = nil, accept: String = "application/json") async throws -> GraphHTTPResponse {
+             maxPageSize: Int? = nil, accept: String = "application/json",
+             extraHeaders: [String: String] = [:]) async throws -> GraphHTTPResponse {
         guard isGraphHost(start) else {
             throw MailProviderError.permanent("graphForeignHost: a Graph link pointed at \(start.host ?? "another host"); the account's token is never sent there")
         }
@@ -300,6 +338,7 @@ public actor GraphAdapter: MailProviderAdapter {
         var prefer = #"IdType="ImmutableId""#
         if let maxPageSize { prefer += ", odata.maxpagesize=\(maxPageSize)" }
         let headers = ["Authorization": "Bearer \(token)", "Prefer": prefer, "Accept": accept]
+            .merging(extraHeaders) { current, _ in current }
         var current = start
         for _ in 0...Self.maxRedirects {
             try Task.checkCancellation()
@@ -332,7 +371,9 @@ public actor GraphAdapter: MailProviderAdapter {
 
     func decode<T: Decodable>(_ type: T.Type, _ response: GraphHTTPResponse) async throws -> T {
         let data = try await response.collect()
-        do { return try JSONDecoder().decode(T.self, from: data) } catch {
+        do { return try JSONDecoder().decode(T.self, from: data) } catch let error as MailProviderError {
+            throw error
+        } catch {
             throw MailProviderError.permanent("Microsoft Graph sent a response that could not be read (\(T.self))")
         }
     }
@@ -340,6 +381,8 @@ public actor GraphAdapter: MailProviderAdapter {
     static let noMailboxCodes: Set<String> = ["mailboxnotenabledforrestapi", "mailboxnotfound", "errormailboxnotfound"]
     /// Prefix of the `.permanent` reason for an account without an Outlook mailbox.
     public static let noMailboxPrefix = "noOutlookMailbox"
+    /// Prefix of the `.permanent` reason for a mailbox the account may not read (403).
+    public static let mailboxAccessDeniedPrefix = "mailboxAccessDenied"
 
     static let expiredStateCodes: Set<String> = ["syncstatenotfound", "syncstateinvalid", "resyncrequired", "invalidsyncstate",
                                                  "errorinvalidsyncstatedata", "syncstateexpired"]
@@ -360,7 +403,7 @@ public actor GraphAdapter: MailProviderAdapter {
         case 401:
             return .unauthorized
         case 403:
-            return .permanent("mailboxAccessDenied: the signed-in account may not read mailbox \(mailbox.identity) (HTTP 403\(code.isEmpty ? "" : ", \(code)")). The mailbox owner or an administrator must grant access.")
+            return .permanent("\(Self.mailboxAccessDeniedPrefix): the signed-in account may not read mailbox \(mailbox.identity) (HTTP 403\(code.isEmpty ? "" : ", \(code)")). The mailbox owner or an administrator must grant access.")
         case 404:
             return notFound
         case 410:
@@ -498,17 +541,87 @@ public actor GraphAdapter: MailProviderAdapter {
 
     func identity(_ id: String) -> ProviderMessageIdentity { .graph(mailbox: mailbox.identity, immutableID: id) }
 
+    /// One folder's walk in this adapter: the ids listed so far (hashed — no
+    /// message data held) and how often the walk was started again.
+    struct FolderWalkTally { var seen: Set<Int> = []; var rewalks = 0; var startTotal: Int? }
+    private var tallies: [String: FolderWalkTally] = [:]
+    /// Walks of a folder started again because the listing came up short.
+    static let maxRewalks = 2
+
+    /// A folder whose listing stayed shorter than the folder's own item count
+    /// after the re-walks (stated, never hidden; Health / diagnostics).
+    public struct EnumerationShortfall: Sendable, Equatable {
+        public var listed: Int
+        public var totalItemCount: Int
+    }
+    public private(set) var enumerationShortfalls: [String: EnumerationShortfall] = [:]
+
+    func firstPage(_ folder: RemoteFolderOccurrence, pageSize: Int) throws -> URL {
+        try url(["mailFolders", folder.serverID, "messages"],
+                query: [("$select", Self.messageSelect), ("$top", String(max(1, pageSize)))])
+    }
+
     public func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
                           context: ProviderRequestContext) async throws -> EnumerationPage {
-        let request = try cursor.map(link) ?? url(["mailFolders", folder.serverID, "messages"],
-                                                  query: [("$select", Self.messageSelect), ("$top", String(max(1, pageSize)))])
+        let request = try cursor.map(link) ?? firstPage(folder, pageSize: pageSize)
+        // A walk that starts here is counted; one resumed from a stored cursor
+        // (after a restart) cannot be, and is not checked.
+        if cursor == nil {
+            tallies[folder.serverID] = FolderWalkTally(startTotal: try await totalItemCount(folder, context: context))
+        }
         let response = try await get(request, context: context)
         guard (200..<300).contains(response.status) else {
             throw await failure(response, notFound: .folderUnavailable(folder.serverID))
         }
         let page = try await decode(GraphCollection<GraphMessageRef>.self, response)
         let items = page.value.map { RemoteItemRef(identity: identity($0.id), folder: folder, changeToken: $0.changeKey) }
-        return EnumerationPage(items: items, nextCursor: page.nextLink)
+        if tallies[folder.serverID] != nil {
+            for ref in page.value { tallies[folder.serverID]?.seen.insert(ref.id.hashValue) }
+        }
+        guard page.nextLink == nil, var tally = tallies[folder.serverID] else {
+            return EnumerationPage(items: items, nextCursor: page.nextLink)
+        }
+        // `$skip` paging shifts when messages leave the folder during the walk,
+        // so a message can fall between two pages. The walk is compared with
+        // the folder's own count, at its start and at its end: fewer listed
+        // than the folder holds, or a count that went DOWN while it was walked
+        // (mail left the folder — the shift that skips; arrivals only shift
+        // mail onto a later page twice), starts the walk again (already-saved
+        // mail is only observed), at most `maxRewalks` times; a walk still
+        // short after that is stated in `enumerationShortfalls`.
+        guard let total = try await totalItemCount(folder, context: context) else {
+            tallies[folder.serverID] = nil
+            return EnumerationPage(items: items, nextCursor: nil)
+        }
+        let short = tally.seen.count < total
+        let shrank = tally.startTotal.map { total < $0 } ?? false
+        guard short || shrank else {
+            tallies[folder.serverID] = nil
+            enumerationShortfalls[folder.serverID] = nil
+            return EnumerationPage(items: items, nextCursor: nil)
+        }
+        if tally.rewalks < Self.maxRewalks {
+            tally.rewalks += 1
+            tally.startTotal = total
+            tallies[folder.serverID] = tally
+            return EnumerationPage(items: items, nextCursor: try firstPage(folder, pageSize: pageSize).absoluteString)
+        }
+        tallies[folder.serverID] = nil
+        if short { enumerationShortfalls[folder.serverID] = EnumerationShortfall(listed: tally.seen.count, totalItemCount: total) }
+        return EnumerationPage(items: items, nextCursor: nil)
+    }
+
+    /// The folder's `totalItemCount`; nil when the folder is gone (its mail
+    /// reappears through the change log).
+    func totalItemCount(_ folder: RemoteFolderOccurrence, context: ProviderRequestContext) async throws -> Int? {
+        let response = try await get(try url(["mailFolders", folder.serverID], query: [("$select", "totalItemCount")]), context: context)
+        guard (200..<300).contains(response.status) else {
+            let error = await failure(response, notFound: .folderUnavailable(folder.serverID))
+            if case .folderUnavailable = error { return nil }
+            throw error
+        }
+        struct Count: Decodable { var totalItemCount: Int? }
+        return try await decode(Count.self, response).totalItemCount
     }
 
     // MARK: Capture
@@ -554,9 +667,14 @@ public actor GraphAdapter: MailProviderAdapter {
             }
         }
 
-        // 3. The MIME, streamed exactly as received.
-        let response = try await get(try url(["messages", id, "$value"]), context: context, operation: .download, accept: "*/*")
+        // 3. The MIME, streamed exactly as received. `identity`: the bytes
+        //    must arrive uncompressed so their count can be checked against
+        //    Content-Length (URLSession decompresses gzip silently, and the
+        //    header then counts the compressed bytes).
+        let response = try await get(try url(["messages", id, "$value"]), context: context, operation: .download, accept: "*/*",
+                                     extraHeaders: ["Accept-Encoding": "identity"])
         guard (200..<300).contains(response.status) else { throw await failure(response, notFound: .itemUnavailable) }
+        var bodyBytes: Int64 = 0
         var iterator = response.body.makeAsyncIterator()
         while true {
             let chunk: Data?
@@ -568,7 +686,13 @@ public actor GraphAdapter: MailProviderAdapter {
                 throw MailProviderError.transient("the message download was interrupted: \(error.localizedDescription)")
             }
             guard let chunk else { break }
+            bodyBytes += Int64(chunk.count)
             try sink.write(chunk)
+        }
+        // No message is zero bytes: an empty body is a failed transfer, retried
+        // (never preserved as an unreadable record).
+        guard bodyBytes > 0 else {
+            throw MailProviderError.transient("Microsoft Graph sent an empty message body")
         }
 
         var occurrences: [RemoteFolderOccurrence] = []
@@ -582,7 +706,18 @@ public actor GraphAdapter: MailProviderAdapter {
             occurrences: occurrences,
             metadata: ProviderMetadata(representation: .graphMIME, internalDate: received, revision: meta.changeKey,
                                        flags: flags, extra: extra),
-            expectedByteCount: response.header("content-length").flatMap { Int64($0.trimmingCharacters(in: .whitespaces)) })
+            expectedByteCount: Self.expectedByteCount(response))
+    }
+
+    /// Content-Length counts the bytes as SENT; when the server encoded them
+    /// anyway (gzip despite `identity`), the transport hands over decoded
+    /// bytes and the length cannot be compared.
+    static func expectedByteCount(_ response: GraphHTTPResponse) -> Int64? {
+        if let encoding = response.header("content-encoding")?.trimmingCharacters(in: .whitespaces).lowercased(),
+           !encoding.isEmpty, encoding != "identity" {
+            return nil
+        }
+        return response.header("content-length").flatMap { Int64($0.trimmingCharacters(in: .whitespaces)) }
     }
 
     // MARK: Changes
