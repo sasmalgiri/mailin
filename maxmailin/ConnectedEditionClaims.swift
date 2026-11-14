@@ -68,7 +68,7 @@ extension LegalComplianceManager {
 
     Sign-in: you sign in on the provider's own page. mailin receives sign-in tokens (Gmail, Outlook) or uses the password or app password you enter (IMAP); they are kept only in this device's Keychain, are never synchronised and are never included in backups or exports.
 
-    Data Storage: Saved mail, drafts and the outbox are stored locally in your archive folder. Removing an account deletes its sign-in data from the Keychain and keeps its saved mail; deleting that mail is a separate step that shows the count first. To also withdraw mailin's access at the provider, remove it in your Google or Microsoft account's app permissions.
+    Data Storage: Saved mail, drafts and the outbox are stored locally in your archive folder. Removing an account deletes its sign-in data from the Keychain and keeps its saved mail; deleting that mail is a separate step that shows the count first. Removing an account does not withdraw access at the provider; to do that as well: for Gmail, revoke the app password you created for mailin at myaccount.google.com/apppasswords; for Microsoft, remove mailin at account.microsoft.com ▸ Privacy ▸ Apps and services (work or school accounts: myapps.microsoft.com); for another IMAP server, delete the app password or change the password you entered.
 
     Third-Party Services: Apple App Store for purchases. Your own mail providers, only as described above. No advertising SDKs, no analytics frameworks, no tracking.
 

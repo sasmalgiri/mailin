@@ -11232,14 +11232,12 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
         XCTAssertNotEqual(try env.credentials.read(.oauthTokenSet, account: id), Data("old-secret".utf8))
 
         #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
-        struct Stated { let address: String; let fromUserPrincipalName: Bool }
-        struct Checked { let mail: String; let isConfirmed: Bool }
-        XCTAssertEqual(ConnectedMailProductionTransports.providerStated("a@example.com"), "a@example.com")
-        XCTAssertNil(ConnectedMailProductionTransports.providerStated(nil as String?))
-        XCTAssertNil(ConnectedMailProductionTransports.providerStated(Stated(address: "a@example.com", fromUserPrincipalName: true)),
-                     "a sign-in name (userPrincipalName) is not a confirmed mailbox")
-        XCTAssertEqual(ConnectedMailProductionTransports.providerStated(Stated(address: "a@example.com", fromUserPrincipalName: false)), "a@example.com")
-        XCTAssertNil(ConnectedMailProductionTransports.providerStated(Checked(mail: "a@example.com", isConfirmed: false)))
+        XCTAssertNil(ConnectedMailProductionTransports.stated(graph: nil))
+        XCTAssertEqual(ConnectedMailProductionTransports.stated(graph: GraphProfileAddress(address: "a@example.com", source: .userPrincipalName)),
+                       ProviderStatedAddress(address: "a@example.com", isConfirmed: false),
+                       "a sign-in name (userPrincipalName) is not a confirmed mailbox")
+        XCTAssertEqual(ConnectedMailProductionTransports.stated(graph: GraphProfileAddress(address: "a@example.com", source: .mail)),
+                       ProviderStatedAddress(address: "a@example.com", isConfirmed: true))
         #endif
     }
 
@@ -11443,5 +11441,336 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
             let ids = try XCTUnwrap(info["BGTaskSchedulerPermittedIdentifiers"] as? [String], plist)
             XCTAssertTrue(ids.contains(BackgroundAnalysisManager.taskIdentifier), "\(plist) does not permit the analysis task")
         }
+    }
+}
+
+// MARK: - Fix integration 2026-11-14
+
+/// An IMAP account's adapter for the integration tests: its folder listing
+/// fails with `listingError`, or succeeds and states `statedLimits`.
+actor IntegrationIMAPProvider: MailProviderAdapter, ListingLimitsReporting {
+    nonisolated let accountID: UUID
+    nonisolated let provider: MailProviderKind = .imap
+    nonisolated let mailHost: String
+    nonisolated let authorizationHost: String? = nil
+    nonisolated let tokenAudience: String? = nil
+    private let listingError: MailProviderError?
+    private let statedLimits: [IMAPListingLimit]
+
+    init(accountID: UUID, mailHost: String = "imap.fixture.example", listingError: MailProviderError? = nil,
+         statedLimits: [IMAPListingLimit] = []) {
+        self.accountID = accountID; self.mailHost = mailHost
+        self.listingError = listingError; self.statedLimits = statedLimits
+    }
+
+    func statedListingLimits() async -> [IMAPListingLimit] { statedLimits }
+    func limits() async -> ProviderLimits { ProviderLimits(maxConcurrentDownloads: 1, pageSize: 10, changeTracking: .none) }
+    func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {
+        if let listingError { throw listingError }
+        return FolderPage(folders: [RemoteFolderOccurrence(serverID: "INBOX", displayPath: "Inbox", kind: .label)], nextPageToken: nil)
+    }
+    func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
+                   context: ProviderRequestContext) async throws -> EnumerationPage {
+        EnumerationPage(items: [], nextCursor: nil)
+    }
+    func fetchRaw(_ item: RemoteItemRef, into sink: RawByteSink, context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+        throw MailProviderError.itemUnavailable
+    }
+    func changeBoundary(scope: ChangeScope, context: ProviderRequestContext) async throws -> String { "" }
+    func changes(scope: ChangeScope, since token: String, context: ProviderRequestContext) async throws -> ChangePage {
+        ChangePage(changes: [], resume: "", hasMore: false)
+    }
+}
+
+/// Sign-in transports whose provider states an address, confirmed or only
+/// a sign-in name (Microsoft `userPrincipalName`).
+@MainActor
+private final class IntegrationStatedTransports: ConnectedMailTransports {
+    var stated: ProviderStatedAddress?
+    init(stated: ProviderStatedAddress?) { self.stated = stated }
+    func signIn(_ choice: MailProviderChoice, accountID: UUID, extraScopes: [String], info: [String: String],
+                policy: MailNetworkPolicy) async throws -> (tokens: OAuthTokenSet, issuer: String, tenant: String?) {
+        (OAuthTokenSet(accountID: accountID, issuer: GmailOAuth.issuer, audience: GmailOAuth.audience, accessToken: "a",
+                       refreshToken: "r", expiresAt: Date().addingTimeInterval(3600), scopes: GmailOAuth.captureScopes),
+         GmailOAuth.issuer, nil)
+    }
+    func registerSending(_ account: MailAccount, extras: MailAccountExtras, outbox: Outbox, credentials: any CredentialStore,
+                         tokens: TokenRefreshCoordinator?, permission: @escaping NetworkPermission) async {}
+    func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
+                        permission: @escaping NetworkPermission) throws -> (any RemoteActionExecutor)? { nil }
+    func statedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                       policy: MailNetworkPolicy) async -> ProviderStatedAddress? { stated }
+}
+
+/// Fix integration 2026-11-14: the five parallel fix branches' integration
+/// points wired — Graph Sent lookup and the one no-redirect transport, one
+/// outbox sentence for Microsoft's 4 MB limit, Microsoft's unconfirmed
+/// sign-in name, IMAP / SMTP error codes worded and Replace password offered,
+/// Gmail's hidden All Mail stated, only-copy records stated on deletion, and
+/// the connected privacy summary's withdrawal steps.
+@MainActor
+final class ConnectedFixIntegrationTests: XCTestCase {
+
+    private static var repo: URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent() }
+    private static let gmailInfo = [MailProviderChoice.gmailClientIDKey: "418093572046-k2pq7rnv5x3w9hfsd8a1jc4mty6bzle0.apps.googleusercontent.com"]
+
+    private func source(_ path: String) throws -> String {
+        try String(contentsOf: Self.repo.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    private struct Env {
+        let root: URL
+        let runtime: ConnectedMailRuntime
+        let credentials: ConnectedFiveJobsCredentials
+    }
+
+    private func makeEnv(adapters: @escaping ConnectedAdapterFactory = { _ in nil }) -> Env {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("FIXINT-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let credentials = ConnectedFiveJobsCredentials()
+        let deps = ConnectedMailRuntime.Dependencies(store: store, fts: fts, policy: policy, credentials: credentials, tokens: nil,
+                                                     adapters: adapters, storage: StorageProbe(reserveBytes: 0))
+        return Env(root: root, runtime: ConnectedMailRuntime(dependencies: deps), credentials: credentials)
+    }
+
+    private func backend(_ env: Env, transports: ConnectedMailTransports? = nil) throws -> ConnectedMailBackend {
+        let name = "fixint-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        return try ConnectedMailBackend(runtime: env.runtime, storeDirectory: env.root.appendingPathComponent("store", isDirectory: true),
+                                        credentials: env.credentials, tokens: nil, transports: transports,
+                                        extras: MailAccountExtrasStore(defaults: defaults), providerInfo: Self.gmailInfo)
+    }
+
+    private func imapAccount(_ host: String = "imap.fixture.example", state: MailAccount.ConnectionState = .connected) -> MailAccount {
+        MailAccount(provider: .imap, host: host, port: 993, loginName: "asha@example.com", displayIdentity: "asha@example.com",
+                    enabledModes: [.capture], connectionState: state)
+    }
+
+    /// One real capture run of `adapter` (SyncEngine + archive) and its status.
+    private func failedStatus(_ adapter: IntegrationIMAPProvider) async throws -> CaptureStatus {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fixint-run-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let sink = ConnectedArchiveSink(storeDirectory: dir)
+        try await sink.saveAccount(ConnectedAccountRecord(accountID: adapter.accountID, provider: .imap, issuer: "",
+                                                          displayIdentity: "asha@example.com", enabledModes: ["capture"],
+                                                          connectionState: "connected", createdAt: Date(), updatedAt: Date()))
+        let engine = SyncEngine(adapter: adapter, sink: sink, scheduler: FairDownloadScheduler(totalSlots: 2), tokens: nil,
+                                permission: { _ in }, backoff: BackoffPolicy(sleep: { _ in }),
+                                storage: StorageProbe(reserveBytes: 1_024, availableBytes: { _ in 1 << 40 }))
+        let report = await engine.sync()
+        guard case .failed = report.outcome else { XCTFail("\(report.outcome)"); return try await engine.status() }
+        return try await engine.status()
+    }
+
+    // MARK: 1, 2 — Graph Sent lookup, one no-redirect transport
+
+    func testGraphSendRoute_hasASentLookup_andTheAppUsesTheSharedNoRedirectTransport() throws {
+        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        struct Tokens: AccessTokenSource {
+            func accessToken(for account: UUID, audience: String) async throws -> String { "t" }
+            func refreshAfterRejection(account: UUID, audience: String) async throws -> String { "t" }
+        }
+        let lookup = ConnectedMailProductionTransports.sentLookup(for: .microsoftGraph, tokens: Tokens(), permission: { _ in })
+        XCTAssertTrue(lookup is GraphSentLookup, "Microsoft sends can be checked against Sent Items")
+        XCTAssertEqual(lookup?.host, "graph.microsoft.com")
+        XCTAssertNil(ConnectedMailProductionTransports.sentLookup(for: .microsoftGraph, tokens: nil, permission: { _ in }))
+        XCTAssertNil(ConnectedMailProductionTransports.sentLookup(for: .gmail, tokens: Tokens(), permission: { _ in }))
+        #endif
+        let transports = try source("maxmailin/ConnectedMailProductionTransports.swift")
+        let register = String(transports[try XCTUnwrap(transports.range(of: "func registerSending(")).upperBound...].prefix(1_500))
+        XCTAssertTrue(register.contains("lookup: Self.sentLookup(for: account.provider"), "the Graph route registers its Sent lookup")
+        for file in ["maxmailin/ConnectedMailProductionTransports.swift", "maxmailin/ConnectedMailRuntime.swift", "maxmailin/MailWorkspaceBackend.swift"] {
+            XCTAssertFalse(try source(file).contains("NoRedirectSendHTTPTransport()"), "\(file) builds its own transport instead of .shared")
+        }
+    }
+
+    // MARK: 3 — one sentence for Microsoft's 4 MB limit
+
+    func testGraphTooLarge_isOneSentence_beforeQueueingAndInTheOutbox() {
+        let bytes = 3_500_000
+        let preQueue = ConnectedMailBackend.graphSendRefusal(byteCount: bytes)
+        XCTAssertNotNil(preQueue)
+        XCTAssertEqual(preQueue, ConnectedMailErrorText.graphSizeRefusal(messageBytes: bytes), "the pre-queue refusal is the outbox's sentence")
+        let reason = "\(GraphSendSubmitter.tooLargePrefix): 4666668 bytes once encoded (the message is 3500000 bytes)"
+        let shown = MailOutboxText.state(.rejected(reason: reason, rejectedRecipients: []))
+        XCTAssertEqual(shown, preQueue)
+        XCTAssertFalse(shown.contains("the provider refused it"), "not a second, generic sentence: \(shown)")
+        XCTAssertFalse(shown.contains(GraphSendSubmitter.tooLargePrefix))
+        // Uncoded refusals keep the generic line.
+        XCTAssertTrue(MailOutboxText.state(.rejected(reason: "550 no such user", rejectedRecipients: [])).contains("550 no such user"))
+    }
+
+    // MARK: 4 — Microsoft's unconfirmed sign-in name
+
+    func testUnconfirmedSignInName_isNotVerified_butASecondMailboxIsStillRefused() async throws {
+        let env = makeEnv()
+        let transports = IntegrationStatedTransports(stated: ProviderStatedAddress(address: "asha@contoso.example", isConfirmed: false))
+        let backend = try backend(env, transports: transports)
+        let id = try await backend.signIn(.gmail, address: "asha@contoso.example", existing: nil, extraScopes: [])
+        let identities = await backend.identities(id)
+        XCTAssertEqual(identities.first?.address.addrSpec, "asha@contoso.example")
+        XCTAssertNotEqual(identities.first?.permission, .verified, "a sign-in name alone never verifies the sending address")
+
+        // Signing in again as another login is refused even when that login is only a sign-in name.
+        transports.stated = ProviderStatedAddress(address: "ravi@contoso.example", isConfirmed: false)
+        do {
+            _ = try await backend.signIn(.gmail, address: "asha@contoso.example", existing: id, extraScopes: [])
+            XCTFail("signing in as another login must be refused")
+        } catch {
+            XCTAssertEqual(error.localizedDescription,
+                           MailLifecycleText.otherMailbox(signedIn: "ravi@contoso.example", account: "asha@contoso.example"))
+        }
+
+        // The provider confirming the mailbox verifies it.
+        transports.stated = ProviderStatedAddress(address: "asha@contoso.example", isConfirmed: true)
+        _ = try await backend.signIn(.gmail, address: "asha@contoso.example", existing: id, extraScopes: [])
+        let confirmed = await backend.identities(id)
+        XCTAssertEqual(confirmed.first?.permission, .verified)
+
+        let transportsSource = try source("maxmailin/ConnectedMailProductionTransports.swift")
+        XCTAssertTrue(transportsSource.contains("adapter.profile(context: context)"), "Graph's typed /me answer is used")
+        XCTAssertFalse(transportsSource.contains("Mirror(reflecting:"), "no reflection workaround")
+    }
+
+    // MARK: 5 — IMAP / SMTP error codes worded; Replace password offered
+
+    func testIMAPErrorCodes_becomeSentences_andGmailAdviceOnlyForRealPasswordRefusals() throws {
+        let gmail = "imap.gmail.com"
+        func text(_ code: String, _ detail: String = "server words", host: String? = nil, retrying: Bool = true) throws -> String {
+            try XCTUnwrap(ConnectedMailErrorText.codedSentence("\(code): \(detail)", mailHost: host, retrying: retrying), code)
+        }
+        XCTAssertEqual(try text(IMAPErrorCode.imapDisabled, host: gmail), ConnectedMailErrorText.imapAccessOff)
+        XCTAssertTrue(try text(IMAPErrorCode.imapDisabled).contains("administrator"))
+        XCTAssertTrue(try text(IMAPErrorCode.webLoginRequired, host: gmail).contains("web browser"))
+        XCTAssertTrue(try text(IMAPErrorCode.appPasswordRequired, host: gmail).contains("myaccount.google.com/apppasswords"))
+        XCTAssertTrue(try text(IMAPErrorCode.appPasswordRequired, host: "imap.mail.me.com").contains("account.apple.com"))
+        XCTAssertTrue(try text(IMAPErrorCode.appPasswordRequired, host: "mail.example.org").contains("app password"))
+        XCTAssertTrue(try text(IMAPErrorCode.tooManyConnections, host: gmail).contains("tries again by itself"))
+        XCTAssertFalse(try text(IMAPErrorCode.tooManyConnections, retrying: false).contains("tries again by itself"))
+        XCTAssertEqual(try text(IMAPErrorCode.authenticationFailed, host: gmail), ConnectedMailErrorText.gmailAppPasswordRefused)
+        XCTAssertEqual(try text(IMAPErrorCode.authenticationFailed, host: "mail.example.org"), ConnectedMailErrorText.imapPasswordRefused)
+        XCTAssertTrue(ConnectedMailErrorText.imapPasswordRefused.contains("Replace password…"))
+        for code in [IMAPErrorCode.imapDisabled, IMAPErrorCode.webLoginRequired, IMAPErrorCode.tooManyConnections] {
+            XCTAssertNotEqual(try text(code, host: gmail), ConnectedMailErrorText.gmailAppPasswordRefused,
+                              "\(code) is not a password refusal")
+        }
+        // Certificates and TLS name the host; the code and the server's detail never show.
+        let certificate = IMAPTLSError(host: "imap.bad.example", status: -9807, isCertificateFailure: true, detail: "errSSLXCertChainInvalid")
+        let shown = ConnectedMailErrorText.sentence(for: certificate.providerError)
+        XCTAssertTrue(shown.contains("imap.bad.example"), shown)
+        XCTAssertTrue(shown.contains("not trusted"), shown)
+        XCTAssertTrue(ConnectedMailErrorText.sentence(for: IMAPTLSError(host: "imap.x.example", status: nil, isCertificateFailure: false,
+                                                                        detail: "port speaks plaintext").providerError).contains("imap.x.example"))
+        let smtp = "\(IMAPErrorCode.smtpCertificateNotTrusted): the certificate of smtp.bad.example is not trusted (expired). Your sign-in details were not sent."
+        let handshake = "\(IMAPErrorCode.smtpTLSHandshakeFailed): a secure connection to smtp.bad.example could not be established (closed). Your sign-in details were not sent."
+        for reason in [smtp, handshake] {
+            let line = MailOutboxText.state(.retryWaiting(reason: reason, notBefore: Date(), quota: false, automatic: false))
+            XCTAssertTrue(line.contains("smtp.bad.example"), line)
+            for leak in IMAPErrorCode.all + ["expired", "closed", "errSSL"] { XCTAssertFalse(line.contains(leak), "“\(leak)” on screen: \(line)") }
+        }
+
+        // The add-account / Replace password login check.
+        let disabled = MailLifecycleText.loginRefused(.incoming("\(IMAPErrorCode.imapDisabled): [ALERT] Your account is not enabled for IMAP use."),
+                                                      mailHost: gmail)
+        XCTAssertTrue(disabled.hasPrefix(ConnectedMailErrorText.imapAccessOff), disabled)
+        XCTAssertTrue(disabled.contains("Nothing was saved"), disabled)
+        XCTAssertNotEqual(disabled, ConnectedMailErrorText.gmailAppPasswordRefused)
+        XCTAssertEqual(MailLifecycleText.loginRefused(.incoming(MailLifecycleText.passwordRefusedReason), mailHost: gmail),
+                       ConnectedMailErrorText.gmailAppPasswordRefused)
+        XCTAssertTrue(MailLifecycleText.loginRefused(.incoming(MailLifecycleText.passwordRefusedReason), mailHost: "imap.fastmail.com")
+            .contains("Nothing was saved"))
+        let outgoing = MailLifecycleText.loginRefused(.outgoing("\(MailLifecycleText.passwordRefusedReason) (535 5.7.8 invalid)"),
+                                                      mailHost: "smtp.gmail.com")
+        XCTAssertEqual(outgoing, ConnectedMailErrorText.gmailAppPasswordRefused)
+    }
+
+    func testAccountHeadline_wordsTheCode_andReplacePasswordIsOfferedForPasswordStates() async throws {
+        let id = UUID()
+        let appPassword = try await failedStatus(IntegrationIMAPProvider(
+            accountID: id, listingError: .permanent("\(IMAPErrorCode.appPasswordRequired): Application-specific password required")))
+        var snapshot = MailAccountSnapshot(account: imapAccount("imap.mail.me.com"), status: appPassword, unavailableReason: nil,
+                                           isPaused: false, lastRunSummary: nil)
+        XCTAssertTrue(snapshot.headline.contains("account.apple.com"), snapshot.headline)
+        XCTAssertFalse(snapshot.headline.contains(IMAPErrorCode.appPasswordRequired), snapshot.headline)
+        XCTAssertTrue(snapshot.offersReplacePassword, "an app password requirement offers Replace password…")
+
+        let disabled = try await failedStatus(IntegrationIMAPProvider(
+            accountID: id, listingError: .permanent("\(IMAPErrorCode.imapDisabled): Your account is not enabled for IMAP use.")))
+        snapshot = MailAccountSnapshot(account: imapAccount("imap.gmail.com"), status: disabled, unavailableReason: nil,
+                                       isPaused: false, lastRunSummary: nil)
+        XCTAssertTrue(snapshot.headline.contains(ConnectedMailErrorText.imapAccessOff), snapshot.headline)
+        XCTAssertFalse(snapshot.headline.contains(ConnectedMailErrorText.gmailAppPasswordRefused))
+        XCTAssertFalse(snapshot.offersReplacePassword, "a new password cannot switch IMAP on")
+
+        let refused = MailAccountSnapshot(account: imapAccount(state: .needsReauthorisation), status: nil, unavailableReason: nil,
+                                          isPaused: false, lastRunSummary: nil)
+        XCTAssertTrue(refused.offersReplacePassword)
+        var oauth = imapAccount(state: .needsReauthorisation)
+        oauth.provider = .gmail
+        XCTAssertFalse(MailAccountSnapshot(account: oauth, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)
+            .offersReplacePassword, "browser sign-in accounts sign in again instead")
+
+        let views = try source("maxmailin/MailAccountViews.swift")
+        XCTAssertTrue(views.contains("if snapshot.offersReplacePassword {"), "the button follows the snapshot's decision")
+    }
+
+    // MARK: 6 — Gmail's hidden All Mail stated on the account page
+
+    func testGmailAllMailHidden_isStatedOnTheAccount() async throws {
+        let account = imapAccount("imap.gmail.com")
+        let limit = IMAPListingLimit(code: IMAPErrorCode.gmailAllMailHidden, detail: "[Gmail]/All Mail is hidden from IMAP")
+        let env = makeEnv(adapters: { context in
+            IntegrationIMAPProvider(accountID: context.account.id, mailHost: "imap.gmail.com", statedLimits: [limit])
+        })
+        try await env.runtime.registry.add(account, secret: Data("abcdabcdabcdabcd".utf8), kind: .password)
+        let backend = try backend(env)
+        try await env.runtime.reloadAccounts()
+        let snapshots = try await backend.accounts()
+        let snapshot = try XCTUnwrap(snapshots.first { $0.id == account.id })
+        XCTAssertEqual(snapshot.statedLimits, [ConnectedMailErrorText.gmailAllMailHidden])
+        XCTAssertTrue(snapshot.statedLimits.first?.contains("Show in IMAP") == true)
+        XCTAssertTrue(try source("maxmailin/MailAccountViews.swift").contains("ForEach(snapshot.statedLimits"))
+    }
+
+    // MARK: 7 — only copies stated apart from the hold
+
+    func testOnlyCopyRecords_areStated_andTheTypedCountStaysDeletable() throws {
+        var summary = ConnectedAccountArchiveSummary(accountID: UUID(), records: 12, held: 2, deletable: 7,
+                                                     exclusiveBlobs: 7, exclusiveBytes: 1_000, sharedBlobs: 0)
+        summary.keptOnlyCopy = 3
+        let detail = MailRemovalText.deletionDetail(summary)
+        XCTAssertTrue(detail.contains("7 of 12"), detail)
+        XCTAssertTrue(detail.contains("2 are on hold"), detail)
+        XCTAssertTrue(detail.contains("3 are the only copy left after duplicate removal"), detail)
+        XCTAssertTrue(MailRemovalText.deletionTitle(summary).contains("7"), "the typed count is the deletable number")
+        XCTAssertTrue(MailRemovalText.removeAndDeleteTitle(summary).contains("7"))
+
+        var deletion = ConnectedAccountArchiveDeletion(accountID: summary.accountID, deletedEmailIDs: (0..<7).map { _ in UUID() }, heldKept: 2,
+                                                       blobsRemoved: 0, bytesReclaimed: 0, blobsKeptShared: 0)
+        deletion.keptOnlyCopy = 3
+        let report = MailRemovalText.deletionReport(deletion)
+        XCTAssertTrue(report.contains("7 archived messages deleted"), report)
+        XCTAssertTrue(report.contains("2 on hold kept"), report)
+        XCTAssertTrue(report.contains("3 kept as the only copy"), report)
+        deletion.keptOnlyCopy = 0
+        XCTAssertFalse(MailRemovalText.deletionReport(deletion).contains("only copy"))
+        let views = try source("maxmailin/MailAccountViews.swift")
+        XCTAssertEqual(views.components(separatedBy: "MailRemovalText.deletionReport(deleted)").count, 3, "both deletion sheets state it")
+        XCTAssertTrue(try source("maxmailin/MailWorkspaceModel.swift").contains("self.message = MailRemovalText.deletionReport(r)"))
+    }
+
+    // MARK: 8 — privacy summary: how to withdraw access at the provider
+
+    func testConnectedPrivacySummary_namesWhereAccessIsWithdrawn() {
+        let summary = LegalComplianceManager.privacyPolicyText(mailTransportsCompiled: true)
+        XCTAssertFalse(summary.contains("app permissions"), "the stale instruction is gone")
+        XCTAssertTrue(summary.contains("myaccount.google.com/apppasswords"))
+        XCTAssertTrue(summary.contains("account.microsoft.com ▸ Privacy ▸ Apps and services"))
+        XCTAssertTrue(summary.contains("myapps.microsoft.com"))
     }
 }

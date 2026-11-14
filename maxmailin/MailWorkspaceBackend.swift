@@ -40,6 +40,11 @@ protocol ConnectedMailTransports: AnyObject {
     /// the provider was not asked or did not say.
     func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
                           policy: MailNetworkPolicy) async -> String?
+    /// The address the provider states and whether it is the mailbox's own
+    /// (Microsoft Graph: `mail`) or only a sign-in name (`userPrincipalName`,
+    /// unconfirmed). Default: `confirmedAddress`, as confirmed.
+    func statedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                       policy: MailNetworkPolicy) async -> ProviderStatedAddress?
     /// Before an IMAP account (or its new password) is saved: one IMAP session
     /// (login, list, logout) and, when `smtp` is set, one SMTP session up to
     /// AUTH. Throws the reason when either server refuses; saves nothing.
@@ -53,6 +58,11 @@ protocol ConnectedMailTransports: AnyObject {
 extension ConnectedMailTransports {
     func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
                           policy: MailNetworkPolicy) async -> String? { nil }
+    func statedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                       policy: MailNetworkPolicy) async -> ProviderStatedAddress? {
+        await confirmedAddress(choice, accountID: accountID, tokens: tokens, policy: policy)
+            .map { ProviderStatedAddress(address: $0, isConfirmed: true) }
+    }
     /// Test transports connect nowhere: the login is not checked.
     func verifyLogin(_ account: MailAccount, password: String, smtp: MailAccountExtras.SMTP?,
                      policy: MailNetworkPolicy) async throws {}
@@ -60,6 +70,15 @@ extension ConnectedMailTransports {
                         permission: @escaping NetworkPermission, trashMailbox: String?) throws -> (any RemoteActionExecutor)? {
         try actionExecutor(account, credentials: credentials, tokens: tokens, permission: permission)
     }
+}
+
+/// The mailbox address a provider states for a sign-in. `isConfirmed` false =
+/// a sign-in name only (Microsoft `userPrincipalName`): it names who signed
+/// in, so a re-sign-in as someone else is refused, but it never makes the
+/// sending identity verified.
+struct ProviderStatedAddress: Sendable, Equatable {
+    var address: String
+    var isConfirmed: Bool
 }
 
 @MainActor
@@ -211,6 +230,7 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
                                                lastRunSummary: runtime.lastReports[account.id].map(Self.runSummary))
             snapshot.isRunning = runtime.running.contains(account.id)
             snapshot.nextRetry = runtime.nextRetry[account.id]
+            snapshot.statedLimits = ConnectedMailErrorText.listingLimits(await runtime.listingLimits(of: account.id))
             out.append(snapshot)
         }
         return out
@@ -282,7 +302,10 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         do {
             try await transports.verifyLogin(account, password: password, smtp: smtp, policy: runtime.policy)
         } catch let refusal as AccountLoginCheckError {
-            throw MailWorkspaceError(MailLifecycleText.loginRefused(refusal, gmail: ConnectedMailErrorText.isGmailHost(account.host)))
+            // The outgoing server's own host words an SMTP certificate / TLS refusal.
+            let host: String?
+            if case .outgoing = refusal { host = smtp?.host ?? account.host } else { host = account.host }
+            throw MailWorkspaceError(MailLifecycleText.loginRefused(refusal, mailHost: host))
         }
     }
 
@@ -343,14 +366,18 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         }
         // The sending identity is the address the PROVIDER states, never only
         // what was typed (a typed-but-unconfirmed address is never `.verified`).
-        let confirmed = await transports.confirmedAddress(choice, accountID: id, tokens: result.tokens, policy: runtime.policy)
-            .flatMap { try? MailAddress(parsing: $0) }
+        let stated = await transports.statedAddress(choice, accountID: id, tokens: result.tokens, policy: runtime.policy)
+        let statedAddress = stated.flatMap { try? MailAddress(parsing: $0.address) }
+        // Only an address the provider confirms as the mailbox names the
+        // account and is trusted for sending; a sign-in name alone is not.
+        let confirmed = stated?.isConfirmed == true ? statedAddress : nil
         if let target {
             let account = try await runtime.registry.account(target)
-            // Signing in again never switches the account to another mailbox.
-            if let confirmed, confirmed.addrSpec.lowercased() != account.displayIdentity.lowercased() {
+            // Signing in again never switches the account to another mailbox:
+            // any stated address — confirmed or a sign-in name — must match.
+            if let signedIn = statedAddress, signedIn.addrSpec.lowercased() != account.displayIdentity.lowercased() {
                 try? await runtime.reloadAccounts()
-                throw MailWorkspaceError(MailLifecycleText.otherMailbox(signedIn: confirmed.addrSpec, account: account.displayIdentity))
+                throw MailWorkspaceError(MailLifecycleText.otherMailbox(signedIn: signedIn.addrSpec, account: account.displayIdentity))
             }
             try await reconnect(account, tokens: result.tokens, issuer: result.issuer, tenant: result.tenant, confirmed: confirmed)
         } else if let confirmed,
@@ -566,9 +593,10 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     nonisolated static let graphMaximumEncodedBytes = GraphSendSubmitter.maximumRequestBytes
 
     /// Why a message of `byteCount` bytes cannot go through Microsoft Graph, or nil.
+    /// The same sentence the outbox shows for a refusal after queueing
+    /// (`ConnectedMailErrorText.graphSizeRefusal`), so there is one wording.
     nonisolated static func graphSendRefusal(byteCount: Int) -> String? {
-        let encoded = ((byteCount + 2) / 3) * 4
-        return encoded > graphMaximumEncodedBytes ? MailLifecycleText.graphTooLarge(encodedBytes: encoded) : nil
+        ConnectedMailErrorText.graphSizeRefusal(messageBytes: byteCount)
     }
 
     // MARK: Outbox

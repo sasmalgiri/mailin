@@ -101,9 +101,11 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
     /// like every capture request: for its duration the account may read
     /// (purpose Preserve mail) from the Gmail API host only, then the grant
     /// is put back as it was. Microsoft Graph states the address from `/me`
-    /// with User.Read, which the Outlook sign-in requests (owner 2026-11-13).
-    func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
-                          policy: MailNetworkPolicy) async -> String? {
+    /// with User.Read, which the Outlook sign-in requests (owner 2026-11-13):
+    /// `mail` is the mailbox (confirmed); a `userPrincipalName` alone is a
+    /// sign-in name, stated but not confirmed.
+    func statedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                       policy: MailNetworkPolicy) async -> ProviderStatedAddress? {
         let host: String
         switch choice {
         case .gmail: host = GmailAPI.host
@@ -121,59 +123,31 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
         }
         let context = ProviderRequestContext(accountID: accountID, accessToken: tokens.accessToken, attempt: 0)
         let permission = ConnectedMailRuntime.permission(policy: policy)
-        let address: String?
+        let stated: ProviderStatedAddress?
         if choice == .gmail {
             let adapter = GmailAdapter(accountID: accountID, transport: URLSessionGmailTransport(), permission: permission)
-            address = Self.providerStated(try? await adapter.profileAddress(context: context))
+            let address: String? = try? await adapter.profileAddress(context: context)
+            stated = address.map { ProviderStatedAddress(address: $0, isConfirmed: true) }
             await adapter.close()
         } else {
             let adapter = GraphAdapter(accountID: accountID, transport: URLSessionGraphTransport(), permission: permission)
-            address = Self.providerStated(try? await adapter.profileAddress(context: context))
+            let profile: GraphProfileAddress? = try? await adapter.profile(context: context)
+            stated = Self.stated(graph: profile)
             await adapter.close()
         }
         if !alreadyAllowed { policy.setAccount(previous ?? MailAccountNetworkPolicy(id: accountID)) }
-        return address
+        return stated
     }
 
-    /// The mailbox address in a provider's profile answer, or nil when it does
-    /// not confirm one. A plain string is the stated address. A structured
-    /// answer counts only when it does not say the address came from the
-    /// sign-in name alone (Graph `userPrincipalName` is a login, not a
-    /// mailbox): a Bool child named like "confirmed" that is false, or one
-    /// named like "userPrincipalName" / "fromSignInName" that is true, makes
-    /// it unconfirmed. Works with either form of `profileAddress`.
-    nonisolated static func providerStated(_ answer: Any?) -> String? {
-        guard let answer else { return nil }
-        if let text = answer as? String { return text }
-        var address: String?
-        var unconfirmed = false
-        var pending: [Any] = [answer]
-        while let value = pending.popLast() {
-            let mirror = Mirror(reflecting: value)
-            if mirror.displayStyle == .optional {
-                pending.append(contentsOf: mirror.children.map(\.value))
-                continue
-            }
-            for child in mirror.children {
-                let label = (child.label ?? "").lowercased()
-                switch child.value {
-                case let flag as Bool:
-                    if label.contains("confirm") || label.contains("verified") || label.contains("mailbox") {
-                        if !flag { unconfirmed = true }
-                    } else if label.contains("principal") || label.contains("signin") || label.contains("login") || label.contains("upn") {
-                        if flag { unconfirmed = true }
-                    }
-                case let text as String where address == nil && (label.contains("address") || label.contains("mail") || label.isEmpty):
-                    address = text
-                default:
-                    if Mirror(reflecting: child.value).displayStyle == .enum, label.contains("source") || label.contains("origin") {
-                        let described = String(describing: child.value).lowercased()
-                        if described.contains("principal") || described.contains("upn") { unconfirmed = true }
-                    }
-                }
-            }
-        }
-        return unconfirmed ? nil : address
+    func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                          policy: MailNetworkPolicy) async -> String? {
+        await statedAddress(choice, accountID: accountID, tokens: tokens, policy: policy).flatMap { $0.isConfirmed ? $0.address : nil }
+    }
+
+    /// Microsoft Graph's `/me` answer as the app keeps it: confirmed only when
+    /// Graph named the mailbox (`mail`), never for a sign-in name alone.
+    nonisolated static func stated(graph profile: GraphProfileAddress?) -> ProviderStatedAddress? {
+        profile.map { ProviderStatedAddress(address: $0.address, isConfirmed: $0.isConfirmed) }
     }
 
     // MARK: Login check
@@ -214,11 +188,14 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
         case .gmail:
             guard let tokens else { return }
             await outbox.register(account: account.id, submitter: GmailSendSubmitter(
-                tokens: tokens, transport: NoRedirectSendHTTPTransport(), permission: permission))
+                tokens: tokens, transport: NoRedirectSendHTTPTransport.shared, permission: permission))
         case .microsoftGraph:
             guard let tokens else { return }
+            // The Sent lookup lets the outbox check Sent Items for a send
+            // Microsoft accepted (202) or whose outcome is uncertain.
             await outbox.register(account: account.id, submitter: GraphSendSubmitter(
-                tokens: tokens, transport: NoRedirectSendHTTPTransport(), permission: permission))
+                tokens: tokens, transport: NoRedirectSendHTTPTransport.shared, permission: permission),
+                lookup: Self.sentLookup(for: account.provider, tokens: tokens, permission: permission))
         case .imap:
             guard let smtp = extras.smtp else { return }
             let settings = SMTPServerSettings(host: smtp.host, port: smtp.port, security: smtp.implicitTLS ? .implicitTLS : .startTLS)
@@ -229,6 +206,15 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
         }
     }
 
+    /// The account's Sent lookup for reconciling sends: Microsoft Graph
+    /// searches Sent Items by Message-ID; the other routes have none here
+    /// (Gmail's answer carries the SENT label; IMAP appends its own copy).
+    nonisolated static func sentLookup(for provider: MailProviderKind, tokens: (any AccessTokenSource)?,
+                                       permission: @escaping NetworkPermission) -> (any SentMessageLookup)? {
+        guard provider == .microsoftGraph, let tokens else { return nil }
+        return GraphSentLookup(tokens: tokens, transport: NoRedirectSendHTTPTransport.shared, permission: permission)
+    }
+
     // MARK: Server actions
 
     func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
@@ -236,10 +222,10 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
         switch account.provider {
         case .gmail:
             guard let tokens else { return nil }
-            return GmailActionExecutor(accountID: account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport(), permission: permission)
+            return GmailActionExecutor(accountID: account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport.shared, permission: permission)
         case .microsoftGraph:
             guard let tokens else { return nil }
-            return GraphActionExecutor(accountID: account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport(), permission: permission)
+            return GraphActionExecutor(accountID: account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport.shared, permission: permission)
         case .imap:
             let adapter = try IMAPAdapter(account: account, credentials: credentials, permission: permission)
             return IMAPActionExecutor(adapter: adapter, trashMailbox: nil, permission: permission)

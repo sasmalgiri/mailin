@@ -256,7 +256,7 @@ enum MailModeText {
 
 enum MailStatusText {
     /// The localised headline for a capture status.
-    static func headline(_ status: CaptureStatus) -> String {
+    static func headline(_ status: CaptureStatus, mailHost: String? = nil) -> String {
         switch status.headline {
         case .needsSignIn: return String(localized: "Account needs sign-in; saved mail remains available")
         case .paused(.driveUnavailable):
@@ -274,7 +274,7 @@ enum MailStatusText {
         case .savedWithFailures(_, let failed): return String(localized: "Saved locally; \(failed) could not be downloaded yet")
         case .savedTextPending: return String(localized: "Saved locally; attachment text pending")
         case .upToDate(let saved, _): return String(localized: "Up to date: \(saved) saved from the selected folders")
-        case .lastRunStopped(let why): return ConnectedMailErrorText.stoppedHeadline(why, cause: status.failureCause)
+        case .lastRunStopped(let why): return ConnectedMailErrorText.stoppedHeadline(why, cause: status.failureCause, mailHost: mailHost)
         }
     }
 
@@ -327,8 +327,13 @@ enum MailOutboxText {
         case .sentReconciled(_, .appendedToSent): return String(localized: "Sent: a copy was saved to the Sent folder")
         case .sentReconciled(_, .providerResponse): return String(localized: "Sent: the provider confirmed it")
         case .cancelledBeforeSubmission: return String(localized: "Not sent: cancelled before it left this device")
-        case .rejected(let reason, _): return String(localized: "Not sent: the provider refused it (\(reason))")
+        case .rejected(let reason, _):
+            // One sentence: a reason the app words itself (Microsoft's 4 MB
+            // limit, a coded SMTP refusal) replaces the generic line.
+            if let worded = ConnectedMailErrorText.outboxRejection(reason) { return worded }
+            return String(localized: "Not sent: the provider refused it (\(reason))")
         case .retryWaiting(let reason, let notBefore, _, _):
+            if let worded = ConnectedMailErrorText.outboxRetry(reason) { return worded }
             return String(localized: "Not sent yet: \(reason). Trying again after \(notBefore.formatted(date: .omitted, time: .shortened))")
         case .needsSignIn: return String(localized: "Not sent: the account needs sign-in")
         case .outcomeUncertain(_, .notChecked): return String(localized: "Send outcome uncertain; checking Sent")
@@ -418,7 +423,19 @@ enum MailRemovalText {
     }
 
     static func deletionDetail(_ s: ConnectedAccountArchiveSummary) -> String {
-        String(localized: "\(s.deletable) of \(s.records) messages can be deleted; \(s.held) are on hold and stay. Files other accounts or imports also use stay. This cannot be undone.")
+        guard s.keptOnlyCopy > 0 else {
+            return String(localized: "\(s.deletable) of \(s.records) messages can be deleted; \(s.held) are on hold and stay. Files other accounts or imports also use stay. This cannot be undone.")
+        }
+        // The typed count stays `deletable`; the kept copies are stated apart from the hold.
+        return String(localized: "\(s.deletable) of \(s.records) messages can be deleted; \(s.held) are on hold and stay; \(s.keptOnlyCopy) are the only copy left after duplicate removal and stay. Files other accounts or imports also use stay. This cannot be undone.")
+    }
+
+    /// What a deletion did: deleted, on hold kept, only copies kept.
+    static func deletionReport(_ r: ConnectedAccountArchiveDeletion) -> String {
+        guard r.keptOnlyCopy > 0 else {
+            return String(localized: "\(r.deletedEmailIDs.count) archived messages deleted; \(r.heldKept) on hold kept.")
+        }
+        return String(localized: "\(r.deletedEmailIDs.count) archived messages deleted; \(r.heldKept) on hold kept; \(r.keptOnlyCopy) kept as the only copy left after duplicate removal.")
     }
 }
 
@@ -749,7 +766,21 @@ struct MailAccountSnapshot: Identifiable, Equatable {
     var isRunning = false
     /// When a paused capture (provider throttling or quota) is tried again by itself.
     var nextRetry: Date? = nil
+    /// Limits of the account's last folder listing, stated on screen (rule 6),
+    /// e.g. Gmail's All Mail hidden from IMAP. One sentence each.
+    var statedLimits: [String] = []
     var id: UUID { account.id }
+
+    /// A password (IMAP) account offers Replace password… when it needs
+    /// sign-in, or when its last capture stopped because the server refused
+    /// the password or wants an app password.
+    var offersReplacePassword: Bool {
+        guard account.provider == .imap, account.connectionState != .removed else { return false }
+        if account.connectionState == .needsReauthorisation { return true }
+        guard case .lastRunStopped(let why) = status?.headline else { return false }
+        let code = status?.failureCause.flatMap { IMAPErrorCode.code(of: $0.error) } ?? IMAPErrorCode.code(in: why)
+        return code.map { ConnectedMailErrorText.replacePasswordCodes.contains($0) } ?? false
+    }
 
     /// "Tries again by itself at 14:05", while an automatic retry is scheduled.
     var retryText: String? {
@@ -762,7 +793,7 @@ struct MailAccountSnapshot: Identifiable, Equatable {
         if account.connectionState == .needsReauthorisation { return String(localized: "Account needs sign-in; saved mail remains available") }
         if account.connectionState == .removed { return String(localized: "Removed; its saved mail stays in the archive") }
         if let status {
-            let line = MailStatusText.headline(status)
+            let line = MailStatusText.headline(status, mailHost: account.host)
             return retryText.map { line + " " + $0 } ?? line
         }
         return unavailableReason ?? String(localized: "Not saving mail")
@@ -1194,7 +1225,7 @@ final class MailWorkspaceModel {
         await run {
             let r = try await self.backend.deleteArchivedMail(account, confirmedCount: confirmedCount)
             result = r
-            self.message = String(localized: "\(r.deletedEmailIDs.count) archived messages deleted; \(r.heldKept) on hold kept.")
+            self.message = MailRemovalText.deletionReport(r)
         }
         if result != nil { await refresh() }
         return result

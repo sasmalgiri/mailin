@@ -27,6 +27,7 @@ enum ConnectedMailErrorText {
 
     /// The sentence only (tests; no log entry).
     static func sentence(for error: Error) -> String {
+        if let coded = codedSentence(for: error, mailHost: nil) { return coded }
         switch error {
         case let e as OAuthError: return oauth(e)
         case let e as CredentialStoreError: return keychain(e)
@@ -61,6 +62,10 @@ enum ConnectedMailErrorText {
     /// `mailHost`: Gmail's IMAP / SMTP refusing the password (IMAP
     /// AUTHENTICATIONFAILED, SMTP 535) means it needs an app password.
     static func text(for error: Error, mailHost: String?) -> String {
+        if let coded = codedSentence(for: error, mailHost: mailHost) {
+            log.error("connected mail error \(String(describing: type(of: error)), privacy: .public): \(String(describing: error), privacy: .private)")
+            return coded
+        }
         if isGmailPasswordRefusal(error, mailHost: mailHost) {
             log.error("Gmail refused the IMAP / SMTP password")
             return gmailAppPasswordRefused
@@ -70,7 +75,8 @@ enum ConnectedMailErrorText {
 
     /// The sentence only (tests; no log entry).
     static func sentence(for error: Error, mailHost: String?) -> String {
-        isGmailPasswordRefusal(error, mailHost: mailHost) ? gmailAppPasswordRefused : sentence(for: error)
+        if let coded = codedSentence(for: error, mailHost: mailHost) { return coded }
+        return isGmailPasswordRefusal(error, mailHost: mailHost) ? gmailAppPasswordRefused : sentence(for: error)
     }
 
     static func isGmailHost(_ host: String?) -> Bool {
@@ -95,6 +101,116 @@ enum ConnectedMailErrorText {
     static var fallback: String {
         String(localized: "Something went wrong with this mail account. Saved mail is not affected; the details are in the app's log.")
     }
+
+    // MARK: IMAP / SMTP refusals (audit 2026-11-14)
+
+    /// The sentence for an IMAP / SMTP error carrying an `IMAPErrorCode`
+    /// (a coded `MailProviderError`, a login-check refusal, a stopped
+    /// listing); nil when it carries none.
+    static func codedSentence(for error: Error, mailHost: String?, retrying: Bool = true) -> String? {
+        switch error {
+        case let e as AccountLoginCheckError:
+            switch e {
+            case .incoming(let why), .outgoing(let why): return codedSentence(why, mailHost: mailHost, retrying: false)
+            }
+        case let e as SelectiveListingStopped:
+            guard case .failed = e.outcome, let cause = e.cause else { return nil }
+            return codedSentence(for: cause.error, mailHost: mailHost, retrying: retrying)
+        case let e as IMAPTLSError:
+            return codedSentence(for: e.providerError, mailHost: mailHost ?? e.host, retrying: retrying)
+        case MailProviderError.permanent(let why), MailProviderError.transient(let why):
+            return codedSentence(why, mailHost: mailHost, retrying: retrying)
+        default:
+            return nil
+        }
+    }
+
+    /// The sentence for a reason that starts with an `IMAPErrorCode`
+    /// ("<code>: <server's words>"); nil for an uncoded reason. `mailHost`
+    /// is the account's server (provider-specific advice; the certificate's
+    /// host when the reason does not name it). `retrying` false: nothing
+    /// tries again by itself (the login check before saving).
+    static func codedSentence(_ reason: String, mailHost: String?, retrying: Bool = true) -> String? {
+        guard let code = IMAPErrorCode.code(in: reason) else { return nil }
+        let typedHost = mailHost?.trimmingCharacters(in: .whitespaces)
+        let host = tlsHost(in: IMAPErrorCode.detail(in: reason)) ?? (typedHost?.isEmpty == false ? typedHost : nil)
+        switch code {
+        case IMAPErrorCode.imapDisabled:
+            return imapAccessOff
+        case IMAPErrorCode.webLoginRequired:
+            return String(localized: "The provider wants you to sign in once on its website first. Sign in there in a web browser, then try again. Saved mail remains available.")
+        case IMAPErrorCode.appPasswordRequired:
+            return appPasswordNeeded(mailHost: mailHost)
+        case IMAPErrorCode.tooManyConnections:
+            return retrying
+                ? String(localized: "The mail server has too many connections open for this account right now. mailin tries again by itself; closing mail apps on other devices helps.")
+                : String(localized: "The mail server has too many connections open for this account right now. Close mail apps on other devices or wait a few minutes, then try again.")
+        case IMAPErrorCode.authenticationFailed:
+            return isGmailHost(mailHost) ? gmailAppPasswordRefused : imapPasswordRefused
+        case IMAPErrorCode.certificateNotTrusted, IMAPErrorCode.smtpCertificateNotTrusted:
+            if let host {
+                return String(localized: "The mail server's certificate is not trusted for \(host), so mailin does not connect to it and no password was sent.")
+            }
+            return String(localized: "The mail server's certificate is not trusted, so mailin does not connect to it and no password was sent.")
+        case IMAPErrorCode.tlsHandshakeFailed, IMAPErrorCode.smtpTLSHandshakeFailed:
+            if let host {
+                return String(localized: "A secure connection to \(host) could not be made, so mailin did not connect and no password was sent. Check the server name, port and security setting.")
+            }
+            return String(localized: "A secure connection to the mail server could not be made, so mailin did not connect and no password was sent. Check the server name, port and security setting.")
+        case IMAPErrorCode.gmailAllMailHidden:
+            return gmailAllMailHidden
+        default:
+            return nil
+        }
+    }
+
+    /// The host a TLS refusal names ("the certificate of <host> is not
+    /// trusted", "a secure connection to <host> could not be established").
+    static func tlsHost(in detail: String) -> String? {
+        let pattern = #"(?:certificate of|secure connection to) (\S+) (?:is not trusted|could not be established)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: detail, range: NSRange(detail.startIndex..., in: detail)),
+              let range = Range(match.range(at: 1), in: detail) else { return nil }
+        return String(detail[range])
+    }
+
+    static var imapAccessOff: String {
+        String(localized: "IMAP access is turned off for this account. Turn on IMAP in the provider's mail settings; for a work or school account (such as Google Workspace) an administrator must allow IMAP. Saved mail remains available.")
+    }
+
+    /// The mail server refused the password of an IMAP account (not Gmail).
+    static var imapPasswordRefused: String {
+        String(localized: "The mail server refused the password. Choose Replace password… to enter the current password or app password. Saved mail remains available.")
+    }
+
+    static func isICloudHost(_ host: String?) -> Bool {
+        guard let host = host?.trimmingCharacters(in: .whitespaces).lowercased(), !host.isEmpty else { return false }
+        return host == "mail.me.com" || host.hasSuffix(".mail.me.com")
+    }
+
+    /// The server wants an app password, by provider.
+    static func appPasswordNeeded(mailHost: String?) -> String {
+        if isGmailHost(mailHost) {
+            return String(localized: "This Google account needs an app password, not the normal password: turn on 2-Step Verification, create an app password at myaccount.google.com/apppasswords and use it as the password in mailin.")
+        }
+        if isICloudHost(mailHost) {
+            return String(localized: "This iCloud account needs an app-specific password: create one at account.apple.com under Sign-In and Security ▸ App-Specific Passwords and use it as the password in mailin.")
+        }
+        return String(localized: "This account needs an app password (an app-specific password) instead of the normal password. Create one in the provider's account security settings and use it as the password in mailin.")
+    }
+
+    /// Gmail's All Mail hidden from IMAP: what cannot be saved, and the fix (rule 6).
+    static var gmailAllMailHidden: String {
+        String(localized: "All Mail is hidden from IMAP in Gmail settings; archived mail without a label cannot be saved. Turn on 'Show in IMAP' for All Mail.")
+    }
+
+    /// The stated limits of an account's last folder listing, one sentence each.
+    static func listingLimits(_ limits: [IMAPListingLimit]) -> [String] {
+        limits.compactMap { codedSentence($0.code, mailHost: nil) }
+    }
+
+    /// The failure codes after which a password account offers Replace password….
+    static let replacePasswordCodes: Set<String> = [IMAPErrorCode.appPasswordRequired, IMAPErrorCode.authenticationFailed]
 
     // MARK: Sign-in
 
@@ -208,8 +324,10 @@ enum ConnectedMailErrorText {
 
     /// The headline of a capture that stopped: the typed cause's sentence,
     /// never the provider's raw text (codes, HTTP statuses, enum names).
-    static func stoppedHeadline(_ why: String, cause: SyncFailureCause?) -> String {
-        let reason = cause.map { sentence(for: $0.error) } ?? (isPresentable(why) ? why : fallback)
+    static func stoppedHeadline(_ why: String, cause: SyncFailureCause?, mailHost: String? = nil) -> String {
+        let reason = cause.map { sentence(for: $0.error, mailHost: mailHost) }
+            ?? codedSentence(why, mailHost: mailHost)
+            ?? (isPresentable(why) ? why : fallback)
         return String(localized: "Last capture stopped; saved mail remains available. \(reason)")
     }
 
@@ -225,7 +343,14 @@ enum ConnectedMailErrorText {
     /// The sentence for a `.rejected` outbox reason the app words itself;
     /// nil for a reason without special wording.
     static func outboxRejection(_ reason: String) -> String? {
-        GraphSendSubmitter.tooLargeEncodedBytes(inReason: reason).map(graphMessageTooLarge(encodedBytes:))
+        if let encoded = GraphSendSubmitter.tooLargeEncodedBytes(inReason: reason) { return graphMessageTooLarge(encodedBytes: encoded) }
+        return codedSentence(reason, mailHost: nil).map { String(localized: "Not sent. \($0)") }
+    }
+
+    /// The sentence for a `.retryWaiting` outbox reason the app words itself
+    /// (SMTP certificate / TLS refusals); nil for a reason without special wording.
+    static func outboxRetry(_ reason: String) -> String? {
+        codedSentence(reason, mailHost: nil).map { String(localized: "Not sent yet. \($0)") }
     }
 
     /// The pre-queue check: the sentence when `messageBytes` cannot be sent

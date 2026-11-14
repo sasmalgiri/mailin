@@ -65,16 +65,36 @@ enum MailLifecycleText {
     static var passwordReplaced: String { String(localized: "Password replaced. The account is signed in again.") }
 
     /// The login check before an IMAP account (or its new password) is saved failed.
-    static func loginRefused(_ error: AccountLoginCheckError, gmail: Bool) -> String {
+    /// Worded for the server `mailHost`: a coded IMAP /
+    /// SMTP refusal (IMAP off, web sign-in, app password, too many
+    /// connections, certificate, TLS) gets its own sentence; only a real
+    /// password refusal is Gmail's app-password advice.
+    static func loginRefused(_ error: AccountLoginCheckError, mailHost: String?) -> String {
+        if let coded = ConnectedMailErrorText.codedSentence(for: error, mailHost: mailHost) {
+            return String(localized: "\(coded) Nothing was saved.")
+        }
+        let gmail = ConnectedMailErrorText.isGmailHost(mailHost)
         switch error {
         case .incoming(let why):
-            if gmail && why.contains("refused") { return ConnectedMailErrorText.gmailAppPasswordRefused }
+            if isPasswordRefusal(why) {
+                return gmail ? ConnectedMailErrorText.gmailAppPasswordRefused
+                             : String(localized: "The incoming mail server refused the user name or password. Nothing was saved.")
+            }
             return String(localized: "The incoming mail server did not accept the sign-in (\(why)). Nothing was saved.")
         case .outgoing(let why):
-            if gmail && why.contains("refused") { return ConnectedMailErrorText.gmailAppPasswordRefused }
+            if isPasswordRefusal(why) {
+                return gmail ? ConnectedMailErrorText.gmailAppPasswordRefused
+                             : String(localized: "The outgoing mail server refused the user name or password. Nothing was saved.")
+            }
             return String(localized: "The outgoing mail server did not accept the sign-in (\(why)). Nothing was saved.")
         }
     }
+
+    /// The login check's words for a refused user name or password
+    /// (`IMAPLoginCheck.describe`, `SMTPLoginCheck`).
+    static let passwordRefusedReason = "the user name or password was refused"
+
+    static func isPasswordRefusal(_ why: String) -> Bool { why.hasPrefix(passwordRefusedReason) }
 
     // MARK: Sending identity
 

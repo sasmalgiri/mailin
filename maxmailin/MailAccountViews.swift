@@ -218,10 +218,17 @@ struct MailAccountSettingsView: View {
                             }
                         }
                     }
-                    if snapshot.account.connectionState == .needsReauthorisation, snapshot.account.provider == .imap {
-                        // A password account signs in again with a new password (checked first).
+                    if snapshot.offersReplacePassword {
+                        // A password account signs in again with a new password (checked first):
+                        // after sign-in is needed, a refused password or an app password requirement.
                         Button(String(localized: "Replace password…")) { sheet = .replacePassword(accountID) }
                             .accessibilityIdentifier("mail.account.replacePassword")
+                    }
+                    // Limits of the last folder listing, stated (rule 6).
+                    ForEach(snapshot.statedLimits, id: \.self) { limit in
+                        Label(limit, systemImage: "exclamationmark.triangle")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("mail.account.listingLimit")
                     }
                     if let address = unconfirmedAddress {
                         Text(MailLifecycleText.addressNotConfirmed(address)).font(.callout).foregroundStyle(.secondary)
@@ -473,7 +480,7 @@ struct MailRemoveAccountView: View {
                             .accessibilityIdentifier("mail.remove.report")
                     }
                     if let deleted = flow.deleted {
-                        Section { Text("\(deleted.deletedEmailIDs.count) archived messages deleted; \(deleted.heldKept) on hold kept.") }
+                        Section { Text(MailRemovalText.deletionReport(deleted)) }
                     } else if let deletion = flow.deletion, deletion.deletable > 0 {
                         // Removed with mail kept (or the count changed): deleting it stays possible here.
                         Section {
@@ -586,7 +593,7 @@ struct MailDeleteRemovedMailView: View {
                     Section { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("mail.deleteRemoved.error") }
                 }
                 if let deleted = flow.deleted {
-                    Section { Text("\(deleted.deletedEmailIDs.count) archived messages deleted; \(deleted.heldKept) on hold kept.") }
+                    Section { Text(MailRemovalText.deletionReport(deleted)) }
                 } else if let deletion = flow.deletion {
                     Section {
                         Text(MailRemovalText.deletionDetail(deletion)).font(.callout)

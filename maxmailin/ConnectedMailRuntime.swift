@@ -68,6 +68,16 @@ typealias ConnectedAdapterFactory = @Sendable (ConnectedAdapterContext) async th
 /// permission asks the policy with purpose "change server mail".
 typealias ConnectedActionExecutorFactory = @Sendable (ConnectedAdapterContext) async throws -> (any RemoteActionExecutor)?
 
+/// An adapter whose last folder listing has limits the app must state on
+/// screen (rule 6), e.g. Gmail's All Mail hidden from IMAP.
+protocol ListingLimitsReporting: Sendable {
+    func statedListingLimits() async -> [IMAPListingLimit]
+}
+
+extension IMAPAdapter: ListingLimitsReporting {
+    func statedListingLimits() async -> [IMAPListingLimit] { listingLimits }
+}
+
 // MARK: - Search feed
 
 /// Indexes newly captured records into the full-text index exactly as an
@@ -265,9 +275,14 @@ final class ConnectedMailRuntime {
                 case .removed: reason = String(localized: "The account was removed; its saved mail stays in the archive.")
                 case .needsReauthorisation:
                     // V4-16: Gmail over IMAP refused the password — say what it needs.
-                    reason = account.provider == .imap && ConnectedMailErrorText.isGmailHost(account.host)
-                        ? ConnectedMailErrorText.gmailAppPasswordRefused
-                        : String(localized: "Account needs sign-in; saved mail remains available.")
+                    // Any other password account: the password was refused (Replace password…).
+                    if account.provider == .imap {
+                        reason = ConnectedMailErrorText.isGmailHost(account.host)
+                            ? ConnectedMailErrorText.gmailAppPasswordRefused
+                            : ConnectedMailErrorText.imapPasswordRefused
+                    } else {
+                        reason = String(localized: "Account needs sign-in; saved mail remains available.")
+                    }
                 case .disconnected, .connected: reason = String(localized: "Saving mail is switched off for this account.")
                 }
                 disable(account.id, reason: reason)
@@ -738,6 +753,13 @@ final class ConnectedMailRuntime {
         try await reloadAccounts()
     }
 
+    /// The limits the account's last folder listing stated (empty = none, or
+    /// not listed since launch).
+    func listingLimits(of id: UUID) async -> [IMAPListingLimit] {
+        guard let reporter = adapters[id]?.adapter as? any ListingLimitsReporting else { return [] }
+        return await reporter.statedListingLimits()
+    }
+
     /// The four kinds of completeness for one account (§5.4).
     func status(of id: UUID) async throws -> CaptureStatus? {
         guard let engine = engines[id] else { return nil }
@@ -945,11 +967,11 @@ enum ConnectedMailProduction {
         switch c.account.provider {
         case .gmail:
             guard let tokens = c.tokens else { return nil }
-            return GmailActionExecutor(accountID: c.account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport(),
+            return GmailActionExecutor(accountID: c.account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport.shared,
                                        permission: c.permission)
         case .microsoftGraph:
             guard let tokens = c.tokens else { return nil }
-            return GraphActionExecutor(accountID: c.account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport(),
+            return GraphActionExecutor(accountID: c.account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport.shared,
                                        permission: c.permission)
         case .imap:
             // The Trash the server listed (special use \Trash); none listed:
