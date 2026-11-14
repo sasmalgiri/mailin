@@ -75,6 +75,10 @@ enum MailSheet: Identifiable, Equatable {
     case cleanup(UUID, only: UUID?)          // account id, one message (nil = the listed ones)
     case removeAccount(UUID)
     case upgrade
+    /// IMAP account that needs sign-in: a new password.
+    case replacePassword(UUID)
+    /// A removed account's archived mail, deleted later (count typed first).
+    case deleteRemovedMail(UUID)
 
     var id: String {
         switch self {
@@ -84,6 +88,8 @@ enum MailSheet: Identifiable, Equatable {
         case .cleanup(let id, let only): return "cleanup-\(id)-\(only?.uuidString ?? "all")"
         case .removeAccount(let id): return "remove-\(id)"
         case .upgrade: return "upgrade"
+        case .replacePassword(let id): return "password-\(id)"
+        case .deleteRemovedMail(let id): return "delete-removed-\(id)"
         }
     }
 }
@@ -102,6 +108,8 @@ private struct MailSheetHost: View {
             case .cleanup(let account, let only): MailCleanupView(model: model, accountID: account, only: only, dismiss: dismiss)
             case .removeAccount(let account): MailRemoveAccountView(model: model, accountID: account, dismiss: dismiss)
             case .upgrade: MailUpgradeInventoryView(model: model, dismiss: dismiss)
+            case .replacePassword(let account): MailReplacePasswordView(model: model, accountID: account, dismiss: dismiss)
+            case .deleteRemovedMail(let account): MailDeleteRemovedMailView(model: model, accountID: account, dismiss: dismiss)
             }
         }
         #if os(macOS)
@@ -206,7 +214,7 @@ private struct MailWorkspaceReadyView: View {
                 }
             }
             .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
-            .help(String(localized: "Save new mail from every account that may preserve mail"))
+            .help(model.syncNowHelp)
             .keyboardShortcut("r", modifiers: [.command, .option])
             .accessibilityIdentifier("mail.syncNow")
 

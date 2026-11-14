@@ -87,24 +87,32 @@ final class BackgroundAnalysisManager: ObservableObject {
     }
     #endif
 
+    /// Lifecycle audit 2026-11-14: BGTaskScheduler handlers must be registered
+    /// before the app finishes launching (a launch for a scheduled task finds
+    /// no handler otherwise, and a later register() raises). Called from the
+    /// app's init; scheduling happens later, only when the analysis is wanted.
+    func registerLaunchHandler() {
+        #if os(iOS)
+        guard !didRegisterBGTask else { return }
+        didRegisterBGTask = BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.taskIdentifier, using: nil) { [weak self] task in
+            guard let self, let processingTask = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: true)
+                return
+            }
+            Task { @MainActor in
+                await self.handleBGTask(processingTask)
+            }
+        }
+        #endif
+    }
+
     #if os(iOS)
     private func scheduleiOS() {
-        // The task identifier MUST be registered with BGTaskScheduler before
-        // any submit() call, otherwise BGTaskScheduler raises an uncatchable
-        // NSInternalInconsistencyException. Apple normally expects register()
-        // to happen at app launch; we do it lazily on first submit and guard
-        // with `didRegisterBGTask` to avoid double registration.
-        if !didRegisterBGTask {
-            BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.taskIdentifier, using: nil) { [weak self] task in
-                guard let self, let processingTask = task as? BGProcessingTask else {
-                    task.setTaskCompleted(success: true)
-                    return
-                }
-                Task { @MainActor in
-                    await self.handleBGTask(processingTask)
-                }
-            }
-            didRegisterBGTask = true
+        // The handler is registered at launch (`registerLaunchHandler`); a
+        // submit without a registered identifier is refused, never raised.
+        guard didRegisterBGTask else {
+            logger.error("Background analysis not scheduled: its handler was not registered at launch")
+            return
         }
 
         let request = BGProcessingTaskRequest(identifier: Self.taskIdentifier)

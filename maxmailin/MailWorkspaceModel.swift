@@ -96,6 +96,14 @@ enum MailProviderChoice: String, CaseIterable, Identifiable, Sendable {
 
     var usesOAuth: Bool { provider != .imap }
 
+    /// IMAP presets whose login name is the email address itself.
+    var loginIsAddress: Bool {
+        switch self {
+        case .gmailAppPassword, .iCloud, .fastmail: return true
+        case .gmail, .outlook, .otherIMAP: return false
+        }
+    }
+
     var preset: IMAPProviderPreset? {
         switch self {
         case .iCloud: return .iCloud
@@ -400,7 +408,8 @@ enum MailRemovalText {
 
     /// The separate, counted deletion of the account's archived mail.
     static func removeAndDeleteTitle(_ s: ConnectedAccountArchiveSummary) -> String {
-        s.deletable == 0 ? String(localized: "Remove")
+        // Never a second button titled "Remove" next to Remove.
+        s.deletable == 0 ? MailLifecycleText.nothingToDelete
                          : String(localized: "Remove and Delete \(s.deletable) Messages")
     }
 
@@ -691,6 +700,14 @@ struct MailIMAPForm: Equatable, Sendable {
         if choice == .gmailAppPassword, secret.count != 16 {
             return String(localized: "A Google app password has 16 characters. Create one at myaccount.google.com/apppasswords; a normal Google password will be refused.")
         }
+        // Gmail, iCloud and Fastmail sign in with the address itself: the
+        // address mail is sent from is then the one the server let in.
+        if choice.loginIsAddress {
+            let login = loginName.trimmingCharacters(in: .whitespaces)
+            if !login.isEmpty, login.lowercased() != address.trimmingCharacters(in: .whitespaces).lowercased() {
+                return MailLifecycleText.loginMustBeAddress(choice.title)
+            }
+        }
         return nil
     }
 
@@ -764,6 +781,10 @@ protocol MailWorkspaceBackend: AnyObject {
     func addIMAP(_ form: MailIMAPForm) async throws -> UUID
     /// Interactive sign-in (OAuth); `existing` re-signs an account (re-consent with `extraScopes`).
     func signIn(_ choice: MailProviderChoice, address: String, existing: UUID?, extraScopes: [String]) async throws -> UUID
+    /// IMAP: a new password, checked against the servers, then stored (account connected again).
+    func replacePassword(_ password: String, account: UUID) async throws
+    /// IMAP (other servers): the person confirms the typed sending address is theirs.
+    func confirmSendingAddress(_ account: UUID) async throws
     func setMode(_ mode: MailAccount.Mode, enabled: Bool, account: UUID) async throws
     func syncNow(_ account: UUID) async
     func setPaused(_ paused: Bool, account: UUID) async throws
@@ -816,6 +837,8 @@ extension MailWorkspaceBackend {
     func accounts() async throws -> [MailAccountSnapshot] { [] }
     func addIMAP(_ form: MailIMAPForm) async throws -> UUID { throw MailBackendUnavailable() }
     func signIn(_ choice: MailProviderChoice, address: String, existing: UUID?, extraScopes: [String]) async throws -> UUID { throw MailBackendUnavailable() }
+    func replacePassword(_ password: String, account: UUID) async throws { throw MailBackendUnavailable() }
+    func confirmSendingAddress(_ account: UUID) async throws { throw MailBackendUnavailable() }
     func setMode(_ mode: MailAccount.Mode, enabled: Bool, account: UUID) async throws { throw MailBackendUnavailable() }
     func syncNow(_ account: UUID) async {}
     func setPaused(_ paused: Bool, account: UUID) async throws { throw MailBackendUnavailable() }
@@ -880,6 +903,11 @@ final class MailWorkspaceModel {
     let backend: MailWorkspaceBackend
     var section: Section = .unifiedInbox
     private(set) var accounts: [MailAccountSnapshot] = []
+    /// Removed accounts whose archived mail is still in the archive: listed
+    /// (with the count) so their mail can still be deleted later, and their
+    /// mail stays in the unified inbox.
+    private(set) var removedAccounts: [MailAccountSnapshot] = []
+    private(set) var removedArchive: [UUID: ConnectedAccountArchiveSummary] = [:]
     private(set) var folders: [UUID: [ConnectedFolderSummary]] = [:]
     private(set) var rows: [ConnectedMailboxRow] = []
     private(set) var total = 0
@@ -913,12 +941,20 @@ final class MailWorkspaceModel {
     var actions: [MailWorkspaceAction] {
         guard availability == .ready else { return [] }
         var out: [MailWorkspaceAction] = [.addAccount, .openOutbox]
-        if accounts.contains(where: { $0.account.enabledModes.contains(.capture) && $0.account.connectionState == .connected }) {
+        if accounts.contains(where: { $0.account.enabledModes.contains(.capture) && $0.account.connectionState == .connected && !$0.isPaused }) {
             out.append(.syncNow)
         }
         if accounts.contains(where: { $0.account.enabledModes.contains(.send) }) { out.append(.compose) }
         if accounts.contains(where: { $0.account.enabledModes.contains(.serverActions) }) { out.append(.cleanup) }
         return out
+    }
+
+    /// What the Sync now button says: why it is off when every account that
+    /// saves mail is paused.
+    var syncNowHelp: String {
+        let capturing = accounts.filter { $0.account.enabledModes.contains(.capture) && $0.account.connectionState == .connected }
+        if !capturing.isEmpty, capturing.allSatisfy(\.isPaused) { return MailLifecycleText.allCapturePaused }
+        return String(localized: "Save new mail from every account that may preserve mail")
     }
 
     /// V4-16: the providers Add account lists (one Gmail entry, by the build's mode).
@@ -949,8 +985,30 @@ final class MailWorkspaceModel {
     func refreshAccounts() async {
         guard availability == .ready else { accounts = []; return }
         await run(clearsError: false) {
-            self.accounts = try await self.backend.accounts().filter { $0.account.connectionState != .removed }
+            let all = try await self.backend.accounts()
+            self.accounts = all.filter { $0.account.connectionState != .removed }
             for a in self.accounts { self.folders[a.id] = try await self.backend.folders(a.id) }
+            // Removed accounts that still have archived mail stay listed (and searchable in the inbox).
+            var removed: [MailAccountSnapshot] = []
+            var summaries: [UUID: ConnectedAccountArchiveSummary] = [:]
+            for snapshot in all where snapshot.account.connectionState == .removed {
+                guard let summary = try? await self.backend.archiveDeletionPlan(snapshot.id), summary.records > 0 else { continue }
+                removed.append(snapshot)
+                summaries[snapshot.id] = summary
+            }
+            self.removedAccounts = removed
+            self.removedArchive = summaries
+            self.resetSectionIfGone()
+        }
+    }
+
+    /// A section naming an account that is no longer listed goes back to the inbox.
+    private func resetSectionIfGone() {
+        let listed = Set(accounts.map(\.id))
+        switch section {
+        case .account(let id) where !listed.contains(id), .folder(let id, _) where !listed.contains(id):
+            section = .unifiedInbox
+        default: break
         }
     }
 
@@ -960,7 +1018,9 @@ final class MailWorkspaceModel {
         case .folder(let id, let folder):
             return ConnectedMailboxQuery(accountIDs: [id], folderServerID: folder, unreadOnly: unreadOnly, flaggedOnly: flaggedOnly)
         default:
-            return ConnectedMailboxQuery(accountIDs: Set(accounts.map(\.id)), unreadOnly: unreadOnly, flaggedOnly: flaggedOnly)
+            // Every account's captured mail, removed accounts' kept mail included.
+            return ConnectedMailboxQuery(accountIDs: Set(accounts.map(\.id)).union(removedAccounts.map(\.id)),
+                                         unreadOnly: unreadOnly, flaggedOnly: flaggedOnly)
         }
     }
 
@@ -1020,13 +1080,36 @@ final class MailWorkspaceModel {
     func addIMAP(_ form: MailIMAPForm) async -> Bool {
         var ok = false
         await run {
+            let known = Set(((try? await self.backend.accounts()) ?? []).map(\.id))
             let id = try await self.backend.addIMAP(form)
-            self.message = String(localized: "Account added. Nothing is downloaded until you turn on Preserve mail.")
+            self.message = known.contains(id)
+                ? MailLifecycleText.reconnected(form.address.trimmingCharacters(in: .whitespaces))
+                : String(localized: "Account added. Nothing is downloaded until you turn on Preserve mail.")
             self.section = .account(id)
             ok = true
         }
         if ok { await refresh() }
         return ok
+    }
+
+    /// IMAP "Replace password…": the new password is checked before it is stored.
+    func replacePassword(_ password: String, account: UUID) async -> Bool {
+        var ok = false
+        await run {
+            try await self.backend.replacePassword(password, account: account)
+            self.message = MailLifecycleText.passwordReplaced
+            ok = true
+        }
+        await refreshAccounts()
+        return ok
+    }
+
+    /// The person confirms an IMAP account's typed sending address is theirs.
+    func confirmSendingAddress(_ account: UUID) async {
+        await run {
+            try await self.backend.confirmSendingAddress(account)
+            self.message = MailLifecycleText.addressConfirmed
+        }
     }
 
     /// Signs in a new OAuth account (nothing allowed yet). Does nothing when
@@ -1035,9 +1118,12 @@ final class MailWorkspaceModel {
         guard providerReadiness(choice).isReady else { return false }
         var ok = false
         await run {
+            let known = Set(((try? await self.backend.accounts()) ?? []).map(\.id))
             let id = try await self.backend.signIn(choice, address: address, existing: nil, extraScopes: [])
-            var note = String(localized: "Account added. Nothing is downloaded until you turn on Preserve mail.")
             let typed = address.trimmingCharacters(in: .whitespaces)
+            var note = known.contains(id)
+                ? MailLifecycleText.reconnected(typed)
+                : String(localized: "Account added. Nothing is downloaded until you turn on Preserve mail.")
             if let added = try await self.backend.accounts().first(where: { $0.id == id })?.account {
                 if added.displayIdentity.lowercased() != typed.lowercased() {
                     note += " " + String(localized: "The provider says this account's address is \(added.displayIdentity), so mailin uses that instead of \(typed).")
@@ -1058,7 +1144,7 @@ final class MailWorkspaceModel {
     /// An account whose capture already runs is left to it (no second run,
     /// no "did not start" report).
     func syncNow(_ account: UUID? = nil) async {
-        let ids = (account.map { [$0] } ?? accounts.filter { $0.account.enabledModes.contains(.capture) }.map(\.id))
+        let ids = (account.map { [$0] } ?? accounts.filter { $0.account.enabledModes.contains(.capture) && !$0.isPaused }.map(\.id))
             .filter { id in self.account(id)?.isRunning != true }
         busy = true
         for id in ids { await backend.syncNow(id) }
@@ -1094,7 +1180,11 @@ final class MailWorkspaceModel {
             report = r
             self.message = MailRemovalText.report(r)
         }
-        if section == .account(account) { section = .unifiedInbox }
+        // Its account and folder sections go; its kept mail stays in the inbox.
+        switch section {
+        case .account(let id) where id == account, .folder(let id, _) where id == account: section = .unifiedInbox
+        default: break
+        }
         await refresh()
         return report
     }
@@ -1106,6 +1196,7 @@ final class MailWorkspaceModel {
             result = r
             self.message = String(localized: "\(r.deletedEmailIDs.count) archived messages deleted; \(r.heldKept) on hold kept.")
         }
+        if result != nil { await refresh() }
         return result
     }
 

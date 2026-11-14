@@ -30,10 +30,21 @@ public struct ConnectedRestoreReport: Sendable, Equatable {
 public enum ConnectedRestore {
     /// Call once, right after the restore placed its files and before any
     /// outbox runs. Idempotent: holding an item twice changes nothing.
-    public static func prepare(storeDirectory: URL, registry: MailAccountRegistry, lifecycle: ConnectedLifecycle) async throws -> ConnectedRestoreReport {
+    ///
+    /// `requireSignIn`: a restore into this device's running archive (the
+    /// Keychain may still hold the accounts' secrets) — every account the
+    /// restored database calls connected must sign in again before anything
+    /// connects for it, exactly as after a clean-profile restore.
+    public static func prepare(storeDirectory: URL, registry: MailAccountRegistry, lifecycle: ConnectedLifecycle,
+                               requireSignIn: Bool = false) async throws -> ConnectedRestoreReport {
         let outboxStore = try OutboxStore(storeDirectory: storeDirectory)
         let listing = await outboxStore.all()
         let held = try lifecycle.holdRestored(listing.operations)
+        if requireSignIn {
+            for account in try await registry.accounts() where account.connectionState == .connected {
+                try await registry.setState(.needsReauthorisation, account: account.id)
+            }
+        }
         let drafts = try DraftStore(storeDirectory: storeDirectory)
         let draftListing = await drafts.drafts()
         let accounts = try await registry.accounts()

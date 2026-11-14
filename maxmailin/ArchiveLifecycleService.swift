@@ -180,6 +180,9 @@ final class ArchiveLifecycleService {
     @discardableResult
     func eraseAllData() async -> ClearOutcome {
         var outcome = ClearOutcome()
+        // Connected mail stops first (captures waited for, outbox driver off):
+        // nothing may write into the archive or send while it is erased.
+        await ConnectedMailRuntime.suspendForArchiveChange()
         do {
             outcome = try await clearArchive(respectLegalHolds: false, auditTheClear: false)
         } catch {
@@ -199,7 +202,34 @@ final class ArchiveLifecycleService {
         // Connected-account sign-in data (tokens, passwords) lives in its own
         // Keychain service; the erase removes it too.
         if let warning = Self.eraseConnectedMailSecrets(KeychainCredentialStore()) { outcome.warnings.append(warning) }
+        // Connected accounts, folders, provider identities, cursors and runs,
+        // and the drafts / outbox / lifecycle / server-action folders: an
+        // account added again starts from nothing and captures its mail again.
+        outcome.warnings += await Self.eraseConnectedMailData(store: store)
         return outcome
+    }
+
+    /// The connected-mail folders under the store (drafts, outbox, lifecycle
+    /// ledger, server-action journal).
+    nonisolated static let connectedMailFolders = [DraftStore.folderName, OutboxStore.folderName,
+                                                   ConnectedLifecycle.folderName, RemoteOperationJournal.folderName]
+
+    /// Delete All Data's connected part: every connected-mail row, then the
+    /// connected folders. Failures are stated warnings, never silent.
+    static func eraseConnectedMailData(store: SQLiteEmailStore) async -> [String] {
+        var warnings: [String] = []
+        do { try await store.eraseConnectedMailRows() } catch {
+            warnings.append("Connected-mail accounts and their records could not be erased: \(error.localizedDescription)")
+        }
+        let fm = FileManager.default
+        for name in connectedMailFolders {
+            let folder = store.storeDirectory.appendingPathComponent(name, isDirectory: true)
+            guard fm.fileExists(atPath: folder.path) else { continue }
+            do { try fm.removeItem(at: folder) } catch {
+                warnings.append("The connected-mail folder \(name) could not be erased: \(error.localizedDescription)")
+            }
+        }
+        return warnings
     }
 
     /// Removes every connected-account secret; a failure is a stated warning.

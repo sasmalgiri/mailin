@@ -85,6 +85,9 @@ struct mailinApp: App {
         // §3-S4: the continued-processing handler must be registered exactly
         // once, before launch finishes (a second registration terminates).
         ContinuedProcessing.register()
+        // The background-analysis task handler, likewise before launch
+        // finishes (it is scheduled later, only when the analysis is wanted).
+        BackgroundAnalysisManager.shared.registerLaunchHandler()
     }
 
     // MARK: - Scene Configuration

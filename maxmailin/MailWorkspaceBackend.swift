@@ -40,11 +40,26 @@ protocol ConnectedMailTransports: AnyObject {
     /// the provider was not asked or did not say.
     func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
                           policy: MailNetworkPolicy) async -> String?
+    /// Before an IMAP account (or its new password) is saved: one IMAP session
+    /// (login, list, logout) and, when `smtp` is set, one SMTP session up to
+    /// AUTH. Throws the reason when either server refuses; saves nothing.
+    func verifyLogin(_ account: MailAccount, password: String, smtp: MailAccountExtras.SMTP?,
+                     policy: MailNetworkPolicy) async throws
+    /// The account's server-action executor, with the IMAP Trash folder the server listed.
+    func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
+                        permission: @escaping NetworkPermission, trashMailbox: String?) throws -> (any RemoteActionExecutor)?
 }
 
 extension ConnectedMailTransports {
     func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
                           policy: MailNetworkPolicy) async -> String? { nil }
+    /// Test transports connect nowhere: the login is not checked.
+    func verifyLogin(_ account: MailAccount, password: String, smtp: MailAccountExtras.SMTP?,
+                     policy: MailNetworkPolicy) async throws {}
+    func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
+                        permission: @escaping NetworkPermission, trashMailbox: String?) throws -> (any RemoteActionExecutor)? {
+        try actionExecutor(account, credentials: credentials, tokens: tokens, permission: permission)
+    }
 }
 
 @MainActor
@@ -113,6 +128,20 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
             log.error("mail workspace did not start: \(error.localizedDescription, privacy: .public)")
             return UnavailableMailBackend(.mailSwitchedOff)
         }
+    }
+
+    /// The runtime started (launch, Connected mail switched on): the backend
+    /// and its outbox driver start with it, whether or not Mail is opened.
+    static func startForRuntime() {
+        _ = current()
+    }
+
+    /// Connected mail off, a restore or Delete All Data: the outbox driver
+    /// stops and the next `current()` builds a fresh backend (its lifecycle
+    /// ledger is read again from disk).
+    static func discardCached() {
+        cached?.stop()
+        cached = nil
     }
 
     static func makeTransports() -> ConnectedMailTransports? {
@@ -195,67 +224,180 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         return String(localized: "Last run \(when) did not start")
     }
 
+    /// The outgoing server the form names (nil = none entered).
+    nonisolated static func smtpSettings(_ form: MailIMAPForm) -> MailAccountExtras.SMTP? {
+        let host = form.smtpHost.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !host.isEmpty, let port = Int(form.smtpPort) else { return nil }
+        return .init(host: host, port: port, implicitTLS: port == 465)
+    }
+
+    /// An account that is the same mailbox as `candidate`: the same provider
+    /// and address (any case), or for IMAP the same server and login. A
+    /// connected match comes first (it refuses the add); otherwise a removed,
+    /// signed-out or disconnected one is reconnected under its own id.
+    nonisolated static func duplicate(of candidate: MailAccount, among accounts: [MailAccount]) -> MailAccount? {
+        func norm(_ s: String?) -> String { (s ?? "").trimmingCharacters(in: .whitespaces).lowercased() }
+        let matches = accounts.filter { other in
+            guard other.id != candidate.id, other.provider == candidate.provider else { return false }
+            if norm(other.displayIdentity) == norm(candidate.displayIdentity) { return true }
+            guard candidate.provider == .imap, !norm(candidate.host).isEmpty, !norm(candidate.loginName).isEmpty else { return false }
+            return norm(other.host) == norm(candidate.host) && norm(other.loginName) == norm(candidate.loginName)
+        }
+        return matches.first { $0.connectionState == .connected } ?? matches.first
+    }
+
     func addIMAP(_ form: MailIMAPForm) async throws -> UUID {
         if let problem = form.problem { throw MailWorkspaceError(problem) }
-        let account = MailOnboarding.newAccount(form)
-        try await runtime.registry.add(account, secret: Data(form.secret.utf8), kind: .password)
-        var e = extras.extras(account.id)
-        let smtpHost = form.smtpHost.trimmingCharacters(in: .whitespaces).lowercased()
-        if !smtpHost.isEmpty, let port = Int(form.smtpPort) {
-            e.smtp = .init(host: smtpHost, port: port, implicitTLS: port == 465)
+        var account = MailOnboarding.newAccount(form)
+        let smtp = Self.smtpSettings(form)
+        // Adding the same mailbox again reconnects its earlier entry (its saved
+        // mail is not downloaded again); a connected one is refused.
+        let match = Self.duplicate(of: account, among: try await runtime.registry.accounts())
+        if let match {
+            guard match.connectionState != .connected else { throw MailWorkspaceError(MailLifecycleText.alreadyAdded(match.displayIdentity)) }
+            account = MailAccount(id: match.id, provider: .imap, host: account.host, port: account.port, loginName: account.loginName,
+                                  displayIdentity: account.displayIdentity,
+                                  enabledModes: match.connectionState == .removed ? [] : match.enabledModes,
+                                  createdAt: match.createdAt)
         }
+        // The password must work before anything is saved.
+        try await checkLogin(account, password: form.secret, smtp: smtp)
+        try await runtime.registry.add(account, secret: Data(form.secret.utf8), kind: .password)
+        if match != nil { try lifecycle.clearAccountRemoved(account.id) }
+        var e = extras.extras(account.id)
+        e.smtp = smtp
         extras.save(e, for: account.id)
-        _ = extras.identities(for: account)
+        // The address the person typed: provider presets sign in with it (the
+        // login was checked); any other server is not trusted to send as it
+        // until the person confirms it is theirs.
+        _ = extras.identities(for: account, addressConfirmed: form.choice != .otherIMAP)
         try await runtime.reloadAccounts()
+        await registerSendRoutes()
         return account.id
+    }
+
+    /// The servers' answer to the password, as a sentence (nothing is saved on a refusal).
+    private func checkLogin(_ account: MailAccount, password: String, smtp: MailAccountExtras.SMTP?) async throws {
+        guard let transports else { return }
+        do {
+            try await transports.verifyLogin(account, password: password, smtp: smtp, policy: runtime.policy)
+        } catch let refusal as AccountLoginCheckError {
+            throw MailWorkspaceError(MailLifecycleText.loginRefused(refusal, gmail: ConnectedMailErrorText.isGmailHost(account.host)))
+        }
+    }
+
+    /// A new password for an IMAP account that needs sign-in: checked against
+    /// the servers first, then stored; the account is connected again.
+    func replacePassword(_ password: String, account id: UUID) async throws {
+        let account = try await runtime.registry.account(id)
+        guard account.provider == .imap else { throw MailWorkspaceError(String(localized: "This account signs in in the browser, not with a password.")) }
+        let isGmail = ConnectedMailErrorText.isGmailHost(account.host)
+        let secret = isGmail ? password.filter { !$0.isWhitespace } : password
+        guard !secret.isEmpty else { throw MailWorkspaceError(String(localized: "Enter the password or app password.")) }
+        if isGmail, secret.count != 16 {
+            throw MailWorkspaceError(String(localized: "A Google app password has 16 characters. Create one at myaccount.google.com/apppasswords; a normal Google password will be refused."))
+        }
+        try await checkLogin(account, password: secret, smtp: extras.extras(id).smtp)
+        try await runtime.registry.updateSecret(Data(secret.utf8), kind: .password, account: id)
+        try await runtime.registry.setState(.connected, account: id)
+        try await runtime.reloadAccounts()
+        await registerSendRoutes()
+    }
+
+    /// The person confirms the typed sending address of an IMAP account is theirs.
+    func confirmSendingAddress(_ id: UUID) async throws {
+        let account = try await runtime.registry.account(id)
+        extras.confirmPrimaryIdentity(of: account)
     }
 
     func signIn(_ choice: MailProviderChoice, address: String, existing: UUID?, extraScopes: [String]) async throws -> UUID {
         guard case .ready = choice.readiness(info: providerInfo) else { throw MailWorkspaceError(MailProviderChoice.notConfiguredReason(choice)) }
         guard let transports else { throw MailBackendUnavailable() }
-        let id = existing ?? UUID()
-        if existing == nil, (try? MailAddress(parsing: address.trimmingCharacters(in: .whitespaces))) == nil {
-            throw MailWorkspaceError(String(localized: "Enter your email address."))
+        let typed = address.trimmingCharacters(in: .whitespaces)
+        var target = existing
+        if existing == nil {
+            guard (try? MailAddress(parsing: typed)) != nil else { throw MailWorkspaceError(String(localized: "Enter your email address.")) }
+            // The same mailbox again: refused while connected, otherwise signed
+            // in again under its earlier entry (nothing is downloaded twice).
+            let probe = MailAccount(provider: choice.provider, displayIdentity: typed)
+            if let match = Self.duplicate(of: probe, among: try await runtime.registry.accounts()) {
+                guard match.connectionState != .connected else { throw MailWorkspaceError(MailLifecycleText.alreadyAdded(match.displayIdentity)) }
+                target = match.id
+            }
         }
+        let id = target ?? UUID()
         // A re-consent asks again for every scope the account already holds, so
         // asking for Change server mail never drops Send (the provider's answer
         // replaces the stored scopes below).
         var requested = extraScopes
-        if let existing, let account = try? await runtime.registry.account(existing) {
+        if let target, let account = try? await runtime.registry.account(target) {
             requested = Self.reconsentScopes(granted: account.grantedScopes, provider: account.provider, adding: extraScopes)
         }
         let result: (tokens: OAuthTokenSet, issuer: String, tenant: String?)
         do {
             result = try await transports.signIn(choice, accountID: id, extraScopes: requested, info: providerInfo, policy: runtime.policy)
         } catch {
-            if existing == nil { runtime.policy.removeAccount(id) }
+            if target == nil { runtime.policy.removeAccount(id) }
             try? await runtime.reloadAccounts()
             throw error
         }
-        let secret = try result.tokens.encoded()
         // The sending identity is the address the PROVIDER states, never only
         // what was typed (a typed-but-unconfirmed address is never `.verified`).
         let confirmed = await transports.confirmedAddress(choice, accountID: id, tokens: result.tokens, policy: runtime.policy)
             .flatMap { try? MailAddress(parsing: $0) }
-        if let existing {
-            var account = try await runtime.registry.account(existing)
-            try await runtime.registry.updateSecret(secret, kind: .oauthTokenSet, account: existing)
-            account.grantedScopes = result.tokens.scopes
-            account.connectionState = .connected
-            if let confirmed { account.displayIdentity = confirmed.addrSpec }
-            try await runtime.registry.save(account)
-            try? await tokens?.store(result.tokens)
-            if confirmed != nil { extras.confirmPrimaryIdentity(of: account) }
+        if let target {
+            let account = try await runtime.registry.account(target)
+            // Signing in again never switches the account to another mailbox.
+            if let confirmed, confirmed.addrSpec.lowercased() != account.displayIdentity.lowercased() {
+                try? await runtime.reloadAccounts()
+                throw MailWorkspaceError(MailLifecycleText.otherMailbox(signedIn: confirmed.addrSpec, account: account.displayIdentity))
+            }
+            try await reconnect(account, tokens: result.tokens, issuer: result.issuer, tenant: result.tenant, confirmed: confirmed)
+        } else if let confirmed,
+                  let match = Self.duplicate(of: MailAccount(provider: choice.provider, displayIdentity: confirmed.addrSpec),
+                                             among: try await runtime.registry.accounts()) {
+            // The provider names a mailbox that is already an account.
+            runtime.policy.removeAccount(id)
+            guard match.connectionState != .connected else {
+                try? await runtime.reloadAccounts()
+                throw MailWorkspaceError(MailLifecycleText.alreadyAdded(match.displayIdentity))
+            }
+            var rekeyed = result.tokens
+            rekeyed.accountID = match.id
+            try await reconnect(match, tokens: rekeyed, issuer: result.issuer, tenant: result.tenant, confirmed: confirmed)
+            try await runtime.reloadAccounts()
+            await registerSendRoutes()
+            return match.id
         } else {
-            let typed = address.trimmingCharacters(in: .whitespaces)
             let account = MailOnboarding.newOAuthAccount(id: id, provider: choice.provider, issuer: result.issuer, tenant: result.tenant,
                                                          address: confirmed?.addrSpec ?? typed, scopes: result.tokens.scopes)
-            try await runtime.registry.add(account, secret: secret, kind: .oauthTokenSet)
+            try await runtime.registry.add(account, secret: try result.tokens.encoded(), kind: .oauthTokenSet)
             _ = extras.identities(for: account, addressConfirmed: confirmed != nil)
         }
         try await runtime.reloadAccounts()
         await registerSendRoutes()
         return id
+    }
+
+    /// Stores new tokens for an existing account (sign in again, re-consent,
+    /// or a removed account added again — then with nothing allowed yet).
+    private func reconnect(_ existing: MailAccount, tokens newTokens: OAuthTokenSet, issuer: String, tenant: String?,
+                           confirmed: MailAddress?) async throws {
+        var account = existing
+        let wasRemoved = account.connectionState == .removed
+        try await runtime.registry.updateSecret(try newTokens.encoded(), kind: .oauthTokenSet, account: account.id)
+        account.grantedScopes = newTokens.scopes
+        account.connectionState = .connected
+        if wasRemoved {
+            account.issuer = issuer
+            account.tenant = tenant
+            account.enabledModes = []
+        }
+        if let confirmed { account.displayIdentity = confirmed.addrSpec }
+        try await runtime.registry.save(account)
+        try? await tokens?.store(newTokens)
+        if wasRemoved || lifecycle.isRemoved(account.id) { try lifecycle.clearAccountRemoved(account.id) }
+        if confirmed != nil { extras.confirmPrimaryIdentity(of: account) } else { _ = extras.identities(for: account, addressConfirmed: false) }
     }
 
     /// The scopes a re-consent requests: the account's own mail scopes for its
@@ -307,7 +449,12 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     func removalPlan(_ account: UUID) async throws -> AccountRemovalPlan { try await removal.plan(account) }
 
     func remove(_ account: UUID) async throws -> AccountRemovalReport {
+        // The coordinator waits for the account's running capture to end
+        // (RuntimeTaskControl) before anything else changes.
         let report = try await removal.remove(account)
+        // Its sending identities and outgoing server go with it; its pause choice too.
+        extras.remove(account)
+        runtime.forgetPaused(account)
         try await runtime.reloadAccounts()
         return report
     }
@@ -316,12 +463,23 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         try await removal.planArchiveDeletion(account)
     }
 
+    /// Search index first, then the archive (the order every delete uses): a
+    /// failure in between leaves archive rows the launch reconcile indexes
+    /// again, never search results for deleted mail. Any index failure stops
+    /// the deletion and is stated.
     func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
-        let result = try await removal.deleteArchivedMail(account, confirmedCount: confirmedCount)
-        if !result.deletedEmailIDs.isEmpty {
-            for id in result.deletedEmailIDs { try? await FTSSearchIndex.shared.delete(id: id) }
-            NotificationCenter.default.post(name: .parsingFinished, object: nil)
+        let summary = try await removal.planArchiveDeletion(account)
+        guard summary.deletable == confirmedCount else {
+            throw ConnectedLifecycleError.countChanged(shown: confirmedCount, now: summary.deletable)
         }
+        let ids = try await runtime.sink.deletableRecordIDs(accountID: account)
+        var failed = 0
+        for id in ids {
+            do { try await runtime.searchIndex.delete(id: id) } catch { failed += 1 }
+        }
+        if failed > 0 { throw MailWorkspaceError(MailLifecycleText.searchRemovalFailed(failed: failed, total: ids.count)) }
+        let result = try await removal.deleteArchivedMail(account, confirmedCount: confirmedCount)
+        if !result.deletedEmailIDs.isEmpty { await runtime.afterDelete(result.deletedEmailIDs) }
         return result
     }
 
@@ -339,13 +497,20 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         let account = try await runtime.registry.account(row.accountID)
         let policy = runtime.policy
         let permission = lifecycle.serverActionPermission(Self.permission(policy: policy, purpose: .changeServerMail))
-        guard let executor = try transports?.actionExecutor(account, credentials: credentials, tokens: tokens, permission: permission) else {
+        let trash = await trashMailbox(account.id)
+        guard let executor = try transports?.actionExecutor(account, credentials: credentials, tokens: tokens, permission: permission,
+                                                            trashMailbox: trash) else {
             throw MailWorkspaceError(String(localized: "This account cannot change mail on the server in this build."))
         }
         let service = RemoteActionService(account: account, executor: executor, journal: journal, changePermission: { id in
             guard policy.account(id)?.modes.contains(.changeServerMail) == true else { throw MailNetworkRefusal.modeNotGranted }
         })
         return try await service.perform(row.identity, request, emailID: row.emailID)
+    }
+
+    /// The IMAP Trash folder the server listed for the account (nil = none).
+    private func trashMailbox(_ account: UUID) async -> String? {
+        ConnectedMailRuntime.trashMailbox(in: (try? await runtime.sink.folderSummaries(accountID: account)) ?? [])
     }
 
     // MARK: Drafts
@@ -382,6 +547,11 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         let account = try await runtime.registry.account(draft.accountID)
         let identities = extras.identities(for: account)
         let composed = try await draftStore.compose(draft.id, account: account, identities: identities, date: Date())
+        // Microsoft takes at most 4 MB per message once encoded: refused here,
+        // with the reason, instead of failing in the outbox after the undo delay.
+        if account.provider == .microsoftGraph, let why = Self.graphSendRefusal(byteCount: composed.bytes.count) {
+            throw MailWorkspaceError(why)
+        }
         let route: OutboxRoute
         switch account.provider {
         case .gmail: route = .gmailAPI
@@ -390,6 +560,15 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         }
         await registerSendRoutes()
         return try await outboxQueue.enqueue(composed, draft: draft, route: route, undoDelay: undoDelay)
+    }
+
+    /// Microsoft Graph's limit for one send request (the base64 MIME body).
+    nonisolated static let graphMaximumEncodedBytes = GraphSendSubmitter.maximumRequestBytes
+
+    /// Why a message of `byteCount` bytes cannot go through Microsoft Graph, or nil.
+    nonisolated static func graphSendRefusal(byteCount: Int) -> String? {
+        let encoded = ((byteCount + 2) / 3) * 4
+        return encoded > graphMaximumEncodedBytes ? MailLifecycleText.graphTooLarge(encodedBytes: encoded) : nil
     }
 
     // MARK: Outbox
@@ -446,7 +625,9 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         let account = try await runtime.registry.account(plan.accountID)
         let policy = runtime.policy
         let permission = lifecycle.serverActionPermission(Self.permission(policy: policy, purpose: .changeServerMail))
-        guard let executor = try transports?.actionExecutor(account, credentials: credentials, tokens: tokens, permission: permission) else {
+        let trash = await trashMailbox(account.id)
+        guard let executor = try transports?.actionExecutor(account, credentials: credentials, tokens: tokens, permission: permission,
+                                                            trashMailbox: trash) else {
             throw MailWorkspaceError(String(localized: "This account cannot change mail on the server in this build."))
         }
         let service = RemoteActionService(account: account, executor: executor, journal: journal, changePermission: { id in
@@ -502,10 +683,11 @@ private final class LegacyCaptureBox: @unchecked Sendable {
 }
 
 /// The removal coordinator's handle on the account's running work: the
-/// runtime stops its engine and the policy cancels everything registered.
+/// runtime stops its engine, the policy cancels everything registered, and
+/// the removal waits until the running capture has really ended.
 private struct RuntimeTaskControl: AccountTaskControl {
     let runtime: ConnectedMailRuntime
     func cancelTasks(account: UUID) async -> Int {
-        await MainActor.run { runtime.stopAccount(account) }
+        await runtime.stopAccountAndWait(account)
     }
 }

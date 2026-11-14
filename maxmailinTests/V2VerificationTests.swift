@@ -10522,7 +10522,9 @@ final class RemoveAccountSheetFooterTests: XCTestCase {
                                                   exclusiveBlobs: 0, exclusiveBytes: 0, sharedBlobs: 0)
         let some = ConnectedAccountArchiveSummary(accountID: UUID(), records: 12, held: 2, deletable: 10,
                                                   exclusiveBlobs: 10, exclusiveBytes: 1_000, sharedBlobs: 0)
-        XCTAssertEqual(MailRemovalText.removeAndDeleteTitle(none), String(localized: "Remove"))
+        // Lifecycle audit 2026-11-14: never a second "Remove" next to Remove.
+        XCTAssertNotEqual(MailRemovalText.removeAndDeleteTitle(none), String(localized: "Remove"))
+        XCTAssertEqual(MailRemovalText.removeAndDeleteTitle(none), MailLifecycleText.nothingToDelete)
         XCTAssertTrue(MailRemovalText.removeAndDeleteTitle(some).contains("10"))
     }
 }
@@ -10723,5 +10725,723 @@ final class ConnectedFiveJobsFixPassTests: XCTestCase {
         XCTAssertEqual(choices.map(\.name), ["asha@example.com · Gmail", "asha@example.com · IMAP"])
         XCTAssertFalse(choices.contains { $0.id == removed.accountID.uuidString })
         XCTAssertEqual(names[removed.accountID.uuidString], "old@example.com", "saved searches still describe it by name")
+    }
+}
+
+// MARK: - Lifecycle audit 2026-11-14: connected mail through restore, erase, removal, re-adding
+
+/// Records the login checks and sign-ins the backend asks for; connects nowhere.
+@MainActor
+private final class LifecycleRecordingTransports: ConnectedMailTransports {
+    var verifyCalls: [(account: MailAccount, password: String, smtp: MailAccountExtras.SMTP?)] = []
+    var verifyError: Error?
+    var signInCalls = 0
+    var confirmed: String?
+
+    func signIn(_ choice: MailProviderChoice, accountID: UUID, extraScopes: [String], info: [String: String],
+                policy: MailNetworkPolicy) async throws -> (tokens: OAuthTokenSet, issuer: String, tenant: String?) {
+        signInCalls += 1
+        return (OAuthTokenSet(accountID: accountID, issuer: GmailOAuth.issuer, audience: GmailOAuth.audience, accessToken: "access-\(signInCalls)",
+                              refreshToken: "r", expiresAt: Date().addingTimeInterval(3600), scopes: GmailOAuth.captureScopes),
+                GmailOAuth.issuer, nil)
+    }
+    func registerSending(_ account: MailAccount, extras: MailAccountExtras, outbox: Outbox, credentials: any CredentialStore,
+                         tokens: TokenRefreshCoordinator?, permission: @escaping NetworkPermission) async {}
+    func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
+                        permission: @escaping NetworkPermission) throws -> (any RemoteActionExecutor)? { nil }
+    func confirmedAddress(_ choice: MailProviderChoice, accountID: UUID, tokens: OAuthTokenSet,
+                          policy: MailNetworkPolicy) async -> String? { confirmed }
+    func verifyLogin(_ account: MailAccount, password: String, smtp: MailAccountExtras.SMTP?, policy: MailNetworkPolicy) async throws {
+        verifyCalls.append((account, password, smtp))
+        if let verifyError { throw verifyError }
+    }
+}
+
+/// A provider whose downloads take ~0.6 s and do not stop at cancellation
+/// (a write in flight): removal must wait for the run to end.
+actor LifecycleSlowProvider: MailProviderAdapter {
+    nonisolated let accountID: UUID
+    nonisolated let provider: MailProviderKind = .gmail
+    nonisolated let mailHost = "mail.fixture.example"
+    nonisolated let authorizationHost: String? = nil
+    nonisolated let tokenAudience: String? = nil
+    init(accountID: UUID) { self.accountID = accountID }
+
+    func limits() async -> ProviderLimits { ProviderLimits(maxConcurrentDownloads: 1, pageSize: 10, changeTracking: .none) }
+    func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {
+        FolderPage(folders: [RemoteFolderOccurrence(serverID: "INBOX", displayPath: "Inbox", kind: .label)], nextPageToken: nil)
+    }
+    func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
+                   context: ProviderRequestContext) async throws -> EnumerationPage {
+        EnumerationPage(items: (1...3).map { RemoteItemRef(identity: .gmail(messageID: "slow-\($0)"), folder: folder) }, nextCursor: nil)
+    }
+    func fetchRaw(_ item: RemoteItemRef, into sink: RawByteSink, context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+        let until = Date().addingTimeInterval(0.6)
+        while Date() < until { try? await Task.sleep(nanoseconds: 10_000_000) }
+        try sink.write(AuditFlakyProvider.bytes)
+        return FetchedItemMetadata(occurrences: [], metadata: ProviderMetadata(representation: .gmailRaw, revision: "1"),
+                                   expectedByteCount: Int64(AuditFlakyProvider.bytes.count))
+    }
+    func changeBoundary(scope: ChangeScope, context: ProviderRequestContext) async throws -> String { "" }
+    func changes(scope: ChangeScope, since token: String, context: ProviderRequestContext) async throws -> ChangePage {
+        ChangePage(changes: [], resume: "", hasMore: false)
+    }
+}
+
+/// The Mail workspace's removal / removed-account decisions, without a network.
+@MainActor
+private final class LifecycleFakeBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var snapshots: [MailAccountSnapshot] = []
+    var summaries: [UUID: ConnectedAccountArchiveSummary] = [:]
+    /// What the account has to delete once it was removed (its capture saved more meanwhile).
+    var deletableAfterRemoval: Int?
+    var deleteCalls: [Int] = []
+    var mailboxQueries: [ConnectedMailboxQuery] = []
+
+    func accounts() async throws -> [MailAccountSnapshot] { snapshots }
+    func folders(_ account: UUID) async throws -> [ConnectedFolderSummary] { [] }
+    func removalPlan(_ account: UUID) async throws -> AccountRemovalPlan {
+        guard let a = snapshots.first(where: { $0.id == account })?.account, let s = summaries[account] else { throw MailBackendUnavailable() }
+        return AccountRemovalPlan(account: a, drafts: 0, outboxToKeep: 0, outboxAwaitingOutcome: 0, archive: s)
+    }
+    func remove(_ account: UUID) async throws -> AccountRemovalReport {
+        if let i = snapshots.firstIndex(where: { $0.id == account }) { snapshots[i].account.connectionState = .removed }
+        if let n = deletableAfterRemoval { summaries[account]?.deletable = n; summaries[account]?.records = n }
+        return AccountRemovalReport(accountID: account, tasksCancelled: 0, keptAsDrafts: [], keptInOutbox: [], awaitingOutcome: [],
+                                    secretsRemoved: true, liveCacheRowsRemoved: 0, archivedRecordsKept: summaries[account]?.records ?? 0)
+    }
+    func archiveDeletionPlan(_ account: UUID) async throws -> ConnectedAccountArchiveSummary {
+        guard let s = summaries[account] else { throw MailBackendUnavailable() }
+        return s
+    }
+    func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
+        deleteCalls.append(confirmedCount)
+        let held = summaries[account]?.held ?? 0
+        summaries[account]?.deletable = 0
+        summaries[account]?.records = held
+        return ConnectedAccountArchiveDeletion(accountID: account, deletedEmailIDs: (0..<confirmedCount).map { _ in UUID() }, heldKept: held,
+                                               blobsRemoved: 0, bytesReclaimed: 0, blobsKeptShared: 0)
+    }
+    func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {
+        mailboxQueries.append(query)
+        return ConnectedMailboxPage(rows: [], total: 0, next: nil)
+    }
+}
+
+/// Lifecycle audit 2026-11-14 (connected mail): a restore holds the restored
+/// outbox and asks every account to sign in again; Delete All Data erases the
+/// connected rows and folders so an account added again captures again;
+/// removal waits for the running capture and re-plans the deletion count;
+/// removed accounts with kept mail stay listed and in the inbox; IMAP
+/// passwords are checked before they are saved and can be replaced; adding
+/// the same mailbox again reconnects it; signing in again never switches
+/// mailbox; sending identities, the Graph 4 MB limit, the IMAP Trash, pauses
+/// across relaunch, capture after space comes back, the outbox from launch,
+/// search-index-first deletion and the launch-time background task.
+@MainActor
+final class ConnectedLifecycleAuditTests: XCTestCase {
+
+    private struct Env {
+        let root: URL
+        let store: SQLiteEmailStore
+        let runtime: ConnectedMailRuntime
+        let credentials: ConnectedFiveJobsCredentials
+        let deleted: AuditBox<[UUID]>
+        var storeDirectory: URL { root.appendingPathComponent("store", isDirectory: true) }
+    }
+
+    private static let gmailInfo = [MailProviderChoice.gmailClientIDKey: "418093572046-k2pq7rnv5x3w9hfsd8a1jc4mty6bzle0.apps.googleusercontent.com"]
+    private static var repo: URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent() }
+
+    private func source(_ path: String) throws -> String {
+        try String(contentsOf: Self.repo.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    private func makeEnv(adapters: @escaping ConnectedAdapterFactory = { _ in nil },
+                         configure: (inout ConnectedMailRuntime.Dependencies) -> Void = { _ in }) -> Env {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LIFECYCLE-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let credentials = ConnectedFiveJobsCredentials()
+        let deleted = AuditBox<[UUID]>([])
+        var deps = ConnectedMailRuntime.Dependencies(store: store, fts: fts, policy: policy, credentials: credentials, tokens: nil,
+                                                     adapters: adapters, storage: StorageProbe(reserveBytes: 0))
+        deps.afterDelete = { ids in deleted.mutate { $0 += ids } }
+        configure(&deps)
+        return Env(root: root, store: store, runtime: ConnectedMailRuntime(dependencies: deps), credentials: credentials, deleted: deleted)
+    }
+
+    private func makeDefaults() throws -> UserDefaults {
+        let name = "lifecycle-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        return defaults
+    }
+
+    private func backend(_ env: Env, transports: ConnectedMailTransports? = nil) throws -> (ConnectedMailBackend, MailAccountExtrasStore) {
+        let extras = MailAccountExtrasStore(defaults: try makeDefaults())
+        let backend = try ConnectedMailBackend(runtime: env.runtime, storeDirectory: env.storeDirectory, credentials: env.credentials,
+                                               tokens: nil, transports: transports, extras: extras, providerInfo: Self.gmailInfo)
+        return (backend, extras)
+    }
+
+    private func gmail(_ id: UUID = UUID(), _ address: String = "asha@example.com", modes: Set<MailAccount.Mode> = [.capture]) -> MailAccount {
+        MailAccount(id: id, provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: address,
+                    grantedScopes: [GmailOAuth.readOnlyScope], enabledModes: modes)
+    }
+
+    private func form(_ choice: MailProviderChoice, _ address: String, login: String = "") -> MailIMAPForm {
+        var f = MailIMAPForm()
+        f.apply(choice)
+        f.address = address
+        f.loginName = login
+        f.password = "app-password-1"
+        if choice == .otherIMAP { f.host = "mail.example.org" }
+        return f
+    }
+
+    private func waitUntil(_ seconds: Double = 10, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return await condition()
+    }
+
+    private static func plain(_ n: Int) -> Data {
+        Data(["From: Asha <asha@example.com>", "To: Ravi <ravi@example.org>", "Subject: Kept \(n)",
+              "Date: Mon, 6 Jan 2025 10:00:00 +0530", "Message-ID: <lifecycle-\(n)@fixture.example>", "MIME-Version: 1.0",
+              "Content-Type: text/plain; charset=utf-8", "", "Body \(n).", ""].joined(separator: "\r\n").utf8)
+    }
+
+    private func summary(_ id: UUID, records: Int, held: Int = 0) -> ConnectedAccountArchiveSummary {
+        ConnectedAccountArchiveSummary(accountID: id, records: records, held: held, deletable: records - held,
+                                       exclusiveBlobs: records, exclusiveBytes: Int64(records * 100), sharedBlobs: 0)
+    }
+
+    // MARK: 1 — restore
+
+    func testRestore_restoredOutboxIsHeld_accountsSignInAgain_reportIsShown() async throws {
+        let env = makeEnv()
+        let account = gmail(modes: [.capture, .send])
+        try await env.runtime.registry.add(account, secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        let drafts = try DraftStore(storeDirectory: env.storeDirectory)
+        let me = SendingIdentity(accountID: account.id, address: try MailAddress(parsing: account.displayIdentity))
+        var draft = Draft(accountID: account.id, senderIdentityID: me.id, to: [try MailAddress(parsing: "ravi@example.org")], subject: "queued")
+        draft = try await drafts.save(draft)
+        let composed = try await drafts.compose(draft.id, account: try await env.runtime.registry.account(account.id), identities: [me], date: Date())
+        let queued = try await Outbox(store: try OutboxStore(storeDirectory: env.storeDirectory), permission: { _ in })
+            .enqueue(composed, draft: draft, route: .gmailAPI)
+
+        let text = await ArchiveBackups.prepareConnectedMailAfterRestore(store: env.store, credentials: env.credentials)
+        XCTAssertTrue(text.contains("1"), text)
+        let state = try await env.runtime.registry.account(account.id).connectionState
+        XCTAssertEqual(state, .needsReauthorisation, "a restored account must sign in again (the Keychain still had its secret)")
+        let lifecycle = try ConnectedLifecycle(storeDirectory: env.storeDirectory, entitlement: { ConnectedEntitlement(plan: .active) })
+        guard case .restoredFromBackup? = lifecycle.pendingDecisions()[queued.id] else {
+            return XCTFail("the restored message is not held: \(lifecycle.pendingDecisions())")
+        }
+
+        // The restore stops connected mail first and prepares it before anything restarts.
+        let restore = try source("maxmailin/ArchiveBackups.swift")
+        let body = String(restore[try XCTUnwrap(restore.range(of: "private static func performRestore")).upperBound...])
+        let suspend = try XCTUnwrap(body.range(of: "ConnectedMailRuntime.suspendForArchiveChange()"))
+        let placed = try XCTUnwrap(body.range(of: "ArchiveBackup.restore("))
+        let prepare = try XCTUnwrap(body.range(of: "prepareConnectedMailAfterRestore("))
+        XCTAssertLessThan(suspend.lowerBound, placed.lowerBound)
+        XCTAssertLessThan(placed.lowerBound, prepare.lowerBound)
+        XCTAssertTrue(body.contains("capabilityChanged(isOn: true)"), "connected mail starts again after the restore")
+    }
+
+    // MARK: 2 — Delete All Data
+
+    func testDeleteAllData_erasesConnectedRowsAndFolders_aReaddedAccountCapturesAgain() async throws {
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        for n in 1...3 { await provider.add("m\(n)", bytes: Self.plain(n), folders: ["INBOX"]) }
+        let env = makeEnv(adapters: { _ in provider })
+        let account = gmail(provider.accountID)
+        try await env.runtime.registry.add(account, secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await env.runtime.start()
+        let first = await env.runtime.sync(account.id)
+        XCTAssertEqual(first?.receipt?.stored, 3)
+        _ = try DraftStore(storeDirectory: env.storeDirectory)
+        _ = try OutboxStore(storeDirectory: env.storeDirectory)
+
+        // The archive part of the erase, then its connected part.
+        try await env.store.clearAll()
+        let warnings = await ArchiveLifecycleService.eraseConnectedMailData(store: env.store)
+        XCTAssertEqual(warnings, [])
+        let counts = try await env.store.connectedTableCounts()
+        XCTAssertEqual(counts.values.reduce(0, +), 0, "\(counts)")
+        for name in ArchiveLifecycleService.connectedMailFolders {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: env.storeDirectory.appendingPathComponent(name).path), name)
+        }
+        let listed = try await env.runtime.registry.accounts()
+        XCTAssertEqual(listed.count, 0, "no account comes back after the erase")
+
+        try await env.runtime.registry.add(account, secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await env.runtime.reloadAccounts()
+        let again = await env.runtime.sync(account.id)
+        XCTAssertEqual(again?.receipt?.stored, 3, "the account added again saved its mail again")
+
+        let erase = try source("maxmailin/ArchiveLifecycleService.swift")
+        let body = String(erase[try XCTUnwrap(erase.range(of: "func eraseAllData()")).upperBound...].prefix(3_000))
+        XCTAssertTrue(body.contains("ConnectedMailRuntime.suspendForArchiveChange()"), "connected mail stops before the erase")
+        XCTAssertTrue(body.contains("eraseConnectedMailData(store: store)"))
+        XCTAssertTrue(body.contains("eraseConnectedMailSecrets(KeychainCredentialStore())"), "the Keychain wipe stays")
+    }
+
+    // MARK: 3 — removal waits; the sheet re-plans
+
+    func testRemoveAccount_waitsForTheRunningCapture_andRemovesItsIdentities() async throws {
+        let id = UUID()
+        let provider = LifecycleSlowProvider(accountID: id)
+        let env = makeEnv(adapters: { _ in provider })
+        let account = gmail(id, modes: [.capture, .send])
+        try await env.runtime.registry.add(account, secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await env.runtime.start()
+        let (backend, extras) = try backend(env)
+        _ = extras.identities(for: account)
+        var e = extras.extras(id)
+        e.smtp = .init(host: "smtp.example.org", port: 587, implicitTLS: false)
+        extras.save(e, for: id)
+
+        let run = Task { await env.runtime.sync(id) }
+        let started = await waitUntil { env.runtime.running.contains(id) }
+        XCTAssertTrue(started)
+        let report = try await backend.remove(id)
+        XCTAssertFalse(env.runtime.running.contains(id), "removal returned while the account's capture was still running")
+        XCTAssertEqual(report.tasksCancelled, 1)
+        XCTAssertEqual(extras.extras(id), MailAccountExtras(), "the removed account's identities and outgoing server are gone")
+        _ = await run.value
+    }
+
+    func testRemoveAndDelete_aCountThatChangedAfterRemovalIsShownInTheSheet_andNeedsTheNewNumber() async {
+        let fake = LifecycleFakeBackend()
+        let account = MailAccount(provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                  enabledModes: [.capture], connectionState: .connected)
+        fake.snapshots = [MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        fake.summaries[account.id] = summary(account.id, records: 5)
+        fake.deletableAfterRemoval = 7
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        model.lastError = "an earlier error of the page"
+        let flow = MailRemovalFlow(model: model, accountID: account.id)
+        await flow.load()
+        XCTAssertNil(model.lastError, "the sheet clears the page's stale error")
+        XCTAssertNotNil(flow.plan)
+
+        flow.chooseDelete()
+        flow.typedCount = "5"
+        XCTAssertTrue(flow.typedMatches)
+        await flow.removeAndDelete()
+        XCTAssertNotNil(flow.report, "the account was removed")
+        XCTAssertNil(flow.deleted)
+        XCTAssertEqual(fake.deleteCalls, [], "nothing is deleted with the count shown before the removal")
+        XCTAssertEqual(flow.error, MailLifecycleText.countChangedAfterRemoval(shown: 5, now: 7), "the reason is in the sheet")
+        XCTAssertEqual(flow.deletion?.deletable, 7)
+        XCTAssertFalse(flow.typedMatches, "the new number must be typed")
+        flow.typedCount = "7"
+        await flow.deleteNow()
+        XCTAssertEqual(fake.deleteCalls, [7])
+        XCTAssertNotNil(flow.deleted)
+        XCTAssertNil(flow.error)
+    }
+
+    func testRemoveSheet_returnNeverRemovesWhileTheCountIsTyped_titlesDiffer_iOSActionsInTheForm() throws {
+        let views = try source("maxmailin/MailAccountViews.swift")
+        let start = try XCTUnwrap(views.range(of: "struct MailRemoveAccountView"))
+        let end = try XCTUnwrap(views.range(of: "struct MailDeleteRemovedMailView"))
+        let sheet = String(views[start.upperBound..<end.lowerBound])
+        XCTAssertTrue(sheet.contains("keyboardShortcut(flow.alsoDelete ? nil : KeyboardShortcut.defaultAction)"))
+        XCTAssertFalse(sheet.contains(".keyboardShortcut(.defaultAction)"), "Return in the count field would remove and keep the mail")
+        let ios = try XCTUnwrap(sheet.range(of: "#if os(iOS)"))
+        let iosEnd = try XCTUnwrap(sheet.range(of: "#endif", range: ios.upperBound..<sheet.endIndex))
+        let iosPart = sheet[ios.upperBound..<iosEnd.lowerBound]
+        XCTAssertTrue(iosPart.contains("removeButton(plan)") && iosPart.contains("deleteChoiceButton"), "iOS: the actions are in the form")
+        XCTAssertTrue(sheet.contains("Text(MailRemovalText.confirmTitle(plan))"), "the kept-count sentence is visible, not only a tooltip")
+        let none = summary(UUID(), records: 0)
+        XCTAssertNotEqual(MailRemovalText.removeAndDeleteTitle(none), String(localized: "Remove"))
+    }
+
+    // MARK: 4 — removed accounts with kept mail
+
+    func testRemovedAccountsWithKeptMail_areListed_stayInTheInbox_andTheirSectionsReset() async throws {
+        let fake = LifecycleFakeBackend()
+        func snap(_ address: String, _ state: MailAccount.ConnectionState) -> MailAccountSnapshot {
+            MailAccountSnapshot(account: MailAccount(provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: address,
+                                                     enabledModes: [], connectionState: state),
+                                status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)
+        }
+        let active = snap("asha@example.com", .connected)
+        let kept = snap("old@example.com", .removed)
+        let empty = snap("gone@example.com", .removed)
+        fake.snapshots = [active, kept, empty]
+        fake.summaries = [active.id: summary(active.id, records: 2), kept.id: summary(kept.id, records: 3), empty.id: summary(empty.id, records: 0)]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        XCTAssertEqual(model.accounts.map(\.id), [active.id])
+        XCTAssertEqual(model.removedAccounts.map(\.id), [kept.id], "a removed account with kept mail is listed; one without is not")
+        XCTAssertEqual(model.removedArchive[kept.id]?.deletable, 3)
+        XCTAssertEqual(model.currentQuery.accountIDs, [active.id, kept.id], "the unified inbox still shows the kept mail")
+
+        model.section = .folder(kept.id, "INBOX")
+        await model.refreshAccounts()
+        XCTAssertEqual(model.section, .unifiedInbox)
+        model.section = .folder(active.id, "INBOX")
+        _ = await model.remove(active.id)
+        XCTAssertEqual(model.section, .unifiedInbox, "a removed account's folder section is reset")
+        XCTAssertEqual(Set(model.removedAccounts.map(\.id)), [active.id, kept.id])
+
+        let views = try source("maxmailin/MailAccountViews.swift")
+        XCTAssertTrue(views.contains("Section(String(localized: \"Removed accounts\"))"))
+        XCTAssertTrue(views.contains("sheet = .deleteRemovedMail(snapshot.id)"))
+        let deleteRemoved = MailRemovalFlow(model: model, accountID: kept.id)
+        await deleteRemoved.loadDeletionOnly()
+        deleteRemoved.typedCount = "3"
+        await deleteRemoved.deleteNow()
+        XCTAssertEqual(fake.deleteCalls, [3], "a removed account's mail can still be deleted later")
+    }
+
+    // MARK: 5, 6 — IMAP login check and password replacement
+
+    func testAddIMAP_checksTheLoginBeforeSaving_andSavesNothingOnARefusal() async throws {
+        let env = makeEnv()
+        let transports = LifecycleRecordingTransports()
+        let (backend, _) = try backend(env, transports: transports)
+        transports.verifyError = AccountLoginCheckError.incoming("the user name or password was refused")
+        do {
+            _ = try await backend.addIMAP(form(.fastmail, "asha@fastmail.example"))
+            XCTFail("a refused login must not add the account")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Nothing was saved"), error.localizedDescription)
+        }
+        let none = try await env.runtime.registry.accounts()
+        XCTAssertEqual(none.count, 0)
+        XCTAssertEqual(transports.verifyCalls.first?.password, "app-password-1")
+        XCTAssertEqual(transports.verifyCalls.first?.smtp, MailAccountExtras.SMTP(host: "smtp.fastmail.com", port: 465, implicitTLS: true),
+                       "the outgoing server is checked too")
+
+        let model = MailWorkspaceModel(backend: backend)
+        let added = await model.addIMAP(form(.fastmail, "asha@fastmail.example"))
+        XCTAssertFalse(added)
+        XCTAssertNotNil(model.lastError, "the reason is shown")
+
+        transports.verifyError = nil
+        _ = try await backend.addIMAP(form(.fastmail, "asha@fastmail.example"))
+        let one = try await env.runtime.registry.accounts()
+        XCTAssertEqual(one.count, 1)
+    }
+
+    func testReplacePassword_checksTheNewPasswordFirst_thenConnectsTheAccount() async throws {
+        let env = makeEnv()
+        let transports = LifecycleRecordingTransports()
+        let (backend, _) = try backend(env, transports: transports)
+        let id = try await backend.addIMAP(form(.fastmail, "asha@fastmail.example"))
+        try await env.runtime.registry.setState(.needsReauthorisation, account: id)
+
+        transports.verifyError = AccountLoginCheckError.incoming("the user name or password was refused")
+        do {
+            try await backend.replacePassword("wrong-password", account: id)
+            XCTFail("a refused password must not be stored")
+        } catch {}
+        var state = try await env.runtime.registry.account(id).connectionState
+        XCTAssertEqual(state, .needsReauthorisation)
+        XCTAssertEqual(try env.credentials.read(.password, account: id), Data("app-password-1".utf8), "the old password is kept")
+
+        transports.verifyError = nil
+        try await backend.replacePassword("new-password-2", account: id)
+        state = try await env.runtime.registry.account(id).connectionState
+        XCTAssertEqual(state, .connected)
+        XCTAssertEqual(try env.credentials.read(.password, account: id), Data("new-password-2".utf8))
+        XCTAssertEqual(transports.verifyCalls.last?.password, "new-password-2")
+        XCTAssertEqual(transports.verifyCalls.last?.smtp?.host, "smtp.fastmail.com")
+
+        let views = try source("maxmailin/MailAccountViews.swift")
+        XCTAssertTrue(views.contains("sheet = .replacePassword(accountID)"), "IMAP accounts that need sign-in offer Replace password…")
+    }
+
+    // MARK: 7 — the same mailbox again
+
+    func testAddingTheSameMailboxAgain_isRefusedWhileConnected_andReconnectsARemovedOne() async throws {
+        let env = makeEnv()
+        let transports = LifecycleRecordingTransports()
+        let (backend, _) = try backend(env, transports: transports)
+        let first = try await backend.addIMAP(form(.fastmail, "asha@fastmail.example"))
+        do {
+            _ = try await backend.addIMAP(form(.fastmail, "ASHA@Fastmail.example"))
+            XCTFail("the same connected mailbox must not be added twice")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, MailLifecycleText.alreadyAdded("asha@fastmail.example"))
+        }
+        _ = try await backend.remove(first)
+        XCTAssertTrue(backend.lifecycle.isRemoved(first))
+        let again = try await backend.addIMAP(form(.fastmail, "asha@fastmail.example"))
+        XCTAssertEqual(again, first, "re-added under its earlier id: its saved mail is not downloaded again")
+        let reconnected = try await env.runtime.registry.account(first)
+        XCTAssertEqual(reconnected.connectionState, .connected)
+        XCTAssertEqual(reconnected.enabledModes, [], "nothing allowed until the person switches it on")
+        XCTAssertFalse(backend.lifecycle.isRemoved(first))
+        let all = try await env.runtime.registry.accounts()
+        XCTAssertEqual(all.count, 1)
+
+        // OAuth: a removed Gmail account signs in again under its own id; a connected one is refused before the browser opens.
+        let gmailID = UUID()
+        try await env.runtime.registry.add(gmail(gmailID, "ravi@gmail.com"), secret: Data("old".utf8), kind: .oauthTokenSet)
+        _ = try await backend.remove(gmailID)
+        let back = try await backend.signIn(.gmail, address: "Ravi@gmail.com", existing: nil, extraScopes: [])
+        XCTAssertEqual(back, gmailID)
+        let state = try await env.runtime.registry.account(gmailID).connectionState
+        XCTAssertEqual(state, .connected)
+        XCTAssertFalse(backend.lifecycle.isRemoved(gmailID))
+        let calls = transports.signInCalls
+        do {
+            _ = try await backend.signIn(.gmail, address: "ravi@gmail.com", existing: nil, extraScopes: [])
+            XCTFail("a connected account must not be added again")
+        } catch {}
+        XCTAssertEqual(transports.signInCalls, calls, "no sign-in page for an account that is already connected")
+    }
+
+    // MARK: 8 — signing in again never switches mailbox
+
+    func testSignInAgainWithAnotherMailbox_isRefused_andChangesNothing() async throws {
+        let env = makeEnv()
+        let transports = LifecycleRecordingTransports()
+        let (backend, _) = try backend(env, transports: transports)
+        let id = UUID()
+        try await env.runtime.registry.add(gmail(id, "asha@example.com"), secret: Data("old-secret".utf8), kind: .oauthTokenSet)
+        transports.confirmed = "ravi@example.com"
+        do {
+            _ = try await backend.signIn(.gmail, address: "asha@example.com", existing: id, extraScopes: [])
+            XCTFail("signing in as another mailbox must be refused")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, MailLifecycleText.otherMailbox(signedIn: "ravi@example.com", account: "asha@example.com"))
+        }
+        let unchanged = try await env.runtime.registry.account(id)
+        XCTAssertEqual(unchanged.displayIdentity, "asha@example.com")
+        XCTAssertEqual(try env.credentials.read(.oauthTokenSet, account: id), Data("old-secret".utf8), "the old sign-in is kept")
+
+        transports.confirmed = "Asha@Example.com"
+        _ = try await backend.signIn(.gmail, address: "asha@example.com", existing: id, extraScopes: [])
+        XCTAssertNotEqual(try env.credentials.read(.oauthTokenSet, account: id), Data("old-secret".utf8))
+
+        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        struct Stated { let address: String; let fromUserPrincipalName: Bool }
+        struct Checked { let mail: String; let isConfirmed: Bool }
+        XCTAssertEqual(ConnectedMailProductionTransports.providerStated("a@example.com"), "a@example.com")
+        XCTAssertNil(ConnectedMailProductionTransports.providerStated(nil as String?))
+        XCTAssertNil(ConnectedMailProductionTransports.providerStated(Stated(address: "a@example.com", fromUserPrincipalName: true)),
+                     "a sign-in name (userPrincipalName) is not a confirmed mailbox")
+        XCTAssertEqual(ConnectedMailProductionTransports.providerStated(Stated(address: "a@example.com", fromUserPrincipalName: false)), "a@example.com")
+        XCTAssertNil(ConnectedMailProductionTransports.providerStated(Checked(mail: "a@example.com", isConfirmed: false)))
+        #endif
+    }
+
+    // MARK: 9 — IMAP sending identity
+
+    func testIMAPSendingIdentity_presetsSignInWithTheAddress_otherServersNeedConfirmation() async throws {
+        var mismatch = form(.fastmail, "asha@fastmail.example", login: "someone-else")
+        XCTAssertEqual(mismatch.problem, MailLifecycleText.loginMustBeAddress(MailProviderChoice.fastmail.title))
+        mismatch.loginName = "ASHA@fastmail.example"
+        XCTAssertNil(mismatch.problem)
+        XCTAssertNil(form(.otherIMAP, "me@example.org", login: "me").problem, "another server may use any login")
+
+        let env = makeEnv()
+        let (backend, _) = try backend(env, transports: LifecycleRecordingTransports())
+        let preset = try await backend.addIMAP(form(.fastmail, "asha@fastmail.example"))
+        let presetIdentities = await backend.identities(preset)
+        XCTAssertEqual(presetIdentities.first?.permission, .verified)
+        let other = try await backend.addIMAP(form(.otherIMAP, "boss@example.org", login: "me"))
+        let otherIdentities = await backend.identities(other)
+        XCTAssertEqual(otherIdentities.first?.permission, .unverified, "a typed address on another server is not trusted for sending")
+        XCTAssertTrue(MailComposeGate.offeredIdentities(for: other, from: otherIdentities).isEmpty)
+        try await backend.confirmSendingAddress(other)
+        let confirmed = await backend.identities(other)
+        XCTAssertEqual(confirmed.first?.permission, .verified, "the person confirmed it is theirs")
+    }
+
+    // MARK: 10 — Microsoft 4 MB
+
+    func testGraphSendOver4MBEncoded_isRefusedBeforeQueueing() async throws {
+        XCTAssertEqual(ConnectedMailBackend.graphMaximumEncodedBytes, 4_194_304)
+        XCTAssertNil(ConnectedMailBackend.graphSendRefusal(byteCount: 3_145_728))
+        XCTAssertNotNil(ConnectedMailBackend.graphSendRefusal(byteCount: 3_145_729))
+
+        let env = makeEnv()
+        let (backend, extras) = try backend(env)
+        let account = MailAccount(provider: .microsoftGraph, issuer: "https://login.microsoftonline.com/common/v2.0",
+                                  displayIdentity: "asha@contoso.example", enabledModes: [.send])
+        try await env.runtime.registry.add(account, secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        let saved = try await env.runtime.registry.account(account.id)
+        let identity = try XCTUnwrap(extras.identities(for: saved).first)
+        let draft = try await backend.createDraft(DraftSeed(
+            draft: Draft(accountID: account.id, senderIdentityID: identity.id, to: [try MailAddress(parsing: "ravi@example.org")], subject: "Big"),
+            attachments: [DraftAttachmentPayload(filename: "big.bin", mimeType: "application/octet-stream",
+                                                 data: Data(repeating: 0x41, count: 2_600_000))]))
+        do {
+            _ = try await backend.queue(draft, undoDelay: 0)
+            XCTFail("a message over Microsoft's limit must not be queued")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("4 MB"), error.localizedDescription)
+        }
+        let queued = try await backend.outbox()
+        XCTAssertEqual(queued.count, 0)
+    }
+
+    // MARK: 11 — IMAP Trash
+
+    func testIMAPMoveToTrash_getsTheTrashFolderTheServerListed() throws {
+        let a = UUID()
+        let inbox = ConnectedFolderSummary(accountID: a, serverID: "INBOX", path: "Inbox", kind: .folder, specialUse: "INBOX",
+                                           messages: 1, unread: 0, selected: true)
+        let trash = ConnectedFolderSummary(accountID: a, serverID: "Deleted Messages", path: "Deleted Messages", kind: .folder,
+                                           specialUse: "\\Trash", messages: 0, unread: 0, selected: true)
+        XCTAssertEqual(ConnectedMailRuntime.trashMailbox(in: [inbox, trash]), "Deleted Messages")
+        XCTAssertNil(ConnectedMailRuntime.trashMailbox(in: [inbox]))
+        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        let account = MailAccount(provider: .imap, host: "imap.example.org", port: 993, loginName: "me", displayIdentity: "me@example.org",
+                                  enabledModes: [.serverActions], connectionState: .connected)
+        let context = ConnectedAdapterContext(account: account, credentials: ConnectedFiveJobsCredentials(), tokens: nil,
+                                              permission: { _ in }, trashMailbox: "Deleted Messages")
+        let executor = try XCTUnwrap(try ConnectedMailProduction.actionExecutor(context) as? IMAPActionExecutor)
+        XCTAssertEqual(executor.trashMailbox, "Deleted Messages")
+        let fromTransports = try XCTUnwrap(try ConnectedMailProductionTransports().actionExecutor(
+            account, credentials: ConnectedFiveJobsCredentials(), tokens: nil, permission: { _ in }, trashMailbox: "Deleted Messages") as? IMAPActionExecutor)
+        XCTAssertEqual(fromTransports.trashMailbox, "Deleted Messages")
+        #endif
+    }
+
+    // MARK: 12 — pause across relaunch; Sync now explained
+
+    func testPauseSurvivesARelaunch_andSyncNowSaysWhyItIsOff() async throws {
+        let defaults = try makeDefaults()
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        let env = makeEnv(adapters: { _ in provider }, configure: { $0.pauseDefaults = defaults })
+        let id = provider.accountID
+        try await env.runtime.registry.add(gmail(id), secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await env.runtime.start()
+        try await env.runtime.setPaused(true, account: id)
+
+        // The next launch: a new runtime on the same archive and settings.
+        var deps = ConnectedMailRuntime.Dependencies(store: env.store, fts: FTSSearchIndex(shardsDirectory: env.root.appendingPathComponent("fts2")),
+                                                     policy: env.runtime.policy, credentials: env.credentials, tokens: nil,
+                                                     adapters: { _ in provider }, storage: StorageProbe(reserveBytes: 0))
+        deps.pauseDefaults = defaults
+        let relaunched = ConnectedMailRuntime(dependencies: deps)
+        XCTAssertTrue(relaunched.paused.contains(id), "the pause was forgotten on relaunch")
+        try await relaunched.start()
+        XCTAssertNil(relaunched.engines[id], "a paused account does not capture on launch")
+        try await relaunched.setPaused(false, account: id)
+        XCTAssertNotNil(relaunched.engines[id])
+
+        let fake = LifecycleFakeBackend()
+        let account = MailAccount(provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                  enabledModes: [.capture], connectionState: .connected)
+        fake.snapshots = [MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: true, lastRunSummary: nil)]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        XCTAssertFalse(model.actions.contains(.syncNow), "Sync now is off while every capturing account is paused")
+        XCTAssertEqual(model.syncNowHelp, MailLifecycleText.allCapturePaused)
+    }
+
+    // MARK: 13 — the outbox from launch
+
+    func testOutboxStartsWithTheRuntime_neverInTheTestHost() throws {
+        let runtime = try source("maxmailin/ConnectedMailRuntime.swift")
+        let start = try XCTUnwrap(runtime.range(of: "try await runtime.start()"))
+        let outbox = try XCTUnwrap(runtime.range(of: "ConnectedMailBackend.startForRuntime()"))
+        XCTAssertLessThan(start.lowerBound, outbox.lowerBound, "the outbox driver starts once the runtime has started")
+        XCTAssertTrue(runtime.contains("ConnectedMailBackend.discardCached()"), "switching Mail off stops the outbox driver")
+        XCTAssertFalse(ConnectedMailRuntime.productionAllowed(environment: ["XCTestConfigurationFilePath": "/x"], isolatedArchive: false),
+                       "the unit-test host never starts the real runtime (and so no real outbox)")
+    }
+
+    // MARK: 14 — capture after space comes back
+
+    func testCaptureResumesByItselfOnceSpaceIsFreed() async throws {
+        let free = AuditBox<Int64>(10)
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        for n in 1...2 { await provider.add("m\(n)", bytes: Self.plain(n), folders: ["INBOX"]) }
+        let env = makeEnv(adapters: { _ in provider }, configure: {
+            $0.storage = StorageProbe(reserveBytes: 1_000_000, availableBytes: { _ in free.value })
+            $0.storageRecheckInterval = 0.02
+            $0.retrySleep = { seconds in try await Task.sleep(nanoseconds: UInt64(max(0.001, seconds) * 1_000_000_000)) }
+        })
+        let id = provider.accountID
+        try await env.runtime.registry.add(gmail(id), secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await env.runtime.start()
+        let first = await env.runtime.sync(id)
+        guard case .paused(.diskFull)? = first?.outcome else { return XCTFail("\(String(describing: first?.outcome))") }
+        XCTAssertTrue(env.runtime.waitingForStorage.contains(id))
+
+        free.mutate { $0 = 1 << 40 }
+        let resumed = await waitUntil { env.runtime.lastReports[id]?.outcome == .completed }
+        XCTAssertTrue(resumed, "capture did not resume after space was freed")
+        XCTAssertFalse(env.runtime.waitingForStorage.contains(id))
+        let runtimeSource = try source("maxmailin/ConnectedMailRuntime.swift")
+        XCTAssertTrue(runtimeSource.contains("NSWorkspace.didMountNotification"), "a returning drive is noticed at once on the Mac")
+        XCTAssertTrue(runtimeSource.contains("await sink.reopenAfterDriveReturned()"))
+    }
+
+    // MARK: 16 — deleting an account's mail: search index first
+
+    func testDeletingAnAccountsArchivedMail_refusesAChangedCount_thenDeletesAndBumpsTheRevision() async throws {
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        for n in 1...2 { await provider.add("m\(n)", bytes: Self.plain(n), folders: ["INBOX"]) }
+        let env = makeEnv(adapters: { _ in provider })
+        let id = provider.accountID
+        try await env.runtime.registry.add(gmail(id), secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await env.runtime.start()
+        _ = await env.runtime.sync(id)
+        let (backend, _) = try backend(env)
+        _ = try await backend.remove(id)
+
+        do {
+            _ = try await backend.deleteArchivedMail(id, confirmedCount: 1)
+            XCTFail("a count that is not the current one deletes nothing")
+        } catch {
+            XCTAssertEqual(error as? ConnectedLifecycleError, .countChanged(shown: 1, now: 2))
+        }
+        let still = try await env.store.totalCount()
+        XCTAssertEqual(still, 2)
+        let result = try await backend.deleteArchivedMail(id, confirmedCount: 2)
+        XCTAssertEqual(result.deletedEmailIDs.count, 2)
+        XCTAssertEqual(Set(env.deleted.value), Set(result.deletedEmailIDs), "the follow-ups of a delete ran (corpus revision, lists)")
+        let left = try await env.store.totalCount()
+        XCTAssertEqual(left, 0)
+        let backendSource = try source("maxmailin/MailWorkspaceBackend.swift")
+        let body = String(backendSource[try XCTUnwrap(backendSource.range(of: "func deleteArchivedMail(")).upperBound...].prefix(1_500))
+        let index = try XCTUnwrap(body.range(of: "runtime.searchIndex.delete(id:"))
+        let archive = try XCTUnwrap(body.range(of: "removal.deleteArchivedMail("))
+        XCTAssertLessThan(index.lowerBound, archive.lowerBound, "search index first, then the archive")
+        XCTAssertTrue(body.contains("searchRemovalFailed"), "an index failure is stated")
+    }
+
+    // MARK: 17 — iOS background task registered at launch
+
+    func testBackgroundTaskHandlerIsRegisteredInTheAppsInit_withAPermittedIdentifier() throws {
+        let app = try source("maxmailin/mailinApp.swift")
+        let initStart = try XCTUnwrap(app.range(of: "    init() {"))
+        let initEnd = try XCTUnwrap(app.range(of: "    // MARK: - Scene Configuration"))
+        XCTAssertTrue(app[initStart.upperBound..<initEnd.lowerBound].contains("BackgroundAnalysisManager.shared.registerLaunchHandler()"))
+        let manager = try source("maxmailin/BackgroundAnalysisManager.swift")
+        let schedule = try XCTUnwrap(manager.range(of: "private func scheduleiOS()"))
+        XCTAssertFalse(manager[schedule.upperBound...].prefix(600).contains("BGTaskScheduler.shared.register("),
+                       "no lazy registration at the first schedule")
+        for plist in ["Info.plist", "Info-Connected.plist"] {
+            let data = try Data(contentsOf: Self.repo.appendingPathComponent(plist))
+            let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+            let ids = try XCTUnwrap(info["BGTaskSchedulerPermittedIdentifiers"] as? [String], plist)
+            XCTAssertTrue(ids.contains(BackgroundAnalysisManager.taskIdentifier), "\(plist) does not permit the analysis task")
+        }
     }
 }

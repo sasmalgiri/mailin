@@ -17,6 +17,7 @@
 
 @testable import ArchiveCore
 import Foundation
+import MailConnectivity
 #if os(macOS)
 import AppKit
 #endif
@@ -175,7 +176,33 @@ enum ArchiveBackups {
         return await performRestore(from: verified.folder)
     }
 
+    /// Lifecycle audit 2026-11-14: after the restore placed its files and
+    /// BEFORE any outbox or capture runs again — every restored outbox item
+    /// not yet handed to a provider waits for the person's decision (never sent
+    /// by itself), and every connected account must sign in again. Returns the
+    /// sentence for the result (empty when there was nothing connected).
+    static func prepareConnectedMailAfterRestore(store: SQLiteEmailStore, credentials: any CredentialStore) async -> String {
+        let storeDirectory = store.storeDirectory
+        do {
+            let registry = MailAccountRegistry(records: ConnectedArchiveSink(store: store), credentials: credentials)
+            let lifecycle = try ConnectedLifecycle(storeDirectory: storeDirectory,
+                                                   entitlement: { ConnectedEntitlement(plan: .active, paidActivities: []) })
+            let report = try await ConnectedRestore.prepare(storeDirectory: storeDirectory, registry: registry, lifecycle: lifecycle,
+                                                            requireSignIn: true)
+            return MailLifecycleText.restoreReport(report)
+        } catch {
+            return MailLifecycleText.restorePrepareFailed(error.localizedDescription)
+        }
+    }
+
     private static func performRestore(from backup: URL) async -> String {
+        // Nothing connected runs while the archive's files are replaced:
+        // captures stop (waiting for the running ones) and the outbox driver stops.
+        let connectedWasOn = await ConnectedMailRuntime.suspendForArchiveChange()
+        defer {
+            // Started again only after the restored outbox is held (below).
+            if connectedWasOn { ConnectedMailRuntime.capabilityChanged(isOn: true) }
+        }
         do {
             let store = SQLiteEmailStore.shared
             _ = try await store.snapshot(reason: "before-restore")
@@ -184,6 +211,9 @@ enum ArchiveBackups {
             let inventory = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: target, mode: .replaceDatabaseKeepFiles,
                                                       receiptDirectories: receiptDirectories)
             _ = try await store.schemaVersion()   // reopens; runs migrations if the backup predates an upgrade
+            // Connected mail, first thing after the files are placed and before
+            // anything restarts: the restored outbox is held, accounts sign in again.
+            let connected = await prepareConnectedMailAfterRestore(store: store, credentials: KeychainCredentialStore())
             // Self-contained copies now live under THIS store's sources/; point the locators there.
             let relocated = try await store.relocateSelfContainedLocators()
             // R07 (LIFE-06): the restored archive carries its own paid-tier record; read it now so a
@@ -192,7 +222,8 @@ enum ArchiveBackups {
             RecipeJobBroker.shared.reportInventory(.restore, folder: backup)
             ForensicManager.shared.logAction("Archive restored from backup",
                                              detail: "\(backup.lastPathComponent); the previous database was kept as a before-restore snapshot; \(relocated) locator paths moved to the restored copies")
-            return String(localized: "Restored \(CountPhrase.emails(inventory.counts.emails)) from \(backup.lastPathComponent). Rebuild the search index next.")
+            let line = String(localized: "Restored \(CountPhrase.emails(inventory.counts.emails)) from \(backup.lastPathComponent). Rebuild the search index next.")
+            return connected.isEmpty ? line : line + " " + connected
         } catch {
             RecipeJobBroker.shared.report(.restore, outcome: .failed, receipt: .init(kind: .none, id: ""),
                                           summary: "Restore failed: \(error.localizedDescription)")
