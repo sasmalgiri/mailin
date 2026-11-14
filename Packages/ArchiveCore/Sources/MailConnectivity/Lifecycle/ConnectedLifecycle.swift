@@ -365,6 +365,16 @@ public final class ConnectedLifecycle: @unchecked Sendable {
 
     public func isRemoved(_ account: UUID) -> Bool { locked { ledger.removedAccounts[account] != nil } }
 
+    /// The person added a removed account again (reconnected under its old
+    /// id): its new work may run. Items held because it was removed stay
+    /// cancelled (they were cancelled at removal); nothing is sent by this.
+    public func clearAccountRemoved(_ account: UUID) throws {
+        try locked {
+            guard ledger.removedAccounts.removeValue(forKey: account) != nil else { return }
+            try persistLocked()
+        }
+    }
+
     /// After a restore: every outbox item that was not yet handed to a
     /// provider waits for the user's decision.
     @discardableResult

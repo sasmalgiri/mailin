@@ -829,3 +829,189 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(g2Still?.plainBody, "Body g2 as the old connector extracted it")
     }
 }
+
+// MARK: - Lifecycle audit 2026-11-14
+
+/// A restore into this device's running archive, a removed account added
+/// again, Delete All Data, the login check before an IMAP account is saved.
+final class LifecycleAuditTests: XCTestCase {
+    private var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("lifecycle-audit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: dir)
+        super.tearDown()
+    }
+
+    private func gmail(_ display: String) -> MailAccount {
+        MailAccount(provider: .gmail, issuer: "https://accounts.google.com", displayIdentity: display,
+                    enabledModes: [.capture, .send], connectionState: .connected)
+    }
+
+    private func record(_ id: UUID) -> ConnectedAccountRecord {
+        ConnectedAccountRecord(accountID: id, provider: .gmail, issuer: "https://accounts.google.com",
+                               displayIdentity: "asha@gmail.com", enabledModes: ["capture"],
+                               connectionState: "connected", createdAt: Date(), updatedAt: Date())
+    }
+
+    private func capture(_ fake: FakeMailProvider, _ sink: ConnectedArchiveSink) async -> SyncRunReport {
+        await SyncEngine(adapter: fake, sink: sink, scheduler: FairDownloadScheduler(totalSlots: 2), tokens: nil, permission: { _ in },
+                         backoff: LifecycleTests.noWait, storage: LifecycleTests.plenty).sync()
+    }
+
+    /// The in-app restore keeps this device's Keychain: without `requireSignIn`
+    /// the restored accounts would connect at once with the old secrets.
+    func testRestoreIntoRunningArchive_accountsNeedSignIn_queuedOutboxHeld() async throws {
+        let storeDir = dir.appendingPathComponent("archive", isDirectory: true)
+        let sink = ConnectedArchiveSink(storeDirectory: storeDir)
+        let credentials = InMemoryCredentialStore()
+        let registry = MailAccountRegistry(records: sink, credentials: credentials)
+        let account = gmail("asha@gmail.com")
+        try await registry.add(account, secret: Data("tokens".utf8), kind: .oauthTokenSet)
+        let lifecycle = try ConnectedLifecycle(storeDirectory: storeDir, entitlement: { ConnectedEntitlement(plan: .active) })
+        let drafts = try DraftStore(storeDirectory: storeDir)
+        let me = SendingIdentity(accountID: account.id, address: try MailAddress(parsing: account.displayIdentity))
+        var draft = Draft(accountID: account.id, senderIdentityID: me.id, to: [try MailAddress(parsing: "ann@example.net")], subject: "queued")
+        draft = try await drafts.save(draft)
+        let composed = try await drafts.compose(draft.id, account: account, identities: [me], date: Date())
+        let outbox = Outbox(store: try OutboxStore(storeDirectory: storeDir), permission: { _ in })
+        let queued = try await outbox.enqueue(composed, draft: draft, route: .gmailAPI)
+
+        let untouched = try await ConnectedRestore.prepare(storeDirectory: storeDir, registry: registry, lifecycle: lifecycle)
+        XCTAssertEqual(untouched.accountsNeedingSignIn, [], "the default (clean profile) relies on the restore's own marking")
+
+        let report = try await ConnectedRestore.prepare(storeDirectory: storeDir, registry: registry, lifecycle: lifecycle, requireSignIn: true)
+        XCTAssertEqual(report.accountsNeedingSignIn, [account.id])
+        XCTAssertEqual(report.outboxHeldForDecision, [queued.id])
+        let state = try await registry.account(account.id).connectionState
+        XCTAssertEqual(state, .needsReauthorisation, "stays marked although the Keychain still has the secret")
+
+        let submitter = ScriptedSubmitter()
+        await outbox.register(account: account.id, submitter: submitter)
+        await outbox.setAdmission(lifecycle.outboxAdmission)
+        try await outbox.runDue()
+        XCTAssertTrue(submitter.submitted.isEmpty, "a restored message is never sent automatically")
+    }
+
+    func testRemovedAccountAddedAgain_mayRunAgain_persisted() throws {
+        let id = UUID()
+        let lifecycle = try ConnectedLifecycle(storeDirectory: dir, entitlement: { ConnectedEntitlement(plan: .active) })
+        try lifecycle.markAccountRemoved(id)
+        XCTAssertEqual(lifecycle.decide(.capture, account: id), .paused(.accountRemoved))
+        try lifecycle.clearAccountRemoved(id)
+        XCTAssertEqual(lifecycle.decide(.capture, account: id), .allowed)
+        let reread = try ConnectedLifecycle(storeDirectory: dir, entitlement: { ConnectedEntitlement(plan: .active) })
+        XCTAssertFalse(reread.isRemoved(id))
+    }
+
+    /// Delete All Data: no connected row survives, so an account added again
+    /// captures its mail again (old identities would read "deleted here").
+    func testEraseConnectedRows_emptiesEveryTable_andAReaddedAccountCapturesAgain() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("archive", isDirectory: true))
+        let id = UUID()
+        try await sink.saveAccount(record(id))
+        let fake = FakeMailProvider(accountID: id)
+        await fake.addFolder("INBOX", path: "Inbox")
+        for m in ["m1", "m2"] { await fake.seed(m, folders: ["INBOX"]) }
+        let first = await capture(fake, sink)
+        XCTAssertEqual(first.receipt?.stored, 2)
+
+        // What erase-all does to the store: every mail row, then the connected rows.
+        try await sink.store.clearAll()
+        let removed = try await sink.eraseAllConnectedRows()
+        XCTAssertGreaterThan(removed, 0)
+        let counts = try await sink.store.connectedTableCounts()
+        XCTAssertEqual(counts.values.reduce(0, +), 0, "\(counts)")
+
+        try await sink.saveAccount(record(id))
+        let again = await capture(fake, sink)
+        XCTAssertEqual(again.receipt?.stored, 2, "the re-added account saved its mail again")
+        let total = try await sink.store.totalCount()
+        XCTAssertEqual(total, 2)
+    }
+
+    func testDeletableRecordIDs_areExactlyWhatTheAccountDeletionRemoves() async throws {
+        let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("archive", isDirectory: true))
+        let id = UUID()
+        try await sink.saveAccount(record(id))
+        let fake = FakeMailProvider(accountID: id)
+        await fake.addFolder("INBOX", path: "Inbox")
+        for m in ["m1", "m2", "m3"] { await fake.seed(m, folders: ["INBOX"]) }
+        _ = await capture(fake, sink)
+        let listed = try await sink.deletableRecordIDs(accountID: id)
+        XCTAssertEqual(listed.count, 3)
+        let deletion = try await sink.deleteAccountArchive(accountID: id, confirmedCount: listed.count)
+        XCTAssertEqual(Set(listed), Set(deletion.deletedEmailIDs))
+        let after = try await sink.deletableRecordIDs(accountID: id)
+        XCTAssertEqual(after, [])
+    }
+
+    // MARK: Login check
+
+    func testSMTPLoginCheck_authenticatesOverTLS_sendsNoMessage_refusalIsStated() async throws {
+        let ok = try ScriptedSMTPServer(behavior: SMTPServerBehavior())
+        defer { ok.stop() }
+        let settings = SMTPServerSettings(host: "127.0.0.1", port: Int(ok.port), security: .startTLS, commandTimeout: 5)
+        try await SMTPLoginCheck.verify(settings, username: "me@alpha.example", password: "pw-1", accountID: UUID(),
+                                        connector: SimulatedTLSConnector(), permission: { _ in })
+        XCTAssertTrue(ok.allLines.contains { $0.hasPrefix("AUTH") })
+        XCTAssertFalse(ok.allLines.contains { $0.hasPrefix("MAIL") }, "no message is sent by the check")
+        XCTAssertTrue(ok.allLines.contains("QUIT"))
+
+        let refusing = try ScriptedSMTPServer(script: { c in
+            c.reply("220 mail.test ESMTP")
+            while let line = c.readLine() {
+                let upper = line.uppercased()
+                if upper.hasPrefix("EHLO") { c.send("250-mail.test\r\n250-STARTTLS\r\n250 AUTH PLAIN LOGIN\r\n") }
+                else if upper == "STARTTLS" { c.reply("220 go ahead") }
+                else if upper.hasPrefix("AUTH") { c.reply("535 5.7.8 Authentication credentials invalid") }
+                else if upper == "QUIT" { c.reply("221 bye"); return }
+            }
+        })
+        defer { refusing.stop() }
+        do {
+            try await SMTPLoginCheck.verify(SMTPServerSettings(host: "127.0.0.1", port: Int(refusing.port), security: .startTLS, commandTimeout: 5),
+                                            username: "me", password: "wrong", accountID: UUID(), connector: SimulatedTLSConnector(), permission: { _ in })
+            XCTFail("a refused login must throw")
+        } catch let error as AccountLoginCheckError {
+            guard case .outgoing(let why) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(why.contains("refused"), why)
+        }
+
+        let never = try ScriptedSMTPServer(behavior: SMTPServerBehavior())
+        defer { never.stop() }
+        do {
+            try await SMTPLoginCheck.verify(SMTPServerSettings(host: "127.0.0.1", port: Int(never.port)), username: "me", password: "pw",
+                                            accountID: UUID(), connector: SimulatedTLSConnector(),
+                                            permission: { _ in throw NSError(domain: "policy", code: 1) })
+            XCTFail("a refused permission must throw")
+        } catch is AccountLoginCheckError {}
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(never.connections, 0, "nothing connects without permission")
+    }
+
+    func testIMAPLoginCheck_logsInListsAndLogsOut_wrongPasswordIsStated() async throws {
+        let model = IMAPServerModel()
+        model.addMailbox("INBOX")
+        model.addMailbox("Trash", attributes: ["\\HasNoChildren", "\\Trash"])
+        let server = try LocalIMAPServer(model: model)
+        try await server.start()
+        defer { server.stop() }
+        let account = MailAccount(provider: .imap, host: "127.0.0.1", port: Int(server.port), loginName: model.login,
+                                  displayIdentity: "asha@example.com", enabledModes: [])
+        let folders = try await IMAPLoginCheck.verify(account, password: model.password, security: .plaintextLoopbackOnly, permission: { _ in })
+        XCTAssertEqual(folders.first { $0.specialUse == "\\Trash" }?.serverID, "Trash")
+        XCTAssertTrue(model.transcript.contains { $0.uppercased().contains("LOGOUT") }, "the check logs out")
+
+        do {
+            try await IMAPLoginCheck.verify(account, password: "wrong", security: .plaintextLoopbackOnly, permission: { _ in })
+            XCTFail("a wrong password must throw")
+        } catch let error as AccountLoginCheckError {
+            guard case .incoming = error else { return XCTFail("\(error)") }
+        }
+    }
+}

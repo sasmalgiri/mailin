@@ -156,6 +156,24 @@ struct MailAccountsList: View {
             if model.accounts.isEmpty {
                 Text("No accounts yet.").foregroundStyle(.secondary)
             }
+            if !model.removedAccounts.isEmpty {
+                // Removed with their mail kept: deleting that mail stays possible here.
+                Section(String(localized: "Removed accounts")) {
+                    ForEach(model.removedAccounts) { snapshot in
+                        HStack {
+                            MailAccountBadge(account: snapshot.account,
+                                             headline: MailLifecycleText.keptMessages(model.removedArchive[snapshot.id]?.records ?? 0))
+                            Spacer()
+                            Button(String(localized: "Delete archived mail…"), role: .destructive) {
+                                sheet = .deleteRemovedMail(snapshot.id)
+                            }
+                            .disabled((model.removedArchive[snapshot.id]?.deletable ?? 0) == 0)
+                            .accessibilityIdentifier("mail.removed.delete")
+                        }
+                        .selectionDisabled()
+                    }
+                }
+            }
             Section {
                 Button(String(localized: "Add account…")) { sheet = .addAccount }
                 Button(String(localized: "Sign-in details from an earlier version…")) { sheet = .upgrade }
@@ -172,6 +190,8 @@ struct MailAccountSettingsView: View {
     let model: MailWorkspaceModel
     let accountID: UUID
     @Binding var sheet: MailSheet?
+    @State private var unconfirmedAddress: String?
+    @State private var confirmingAddress = false
 
     var body: some View {
         if let snapshot = model.account(accountID) {
@@ -197,6 +217,16 @@ struct MailAccountSettingsView: View {
                                                       ? GmailOAuth.readOnlyScope : "Mail.Read")
                             }
                         }
+                    }
+                    if snapshot.account.connectionState == .needsReauthorisation, snapshot.account.provider == .imap {
+                        // A password account signs in again with a new password (checked first).
+                        Button(String(localized: "Replace password…")) { sheet = .replacePassword(accountID) }
+                            .accessibilityIdentifier("mail.account.replacePassword")
+                    }
+                    if let address = unconfirmedAddress {
+                        Text(MailLifecycleText.addressNotConfirmed(address)).font(.callout).foregroundStyle(.secondary)
+                        Button(String(localized: "Confirm Sending Address…")) { confirmingAddress = true }
+                            .accessibilityIdentifier("mail.account.confirmAddress")
                     }
                 }
 
@@ -283,76 +313,208 @@ struct MailAccountSettingsView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(snapshot.account.displayIdentity)
+            .task(id: accountID) { await loadIdentity(snapshot.account) }
+            .confirmationDialog(String(localized: "Confirm Sending Address…"), isPresented: $confirmingAddress) {
+                Button(String(localized: "Confirm")) {
+                    Task {
+                        await model.confirmSendingAddress(accountID)
+                        await loadIdentity(snapshot.account)
+                    }
+                }
+                Button(String(localized: "Cancel"), role: .cancel) {}
+            } message: {
+                Text(MailLifecycleText.addressNotConfirmed(unconfirmedAddress ?? snapshot.account.displayIdentity))
+            }
         } else {
             Text("This account is no longer listed.").foregroundStyle(.secondary)
         }
+    }
+
+    /// An IMAP account's typed address the person has not confirmed yet.
+    private func loadIdentity(_ account: MailAccount) async {
+        guard account.provider == .imap else { unconfirmedAddress = nil; return }
+        let own = await model.backend.identities(accountID)
+        unconfirmedAddress = !own.isEmpty && !own.contains(where: { $0.permission == .verified }) ? own.first?.address.addrSpec : nil
     }
 }
 
 // MARK: - Remove
 
+/// The Remove account sheet's decisions (no SwiftUI): the counts are shown
+/// first, removal waits for the account's running capture, and deleting its
+/// archived mail re-plans after the removal — a changed count is shown in
+/// the sheet and must be typed again (rule 4). Nothing is deleted on Return.
+@MainActor
+@Observable
+final class MailRemovalFlow {
+    let model: MailWorkspaceModel
+    let accountID: UUID
+    private(set) var plan: AccountRemovalPlan?
+    private(set) var report: AccountRemovalReport?
+    private(set) var deletion: ConnectedAccountArchiveSummary?
+    private(set) var deleted: ConnectedAccountArchiveDeletion?
+    var typedCount = ""
+    /// "Remove and Delete Mail…" was chosen: the count field is shown.
+    private(set) var alsoDelete = false
+    private(set) var working = false
+    /// This sheet's own error, shown in the sheet (never only on the page behind it).
+    private(set) var error: String?
+
+    init(model: MailWorkspaceModel, accountID: UUID) {
+        self.model = model
+        self.accountID = accountID
+    }
+
+    /// The typed number equals what would be deleted now (and that is not zero).
+    var typedMatches: Bool {
+        guard let deletable = deletion?.deletable, deletable > 0 else { return false }
+        return typedCount.trimmingCharacters(in: .whitespaces) == String(deletable)
+    }
+
+    var hasDeletableMail: Bool { (deletion?.deletable ?? 0) > 0 }
+
+    func load() async {
+        // An error from elsewhere on the page is not this sheet's.
+        model.lastError = nil
+        error = nil
+        plan = await model.removalPlan(accountID)
+        if plan == nil { error = model.lastError }
+        deletion = try? await model.backend.archiveDeletionPlan(accountID)
+    }
+
+    /// A removed account's sheet: only the deletion count.
+    func loadDeletionOnly() async {
+        error = nil
+        do { deletion = try await model.backend.archiveDeletionPlan(accountID) } catch {
+            self.error = ConnectedMailErrorText.text(for: error)
+        }
+    }
+
+    func chooseDelete() {
+        alsoDelete = true
+        typedCount = ""
+        error = nil
+    }
+
+    func removeKeepingMail() async {
+        working = true; defer { working = false }
+        alsoDelete = false
+        report = await model.remove(accountID)
+        guard report != nil else { error = model.lastError; return }
+        deletion = try? await model.backend.archiveDeletionPlan(accountID)
+        typedCount = ""
+    }
+
+    func removeAndDelete() async {
+        guard let shown = deletion?.deletable, typedMatches else { return }
+        working = true; defer { working = false }
+        report = await model.remove(accountID)
+        guard report != nil else { error = model.lastError; return }
+        await delete(shown: shown)
+    }
+
+    /// After removal: the delete section's own button (the count typed against the current plan).
+    func deleteNow() async {
+        guard let shown = deletion?.deletable, typedMatches else { return }
+        working = true; defer { working = false }
+        await delete(shown: shown)
+    }
+
+    /// Re-plans first: a count that changed since it was shown deletes
+    /// nothing and asks for the new number.
+    private func delete(shown: Int) async {
+        let fresh = try? await model.backend.archiveDeletionPlan(accountID)
+        deletion = fresh
+        guard let fresh, fresh.deletable == shown else {
+            typedCount = ""
+            error = MailLifecycleText.countChangedAfterRemoval(shown: shown, now: fresh?.deletable ?? 0)
+            return
+        }
+        deleted = await model.deleteArchivedMail(accountID, confirmedCount: shown)
+        if deleted == nil {
+            error = model.lastError
+            deletion = try? await model.backend.archiveDeletionPlan(accountID)
+            typedCount = ""
+        } else {
+            error = nil
+        }
+    }
+}
+
 struct MailRemoveAccountView: View {
     let model: MailWorkspaceModel
     let accountID: UUID
     let dismiss: () -> Void
-    @State private var plan: AccountRemovalPlan?
-    @State private var report: AccountRemovalReport?
-    @State private var deletion: ConnectedAccountArchiveSummary?
-    @State private var typedCount = ""
-    @State private var deleted: ConnectedAccountArchiveDeletion?
     /// Owner 2026-11-14: "Remove" and "Remove and Delete Mail…" are both footer
-    /// buttons next to Cancel; deleting first shows the exact count to type (rule 4).
-    @State private var alsoDelete = false
-    @State private var working = false
+    /// buttons next to Cancel (macOS); deleting first shows the exact count to type (rule 4).
+    @State private var flow: MailRemovalFlow
 
-    private var typedMatches: Bool {
-        guard let deletion else { return false }
-        return deletion.deletable == 0 || typedCount.trimmingCharacters(in: .whitespaces) == String(deletion.deletable)
+    init(model: MailWorkspaceModel, accountID: UUID, dismiss: @escaping () -> Void) {
+        self.model = model
+        self.accountID = accountID
+        self.dismiss = dismiss
+        _flow = State(initialValue: MailRemovalFlow(model: model, accountID: accountID))
     }
+
+    private var typedMatches: Bool { flow.typedMatches }
 
     var body: some View {
         NavigationStack {
             Form {
-                if let report {
+                if let error = flow.error {
+                    Section {
+                        Text(error).foregroundStyle(.red).font(.callout)
+                            .accessibilityIdentifier("mail.remove.error")
+                    }
+                }
+                if let report = flow.report {
                     Section {
                         Text(MailRemovalText.report(report))
                             .accessibilityIdentifier("mail.remove.report")
                     }
-                    if let deleted {
+                    if let deleted = flow.deleted {
                         Section { Text("\(deleted.deletedEmailIDs.count) archived messages deleted; \(deleted.heldKept) on hold kept.") }
-                    } else if !alsoDelete, let deletion, deletion.deletable > 0 {
-                        // Removed with mail kept: deleting it later stays possible here.
+                    } else if let deletion = flow.deletion, deletion.deletable > 0 {
+                        // Removed with mail kept (or the count changed): deleting it stays possible here.
                         Section {
                             Text(MailRemovalText.deletionDetail(deletion)).font(.callout)
-                            TextField(String(localized: "Type the number to confirm"), text: $typedCount)
-                            Button(MailRemovalText.deletionTitle(deletion), role: .destructive) {
-                                Task { deleted = await model.deleteArchivedMail(accountID, confirmedCount: deletion.deletable) }
-                            }
-                            .disabled(!typedMatches)
+                            TextField(String(localized: "Type the number to confirm"), text: $flow.typedCount)
+                                .accessibilityIdentifier("mail.remove.typedCount")
+                            Button(MailRemovalText.deletionTitle(deletion), role: .destructive) { Task { await flow.deleteNow() } }
+                                .disabled(!typedMatches || flow.working)
+                                .accessibilityIdentifier("mail.remove.deleteAfter")
                         } header: {
                             Text("Also delete its archived mail? (separate, optional)")
                         }
                     }
-                } else if let plan {
+                } else if let plan = flow.plan {
                     Section {
                         ForEach(MailRemovalText.summary(plan), id: \.self) { Text($0) }
                     } header: {
                         Text("Before removing")
+                    } footer: {
+                        // What Remove does, visible (not only as a tooltip).
+                        Text(MailRemovalText.confirmTitle(plan))
                     }
-                    if alsoDelete, let deletion {
+                    if flow.alsoDelete, let deletion = flow.deletion {
                         Section {
                             Text(MailRemovalText.deletionDetail(deletion)).font(.callout)
                             if deletion.deletable > 0 {
-                                TextField(String(localized: "Type the number to confirm"), text: $typedCount)
+                                TextField(String(localized: "Type the number to confirm"), text: $flow.typedCount)
                                     .accessibilityIdentifier("mail.remove.typedCount")
                             }
                         } header: {
                             Text("Delete its archived mail too")
                         }
                     }
-                } else if let error = model.lastError {
-                    Text(error).foregroundStyle(.red)
-                } else {
+                    #if os(iOS)
+                    // iPhone / iPad: the actions sit in the form, under what they do.
+                    Section {
+                        removeButton(plan)
+                        deleteChoiceButton
+                    }
+                    #endif
+                } else if flow.error == nil {
                     ProgressView()
                 }
             }
@@ -360,53 +522,146 @@ struct MailRemoveAccountView: View {
             .navigationTitle(String(localized: "Remove account"))
             .toolbar { footer }
         }
-        .task {
-            plan = await model.removalPlan(accountID)
-            deletion = try? await model.backend.archiveDeletionPlan(accountID)
-        }
+        .task { await flow.load() }
     }
 
     @ToolbarContentBuilder
     private var footer: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            Button(report == nil ? String(localized: "Cancel") : String(localized: "Done"), action: dismiss)
+            Button(flow.report == nil ? String(localized: "Cancel") : String(localized: "Done"), action: dismiss)
                 .accessibilityIdentifier("mail.remove.close")
         }
-        if report == nil, let plan {
-            ToolbarItem(placement: .destructiveAction) {
-                if alsoDelete, let deletion {
-                    Button(MailRemovalText.removeAndDeleteTitle(deletion), role: .destructive) { Task { await removeAndDelete() } }
-                        .disabled(!typedMatches || working)
-                        .accessibilityIdentifier("mail.remove.andDelete")
-                } else {
-                    Button(String(localized: "Remove and Delete Mail…"), role: .destructive) { alsoDelete = true; typedCount = "" }
-                        .disabled(deletion == nil || working)
-                        .accessibilityIdentifier("mail.remove.chooseDelete")
-                }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button(String(localized: "Remove")) { Task { await removeKeepingMail() } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(working)
-                    .help(MailRemovalText.confirmTitle(plan))
-                    .accessibilityIdentifier("mail.remove.confirm")
-            }
+        #if os(macOS)
+        if flow.report == nil, let plan = flow.plan {
+            ToolbarItem(placement: .destructiveAction) { deleteChoiceButton }
+            ToolbarItem(placement: .confirmationAction) { removeButton(plan) }
+        }
+        #endif
+    }
+
+    /// Remove (keeps the mail). Return triggers it only while no delete count
+    /// is being typed: Return in the count field must never remove-and-keep.
+    private func removeButton(_ plan: AccountRemovalPlan) -> some View {
+        Button(String(localized: "Remove")) { Task { await flow.removeKeepingMail() } }
+            .keyboardShortcut(flow.alsoDelete ? nil : KeyboardShortcut.defaultAction)
+            .disabled(flow.working)
+            .help(MailRemovalText.confirmTitle(plan))
+            .accessibilityIdentifier("mail.remove.confirm")
+    }
+
+    @ViewBuilder
+    private var deleteChoiceButton: some View {
+        if flow.alsoDelete, let deletion = flow.deletion {
+            Button(MailRemovalText.removeAndDeleteTitle(deletion), role: .destructive) { Task { await flow.removeAndDelete() } }
+                .disabled(!typedMatches || flow.working)
+                .accessibilityIdentifier("mail.remove.andDelete")
+        } else {
+            Button(flow.deletion.map { $0.deletable == 0 } == true ? MailLifecycleText.nothingToDelete : String(localized: "Remove and Delete Mail…"),
+                   role: .destructive) { flow.chooseDelete() }
+                .disabled(!flow.hasDeletableMail || flow.working)
+                .accessibilityIdentifier("mail.remove.chooseDelete")
         }
     }
+}
 
-    private func removeKeepingMail() async {
-        working = true; defer { working = false }
-        alsoDelete = false
-        report = await model.remove(accountID)
-        if report != nil { deletion = try? await model.backend.archiveDeletionPlan(accountID) }
+/// A removed account's archived mail, deleted later: the count is shown,
+/// typed, and re-checked before anything is deleted.
+struct MailDeleteRemovedMailView: View {
+    let model: MailWorkspaceModel
+    let accountID: UUID
+    let dismiss: () -> Void
+    @State private var flow: MailRemovalFlow
+
+    init(model: MailWorkspaceModel, accountID: UUID, dismiss: @escaping () -> Void) {
+        self.model = model
+        self.accountID = accountID
+        self.dismiss = dismiss
+        _flow = State(initialValue: MailRemovalFlow(model: model, accountID: accountID))
     }
 
-    private func removeAndDelete() async {
-        guard let confirmed = deletion?.deletable else { return }
-        working = true; defer { working = false }
-        report = await model.remove(accountID)
-        guard report != nil else { return }
-        if confirmed > 0 { deleted = await model.deleteArchivedMail(accountID, confirmedCount: confirmed) }
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let error = flow.error {
+                    Section { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("mail.deleteRemoved.error") }
+                }
+                if let deleted = flow.deleted {
+                    Section { Text("\(deleted.deletedEmailIDs.count) archived messages deleted; \(deleted.heldKept) on hold kept.") }
+                } else if let deletion = flow.deletion {
+                    Section {
+                        Text(MailRemovalText.deletionDetail(deletion)).font(.callout)
+                        if deletion.deletable > 0 {
+                            TextField(String(localized: "Type the number to confirm"), text: $flow.typedCount)
+                                .accessibilityIdentifier("mail.deleteRemoved.typedCount")
+                            Button(MailRemovalText.deletionTitle(deletion), role: .destructive) { Task { await flow.deleteNow() } }
+                                .disabled(!flow.typedMatches || flow.working)
+                                .accessibilityIdentifier("mail.deleteRemoved.confirm")
+                        }
+                    }
+                } else if flow.error == nil {
+                    ProgressView()
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(String(localized: "Delete archived mail"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(flow.deleted == nil ? String(localized: "Cancel") : String(localized: "Done"), action: dismiss)
+                }
+            }
+        }
+        .task {
+            model.lastError = nil
+            await flow.loadDeletionOnly()
+        }
+    }
+}
+
+/// IMAP account that needs sign-in: a new password, checked with the
+/// servers before it replaces the old one.
+struct MailReplacePasswordView: View {
+    let model: MailWorkspaceModel
+    let accountID: UUID
+    let dismiss: () -> Void
+    @State private var password = ""
+    @State private var working = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    if let account = model.account(accountID)?.account {
+                        Text(account.displayIdentity).font(.headline)
+                    }
+                    SecureField(String(localized: "Password or app password"), text: $password)
+                        .accessibilityIdentifier("mail.password.field")
+                } footer: {
+                    if let host = model.account(accountID)?.account.host, ConnectedMailErrorText.isGmailHost(host) {
+                        Text(MailProviderChoice.gmailAppPasswordGuidance)
+                    }
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("mail.password.error") }
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(String(localized: "Replace password"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(String(localized: "Cancel"), action: dismiss) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(String(localized: "Save")) {
+                        Task {
+                            working = true; defer { working = false }
+                            if await model.replacePassword(password, account: accountID) { dismiss() } else { error = model.lastError }
+                        }
+                    }
+                    .disabled(password.isEmpty || working)
+                    .accessibilityIdentifier("mail.password.save")
+                }
+            }
+        }
+        .onAppear { model.lastError = nil }
     }
 }
 

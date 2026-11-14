@@ -41,6 +41,9 @@ import MailConnectivity
 
 import Foundation
 import os
+#if os(macOS)
+import AppKit
+#endif
 
 // MARK: - Adapter factory
 
@@ -52,6 +55,9 @@ struct ConnectedAdapterContext: Sendable {
     let tokens: TokenRefreshCoordinator?
     /// The policy check every adapter request goes through.
     let permission: NetworkPermission
+    /// IMAP: the account's Trash folder (special use \Trash) as the server
+    /// listed it, for Move to Trash; nil = none listed (the move is refused).
+    var trashMailbox: String? = nil
 }
 
 /// Builds an account's adapter; nil = this build has no transport for it.
@@ -148,7 +154,19 @@ final class ConnectedMailRuntime {
         var retrySleep: @Sendable (TimeInterval) async throws -> Void = { seconds in
             try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
         }
+        /// How often an account paused for storage (drive gone, volume full)
+        /// checks whether it may capture again.
+        var storageRecheckInterval: TimeInterval = 60
+        /// Where the person's "Pause capture" choices are kept across launches
+        /// (nil = this process only; production uses the app's defaults).
+        var pauseDefaults: UserDefaults? = nil
+        /// After an account's archived mail was deleted (app: corpus revision,
+        /// list refresh — the same follow-ups any delete makes).
+        var afterDelete: @Sendable ([UUID]) async -> Void = { _ in }
     }
+
+    /// The defaults key of the paused accounts (their UUID strings).
+    nonisolated static let pausedAccountsKey = "mailin.connected.pausedAccounts"
 
     nonisolated static let didChange = Notification.Name("ConnectedMailRuntime.didChange")
     /// Posted (throttled to `progressInterval`) while a capture runs, so the
@@ -186,6 +204,12 @@ final class ConnectedMailRuntime {
     private var adapters: [UUID: (fingerprint: String, adapter: any MailProviderAdapter)] = [:]
     /// Adapters replaced while their account was capturing: closed when that run ends.
     private var retiredAdapters: [UUID: [any MailProviderAdapter]] = [:]
+    /// Accounts paused for storage (the archive's drive gone, the volume
+    /// full): checked again on a timer and when a volume is mounted, and
+    /// captured again by themselves once the archive can be written.
+    private var storageWaits: [UUID: (task: Task<Void, Never>, driveMissing: Bool)] = [:]
+    /// Waiting for an account's running capture to end (account removal).
+    private var runEndWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private var started = false
 
     init(dependencies: Dependencies) {
@@ -194,6 +218,19 @@ final class ConnectedMailRuntime {
         sink = ConnectedArchiveSink(store: dependencies.store)
         registry = MailAccountRegistry(records: sink, credentials: dependencies.credentials)
         feed = ConnectedSearchFeed(store: dependencies.store, fts: dependencies.fts, afterIndex: dependencies.afterIndex)
+        // A pause survives a relaunch: a paused account does not capture on launch.
+        let saved = dependencies.pauseDefaults?.stringArray(forKey: Self.pausedAccountsKey) ?? []
+        paused = Set(saved.compactMap(UUID.init(uuidString:)))
+    }
+
+    private func savePaused() {
+        deps.pauseDefaults?.set(paused.map(\.uuidString).sorted(), forKey: Self.pausedAccountsKey)
+    }
+
+    /// The account is gone (removed): its pause choice is forgotten.
+    func forgetPaused(_ id: UUID) {
+        guard paused.remove(id) != nil else { return }
+        savePaused()
     }
 
     // MARK: Lifecycle
@@ -322,16 +359,32 @@ final class ConnectedMailRuntime {
     /// The account's credential store and token coordinator (the Mail workspace signs in through them).
     var credentials: any CredentialStore { deps.credentials }
     var tokens: TokenRefreshCoordinator? { deps.tokens }
+    /// The full-text index captured mail is indexed into (and removed from first).
+    var searchIndex: FTSSearchIndex { deps.fts }
+    /// The follow-ups after archived mail of an account was deleted.
+    func afterDelete(_ ids: [UUID]) async { await deps.afterDelete(ids) }
 
     /// Stops one account's engine and cancels its registered work (account
     /// removal, V4-12); returns how many engines were stopped.
     @discardableResult
     func stopAccount(_ id: UUID) -> Int {
-        let had = engines[id] != nil ? 1 : 0
+        let had = engines[id] != nil || running.contains(id) ? 1 : 0
         engines[id] = nil
         cancelRetry(id)
         policy.setAccount(MailAccountNetworkPolicy(id: id))   // off, no modes: cancels its tasks
         NotificationCenter.default.post(name: Self.didChange, object: self)
+        return had
+    }
+
+    /// `stopAccount`, then waits until the account's running capture has
+    /// really ended (its last write committed or rolled back), so removal
+    /// and deletion never race a capture that is still unwinding.
+    @discardableResult
+    func stopAccountAndWait(_ id: UUID) async -> Int {
+        let had = stopAccount(id)
+        while running.contains(id) {
+            await withCheckedContinuation { runEndWaiters[id, default: []].append($0) }
+        }
         return had
     }
 
@@ -385,6 +438,7 @@ final class ConnectedMailRuntime {
         }
         endRun(id)
         scheduleRetryIfNeeded(id, after: report)
+        watchStorageIfNeeded(id, after: report)
         NotificationCenter.default.post(name: Self.didChange, object: self)
         return report
     }
@@ -392,6 +446,7 @@ final class ConnectedMailRuntime {
     private func endRun(_ id: UUID) {
         running.remove(id)
         closeRetired(id)
+        for waiter in runEndWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
         NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
@@ -431,7 +486,66 @@ final class ConnectedMailRuntime {
     private func cancelRetry(_ id: UUID) {
         retryTasks.removeValue(forKey: id)?.cancel()
         nextRetry[id] = nil
+        storageWaits.removeValue(forKey: id)?.task.cancel()
     }
+
+    // MARK: Storage came back
+
+    /// After a pause for storage (the archive's drive is gone, or the volume
+    /// is full) the account checks again every `storageRecheckInterval` — and
+    /// at once when a volume is mounted — and captures again by itself as soon
+    /// as the archive can be written (the drive's connection reopened first).
+    private func watchStorageIfNeeded(_ id: UUID, after report: SyncRunReport) {
+        guard case .paused(let why) = report.outcome, engines[id] != nil, !paused.contains(id) else { return }
+        let driveMissing: Bool
+        switch why {
+        case .driveUnavailable: driveMissing = true
+        case .diskFull: driveMissing = false
+        case .quotaExceeded, .rateLimited: return
+        }
+        storageWaits.removeValue(forKey: id)?.task.cancel()
+        let sleep = deps.retrySleep
+        let interval = deps.storageRecheckInterval
+        let task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await sleep(interval) } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                if await self.resumeIfStorageReturned(id) { return }
+            }
+        }
+        storageWaits[id] = (task, driveMissing)
+    }
+
+    /// True when the account no longer waits (it captures again, or it was
+    /// paused, switched off or removed meanwhile).
+    @discardableResult
+    func resumeIfStorageReturned(_ id: UUID) async -> Bool {
+        guard let wait = storageWaits[id] else { return true }
+        guard engines[id] != nil, !paused.contains(id) else {
+            storageWaits.removeValue(forKey: id)?.task.cancel()
+            return true
+        }
+        let archive = sink.stagingDirectory.deletingLastPathComponent()
+        if let drive = deps.storage.drive, !ArchiveDriveGuard.check(drive).isPresent { return false }
+        guard let available = deps.storage.availableBytes(archive), available >= deps.storage.reserveBytes else { return false }
+        // The drive came back: the open connection still points at the vanished mount.
+        if wait.driveMissing { await sink.reopenAfterDriveReturned() }
+        guard storageWaits[id] != nil else { return true }
+        storageWaits[id] = nil
+        startCapture(id)
+        return true
+    }
+
+    /// A volume was mounted (or space may have been freed): every account
+    /// waiting for storage checks now instead of at its next tick.
+    func recheckStorageNow() {
+        for id in Array(storageWaits.keys) {
+            Task { @MainActor [weak self] in await self?.resumeIfStorageReturned(id) }
+        }
+    }
+
+    /// Accounts waiting for the archive's drive or free space to come back.
+    var waitingForStorage: Set<UUID> { Set(storageWaits.keys) }
 
     // MARK: Sign-in lost outside a capture
 
@@ -471,6 +585,7 @@ final class ConnectedMailRuntime {
     /// Pausing cancels its running capture at once (the policy narrows).
     func setPaused(_ isPaused: Bool, account id: UUID) async throws {
         if isPaused { paused.insert(id); cancelRetry(id) } else { paused.remove(id) }
+        savePaused()
         try await reloadAccounts()
     }
 
@@ -582,8 +697,10 @@ final class ConnectedMailRuntime {
     func actionService(_ id: UUID, journal: RemoteOperationJournal) async throws -> RemoteActionService {
         if let why = await serverChangeRefusal(id) { throw ConnectedRecipeError.notPermitted(why) }
         let account = try await registry.account(id)
+        let trash = Self.trashMailbox(in: (try? await sink.folderSummaries(accountID: id)) ?? [])
         let context = ConnectedAdapterContext(account: account, credentials: deps.credentials, tokens: deps.tokens,
-                                              permission: Self.permission(policy: policy, purpose: .changeServerMail))
+                                              permission: Self.permission(policy: policy, purpose: .changeServerMail),
+                                              trashMailbox: trash)
         guard let executor = try await deps.actionExecutors(context) else {
             throw ConnectedRecipeError.notPermitted(String(localized: "This edition cannot change mail on this account's server."))
         }
@@ -591,6 +708,12 @@ final class ConnectedMailRuntime {
         return RemoteActionService(account: account, executor: executor, journal: journal, changePermission: { id in
             if let refusal = Self.serverChangeRefusal(policy: policy, account: id) { throw refusal }
         })
+    }
+
+    /// The server's Trash folder among the account's listed folders (IMAP
+    /// special use \Trash), nil when the server named none.
+    nonisolated static func trashMailbox(in folders: [ConnectedFolderSummary]) -> String? {
+        folders.first { $0.specialUse?.caseInsensitiveCompare("\\Trash") == .orderedSame }?.serverID
     }
 
     // MARK: Accounts
@@ -683,9 +806,13 @@ final class ConnectedMailRuntime {
             let runtime = ConnectedMailRuntime(dependencies: deps)
             runtime.rules = CaptureRuleEngine.production(store: deps.store)
             shared = runtime
+            observeVolumes()
             Task { @MainActor in
                 do {
                     try await runtime.start()
+                    // The outbox runs from launch, not only once the Mail page
+                    // was opened: due messages go, held ones wait visibly.
+                    ConnectedMailBackend.startForRuntime()
                     // REC-07: arrivals a rule has not decided yet (an earlier
                     // indexing failure, a crash) — the ledger keeps it once-only.
                     _ = await runtime.rules?.catchUp()
@@ -697,7 +824,36 @@ final class ConnectedMailRuntime {
         } else {
             shared?.stop()
             shared = nil
+            ConnectedMailBackend.discardCached()
         }
+    }
+
+    /// Restore and Delete All Data: everything connected stops (captures,
+    /// the outbox driver) before the archive's files change. Returns whether
+    /// connected mail was running, so the caller can start it again.
+    @discardableResult
+    static func suspendForArchiveChange() async -> Bool {
+        ConnectedMailBackend.discardCached()
+        guard let runtime = shared else { return false }
+        for id in Array(runtime.running) { await runtime.stopAccountAndWait(id) }
+        runtime.stop()
+        shared = nil
+        return true
+    }
+
+    #if os(macOS)
+    private static var volumeObserver: NSObjectProtocol?
+    #endif
+
+    /// A mounted volume may be the archive's drive coming back.
+    private static func observeVolumes() {
+        #if os(macOS)
+        guard volumeObserver == nil else { return }
+        volumeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didMountNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in ConnectedMailRuntime.shared?.recheckStorageNow() }
+        }
+        #endif
     }
 
     /// A3 / A08: what the legacy connector screens call instead of inserting
@@ -713,6 +869,14 @@ final class ConnectedMailRuntime {
         guard !ids.isEmpty else { return }
         _ = try? await ArchiveCorpusRevision.shared.bump()
         AttachmentTextIndexJob.shared.kickIfNeeded()
+        NotificationCenter.default.post(name: .parsingFinished, object: nil)
+    }
+
+    /// After archived mail was deleted: the follow-ups any delete makes
+    /// (ContentViewModel.removeEmailsAwaitingResult): corpus revision, lists.
+    static func afterDeleteInApp(_ ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        _ = try? await ArchiveCorpusRevision.shared.bump()
         NotificationCenter.default.post(name: .parsingFinished, object: nil)
     }
 
@@ -765,11 +929,14 @@ enum ConnectedMailProduction {
         let tokens = TokenRefreshCoordinator(credentials: credentials,
                                              transport: PolicyCheckedTokenTransport(policy: .shared),
                                              onReauthorisationNeeded: ConnectedMailRuntime.reauthorisationHandler)
-        return ConnectedMailRuntime.Dependencies(
+        var deps = ConnectedMailRuntime.Dependencies(
             store: .shared, fts: .shared, policy: .shared, credentials: credentials, tokens: tokens,
             adapters: { context in try await adapter(context) },
             afterIndex: { ids in await ConnectedMailRuntime.afterIndexInApp(ids) },
             actionExecutors: { context in try actionExecutor(context) })
+        deps.pauseDefaults = .standard
+        deps.afterDelete = { ids in await ConnectedMailRuntime.afterDeleteInApp(ids) }
+        return deps
     }
 
     /// REC-07 / V4-11: the account's server-action executor. Its requests ask
@@ -785,10 +952,10 @@ enum ConnectedMailProduction {
             return GraphActionExecutor(accountID: c.account.id, tokens: tokens, transport: NoRedirectSendHTTPTransport(),
                                        permission: c.permission)
         case .imap:
-            // No Trash mailbox is assumed: without one, Move to Trash is
-            // refused with its reason (never a mailbox-wide EXPUNGE).
+            // The Trash the server listed (special use \Trash); none listed:
+            // Move to Trash is refused with its reason (never a mailbox-wide EXPUNGE).
             let adapter = try IMAPAdapter(account: c.account, credentials: c.credentials, permission: c.permission)
-            return IMAPActionExecutor(adapter: adapter, trashMailbox: nil, permission: c.permission)
+            return IMAPActionExecutor(adapter: adapter, trashMailbox: c.trashMailbox, permission: c.permission)
         }
     }
 

@@ -124,15 +124,85 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
         let address: String?
         if choice == .gmail {
             let adapter = GmailAdapter(accountID: accountID, transport: URLSessionGmailTransport(), permission: permission)
-            address = try? await adapter.profileAddress(context: context)
+            address = Self.providerStated(try? await adapter.profileAddress(context: context))
             await adapter.close()
         } else {
             let adapter = GraphAdapter(accountID: accountID, transport: URLSessionGraphTransport(), permission: permission)
-            address = try? await adapter.profileAddress(context: context)
+            address = Self.providerStated(try? await adapter.profileAddress(context: context))
             await adapter.close()
         }
         if !alreadyAllowed { policy.setAccount(previous ?? MailAccountNetworkPolicy(id: accountID)) }
         return address
+    }
+
+    /// The mailbox address in a provider's profile answer, or nil when it does
+    /// not confirm one. A plain string is the stated address. A structured
+    /// answer counts only when it does not say the address came from the
+    /// sign-in name alone (Graph `userPrincipalName` is a login, not a
+    /// mailbox): a Bool child named like "confirmed" that is false, or one
+    /// named like "userPrincipalName" / "fromSignInName" that is true, makes
+    /// it unconfirmed. Works with either form of `profileAddress`.
+    nonisolated static func providerStated(_ answer: Any?) -> String? {
+        guard let answer else { return nil }
+        if let text = answer as? String { return text }
+        var address: String?
+        var unconfirmed = false
+        var pending: [Any] = [answer]
+        while let value = pending.popLast() {
+            let mirror = Mirror(reflecting: value)
+            if mirror.displayStyle == .optional {
+                pending.append(contentsOf: mirror.children.map(\.value))
+                continue
+            }
+            for child in mirror.children {
+                let label = (child.label ?? "").lowercased()
+                switch child.value {
+                case let flag as Bool:
+                    if label.contains("confirm") || label.contains("verified") || label.contains("mailbox") {
+                        if !flag { unconfirmed = true }
+                    } else if label.contains("principal") || label.contains("signin") || label.contains("login") || label.contains("upn") {
+                        if flag { unconfirmed = true }
+                    }
+                case let text as String where address == nil && (label.contains("address") || label.contains("mail") || label.isEmpty):
+                    address = text
+                default:
+                    if Mirror(reflecting: child.value).displayStyle == .enum, label.contains("source") || label.contains("origin") {
+                        let described = String(describing: child.value).lowercased()
+                        if described.contains("principal") || described.contains("upn") { unconfirmed = true }
+                    }
+                }
+            }
+        }
+        return unconfirmed ? nil : address
+    }
+
+    // MARK: Login check
+
+    /// One IMAP session and, when an outgoing server is set, one SMTP session
+    /// up to AUTH. For their duration the account may reach exactly those two
+    /// hosts; the policy is put back as it was afterwards.
+    func verifyLogin(_ account: MailAccount, password: String, smtp: MailAccountExtras.SMTP?,
+                     policy: MailNetworkPolicy) async throws {
+        guard account.provider == .imap, let host = account.host else { return }
+        let previous = policy.account(account.id)
+        var grant = previous ?? MailAccountNetworkPolicy(id: account.id)
+        grant.isEnabled = true
+        grant.modes.insert(.preserveMail)
+        grant.modes.insert(.sendMail)
+        grant.mailHosts.insert(host)
+        if let smtp { grant.mailHosts.insert(smtp.host) }
+        policy.setAccount(grant)
+        defer {
+            if let previous { policy.setAccount(previous) } else { policy.removeAccount(account.id) }
+        }
+        try await IMAPLoginCheck.verify(account, password: password, permission: ConnectedMailRuntime.permission(policy: policy))
+        if let smtp {
+            let settings = SMTPServerSettings(host: smtp.host, port: smtp.port, security: smtp.implicitTLS ? .implicitTLS : .startTLS,
+                                              connectTimeout: 30, commandTimeout: 60)
+            try await SMTPLoginCheck.verify(settings, username: account.loginName ?? account.displayIdentity, password: password,
+                                            accountID: account.id,
+                                            permission: ConnectedMailBackend.permission(policy: policy, purpose: .sendMail))
+        }
     }
 
     // MARK: Sending
@@ -174,6 +244,16 @@ final class ConnectedMailProductionTransports: ConnectedMailTransports {
             let adapter = try IMAPAdapter(account: account, credentials: credentials, permission: permission)
             return IMAPActionExecutor(adapter: adapter, trashMailbox: nil, permission: permission)
         }
+    }
+
+    /// As above, with the Trash folder the IMAP server listed (special use \Trash).
+    func actionExecutor(_ account: MailAccount, credentials: any CredentialStore, tokens: TokenRefreshCoordinator?,
+                        permission: @escaping NetworkPermission, trashMailbox: String?) throws -> (any RemoteActionExecutor)? {
+        guard account.provider == .imap else {
+            return try actionExecutor(account, credentials: credentials, tokens: tokens, permission: permission)
+        }
+        let adapter = try IMAPAdapter(account: account, credentials: credentials, permission: permission)
+        return IMAPActionExecutor(adapter: adapter, trashMailbox: trashMailbox, permission: permission)
     }
 }
 
