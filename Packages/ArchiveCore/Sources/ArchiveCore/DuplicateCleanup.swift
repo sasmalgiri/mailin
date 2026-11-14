@@ -11,6 +11,11 @@
 //    • The copy is moved to the Trash (`email_review_state.trashed`), never
 //      deleted here: the Trash restores it; permanent deletion stays the
 //      explicit second step it already is.
+//    • V4: a removed copy captured from a connected account hands its
+//      account link (provider identity, memberships, provenance) to the
+//      survivor, so account search, the Mail workspace and provenance still
+//      find the mail, and later label changes attach to the survivor. The
+//      occurrence remembers which record it came from (`mailinCarriedFrom`).
 //    • A copy under a legal hold recorded in the database is kept, whatever
 //      the caller and whether or not the Professional interface is on.
 //    • `reclaimableBytesEstimate` says what a permanent deletion would free
@@ -35,6 +40,8 @@ extension SQLiteEmailStore {
         var membershipsMerged = 0
         var userTagsMerged = 0
         var annotationsMerged = 0
+        /// Connected-account occurrences handed from a removed copy to its survivor.
+        var accountLinksCarried = 0
     }
 
     /// Merge, then trash. One transaction: either every copy of every plan is
@@ -61,6 +68,7 @@ extension SQLiteEmailStore {
                     result.userTagsMerged += try copyRows(db,
                         "INSERT OR IGNORE INTO email_user_tags(email_id, tag) SELECT ?, tag FROM email_user_tags WHERE email_id = ?;",
                         into: plan.survivor, from: copy)
+                    result.accountLinksCarried += try carryConnectedLinks(db, into: plan.survivor, from: copy)
                     if let note = try noteOf(db, copy), !note.isEmpty {
                         let existing = try noteOf(db, plan.survivor) ?? ""
                         if existing != note {
@@ -146,6 +154,24 @@ extension SQLiteEmailStore {
 
     private func copyRows(_ db: OpaquePointer, _ sql: String, into survivor: UUID, from copy: UUID) throws -> Int {
         let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, survivor.uuidString)
+        bindText(stmt, 2, copy.uuidString)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return Int(sqlite3_changes(db))
+    }
+
+    /// Every connected occurrence of `copy` now names the survivor (the
+    /// occurrence key is the provider identity, so nothing else changes);
+    /// the first record it named is kept in its metadata.
+    private func carryConnectedLinks(_ db: OpaquePointer, into survivor: UUID, from copy: UUID) throws -> Int {
+        let stmt = try prepare(db, """
+            UPDATE remote_messages SET email_id = ?1,
+                metadata_json = json_set(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+                                         '$.mailinCarriedFrom',
+                                         COALESCE(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.mailinCarriedFrom') END, ?2))
+            WHERE email_id = ?2;
+        """)
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, survivor.uuidString)
         bindText(stmt, 2, copy.uuidString)

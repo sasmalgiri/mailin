@@ -331,6 +331,24 @@ extension SQLiteEmailStore {
         return sqlite3_column_int64(stmt, 0)
     }
 
+    /// The account's own address, for recognising its sent mail: the login
+    /// name when it is an address, else the display identity.
+    func connectedAccountAddress(accountID: UUID) throws -> String {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT COALESCE(login_name, ''), display_identity FROM mail_accounts WHERE account_id = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, accountID.uuidString)
+        guard try stepRow(stmt, db) else { return "" }
+        let login = columnText(stmt, 0).trimmingCharacters(in: .whitespaces)
+        if login.contains("@") { return login }
+        let display = columnText(stmt, 1)
+        // "Name <address>" → address.
+        if let open = display.lastIndex(of: "<"), let close = display.lastIndex(of: ">"), open < close {
+            return String(display[display.index(after: open)..<close]).trimmingCharacters(in: .whitespaces)
+        }
+        return display.contains("@") ? display.trimmingCharacters(in: .whitespaces) : ""
+    }
+
     // MARK: Runs and items
 
     func beginCaptureRun(accountID: UUID, selection: String) throws -> String {

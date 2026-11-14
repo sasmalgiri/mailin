@@ -105,6 +105,7 @@ extension SQLiteEmailStore {
 
     func connectedFolderSummaries(accountID: UUID) throws -> [ConnectedFolderSummary] {
         let db = try ensureDB()
+        ensureConnectedMailboxIndexes(db)
         let stmt = try prepare(db, """
             SELECT f.server_id, f.path, f.kind, f.special_use, f.selected
             FROM remote_folders f WHERE f.account_id = ?1 ORDER BY f.path COLLATE NOCASE, f.server_id;
@@ -119,24 +120,23 @@ extension SQLiteEmailStore {
                 specialUse: sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : columnText(stmt, 3),
                 messages: 0, unread: 0, selected: sqlite3_column_int64(stmt, 4) != 0))
         }
-        // Counts: archived records per folder, with their capture-time flags.
+        // Counts: archived records per folder, with their capture-time
+        // flags — one SQL aggregate (50k messages: no row is decoded in Swift).
         let counts = try prepare(db, """
-            SELECT m.folder_server_id, r.provider, r.flags_json
+            SELECT m.folder_server_id, COUNT(*), SUM(CASE WHEN \(Self.unreadSQL) THEN 1 ELSE 0 END)
             FROM remote_memberships m
             JOIN remote_messages r ON r.account_id = m.account_id AND r.identity_key = m.identity_key
             JOIN emails e ON e.id = r.email_id
-            WHERE m.account_id = ?1;
+            WHERE m.account_id = ?1
+            GROUP BY m.folder_server_id;
         """)
         defer { sqlite3_finalize(counts) }
         bindText(counts, 1, accountID.uuidString)
         var total: [String: Int] = [:], unread: [String: Int] = [:]
-        let decoder = JSONDecoder()
         while try stepRow(counts, db) {
             let folder = columnText(counts, 0)
-            total[folder, default: 0] += 1
-            let provider = MailProviderKind(rawValue: columnText(counts, 1)) ?? .imap
-            let flags = (try? decoder.decode([String].self, from: Data(columnText(counts, 2).utf8))) ?? []
-            if ConnectedMessageFlags.isRead(provider: provider, flags: flags) == false { unread[folder, default: 0] += 1 }
+            total[folder] = Int(sqlite3_column_int64(counts, 1))
+            unread[folder] = Int(sqlite3_column_int64(counts, 2))
         }
         for i in folders.indices {
             folders[i].messages = total[folders[i].serverID] ?? 0
@@ -156,6 +156,25 @@ extension SQLiteEmailStore {
 
     private static let mailboxDateSQL = "COALESCE(r.internal_date, e.date)"
 
+    /// The capture-time flags as SQL, exactly `ConnectedMessageFlags`: the
+    /// flag list is `r.flags_json` (an unreadable list reads as no flags).
+    private static func hasFlagSQL(_ flag: String, caseInsensitive: Bool = false) -> String {
+        let value = caseInsensitive ? "lower(fj.value)" : "fj.value"
+        return "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(r.flags_json) THEN r.flags_json ELSE '[]' END) fj WHERE \(value) = '\(flag)')"
+    }
+    /// Unread when captured (`isRead == false`).
+    static let unreadSQL = """
+        (CASE r.provider WHEN 'gmail' THEN \(hasFlagSQL("UNREAD"))
+                         WHEN 'graph' THEN NOT \(hasFlagSQL("isRead"))
+                         ELSE NOT \(hasFlagSQL("\\seen", caseInsensitive: true)) END)
+        """
+    /// Flagged when captured (`isFlagged == true`).
+    static let flaggedSQL = """
+        (CASE r.provider WHEN 'gmail' THEN \(hasFlagSQL("STARRED"))
+                         WHEN 'graph' THEN \(hasFlagSQL("flagged"))
+                         ELSE \(hasFlagSQL("\\flagged", caseInsensitive: true)) END)
+        """
+
     /// WHERE clause + bindings shared by the page and the count.
     private func mailboxFilter(_ q: ConnectedMailboxQuery) -> (sql: String, binds: [String]) {
         var clauses = ["r.email_id IS NOT NULL"]
@@ -170,11 +189,15 @@ extension SQLiteEmailStore {
             clauses.append("EXISTS (SELECT 1 FROM remote_memberships m WHERE m.account_id = r.account_id AND m.identity_key = r.identity_key AND m.folder_server_id = ?)")
             binds.append(folder)
         }
+        // In SQL, so a page reads only matching rows and the total is a COUNT.
+        if q.unreadOnly { clauses.append(Self.unreadSQL) }
+        if q.flaggedOnly { clauses.append(Self.flaggedSQL) }
         return (clauses.joined(separator: " AND "), binds)
     }
 
     func connectedMailboxPage(_ q: ConnectedMailboxQuery, after cursor: ConnectedMailboxCursor?) throws -> ConnectedMailboxPage {
         let db = try ensureDB()
+        ensureConnectedMailboxIndexes(db)
         let filter = mailboxFilter(q)
         var sql = """
             SELECT r.email_id, r.account_id, r.identity_key, r.provider, r.mailbox, r.provider_message_id,
@@ -205,8 +228,6 @@ extension SQLiteEmailStore {
             let flags = (try? decoder.decode([String].self, from: Data(columnText(stmt, 8).utf8))) ?? []
             let read = ConnectedMessageFlags.isRead(provider: provider, flags: flags)
             let flagged = ConnectedMessageFlags.isFlagged(provider: provider, flags: flags)
-            if q.unreadOnly, read != false { continue }
-            if q.flaggedOnly, flagged != true { continue }
             if rows.count == q.pageSize { more = true; break }
             let mailbox = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : columnText(stmt, 4)
             let providerID = sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : columnText(stmt, 5)
@@ -242,24 +263,26 @@ extension SQLiteEmailStore {
 
     private func connectedMailboxCount(_ q: ConnectedMailboxQuery, db: OpaquePointer) throws -> Int {
         let filter = mailboxFilter(q)
-        let flagged = q.unreadOnly || q.flaggedOnly
-        let stmt = try prepare(db, flagged
-            ? "SELECT r.provider, r.flags_json FROM remote_messages r JOIN emails e ON e.id = r.email_id WHERE \(filter.sql);"
-            : "SELECT COUNT(*) FROM remote_messages r JOIN emails e ON e.id = r.email_id WHERE \(filter.sql);")
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM remote_messages r JOIN emails e ON e.id = r.email_id WHERE \(filter.sql);")
         defer { sqlite3_finalize(stmt) }
         for (i, b) in filter.binds.enumerated() { bindText(stmt, Int32(i + 1), b) }
-        guard flagged else { return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0 }
-        let decoder = JSONDecoder()
-        var n = 0
-        while try stepRow(stmt, db) {
-            let provider = MailProviderKind(rawValue: columnText(stmt, 0)) ?? .imap
-            let flags = (try? decoder.decode([String].self, from: Data(columnText(stmt, 1).utf8))) ?? []
-            if q.unreadOnly, ConnectedMessageFlags.isRead(provider: provider, flags: flags) != false { continue }
-            if q.flaggedOnly, ConnectedMessageFlags.isFlagged(provider: provider, flags: flags) != true { continue }
-            n += 1
-        }
-        return n
+        return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0
     }
+
+    /// V4-13 at 50k messages: the mailbox's lookups by account and date
+    /// (the keyset sort's leading columns), by record, and memberships by
+    /// folder. `CREATE INDEX IF NOT EXISTS` — additive and idempotent (no
+    /// table or row changes, so no schema version); a read-only (Safe Mode)
+    /// archive simply reads without them.
+    func ensureConnectedMailboxIndexes(_ db: OpaquePointer) {
+        for sql in Self.connectedMailboxIndexSQL { try? exec(db, sql) }
+    }
+
+    static let connectedMailboxIndexSQL = [
+        "CREATE INDEX IF NOT EXISTS idx_remote_messages_mailbox ON remote_messages(account_id, internal_date DESC, identity_key);",
+        "CREATE INDEX IF NOT EXISTS idx_remote_messages_date ON remote_messages(internal_date DESC, account_id, identity_key);",
+        "CREATE INDEX IF NOT EXISTS idx_remote_memberships_folder ON remote_memberships(account_id, folder_server_id, identity_key);",
+    ]
 }
 
 extension ConnectedArchiveSink {

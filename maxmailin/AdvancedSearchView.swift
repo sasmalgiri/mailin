@@ -177,9 +177,26 @@ struct AdvancedSearchView: View {
     }
 
     private func loadConnectedAccounts() async {
-        guard let records = try? await SQLiteEmailStore.shared.connectedAccounts() else { return }
-        connectedAccounts = records.map { ConnectedAccountChoice(id: $0.accountID.uuidString, name: $0.displayIdentity) }
-        SearchSpecDescriber.accountNames = Dictionary(connectedAccounts.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+        guard let records = try? await SQLiteEmailStore.shared.connectedAccounts(),
+              let searchable = try? await SQLiteEmailStore.shared.searchableConnectedAccounts() else { return }
+        let names = Self.accountNames(records)
+        // A removed account with no mail left is not offered; two accounts
+        // with one address are told apart by provider.
+        connectedAccounts = Self.accountChoices(searchable: searchable, names: names)
+        // Every account keeps its name in descriptions of saved searches.
+        SearchSpecDescriber.accountNames = names
+    }
+
+    /// Display name per account id: the address, plus the provider when
+    /// another account shares that address.
+    static func accountNames(_ records: [ConnectedAccountRecord]) -> [String: String] {
+        ConnectedAccountNaming.distinctNames(records.map {
+            .init(key: $0.accountID.uuidString, display: $0.displayIdentity, provider: $0.provider)
+        })
+    }
+
+    static func accountChoices(searchable: [ConnectedAccountRecord], names: [String: String]) -> [ConnectedAccountChoice] {
+        searchable.map { ConnectedAccountChoice(id: $0.accountID.uuidString, name: names[$0.accountID.uuidString] ?? $0.displayIdentity) }
     }
 
     private func matchOptions(for field: SearchCondition.Field) -> [SearchCondition.Match] {

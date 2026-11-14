@@ -37,13 +37,19 @@ public struct ConnectedAccountArchiveSummary: Sendable, Equatable {
     public var records: Int
     /// Of those, under a legal hold: never deleted by the account deletion.
     public var held: Int
-    /// What the deletion removes (records − held).
+    /// What the deletion removes (records − held − keptOnlyCopy).
     public var deletable: Int
     /// Raw-message blobs only these records reference (removed with them).
     public var exclusiveBlobs: Int
     public var exclusiveBytes: Int64
     /// Blobs another account, an imported file or a held record also uses (kept).
     public var sharedBlobs: Int
+    /// Records kept because deleting them would remove mail that is visible
+    /// nowhere else: a duplicate survivor whose other copies are in the Trash
+    /// (duplicate cleanup carried their account link to it), a record of an
+    /// imported file or another account that this account's copy was merged
+    /// into, or a record another account also holds. Stated apart from `held`.
+    public var keptOnlyCopy: Int = 0
 }
 
 public struct ConnectedAccountArchiveDeletion: Sendable, Equatable {
@@ -51,6 +57,8 @@ public struct ConnectedAccountArchiveDeletion: Sendable, Equatable {
     /// Archive record ids removed (the caller removes them from the search index).
     public var deletedEmailIDs: [UUID]
     public var heldKept: Int
+    /// Records kept as the only visible copy (see `ConnectedAccountArchiveSummary.keptOnlyCopy`).
+    public var keptOnlyCopy: Int = 0
     public var blobsRemoved: Int
     public var bytesReclaimed: Int64
     public var blobsKeptShared: Int
@@ -133,10 +141,27 @@ extension SQLiteEmailStore {
 
     // MARK: Account archive
 
-    /// The deletable set: the account's records not under a legal hold.
+    /// The deletable set: the account's OWN records (captured under its
+    /// source), not under a legal hold, and not the only visible copy of
+    /// other mail — no other account links the record, no duplicate copy was
+    /// merged into it (its link carried, or a copy with the same Message-ID
+    /// sits in the Trash).
     private static let accountRecordsSQL = """
         SELECT r.email_id FROM remote_messages r JOIN emails e ON e.id = r.email_id
         WHERE r.account_id = ?1 AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.email_id = r.email_id)
+          AND \(onlyCopyExclusionSQL)
+    """
+
+    /// True for a record the account deletion may remove without leaving
+    /// other mail visible nowhere (`e`, `r` and `?1` in scope).
+    private static let onlyCopyExclusionSQL = """
+        e.source_id IS (SELECT a.source_id FROM mail_accounts a WHERE a.account_id = ?1)
+          AND NOT EXISTS (SELECT 1 FROM remote_messages o WHERE o.email_id = r.email_id AND o.account_id <> ?1)
+          AND NOT EXISTS (SELECT 1 FROM remote_messages c WHERE c.email_id = r.email_id
+                          AND json_valid(c.metadata_json) AND json_extract(c.metadata_json, '$.mailinCarriedFrom') IS NOT NULL)
+          AND NOT (COALESCE(e.message_id, '') <> '' AND EXISTS (
+                SELECT 1 FROM emails t JOIN email_review_state ts ON ts.email_id = t.id AND ts.trashed = 1
+                WHERE t.message_id = e.message_id AND t.id <> e.id))
     """
 
     func connectedAccountArchiveSummary(accountID: UUID) throws -> ConnectedAccountArchiveSummary {
@@ -148,15 +173,20 @@ extension SQLiteEmailStore {
             bindText(stmt, 1, a)
             return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0
         }
-        let records = try count("SELECT COUNT(*) FROM remote_messages r JOIN emails e ON e.id = r.email_id WHERE r.account_id = ?1;")
-        let deletable = try count("SELECT COUNT(*) FROM (\(Self.accountRecordsSQL));")
+        let records = try count("SELECT COUNT(DISTINCT r.email_id) FROM remote_messages r JOIN emails e ON e.id = r.email_id WHERE r.account_id = ?1;")
+        let held = try count("""
+            SELECT COUNT(DISTINCT r.email_id) FROM remote_messages r JOIN emails e ON e.id = r.email_id
+            WHERE r.account_id = ?1 AND EXISTS (SELECT 1 FROM legal_holds h WHERE h.email_id = r.email_id);
+            """)
+        let deletable = try count("SELECT COUNT(DISTINCT email_id) FROM (\(Self.accountRecordsSQL));")
         var exclusive = 0, shared = 0
         var bytes: Int64 = 0
         for (digest, length) in try accountDigests(db, accountID: accountID) {
             if try digestReferencedOutside(db, digest: digest, accountID: accountID) { shared += 1 } else { exclusive += 1; bytes += length }
         }
-        return ConnectedAccountArchiveSummary(accountID: accountID, records: records, held: records - deletable, deletable: deletable,
-                                              exclusiveBlobs: exclusive, exclusiveBytes: bytes, sharedBlobs: shared)
+        return ConnectedAccountArchiveSummary(accountID: accountID, records: records, held: held, deletable: deletable,
+                                              exclusiveBlobs: exclusive, exclusiveBytes: bytes, sharedBlobs: shared,
+                                              keptOnlyCopy: max(0, records - held - deletable))
     }
 
     /// Distinct blob digests of the account's deletable records.
@@ -164,6 +194,7 @@ extension SQLiteEmailStore {
         let stmt = try prepare(db, """
             SELECT r.blob_digest, MAX(r.blob_length) FROM remote_messages r JOIN emails e ON e.id = r.email_id
             WHERE r.account_id = ?1 AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.email_id = r.email_id)
+              AND \(Self.onlyCopyExclusionSQL)
             GROUP BY r.blob_digest ORDER BY r.blob_digest;
         """)
         defer { sqlite3_finalize(stmt) }
@@ -199,7 +230,7 @@ extension SQLiteEmailStore {
         var deleted: [UUID] = []
         var after = ""
         while true {
-            let stmt = try prepare(db, "SELECT email_id FROM (\(Self.accountRecordsSQL)) WHERE email_id > ?2 ORDER BY email_id LIMIT ?3;")
+            let stmt = try prepare(db, "SELECT DISTINCT email_id FROM (\(Self.accountRecordsSQL)) WHERE email_id > ?2 ORDER BY email_id LIMIT ?3;")
             bindText(stmt, 1, accountID.uuidString); bindText(stmt, 2, after); sqlite3_bind_int64(stmt, 3, Int64(max(1, pageSize)))
             var page: [UUID] = []
             while try stepRow(stmt, db) {
@@ -208,7 +239,10 @@ extension SQLiteEmailStore {
             }
             sqlite3_finalize(stmt)
             if page.isEmpty { break }
-            let refused = try deleteReportingHeld(ids: Set(page))
+            // No Message-ID tombstones: removing an account's archive is not
+            // "never import this message again" — a later import of the same
+            // mail (a file, or the account reconnected) stores it as new.
+            let refused = try deleteReportingHeld(ids: Set(page), recordTombstones: false)
             deleted.append(contentsOf: page.filter { !refused.contains($0) })
         }
         // The account's occurrence rows of records that no longer exist.
@@ -239,6 +273,7 @@ extension SQLiteEmailStore {
             if (try? FileManager.default.removeItem(at: url)) != nil { removed += 1; reclaimed += length }
         }
         return ConnectedAccountArchiveDeletion(accountID: accountID, deletedEmailIDs: deleted, heldKept: before.held,
+                                               keptOnlyCopy: before.keptOnlyCopy,
                                                blobsRemoved: removed, bytesReclaimed: reclaimed, blobsKeptShared: before.sharedBlobs)
     }
 
@@ -260,6 +295,43 @@ extension SQLiteEmailStore {
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }
         return removed
+    }
+
+    // MARK: Removed accounts in lists
+
+    /// A removed account whose mail is gone: neither its own records nor any
+    /// record its occurrences point at remain. (`a` = mail_accounts, `s` = sources.)
+    private static let removedAndEmptySQL = """
+        (a.account_id IS NULL OR a.connection_state = 'removed')
+          AND NOT EXISTS (SELECT 1 FROM emails e WHERE e.source_id = s.source_id)
+          AND NOT EXISTS (SELECT 1 FROM remote_messages r JOIN emails e2 ON e2.id = r.email_id WHERE r.account_id = a.account_id)
+    """
+
+    /// Archive sources of connected accounts that were removed and have no
+    /// record left: the sidebar leaves out their Sources row and their folder
+    /// tree (the server-listed folders, all empty). Nothing is deleted — a
+    /// reconnect or a later capture shows them again.
+    func hiddenConnectedSourceIDs() throws -> Set<Int64> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT s.source_id FROM sources s LEFT JOIN mail_accounts a ON a.source_id = s.source_id
+            WHERE s.source_kind = 'connected' AND \(Self.removedAndEmptySQL);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out = Set<Int64>()
+        while try stepRow(stmt, db) { out.insert(sqlite3_column_int64(stmt, 0)) }
+        return out
+    }
+
+    /// The accounts a search can name: every account except a removed one
+    /// with no mail left in the archive.
+    func searchableConnectedAccounts() throws -> [ConnectedAccountRecord] {
+        let hidden = try hiddenConnectedSourceIDs()
+        return try connectedAccounts().filter { record in
+            guard record.connectionState == "removed" else { return true }
+            guard let source = record.archiveSourceID else { return false }
+            return !hidden.contains(source)
+        }
     }
 
     // MARK: Earlier online captures
@@ -362,6 +434,64 @@ extension SQLiteEmailStore {
     }
 }
 
+// MARK: - Names
+
+/// How connected accounts are named in lists (sidebar Sources, the Advanced
+/// Search account picker): the address, and — when two accounts share the
+/// address — the provider too, so they are two distinguishable rows.
+public enum ConnectedAccountNaming {
+    /// Provider names are product names, the same in every language.
+    public static func providerName(_ provider: MailProviderKind) -> String {
+        switch provider {
+        case .gmail: return "Gmail"
+        case .microsoftGraph: return "Outlook"
+        case .imap: return "IMAP"
+        }
+    }
+
+    /// The provider of a connected archive source (`connected-<provider>` parser), nil for a file.
+    public static func provider(parser: String) -> MailProviderKind? {
+        guard parser.hasPrefix("connected-") else { return nil }
+        return MailProviderKind(rawValue: String(parser.dropFirst("connected-".count)))
+    }
+
+    public struct Item: Sendable, Equatable {
+        public var key: String
+        public var display: String
+        public var provider: MailProviderKind?
+        public init(key: String, display: String, provider: MailProviderKind?) {
+            self.key = key; self.display = display; self.provider = provider
+        }
+    }
+
+    /// One name per item. An address shared by several connected accounts
+    /// gets " · <provider>"; if that is still shared (two Gmail accounts with
+    /// one address), " · <provider> <n>" in list order.
+    public static func distinctNames(_ items: [Item]) -> [String: String] {
+        func norm(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces).lowercased() }
+        var byDisplay: [String: Int] = [:]
+        for item in items where item.provider != nil { byDisplay[norm(item.display), default: 0] += 1 }
+        var withProvider: [String: Int] = [:]
+        for item in items {
+            guard let p = item.provider, (byDisplay[norm(item.display)] ?? 0) > 1 else { continue }
+            withProvider[norm(item.display) + "\u{1F}" + p.rawValue, default: 0] += 1
+        }
+        var seen: [String: Int] = [:]
+        var out: [String: String] = [:]
+        for item in items {
+            guard let p = item.provider, (byDisplay[norm(item.display)] ?? 0) > 1 else { out[item.key] = item.display; continue }
+            let k = norm(item.display) + "\u{1F}" + p.rawValue
+            var name = item.display + " · " + providerName(p)
+            if (withProvider[k] ?? 0) > 1 {
+                seen[k, default: 0] += 1
+                name += " \(seen[k]!)"
+            }
+            out[item.key] = name
+        }
+        return out
+    }
+}
+
 // MARK: - Restore
 
 extension ArchiveBackup {
@@ -426,5 +556,10 @@ extension ConnectedArchiveSink {
 
     public func messageSummary(emailID: UUID) async throws -> ArchivedMessageSummary? {
         try await store.archivedMessageSummary(id: emailID)
+    }
+
+    /// Accounts a search can name (a removed account with no mail left is not one).
+    public func searchableAccounts() async throws -> [ConnectedAccountRecord] {
+        try await store.searchableConnectedAccounts()
     }
 }

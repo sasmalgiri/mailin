@@ -484,8 +484,13 @@ public actor ConnectedArchiveSink {
             // distinct and the parse can be retried from the retained bytes.
             var item = item
             let email: MBOXParser.RawEmail
+            // Sent mail is classified as for an import: the account's own
+            // address is the sender to recognise (and a Sent folder / label
+            // occurrence says so on its own).
+            let ownAddress = (try? await store.connectedAccountAddress(accountID: item.accountID)) ?? ""
             do {
-                email = try Self.record(from: blob, store: store, occurrences: item.occurrences, parseHook: parseFaultHook)
+                email = try Self.record(from: blob, store: store, occurrences: item.occurrences,
+                                        accountAddress: ownAddress, parseHook: parseFaultHook)
             } catch {
                 item.metadata.extra[Self.parseErrorKey] = error.localizedDescription
                 email = try Self.unreadableRecord(occurrences: item.occurrences, reason: error.localizedDescription)
@@ -505,15 +510,35 @@ public actor ConnectedArchiveSink {
     /// the connected projection, never in the archive's folders.
     static func record(from blob: BlobReference, store: SQLiteEmailStore,
                        occurrences: [RemoteFolderOccurrence],
+                       accountAddress: String = "",
                        parseHook: (@Sendable (Data) throws -> Void)? = nil) throws -> MBOXParser.RawEmail {
         let data = try store.blobStore.read(blob)
         try parseHook?(data)
-        let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
-        var email = try MBOXParser.processRawMessage(text, senderEmail: "")
+        // Decoded as the rest of the store decodes raw MIME (`rawMIME`):
+        // UTF-8, else ISO-8859-1 — which maps every byte to one character, so
+        // 8-bit Latin-1 mail keeps its "é" instead of U+FFFD.
+        let text = Self.decodeRaw(data)
+        // No temporary copy per attachment (as bulk import): the bytes stay in
+        // the published blob and are read from there when needed.
+        var email = try MBOXParser.processRawMessage(text, senderEmail: accountAddress, materializeAttachments: false)
+        if occurrences.contains(where: Self.isSentOccurrence) { email.messageType = "sent" }
         let paths = occurrences.map(\.cleanPath).filter { !$0.isEmpty }
         email.folderPath = paths.first
         for path in paths.dropFirst() where !email.tags.contains(path) { email.tags.append(path) }
         return email
+    }
+
+    /// Raw message bytes as text, the store's way: UTF-8, else ISO-8859-1.
+    static func decodeRaw(_ data: Data) -> String {
+        String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? String(decoding: data, as: UTF8.self)
+    }
+
+    /// A Sent folder or label: Gmail's SENT label, an IMAP `\Sent` mailbox,
+    /// Graph's sentitems well-known folder.
+    static func isSentOccurrence(_ o: RemoteFolderOccurrence) -> Bool {
+        let use = (o.specialUse ?? "").lowercased()
+        if ["sent", "\\sent", "sentitems"].contains(use) { return true }
+        return o.kind == .label && o.serverID == "SENT"
     }
 
     /// `remote_messages.metadata_json` key holding the reader failure of a
@@ -605,6 +630,55 @@ public actor ConnectedArchiveSink {
         try encoder.encode(sidecar).write(to: url, options: .atomic)
         return url
     }
+
+    /// The provenance sidecar of a CONTAINER export (mbox, PST), beside it as
+    /// `<container>.mailin-connected-provenance.json`: one entry per record of
+    /// the container's manifest that is connected mail, with its ordinal in
+    /// the container. A container record is never the captured byte stream
+    /// itself (mbox framing and `>From` quoting, PST properties), so
+    /// `bytesIdenticalToCapture` is false and `fileSHA256` is the SHA-256 of
+    /// the record's bytes in the container when the manifest locates them
+    /// (mbox), else empty (PST). Returns nil when no record is connected mail
+    /// or the container has no manifest.
+    @discardableResult
+    public func writeProvenanceSidecar(container: URL) async throws -> URL? {
+        let manifestURL = ContainerManifest.url(for: container)
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else { return nil }
+        let connected = try await store.connectedEmailIDs()
+        guard !connected.isEmpty else { return nil }
+        var hits: [(ordinal: Int, id: String, offset: UInt64?, length: UInt64?)] = []
+        try ContainerManifest.forEachLine(url: manifestURL) { line, _ in
+            if line.kind == .record, let id = line.emailID, connected.contains(id) {
+                hits.append((line.ordinal ?? hits.count, id, line.offset, line.length))
+            }
+            return true
+        }
+        var entries: [ConnectedProvenanceSidecar.Entry] = []
+        let handle = try? FileHandle(forReadingFrom: container)
+        defer { try? handle?.close() }
+        for hit in hits {
+            guard let id = UUID(uuidString: hit.id), let provenance = try await store.connectedProvenance(emailID: id) else { continue }
+            var recordHash = ""
+            if let handle, let offset = hit.offset, let length = hit.length {
+                try handle.seek(toOffset: offset)
+                var hasher = SHA256()
+                var remaining = Int(length)
+                while remaining > 0, let chunk = try handle.read(upToCount: min(remaining, 1 << 20)), !chunk.isEmpty {
+                    hasher.update(data: chunk); remaining -= chunk.count
+                }
+                if remaining == 0 { recordHash = hasher.finalize().map { String(format: "%02x", $0) }.joined() }
+            }
+            entries.append(.init(path: container.lastPathComponent, fileSHA256: recordHash, bytesIdenticalToCapture: false,
+                                 provenance: provenance, ordinal: hit.ordinal))
+        }
+        guard !entries.isEmpty else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let url = ConnectedProvenanceSidecar.url(forContainer: container)
+        try encoder.encode(ConnectedProvenanceSidecar(createdAt: Date(), entries: entries)).write(to: url, options: .atomic)
+        return url
+    }
 }
 
 public struct ConnectedProvenanceSidecar: Codable, Sendable, Equatable {
@@ -614,6 +688,13 @@ public struct ConnectedProvenanceSidecar: Codable, Sendable, Equatable {
         public var fileSHA256: String
         public var bytesIdenticalToCapture: Bool
         public var provenance: ConnectedProvenance
+        /// Container exports: the record's ordinal within the container (nil for a per-message file).
+        public var ordinal: Int? = nil
+    }
+
+    /// The sidecar of a container export, beside the container.
+    public static func url(forContainer container: URL) -> URL {
+        container.deletingLastPathComponent().appendingPathComponent(container.lastPathComponent + "." + filename)
     }
     public var version = 1
     public var createdAt: Date

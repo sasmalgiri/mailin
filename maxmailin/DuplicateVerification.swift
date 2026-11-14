@@ -103,6 +103,15 @@ enum DuplicateVerification {
             }
         }
 
+        // A member the reader could not parse (a preserved-but-unreadable
+        // capture: raw bytes kept, no header, body or attachment read from
+        // them) has no content to compare — empty fields equal empty fields
+        // proves nothing. Only the identical bytes above could have proven
+        // it, so it stays a candidate the person compares.
+        if members.contains(where: { !hasParsedContent($0) }) {
+            return .candidate(differences: [.body, .structure])
+        }
+
         // 2. Full content, field by field.
         var differences: [Difference] = []
         func check(_ field: Difference, _ value: (MBOXParser.RawEmail) -> String) {
@@ -239,6 +248,19 @@ enum DuplicateVerification {
         }
         try await flush()
         return (removable, verifiedGroups, candidateGroups, plans)
+    }
+
+    /// Whether the record carries anything the reader produced: a body, an
+    /// attachment, or one of the identifying headers. An unreadable capture
+    /// (`ConnectedArchiveSink.unreadableRecord`) carries none of them.
+    static func hasParsedContent(_ email: MBOXParser.RawEmail) -> Bool {
+        if !email.plainBody.isEmpty || !email.htmlBody.isEmpty || !email.attachments.isEmpty { return true }
+        if email.anomalies.contains(where: { $0.hasPrefix("connected-parse-failed") }) { return false }
+        // "(No Subject)" is the reader's placeholder for a missing Subject, not content.
+        return ["From", "To", "Cc", "Subject", "Date", "Message-ID"].contains { name in
+            let value = (email.headers[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return !value.isEmpty && !(name == "Subject" && value == "(No Subject)")
+        }
     }
 
     // MARK: - Normalisation

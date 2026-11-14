@@ -336,7 +336,7 @@ final class ArchiveExportService {
                         } else {
                             try write(try row(email, position))
                         }
-                        try manifest?.record(position: position, email: email, folder: SQLiteEmailStore.folderPaths(for: email).first,
+                        try manifest?.record(position: position, email: email, folder: Self.primaryFolderFirst(SQLiteEmailStore.folderPaths(for: email)).first,
                                              offset: recordStart, length: baseOffset + UInt64(bytes) - recordStart)
                     }
                     position += 1
@@ -453,6 +453,7 @@ final class ArchiveExportService {
         locatedRawExtension: String? = nil,
         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil,
+        storedRaw: (@MainActor (MBOXParser.RawEmail, Int) async throws -> (filename: String, data: Data)?)? = nil,
         content: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)?
     ) async throws -> ArchiveExportResult {
         beginSourceLedger()
@@ -572,6 +573,9 @@ final class ArchiveExportService {
                     let file: (filename: String, data: Data?)
                     if located, let ext = locatedRawExtension {
                         file = (Self.messageFilename(index: records, subject: email.headers["Subject"], ext: ext), nil)
+                    } else if let storedRaw, let raw = try await storedRaw(email, records) {
+                        // The message's own stored bytes (a capture), written as they are.
+                        file = (raw.filename, raw.data)
                     } else if let rendered = try content(email, records) {
                         file = (rendered.filename, rendered.data)
                     } else {
@@ -590,7 +594,7 @@ final class ArchiveExportService {
                     case .byYear:
                         targets = [(Self.yearFolderName(for: email), nil)]
                     case .sourceFolders:
-                        let paths = SQLiteEmailStore.folderPaths(for: email)
+                        let paths = Self.primaryFolderFirst(SQLiteEmailStore.folderPaths(for: email))
                         let chosen = options.folderOccurrences ? paths : Array(paths.prefix(1))
                         targets = chosen.map { path in
                             let safe = ExportInventory.safeRelativeDirectory(forFolderPath: path)
@@ -709,6 +713,22 @@ final class ArchiveExportService {
                                    inventoryFailure: inventoryFailure)
     }
 
+    /// The folder a message is filed under when it is written once: its
+    /// Inbox when it has one, else its first folder that is not an
+    /// everything-view ("All Mail" — a captured Gmail message carries that
+    /// label next to its real ones, and it sorts first). The other folders
+    /// keep their order after it.
+    nonisolated static func primaryFolderFirst(_ paths: [String]) -> [String] {
+        guard paths.count > 1 else { return paths }
+        func isInbox(_ p: String) -> Bool { p.caseInsensitiveCompare("Inbox") == .orderedSame }
+        func isAllMail(_ p: String) -> Bool {
+            let last = p.split(separator: "/").last.map(String.init) ?? p
+            return last.caseInsensitiveCompare("All Mail") == .orderedSame
+        }
+        let primary = paths.first(where: isInbox) ?? paths.first(where: { !isAllMail($0) }) ?? paths[0]
+        return [primary] + paths.filter { $0 != primary }
+    }
+
     /// `2019`, or `undated` when the Date header is missing or unparseable.
     nonisolated static func yearFolderName(for email: MBOXParser.RawEmail) -> String {
         guard let date = MBOXParser.parseDate(email.headers["Date"]) else { return "undated" }
@@ -759,12 +779,18 @@ final class ArchiveExportService {
                         write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
                         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        var result = try await exportEMLFilesBody(scope: scope, to: folder, limit: limit, render: render, write: options,
+        let result = try await exportEMLFilesBody(scope: scope, to: folder, limit: limit, render: render, write: options,
                                                   onProgress: onProgress, onProduced: onProduced)
-        // V4-08 (§5.5 exports): a finished export holding connected mail gets
-        // its provenance sidecar — account, provider identity, folders and the
-        // captured SHA-256 per file, never a credential. The export verifier
-        // ignores the sidecar (ExportInventory), so verification is unchanged.
+        return await withProvenanceSidecar(result, folder: folder)
+    }
+
+    /// V4-08 (§5.5 exports): a finished folder export holding connected mail
+    /// gets its provenance sidecar — account, provider identity, folders and
+    /// the captured SHA-256 per file, never a credential. The export verifier
+    /// ignores the sidecar (ExportInventory), so verification is unchanged.
+    /// EML, MSG, PDF and TIFF folders all carry it.
+    func withProvenanceSidecar(_ result: ArchiveExportResult, folder: URL) async -> ArchiveExportResult {
+        var result = result
         if !result.cancelled, result.inventoryURL != nil, let store = archive.sqliteStore,
            (try? await store.hasConnectedMessages()) == true {
             do {
@@ -777,13 +803,62 @@ final class ArchiveExportService {
         return result
     }
 
+    /// The same sidecar for a container (mbox, PST): one entry per record of
+    /// the container's manifest that is connected mail, written beside it as
+    /// `<container>.mailin-connected-provenance.json`. Nil when none is.
+    @discardableResult
+    func writeContainerProvenanceSidecar(container: URL) async throws -> URL? {
+        guard let store = archive.sqliteStore, try await store.hasConnectedMessages() else { return nil }
+        return try await ConnectedArchiveSink(store: store).writeProvenanceSidecar(container: container)
+    }
+
+    /// The container sidecar for a finished text-document export; a failure
+    /// is carried on the receipt, never swallowed.
+    func withContainerProvenanceSidecar(_ result: ArchiveExportResult, container: URL) async -> ArchiveExportResult {
+        guard result.completed, !result.cancelled else { return result }
+        var result = result
+        do { try await writeContainerProvenanceSidecar(container: container) } catch {
+            let note = "connected-mail provenance was not written: \(error.localizedDescription)"
+            result.inventoryFailure = result.inventoryFailure.map { $0 + "; " + note } ?? note
+        }
+        return result
+    }
+
+    /// When the archive holds connected mail: a captured record's own bytes
+    /// as one file (nil for every other record, which renders as before).
+    func capturedRawFile(ext: String) async -> (@MainActor (MBOXParser.RawEmail, Int) async throws -> (filename: String, data: Data)?)? {
+        guard let store = await connectedStore() else { return nil }
+        return { email, index in
+            guard let blob = try await store.capturedRawBlob(emailID: email.id) else { return nil }
+            return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: ext), try store.blobStore.read(blob))
+        }
+    }
+
+    /// The mbox stream plan: a located message from its source, a captured
+    /// message from its own stored bytes (as acquired — never re-encoded
+    /// through the decoded text), anything else nil (rendered from the text).
+    func mboxStreamPlan(for email: MBOXParser.RawEmail, connected: SQLiteEmailStore?) async throws -> RawStreamPlan? {
+        if let located = try await locatorStreamPlan(for: email) { return located }
+        guard let connected, let blob = try await connected.capturedRawBlob(emailID: email.id) else { return nil }
+        return RawStreamPlan(prefix: MBOXRecordBuilder.envelopeLine(for: email),
+                             sourcePath: connected.blobStore.url(for: blob.digest).path,
+                             range: ByteRange(offset: 0, length: blob.length), quoteFromLines: true, locator: nil)
+    }
+
+    /// The store, when it holds connected mail (checked once per export).
+    func connectedStore() async -> SQLiteEmailStore? {
+        guard let store = archive.sqliteStore, (try? await store.hasConnectedMessages()) == true else { return nil }
+        return store
+    }
+
     private func exportEMLFilesBody(scope: ArchiveSelectionScope, to folder: URL, limit: Int?,
                                     render: (@MainActor @Sendable (MBOXParser.RawEmail) -> String)?,
                                     write options: ExportWriteOptions,
                                     onProgress: (@MainActor @Sendable (Int, Int) -> Void)?,
                                     onProduced: (@MainActor @Sendable (Int) -> Void)?) async throws -> ArchiveExportResult {
         try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options,
-                                     locatedRawExtension: "eml", onProgress: onProgress, onProduced: onProduced) { email, index in
+                                     locatedRawExtension: "eml", onProgress: onProgress, onProduced: onProduced,
+                                     storedRaw: await capturedRawFile(ext: "eml")) { email, index in
             // A message without raw source (PST, MSG, OLM, NSF imports) is
             // rendered whole — headers, both bodies, every attachment — not
             // reduced to a subject line and the plain text.
@@ -803,10 +878,11 @@ final class ArchiveExportService {
                         write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
                         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
+        let result = try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
             guard let data = MSGWriter.write(email: email) else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "msg"), data)
         }
+        return await withProvenanceSidecar(result, folder: folder)
     }
 
     /// Detailed CSV (the list "Export as CSV" columns).
@@ -944,14 +1020,16 @@ final class ArchiveExportService {
                            limit: Int? = nil,
                            write options: ExportWriteOptions = ExportWriteOptions(),
                            onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportTextDocument(
+        let connected = await connectedStore()
+        let result = try await exportTextDocument(
             scope: scope, to: url, limit: limit, write: options,
             manifestFormat: "mbox",
             onProgress: onProgress,
-            rawStream: { [self] email in try await self.locatorStreamPlan(for: email) }
+            rawStream: { [self] email in try await self.mboxStreamPlan(for: email, connected: connected) }
         ) { email, _ in
             Self.mboxRecord(for: email)
         }
+        return await withContainerProvenanceSidecar(result, container: url)
     }
 
     /// One mbox record: a correct `From_` envelope followed by the message.
@@ -1005,6 +1083,7 @@ final class ArchiveExportService {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         var results: [ArchiveExportResult] = []
+        let connected = await connectedStore()
         var partition = 1
         var written = 0
         var exhausted = false
@@ -1016,20 +1095,27 @@ final class ArchiveExportService {
         while !exhausted {
             let name = String(format: "%@-%04d.mbox", baseName, partition)
             let target = directory.appendingPathComponent(name)
-            var recordsThisPartition = 0
+            let counter = PartitionRecordCounter()
 
-            let result = try await exportTextDocument(
+            var result = try await exportTextDocument(
                 scope: scope, to: target,
                 limit: limit,
                 startAt: written,
                 maxBytes: partitionBytes,
                 manifestFormat: "mbox",
                 onProgress: onProgress,
-                rawStream: { [self] email in try await self.locatorStreamPlan(for: email) }
+                rawStream: { [self] email in
+                    // A streamed record (located or captured) is a record of this partition too.
+                    let plan = try await self.mboxStreamPlan(for: email, connected: connected)
+                    if plan != nil { counter.count += 1 }
+                    return plan
+                }
             ) { email, _ in
-                recordsThisPartition += 1
+                counter.count += 1
                 return Self.mboxRecord(for: email)
             }
+            let recordsThisPartition = counter.count
+            if recordsThisPartition > 0 { result = await withContainerProvenanceSidecar(result, container: target) }
 
             if recordsThisPartition == 0 {
                 // The scope ended exactly on the previous cap: nothing to
@@ -1156,7 +1242,7 @@ final class ArchiveExportService {
                         inPart = 0
                     }
                     try writer.appendMessage(email)
-                    try manifest.record(position: done, email: email, folder: SQLiteEmailStore.folderPaths(for: email).first, offset: nil, length: nil)
+                    try manifest.record(position: done, email: email, folder: Self.primaryFolderFirst(SQLiteEmailStore.folderPaths(for: email)).first, offset: nil, length: nil)
                     inPart += 1
                     done += 1
                 }
@@ -1172,12 +1258,15 @@ final class ArchiveExportService {
                 manifest.remove()
                 try? FileManager.default.removeItem(at: url)
             }
-            return parts
         } catch {
             writer.abort()
             manifest.remove()
             throw error
         }
+        // Every part is complete here; a sidecar that cannot be written is
+        // this export's error (the caller reports it), never a silence.
+        for part in parts { try await writeContainerProvenanceSidecar(container: part.url) }
+        return parts
     }
 
     // MARK: - PST (streaming, uncapped)
@@ -1196,26 +1285,36 @@ final class ArchiveExportService {
             writer.abort()
             throw error
         }
+        let written: Int
         do {
             var done = 0
             for try await batch in archive.streamSelected(scope: scope) {
                 try Task.checkCancellation()
                 for email in batch {
                     try writer.appendMessage(email)
-                    try manifest.record(position: done, email: email, folder: SQLiteEmailStore.folderPaths(for: email).first, offset: nil, length: nil)
+                    try manifest.record(position: done, email: email, folder: Self.primaryFolderFirst(SQLiteEmailStore.folderPaths(for: email)).first, offset: nil, length: nil)
                     done += 1
                 }
                 try manifest.flush()
                 onProgress?(done, total)
             }
-            let written = try writer.finalize()
+            written = try writer.finalize()
             try manifest.finish(positions: done, bytes: nil, sha256: nil)
             manifest.close()
-            return written
         } catch {
             writer.abort()
             manifest.remove()
             throw error
         }
+        // The PST is complete here; a sidecar that cannot be written is this
+        // export's error (the caller reports it), never a silence.
+        try await writeContainerProvenanceSidecar(container: url)
+        return written
     }
+}
+
+/// Records written into one mbox partition, by either the streamed or the rendered path.
+@MainActor
+final class PartitionRecordCounter {
+    var count = 0
 }

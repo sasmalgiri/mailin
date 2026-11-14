@@ -50,6 +50,13 @@ enum ContainerManifest {
     /// sidecar is not an error: there is nothing to move.
     static func moveSidecar(from source: URL, to destination: URL) throws {
         let fm = FileManager.default
+        // V4: the connected-mail provenance sidecar goes with its container too.
+        let provenanceFrom = ConnectedProvenanceSidecar.url(forContainer: source)
+        if fm.fileExists(atPath: provenanceFrom.path) {
+            let provenanceTo = ConnectedProvenanceSidecar.url(forContainer: destination)
+            if fm.fileExists(atPath: provenanceTo.path) { try fm.removeItem(at: provenanceTo) }
+            try fm.moveItem(at: provenanceFrom, to: provenanceTo)
+        }
         let from = url(for: source), to = url(for: destination)
         guard fm.fileExists(atPath: from.path) else { return }
         if fm.fileExists(atPath: to.path) { try fm.removeItem(at: to) }

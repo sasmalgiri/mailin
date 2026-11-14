@@ -21,10 +21,12 @@ extension ArchiveExportService {
                          write options: ExportWriteOptions = ExportWriteOptions(),
                          onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
                         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
+        let result = try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
             guard let data = ExportManager.exportAsTIFF(email: email) else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "tiff"), data)
         }
+        // V4: connected mail in the folder → its provenance sidecar, as for EML.
+        return await withProvenanceSidecar(result, folder: folder)
     }
 
     /// PDFs: one PDF per message, rendered per message (bounded).
@@ -34,11 +36,13 @@ extension ArchiveExportService {
                         write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
                         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
+        let result = try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
             let data = ExportManager.generateSinglePDFData(email: email)
             guard !data.isEmpty else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "pdf"), data)
         }
+        // V4: connected mail in the folder → its provenance sidecar, as for EML.
+        return await withProvenanceSidecar(result, folder: folder)
     }
 
     /// Headers-only CSV.
