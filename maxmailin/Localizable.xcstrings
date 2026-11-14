@@ -448170,6 +448170,2281 @@
           }
         }
       }
+    },
+    "Last capture stopped; saved mail remains available. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Letzte Erfassung angehalten; gesicherte Mails bleiben verfügbar. %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La última captura se detuvo; el correo guardado sigue disponible. %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dernière capture arrêtée ; le courrier enregistré reste disponible. %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पिछला कैप्चर रुक गया; सहेजा गया मेल उपलब्ध रहता है। %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ultima acquisizione si è interrotta; la posta salvata resta disponibile. %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回の取り込みは停止しました。保存済みのメールは引き続き利用できます。%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마지막 캡처가 중지되었습니다. 저장된 메일은 계속 사용할 수 있습니다. %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A última captura parou; o e-mail salvo continua disponível. %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次捕获已停止；已保存的邮件仍可使用。%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次擷取已停止；已儲存的郵件仍可使用。%@"
+          }
+        }
+      }
+    },
+    "This account is not allowed to read that mailbox. The mailbox owner or an administrator must give it access. Saved mail remains available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Konto darf dieses Postfach nicht lesen. Der Inhaber des Postfachs oder ein Administrator muss ihm Zugriff gewähren. Gesicherte Mails bleiben verfügbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta no tiene permiso para leer ese buzón. El propietario del buzón o un administrador debe darle acceso. El correo guardado sigue disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte n'est pas autorisé à lire cette boîte aux lettres. Son propriétaire ou un administrateur doit lui en donner l'accès. Le courrier enregistré reste disponible."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस खाते को वह मेलबॉक्स पढ़ने की अनुमति नहीं है। मेलबॉक्स के स्वामी या किसी व्यवस्थापक को इसे पहुँच देनी होगी। सहेजा गया मेल उपलब्ध रहता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo account non è autorizzato a leggere quella casella di posta. Il proprietario della casella o un amministratore deve concedergli l'accesso. La posta salvata resta disponibile."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアカウントにはそのメールボックスを読み取る権限がありません。メールボックスの所有者または管理者がアクセス権を付与する必要があります。保存済みのメールは引き続き利用できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정에는 해당 사서함을 읽을 권한이 없습니다. 사서함 소유자나 관리자가 액세스 권한을 부여해야 합니다. 저장된 메일은 계속 사용할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta não tem permissão para ler essa caixa de correio. O proprietário da caixa ou um administrador precisa conceder acesso. O e-mail salvo continua disponível."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此账户无权读取该邮箱。需要邮箱所有者或管理员授予访问权限。已保存的邮件仍可使用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此帳號無權讀取該信箱。需要信箱擁有者或管理員授予存取權限。已儲存的郵件仍可使用。"
+          }
+        }
+      }
+    },
+    "Your organisation's administrator must approve mailin before this account can sign in. Ask your IT administrator to approve mailin, then sign in again. Nothing was changed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein Administrator Ihrer Organisation muss mailin genehmigen, bevor sich dieses Konto anmelden kann. Bitten Sie Ihre IT-Administration, mailin zu genehmigen, und melden Sie sich dann erneut an. Es wurde nichts geändert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El administrador de tu organización debe aprobar mailin antes de que esta cuenta pueda iniciar sesión. Pide a tu administrador de TI que apruebe mailin y vuelve a iniciar sesión. No se ha cambiado nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'administrateur de votre organisation doit approuver mailin avant que ce compte puisse se connecter. Demandez à votre administrateur informatique d'approuver mailin, puis reconnectez-vous. Rien n'a été modifié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "इस खाते से साइन इन करने से पहले आपके संगठन के व्यवस्थापक को mailin को स्वीकृति देनी होगी। अपने IT व्यवस्थापक से mailin को स्वीकृत करने के लिए कहें, फिर दोबारा साइन इन करें। कुछ भी नहीं बदला गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'amministratore della tua organizzazione deve approvare mailin prima che questo account possa accedere. Chiedi al tuo amministratore IT di approvare mailin, poi accedi di nuovo. Non è stato modificato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアカウントでサインインするには、組織の管理者が mailin を承認する必要があります。IT 管理者に mailin の承認を依頼してから、もう一度サインインしてください。何も変更されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정으로 로그인하려면 조직의 관리자가 mailin을 승인해야 합니다. IT 관리자에게 mailin 승인을 요청한 후 다시 로그인하세요. 변경된 내용은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O administrador da sua organização precisa aprovar o mailin antes que esta conta possa entrar. Peça ao administrador de TI para aprovar o mailin e entre novamente. Nada foi alterado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您所在组织的管理员必须先批准 mailin，此账户才能登录。请让 IT 管理员批准 mailin，然后重新登录。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您所屬組織的管理員必須先核准 mailin，此帳號才能登入。請 IT 管理員核准 mailin，然後重新登入。未做任何變更。"
+          }
+        }
+      }
+    },
+    "Your organisation's sign-in rules blocked this sign-in, for example from this device or network. Ask your IT administrator, or sign in from a device your organisation allows. Nothing was changed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Anmelderegeln Ihrer Organisation haben diese Anmeldung blockiert, etwa von diesem Gerät oder Netzwerk aus. Wenden Sie sich an Ihre IT-Administration oder melden Sie sich auf einem Gerät an, das Ihre Organisation zulässt. Es wurde nichts geändert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las reglas de inicio de sesión de tu organización han bloqueado este inicio de sesión, por ejemplo desde este dispositivo o red. Consulta a tu administrador de TI o inicia sesión desde un dispositivo que tu organización permita. No se ha cambiado nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les règles de connexion de votre organisation ont bloqué cette connexion, par exemple depuis cet appareil ou ce réseau. Contactez votre administrateur informatique ou connectez-vous depuis un appareil autorisé par votre organisation. Rien n'a été modifié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपके संगठन के साइन-इन नियमों ने इस साइन-इन को रोक दिया, उदाहरण के लिए इस डिवाइस या नेटवर्क से। अपने IT व्यवस्थापक से पूछें, या ऐसे डिवाइस से साइन इन करें जिसकी आपका संगठन अनुमति देता है। कुछ भी नहीं बदला गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le regole di accesso della tua organizzazione hanno bloccato questo accesso, ad esempio da questo dispositivo o rete. Rivolgiti al tuo amministratore IT oppure accedi da un dispositivo consentito dalla tua organizzazione. Non è stato modificato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "組織のサインイン ルールにより、このサインインはブロックされました（このデバイスやネットワークからのサインインなど）。IT 管理者に問い合わせるか、組織が許可しているデバイスからサインインしてください。何も変更されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "조직의 로그인 규칙에 따라 이 로그인이 차단되었습니다(예: 이 기기 또는 네트워크에서의 로그인). IT 관리자에게 문의하거나 조직에서 허용하는 기기에서 로그인하세요. 변경된 내용은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As regras de acesso da sua organização bloquearam esta entrada, por exemplo a partir deste dispositivo ou rede. Fale com o administrador de TI ou entre a partir de um dispositivo permitido pela sua organização. Nada foi alterado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您所在组织的登录规则阻止了此次登录（例如来自此设备或网络的登录）。请联系 IT 管理员，或从组织允许的设备登录。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您所屬組織的登入規則封鎖了這次登入（例如來自此裝置或網路的登入）。請聯絡 IT 管理員，或從組織允許的裝置登入。未做任何變更。"
+          }
+        }
+      }
+    },
+    "Microsoft needs extra verification for this account. Sign in again and complete the verification step Microsoft shows. Nothing was changed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft verlangt für dieses Konto eine zusätzliche Bestätigung. Melden Sie sich erneut an und schließen Sie den Bestätigungsschritt ab, den Microsoft anzeigt. Es wurde nichts geändert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft necesita una verificación adicional para esta cuenta. Vuelve a iniciar sesión y completa el paso de verificación que muestra Microsoft. No se ha cambiado nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft demande une vérification supplémentaire pour ce compte. Reconnectez-vous et effectuez l'étape de vérification affichée par Microsoft. Rien n'a été modifié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft को इस खाते के लिए अतिरिक्त सत्यापन चाहिए। दोबारा साइन इन करें और Microsoft द्वारा दिखाया गया सत्यापन चरण पूरा करें। कुछ भी नहीं बदला गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft richiede una verifica aggiuntiva per questo account. Accedi di nuovo e completa il passaggio di verifica mostrato da Microsoft. Non è stato modificato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft はこのアカウントに追加の確認を求めています。もう一度サインインし、Microsoft が表示する確認手順を完了してください。何も変更されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft에서 이 계정에 대한 추가 인증을 요구합니다. 다시 로그인하여 Microsoft가 표시하는 인증 단계를 완료하세요. 변경된 내용은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Microsoft precisa de uma verificação adicional para esta conta. Entre novamente e conclua a etapa de verificação que a Microsoft mostrar. Nada foi alterado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft 需要对此账户进行额外验证。请重新登录并完成 Microsoft 显示的验证步骤。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microsoft 需要對此帳號進行額外驗證。請重新登入並完成 Microsoft 顯示的驗證步驟。未做任何變更。"
+          }
+        }
+      }
+    },
+    "mailin is not available in your organisation's Microsoft directory. Ask your IT administrator to allow mailin, or sign in with another account. Nothing was changed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin ist im Microsoft-Verzeichnis Ihrer Organisation nicht verfügbar. Bitten Sie Ihre IT-Administration, mailin zuzulassen, oder melden Sie sich mit einem anderen Konto an. Es wurde nichts geändert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin no está disponible en el directorio de Microsoft de tu organización. Pide a tu administrador de TI que permita mailin o inicia sesión con otra cuenta. No se ha cambiado nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin n'est pas disponible dans l'annuaire Microsoft de votre organisation. Demandez à votre administrateur informatique d'autoriser mailin, ou connectez-vous avec un autre compte. Rien n'a été modifié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin आपके संगठन की Microsoft निर्देशिका में उपलब्ध नहीं है। अपने IT व्यवस्थापक से mailin को अनुमति देने के लिए कहें, या किसी दूसरे खाते से साइन इन करें। कुछ भी नहीं बदला गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin non è disponibile nella directory Microsoft della tua organizzazione. Chiedi al tuo amministratore IT di consentire mailin oppure accedi con un altro account. Non è stato modificato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin は組織の Microsoft ディレクトリで利用できません。IT 管理者に mailin の許可を依頼するか、別のアカウントでサインインしてください。何も変更されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin은 조직의 Microsoft 디렉터리에서 사용할 수 없습니다. IT 관리자에게 mailin 허용을 요청하거나 다른 계정으로 로그인하세요. 변경된 내용은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O mailin não está disponível no diretório da Microsoft da sua organização. Peça ao administrador de TI para permitir o mailin ou entre com outra conta. Nada foi alterado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 在您所在组织的 Microsoft 目录中不可用。请让 IT 管理员允许 mailin，或使用其他账户登录。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 在您所屬組織的 Microsoft 目錄中無法使用。請 IT 管理員允許 mailin，或使用其他帳號登入。未做任何變更。"
+          }
+        }
+      }
+    },
+    "This account is not part of the organisation it tried to sign in to. Sign in with an account of that organisation, or with a personal Microsoft account. Nothing was changed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Konto gehört nicht zu der Organisation, bei der es sich anmelden wollte. Melden Sie sich mit einem Konto dieser Organisation oder mit einem persönlichen Microsoft-Konto an. Es wurde nichts geändert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta no pertenece a la organización en la que intentó iniciar sesión. Inicia sesión con una cuenta de esa organización o con una cuenta personal de Microsoft. No se ha cambiado nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte ne fait pas partie de l'organisation à laquelle il a tenté de se connecter. Connectez-vous avec un compte de cette organisation ou avec un compte Microsoft personnel. Rien n'a été modifié."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यह खाता उस संगठन का हिस्सा नहीं है जिसमें इसने साइन इन करने की कोशिश की। उस संगठन के किसी खाते से, या किसी व्यक्तिगत Microsoft खाते से साइन इन करें। कुछ भी नहीं बदला गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo account non fa parte dell'organizzazione a cui ha tentato di accedere. Accedi con un account di quell'organizzazione oppure con un account Microsoft personale. Non è stato modificato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアカウントは、サインインしようとした組織に属していません。その組織のアカウント、または個人用 Microsoft アカウントでサインインしてください。何も変更されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 로그인하려던 조직에 속해 있지 않습니다. 해당 조직의 계정 또는 개인 Microsoft 계정으로 로그인하세요. 변경된 내용은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta não faz parte da organização em que tentou entrar. Entre com uma conta dessa organização ou com uma conta pessoal da Microsoft. Nada foi alterado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此账户不属于它尝试登录的组织。请使用该组织的账户或个人 Microsoft 账户登录。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此帳號不屬於它嘗試登入的組織。請使用該組織的帳號或個人 Microsoft 帳號登入。未做任何變更。"
+          }
+        }
+      }
+    },
+    "Not sent: this message is %@ once prepared for sending, and Microsoft accepts at most %@ per message sent from mailin. Remove or shrink attachments and send it again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht gesendet: Diese Nachricht ist nach der Vorbereitung zum Senden %1$@ groß, und Microsoft akzeptiert höchstens %2$@ pro Nachricht, die aus mailin gesendet wird. Entfernen oder verkleinern Sie Anhänge und senden Sie sie erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No enviado: este mensaje ocupa %1$@ una vez preparado para el envío, y Microsoft acepta como máximo %2$@ por mensaje enviado desde mailin. Quita o reduce los adjuntos y vuelve a enviarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non envoyé : ce message fait %1$@ une fois préparé pour l'envoi, et Microsoft accepte au maximum %2$@ par message envoyé depuis mailin. Retirez ou réduisez les pièces jointes, puis renvoyez-le."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "नहीं भेजा गया: भेजने के लिए तैयार होने पर यह संदेश %1$@ का है, और Microsoft mailin से भेजे गए हर संदेश के लिए अधिकतम %2$@ स्वीकार करता है। अटैचमेंट हटाएँ या छोटे करें और इसे फिर से भेजें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non inviato: una volta preparato per l'invio questo messaggio occupa %1$@, e Microsoft accetta al massimo %2$@ per messaggio inviato da mailin. Rimuovi o riduci gli allegati e invialo di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未送信：このメッセージは送信用に準備すると %1$@ になり、Microsoft が mailin から送信されるメッセージ 1 通につき受け付けるのは最大 %2$@ です。添付ファイルを削除するか小さくしてから、もう一度送信してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보내지 않음: 이 메시지는 전송 준비 후 %1$@이며, Microsoft는 mailin에서 보내는 메시지당 최대 %2$@까지만 허용합니다. 첨부 파일을 제거하거나 줄인 후 다시 보내세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não enviado: esta mensagem tem %1$@ depois de preparada para envio, e a Microsoft aceita no máximo %2$@ por mensagem enviada pelo mailin. Remova ou reduza os anexos e envie novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未发送：此邮件准备发送后为 %1$@，而 Microsoft 对从 mailin 发送的每封邮件最多接受 %2$@。请移除或缩小附件后重新发送。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未傳送：此郵件準備傳送後為 %1$@，而 Microsoft 對從 mailin 傳送的每封郵件最多接受 %2$@。請移除或縮小附件後重新傳送。"
+          }
+        }
+      }
+    },
+    "%lld connected accounts must sign in again before anything connects for them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld verbundene Konten müssen sich erneut anmelden, bevor für sie wieder etwas verbunden wird."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld cuentas conectadas deben volver a iniciar sesión antes de que se conecte nada para ellas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld comptes connectés doivent se reconnecter avant que quoi que ce soit ne se connecte pour eux."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld जुड़े हुए खातों को फिर से साइन इन करना होगा, उसके बाद ही उनके लिए कुछ भी कनेक्ट होगा।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld account collegati devono accedere di nuovo prima che qualcosa si colleghi per loro."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続済みの %lld 件のアカウントは、何かが接続される前にもう一度サインインする必要があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결된 계정 %lld개는 무엇이든 다시 연결되기 전에 다시 로그인해야 합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld contas conectadas precisam entrar novamente antes que qualquer coisa se conecte para elas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个已连接的账户必须重新登录，之后才会为它们建立任何连接。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個已連線的帳號必須重新登入，之後才會為它們建立任何連線。"
+          }
+        }
+      }
+    },
+    "%lld outbox messages came back with the backup and are not sent: open Outbox and send each one or keep it as a draft." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Nachrichten im Postausgang kamen mit dem Backup zurück und werden nicht gesendet: Öffnen Sie den Postausgang und senden Sie jede oder behalten Sie sie als Entwurf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld mensajes de la bandeja de salida volvieron con la copia de seguridad y no se envían: abre la bandeja de salida y envía cada uno o guárdalo como borrador."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld messages de la boîte d'envoi sont revenus avec la sauvegarde et ne sont pas envoyés : ouvrez la boîte d'envoi et envoyez chacun ou gardez-le comme brouillon."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आउटबॉक्स के %lld संदेश बैकअप के साथ वापस आए हैं और भेजे नहीं जाते: आउटबॉक्स खोलें और हर एक को भेजें या ड्राफ़्ट के रूप में रखें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld messaggi della posta in uscita sono tornati con il backup e non vengono inviati: apri la posta in uscita e invia ciascuno o conservalo come bozza."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信トレイの %lld 件のメッセージがバックアップとともに戻りましたが、送信されません。送信トレイを開き、それぞれ送信するか下書きとして残してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보낼 편지함의 메시지 %lld개가 백업과 함께 돌아왔으며 전송되지 않습니다. 보낼 편지함을 열어 각각 보내거나 임시 보관함에 두세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld mensagens da caixa de saída voltaram com o backup e não são enviadas: abra a caixa de saída e envie cada uma ou mantenha-a como rascunho."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发件箱中的 %lld 封邮件随备份一起恢复，不会被发送：请打开发件箱，逐封发送或保留为草稿。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄件匣中的 %lld 封郵件隨備份一起復原，不會被傳送：請開啟寄件匣，逐封傳送或保留為草稿。"
+          }
+        }
+      }
+    },
+    "%lld drafts or outbox items could not be read; they are listed, not sent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Entwürfe oder Postausgangseinträge konnten nicht gelesen werden; sie werden aufgeführt, nicht gesendet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer %lld borradores o elementos de la bandeja de salida; se muestran, no se envían."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld brouillons ou éléments de la boîte d'envoi n'ont pas pu être lus ; ils sont listés, pas envoyés."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ड्राफ़्ट या आउटबॉक्स आइटम पढ़े नहीं जा सके; वे सूची में दिखाए जाते हैं, भेजे नहीं जाते।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non è stato possibile leggere %lld bozze o elementi della posta in uscita; sono elencati, non inviati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件の下書きまたは送信トレイの項目を読み取れませんでした。一覧に表示されますが、送信されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "임시 보관함 또는 보낼 편지함 항목 %lld개를 읽을 수 없습니다. 목록에 표시되며 전송되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ler %lld rascunhos ou itens da caixa de saída; eles são listados, não enviados."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 个草稿或发件箱项目无法读取；它们会列出，但不会发送。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 個草稿或寄件匣項目無法讀取；它們會列出，但不會傳送。"
+          }
+        }
+      }
+    },
+    "Connected mail could not be prepared after the restore (%@). Nothing is sent and no account connects until it is." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verbundene Mail konnte nach der Wiederherstellung nicht vorbereitet werden (%@). Bis dahin wird nichts gesendet und kein Konto verbunden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar el correo conectado después de la restauración (%@). Hasta entonces no se envía nada y ninguna cuenta se conecta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La messagerie connectée n'a pas pu être préparée après la restauration (%@). Rien n'est envoyé et aucun compte ne se connecte tant que ce n'est pas fait."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पुनर्स्थापना के बाद कनेक्टेड मेल तैयार नहीं हो सका (%@)। जब तक यह नहीं होता, कुछ भी नहीं भेजा जाता और कोई खाता कनेक्ट नहीं होता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non è stato possibile preparare la posta collegata dopo il ripristino (%@). Finché non succede, non viene inviato nulla e nessun account si collega."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "復元後に接続メールを準備できませんでした（%@）。準備できるまで何も送信されず、どのアカウントも接続されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "복원 후 연결된 메일을 준비할 수 없습니다(%@). 준비될 때까지 아무것도 보내지 않으며 어떤 계정도 연결되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível preparar o e-mail conectado após a restauração (%@). Até lá, nada é enviado e nenhuma conta se conecta."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复后无法准备已连接邮件（%@）。在此之前不会发送任何内容，也不会连接任何账户。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "復原後無法準備已連線郵件（%@）。在此之前不會傳送任何內容，也不會連線任何帳號。"
+          }
+        }
+      }
+    },
+    "The account was removed and its mail kept. It now has %lld messages to delete, not the %lld shown. Type the new number to delete them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Konto wurde entfernt und seine Mail behalten. Es hat jetzt %1$lld Nachrichten zum Löschen, nicht die angezeigten %2$lld. Geben Sie die neue Zahl ein, um sie zu löschen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cuenta se eliminó y su correo se conservó. Ahora tiene %1$lld mensajes para eliminar, no los %2$lld mostrados. Escribe el nuevo número para eliminarlos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le compte a été supprimé et ses messages conservés. Il a maintenant %1$lld messages à supprimer, et non les %2$lld affichés. Saisissez le nouveau nombre pour les supprimer."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "खाता हटा दिया गया और उसका मेल रखा गया। अब उसके %1$lld संदेश हटाने हैं, दिखाए गए %2$lld नहीं। उन्हें हटाने के लिए नई संख्या लिखें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'account è stato rimosso e la sua posta conservata. Ora ha %1$lld messaggi da eliminare, non i %2$lld mostrati. Digita il nuovo numero per eliminarli."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アカウントは削除され、メールは保持されました。削除対象は表示されていた %2$lld 件ではなく、現在 %1$lld 件です。削除するには新しい数を入力してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정이 제거되었고 메일은 보관되었습니다. 이제 삭제할 메시지는 표시된 %2$lld개가 아니라 %1$lld개입니다. 삭제하려면 새 숫자를 입력하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conta foi removida e seu e-mail mantido. Agora ela tem %1$lld mensagens para apagar, não as %2$lld mostradas. Digite o novo número para apagá-las."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账户已移除，邮件已保留。现在要删除的邮件是 %1$lld 封，而不是显示的 %2$lld 封。请输入新数字以删除它们。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帳號已移除，郵件已保留。現在要刪除的郵件是 %1$lld 封，而不是顯示的 %2$lld 封。請輸入新數字以刪除它們。"
+          }
+        }
+      }
+    },
+    "No Archived Mail to Delete" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine archivierte Mail zum Löschen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay correo archivado para eliminar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun message archivé à supprimer"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हटाने के लिए कोई संग्रहीत मेल नहीं"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessuna posta archiviata da eliminare"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除するアーカイブ済みメールはありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "삭제할 보관된 메일 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum e-mail arquivado para apagar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可删除的已存档邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可刪除的已封存郵件"
+          }
+        }
+      }
+    },
+    "Removed; %lld archived messages kept" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entfernt; %lld archivierte Nachrichten behalten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminada; se conservan %lld mensajes archivados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimé ; %lld messages archivés conservés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हटाया गया; %lld संग्रहीत संदेश रखे गए"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rimosso; %lld messaggi archiviati conservati"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除済み。アーカイブ済みメッセージ %lld 件を保持"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제거됨, 보관된 메시지 %lld개 유지"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removida; %lld mensagens arquivadas mantidas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除；保留 %lld 封已存档邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除；保留 %lld 封已封存郵件"
+          }
+        }
+      }
+    },
+    "Removed accounts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entfernte Konten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuentas eliminadas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comptes supprimés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हटाए गए खाते"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account rimossi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除したアカウント"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제거된 계정"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contas removidas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除的账户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除的帳號"
+          }
+        }
+      }
+    },
+    "Delete archived mail…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivierte Mail löschen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar correo archivado…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer les messages archivés…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रहीत मेल हटाएँ…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elimina posta archiviata…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ済みメールを削除…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관된 메일 삭제…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagar e-mail arquivado…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除已存档邮件…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除已封存郵件…"
+          }
+        }
+      }
+    },
+    "Delete archived mail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivierte Mail löschen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar correo archivado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer les messages archivés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रहीत मेल हटाएँ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elimina posta archiviata"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブ済みメールを削除"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관된 메일 삭제"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagar e-mail arquivado"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除已存档邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除已封存郵件"
+          }
+        }
+      }
+    },
+    "%@ is already added. Choose it in Accounts and status." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ist bereits hinzugefügt. Wählen Sie es unter „Konten und Status“."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ya está añadida. Elígela en Cuentas y estado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ est déjà ajouté. Choisissez-le dans Comptes et état."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ पहले से जोड़ा हुआ है। इसे खाते और स्थिति में चुनें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ è già aggiunto. Sceglilo in Account e stato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はすでに追加されています。「アカウントと状態」で選択してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 계정은 이미 추가되어 있습니다. 계정 및 상태에서 선택하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ já foi adicionada. Escolha-a em Contas e status."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已添加。请在“账户和状态”中选择它。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已加入。請在「帳號與狀態」中選擇它。"
+          }
+        }
+      }
+    },
+    "%@ was added before, so mailin connected that account again: mail it already saved is not downloaded again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ wurde schon einmal hinzugefügt, daher hat mailin dieses Konto wieder verbunden: Bereits gesicherte Mail wird nicht erneut heruntergeladen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ya se había añadido, así que mailin volvió a conectar esa cuenta: el correo ya guardado no se descarga de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ avait déjà été ajouté, mailin a donc reconnecté ce compte : les messages déjà enregistrés ne sont pas téléchargés à nouveau."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ पहले जोड़ा गया था, इसलिए mailin ने वही खाता फिर से कनेक्ट किया: पहले से सहेजा गया मेल फिर से डाउनलोड नहीं होता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ era già stato aggiunto, quindi mailin ha ricollegato quell'account: la posta già salvata non viene scaricata di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ は以前に追加されていたため、mailin はそのアカウントを再接続しました。保存済みのメールは再ダウンロードされません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 계정은 이전에 추가된 적이 있어 mailin이 그 계정을 다시 연결했습니다. 이미 저장된 메일은 다시 다운로드되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ já tinha sido adicionada, então o mailin conectou essa conta novamente: o e-mail já salvo não é baixado de novo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 之前已添加过，因此 mailin 重新连接了该账户：已保存的邮件不会再次下载。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 之前已加入過，因此 mailin 重新連線了該帳號：已儲存的郵件不會再次下載。"
+          }
+        }
+      }
+    },
+    "You signed in as %@, but this account is %@. Nothing was changed. Sign in with %@, or add %@ as a new account." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sie haben sich als %1$@ angemeldet, aber dieses Konto ist %2$@. Es wurde nichts geändert. Melden Sie sich mit %3$@ an oder fügen Sie %4$@ als neues Konto hinzu."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciaste sesión como %1$@, pero esta cuenta es %2$@. No se cambió nada. Inicia sesión con %3$@ o añade %4$@ como cuenta nueva."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous vous êtes connecté en tant que %1$@, mais ce compte est %2$@. Rien n'a été modifié. Connectez-vous avec %3$@ ou ajoutez %4$@ comme nouveau compte."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपने %1$@ के रूप में साइन इन किया, लेकिन यह खाता %2$@ है। कुछ भी नहीं बदला गया। %3$@ से साइन इन करें, या %4$@ को नए खाते के रूप में जोड़ें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hai effettuato l'accesso come %1$@, ma questo account è %2$@. Non è stato modificato nulla. Accedi con %3$@ oppure aggiungi %4$@ come nuovo account."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ としてサインインしましたが、このアカウントは %2$@ です。何も変更されていません。%3$@ でサインインするか、%4$@ を新しいアカウントとして追加してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@(으)로 로그인했지만 이 계정은 %2$@입니다. 아무것도 변경되지 않았습니다. %3$@(으)로 로그인하거나 %4$@을(를) 새 계정으로 추가하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você entrou como %1$@, mas esta conta é %2$@. Nada foi alterado. Entre com %3$@ ou adicione %4$@ como uma nova conta."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你以 %1$@ 登录，但此账户是 %2$@。未作任何更改。请用 %3$@ 登录，或将 %4$@ 添加为新账户。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你以 %1$@ 登入，但此帳號是 %2$@。未作任何變更。請用 %3$@ 登入，或將 %4$@ 加入為新帳號。"
+          }
+        }
+      }
+    },
+    "Password replaced. The account is signed in again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passwort ersetzt. Das Konto ist wieder angemeldet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contraseña sustituida. La cuenta vuelve a tener la sesión iniciada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mot de passe remplacé. Le compte est de nouveau connecté."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पासवर्ड बदल दिया गया। खाता फिर से साइन इन है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Password sostituita. L'account ha di nuovo effettuato l'accesso."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードを置き換えました。アカウントは再びサインインしています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "암호가 교체되었습니다. 계정이 다시 로그인되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Senha substituída. A conta está conectada novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码已替换。账户已重新登录。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密碼已替換。帳號已重新登入。"
+          }
+        }
+      }
+    },
+    "Replace password…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passwort ersetzen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sustituir contraseña…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remplacer le mot de passe…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पासवर्ड बदलें…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sostituisci password…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードを置き換える…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "암호 교체…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Substituir senha…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换密码…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替換密碼…"
+          }
+        }
+      }
+    },
+    "Replace password" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passwort ersetzen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sustituir contraseña"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remplacer le mot de passe"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पासवर्ड बदलें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sostituisci password"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードを置き換える"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "암호 교체"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Substituir senha"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换密码"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替換密碼"
+          }
+        }
+      }
+    },
+    "The incoming mail server did not accept the sign-in (%@). Nothing was saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für eingehende Mail hat die Anmeldung nicht akzeptiert (%@). Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo entrante no aceptó el inicio de sesión (%@). No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de courrier entrant n'a pas accepté la connexion (%@). Rien n'a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया (%@)। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in arrivo non ha accettato l'accesso (%@). Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信メールサーバがサインインを受け付けませんでした（%@）。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수신 메일 서버가 로그인을 받아들이지 않았습니다(%@). 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de e-mail de entrada não aceitou o login (%@). Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件服务器未接受登录（%@）。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件伺服器未接受登入（%@）。未儲存任何內容。"
+          }
+        }
+      }
+    },
+    "The outgoing mail server did not accept the sign-in (%@). Nothing was saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für ausgehende Mail hat die Anmeldung nicht akzeptiert (%@). Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo saliente no aceptó el inicio de sesión (%@). No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de courrier sortant n'a pas accepté la connexion (%@). Rien n'a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जाने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया (%@)। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in uscita non ha accettato l'accesso (%@). Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信メールサーバがサインインを受け付けませんでした（%@）。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "발신 메일 서버가 로그인을 받아들이지 않았습니다(%@). 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de e-mail de saída não aceitou o login (%@). Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发件服务器未接受登录（%@）。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄件伺服器未接受登入（%@）。未儲存任何內容。"
+          }
+        }
+      }
+    },
+    "This account signs in in the browser, not with a password." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Konto meldet sich im Browser an, nicht mit einem Passwort."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta inicia sesión en el navegador, no con una contraseña."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte se connecte dans le navigateur, pas avec un mot de passe."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यह खाता ब्राउज़र में साइन इन करता है, पासवर्ड से नहीं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo account accede nel browser, non con una password."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアカウントはパスワードではなくブラウザでサインインします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 암호가 아니라 브라우저에서 로그인합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta conta entra pelo navegador, não com uma senha."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此账户在浏览器中登录，而不是使用密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此帳號在瀏覽器中登入，而不是使用密碼。"
+          }
+        }
+      }
+    },
+    "For %@, the login name must be the email address." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bei %@ muss der Anmeldename die E-Mail-Adresse sein."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para %@, el nombre de usuario debe ser la dirección de correo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pour %@, l'identifiant doit être l'adresse e-mail."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ के लिए, लॉगिन नाम ईमेल पता ही होना चाहिए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Per %@, il nome di accesso deve essere l'indirizzo email."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ では、ログイン名はメールアドレスである必要があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@의 경우 로그인 이름은 이메일 주소여야 합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No %@, o nome de login deve ser o endereço de e-mail."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对于 %@，登录名必须是电子邮件地址。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "對於 %@，登入名稱必須是電子郵件地址。"
+          }
+        }
+      }
+    },
+    "mailin has not confirmed that this server lets you send as %@. Confirm it only if this is your own address on this server." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin hat nicht bestätigt, dass dieser Server Sie als %@ senden lässt. Bestätigen Sie es nur, wenn dies Ihre eigene Adresse auf diesem Server ist."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin no ha confirmado que este servidor te permita enviar como %@. Confírmalo solo si es tu propia dirección en este servidor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin n'a pas confirmé que ce serveur vous permet d'envoyer en tant que %@. Confirmez-le uniquement s'il s'agit de votre propre adresse sur ce serveur."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin ने पुष्टि नहीं की है कि यह सर्वर आपको %@ के रूप में भेजने देता है। इसकी पुष्टि तभी करें जब यह इस सर्वर पर आपका अपना पता हो।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin non ha confermato che questo server ti permetta di inviare come %@. Confermalo solo se è il tuo indirizzo su questo server."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このサーバで %@ として送信できることを mailin は確認していません。このサーバ上のあなた自身のアドレスである場合にのみ確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 서버에서 %@(으)로 보낼 수 있는지 mailin이 확인하지 않았습니다. 이 서버에 있는 본인 주소인 경우에만 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O mailin não confirmou que este servidor permite enviar como %@. Confirme apenas se este for o seu próprio endereço neste servidor."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 尚未确认此服务器允许你以 %@ 发送。仅当这是你在此服务器上的地址时才确认。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 尚未確認此伺服器允許你以 %@ 傳送。僅當這是你在此伺服器上的地址時才確認。"
+          }
+        }
+      }
+    },
+    "Confirm Sending Address…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Absenderadresse bestätigen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmar dirección de envío…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmer l'adresse d'envoi…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "भेजने का पता पुष्टि करें…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conferma indirizzo di invio…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信元アドレスを確認…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보내는 주소 확인…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmar endereço de envio…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认发件地址…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認寄件地址…"
+          }
+        }
+      }
+    },
+    "Confirm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bestätigen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmer"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पुष्टि करें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conferma"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認"
+          }
+        }
+      }
+    },
+    "Sending address confirmed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Absenderadresse bestätigt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dirección de envío confirmada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adresse d'envoi confirmée."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "भेजने के पते की पुष्टि हो गई।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indirizzo di invio confermato."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信元アドレスを確認しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보내는 주소가 확인되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endereço de envio confirmado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发件地址已确认。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄件地址已確認。"
+          }
+        }
+      }
+    },
+    "This message is %@ once encoded for sending; Microsoft accepts at most 4 MB per message. Remove or shrink attachments, then send it again. Nothing was queued." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Nachricht ist zum Senden codiert %@ groß; Microsoft akzeptiert höchstens 4 MB pro Nachricht. Entfernen oder verkleinern Sie Anhänge und senden Sie sie dann erneut. Es wurde nichts in die Warteschlange gestellt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este mensaje ocupa %@ una vez codificado para enviarlo; Microsoft acepta como máximo 4 MB por mensaje. Quita o reduce los archivos adjuntos y vuelve a enviarlo. No se puso nada en cola."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce message fait %@ une fois encodé pour l'envoi ; Microsoft accepte au plus 4 Mo par message. Supprimez ou réduisez les pièces jointes, puis renvoyez-le. Rien n'a été mis en file d'attente."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "भेजने के लिए एन्कोड होने पर यह संदेश %@ का है; Microsoft प्रति संदेश अधिकतम 4 MB स्वीकार करता है। अटैचमेंट हटाएँ या छोटे करें, फिर दोबारा भेजें। कुछ भी कतार में नहीं डाला गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo messaggio occupa %@ una volta codificato per l'invio; Microsoft accetta al massimo 4 MB per messaggio. Rimuovi o riduci gli allegati, poi invialo di nuovo. Non è stato messo nulla in coda."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージは送信用にエンコードすると %@ になります。Microsoft が受け付けるのは 1 通あたり最大 4 MB です。添付ファイルを削除するか小さくしてから、もう一度送信してください。何もキューに入れられていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 메시지는 전송용으로 인코딩하면 %@입니다. Microsoft는 메시지당 최대 4MB만 받습니다. 첨부 파일을 제거하거나 줄인 다음 다시 보내세요. 대기열에 추가된 것은 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta mensagem tem %@ depois de codificada para envio; a Microsoft aceita no máximo 4 MB por mensagem. Remova ou reduza os anexos e envie novamente. Nada foi colocado na fila."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此邮件编码发送后为 %@；Microsoft 每封邮件最多接受 4 MB。请删除或缩小附件，然后再次发送。未加入发送队列。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此郵件編碼傳送後為 %@；Microsoft 每封郵件最多接受 4 MB。請刪除或縮小附件，然後再次傳送。未加入傳送佇列。"
+          }
+        }
+      }
+    },
+    "%lld of %lld messages could not be removed from search, so nothing was deleted. Try again; if it keeps failing, rebuild the search index." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld von %2$lld Nachrichten konnten nicht aus der Suche entfernt werden, daher wurde nichts gelöscht. Versuchen Sie es erneut; wenn es weiter fehlschlägt, bauen Sie den Suchindex neu auf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron quitar de la búsqueda %1$lld de %2$lld mensajes, así que no se eliminó nada. Vuelve a intentarlo; si sigue fallando, reconstruye el índice de búsqueda."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld messages sur %2$lld n'ont pas pu être retirés de la recherche, rien n'a donc été supprimé. Réessayez ; si l'échec persiste, reconstruisez l'index de recherche."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld में से %1$lld संदेश खोज से हटाए नहीं जा सके, इसलिए कुछ भी नहीं हटाया गया। फिर से कोशिश करें; अगर यह बार-बार विफल हो, तो खोज इंडेक्स फिर से बनाएँ।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non è stato possibile rimuovere dalla ricerca %1$lld messaggi su %2$lld, quindi non è stato eliminato nulla. Riprova; se continua a non riuscire, ricostruisci l'indice di ricerca."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 件中 %1$lld 件のメッセージを検索から削除できなかったため、何も削除されていません。もう一度お試しください。失敗が続く場合は検索インデックスを再構築してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메시지 %2$lld개 중 %1$lld개를 검색에서 제거할 수 없어 아무것도 삭제하지 않았습니다. 다시 시도하세요. 계속 실패하면 검색 색인을 다시 만드세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível remover da pesquisa %1$lld de %2$lld mensagens, então nada foi apagado. Tente novamente; se continuar falhando, recrie o índice de pesquisa."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 封邮件中有 %1$lld 封无法从搜索中移除，因此未删除任何内容。请重试；如果仍然失败，请重建搜索索引。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 封郵件中有 %1$lld 封無法從搜尋中移除，因此未刪除任何內容。請重試；如果仍然失敗，請重建搜尋索引。"
+          }
+        }
+      }
+    },
+    "Every account that saves mail is paused. Resume one in Accounts and status to sync." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jedes Konto, das Mail sichert, ist pausiert. Setzen Sie eines unter „Konten und Status“ fort, um zu synchronisieren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todas las cuentas que guardan correo están en pausa. Reanuda una en Cuentas y estado para sincronizar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tous les comptes qui enregistrent des messages sont en pause. Reprenez-en un dans Comptes et état pour synchroniser."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मेल सहेजने वाला हर खाता रुका हुआ है। सिंक करने के लिए खाते और स्थिति में किसी एक को फिर से शुरू करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutti gli account che salvano la posta sono in pausa. Riprendine uno in Account e stato per sincronizzare."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールを保存するアカウントはすべて一時停止中です。同期するには「アカウントと状態」でいずれかを再開してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메일을 저장하는 모든 계정이 일시 정지되었습니다. 동기화하려면 계정 및 상태에서 하나를 재개하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todas as contas que salvam e-mail estão pausadas. Retome uma em Contas e status para sincronizar."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有保存邮件的账户都已暂停。请在“账户和状态”中恢复其中一个以进行同步。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有儲存郵件的帳號都已暫停。請在「帳號與狀態」中恢復其中一個以進行同步。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
