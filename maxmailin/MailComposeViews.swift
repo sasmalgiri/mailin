@@ -68,36 +68,70 @@ struct MailComposeSheet: View {
     let dismiss: () -> Void
 
     @State private var draft: Draft?
+    /// Confirmed and unconfirmed identities of every account that may send
+    /// (the gate and the From menu filter them to the draft's own account).
     @State private var identities: [SendingIdentity] = []
     @State private var to = ""
     @State private var cc = ""
     @State private var bcc = ""
+    @State private var showCcBcc = false
     @State private var addressError: String?
     @State private var unavailable: [UUID: String] = [:]
     @State private var saveTask: Task<Void, Never>?
     @State private var importing = false
     @State private var error: String?
     @AppStorage("mailin.mail.undoSendSeconds") private var undoSeconds = 10
+    @FocusState private var focus: Field?
+
+    private enum Field: Hashable { case to, cc, bcc, subject, body }
 
     private var sendAccounts: [MailAccountSnapshot] { model.accounts.filter { $0.account.enabledModes.contains(.send) } }
 
     var body: some View {
         NavigationStack {
             Group {
-                if let draft { editor(draft) } else { ProgressView() }
+                if let draft { editor(draft) }
+                else if let error { ContentUnavailableView(error, systemImage: "exclamationmark.triangle") }
+                else { ProgressView() }
             }
-            .navigationTitle(String(localized: "Message"))
+            .navigationTitle(Self.title(draft?.kind ?? .new))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(String(localized: "Close")) { Task { await saveNow(); dismiss() } }
                         .help(String(localized: "Keeps the draft"))
                 }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button { importing = true } label: {
+                        Label(String(localized: "Attach files…"), systemImage: "paperclip")
+                    }
+                    .help(String(localized: "Attach files…"))
+                    .disabled(draft == nil)
+                    Button(role: .destructive) {
+                        Task {
+                            guard let id = draft?.id else { return }
+                            await model.run { try await model.backend.discardDraft(id) }
+                            await model.reloadDrafts()
+                            dismiss()
+                        }
+                    } label: {
+                        Label(String(localized: "Delete draft"), systemImage: "trash")
+                    }
+                    .help(String(localized: "Delete draft"))
+                    .disabled(draft == nil)
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(String(localized: "Send")) { Task { await send() } }
-                        .disabled(!problems.isEmpty)
-                        .help(problems.first.map(MailComposeGate.text) ?? String(localized: "Puts the message in the outbox"))
-                        .keyboardShortcut(.return, modifiers: [.command, .shift])
-                        .accessibilityIdentifier("mail.compose.send")
+                    Button { Task { await send() } } label: {
+                        Label(String(localized: "Send"), systemImage: "paperplane.fill")
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!problems.isEmpty)
+                    .help(problems.first.map(MailComposeGate.text) ?? String(localized: "Puts the message in the outbox"))
+                    .keyboardShortcut(.return, modifiers: [.command, .shift])
+                    .accessibilityIdentifier("mail.compose.send")
                 }
             }
         }
@@ -116,45 +150,108 @@ struct MailComposeSheet: View {
         return p
     }
 
+    /// "New Message" for a fresh draft; Reply / Forward titles otherwise.
+    static func title(_ kind: Draft.Kind) -> String {
+        kind == .new ? String(localized: "New Message") : MailReplySetupView.title(kind)
+    }
+
+    /// Every confirmed address the person may send from, across accounts
+    /// that may send, plus the draft's own account (so its state stays visible).
+    private func fromChoices(_ current: Draft) -> [SendingIdentity] {
+        var ids = Set(sendAccounts.map(\.id))
+        ids.insert(current.accountID)
+        return identities.filter { ids.contains($0.accountID) && $0.permission == .verified }
+    }
+
+    /// One header line in the Mail style: a right-aligned label, then the field.
+    private func headerRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 64, alignment: .trailing)
+                .accessibilityHidden(true)
+            content()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func addressField(_ label: String, text: Binding<String>, field: Field) -> some View {
+        headerRow(label) {
+            TextField(label, text: text, prompt: Text(verbatim: ""))
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
+                #endif
+                .focused($focus, equals: field)
+                .labelsHidden()
+                .accessibilityLabel(Text(label))
+        }
+    }
+
     @ViewBuilder
     private func editor(_ current: Draft) -> some View {
-        Form {
-            Section {
-                Picker(String(localized: "Account"), selection: Binding(
-                    get: { current.accountID },
-                    set: { id in update { $0.switchAccount(to: id) }; Task { identities = await model.backend.identities(id) } })) {
-                    ForEach(sendAccounts) { Text($0.account.displayIdentity).tag($0.id) }
-                    if !sendAccounts.contains(where: { $0.id == current.accountID }) {
-                        Text(model.account(current.accountID)?.account.displayIdentity ?? String(localized: "Unknown account")).tag(current.accountID)
-                    }
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                addressField(String(localized: "To"), text: $to, field: .to)
+                if !showCcBcc {
+                    Button(String(localized: "Cc/Bcc")) { showCcBcc = true; focus = .cc }
+                        .buttonStyle(.borderless)
+                        .padding(.trailing, 16)
+                        .help(String(localized: "Show Cc and Bcc"))
                 }
+            }
+            Divider()
+            if showCcBcc {
+                addressField(String(localized: "Cc"), text: $cc, field: .cc)
+                Divider()
+                addressField(String(localized: "Bcc"), text: $bcc, field: .bcc)
+                Divider()
+            }
+            if let addressError {
+                Label(addressError, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                Divider()
+            }
+            headerRow(String(localized: "Subject")) {
+                TextField(String(localized: "Subject"), text: Binding(get: { current.subject }, set: { s in update { $0.subject = s } }),
+                          prompt: Text(verbatim: ""))
+                    .textFieldStyle(.plain)
+                    .focused($focus, equals: .subject)
+                    .labelsHidden()
+                    .accessibilityLabel(Text("Subject"))
+            }
+            Divider()
+            headerRow(String(localized: "From")) {
                 Picker(String(localized: "From"), selection: Binding(
                     get: { current.senderIdentityID },
-                    set: { id in update { $0.senderIdentityID = id } })) {
+                    set: { id in chooseSender(id) })) {
                     Text("Choose a sending address").tag(UUID?.none)
-                    ForEach(MailComposeGate.offeredIdentities(for: current.accountID, from: identities)) { identity in
-                        Text(identity.address.description).tag(UUID?.some(identity.id))
+                    ForEach(fromChoices(current)) { identity in
+                        Text(fromLabel(identity)).tag(UUID?.some(identity.id))
                     }
                 }
+                .labelsHidden()
+                .fixedSize()
+                .accessibilityLabel(Text("From"))
                 .accessibilityIdentifier("mail.compose.identity")
                 .accessibilityHint(Text("Required. Only this account's own addresses are offered."))
-            } footer: {
+                Spacer(minLength: 0)
+            }
+            if current.kind != .new {
                 Text("Replying to an old archive never sends as its former owner: choose one of your connected addresses.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.bottom, 6)
             }
-
-            Section {
-                TextField(String(localized: "To"), text: $to).autocorrectionDisabled()
-                TextField(String(localized: "Cc"), text: $cc).autocorrectionDisabled()
-                TextField(String(localized: "Bcc"), text: $bcc).autocorrectionDisabled()
-                if let addressError { Text(addressError).font(.caption).foregroundStyle(.red) }
-                TextField(String(localized: "Subject"), text: Binding(get: { current.subject }, set: { s in update { $0.subject = s } }))
-            }
-            .onChange(of: to) { _, _ in parseRecipients() }
-            .onChange(of: cc) { _, _ in parseRecipients() }
-            .onChange(of: bcc) { _, _ in parseRecipients() }
+            Divider()
 
             if current.protectedContent != .none || current.securityNotice != .none {
-                Section {
+                VStack(alignment: .leading, spacing: 4) {
                     if current.protectedContent == .omitted {
                         Label(String(localized: "The original was encrypted. Its decrypted text and attachments were left out of this message."), systemImage: "lock")
                     }
@@ -166,67 +263,126 @@ struct MailComposeSheet: View {
                     }
                 }
                 .font(.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(.orange.opacity(0.08))
+                Divider()
             }
 
-            Section {
-                TextEditor(text: Binding(get: { current.plainBody }, set: { s in update { $0.plainBody = s } }))
-                    .frame(minHeight: 160)
-                    .accessibilityLabel(Text("Message text"))
-                if let quoted = current.quotedPlain, !quoted.isEmpty {
-                    DisclosureGroup(String(localized: "Quoted original")) {
+            TextEditor(text: Binding(get: { current.plainBody }, set: { s in update { $0.plainBody = s } }))
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .focused($focus, equals: .body)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel(Text("Message text"))
+
+            if let quoted = current.quotedPlain, !quoted.isEmpty {
+                Divider()
+                DisclosureGroup(String(localized: "Quoted original")) {
+                    ScrollView {
                         Text(quoted).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(maxHeight: 160)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+            }
+
+            if !current.attachments.isEmpty {
+                Divider()
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(current.attachments) { attachmentChip($0) }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 8)
                 }
             }
 
-            Section {
-                ForEach(current.attachments) { attachment in
-                    HStack {
-                        Image(systemName: unavailable[attachment.id] == nil ? "paperclip" : "exclamationmark.triangle")
-                            .foregroundStyle(unavailable[attachment.id] == nil ? Color.secondary : Color.orange)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading) {
-                            Text(attachment.filename).lineLimit(1)
-                            if let why = unavailable[attachment.id] {
-                                Text(why).font(.caption).foregroundStyle(.orange)
-                            } else {
-                                Text(ByteCountFormatter.string(fromByteCount: attachment.size, countStyle: .file))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        Button(role: .destructive) {
-                            update { $0.attachments.removeAll { $0.id == attachment.id } }
-                            unavailable[attachment.id] = nil
-                        } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Text("Remove \(attachment.filename)"))
-                    }
-                    .accessibilityElement(children: .contain)
-                }
-                Button(String(localized: "Attach files…")) { importing = true }
-            } header: {
-                Text("Attachments")
-            }
-
-            Section {
-                Stepper(value: $undoSeconds, in: 0...60, step: 5) {
-                    Text(undoSeconds == 0 ? String(localized: "Undo Send: off") : String(localized: "Undo Send: \(undoSeconds) seconds"))
-                }
-                ForEach(problems.indices, id: \.self) { i in
-                    Text(MailComposeGate.text(problems[i])).font(.caption).foregroundStyle(.secondary)
-                }
-                if let error { Text(error).font(.caption).foregroundStyle(.red) }
-                Button(String(localized: "Delete draft"), role: .destructive) {
-                    Task {
-                        await model.run { try await model.backend.discardDraft(current.id) }
-                        await model.reloadDrafts()
-                        dismiss()
-                    }
-                }
-            }
+            Divider()
+            statusBar
         }
-        .formStyle(.grouped)
+        .onChange(of: to) { _, _ in parseRecipients() }
+        .onChange(of: cc) { _, _ in parseRecipients() }
+        .onChange(of: bcc) { _, _ in parseRecipients() }
+    }
+
+    private func attachmentChip(_ attachment: DraftAttachment) -> some View {
+        let why = unavailable[attachment.id]
+        return HStack(spacing: 6) {
+            Image(systemName: why == nil ? "doc" : "exclamationmark.triangle")
+                .foregroundStyle(why == nil ? Color.secondary : Color.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(attachment.filename).lineLimit(1)
+                Text(why ?? ByteCountFormatter.string(fromByteCount: attachment.size, countStyle: .file))
+                    .font(.caption2)
+                    .foregroundStyle(why == nil ? Color.secondary : Color.orange)
+                    .lineLimit(2)
+            }
+            Button {
+                update { $0.attachments.removeAll { $0.id == attachment.id } }
+                unavailable[attachment.id] = nil
+            } label: { Image(systemName: "xmark.circle.fill") }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel(Text("Remove \(attachment.filename)"))
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .frame(maxWidth: 260)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(why == nil ? Color.clear : Color.orange.opacity(0.6)))
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Why Send is not available yet (or the last error), and the Undo Send delay.
+    private var statusBar: some View {
+        HStack(spacing: 12) {
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red).lineLimit(2)
+            } else if let first = problems.first(where: { $0 != .noRecipients || !to.isEmpty || !cc.isEmpty || !bcc.isEmpty }) {
+                Label(MailComposeGate.text(first), systemImage: "info.circle")
+                    .foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Picker(selection: $undoSeconds) {
+                Text("Undo Send: off").tag(0)
+                ForEach([5, 10, 20, 30, 60], id: \.self) { s in
+                    Text("Undo Send: \(s) seconds").tag(s)
+                }
+            } label: {
+                Text(undoSeconds == 0 ? String(localized: "Undo Send: off") : String(localized: "Undo Send: \(undoSeconds) seconds"))
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+        }
+        .font(.caption)
+        .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+
+    private func fromLabel(_ identity: SendingIdentity) -> String {
+        // The account is named only when addresses of several accounts are offered.
+        let accounts = Set(identities.filter { $0.permission == .verified }.map(\.accountID))
+        guard accounts.count > 1, let account = model.account(identity.accountID)?.account,
+              account.displayIdentity.caseInsensitiveCompare(identity.address.addrSpec) != .orderedSame else {
+            return identity.address.description
+        }
+        return "\(identity.address.description) — \(account.displayIdentity)"
+    }
+
+    /// Choosing an address of another account moves the draft to that account.
+    private func chooseSender(_ id: UUID?) {
+        guard let id, let identity = identities.first(where: { $0.id == id }) else {
+            update { $0.senderIdentityID = nil }
+            return
+        }
+        update {
+            if $0.accountID != identity.accountID { $0.switchAccount(to: identity.accountID) }
+            $0.senderIdentityID = identity.id
+        }
     }
 
     // MARK: Actions
@@ -237,11 +393,22 @@ struct MailComposeSheet: View {
             error = String(localized: "The draft no longer exists.")
             return
         }
-        draft = found
-        identities = await model.backend.identities(found.accountID)
+        var all: [SendingIdentity] = []
+        var accountIDs = sendAccounts.map(\.id)
+        if !accountIDs.contains(found.accountID) { accountIDs.append(found.accountID) }
+        for id in accountIDs { all += await model.backend.identities(id) }
+        identities = all
         to = found.to.map(\.description).joined(separator: ", ")
         cc = found.cc.map(\.description).joined(separator: ", ")
         bcc = found.bcc.map(\.description).joined(separator: ", ")
+        showCcBcc = !cc.isEmpty || !bcc.isEmpty
+        draft = found
+        // The account's only confirmed address is filled in; several mean a choice.
+        if found.senderIdentityID == nil,
+           let only = MailComposeGate.defaultIdentity(for: found.accountID, from: all) {
+            update { $0.senderIdentityID = only }
+        }
+        focus = to.isEmpty ? .to : .body
         await checkAttachments()
     }
 

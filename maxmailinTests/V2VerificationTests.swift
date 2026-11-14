@@ -8488,6 +8488,36 @@ final class MailWorkspaceTests: XCTestCase {
 
     /// A draft needs an explicitly chosen identity of its own account; a
     /// reply to an archive addressed to its former owner starts without one.
+    /// Composer 2026-11-15: the account's only confirmed address is filled in
+    /// by itself; several (or none) leave the choice to the person; an
+    /// unconfirmed alias or another account's address is never the default.
+    func testComposer_fillsTheOnlyConfirmedAddress_andLooksLikeMail() throws {
+        let me = MailAccount(provider: .microsoftGraph, displayIdentity: "me@outlook.example", enabledModes: [.send])
+        let other = MailAccount(provider: .imap, host: "imap.other.example", displayIdentity: "other@other.example", enabledModes: [.send])
+        let mine = try SendingIdentity.primary(for: me)
+        let theirs = try SendingIdentity.primary(for: other)
+        let unverified = SendingIdentity(accountID: me.id, address: try MailAddress(parsing: "alias@outlook.example"), permission: .unverified)
+        XCTAssertEqual(MailComposeGate.defaultIdentity(for: me.id, from: [mine, theirs, unverified]), mine.id)
+        let second = SendingIdentity(accountID: me.id, address: try MailAddress(parsing: "second@outlook.example"), permission: .verified)
+        XCTAssertNil(MailComposeGate.defaultIdentity(for: me.id, from: [mine, second]), "two addresses: the person chooses")
+        XCTAssertNil(MailComposeGate.defaultIdentity(for: me.id, from: [theirs, unverified]), "never another account's or an unconfirmed address")
+
+        XCTAssertEqual(MailComposeSheet.title(.new), String(localized: "New Message"))
+        XCTAssertEqual(MailComposeSheet.title(.reply), MailReplySetupView.title(.reply))
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let compose = try String(contentsOf: root.appendingPathComponent("maxmailin/MailComposeViews.swift"), encoding: .utf8)
+        let editor = try XCTUnwrap(compose.range(of: "private func editor(")).lowerBound
+        let actions = try XCTUnwrap(compose.range(of: "// MARK: Actions")).lowerBound
+        let body = String(compose[editor..<actions])
+        XCTAssertFalse(body.contains("Form {"), "the composer is a Mail-style editor, not a settings form")
+        XCTAssertTrue(body.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"), "the message text fills the window")
+        XCTAssertTrue(body.contains("if current.kind != .new"), "the archive-reply note is shown only on replies and forwards")
+        XCTAssertTrue(compose.contains("MailComposeGate.defaultIdentity(for: found.accountID"))
+        let host = try String(contentsOf: root.appendingPathComponent("maxmailin/MailWorkspaceView.swift"), encoding: .utf8)
+        XCTAssertTrue(host.contains("minWidth: isComposer ? 640"), "the composer window is sized like Mail's")
+    }
+
     func testIdentityPickerRequired() throws {
         let me = MailAccount(provider: .imap, host: "imap.new.example", displayIdentity: "me@new.example", enabledModes: [.send])
         let other = MailAccount(provider: .imap, host: "imap.other.example", displayIdentity: "other@other.example", enabledModes: [.send])

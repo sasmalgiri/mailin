@@ -656,6 +656,14 @@ enum MailComposeGate {
     static func offeredIdentities(for accountID: UUID, from all: [SendingIdentity]) -> [SendingIdentity] {
         all.filter { $0.accountID == accountID && $0.permission == .verified }
     }
+
+    /// The sending address the composer fills in by itself: the account's
+    /// only confirmed address. Nil when there is a real choice (several) or
+    /// none — then the person picks. Never an archived message's address.
+    static func defaultIdentity(for accountID: UUID, from all: [SendingIdentity]) -> UUID? {
+        let offered = offeredIdentities(for: accountID, from: all)
+        return offered.count == 1 ? offered[0].id : nil
+    }
 }
 
 // MARK: - Per-account settings that are not secrets

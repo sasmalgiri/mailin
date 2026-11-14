@@ -113,8 +113,17 @@ private struct MailSheetHost: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 520, idealWidth: 620, minHeight: 420, idealHeight: 560)
+        .frame(minWidth: isComposer ? 640 : 520, idealWidth: isComposer ? 760 : 620,
+               minHeight: isComposer ? 560 : 420, idealHeight: isComposer ? 720 : 560)
         #endif
+    }
+
+    /// Writing a message gets a window sized like Mail's, not a settings sheet.
+    private var isComposer: Bool {
+        switch sheet {
+        case .compose, .reply: return true
+        default: return false
+        }
     }
 }
 
