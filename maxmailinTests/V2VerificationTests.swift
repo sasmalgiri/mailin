@@ -8175,8 +8175,10 @@ final class ConnectedFiveJobsTests: XCTestCase {
         let cleanup = try await env.store.removeDuplicateCopies([.init(survivor: imported.id, removed: [captured])])
         XCTAssertEqual(cleanup.trashed, [captured])
         XCTAssertGreaterThan(cleanup.membershipsMerged, 0)
-        let kept = try await c.runtime.sink.provenance(emailID: captured)
-        XCTAssertNotNil(kept)
+        // Audit 2026-11-14 (five jobs #2): the account link moves to the kept copy,
+        // so account search, the Mail page and later label changes still find it.
+        let carried = try await c.runtime.sink.provenance(emailID: imported.id)
+        XCTAssertEqual(carried?.accountID, c.accountID, "the kept copy carries the account link")
         // The next sync neither downloads it again nor brings it back (local cleanup is not a server action).
         let fetchesBefore = await c.provider.fetches
         let again = await c.runtime.sync(c.accountID)
