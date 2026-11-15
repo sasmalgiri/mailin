@@ -7,10 +7,10 @@ Outlook / Microsoft 365 via Microsoft sign-in (`Mail.Read`, `User.Read`, `offlin
 Owner steps: [`RELEASE_4_0_CHECKLIST.md`](RELEASE_4_0_CHECKLIST.md).
 
 English source text; translate into the 10 listing languages with the 3.0.2 listing tooling once approved. Claims are
-limited to what the code does at 7d35777. Real-provider evidence (V4-15, `FIVE_JOBS_TRACKER.md`): Gmail over IMAP
-account added and capture started 2026-11-14 (owner accepted Gmail without a count comparison); **Outlook not yet
-run on a real account** — lines marked (V4-15 Outlook) describe what the code does and must be walked on a real
-Outlook / Microsoft 365 account before submission, or removed.
+limited to what the code does. Real-provider evidence (V4-15, `FIVE_JOBS_TRACKER.md`): Gmail over IMAP added and
+capturing 2026-11-14; Outlook / Microsoft 365 signed in, folders listed, a real message saved and a message sent
+2026-11-15. **Owner decision 2026-11-15: the listing leads with what people buy mailin for — the five jobs and
+Live Mail — in that order, first in every field.**
 
 Rules applied (plan §10, §13.8, §0): connected mail is **optional and off until turned on**; it talks **directly** to
 the user's provider; **no AI through a provider is advertised** — v4 has disabled BYOK scaffolding only, so the plan's
@@ -22,40 +22,50 @@ the app works with in the description is factual.
 ## Name / subtitle
 
 - Name: **mailin** (unchanged)
-- Subtitle (≤30): **Mail archive, search, export** (or keep "Email Archive Analyzer")
+- Subtitle (≤30): **Archive, search & live mail** (27) — alternative: "Open, search, export mail" (25)
 
 ## Promotional text (≤170)
 
-Local archive and search. Optional connected mail, directly with your own provider: save Gmail, Outlook and IMAP mail into an archive you own. Off until you turn it on.
+Open huge mail archives, keep every folder, search inside attachments, find duplicates safely and export with proof. New: Live Mail for Outlook, Gmail, iCloud and IMAP.
+
+(168 characters.)
 
 ## Description
 
-mailin keeps your email in an archive you own — on your Mac, iPhone or iPad — and lets you open, search, de-duplicate and export it with proof of what was exported.
+mailin does the five things people need from an email archive — properly, on your own Mac, iPhone or iPad — and now brings your live mail into the same place.
 
-LOCAL ARCHIVE AND SEARCH
-• Open large archives: MBOX (Google Takeout, Thunderbird, Apple Mail), EML, EMLX, MSG, PST and OST, and more.
-• Keep every folder exactly as it was.
-• Search messages and the text inside attachments, with Advanced Search in every plan.
-• Find duplicates safely: nothing is removed without showing you the count first.
-• Export to the formats reviewers use, with a receipt that verifies every file.
+1. OPEN LARGE ARCHIVES
+• MBOX (Google Takeout, Thunderbird, Apple Mail), EML, EMLX, MSG, PST, OST and ZIP — drop the file in and you are in it.
+• Streams from disk: size is bounded by your storage, not by mailin. It says exactly what it could not read, and resumes by itself.
 
-OPTIONAL CONNECTED MAIL — OFF UNTIL YOU TURN IT ON
-• Add Gmail, Outlook / Microsoft 365, iCloud Mail, Fastmail or another IMAP account. Your device connects directly to that provider — there is no mailin server and no relay.
-• Each account starts with nothing allowed. Switch on, one by one: Preserve mail (a read-only copy into your archive), Send mail (from your outbox, only when you send), Change server mail (only changes you confirm).
-• Saved mail goes through the same five jobs as imported files: folders, search, duplicates and verified export.
-• Gmail connects over IMAP with a Google app password (Google requires 2-Step Verification; create the app password at myaccount.google.com/apppasswords). Gmail mail is saved and can be sent; changing Gmail mail on the server is not available in this version. Outlook / Microsoft 365 sign-in happens on Microsoft's own page. Passwords and sign-in tokens stay in this device's Keychain and are sent only to that provider.
-• Remove an account at any time; its saved mail stays in your archive unless you choose to delete it too.
+2. KEEP EVERY FOLDER
+• Outlook folders come through as they were, empty ones included; Gmail labels stay labels — one message, all its labels.
+
+3. SEARCH MESSAGES AND ATTACHMENTS
+• Finds words inside PDFs, Word, Excel, PowerPoint and Pages files, and in scanned images and photos (on-device OCR).
+• Advanced Search (AND / OR / NOT, dates, senders, attachment conditions) in every plan. Every search says how much of the archive it covered.
+
+4. FIND DUPLICATES SAFELY
+• Byte-identical copies are told apart from look-alikes. Nothing is removed without showing you the count first; look-alike groups are never bulk-removed.
+
+5. EXPORT WITH PROOF
+• PST, MBOX, EML, PDF and more. Every export ends with a receipt: outputs are read back and compared with the archive, and any difference is named. Interrupted exports resume.
+
+NEW IN 4.0 — LIVE MAIL
+• Connect Outlook / Microsoft 365, Gmail, iCloud Mail, Fastmail or any IMAP account. Off until you add one; your device talks directly to your provider — no mailin server, no relay.
+• Preserve mail saves every message into your archive, so the five jobs above work on your live mail too — and the copy stays even if the server deletes it.
+• An Apple Mail–style mailbox with quick filter, colour tags, conversations and smart folders. Write with formatting and signatures, attach files or messages from your archive, Undo Send.
+• You choose what each account may do: Preserve mail, Send mail, Change server mail (only changes you confirm, each listed).
+• Gmail connects with a Google app password (2-Step Verification; myaccount.google.com/apppasswords); changing Gmail mail on the server is not available in this version. Outlook signs in on Microsoft's own page. Passwords and tokens stay in this device's Keychain.
 
 PRIVATE BY DESIGN
-• mailin collects no data: no analytics, no tracking, no account with us.
-• No cloud AI. On-device features use Apple's frameworks on your device.
-• An offline edition, whose sandbox has no network access, remains available for organisations that need it.
+• No mailin server, no analytics, no tracking, no account with us. No cloud AI.
 
-Plans: Free, Personal and Professional, monthly, yearly or lifetime — unchanged. Terms of Use: https://sasmalgiri.github.io/mailin/terms
+Plans: Free, Personal and Professional, monthly, yearly or lifetime — unchanged. Terms of Use: https://sasmalgiri.github.io/mailin/terms/
 
 ## What's New in 4.0
 
-LIVE MAIL — YOUR MAIL AND YOUR ARCHIVE IN ONE PLACE
+LIVE MAIL — THE FIVE JOBS NOW WORK ON YOUR LIVE MAIL TOO
 • Connect Outlook and Microsoft 365, Gmail, iCloud Mail, Fastmail or any IMAP account — optional, off until you add one. Your device talks directly to your provider: no mailin server, no relay.
 • Preserve mail saves a read-only copy of every message into your archive, so folders, search, duplicates and verified export work on it — and it stays even if the server deletes it.
 • An Apple Mail–style mailbox with Thunderbird-style tools: message previews, hover and swipe actions, a quick filter (text, unread, flagged, attachments, tags), colour tags, conversations, smart folders and actions on several messages at once.
