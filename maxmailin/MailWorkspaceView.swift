@@ -794,6 +794,7 @@ private struct MailMessageList: View {
                     Button(String(localized: "Mark as unread on the server")) { Task { await model.changeOnServer(.markUnread, rows: chosen) } }
                     Button(String(localized: "Flag on the server")) { Task { await model.changeOnServer(.flag, rows: chosen) } }
                     Button(String(localized: "Remove flag on the server")) { Task { await model.changeOnServer(.unflag, rows: chosen) } }
+                    MailServerMoveItems(model: model, rows: chosen)
                     if chosen.count == 1, let only = chosen.first {
                         Divider()
                         Button(String(localized: "Move to the server's Trash…")) { sheet = .cleanup(only.accountID, only: only.emailID) }
@@ -1014,6 +1015,67 @@ struct MailTagMenu: View {
     }
 }
 
+/// Move to a folder, Restore from the server's Trash and (Gmail) labels — the
+/// "On the server" items beyond read and flag (V4-11; MailServerMoves). Shown
+/// only for messages whose account allows Change server mail.
+private struct MailServerMoveItems: View {
+    let model: MailWorkspaceModel
+    let rows: [ConnectedMailboxRow]
+
+    var body: some View {
+        let changeable = rows.filter(model.canChangeOnServer)
+        let folders = Set(changeable.map(\.accountID)).flatMap { model.folders[$0] ?? [] }
+        let targets = Self.commonTargets(changeable, folders)
+        let restorable = changeable.filter { MailServerMoves.restoreRequest($0, in: folders) != nil }
+        if !targets.isEmpty {
+            Menu(String(localized: "Move to")) {
+                ForEach(targets) { target in
+                    Button(MailFolderStyle.displayName(target.path)) {
+                        Task { await model.changeOnServer(rows: changeable) { MailServerMoves.moveRequest($0, to: target, in: folders) } }
+                    }
+                }
+            }
+        }
+        if !restorable.isEmpty {
+            Button(String(localized: "Restore from the server's Trash")) {
+                Task { await model.changeOnServer(rows: restorable) { MailServerMoves.restoreRequest($0, in: folders) } }
+            }
+        }
+        if changeable.count == 1, let only = changeable.first {
+            let labels = MailServerMoves.labels(for: only, in: folders)
+            if !labels.addable.isEmpty {
+                Menu(String(localized: "Add Label")) {
+                    ForEach(labels.addable) { label in
+                        Button(MailFolderStyle.displayName(label.path)) {
+                            Task { await model.changeOnServer(rows: [only]) { _ in .addLabel(label.serverID) } }
+                        }
+                    }
+                }
+            }
+            if !labels.present.isEmpty {
+                Menu(String(localized: "Remove Label")) {
+                    ForEach(labels.present) { label in
+                        Button(MailFolderStyle.displayName(label.path)) {
+                            Task { await model.changeOnServer(rows: [only]) { _ in .removeLabel(label.serverID) } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Folders every chosen message can go to (one account; none when they span accounts).
+    static func commonTargets(_ rows: [ConnectedMailboxRow], _ folders: [ConnectedFolderSummary]) -> [ConnectedFolderSummary] {
+        guard let first = rows.first, rows.allSatisfy({ $0.accountID == first.accountID }) else { return [] }
+        var targets = MailServerMoves.moveTargets(for: first, in: folders)
+        for row in rows.dropFirst() {
+            let ids = Set(MailServerMoves.moveTargets(for: row, in: folders).map(\.serverID))
+            targets.removeAll { !ids.contains($0.serverID) }
+        }
+        return targets
+    }
+}
+
 /// Several messages selected: what can be done to all of them at once.
 private struct MailSelectionSummary: View {
     let model: MailWorkspaceModel
@@ -1032,6 +1094,7 @@ private struct MailSelectionSummary: View {
                         Button(String(localized: "Mark as unread on the server")) { Task { await model.changeOnServer(.markUnread, rows: rows) } }
                         Button(String(localized: "Flag on the server")) { Task { await model.changeOnServer(.flag, rows: rows) } }
                         Button(String(localized: "Remove flag on the server")) { Task { await model.changeOnServer(.unflag, rows: rows) } }
+                        MailServerMoveItems(model: model, rows: rows)
                     } label: {
                         Label(String(localized: "On the server"), systemImage: "server.rack")
                     }
@@ -1196,6 +1259,7 @@ private struct MailMessageDetail: View {
                         Button(String(localized: "Mark as unread on the server")) { Task { await model.changeOnServer(.markUnread, row: row) } }
                         Button(String(localized: "Flag on the server")) { Task { await model.changeOnServer(.flag, row: row) } }
                         Button(String(localized: "Remove flag on the server")) { Task { await model.changeOnServer(.unflag, row: row) } }
+                        MailServerMoveItems(model: model, rows: [row])
                         Divider()
                         Button(String(localized: "Move to the server's Trash…")) { sheet = .cleanup(row.accountID, only: row.emailID) }
                     } label: {

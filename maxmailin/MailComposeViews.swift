@@ -236,6 +236,7 @@ struct MailComposeSheet: View {
                 .accessibilityLabel(Text("From"))
                 .accessibilityIdentifier("mail.compose.identity")
                 .accessibilityHint(Text("Required. Only this account's own addresses are offered."))
+                .help(Text("Required. Only this account's own addresses are offered."))
                 Spacer(minLength: 0)
             }
             if current.kind != .new {

@@ -1390,13 +1390,20 @@ final class MailWorkspaceModel {
             return nil
         }
         var scope: String?
+        var applied = false
         await run {
             let op = try await self.backend.changeOnServer(request, row: row)
             self.message = MailServerChangeText.outcome(op.outcome)
             scope = MailServerChangeText.missingScope(op.outcome)
-            if case .applied? = op.outcome { self.noteServerMark(request, on: row.emailID) }
+            if case .applied? = op.outcome { applied = true; self.noteServerMark(request, on: row.emailID) }
         }
         if let scope { pendingReconsent = MailReconsentRequest(accountID: row.accountID, scope: scope, mode: .serverActions) }
+        // A move changes where the server keeps it: read the folders again (MailOrganize.swift).
+        if applied, request.changesFolders {
+            let said = message
+            await syncNow(row.accountID)
+            message = said
+        }
         return scope
     }
 

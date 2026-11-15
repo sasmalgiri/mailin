@@ -6537,17 +6537,19 @@ final class MailPolicyTests: XCTestCase {
                      "no mail work may even be registered while Mail is off")
     }
 
-    /// T01 through the real wiring: a fresh registry leaves `connectedMail` off
-    /// (preview, Live Mail page off) and the shared policy closed.
+    /// T01 through the real wiring: a fresh registry leaves the shared policy
+    /// closed because the Live Mail page is off. `connectedMail` itself is
+    /// stable (owner 2026-11-15: "no preview") — turning the page on is the one
+    /// step that allows accounts; no second, hidden switch.
     func testT01_freshRegistryLeavesSharedPolicyClosed() {
         let registry = ModuleRegistry(
             store: ModuleStateStore(url: FileManager.default.temporaryDirectory
                 .appendingPathComponent("modules-\(UUID().uuidString).json")),
             excludedByBuild: [], trapsOnMisuse: false)
         XCTAssertEqual(Capability.connectedMail.owner, .liveMail)
-        XCTAssertEqual(Capability.connectedMail.maturity, .preview)
-        XCTAssertFalse(Capability.connectedMail.defaultsOn)
-        XCTAssertFalse(registry.isOn(.connectedMail))
+        XCTAssertEqual(Capability.connectedMail.maturity, .stable)
+        XCTAssertTrue(Capability.connectedMail.defaultsOn)
+        XCTAssertFalse(registry.isOn(.connectedMail), "off while its page is off")
         CapabilityWiring.applyAll(registry)
         XCTAssertFalse(MailNetworkPolicy.shared.isMailEnabled)
         for r in everyRequest(accountID: UUID(), host: imapHost) {
@@ -6555,10 +6557,10 @@ final class MailPolicyTests: XCTestCase {
         }
         XCTAssertEqual(MailNetworkPolicy.shared.snapshot().permittedAttempts, 0)
 
-        // Switching the page and the capability on opens the runtime switch;
+        // Switching the page on opens the runtime switch by itself (however the
+        // page is turned on — tab, Settings ▸ Modules or managed config);
         // switching the page off closes it again.
         XCTAssertNoThrow(try registry.enable(.liveMail))
-        registry.set(.connectedMail, enabled: true)
         XCTAssertTrue(registry.isOn(.connectedMail))
         XCTAssertTrue(MailNetworkPolicy.shared.isMailEnabled)
         registry.disable(.liveMail)
@@ -6766,8 +6768,9 @@ final class MailPolicyTests: XCTestCase {
         }
         // V4-08: ConnectedMailRuntime.swift is the ninth (its production adapters); V4-13 adds
         // ConnectedMailProductionTransports.swift and MailWorkspaceBackend.swift; the live Gmail
-        // UI-test hook in UITestSupport.swift (5ce933d) is the twelfth.
-        XCTAssertEqual(mailGated, 12, "the twelve mail files carry the mail gate")
+        // UI-test hook in UITestSupport.swift (5ce933d) is the twelfth; FourPageShell.swift
+        // (c1857d3: turning the Live Mail page on allows accounts in the same step) the thirteenth.
+        XCTAssertEqual(mailGated, 13, "the thirteen mail files carry the mail gate")
         XCTAssertEqual(aiGated, 4, "the four cloud-AI files carry the cloud-AI gate")
         XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
@@ -8438,6 +8441,66 @@ final class MailWorkspaceTests: XCTestCase {
         return form
     }()
 
+    /// V4-11 (owner 2026-11-15, "no hidden features"): the engine's folder move,
+    /// Trash restore and Gmail label edits are offered from "On the server". Each
+    /// provider gets a request naming the folder the message is in now and a target
+    /// it can really go to; Gmail over IMAP (no server changes in 4.0) gets none.
+    func testServerMoves_targetsAndRequestsPerProvider() {
+        let a = UUID()
+        func folder(_ id: String, _ path: String, _ kind: RemoteFolderOccurrence.Kind = .folder, _ special: String? = nil) -> ConnectedFolderSummary {
+            ConnectedFolderSummary(accountID: a, serverID: id, path: path, kind: kind, specialUse: special, messages: 1, unread: 0, selected: true)
+        }
+        func row(_ identity: ProviderMessageIdentity, _ folders: [String]) -> ConnectedMailboxRow {
+            ConnectedMailboxRow(emailID: UUID(), accountID: a, identity: identity, subject: "s", from: "x@example.com", date: .now,
+                                hasAttachments: false, isRead: true, isFlagged: false, onServer: true, folderServerIDs: folders,
+                                identityKey: UUID().uuidString)
+        }
+
+        // IMAP: the mailbox in the identity is the source; Trash is not a move target.
+        let imapFolders = [folder("INBOX", "Inbox", .folder, "INBOX"), folder("Projects/2026", "Projects/2026"),
+                           folder("Trash", "Trash", .folder, "\\Trash"), folder("Other", "Other", .folder)]
+        let inInbox = row(.imap(mailbox: "INBOX", uidValidity: 7, uid: 3), ["INBOX"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: inInbox, in: imapFolders).map(\.serverID), ["Other", "Projects/2026"])
+        XCTAssertEqual(MailServerMoves.moveRequest(inInbox, to: imapFolders[1], in: imapFolders), .move(from: "INBOX", to: "Projects/2026"))
+        XCTAssertNil(MailServerMoves.moveRequest(inInbox, to: imapFolders[2], in: imapFolders), "Trash goes through the reviewed cleanup")
+        XCTAssertNil(MailServerMoves.restoreRequest(inInbox, in: imapFolders), "not in Trash: nothing to restore")
+        let inTrash = row(.imap(mailbox: "Trash", uidValidity: 9, uid: 1), ["Trash"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: inTrash, in: imapFolders), [], "out of Trash only by Restore")
+        XCTAssertEqual(MailServerMoves.restoreRequest(inTrash, in: imapFolders), .restoreFromTrash(to: "INBOX"))
+
+        // Outlook (Graph): folder ids, Deleted Items by its well-known name.
+        let graphFolders = [folder("AAMk-inbox", "Inbox", .folder, "inbox"), folder("AAMk-deleted", "Deleted Items", .folder, "deleteditems"),
+                            folder("AAMk-arch", "Archive", .folder, "archive")]
+        let graphDeleted = row(.graph(mailbox: "me", immutableID: "id1"), ["AAMk-deleted"])
+        XCTAssertEqual(MailServerMoves.restoreRequest(graphDeleted, in: graphFolders), .restoreFromTrash(to: "AAMk-inbox"))
+        let graphInbox = row(.graph(mailbox: "me", immutableID: "id2"), ["AAMk-inbox"])
+        XCTAssertEqual(MailServerMoves.moveRequest(graphInbox, to: graphFolders[2], in: graphFolders), .move(from: "AAMk-inbox", to: "AAMk-arch"))
+
+        // Gmail (API): a move swaps INBOX for a user label; system labels are never targets; labels add and remove.
+        let gmailFolders = [folder("INBOX", "Inbox", .label, "INBOX"), folder("SENT", "Sent", .label, "SENT"),
+                            folder("TRASH", "Trash", .label, "TRASH"), folder("Label_1", "Clients", .label), folder("Label_2", "Receipts", .label)]
+        let gmail = row(.gmail(messageID: "m1"), ["INBOX", "Label_1"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: gmail, in: gmailFolders).map(\.serverID), ["Label_1", "Label_2"])
+        XCTAssertEqual(MailServerMoves.moveRequest(gmail, to: gmailFolders[4], in: gmailFolders), .move(from: "INBOX", to: "Label_2"))
+        let labels = MailServerMoves.labels(for: gmail, in: gmailFolders)
+        XCTAssertEqual(labels.present.map(\.serverID), ["Label_1"])
+        XCTAssertEqual(labels.addable.map(\.serverID), ["Label_2"])
+        XCTAssertEqual(MailServerMoves.restoreRequest(row(.gmail(messageID: "m2"), ["TRASH"]), in: gmailFolders), .restoreFromTrash(to: nil),
+                       "Gmail's untrash brings back the message's own labels")
+
+        // Gmail over IMAP: no server change of any kind.
+        let gmailIMAP = row(.gmailIMAP(messageID: 42), ["INBOX"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: gmailIMAP, in: imapFolders), [])
+        XCTAssertNil(MailServerMoves.restoreRequest(row(.gmailIMAP(messageID: 43), ["Trash"]), in: imapFolders))
+
+        // A folder of another account is never offered.
+        let elsewhere = ConnectedFolderSummary(accountID: UUID(), serverID: "Elsewhere", path: "Elsewhere", kind: .folder, specialUse: nil,
+                                               messages: 1, unread: 0, selected: true)
+        XCTAssertFalse(MailServerMoves.moveTargets(for: inInbox, in: imapFolders + [elsewhere]).contains(elsewhere))
+        XCTAssertTrue(RemoteChangeRequest.move(from: "a", to: "b").changesFolders)
+        XCTAssertFalse(RemoteChangeRequest.markRead.changesFolders)
+    }
+
     /// The offline build (the test build compiles no mail transport) shows
     /// one honest state and offers no actionable control.
     func testOfflineBuildShowsHonestStateAndNoActionableControls() async throws {
@@ -9555,6 +9618,22 @@ final class AppLimitsReconciliationTests: XCTestCase {
             XCTAssertNil(gmail, "a build that cannot send lists no send limit")
             XCTAssertNil(graph)
         }
+    }
+
+    /// Owner 2026-11-15 ("no hidden limitation"): what connected mail does not do
+    /// in this version is listed on the Limits page, not left to be discovered.
+    func testNotInThisVersion_connectedMailGapsAreListed() {
+        let names = ["Sending from another address (alias)", "Changing Gmail mail on the server", "Microsoft 365 online archive"]
+        for name in names {
+            let row = AppLimits.all.first { $0.what == name }
+            if ConnectedBuildFeatures.mailTransportsCompiled {
+                XCTAssertEqual(row?.kind, .notInThisVersion, name)
+                XCTAssertFalse(row?.why.isEmpty ?? true, name)
+            } else {
+                XCTAssertNil(row, "the offline edition has no connected mail to qualify: \(name)")
+            }
+        }
+        XCTAssertEqual(AppLimit.Kind.notInThisVersion.label, String(localized: "Not in this version"))
     }
 
     func testCLOSE05_helpTextSaysWhatIsTrue() throws {

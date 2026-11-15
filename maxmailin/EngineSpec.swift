@@ -301,8 +301,9 @@ struct EngineSpec: Sendable {
                 detail: String(localized: "Reads Notes mail databases (.nsf) by their on-disk layout: every mail note with its headers, body, folders and attachments, design notes and deletion stubs counted out. Not read: encrypted (sealed) items, which stay locked and are named, and LZ1-compressed attachments, which are named. Off: the earlier reader, which reads only mailin's own test files."))
         case .protectedMessageDecrypt:
             // §13.8 step 5: CMSDecoder with the keychain's identities; R6: the portable CMS reader on
-            // iPhone and iPad (and as the Mac's fallback). Preview until a real identity has run it.
-            return EngineSpec(.archive, maturity: .preview,
+            // iPhone and iPad (and as the Mac's fallback). Promoted 2026-11-15 (owner: "no preview"):
+            // COMP-14 decoded enveloped and signed parts with a real identity in a keychain (2026-11-07).
+            return EngineSpec(.archive, maturity: .stable,
                 name: String(localized: "Read S/MIME with your keychain key"),
                 detail: String(localized: "Decrypts S/MIME-protected parts with a private key in this device's keychain, then reads the message inside for search; on iPhone and iPad also checks S/MIME signatures. Import a .p12 identity in Settings ▸ Health. Off, they are recorded as locked. Nothing leaves this device; no key is copied."))
         default:

@@ -85,19 +85,21 @@ final class CapabilityMatrixTests: XCTestCase {
     /// to the default, and the guided import sheet and import queue shipped
     /// as the one import path (A-4/A-5); the streaming parser stays as the
     /// fallback.
-    /// External storage: promoted on macOS 2026-10-21 (disk-image run), still
-    /// opt-in on iPhone and iPad, whose external drives that run does not cover.
-    func testExternalStorageDefaultIsPerPlatform() {
+    /// External storage: promoted on macOS 2026-10-21 (disk-image run) and on
+    /// iPhone / iPad 2026-11-15 (owner: "no preview"), so every platform ships it on.
+    func testExternalStorageIsOnEverywhere() {
         let registry = freshRegistry()
-        #if os(macOS)
         XCTAssertEqual(Capability.externalStorage.maturity, .stable)
         XCTAssertTrue(Capability.externalStorage.defaultsOn)
-        XCTAssertTrue(registry.isOn(.externalStorage), "on for a fresh Mac install")
-        #else
-        XCTAssertEqual(Capability.externalStorage.maturity, .preview)
-        XCTAssertFalse(Capability.externalStorage.defaultsOn)
-        XCTAssertFalse(registry.isOn(.externalStorage), "opt-in on iPhone and iPad")
-        #endif
+        XCTAssertTrue(registry.isOn(.externalStorage), "on for a fresh install")
+    }
+
+    /// Owner 2026-11-15: "no preview, no hidden limitation or features". The
+    /// release ships no capability that is built but off on install: every one
+    /// is stable, so the matrix never shows a Preview / Experimental badge.
+    func testNoCapabilityShipsAsPreview() {
+        let unfinished = Capability.allCases.filter { $0.maturity != .stable }.map(\.rawValue)
+        XCTAssertEqual(unfinished, [], "built but off on install: \(unfinished)")
     }
 
     /// The 3.0 defaults, pinned so a change is a decision and not an accident.
@@ -333,13 +335,14 @@ final class CapabilityMatrixTests: XCTestCase {
     }
 
     /// Live Mail owns exactly one switch, the V4-01 network policy
-    /// (`connectedMail`, preview, off). Its features are otherwise
+    /// (`connectedMail`, stable; off while its page is off). Its features are otherwise
     /// `.notInThisBuild`, and a build without the mail transports excludes the
     /// page, so the switch can never be on there.
     func testEveryCapabilityHasAnOwnerAndLiveMailOwnsOnlyThePolicy() {
         XCTAssertEqual(Capability.all(for: .liveMail), [.connectedMail],
                        "Live Mail owns only the connected-mail policy switch")
-        XCTAssertFalse(Capability.connectedMail.defaultsOn)
+        XCTAssertTrue(Capability.connectedMail.defaultsOn)
+        XCTAssertFalse(freshRegistry().isOn(.connectedMail), "off until the Live Mail page is on")
         if !ConnectedBuildFeatures.mailTransportsCompiled {
             XCTAssertTrue(ModuleRegistry.buildExclusions.contains(.liveMail),
                           "a build without mail transports must exclude the Live Mail page")
