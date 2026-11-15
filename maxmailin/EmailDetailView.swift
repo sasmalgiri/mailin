@@ -155,7 +155,10 @@ struct EmailDetailView: View {
                 .padding(Spacing.medium)
             }
         }
-        .navigationTitle("Email Detail")
+        .navigationTitle(subjectLine)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .onAppear {
             // Compute HTML sanitization and mark ready for rendering
             safeHTML = sanitizedHTMLBody(from: shown)
@@ -456,7 +459,9 @@ struct EmailDetailView: View {
 
     @ViewBuilder
     private var emailBodyView: some View {
-        let trimmedBody = emailBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The plain part only when the message has one: an HTML-only message (common from
+        // Microsoft 365) showed "(No Body Content Found)" above its real HTML body (QA 2026-11-15).
+        let trimmedBody = shown.plainBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedBody.isEmpty {
             Group {
                 Label("Plain Text", systemImage: "doc.text")

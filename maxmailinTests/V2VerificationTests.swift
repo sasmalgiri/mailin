@@ -5252,7 +5252,8 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .authorized))
         XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .personTurnedSwitchOn, switchOn: true, status: .denied))
         XCTAssertTrue(AttachmentSpeech.shouldRequestAuthorization(trigger: .personTurnedSwitchOn, switchOn: true, status: .notDetermined))
-        XCTAssertTrue(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .notDetermined))
+        XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .notDetermined),
+                       "never from the background indexing job — only when the person asks (QA 2026-11-15)")
 
         // With the switch off, neither entry point reaches the system call; launch wiring never does.
         let savedHook = AttachmentSpeech.requestHook
@@ -5269,6 +5270,8 @@ final class IPadGate1FixTests: XCTestCase {
         AttachmentSpeech.isEnabled = true
         AttachmentSpeech.requestAuthorizationIfAppropriate(trigger: .launchWiring)
         XCTAssertEqual(counter.calls, 0, "launch wiring never asks, even with the switch on")
+        _ = AttachmentSpeech.requestAuthorizationBeforeRecognising()
+        XCTAssertEqual(counter.calls, 0, "the background indexing job never asks, even with the switch on")
     }
 
     // IPAD-06 (b): the backup goes into the folder the person chose, never the temporary folder.
@@ -8750,6 +8753,67 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertEqual(MailDraftSettling.sent(all, sending: outbox).map(\.id), [accepted.id])
         XCTAssertEqual(Set(MailDraftSettling.listed(all, sending: outbox).map(\.id)),
                        Set([undone.id, rejected.id, edited.id, untouched.id]))
+    }
+
+    /// iPhone / iPad QA 2026-11-15 (simulator walks): folder names, Other IMAP servers, the
+    /// remove-and-delete message, layout tables on iPhone, and the source-level fixes for the
+    /// missing compose button, the shrinking composer and the stuck file picker.
+    func testIPhoneIPadQA_folderNames_otherIMAP_removalText_tables_andLayoutFixes() throws {
+        XCTAssertEqual(MailFolderStyle.displayName("[Gmail]/Sent Mail"), "Sent Mail")
+        XCTAssertEqual(MailFolderStyle.displayName("INBOX"), String(localized: "Inbox"))
+        XCTAssertEqual(MailFolderStyle.displayName("Projects/2025"), "Projects/2025")
+        let account = UUID()
+        func f(_ path: String, _ n: Int) -> ConnectedFolderSummary {
+            ConnectedFolderSummary(accountID: account, serverID: path, path: path, kind: .folder, specialUse: nil, messages: n, unread: 0, selected: true)
+        }
+        XCTAssertFalse(MailFolderStyle.isListed(f("[Gmail]", 0)), "Gmail's empty container is not a folder to show")
+        XCTAssertTrue(MailFolderStyle.isListed(f("[Gmail]/All Mail", 3)))
+
+        var form = MailIMAPForm()
+        form.apply(.gmailAppPassword)
+        XCTAssertEqual(form.host, "imap.gmail.com")
+        form.apply(.otherIMAP)
+        XCTAssertEqual(form.host, "", "another provider's servers are never left filled in")
+        XCTAssertEqual(form.smtpHost, "")
+
+        let html = "<table width=\"600\"><tbody><tr><td width=\"600\"><p>Please confirm</p></td></tr></tbody></table>"
+        let flat = EmailHTMLView.linearizedTables(html)
+        XCTAssertFalse(flat.lowercased().contains("<table") || flat.lowercased().contains("<td") || flat.lowercased().contains("<tr"), flat)
+        XCTAssertTrue(flat.contains("<p>Please confirm</p>"))
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func source(_ name: String) throws -> String { try String(contentsOf: root.appendingPathComponent("maxmailin/\(name)"), encoding: .utf8) }
+        let view = try source("MailWorkspaceView.swift")
+        XCTAssertTrue(view.contains(".toolbar { if sizeClass == .compact { toolbar } }"), "iPhone: Compose / Sync now on the first screen")
+        XCTAssertTrue(view.contains("#if os(macOS)\n        // The window toolbar band exists only on the Mac."), "the Mac-only toolbar fix must not break the iOS build")
+        let compose = try source("MailComposeViews.swift")
+        XCTAssertTrue(compose.contains("ScrollView { content() }") && compose.contains("frame(minHeight: Self.minimumBodyHeight)"),
+                      "iPhone: the composer scrolls and its text never shrinks to nothing")
+        XCTAssertTrue(compose.contains("IconOnlyLabelStyle().makeBody(configuration: configuration)"), "icons keep their VoiceOver names")
+        let content = try source("ContentView.swift")
+        XCTAssertEqual(content.components(separatedBy: ".onChange(of: showFileImporter) { _, open in").count - 1, 2,
+                       "both Filters & Tools sheets (iPhone and iPad layouts) close before the file picker opens")
+        let whatsNew = try source("WhatsNewView.swift")
+        XCTAssertTrue(whatsNew.contains("ReleaseNote(version: \"4.0\""), "What's New has a 4.0 entry")
+    }
+
+    /// 2026-11-15: Xcode saved its own copy of the string catalog over translations written by
+    /// the scripts, and two batches silently lost their 10 languages. Today's user-facing strings
+    /// must keep every language.
+    func testTodaysStrings_keepAllTenLanguages() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: root.appendingPathComponent("maxmailin/Localizable.xcstrings"))
+        let strings = try XCTUnwrap((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["strings"] as? [String: Any])
+        let keys = ["New Message", "Smart Folders", "Tags", "Filter these messages", "Group by Conversation", "New Tag…",
+                    "Attach from Archive…", "Save Draft", "Bold", "No recipients yet", "Allow speech recognition",
+                    "Speech in recordings", "Every Email Body Read Correctly", "Lotus Notes Databases",
+                    "Checking the sign-in with the server…", "No messages in %@", "Open mailin Drafts (%lld)",
+                    "Counting archived messages…", "Deleting %lld of %lld messages…"]
+        for key in keys {
+            let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing key: \(key)")
+            let languages = (entry["localizations"] as? [String: Any])?.count ?? 0
+            XCTAssertGreaterThanOrEqual(languages, 10, "\(key): \(languages) languages")
+        }
     }
 
     func testIdentityPickerRequired() throws {

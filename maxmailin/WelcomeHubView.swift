@@ -362,7 +362,7 @@ struct WelcomeHubView: View {
                 .tracking(0.5)
 
             HStack(spacing: Spacing.xSmall) {
-                ForEach(["MBOX", "EML", "EMLX", "MSG", "PST", "NSF", "ZIP"], id: \.self) { fmt in
+                ForEach(["MBOX", "EML", "EMLX", "MSG", "PST", "OST", "OLM", "NSF", "ZIP"], id: \.self) { fmt in
                     Text(fmt)
                         .font(.system(.caption2, design: .monospaced).weight(.medium))
                         .foregroundColor(.secondary)

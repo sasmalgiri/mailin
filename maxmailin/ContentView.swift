@@ -1419,6 +1419,16 @@ struct ContentView: View {
             .onChange(of: appState.showDuplicateManager) { _, open in
                 if open { showFiltersSheet = false }
             }
+            // The same for the file picker: asked for from inside Filters & Tools ("Open Email
+            // Archive", "Browse Files") it could not appear over the sheet, and the request stayed
+            // on, so every later tap did nothing (iPad QA 2026-11-15 — opening an archive is job 1).
+            // Close the sheet, then ask again once it is gone.
+            .onChange(of: showFileImporter) { _, open in
+                guard open, showFiltersSheet else { return }
+                showFiltersSheet = false
+                showFileImporter = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showFileImporter = true }
+            }
             // iPhone has no docked panel under the email, so Tools ▸ Topics showed nothing:
             // the topics panel opens as its own sheet instead.
             .sheet(isPresented: iPhoneTopicsSheet) {
@@ -1866,6 +1876,14 @@ struct ContentView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+        }
+        // iPad's own Filters & Tools sheet: the same as the iPhone layout's — the file picker
+        // cannot appear over the sheet, so close it and ask again (iPad QA 2026-11-15).
+        .onChange(of: showFileImporter) { _, open in
+            guard open, showFiltersSheet else { return }
+            showFiltersSheet = false
+            showFileImporter = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showFileImporter = true }
         }
     }
     #endif

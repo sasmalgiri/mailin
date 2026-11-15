@@ -170,6 +170,12 @@ struct FourPageShell: View {
                 hasProfessional: storeManager.isProfessional,
                 onEnable: {
                     try? modules.enable(module)
+                    #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+                    // One step, not two: turning on the Live Mail page also allows accounts to be
+                    // added (it connects nothing until an account is added and allowed) — iPhone QA
+                    // 2026-11-15 found "Turn on Live Mail" followed by a second "Turn on Connected mail".
+                    if module == .liveMail { modules.set(.connectedMail, enabled: true) }
+                    #endif
                     router.select(module, in: modules)
                     pendingActivation = nil
                 },
@@ -267,10 +273,16 @@ private struct PageSwitcher: View {
         ViewThatFits(in: .horizontal) {
             switcherRow(short: false)
             switcherRow(short: true)
-            ScrollView(.horizontal, showsIndicators: false) {
-                switcherRow(short: true)
+            // The selected page stays in view: on iPhone the Live Mail tab sat off-screen and the
+            // strip jumped back to Archive after a rotation (QA 2026-11-15).
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    switcherRow(short: true)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .onAppear { proxy.scrollTo(selection.rawValue, anchor: .center) }
+                .onChange(of: selection) { _, page in withAnimation { proxy.scrollTo(page.rawValue, anchor: .center) } }
             }
-            .scrollBounceBehavior(.basedOnSize)
         }
     }
 
@@ -342,6 +354,7 @@ private struct PageSwitcher: View {
                 .accessibilityValue(on ? String(localized: "On") : String(localized: "Off"))
                 .accessibilityAddTraits(page == selection ? [.isSelected] : [])
                 .accessibilityHint(isEnabled(page) ? "" : String(localized: "Off. Opens a summary before turning it on."))
+                .id(page.rawValue)
             }
             Spacer()
         }

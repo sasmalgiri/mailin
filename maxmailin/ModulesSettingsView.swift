@@ -326,7 +326,7 @@ private struct ModuleCard: View {
         case .professional:
             return String(localized: "Case intake, review, production and audit workflows.")
         case .liveMail:
-            return String(localized: "Connect mail accounts to send and receive. Kept separate from your archive.")
+            return String(localized: "Connect mail accounts to read, save and send mail. What you choose to preserve is saved into your archive.")
         }
     }
 }

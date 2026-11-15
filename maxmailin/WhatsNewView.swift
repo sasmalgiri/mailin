@@ -139,7 +139,21 @@ private struct ReleaseItem {
 
 // MARK: - Release Notes Content
 
+/// 4.0: the five jobs first, then Live Mail (only in the edition that can connect to mail servers).
+private let releaseItems40: [ReleaseItem] = {
+    var items: [ReleaseItem] = []
+    #if MAILIN_CONNECTED_MAIL
+    items.append(ReleaseItem(icon: "envelope.badge", title: String(localized: "Live Mail"), description: String(localized: "Connect Outlook and Microsoft 365, Gmail, iCloud or any IMAP account. Every message is saved into your archive, so folders, search, duplicates and verified export work on your live mail too. Off until you add an account; nothing goes through a server of ours."), color: .blue))
+    items.append(ReleaseItem(icon: "square.and.pencil", title: String(localized: "Write and Send"), description: String(localized: "A full composer: formatting, signatures per account, drag files in or attach messages from your archive, and Undo Send."), color: .indigo))
+    #endif
+    items.append(ReleaseItem(icon: "magnifyingglass", title: String(localized: "Advanced Search in Every Plan"), description: String(localized: "AND, OR and NOT, dates, senders and attachment conditions are now in the Free plan too, and every search says how much of the archive it covered."), color: .teal))
+    items.append(ReleaseItem(icon: "text.badge.checkmark", title: String(localized: "Every Email Body Read Correctly"), description: String(localized: "Some emails encoded a certain way were shown as unreadable text; they are now read correctly from every format."), color: .green))
+    items.append(ReleaseItem(icon: "tray.full", title: String(localized: "Lotus Notes Databases"), description: String(localized: "A new reader opens Notes mail databases (.nsf) with their folders and attachments."), color: .orange))
+    return items
+}()
+
 private let releaseNotes: [ReleaseNote] = [
+    ReleaseNote(version: "4.0", date: "November 2026", items: releaseItems40),
     ReleaseNote(version: "3.0.1", date: "October 2026", items: [
         ReleaseItem(icon: "checkmark.seal", title: String(localized: "Exports Say What Happened"), description: String(localized: "Every export now ends with a receipt that reports the real result — complete, limited by the Free plan, cancelled, or failed with the reason. Outlook Archive (.pst) is in every Export menu, on iPhone and iPad too."), color: .green),
         ReleaseItem(icon: "iphone.gen3", title: String(localized: "iPhone and iPad Fixes"), description: String(localized: "Duplicates, Topics and the PII Report work on iPhone, Tools ▸ Export offers every format, and iPad search filters the list as you type."), color: .blue),

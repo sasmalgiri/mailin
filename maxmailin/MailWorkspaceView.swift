@@ -167,19 +167,32 @@ struct MailUnavailableView: View {
 private struct MailWorkspaceReadyView: View {
     @Bindable var model: MailWorkspaceModel
     @Binding var sheet: MailSheet?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
 
     var body: some View {
         NavigationSplitView {
             MailSidebar(model: model, sheet: $sheet)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+                #if os(iOS)
+                // iPhone: the sidebar is the first screen, so Compose / Sync now / Add account live on it
+                // (a toolbar on the split view itself is not shown on iPhone — owner QA 2026-11-15).
+                .toolbar { if sizeClass == .compact { toolbar } }
+                #endif
         } content: {
             MailContentColumn(model: model, sheet: $sheet)
                 .navigationSplitViewColumnWidth(min: 300, ideal: 380)
+                #if os(iOS)
+                .toolbar { toolbar }
+                #endif
         } detail: {
             MailDetailColumn(model: model, sheet: $sheet)
         }
         .mailNoTopFade()
+        #if os(macOS)
         .toolbar { toolbar }
+        #endif
         .safeAreaInset(edge: .bottom) { statusLine }
         .onChange(of: model.section) { _, _ in
             model.selectedMessage = nil
@@ -264,6 +277,13 @@ private struct MailWorkspaceReadyView: View {
             .background(.bar)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier(model.lastError == nil ? "mail.status.message" : "mail.status.error")
+            // A plain message goes by itself after a while (on iPhone it covered the bottom
+            // controls); an error stays until dismissed.
+            .task(id: model.message) {
+                guard model.lastError == nil, let shown = model.message else { return }
+                try? await Task.sleep(for: .seconds(8))
+                if model.lastError == nil, model.message == shown { model.message = nil }
+            }
         }
     }
 }
@@ -286,9 +306,9 @@ private struct MailSidebar: View {
                     DisclosureGroup(isExpanded: Binding(
                         get: { !collapsed.contains(snapshot.id) },
                         set: { open in if open { collapsed.remove(snapshot.id) } else { collapsed.insert(snapshot.id) } })) {
-                        ForEach(MailFolderStyle.ordered(model.folders[snapshot.id] ?? [])) { folder in
+                        ForEach(MailFolderStyle.ordered(model.folders[snapshot.id] ?? []).filter(MailFolderStyle.isListed)) { folder in
                             HStack {
-                                Label(folder.path, systemImage: MailFolderStyle.role(folder).symbol)
+                                Label(MailFolderStyle.displayName(folder.path), systemImage: MailFolderStyle.role(folder).symbol)
                                 Spacer()
                                 // Unread first (as Mail); otherwise how many are saved, so an
                                 // empty folder is visible before it is opened.
@@ -300,7 +320,7 @@ private struct MailSidebar: View {
                             }
                             .tag(MailWorkspaceModel.Section.folder(snapshot.id, folder.serverID))
                             .accessibilityElement(children: .combine)
-                            .accessibilityLabel(Text("\(folder.path), \(folder.messages) messages, \(folder.unread) unread"))
+                            .accessibilityLabel(Text("\(MailFolderStyle.displayName(folder.path)), \(folder.messages) messages, \(folder.unread) unread"))
                             .accessibilityIdentifier("mail.sidebar.folder")
                         }
                     } label: {
@@ -403,6 +423,20 @@ enum MailFolderStyle {
         if folder.kind == .label { return .label }
         let name = normalised(folder.path.split(separator: "/").last.map(String.init) ?? folder.path)
         return folder.path.contains("/") ? .other : (role(named: name) ?? .other)
+    }
+
+    /// Gmail's system folders without the "[Gmail]/" prefix ("[Gmail]/Sent Mail" → "Sent Mail").
+    static func displayName(_ path: String) -> String {
+        if path.caseInsensitiveCompare("INBOX") == .orderedSame { return String(localized: "Inbox") }
+        for prefix in ["[Gmail]/", "[Google Mail]/"] where path.hasPrefix(prefix) && path.count > prefix.count {
+            return String(path.dropFirst(prefix.count))
+        }
+        return path
+    }
+
+    /// Gmail's "[Gmail]" parent holds no mail of its own (the server lists it only as a container).
+    static func isListed(_ folder: ConnectedFolderSummary) -> Bool {
+        !((folder.path == "[Gmail]" || folder.path == "[Google Mail]") && folder.messages == 0)
     }
 
     static func ordered(_ folders: [ConnectedFolderSummary]) -> [ConnectedFolderSummary] {
@@ -525,13 +559,20 @@ private struct MailMessageList: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .overlay(alignment: .bottom) {
+        // Below the list, not drawn over its last row (iPhone QA 2026-11-15).
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if !model.rows.isEmpty {
                 Text("Read and flag marks are as they were when each message was saved.")
                     .font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
                     .padding(Spacing.xxSmall)
+                    .background(.bar)
             }
         }
+        .navigationTitle(listTitle)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .alert(String(localized: "Save as Smart Folder"), isPresented: $savingSearch) {
             TextField(String(localized: "Name"), text: $searchName)
             Button(String(localized: "Save")) { model.saveSmartFolder(named: searchName); searchName = "" }
@@ -552,8 +593,20 @@ private struct MailMessageList: View {
         }
     }
 
+    /// The folder, account or smart folder the list shows.
+    private var listTitle: String {
+        switch model.section {
+        case .folder(let account, let serverID):
+            return model.folders[account]?.first { $0.serverID == serverID }.map { MailFolderStyle.displayName($0.path) } ?? ""
+        case .account(let id): return model.account(id)?.account.displayIdentity ?? ""
+        case .smart(let id): return model.smartFolders.first { $0.id == id }?.name ?? ""
+        default: return String(localized: "All accounts")
+        }
+    }
+
     private func row(_ row: ConnectedMailboxRow, conversationCount: Int = 1) -> some View {
-        MailRowView(row: row, account: model.account(row.accountID)?.account,
+        // The account line only when there is more than one account to tell apart.
+        MailRowView(row: row, account: model.accounts.count + model.removedAccounts.count > 1 ? model.account(row.accountID)?.account : nil,
                     tags: model.tags[row.emailID].map { Array($0).sorted() } ?? [],
                     conversationCount: conversationCount,
                     canChange: model.canChangeOnServer(row),
@@ -691,6 +744,9 @@ private struct MailMessageList: View {
             .toggleStyle(.button)
             // Icons only: the list column is narrow; each says its name on hover and to VoiceOver.
             .labelStyle(.iconOnly)
+            #if os(iOS)
+            .controlSize(.regular)   // iPhone: 44-point-friendly targets (QA 2026-11-15: 17–20 pt)
+            #endif
             Text(model.showingCountText).font(.caption).foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -903,12 +959,17 @@ private extension View {
     /// below the strip), so the band and the top fade are switched off.
     @ViewBuilder
     func mailNoTopFade() -> some View {
-        if #available(macOS 26.0, iOS 26.0, *) {
+        #if os(macOS)
+        // The window toolbar band exists only on the Mac.
+        if #available(macOS 26.0, *) {
             scrollEdgeEffectHidden(true, for: .top)
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 }
 
@@ -994,6 +1055,9 @@ private struct MailSelectionSummary: View {
 private struct MailDetailColumn: View {
     @Bindable var model: MailWorkspaceModel
     @Binding var sheet: MailSheet?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
 
     var body: some View {
         switch model.section {
@@ -1001,7 +1065,17 @@ private struct MailDetailColumn: View {
             if let id = model.selectedAccount, model.account(id) != nil {
                 MailAccountSettingsView(model: model, accountID: id, sheet: $sheet)
             } else {
+                #if os(iOS)
+                // iPhone: after a removal the detail column is what shows — give the account list, not an
+                // empty page. iPad shows the list beside it already, so it is not repeated there.
+                if sizeClass == .compact {
+                    MailAccountsList(model: model, sheet: $sheet)
+                } else {
+                    Text("Choose an account to see its settings and status.").foregroundStyle(.secondary)
+                }
+                #else
                 Text("Choose an account to see its settings and status.").foregroundStyle(.secondary)
+                #endif
             }
         case .account(let id) where model.selection.isEmpty:
             MailAccountSettingsView(model: model, accountID: id, sheet: $sheet)
@@ -1052,11 +1126,13 @@ private struct MailMessageDetail: View {
     }
 
     private var actions: some View {
+        VStack(alignment: .leading, spacing: 2) {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Spacing.xSmall) {
                 replyButtons
                     .disabled(!canReply)
                     .help(canReply ? "" : String(localized: "Turn on Send mail for an account to reply or forward"))
+
                 Divider().frame(height: 18)
                 MailTagMenu(model: model, ids: [row.emailID])
                 if model.canChangeOnServer(row) {
@@ -1078,8 +1154,18 @@ private struct MailMessageDetail: View {
                 }
             }
             .controlSize(.small)
+            .labelStyle(MailCompactLabelStyle())
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
+        }
+        #if os(iOS)
+        if !canReply {
+            // No hover help on iPhone and iPad: the reason is shown under the bar.
+            Text("Turn on Send mail for an account to reply or forward")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, Spacing.small)
+        }
+        #endif
         }
     }
 
