@@ -115,6 +115,26 @@ final class NSFDeletionStubTests: XCTestCase {
         }
     }
 
+    /// 2026-11-15: the Notes ODS reader is on by default; a file it does not recognise as a Notes
+    /// layout (this simplified one has no 1,024-byte database header) goes to the earlier reader, in
+    /// the array path and the streaming import path alike — switching the new reader on never reads
+    /// a file worse than before.
+    func testODSReaderOn_aLayoutItRefuses_isReadByTheEarlierReader_arrayAndStreaming() async throws {
+        let url = dir.appendingPathComponent("simplified.nsf")
+        try Self.writeNSF(to: url, mails: 120, stubs: 0, salt: 3)
+        RecoveryPolicy.isEnabled = false
+        let was = NotesODSPolicy.isEnabled
+        NotesODSPolicy.isEnabled = true
+        defer { NotesODSPolicy.isEnabled = was }
+        XCTAssertEqual(try ParserFactory.parse(fileURL: url, senderEmail: "").count, 120)
+        var streamed = 0
+        let report = try await ParserFactory.parseStreamingCallback(fileURL: url, senderEmail: "", batchSize: 25,
+                                                                    materializeAttachments: false) { streamed += $0.count }
+        XCTAssertEqual(streamed, 120)
+        XCTAssertEqual(report.successfullyParsed, 120)
+        XCTAssertEqual(report.failed, 0)
+    }
+
     func testDeletionStubs_recoveryOff_importIsUnchanged() throws {
         let url = dir.appendingPathComponent("off.nsf")
         try Self.writeNSF(to: url, mails: 1_000, stubs: 37, identityOnlyStub: true, salt: 7)

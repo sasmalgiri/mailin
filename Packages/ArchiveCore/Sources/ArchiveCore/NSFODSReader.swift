@@ -158,6 +158,15 @@ struct NSFODSReader {
         case unsupported(String)
         case damaged(String)
 
+        /// Refused for its layout (not a Notes database, or a header this reader does not read) — the
+        /// earlier reader is tried. Damage inside a real ODS database is not a refusal: it is reported.
+        var isLayoutRefusal: Bool {
+            switch self {
+            case .notNSF, .unsupported: return true
+            case .damaged: return false
+            }
+        }
+
         var errorDescription: String? {
             switch self {
             case .notNSF(let why): return "Not a Notes database: \(why)"
