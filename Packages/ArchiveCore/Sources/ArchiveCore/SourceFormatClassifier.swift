@@ -635,11 +635,34 @@ enum SourceFormatClassifier {
         let fm = FileManager.default
         guard let walker = fm.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
         var found: [URL] = []
-        for case let child as URL in walker where child.pathExtension.lowercased() == "eml" {
+        for case let child as URL in walker where child.pathExtension.lowercased() == "eml" || isNumberedMessageFile(child) {
             guard (try? child.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
             found.append(child)
         }
         return found.sorted { $0.path < $1.path }
+    }
+
+    /// One message per file named by its number — MH folders (nmh, Claws Mail, Sylpheed: "1",
+    /// "2", …) and dumps such as the Enron corpus ("1.", "2.", …) — recognised only when the
+    /// file starts with mail headers, so a stray numbered file is never taken for mail
+    /// (gate 2, 2026-11-15: the real Enron mailbox was refused as "unrecognised").
+    static func isNumberedMessageFile(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        guard !name.isEmpty, name.count <= 12,
+              name.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }), name.first?.isNumber == true,
+              name.filter({ $0 == "." }).count <= 1, (name.last?.isNumber == true || name.last == ".") else { return false }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 2_048), !head.isEmpty else { return false }
+        let text = String(decoding: head, as: UTF8.self)
+        // isNewline: in Swift "\r\n" is ONE Character, so splitting on "\n" or "\r" missed
+        // every CRLF file and took its whole head for one line.
+        let lines = text.split(whereSeparator: { $0.isNewline }).prefix(30)
+        let known = ["message-id:", "from:", "date:", "received:", "return-path:", "subject:", "to:", "delivered-to:"]
+        let headerLines = lines.filter { line in known.contains { line.lowercased().hasPrefix($0) } }
+        // The first line is a header field and at least two known headers appear near the top.
+        guard let first = lines.first, first.contains(":"), !first.hasPrefix(" ") else { return false }
+        return headerLines.count >= 2
     }
 
     /// The directory walk of a mailbox member: its path components below `root`.

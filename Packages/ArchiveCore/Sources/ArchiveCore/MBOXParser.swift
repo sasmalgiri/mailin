@@ -429,11 +429,16 @@ struct MBOXParser {
         // headers and no body, one with a body and no From (found 2026-09-25
         // by the real-export test). The offset engine applies the same rule.
         var headerBlockOpen = false
+        // A file that begins with a header field is ONE bare message (an .eml, or one file of a
+        // Maildir / MH / .eml folder): an envelope-shaped line later in its body — a forwarded
+        // message's "From addr date" — is text, not a separator. Splitting there made two messages
+        // out of 38 real Enron files (gate 2, 2026-11-15).
+        var bareMessageFile = false
         while let line = try nextLine() {
             try Task.checkCancellation()
             let envelopeShaped = line.hasPrefix("From ") && line.count > 5
                 && line.range(of: #"\d{4}"#, options: .regularExpression) != nil
-            let isFromLine = envelopeShaped && (!inMessage || !headerBlockOpen)
+            let isFromLine = envelopeShaped && !bareMessageFile && (!inMessage || !headerBlockOpen)
             if isFirstLine {
                 isFirstLine = false
                 // §7.3, streaming path: a bare RFC-822 message — a .eml file,
@@ -447,6 +452,7 @@ struct MBOXParser {
                 if !isFromLine, Self.looksLikeHeaderField(line) {
                     inMessage = true
                     headerBlockOpen = true
+                    bareMessageFile = true
                 }
             }
             if isFromLine {
