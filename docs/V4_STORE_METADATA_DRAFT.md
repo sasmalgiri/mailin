@@ -35,7 +35,7 @@ Open huge mail archives, keep every folder, search inside attachments, find dupl
 mailin does the five things people need from an email archive — properly, on your own Mac, iPhone or iPad — and now brings your live mail into the same place.
 
 1. OPEN LARGE ARCHIVES
-• MBOX (Google Takeout, Thunderbird, Apple Mail), EML, EMLX, MSG, PST, OST and ZIP — drop the file in and you are in it.
+• MBOX (Google Takeout, Thunderbird, Apple Mail), EML, EMLX, MSG, PST, OST, Outlook for Mac (OLM), Lotus Notes (NSF) and ZIP — drop the file in and you are in it.
 • Streams from disk: size is bounded by your storage, not by mailin. It says exactly what it could not read, and resumes by itself.
 
 2. KEEP EVERY FOLDER
