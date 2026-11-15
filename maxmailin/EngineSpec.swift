@@ -292,10 +292,13 @@ struct EngineSpec: Sendable {
                 detail: String(localized: "Recognises the words spoken in voice memos, calls and videos attached to emails, on this device, so search finds them and says \"Recognised speech\". Asks once for permission. No network."))
         case .notesODSReader:
             // GAP-NSF: 45 of 45 mail notes of the public SampleNSF.nsf read and checked against the
-            // raw file; preview until the owner's own Notes database has been run through it.
-            return EngineSpec(.archive, maturity: .preview,
+            // raw file; R6 folders, Huffman attachments, multi-page indexes; owner decision 2026-11-15:
+            // on by default (stable) after the 100 MB synthetic database (3,300 of 3,300 messages,
+            // folders, attachments, 9 MB memory growth — NSFODSScaleTests). The old reader read 0
+            // messages of the real sample, so it stays only as the rollback switch (rule 14).
+            return EngineSpec(.archive, maturity: .stable,
                 name: String(localized: "Lotus Notes reader (ODS)"),
-                detail: String(localized: "Reads Notes mail databases (.nsf) by their on-disk layout: every mail note with its headers, body and attachments, design notes and deletion stubs counted out. Not yet read: folder membership, compressed attachment objects and encrypted items. Off: the earlier reader, which reads only mailin's own test files."))
+                detail: String(localized: "Reads Notes mail databases (.nsf) by their on-disk layout: every mail note with its headers, body, folders and attachments, design notes and deletion stubs counted out. Not read: encrypted (sealed) items, which stay locked and are named, and LZ1-compressed attachments, which are named. Off: the earlier reader, which reads only mailin's own test files."))
         case .protectedMessageDecrypt:
             // §13.8 step 5: CMSDecoder with the keychain's identities; R6: the portable CMS reader on
             // iPhone and iPad (and as the Mac's fallback). Preview until a real identity has run it.

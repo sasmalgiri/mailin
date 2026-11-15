@@ -89,10 +89,11 @@ final class NSFODSDepthTests: XCTestCase {
             }
             // Summary buckets: a note's bucket holds it in slot 1; the rest are empty.
             var bucketPositions: [Int] = []
+            let noteByBucket = Dictionary(notes.map { ($0.bucket, $0) }, uniquingKeysWith: { first, _ in first })
             for b in 1...summaryBuckets {
                 var payload = Data()
                 var slots = 0
-                if let n = notes.first(where: { $0.bucket == b }) { payload = record(n); slots = 1 }
+                if let n = noteByBucket[b] { payload = record(n); slots = 1 }
                 var size = 66 + payload.count + 4 * slots
                 size = (size + 255) / 256 * 256
                 var bucket = Data(count: size)
@@ -113,30 +114,41 @@ final class NSFODSDepthTests: XCTestCase {
                 rec += o.payload
                 objectPositions[o.id] = put(rec)
             }
-            // One RRV bucket: 256 entries from firstID.
+            // RRV buckets of 256 entries from firstID — as many as the IDs need
+            // (one for the small databases; the 100 MB scale test needs a dozen).
             let entries = 256
-            var rrv = Data(count: 32 + 8 * entries)
-            rrv[0] = 0x06; rrv[1] = 0x20
-            rrv.replaceSubrange(6..<10, with: Self.le32(firstID))
-            for n in notes {
-                let e = 32 + 8 * Int((n.id - firstID) / 4)
-                rrv.replaceSubrange(e..<(e + 4), with: Self.le32(0x8000_0000 | UInt32(n.bucket)))
-                rrv.replaceSubrange((e + 4)..<(e + 8), with: Self.le32(1))
+            var targets: [UInt32: (UInt32, UInt32)] = [:]
+            for n in notes { targets[n.id] = (0x8000_0000 | UInt32(n.bucket), 1) }
+            for (id, pos) in objectPositions { targets[id] = (UInt32(pos >> 8), 0) }
+            let highest = max(targets.keys.max() ?? firstID, firstID)
+            let rrvBuckets = Int((highest - firstID) / 4) / entries + 1
+            var rrv = Data()
+            var rrvDescriptors = Data()
+            for k in 0..<rrvBuckets {
+                let first = firstID + UInt32(4 * entries * k)
+                rrv = Data(count: 32 + 8 * entries)
+                rrv[0] = 0x06; rrv[1] = 0x20
+                rrv.replaceSubrange(6..<10, with: Self.le32(first))
+                for slot in 0..<entries {
+                    guard let (a, b) = targets[first + UInt32(4 * slot)] else { continue }
+                    let e = 32 + 8 * slot
+                    rrv.replaceSubrange(e..<(e + 4), with: Self.le32(a))
+                    rrv.replaceSubrange((e + 4)..<(e + 8), with: Self.le32(b))
+                }
+                // The descriptor's low bit is a flag (the reader masks it), so an RRV
+                // bucket starts on a 512-byte boundary.
+                while file.count % 512 != 0 { file.append(0) }
+                rrvDescriptors += Self.le32(UInt32(put(rrv) >> 8)) + Self.le32(first)
             }
-            for (id, pos) in objectPositions {
-                let e = 32 + 8 * Int((id - firstID) / 4)
-                rrv.replaceSubrange(e..<(e + 4), with: Self.le32(UInt32(pos >> 8)))
-            }
-            let rrvPos = put(rrv)
 
-            // BDB: RRV descriptor, UNK table, text.
+            // BDB: RRV descriptors, UNK table, text.
             var text = Data(), unk = Data()
             for (name, cls, type) in keys {
                 let bytes = Data(name.utf8)
                 unk += Self.le32(UInt32(text.count)) + Self.le16(UInt16(bytes.count)) + Data([type, cls, 0, 0])
                 text += bytes
             }
-            let bdbBody = Self.le32(UInt32(rrvPos >> 8)) + Self.le32(firstID) + unk + Data(count: 4) + text
+            let bdbBody = rrvDescriptors + unk + Data(count: 4) + text
             let bdbCX = Self.cx(bdbBody)
             var bdb = Data(count: 66)
             bdb.replaceSubrange(0..<2, with: Self.le16(1)); bdb.replaceSubrange(2..<4, with: Self.le16(2))
@@ -146,7 +158,7 @@ final class NSFODSDepthTests: XCTestCase {
             bdb.replaceSubrange(14..<18, with: Self.le32(UInt32(70 + bdbCX.stream.count + 12)))
             bdb.replaceSubrange(26..<30, with: Self.le32(UInt32(keys.count)))
             bdb.replaceSubrange(34..<38, with: Self.le32(UInt32(text.count)))
-            bdb.replaceSubrange(38..<42, with: Self.le32(1))
+            bdb.replaceSubrange(38..<42, with: Self.le32(UInt32(rrvBuckets)))
             bdb += Self.le32(UInt32(bdbCX.stream.count)) + bdbCX.stream + Data(count: 12)
             let bdbPos = put(bdb)
 

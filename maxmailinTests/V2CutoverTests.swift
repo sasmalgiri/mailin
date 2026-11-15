@@ -5213,12 +5213,13 @@ final class V2CutoverTests: XCTestCase {
     }
 
     /// GAP-RAR: the vendored libarchive is BSD-licensed; its notice must ship in About ▸ Licenses.
-    /// GAP-NSF: the ODS reader is a preview switch, off by default, wired to NotesODSPolicy.
+    /// GAP-NSF: the ODS reader is a switch wired to NotesODSPolicy — on by default since the owner's
+    /// decision of 2026-11-15 (100 MB synthetic database, NSFODSScaleTests); the old reader is the rollback.
     func testGAP_licenceNoticeCarriesLibarchive_andNotesODSIsAPreviewSwitch() {
         XCTAssertTrue(LegalComplianceManager.thirdPartyNotices.contains(VendoredNotices.libarchive))
         XCTAssertFalse(LegalComplianceManager.thirdPartyNotices.contains("No third-party open source libraries are used"))
-        XCTAssertEqual(Capability.notesODSReader.maturity, .preview)
-        XCTAssertFalse(Capability.notesODSReader.defaultsOn)
+        XCTAssertEqual(Capability.notesODSReader.maturity, .stable)
+        XCTAssertTrue(Capability.notesODSReader.defaultsOn)
         let was = NotesODSPolicy.isEnabled
         defer { NotesODSPolicy.isEnabled = was }
         CapabilityWiring.apply(.notesODSReader, isOn: true)

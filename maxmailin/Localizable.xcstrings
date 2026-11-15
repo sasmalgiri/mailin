@@ -453890,6 +453890,71 @@
           }
         }
       }
+    },
+    "Reads Notes mail databases (.nsf) by their on-disk layout: every mail note with its headers, body, folders and attachments, design notes and deletion stubs counted out. Not read: encrypted (sealed) items, which stay locked and are named, and LZ1-compressed attachments, which are named. Off: the earlier reader, which reads only mailin's own test files." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liest Notes-Maildatenbanken (.nsf) anhand ihres Aufbaus auf dem Datenträger: jede Mail mit Kopfzeilen, Text, Ordnern und Anhängen; Designnotizen und Löschmarken werden gezählt. Nicht gelesen: verschlüsselte (versiegelte) Elemente, die gesperrt bleiben und benannt werden, und LZ1-komprimierte Anhänge, die benannt werden. Aus: der frühere Leser, der nur mailins eigene Testdateien liest."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lee las bases de datos de correo de Notes (.nsf) según su estructura en disco: cada correo con sus encabezados, cuerpo, carpetas y adjuntos; las notas de diseño y los restos de eliminación se cuentan aparte. No se leen: los elementos cifrados (sellados), que quedan bloqueados y se nombran, ni los adjuntos con compresión LZ1, que se nombran. Desactivado: el lector anterior, que solo lee los archivos de prueba de mailin."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lit les bases de messagerie Notes (.nsf) d’après leur structure sur disque : chaque message avec ses en-têtes, son corps, ses dossiers et ses pièces jointes ; notes de conception et traces de suppression comptées à part. Non lus : les éléments chiffrés (scellés), qui restent verrouillés et sont nommés, et les pièces jointes compressées en LZ1, qui sont nommées. Désactivé : l’ancien lecteur, qui ne lit que les fichiers de test de mailin."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes मेल डेटाबेस (.nsf) को डिस्क पर उनकी संरचना से पढ़ता है: हर मेल उसके हेडर, मुख्य भाग, फ़ोल्डर और अनुलग्नकों के साथ; डिज़ाइन नोट्स और हटाने के निशान अलग गिने जाते हैं। नहीं पढ़े जाते: एन्क्रिप्ट (सील) किए गए आइटम, जो लॉक रहते हैं और उनका नाम बताया जाता है, और LZ1-संपीड़ित अनुलग्नक, जिनका नाम बताया जाता है। बंद: पुराना रीडर, जो केवल mailin की अपनी परीक्षण फ़ाइलें पढ़ता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Legge i database di posta di Notes (.nsf) in base alla loro struttura su disco: ogni messaggio con intestazioni, corpo, cartelle e allegati; note di progettazione e tracce di eliminazione contate a parte. Non letti: gli elementi cifrati (sigillati), che restano bloccati e vengono nominati, e gli allegati compressi LZ1, che vengono nominati. Disattivato: il lettore precedente, che legge solo i file di prova di mailin."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notesのメールデータベース（.nsf）をディスク上の構造から読み込みます：各メールのヘッダ、本文、フォルダ、添付ファイル。設計ノートと削除の痕跡は別に数えます。読み込まないもの：暗号化（シール）された項目（ロックされたまま名前を表示）、LZ1圧縮の添付ファイル（名前を表示）。オフ：以前のリーダー（mailin独自のテストファイルのみ読み込み）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes 메일 데이터베이스(.nsf)를 디스크 구조에 따라 읽습니다. 각 메일의 헤더, 본문, 폴더, 첨부 파일을 읽고 디자인 노트와 삭제 흔적은 따로 셉니다. 읽지 않는 항목: 암호화(봉인)된 항목은 잠긴 채 이름만 표시하고, LZ1 압축 첨부 파일은 이름만 표시합니다. 끔: 이전 리더(mailin 자체 테스트 파일만 읽음)."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lê bancos de dados de e-mail do Notes (.nsf) pela sua estrutura em disco: cada e-mail com cabeçalhos, corpo, pastas e anexos; notas de design e vestígios de exclusão contados à parte. Não lidos: itens criptografados (selados), que permanecem bloqueados e são nomeados, e anexos com compressão LZ1, que são nomeados. Desativado: o leitor anterior, que lê apenas os arquivos de teste do próprio mailin."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按磁盘结构读取 Notes 邮件数据库（.nsf）：每封邮件的邮件头、正文、文件夹和附件；设计笔记和删除痕迹另行计数。不读取：加密（密封）项目保持锁定并列出名称，LZ1 压缩的附件列出名称。关闭：旧版读取器，仅读取 mailin 自己的测试文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "依磁碟結構讀取 Notes 郵件資料庫（.nsf）：每封郵件的標頭、內文、檔案夾和附件；設計筆記和刪除痕跡另行計數。不讀取：加密（密封）項目保持鎖定並列出名稱，LZ1 壓縮的附件列出名稱。關閉：舊版讀取器，只讀取 mailin 自己的測試檔案。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
