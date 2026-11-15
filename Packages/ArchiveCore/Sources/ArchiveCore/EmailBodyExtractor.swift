@@ -285,7 +285,18 @@ public class EmailBodyExtractor {
     private static func decodeBodyFromPart(_ part: MIMEPart) -> String {
         let encoding = part.transferEncoding.lowercased()
         let charset = part.charset
-        let raw = part.body
+        // MIMEParser has already transfer-decoded `body` for text parts.
+        // Decoding it a second time garbled every base64 text part whose
+        // decoded text happened to be valid base64 again (alphabet characters
+        // a multiple of 4 — about one in four; found 2026-11-15 by the 100 MB
+        // Notes test). Base64 and quoted-printable are decoded ONCE, from the
+        // encoded original; other encodings keep the parser's charset decoding.
+        if encoding == "base64" || encoding == "quoted-printable" {
+            guard !part.rawBody.isEmpty else { return part.body }
+        } else {
+            return part.body
+        }
+        let raw = part.rawBody
 
         #if canImport(SwiftEmailKit)
         if encoding == "quoted-printable" {

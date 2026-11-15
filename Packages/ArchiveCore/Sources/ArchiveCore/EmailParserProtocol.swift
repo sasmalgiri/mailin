@@ -77,9 +77,15 @@ struct ParserFactory {
         case "pst", "ost":
             return try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "nsf":
-            // GAP-NSF seam: the Notes ODS reader (preview) when its switch is on, else the old heuristic.
+            // GAP-NSF seam: the Notes ODS reader when its switch is on (default since 2026-11-15), else
+            // the old heuristic — which also gets any file the ODS reader does not recognise as a Notes
+            // database layout, so switching the new reader on never reads a file worse than before.
             if NotesODSPolicy.isEnabled {
-                return try NSFODSParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+                do {
+                    return try NSFODSParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+                } catch let error as NSFODSReader.ReadError where error.isLayoutRefusal {
+                    return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+                }
             }
             return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "olm":
@@ -591,17 +597,25 @@ struct ParserFactory {
                 report.declaredFolders = outcome.declaredFolders
                 return report
             }
+            var odsRefusedLayout = false
             if ext == "nsf", NotesODSPolicy.isEnabled {
                 // GAP-NSF: the ODS reader always goes note by note; mail notes it
                 // could not rebuild are failures in the report, never dropped.
+                // A file it does not recognise as a Notes layout (refused while
+                // opening, before any message) goes to the earlier reader below.
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
-                let streamed = try await NSFODSParser.parseStreamingWithInventory(
-                    fileURL: fileURL, senderEmail: senderEmail,
-                    batchSize: max(1, min(batchSize, chunkLimit)),
-                    onProgress: onProgress, onBatch: onBatch)
-                return NSFODSParser.report(streamed)
+                var emitted = false
+                do {
+                    let streamed = try await NSFODSParser.parseStreamingWithInventory(
+                        fileURL: fileURL, senderEmail: senderEmail,
+                        batchSize: max(1, min(batchSize, chunkLimit)),
+                        onProgress: onProgress, onBatch: { batch in emitted = true; try await onBatch(batch) })
+                    return NSFODSParser.report(streamed)
+                } catch let error as NSFODSReader.ReadError where error.isLayoutRefusal && !emitted {
+                    odsRefusedLayout = true
+                }
             }
-            if ext == "nsf", StreamingParserPolicy.binaryStreaming {
+            if ext == "nsf", StreamingParserPolicy.binaryStreaming || odsRefusedLayout {
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
                 let total = try await NSFParser.parseStreaming(
                     fileURL: fileURL, senderEmail: senderEmail,

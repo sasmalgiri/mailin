@@ -35,7 +35,7 @@ Open huge mail archives, keep every folder, search inside attachments, find dupl
 mailin does the five things people need from an email archive — properly, on your own Mac, iPhone or iPad — and now brings your live mail into the same place.
 
 1. OPEN LARGE ARCHIVES
-• MBOX (Google Takeout, Thunderbird, Apple Mail), EML, EMLX, MSG, PST, OST and ZIP — drop the file in and you are in it.
+• MBOX (Google Takeout, Thunderbird, Apple Mail), EML, EMLX, MSG, PST, OST, Outlook for Mac (OLM), Lotus Notes (NSF) and ZIP — drop the file in and you are in it.
 • Streams from disk: size is bounded by your storage, not by mailin. It says exactly what it could not read, and resumes by itself.
 
 2. KEEP EVERY FOLDER
@@ -121,17 +121,20 @@ app (rule 14). TestFlight / demo builds that need Google sign-in set the key to 
 Google has verified the restricted Gmail scopes (`V4_PROVIDER_REGISTRATION.md` §1). `Scripts/check-connected-release.sh`
 prints the mode of the built app (step 5).
 
-## Screenshots (owner, on the candidate; use a demo mailbox, not a personal one)
+## Screenshots (owner, on the candidate; use demo mail, not a personal mailbox)
 
-Mac (2880 × 1800 or 1440 × 900), in this order:
-1. Live Mail with a demo account: folders in the sidebar with counts, the list with previews, a message open on the right.
-2. The quick filter in use (text typed, Unread on) with colour tags on a few messages.
-3. The composer: To / Subject / From, the formatting bar, one attachment chip, a signature.
-4. Accounts and status: the three switches (Preserve mail, Send mail, Change server mail) and the status block.
-5. Archive search showing a captured message next to an imported one.
-6. Add account sheet (Outlook and Microsoft 365 / Gmail app password guidance).
+The first screenshots are what people look at; they follow the same order as the listing. One caption line on each.
 
-iPhone / iPad: the same 1, 3 and 4 if the layout has been checked on device (not yet done, see the tracker).
+Mac (2880 × 1800 or 1440 × 900):
+1. **Open large archives** — a big PST or Takeout MBOX just opened: the import receipt with its counts. Caption: "Open huge archives — PST, MBOX, EML, MSG, OST."
+2. **Keep every folder** — the Archive sidebar with the original folder tree and counts. Caption: "Every folder, exactly as it was."
+3. **Search messages and attachments** — a search that matched inside a PDF / Word attachment, with the "where it matched" chip. Caption: "Find words inside attachments and scans."
+4. **Find duplicates safely** — the duplicates view: byte-identical vs look-alike groups, the count before removal. Caption: "Duplicates found safely — counts first."
+5. **Export with proof** — an export receipt that verified every file. Caption: "Every export ends with a receipt."
+6. **Live Mail** — the mailbox with previews, folders and a message open. Caption: "New: your live mail, in the same place."
+7. **Composer** (optional) — formatting bar and "Attach from Archive".
+
+iPhone / iPad: 1, 3, 5 and 6, once the layouts are checked on a device.
 
 Do not reuse 3.0 screenshots that show "Live Mail is not included" or "Offline & Private" on the connected listing.
 
