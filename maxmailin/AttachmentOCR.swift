@@ -63,6 +63,16 @@ enum AttachmentOCR {
     /// The recogniser, replaceable by tests. The production one asks Vision.
     nonisolated(unsafe) static var recognizer: @Sendable (CGImage) -> Result<String?, Error> = visionRecognizer
 
+    /// One recognition, tried a second time when Vision returns an error: under load Vision
+    /// can fail once on a page it reads the next time (CLOSE-06 Release run, 2026-11-15), and
+    /// a failed row is only re-read when the reader changes — so one transient error would
+    /// leave the attachment unsearchable. A second error is the recorded failure.
+    static func recognizeRetryingOnce(_ image: CGImage) -> Result<String?, Error> {
+        let first = recognizer(image)
+        if case .failure = first { return recognizer(image) }
+        return first
+    }
+
     static func isImage(mimeType: String, filename: String) -> Bool {
         mimeType.lowercased().hasPrefix("image/") || imageExtensions.contains((filename as NSString).pathExtension.lowercased())
     }
@@ -131,7 +141,7 @@ enum AttachmentOCR {
             outcome.failures.append(String(localized: "the image could not be decoded"))
             return outcome
         }
-        switch recognizer(image) {
+        switch recognizeRetryingOnce(image) {
         case .success(let text):
             if let text, !text.isEmpty { outcome.recognised = 1; outcome.text = text }
         case .failure(let error):
@@ -163,7 +173,7 @@ enum AttachmentOCR {
                     outcome.failures.append(String(localized: "page \(index + 1) could not be rendered"))
                     return
                 }
-                switch recognizer(image) {
+                switch recognizeRetryingOnce(image) {
                 case .success(let text):
                     if let text, !text.isEmpty { outcome.recognised += 1; pages.append(text) }
                 case .failure(let error):
