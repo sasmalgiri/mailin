@@ -7972,7 +7972,8 @@ final class ConnectedFiveJobsTests: XCTestCase {
         let rowsB = try await coverageRows(env, captured)
         XCTAssertGreaterThanOrEqual(imported.attachments.count, 4, "PDF, ZIP, inline image, nested message, S/MIME part")
         XCTAssertEqual(rowsA.count, imported.attachments.count)
-        XCTAssertEqual(rowsA.map(Self.key), rowsB.map(Self.key), "the same coverage, attachment by attachment")
+        XCTAssertEqual(rowsA.map(Self.key), rowsB.map(Self.key), "the same coverage, attachment by attachment; notes "
+                       + "\((rowsA + rowsB).compactMap(\.note))")
         let childA = try await env.store.attachmentChildren(forEmailID: imported.id).map { "\($0.path)|\($0.kind)|\($0.sha256)|\($0.state)" }
         let childB = try await env.store.attachmentChildren(forEmailID: captured).map { "\($0.path)|\($0.kind)|\($0.sha256)|\($0.state)" }
         XCTAssertFalse(childA.isEmpty, "the DOCX inside the ZIP and the nested message are documents")
