@@ -5183,6 +5183,30 @@ final class AboutCopyrightTests: XCTestCase {
 /// the behaviour the walk found.
 @MainActor
 final class IPadGate1FixTests: XCTestCase {
+    /// iPad QA 2026-11-15: the badge said "Current plan: Professional" while the home screen
+    /// offered upgrades and the sidebar read "Personal Use". Every view asks the one tier the
+    /// purchase gates use (`effectiveTier`), and the use mode is named as a workspace.
+    func testPlanShownTheSameEverywhere_viewsReadTheEffectiveTier_personaIsAWorkspace() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" && $0.lastPathComponent != "StoreManager.swift" }
+        var raw: [String] = []
+        for f in files {
+            let text = try String(contentsOf: f, encoding: .utf8)
+            for line in text.split(separator: "\n") where line.range(of: #"(storeManager|store|StoreManager\.shared)\.currentTier\b"#, options: .regularExpression) != nil {
+                raw.append("\(f.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        XCTAssertEqual(raw, [], "views read the raw tier instead of effectiveTier:\n" + raw.joined(separator: "\n"))
+
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains(#"Text("Workspace: \(personaManager.selectedPersona.displayName)")"#))
+        // Narrow sidebar: the reply-count row and the import buttons fall back to a stacked layout.
+        XCTAssertTrue(content.contains("minReplyCountLabel\n                            minReplyCountControls"))
+        XCTAssertTrue(content.contains("VStack(spacing: Spacing.xxSmall) {\n                            newImportButton"))
+    }
+
 
     // IPAD-09 (rule 5): a Share sheet closed without saving is not "Complete".
     func testIPAD09_dismissedShareSheetIsNotComplete() {
@@ -8809,7 +8833,7 @@ final class MailWorkspaceTests: XCTestCase {
                     "Attach from Archive…", "Save Draft", "Bold", "No recipients yet", "Allow speech recognition",
                     "Speech in recordings", "Every Email Body Read Correctly", "Lotus Notes Databases",
                     "Checking the sign-in with the server…", "No messages in %@", "Open mailin Drafts (%lld)",
-                    "Counting archived messages…", "Deleting %lld of %lld messages…"]
+                    "Counting archived messages…", "Deleting %lld of %lld messages…", "Workspace: %@"]
         for key in keys {
             let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing key: \(key)")
             let languages = (entry["localizations"] as? [String: Any])?.count ?? 0

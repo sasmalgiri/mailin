@@ -201,7 +201,7 @@ struct WelcomeHubView: View {
                 featureCategorySection(category, index: index)
             }
 
-            if storeManager.currentTier < .professional {
+            if storeManager.effectiveTier < .professional {
                 inAppPurchasesSection
             }
         }
