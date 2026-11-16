@@ -12747,6 +12747,24 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(PracticalRecipesHome.recentHeader(shown: 3, total: 3), String(localized: "Recent results"))
     }
 
+    /// C20 (rule 6): the proactive "tone shifted" finding is computed on a sample of
+    /// the newest messages; its text says so ("100 of 200"), never "overall".
+    func testC20_toneShiftFinding_statesItsSample() throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("FoundationModels") }
+        let happy = "I love this wonderful news, it is fantastic and makes me so happy. Great work, thank you!"
+        let grim = "This is terrible and awful. I hate this horrible failure, it is a disaster and I am furious."
+        let emails = (0..<200).map { i in
+            MBOXParser.RawEmail(
+                headers: ["Message-ID": "<c20-\(i)@x>", "Subject": "s\(i)", "From": "p\(i)@c20.example"],
+                rawSource: "", messageType: "email", attachments: [], timestamp: "2025-01-15T14:30:00Z",
+                domains: ["c20.example"], plainBody: i < 50 ? happy : grim, htmlBody: "")
+        }
+        let findings = FoundationModelEngine.runProactiveScan(emails: emails, phishingResults: [], piiResults: [:])
+        let tone = try XCTUnwrap(findings.first { $0.category == "sentiment" }, "the sample has a clear shift")
+        XCTAssertFalse(tone.detail.hasPrefix("Overall"), tone.detail)
+        XCTAssertTrue(tone.detail.contains("100 of 200"), tone.detail)
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

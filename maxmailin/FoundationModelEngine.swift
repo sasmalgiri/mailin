@@ -4743,7 +4743,7 @@ struct FoundationModelEngine {
     }
 
     // v3.4.1: Proactive scan runs during import, surfaces noteworthy findings
-    private static func runProactiveScan(
+    static func runProactiveScan(
         emails: [MBOXParser.RawEmail],
         phishingResults: [EmailNLPEngine.PhishingFlag],
         piiResults: [EmailNLPEngine.PIIType: Int]
@@ -4798,7 +4798,9 @@ struct FoundationModelEngine {
         }
 
         // 4. Sentiment shifts
-        let sentiments = EmailNLPEngine.analyzeSentiment(of: Array(emails.prefix(100)))
+        // A sample (rule 6: stated in the finding's text, never called "overall").
+        let toneSample = Array(emails.prefix(100))
+        let sentiments = EmailNLPEngine.analyzeSentiment(of: toneSample)
         if sentiments.count >= 10 {
             let half = sentiments.count / 2
             let firstHalf = sentiments.prefix(half)
@@ -4812,7 +4814,7 @@ struct FoundationModelEngine {
                     category: "sentiment",
                     severity: min(abs(shift), 1.0),
                     title: "Significant Sentiment Shift Detected",
-                    detail: "Overall tone shifted \(direction) by \(String(format: "%.1f", abs(shift) * 100))%. Earlier: \(String(format: "%.2f", avgFirst)), Later: \(String(format: "%.2f", avgSecond))",
+                    detail: "In a sample of \(toneSample.count) of \(emails.count) emails, tone shifted \(direction) by \(String(format: "%.1f", abs(shift) * 100))%. Earlier: \(String(format: "%.2f", avgFirst)), Later: \(String(format: "%.2f", avgSecond))",
                     emailIDs: []
                 ))
             }
