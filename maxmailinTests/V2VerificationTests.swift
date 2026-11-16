@@ -12795,6 +12795,34 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(Set(all.first?.removed ?? []), [b.id, c.id])
     }
 
+    /// E (review 2026-11-16): an attachment the streamed path decoded to a temp file is
+    /// read from that file mapped, not loaded whole — a 1.5 GB video on an iPhone must
+    /// not be copied into memory. The footprint stays flat while the bytes are all there.
+    func testE_attachmentDecodedToAFile_isReadMapped_notLoadedWhole() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("e-mapped-\(UUID().uuidString).mov")
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let size: UInt64 = 384 * 1_048_576
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: size)   // sparse: no disk used
+        try handle.close()
+        let meta = AttachmentMetadata(filename: "clip.mov", mimeType: "video/quicktime", size: Int(size), fileURL: url)
+
+        func footprint() -> Int64 {
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+            let kr = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+            }
+            return kr == KERN_SUCCESS ? Int64(info.phys_footprint) : 0
+        }
+        let before = footprint()
+        let data = try XCTUnwrap(AttachmentTextIndexJob.attachmentBytes(meta))
+        let after = footprint()
+        XCTAssertEqual(data.count, Int(size))
+        XCTAssertLessThan(after - before, 64 * 1_048_576, "the attachment was copied into memory (\((after - before) / 1_048_576) MB)")
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

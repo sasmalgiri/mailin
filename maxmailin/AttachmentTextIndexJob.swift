@@ -984,6 +984,17 @@ final class AttachmentTextIndexJob {
         return out
     }
 
+    /// An attachment's bytes: its decoded temp file, or its base64. The file
+    /// is mapped, not copied (review 2026-11-16): a 1.5 GB video the streamed
+    /// path decoded to disk stays file-backed — readers that only look at its
+    /// first bytes (or take its URL, like speech) never pull it into memory,
+    /// so the pass is not killed and restarted on the same email.
+    nonisolated static func attachmentBytes(_ attachment: AttachmentMetadata) -> Data? {
+        if let url = attachment.fileURL { return try? Data(contentsOf: url, options: .alwaysMapped) }
+        if let b64 = attachment.base64 { return Data(base64Encoded: b64, options: .ignoreUnknownCharacters) }
+        return nil
+    }
+
     /// GAP-PGP: the bytes an OpenPGP attachment's signature covers — the
     /// attachment named by a detached signature (`report.pdf.sig` → `report.pdf`),
     /// else the PGP/MIME signed entity. Nil when neither is in the message.
@@ -991,7 +1002,7 @@ final class AttachmentTextIndexJob {
         guard index < attachments.count else { return nil }
         if let target = OpenPGP.signedFileName(forDetachedSignature: attachments[index].filename),
            let other = attachments.enumerated().first(where: { $0.offset != index && $0.element.filename.lowercased() == target.lowercased() })?.element {
-            if let url = other.fileURL, let data = try? Data(contentsOf: url) { return data }
+            if other.fileURL != nil, let data = attachmentBytes(other) { return data }
             if let b64 = other.base64 { return Data(base64Encoded: b64, options: .ignoreUnknownCharacters) }
         }
         return pgpMIMESignedEntity
@@ -1666,7 +1677,7 @@ final class AttachmentTextIndexJob {
         var partial = false
         var children: [ChildDocument] = []
         for (index, attachment) in email.attachments.enumerated() {
-            let data = attachment.fileURL.flatMap { try? Data(contentsOf: $0) } ?? attachment.base64.flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) } ?? Data()
+            let data = attachmentBytes(attachment) ?? Data()
             let child = read(attachment, ocr: ocr, depth: depth + 1, siblings: volumeSiblings(of: index, among: email.attachments, scratch: nil))
             let state: ChildDocument.State
             switch child.state {
@@ -1709,14 +1720,7 @@ final class AttachmentTextIndexJob {
                                          signedData: Data? = nil)
         -> Reading {
         _ = childReaderInstalled
-        let data: Data?
-        if let url = attachment.fileURL {
-            data = try? Data(contentsOf: url)
-        } else if let b64 = attachment.base64 {
-            data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters)
-        } else {
-            data = nil
-        }
+        let data = attachmentBytes(attachment)
         guard let data, !data.isEmpty else {
             return Reading(nil, .failed, "none", String(localized: "attachment has no stored bytes"))
         }
