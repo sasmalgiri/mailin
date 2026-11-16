@@ -134,13 +134,18 @@ final class PSTSpecReader {
 
     init(data: Data) throws {
         bytes = data
-        guard data.count >= 512, data[0] == 0x21, data[1] == 0x42, data[2] == 0x44, data[3] == 0x4E else {
+        let s = data.startIndex
+        guard data.count >= 512, data[s] == 0x21, data[s + 1] == 0x42, data[s + 2] == 0x44, data[s + 3] == 0x4E else {
             throw PSTError.invalidFormat("not a PST/OST file")
         }
         let ver = Self.u16(data, 10)
         geometry = PSTPageGeometry.forHeaderVersion(ver)
         unicode = geometry.unicode
-        crypt = data[unicode ? 513 : 461]
+        // CODE_REVIEW A4: a Unicode header's bCryptMethod is byte 513, so a 512- or
+        // 513-byte file was read one byte past its end; it is a truncated header.
+        let cryptOffset = unicode ? 513 : 461
+        guard data.count > cryptOffset else { throw PSTError.invalidFormat("truncated header (\(data.count) bytes)") }
+        crypt = data[s + cryptOffset]
         // Directive 2026-11-07 §6: 0x10 (Windows Information Protection) and anything else are named, not "unknown".
         guard crypt <= 2 else { throw PSTError.invalidFormat(PSTProtection.CryptMethod(raw: crypt).lockedDescription) }
         let nbtIB = unicode ? Self.u64(data, 224) : UInt64(Self.u32(data, 188))
@@ -151,22 +156,35 @@ final class PSTSpecReader {
 
     // MARK: Little-endian reads (bounds-checked; out of range reads 0)
 
+    // The guards compare `count - o` rather than `o + n`, so no offset can overflow them.
     static func u16(_ d: Data, _ o: Int) -> UInt16 {
-        guard o >= 0, o + 2 <= d.count else { return 0 }
+        guard o >= 0, d.count - o >= 2 else { return 0 }
         let b = d.startIndex + o
         return UInt16(d[b]) | UInt16(d[b + 1]) << 8
     }
     static func u32(_ d: Data, _ o: Int) -> UInt32 {
-        guard o >= 0, o + 4 <= d.count else { return 0 }
+        guard o >= 0, d.count - o >= 4 else { return 0 }
         let b = d.startIndex + o
         return UInt32(d[b]) | UInt32(d[b + 1]) << 8 | UInt32(d[b + 2]) << 16 | UInt32(d[b + 3]) << 24
     }
-    static func u64(_ d: Data, _ o: Int) -> UInt64 { UInt64(u32(d, o)) | UInt64(u32(d, o + 4)) << 32 }
-    static func u16(_ a: [UInt8], _ o: Int) -> UInt16 { o >= 0 && o + 2 <= a.count ? UInt16(a[o]) | UInt16(a[o + 1]) << 8 : 0 }
-    static func u32(_ a: [UInt8], _ o: Int) -> UInt32 {
-        o >= 0 && o + 4 <= a.count ? UInt32(a[o]) | UInt32(a[o + 1]) << 8 | UInt32(a[o + 2]) << 16 | UInt32(a[o + 3]) << 24 : 0
+    static func u64(_ d: Data, _ o: Int) -> UInt64 {
+        guard o >= 0, d.count - o >= 8 else { return 0 }
+        return UInt64(u32(d, o)) | UInt64(u32(d, o + 4)) << 32
     }
-    static func u64(_ a: [UInt8], _ o: Int) -> UInt64 { UInt64(u32(a, o)) | UInt64(u32(a, o + 4)) << 32 }
+    static func u16(_ a: [UInt8], _ o: Int) -> UInt16 { o >= 0 && a.count - o >= 2 ? UInt16(a[o]) | UInt16(a[o + 1]) << 8 : 0 }
+    static func u32(_ a: [UInt8], _ o: Int) -> UInt32 {
+        o >= 0 && a.count - o >= 4 ? UInt32(a[o]) | UInt32(a[o + 1]) << 8 | UInt32(a[o + 2]) << 16 | UInt32(a[o + 3]) << 24 : 0
+    }
+    static func u64(_ a: [UInt8], _ o: Int) -> UInt64 {
+        o >= 0 && a.count - o >= 8 ? UInt64(u32(a, o)) | UInt64(u32(a, o + 4)) << 32 : 0
+    }
+
+    /// CODE_REVIEW A1: a file-supplied byte offset as an Int, or nil when it does not fit
+    /// (`Int(UInt64)` traps when bit 63 is set) or the `length` bytes there run past the file.
+    static func offset(_ ib: UInt64, length: Int, in count: Int) -> Int? {
+        guard let o = Int(exactly: ib), length >= 0, o <= count, length <= count - o else { return nil }
+        return o
+    }
 
     // MARK: NDB — B-trees
 
@@ -176,8 +194,7 @@ final class PSTSpecReader {
         guard depth < 32 else { throw PSTError.depthLimitExceeded }
         visitedPages += 1
         guard visitedPages < 5_000_000 else { throw PSTError.depthLimitExceeded }
-        let o = Int(ib)
-        guard o >= 0, o + geometry.pageSize <= bytes.count else { return }
+        guard let o = Self.offset(ib, length: geometry.pageSize, in: bytes.count) else { return }
         let entriesEnd = geometry.entriesEnd
         let (cEnt, cbEnt, cLevel) = geometry.pageCounts(bytes, pageOffset: o)
         guard cbEnt > 0, cEnt * cbEnt <= entriesEnd else { return }
@@ -210,8 +227,7 @@ final class PSTSpecReader {
     /// One block's bytes; external (data) blocks are decoded.
     func block(_ bid: UInt64) -> [UInt8]? {
         guard let b = blocks[bid & ~1] else { return nil }
-        let o = Int(b.ib)
-        guard o >= 0, b.cb >= 0, o + b.cb <= bytes.count else { return nil }
+        guard let o = Self.offset(b.ib, length: b.cb, in: bytes.count) else { return nil }
         var d = [UInt8](bytes[(bytes.startIndex + o)..<(bytes.startIndex + o + b.cb)])
         // 4 KiB-page OST: inflate first, then decode (libpst's order). A stream the
         // decoder rejects stays as its raw bytes: the item then reads as unreadable.
@@ -228,24 +244,59 @@ final class PSTSpecReader {
     }
 
     /// A node's data as its list of data blocks (XBLOCK / XXBLOCK expanded).
-    func dataBlocks(_ bid: UInt64, depth: Int = 0) -> [[UInt8]] {
-        guard depth < 4, bid != 0, let d = block(bid) else { return [] }
+    ///
+    /// CODE_REVIEW A14: a data tree is a tree — a BID listed twice in one tree, or
+    /// external blocks adding up to more than the root's declared `lcbTotal`, make the
+    /// tree corrupt and it reads as no data (the item is then imported marked unreadable,
+    /// as for any other unreadable block). Before, an XBLOCK naming one child 8,000
+    /// times under an XXBLOCK appended it 64 million times.
+    func dataBlocks(_ bid: UInt64) -> [[UInt8]] {
+        guard bid != 0, let d = block(bid) else { return [] }
         guard bid & 2 != 0 else { return [d] }
-        // XBLOCK (cLevel 1) or XXBLOCK (cLevel 2): btype 0x01.
+        // XBLOCK (cLevel 1) or XXBLOCK (cLevel 2): btype 0x01; lcbTotal at offset 4.
         guard d.count >= 8, d[0] == 0x01 else { return [] }
+        var tree = DataTree(budget: Int(Self.u32(d, 4)), seen: [bid & ~1])
+        guard expand(d, depth: 0, into: &tree) else { return [] }
+        return tree.out
+    }
+
+    private struct DataTree {
+        let budget: Int
+        var seen: Set<UInt64>
+        var total = 0
+        var out: [[UInt8]] = []
+    }
+
+    /// Appends the children of the XBLOCK / XXBLOCK `d`; false when the tree is corrupt.
+    private func expand(_ d: [UInt8], depth: Int, into tree: inout DataTree) -> Bool {
         let count = Int(Self.u16(d, 2))
         let w = unicode ? 8 : 4
-        var out: [[UInt8]] = []
         for i in 0..<count {
             let child = unicode ? Self.u64(d, 8 + i * w) : UInt64(Self.u32(d, 8 + i * w))
-            out += dataBlocks(child, depth: depth + 1)
+            guard child != 0 else { continue }
+            guard tree.seen.insert(child & ~1).inserted else { return false }
+            guard let c = block(child) else { continue }
+            if child & 2 == 0 {
+                guard c.count <= tree.budget - tree.total else { return false }
+                tree.total += c.count
+                tree.out.append(c)
+            } else if depth < 3, c.count >= 8, c[0] == 0x01 {
+                guard expand(c, depth: depth + 1, into: &tree) else { return false }
+            }
         }
-        return out
+        return true
     }
 
     /// Subnode tree (SLBLOCK / SIBLOCK): nid → (data, sub) bids.
+    /// A SIBLOCK naming the same child twice (A14) reads it once.
     func subnodes(_ bid: UInt64, depth: Int = 0) -> [UInt32: (UInt64, UInt64)] {
-        guard depth < 4, bid != 0, let d = block(bid), d.count >= 8, d[0] == 0x02 else { return [:] }
+        var seen = Set<UInt64>()
+        return subnodes(bid, depth: depth, seen: &seen)
+    }
+
+    private func subnodes(_ bid: UInt64, depth: Int, seen: inout Set<UInt64>) -> [UInt32: (UInt64, UInt64)] {
+        guard depth < 4, bid != 0, seen.insert(bid & ~1).inserted,
+              let d = block(bid), d.count >= 8, d[0] == 0x02 else { return [:] }
         let level = d[1]
         let count = Int(Self.u16(d, 2))
         var out: [UInt32: (UInt64, UInt64)] = [:]
@@ -263,7 +314,7 @@ final class PSTSpecReader {
             let size = unicode ? 16 : 8
             for i in 0..<count {
                 let child = unicode ? Self.u64(d, head + i * size + 8) : UInt64(Self.u32(d, head + i * size + 4))
-                out.merge(subnodes(child, depth: depth + 1)) { a, _ in a }
+                out.merge(subnodes(child, depth: depth + 1, seen: &seen)) { a, _ in a }
             }
         }
         return out
@@ -306,8 +357,11 @@ final class PSTSpecReader {
         guard let h = heap.alloc(hid), h.count >= 8, h[0] == 0xB5 else { return [] }
         let cbKey = Int(h[1]), cbEnt = Int(h[2]), levels = Int(h[3])
         var out: [([UInt8], [UInt8])] = []
+        // A14: each index record is read once — an HID listed again (or a branch that
+        // points back up) is skipped, so a hostile heap cannot fan out b^levels times.
+        var seen = Set<UInt32>()
         func visit(_ hid: UInt32, _ level: Int) {
-            guard hid != 0, let r = heap.alloc(hid) else { return }
+            guard hid != 0, seen.insert(hid).inserted, let r = heap.alloc(hid) else { return }
             let size = level > 0 ? cbKey + 4 : cbKey + cbEnt
             guard size > 0 else { return }
             var o = 0
@@ -649,7 +703,11 @@ final class PSTSpecReader {
     /// reads, instead of every message, and carves afterwards.
     func carveUnallocated(listedKeys: Set<String>, listedSubjects: Set<String>) -> [PSTReader.PSTMessage] {
         let key: (String, String, String?, Date?) -> String = Self.carveKey
-        var allocated = blocks.values.map { (Int($0.ib), Int($0.ib) + $0.cb + geometry.blockTrailer) }
+        // A1: a block whose ib lies beyond the file (or beyond Int) allocates nothing in it.
+        var allocated = blocks.values.compactMap { b -> (Int, Int)? in
+            guard let o = Self.offset(b.ib, length: 0, in: bytes.count) else { return nil }
+            return (o, o + b.cb + geometry.blockTrailer)
+        }
         allocated.sort { $0.0 < $1.0 }
         var out: [PSTReader.PSTMessage] = []
         var seen = Set<String>()

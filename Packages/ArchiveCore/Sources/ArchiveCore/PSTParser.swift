@@ -426,7 +426,11 @@ struct PSTReader {
     /// returned as a carved, partial message with its byte offset.
     private func carveUnallocated(blockEntries: [UInt64: BlockEntry]) -> [PSTMessage] {
         // Allocated byte ranges (block data + 16-byte trailer), sorted.
-        var allocated = blockEntries.values.map { (Int($0.offset), Int($0.offset) + Int($0.size) + 16) }
+        // CODE_REVIEW A1: a block whose offset lies beyond the file (or beyond Int) allocates nothing in it.
+        var allocated = blockEntries.values.compactMap { b -> (Int, Int)? in
+            guard let o = Int(exactly: b.offset), o <= data.count else { return nil }
+            return (o, o + Int(b.size) + 16)
+        }
         allocated.sort { $0.0 < $1.0 }
         var out: [PSTMessage] = []
         var seen = Set<String>()
@@ -495,12 +499,14 @@ struct PSTReader {
     private func readNodeBTree() throws -> [NodeEntry] {
         let rootOffset: Int
         if isUnicode {
-            rootOffset = Int(pstReadUInt64(data, offset: 224))
+            // A1: Int(UInt64) traps when bit 63 is set; such a root is outside the file.
+            rootOffset = Int(exactly: pstReadUInt64(data, offset: 224)) ?? -1
         } else {
             rootOffset = Int(pstReadUInt32(data, offset: 188))
         }
         guard rootOffset > 0 && rootOffset < data.count else { return [] }
-        return readNodeBTreePage(at: rootOffset, depth: 0)
+        var seenPages = Set<Int>()
+        return readNodeBTreePage(at: rootOffset, depth: 0, seenPages: &seenPages)
     }
 
     /// MS-PST §2.2.2.7.7: a BTPAGE's leaf-or-branch nature is `cLevel`
@@ -512,9 +518,11 @@ struct PSTReader {
     /// 2026-09-27). Files written by earlier mailin exports used private
     /// ptype values (0x80 branch / 0x82, 0x83 block pages); reading by
     /// `cLevel` keeps those importable too.
-    private func readNodeBTreePage(at offset: Int, depth: Int) -> [NodeEntry] {
+    private func readNodeBTreePage(at offset: Int, depth: Int, seenPages: inout Set<Int>) -> [NodeEntry] {
         guard depth < Self.maxBTreeDepth else { return [] }
-        guard offset >= 0 && offset + 512 <= data.count else { return [] }
+        // A14: a page is read once; a branch naming a page again (or itself) adds nothing.
+        guard seenPages.insert(offset).inserted else { return [] }
+        guard offset >= 0 && data.count - offset >= 512 else { return [] }
 
         let pageType = data[offset + 496]
         guard (0x80...0x83).contains(pageType) else { return [] }
@@ -549,13 +557,13 @@ struct PSTReader {
                 if isUnicode {
                     let base = offset + i * 24
                     guard base + 24 <= data.count else { break }
-                    childOffset = Int(pstReadUInt64(data, offset: base + 16))
+                    childOffset = Int(exactly: pstReadUInt64(data, offset: base + 16)) ?? -1
                 } else {
                     let base = offset + i * 12
                     guard base + 12 <= data.count else { break }
                     childOffset = Int(pstReadUInt32(data, offset: base + 8))
                 }
-                entries.append(contentsOf: readNodeBTreePage(at: childOffset, depth: depth + 1))
+                entries.append(contentsOf: readNodeBTreePage(at: childOffset, depth: depth + 1, seenPages: &seenPages))
             }
             return entries
         }
@@ -564,23 +572,25 @@ struct PSTReader {
     private func readBlockBTree() throws -> [UInt64: BlockEntry] {
         let rootOffset: Int
         if isUnicode {
-            rootOffset = Int(pstReadUInt64(data, offset: 240))
+            rootOffset = Int(exactly: pstReadUInt64(data, offset: 240)) ?? -1
         } else {
             rootOffset = Int(pstReadUInt32(data, offset: 196))
         }
         guard rootOffset > 0 && rootOffset < data.count else { return [:] }
 
         var result: [UInt64: BlockEntry] = [:]
-        let entries = readBlockBTreePage(at: rootOffset, depth: 0)
+        var seenPages = Set<Int>()
+        let entries = readBlockBTreePage(at: rootOffset, depth: 0, seenPages: &seenPages)
         for entry in entries {
             result[entry.bid] = entry
         }
         return result
     }
 
-    private func readBlockBTreePage(at offset: Int, depth: Int) -> [BlockEntry] {
+    private func readBlockBTreePage(at offset: Int, depth: Int, seenPages: inout Set<Int>) -> [BlockEntry] {
         guard depth < Self.maxBTreeDepth else { return [] }
-        guard offset >= 0 && offset + 512 <= data.count else { return [] }
+        guard seenPages.insert(offset).inserted else { return [] }
+        guard offset >= 0 && data.count - offset >= 512 else { return [] }
 
         let pageType = data[offset + 496]
         guard (0x80...0x83).contains(pageType) else { return [] }
@@ -615,13 +625,13 @@ struct PSTReader {
                 if isUnicode {
                     let base = offset + i * 24
                     guard base + 24 <= data.count else { break }
-                    childOffset = Int(pstReadUInt64(data, offset: base + 16))
+                    childOffset = Int(exactly: pstReadUInt64(data, offset: base + 16)) ?? -1
                 } else {
                     let base = offset + i * 12
                     guard base + 12 <= data.count else { break }
                     childOffset = Int(pstReadUInt32(data, offset: base + 8))
                 }
-                entries.append(contentsOf: readBlockBTreePage(at: childOffset, depth: depth + 1))
+                entries.append(contentsOf: readBlockBTreePage(at: childOffset, depth: depth + 1, seenPages: &seenPages))
             }
             return entries
         }
@@ -758,8 +768,12 @@ struct PSTReader {
     /// are XBLOCK/XXBLOCK data trees (MS-PST §2.2.2.8.3.2): a header
     /// (btype 0x01, cLevel, cEnt, lcbTotal) followed by child bids whose
     /// blocks are concatenated in order. Everything else is a plain block.
-    private func readNodeData(bid: UInt64, blockEntries: [UInt64: BlockEntry], depth: Int = 0) -> Data {
-        guard depth < 3, let block = blockEntries[bid] else { return Data() }
+    ///
+    /// CODE_REVIEW A14: a BID listed twice in one tree, or leaf bytes adding up to more
+    /// than the root's declared lcbTotal, make the tree corrupt: it reads as no data.
+    /// Before, an XBLOCK naming one child thousands of times appended it each time.
+    private func readNodeData(bid: UInt64, blockEntries: [UInt64: BlockEntry]) -> Data {
+        guard let block = blockEntries[bid] else { return Data() }
         // Only leaf DATA blocks are obfuscated (MS-PST §2.2.2.8.3.1); internal
         // blocks (bid bit 1) — XBLOCK, XXBLOCK, subnode tables — are stored
         // in the clear.
@@ -768,20 +782,44 @@ struct PSTReader {
         guard isInternal, raw.count >= 8, raw[raw.startIndex] == 0x01 else {
             return raw
         }
-        let count = Int(pstReadUInt16(raw, offset: 2))
+        var seen: Set<UInt64> = [bid]
         var out = Data()
-        for i in 0..<count {
-            let childBid = pstReadUInt64(raw, offset: 8 + i * 8)
-            guard childBid != 0 else { break }
-            out.append(readNodeData(bid: childBid, blockEntries: blockEntries, depth: depth + 1))
-        }
+        // mailin's earlier PSTWriter stores lcbTotal as UInt32(clamping:), so 0xFFFFFFFF means
+        // "4 GiB or more" there; such a tree is bounded by the visited set alone.
+        let declared = pstReadUInt32(raw, offset: 4)
+        let budget = declared == UInt32.max ? Int.max : Int(declared)
+        guard appendDataTree(raw, depth: 1, blockEntries: blockEntries, budget: budget, seen: &seen, into: &out) else { return Data() }
         return out
     }
 
+    /// Appends the children of the XBLOCK / XXBLOCK `raw`; false when the tree is corrupt.
+    private func appendDataTree(_ raw: Data, depth: Int, blockEntries: [UInt64: BlockEntry], budget: Int,
+                                seen: inout Set<UInt64>, into out: inout Data) -> Bool {
+        let count = Int(pstReadUInt16(raw, offset: 2))
+        for i in 0..<count {
+            let childBid = pstReadUInt64(raw, offset: 8 + i * 8)
+            guard childBid != 0 else { break }
+            guard seen.insert(childBid).inserted else { return false }
+            guard let block = blockEntries[childBid] else { continue }
+            let isInternal = (childBid & 0x2) != 0
+            let child = readBlockData(block, decode: !isInternal)
+            if isInternal, child.count >= 8, child[child.startIndex] == 0x01 {
+                guard depth < 2 else { continue }
+                guard appendDataTree(child, depth: depth + 1, blockEntries: blockEntries, budget: budget,
+                                     seen: &seen, into: &out) else { return false }
+            } else {
+                guard child.count <= budget - out.count else { return false }
+                out.append(child)
+            }
+        }
+        return true
+    }
+
     private func readBlockData(_ block: BlockEntry, decode: Bool = true) -> Data {
-        let offset = Int(block.offset)
+        // A1: the offset is file-supplied; one past Int, or past the file, reads nothing.
+        guard let offset = Int(exactly: block.offset), offset <= data.count else { return Data() }
         let size = Int(block.size)
-        guard offset >= 0 && size >= 0 && offset + size <= data.count else { return Data() }
+        guard size <= data.count - offset else { return Data() }
 
         let blockData = data[offset..<(offset + size)]
         guard decode, encType == 0x01 else { return Data(blockData) }
@@ -908,18 +946,18 @@ enum PSTError: LocalizedError {
 // MARK: - PST Binary Read Helpers
 
 private func pstReadUInt16(_ data: Data, offset: Int) -> UInt16 {
-    guard offset >= 0 && offset + 2 <= data.count else { return 0 }
+    guard offset >= 0 && data.count - offset >= 2 else { return 0 }
     return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
 }
 
 private func pstReadUInt32(_ data: Data, offset: Int) -> UInt32 {
-    guard offset >= 0 && offset + 4 <= data.count else { return 0 }
+    guard offset >= 0 && data.count - offset >= 4 else { return 0 }
     return UInt32(data[offset]) | (UInt32(data[offset + 1]) << 8) |
            (UInt32(data[offset + 2]) << 16) | (UInt32(data[offset + 3]) << 24)
 }
 
 private func pstReadUInt64(_ data: Data, offset: Int) -> UInt64 {
-    guard offset >= 0 && offset + 8 <= data.count else { return 0 }
+    guard offset >= 0 && data.count - offset >= 8 else { return 0 }
     return (0..<8).reduce(UInt64(0)) { result, i in
         result | (UInt64(data[offset + i]) << (i * 8))
     }
