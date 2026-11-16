@@ -544,20 +544,20 @@ final class ExportJobRunner {
             }
         case .emlFiles:
             let r = try await service.exportEMLFiles(scope: scope, to: url, limit: cap, render: emlRender, write: write, onProgress: onProgress, onProduced: onProduced)
-            try await attachmentsFolderIfRequested(request, result: r, service: service)
-            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "EML")
+            let attachments = try await attachmentsFolderIfRequested(request, result: r, service: service)
+            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "EML", attachments: attachments)
         case .pdfFiles:
             let r = try await service.exportPDFFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress, onProduced: onProduced)
-            try await attachmentsFolderIfRequested(request, result: r, service: service)
-            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "PDF")
+            let attachments = try await attachmentsFolderIfRequested(request, result: r, service: service)
+            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "PDF", attachments: attachments)
         case .tiffFiles:
             let r = try await service.exportTIFFFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress, onProduced: onProduced)
-            try await attachmentsFolderIfRequested(request, result: r, service: service)
-            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "TIFF")
+            let attachments = try await attachmentsFolderIfRequested(request, result: r, service: service)
+            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "TIFF", attachments: attachments)
         case .msgFiles:
             let r = try await service.exportMSGFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress, onProduced: onProduced)
-            try await attachmentsFolderIfRequested(request, result: r, service: service)
-            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "MSG")
+            let attachments = try await attachmentsFolderIfRequested(request, result: r, service: service)
+            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "MSG", attachments: attachments)
         case .portableHTML:
             let r = try await service.exportPortableHTML(scope: scope, to: url, limit: cap, onProgress: onProgress)
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "HTML")
@@ -572,20 +572,45 @@ final class ExportJobRunner {
 
     /// Folder formats with "also save attachments": copy every attachment into
     /// `Attachments/` after the messages, only when the main run completed.
+    /// Review B12: returns what was saved, so `finish` can say "X of Y".
     private func attachmentsFolderIfRequested(_ request: ExportRequest, result: ArchiveExportResult,
-                                              service: ArchiveExportService) async throws {
-        guard request.options.includeAttachmentsFolder, result.completed, !result.cancelled else { return }
+                                              service: ArchiveExportService) async throws -> ArchiveExportService.AttachmentExportOutcome? {
+        guard request.options.includeAttachmentsFolder, result.completed, !result.cancelled else { return nil }
         let folder = request.destinationURL.appendingPathComponent("Attachments", isDirectory: true)
-        _ = try await service.exportAttachments(scope: request.scope, to: folder, onProgress: { [weak self] in
+        return try await service.exportAttachments(scope: request.scope, to: folder, onProgress: { [weak self] in
             self?.progress($0, $1)
         })
+    }
+
+    /// Review B12: "Saved X of Y attachments …" when the attachments folder
+    /// is short (some could not be produced, or a limit stopped it); nil
+    /// when every attachment reached was saved. Built from the counts here
+    /// so it is localized.
+    nonisolated static func attachmentShortfall(_ a: ArchiveExportService.AttachmentExportOutcome) -> String? {
+        if a.failed > 0 {
+            return String(localized: "Saved \(a.saved) of \(a.attempted) attachments; \(a.failed) could not be read from the archive or written.")
+        }
+        if a.capped {
+            return String(localized: "Saved \(a.saved) attachments; the attachment limit stopped the run before the rest.")
+        }
+        return nil
+    }
+
+    /// Review B12: a short attachments folder makes a complete run partial,
+    /// with the shortfall in the receipt's note.
+    nonisolated static func applyAttachments(_ a: ArchiveExportService.AttachmentExportOutcome?,
+                                             outcome: inout ExportReceipt.Outcome, note: inout String?) {
+        guard let a, let line = attachmentShortfall(a) else { return }
+        if outcome == .complete { outcome = .partial }   // a worse outcome already stands
+        note = note.map { $0 + "; " + line } ?? line
     }
 
     /// Free-tier honesty + A8: every outcome — complete, truncated, cancelled,
     /// failed — is recorded as a receipt with the requested count, what was
     /// written, the artifact hash, and (when the format allows) how to resume.
     private func finish(_ request: ExportRequest, result: ArchiveExportResult?,
-                        written: Int, cancelled: Bool, what: String) async {
+                        written: Int, cancelled: Bool, what: String,
+                        attachments: ArchiveExportService.AttachmentExportOutcome? = nil) async {
         let requested = try? await ArchiveDataService.shared.count(scope: request.scope)
         var outcome: ExportReceipt.Outcome = .complete
         var note: String? = nil
@@ -617,6 +642,10 @@ final class ExportJobRunner {
             let line = "the inventory file could not be written (\(failure)); the working manifest \(ExportFolderManifest.filename) stays beside the files — Verify export re-hashes them once the destination allows writing"
             note = note.map { $0 + "; " + line } ?? line
             onError?("\(what) export: \(line).")
+        }
+        if let attachments, let line = Self.attachmentShortfall(attachments) {
+            Self.applyAttachments(attachments, outcome: &outcome, note: &note)
+            onError?("\(what) export: \(line)")
         }
 
         var resume: ExportRequest? = nil

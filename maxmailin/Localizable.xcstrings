@@ -459774,6 +459774,134 @@
           }
         }
       }
+    },
+    "Saved %lld of %lld attachments; %lld could not be read from the archive or written." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld von %lld Anhängen gesichert; %lld konnten nicht aus dem Archiv gelesen oder geschrieben werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se guardaron %lld de %lld adjuntos; %lld no se pudieron leer del archivo ni escribir."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pièces jointes sur %lld enregistrées ; %lld n’ont pas pu être lues depuis l’archive ou écrites."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld में से %1$lld अटैचमेंट सहेजे गए; %3$lld को संग्रह से पढ़ा या लिखा नहीं जा सका।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvati %lld allegati su %lld; %lld non è stato possibile leggerli dall’archivio o scriverli."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld件中%1$lld件の添付ファイルを保存しました。%3$lld件はアーカイブから読み取れないか、書き込めませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부 파일 %2$lld개 중 %1$lld개를 저장했습니다. %3$lld개는 아카이브에서 읽거나 쓸 수 없었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld de %lld anexos salvos; %lld não puderam ser lidos do arquivo ou gravados."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存 %2$lld 个附件中的 %1$lld 个；%3$lld 个无法从归档读取或写入。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存 %2$lld 個附件中的 %1$lld 個；%3$lld 個無法從封存讀取或寫入。"
+          }
+        }
+      }
+    },
+    "Saved %lld attachments; the attachment limit stopped the run before the rest." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Anhänge gesichert; das Anhangslimit hat den Lauf vor dem Rest angehalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se guardaron %lld adjuntos; el límite de adjuntos detuvo la ejecución antes del resto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pièces jointes enregistrées ; la limite de pièces jointes a arrêté l’exécution avant le reste."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld अटैचमेंट सहेजे गए; अटैचमेंट सीमा ने बाकी से पहले रन रोक दिया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvati %lld allegati; il limite di allegati ha interrotto l’esecuzione prima del resto."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件の添付ファイルを保存しました。添付ファイルの上限により、残りの前に実行が停止しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "첨부 파일 %lld개를 저장했습니다. 첨부 파일 한도 때문에 나머지 전에 실행이 중지되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld anexos salvos; o limite de anexos parou a execução antes do restante."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存 %lld 个附件；附件数量上限使运行在其余附件之前停止。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存 %lld 個附件；附件數量上限使執行在其餘附件之前停止。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

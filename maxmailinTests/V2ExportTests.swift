@@ -72,6 +72,35 @@ final class V2ExportTests: XCTestCase {
     /// Audit F08: a resume is refused when the selection changed since the
     /// run stopped; a fresh request, or one whose fingerprint still matches,
     /// proceeds.
+    /// Review B12: "also save attachments" with attachments that could not be
+    /// produced is a partial run that says "Saved X of Y", never complete.
+    func testAttachmentsFolder_shortfallMakesTheReceiptPartial_withXofY() {
+        typealias A = ArchiveExportService.AttachmentExportOutcome
+        var outcome: ExportReceipt.Outcome = .complete
+        var note: String?
+        ExportJobRunner.applyAttachments(A(saved: 7, failed: 0, capped: false), outcome: &outcome, note: &note)
+        XCTAssertEqual(outcome, .complete, "every attachment saved: complete")
+        XCTAssertNil(note)
+
+        ExportJobRunner.applyAttachments(A(saved: 7, failed: 3, capped: false), outcome: &outcome, note: &note)
+        XCTAssertEqual(outcome, .partial)
+        XCTAssertEqual(note, String(localized: "Saved 7 of 10 attachments; 3 could not be read from the archive or written."))
+
+        var capped: ExportReceipt.Outcome = .complete
+        var cappedNote: String? = "earlier note"
+        ExportJobRunner.applyAttachments(A(saved: 10, failed: 0, capped: true), outcome: &capped, note: &cappedNote)
+        XCTAssertEqual(capped, .partial)
+        XCTAssertEqual(cappedNote, "earlier note; " + String(localized: "Saved 10 attachments; the attachment limit stopped the run before the rest."))
+
+        // A worse outcome already recorded stands.
+        var failed: ExportReceipt.Outcome = .failed
+        var failedNote: String?
+        ExportJobRunner.applyAttachments(A(saved: 0, failed: 2, capped: false), outcome: &failed, note: &failedNote)
+        XCTAssertEqual(failed, .failed)
+        XCTAssertNotNil(failedNote)
+        XCTAssertNil(ExportJobRunner.attachmentShortfall(A(saved: 4, failed: 0, capped: false)))
+    }
+
     func testResumeIsCurrent_refusesAChangedSelection() async throws {
         let env = try await makeEnv(count: 30)
         let scope = ArchiveSelectionScope.query(.all, exclusions: [])

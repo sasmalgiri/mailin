@@ -3335,6 +3335,10 @@ struct ParsedEmailListView: View {
                                                      reason: String(localized: "The Free plan saves 10 attachments a day. Personal and Professional have no daily limit."))
                         listExportError = "Free limit: saved \(outcome.saved) attachments today. Personal and Professional have no daily limit."
                     }
+                    // Review B12: attachments that could not be produced are said, never hidden.
+                    if outcome.failed > 0, let line = ExportJobRunner.attachmentShortfall(outcome) {
+                        listExportError = line
+                    }
                     #if os(iOS)
                     if outcome.saved > 0 { iOSShareFile(at: folderURL) }
                     #endif
