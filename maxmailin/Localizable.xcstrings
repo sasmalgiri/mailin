@@ -470059,6 +470059,134 @@
           }
         }
       }
+    },
+    "The incoming mail server did not accept the sign-in. Nothing was saved." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für eingehende E-Mails hat die Anmeldung nicht angenommen. Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo entrante no aceptó el inicio de sesión. No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de courrier entrant n’a pas accepté la connexion. Rien n’a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in arrivo non ha accettato l’accesso. Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信メールサーバがサインインを受け付けませんでした。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받는 메일 서버가 로그인을 받아들이지 않았습니다. 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de entrada de e-mail não aceitou o início de sessão. Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件服务器未接受登录。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件伺服器未接受登入。未儲存任何內容。"
+          }
+        }
+      }
+    },
+    "The outgoing mail server did not accept the sign-in. Nothing was saved." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für ausgehende E-Mails hat die Anmeldung nicht angenommen. Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo saliente no aceptó el inicio de sesión. No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de courrier sortant n’a pas accepté la connexion. Rien n’a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जाने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in uscita non ha accettato l’accesso. Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信メールサーバがサインインを受け付けませんでした。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보내는 메일 서버가 로그인을 받아들이지 않았습니다. 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de saída de e-mail não aceitou o início de sessão. Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发件服务器未接受登录。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄件伺服器未接受登入。未儲存任何內容。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

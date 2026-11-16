@@ -80,14 +80,33 @@ enum MailLifecycleText {
                 return gmail ? ConnectedMailErrorText.gmailAppPasswordRefused
                              : String(localized: "The incoming mail server refused the user name or password. Nothing was saved.")
             }
-            return String(localized: "The incoming mail server did not accept the sign-in (\(why)). Nothing was saved.")
+            guard let shown = presentableReason(why) else {
+                return String(localized: "The incoming mail server did not accept the sign-in. Nothing was saved.")
+            }
+            return String(localized: "The incoming mail server did not accept the sign-in (\(shown)). Nothing was saved.")
         case .outgoing(let why):
             if isPasswordRefusal(why) {
                 return gmail ? ConnectedMailErrorText.gmailAppPasswordRefused
                              : String(localized: "The outgoing mail server refused the user name or password. Nothing was saved.")
             }
-            return String(localized: "The outgoing mail server did not accept the sign-in (\(why)). Nothing was saved.")
+            guard let shown = presentableReason(why) else {
+                return String(localized: "The outgoing mail server did not accept the sign-in. Nothing was saved.")
+            }
+            return String(localized: "The outgoing mail server did not accept the sign-in (\(shown)). Nothing was saved.")
         }
+    }
+
+    /// A server's own words (its greeting or refusal) are shown only when they
+    /// read as a sentence: one line, no control characters, at most 200
+    /// characters, and nothing `ConnectedMailErrorText.isPresentable` rejects
+    /// (codes, JSON, error dumps). Otherwise the sentence goes without them
+    /// (review 2026-11-16 E).
+    static func presentableReason(_ why: String) -> String? {
+        let line = why.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty, line.count <= 200,
+              !line.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+              ConnectedMailErrorText.isPresentable(line) else { return nil }
+        return line
     }
 
     /// The login check's words for a refused user name or password

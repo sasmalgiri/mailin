@@ -13101,6 +13101,20 @@ final class Review1116CTests: XCTestCase {
         #endif
     }
 
+    /// E: a server's greeting / refusal is shown in the login sentence only when it
+    /// reads as a sentence — never JSON, error dumps, control characters or a wall of text.
+    func testE_loginRefused_showsServerTextOnlyWhenPresentable() {
+        let json = MailLifecycleText.loginRefused(.incoming("* BYE {\"error\":\"internal\",\"trace\":\"x\"}"), mailHost: "imap.example.org")
+        XCTAssertFalse(json.contains("{"), json)
+        XCTAssertTrue(json.contains("did not accept the sign-in"), json)
+        let control = MailLifecycleText.loginRefused(.outgoing("421 busy\r\n\u{1B}[31mINJECT"), mailHost: "smtp.example.org")
+        XCTAssertFalse(control.contains("INJECT"), control)
+        let wall = MailLifecycleText.loginRefused(.incoming(String(repeating: "spam ", count: 100)), mailHost: "imap.example.org")
+        XCTAssertFalse(wall.contains("spam"), wall)
+        let plain = MailLifecycleText.loginRefused(.incoming("the server is closed for maintenance"), mailHost: "imap.example.org")
+        XCTAssertTrue(plain.contains("the server is closed for maintenance"), plain)
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.
