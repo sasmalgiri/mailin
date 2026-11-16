@@ -147,6 +147,10 @@ private let releaseItems40: [ReleaseItem] = {
     items.append(ReleaseItem(icon: "square.and.pencil", title: String(localized: "Write and Send"), description: String(localized: "A full composer: formatting, signatures per account, drag files in or attach messages from your archive, and Undo Send."), color: .indigo))
     #endif
     items.append(ReleaseItem(icon: "magnifyingglass", title: String(localized: "Advanced Search in Every Plan"), description: String(localized: "AND, OR and NOT, dates, senders and attachment conditions are now in the Free plan too, and every search says how much of the archive it covered."), color: .teal))
+    // D-6 (owner 2026-11-16): how the search operators read.
+    items.append(ReleaseItem(icon: "textformat", title: String(localized: "Search Operators in Capitals"), description: String(localized: "AND, OR and NOT work when written in capitals; in lower case, and, or and not are searched as ordinary words. Put a minus sign before a word (-draft) to leave out emails that contain it."), color: .blue))
+    // B6: Spotlight summaries are opt-in.
+    items.append(ReleaseItem(icon: "sparkle.magnifyingglass", title: String(localized: "Spotlight Summaries Off by Default"), description: String(localized: "Apple Intelligence summaries of your mail in Spotlight are now off until you turn them on in Settings ▸ Data & Privacy."), color: .gray))
     items.append(ReleaseItem(icon: "text.badge.checkmark", title: String(localized: "Every Email Body Read Correctly"), description: String(localized: "Some emails encoded a certain way were shown as unreadable text; they are now read correctly from every format."), color: .green))
     items.append(ReleaseItem(icon: "tray.full", title: String(localized: "Lotus Notes Databases"), description: String(localized: "A new reader opens Notes mail databases (.nsf) with their folders and attachments."), color: .orange))
     return items

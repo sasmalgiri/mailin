@@ -472043,6 +472043,262 @@
           }
         }
       }
+    },
+    "Search Operators in Capitals" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suchoperatoren in Großbuchstaben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Operadores de búsqueda en mayúsculas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opérateurs de recherche en majuscules"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बड़े अक्षरों में खोज ऑपरेटर"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Operatori di ricerca in maiuscolo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索演算子は大文字で"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색 연산자는 대문자로"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Operadores de pesquisa em maiúsculas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索运算符使用大写"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋運算子使用大寫"
+          }
+        }
+      }
+    },
+    "AND, OR and NOT work when written in capitals; in lower case, and, or and not are searched as ordinary words. Put a minus sign before a word (-draft) to leave out emails that contain it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND, OR und NOT wirken, wenn sie in Großbuchstaben geschrieben sind; kleingeschrieben werden and, or und not als gewöhnliche Wörter gesucht. Setzen Sie ein Minuszeichen vor ein Wort (-draft), um E-Mails auszulassen, die es enthalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND, OR y NOT funcionan cuando se escriben en mayúsculas; en minúsculas, and, or y not se buscan como palabras normales. Ponga un signo menos delante de una palabra (-draft) para excluir los correos que la contienen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND, OR et NOT fonctionnent lorsqu’ils sont écrits en majuscules ; en minuscules, and, or et not sont recherchés comme des mots ordinaires. Placez un signe moins devant un mot (-draft) pour écarter les e-mails qui le contiennent."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND, OR और NOT बड़े अक्षरों में लिखे जाने पर काम करते हैं; छोटे अक्षरों में and, or और not साधारण शब्दों की तरह खोजे जाते हैं। किसी शब्द वाले ईमेल छोड़ने के लिए उसके आगे ऋण चिह्न लगाएँ (-draft)।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND, OR e NOT funzionano se scritti in maiuscolo; in minuscolo, and, or e not vengono cercati come parole normali. Metti un segno meno davanti a una parola (-draft) per escludere le email che la contengono."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND、OR、NOT は大文字で書いたときに演算子として働きます。小文字の and、or、not は通常の単語として検索されます。単語の前にマイナス記号を付けると（-draft）、その単語を含むメールを除外できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND, OR, NOT은 대문자로 쓸 때 연산자로 작동합니다. 소문자 and, or, not은 일반 단어로 검색됩니다. 단어 앞에 빼기 기호를 붙이면(-draft) 그 단어가 들어 있는 이메일을 제외합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND, OR e NOT funcionam quando escritos em maiúsculas; em minúsculas, and, or e not são pesquisados como palavras comuns. Coloque um sinal de menos antes de uma palavra (-draft) para deixar de fora os e-mails que a contêm."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND、OR 和 NOT 需用大写书写才会作为运算符生效；小写的 and、or 和 not 按普通单词搜索。在单词前加减号（-draft）可排除包含该词的邮件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AND、OR 和 NOT 需以大寫書寫才會作為運算子生效；小寫的 and、or 和 not 會按一般單字搜尋。在單字前加上減號（-draft）可排除含有該字的郵件。"
+          }
+        }
+      }
+    },
+    "Spotlight Summaries Off by Default" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight-Zusammenfassungen standardmäßig aus"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resúmenes de Spotlight desactivados por omisión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Résumés Spotlight désactivés par défaut"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight सारांश डिफ़ॉल्ट रूप से बंद"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Riepiloghi di Spotlight disattivati per impostazione predefinita"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight の要約はデフォルトでオフ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight 요약은 기본적으로 꺼짐"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resumos do Spotlight desativados por padrão"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“聚焦”摘要默认关闭"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight 摘要預設關閉"
+          }
+        }
+      }
+    },
+    "Apple Intelligence summaries of your mail in Spotlight are now off until you turn them on in Settings ▸ Data & Privacy." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence-Zusammenfassungen Ihrer E-Mails in Spotlight sind jetzt aus, bis Sie sie unter Einstellungen ▸ Daten & Datenschutz einschalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los resúmenes de Apple Intelligence de su correo en Spotlight ahora están desactivados hasta que los active en Ajustes ▸ Datos y privacidad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les résumés Apple Intelligence de vos e-mails dans Spotlight sont désormais désactivés jusqu’à ce que vous les activiez dans Réglages ▸ Données et confidentialité."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight में आपके मेल के Apple Intelligence सारांश अब तब तक बंद रहते हैं जब तक आप उन्हें सेटिंग्स ▸ डेटा और गोपनीयता में चालू नहीं करते।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I riepiloghi di Apple Intelligence della tua posta in Spotlight ora sono disattivati finché non li attivi in Impostazioni ▸ Dati e privacy."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight でのメールの Apple Intelligence による要約は、設定 ▸ データとプライバシーでオンにするまでオフになりました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight에서 메일의 Apple Intelligence 요약은 이제 설정 ▸ 데이터 및 개인정보 보호에서 켤 때까지 꺼져 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os resumos do Apple Intelligence do seu e-mail no Spotlight agora ficam desativados até você ativá-los em Ajustes ▸ Dados e privacidade."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“聚焦”中邮件的 Apple 智能摘要现在默认关闭，需在“设置 ▸ 数据与隐私”中开启。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight 中郵件的 Apple Intelligence 摘要現在預設關閉，需在「設定 ▸ 資料與隱私權」中開啟。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

@@ -5273,6 +5273,39 @@ final class WhatsNewGateTests: XCTestCase {
     func testSameVersionNeverShows() {
         XCTAssertFalse(WhatsNewView.shouldShow(current: "3.0.2", lastSeen: "3.0.2"))
     }
+
+    /// D-6 (owner 2026-11-16): the 4.0 notes explain the search operators and say
+    /// Spotlight summaries are now off by default — in every edition, 10 languages.
+    func testD6_fourPointOhNotesExplainOperatorsAndSpotlight() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let view = try String(contentsOf: root.appendingPathComponent("maxmailin/WhatsNewView.swift"), encoding: .utf8)
+        let items40 = try XCTUnwrap(view.range(of: "private let releaseItems40")).upperBound
+        let end = try XCTUnwrap(view.range(of: "private let releaseNotes")).lowerBound
+        let body = String(view[items40..<end])
+        let operators = "AND, OR and NOT work when written in capitals; in lower case, and, or and not are searched as ordinary words. Put a minus sign before a word (-draft) to leave out emails that contain it."
+        let spotlight = "Apple Intelligence summaries of your mail in Spotlight are now off until you turn them on in Settings ▸ Data & Privacy."
+        for text in [operators, spotlight] {
+            let at = try XCTUnwrap(body.range(of: text), text)
+            let connectedOnly = try XCTUnwrap(body.range(of: "#endif")).lowerBound
+            XCTAssertGreaterThan(at.lowerBound, connectedOnly, "shown in the offline edition too")
+        }
+        // Each sentence matches what the app does.
+        XCTAssertEqual(PlainSearchTranslator.spec(from: "salt or pepper")?.groups.first?.kind, .all, "lower-case or is a word")
+        XCTAssertEqual(PlainSearchTranslator.spec(from: "salt OR pepper")?.groups.first?.kind, .any)
+        XCTAssertEqual(PlainSearchTranslator.spec(from: "invoice -draft")?.groups.last?.kind, .exclude)
+        let settings = try String(contentsOf: root.appendingPathComponent("maxmailin/SettingsView.swift"), encoding: .utf8)
+        XCTAssertTrue(settings.contains("@AppStorage(SpotlightIndexer.appleIntelligenceKey) private var spotlightAppleIntelligence = false"), "off unless turned on")
+        XCTAssertTrue(settings.contains(#"Toggle("Let Apple Intelligence summarise mail in Spotlight""#))
+        let section = try XCTUnwrap(settings.range(of: #"Toggle("Let Apple Intelligence summarise mail in Spotlight""#)).upperBound
+        XCTAssertTrue(settings[section...].prefix(4_000).contains(#"Label("Data & Privacy""#), "the toggle is in Data & Privacy")
+        // Translated in all ten languages.
+        let data = try Data(contentsOf: root.appendingPathComponent("maxmailin/Localizable.xcstrings"))
+        let strings = try XCTUnwrap((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["strings"] as? [String: Any])
+        for key in ["Search Operators in Capitals", operators, "Spotlight Summaries Off by Default", spotlight] {
+            let locs = (strings[key] as? [String: Any])?["localizations"] as? [String: Any]
+            XCTAssertEqual(locs?.count, 10, key)
+        }
+    }
 }
 
 // About names the App Store seller (Shrabani Sasmal), in every shipped language.
