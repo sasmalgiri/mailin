@@ -4700,10 +4700,17 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // iOS shares a single .msg — hydrate just the first match.
             let first = try? await ArchiveDataService.shared
                 .page(query: modelVM.currentArchiveQuery, cursor: nil, limit: 1).summaries.first
-            guard let id = first?.id,
-                  let email = try? await ArchiveDataService.shared.fullEmail(id: id),
-                  let data = MSGWriter.write(email: email) else {
-                vm.statusMessage = "MSG export failed."
+            var email: MBOXParser.RawEmail?
+            if let id = first?.id {
+                do { email = try await ArchiveDataService.shared.fullEmail(id: id) } catch {
+                    vm.statusMessage = String(localized: "MSG export failed: \(error.localizedDescription)")
+                    vm.statusColor = .red
+                    return
+                }
+            }
+            let made = Self.msgShareData(email)
+            guard case .success(let data) = made else {
+                if case .failure(let why) = made { vm.statusMessage = why.text }
                 vm.statusColor = .red
                 return
             }
@@ -5208,3 +5215,22 @@ private struct PhoneEmailDetailHost: View {
     }
 }
 #endif
+
+// MARK: - iOS single .msg share (review 2026-11-16 follow-up)
+
+struct MSGShareFailure: Error, Equatable { let text: String }
+
+extension ContentView {
+    /// The .msg bytes for the iOS share, or the reason it could not be made.
+    nonisolated static func msgShareData(_ email: MBOXParser.RawEmail?,
+                                         write: (MBOXParser.RawEmail) throws -> Data = MSGWriter.data(for:)) -> Result<Data, MSGShareFailure> {
+        guard let email else {
+            return .failure(MSGShareFailure(text: String(localized: "MSG export failed: there is no message in the current list.")))
+        }
+        do {
+            return .success(try write(email))
+        } catch {
+            return .failure(MSGShareFailure(text: String(localized: "MSG export failed: \(error.localizedDescription)")))
+        }
+    }
+}

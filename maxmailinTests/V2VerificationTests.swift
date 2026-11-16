@@ -12854,6 +12854,20 @@ final class Review1116CTests: XCTestCase {
         XCTAssertLessThan(after - before, 64 * 1_048_576, "the attachment was copied into memory (\((after - before) / 1_048_576) MB)")
     }
 
+    /// Follow-up (review 2026-11-16): the iPhone/iPad single .msg share shows the
+    /// writer's reason, not a bare "MSG export failed."
+    func testMSGShare_showsTheWritersReason() {
+        let email = Self.email(9)
+        let failed = ContentView.msgShareData(email) { _ in throw MSGWriterError.entryNameTooLong("__substg1.0_TOO_LONG_NAME_FOR_CFB") }
+        guard case .failure(let why) = failed else { return XCTFail("a writer error must fail") }
+        XCTAssertTrue(why.text.contains("31 characters"), why.text)
+        let none = ContentView.msgShareData(nil)
+        guard case .failure(let noneWhy) = none else { return XCTFail("no message must fail") }
+        XCTAssertNotEqual(noneWhy.text, "MSG export failed.", "says why")
+        guard case .success(let data) = ContentView.msgShareData(email) else { return XCTFail("a plain message writes") }
+        XCTAssertGreaterThan(data.count, 512)
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {
