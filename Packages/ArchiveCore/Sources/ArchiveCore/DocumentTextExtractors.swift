@@ -556,14 +556,15 @@ enum IWAFile {
         var objects: [Object] = []
         var pos = 0
         while pos < raw.count {
-            guard let (length, next) = ProtobufWalker.varint(raw, at: pos), next + length <= raw.count else { break }
+            // A6: a decoded length is checked against what is left, never added first (no overflow).
+            guard let (length, next) = ProtobufWalker.length(raw, at: pos), length <= raw.count - next else { break }
             let info = raw.subdata(in: next..<(next + length))
             pos = next + length
             // ArchiveInfo.message_infos (field 2) → MessageInfo.type (1), .length (3)
             for message in ProtobufWalker.messages(field: 2, in: info) {
                 let type = Int(ProtobufWalker.varints(field: 1, in: message).first ?? 0)
                 let size = Int(ProtobufWalker.varints(field: 3, in: message).first ?? 0)
-                guard size >= 0, pos + size <= raw.count else { return objects }
+                guard size >= 0, size <= raw.count - pos else { return objects }
                 objects.append(Object(type: type, payload: raw.subdata(in: pos..<(pos + size))))
                 pos += size
             }
@@ -664,6 +665,15 @@ enum ProtobufWalker {
         return nil
     }
 
+    /// A6: a varint read as a LENGTH (or size, offset): nil when it does not
+    /// decode or decodes negative (`80×9 01` is Int.min) — a length is never
+    /// negative, and the caller compares it with `count - next`, so no sum
+    /// of two decoded values can overflow.
+    static func length(_ data: Data, at start: Int) -> (Int, Int)? {
+        guard let (value, next) = varint(data, at: start), value >= 0 else { return nil }
+        return (value, next)
+    }
+
     /// (field number, wire type, value range or varint value) for every field, in order.
     static func fields(in data: Data) -> [(field: Int, wire: Int, value: Int, bytes: Range<Int>?)] {
         var out: [(Int, Int, Int, Range<Int>?)] = []
@@ -678,8 +688,8 @@ enum ProtobufWalker {
                 out.append((field, wire, v, nil)); pos = n
             case 1: pos += 8; out.append((field, wire, 0, nil))
             case 2:
-                guard let (length, n) = varint(data, at: pos), n + length <= data.count else { return out }
-                out.append((field, wire, 0, n..<(n + length))); pos = n + length
+                guard let (size, n) = Self.length(data, at: pos), size <= data.count - n else { return out }
+                out.append((field, wire, 0, n..<(n + size))); pos = n + size
             case 5: pos += 4; out.append((field, wire, 0, nil))
             default: return out
             }
@@ -1133,6 +1143,45 @@ struct ChildDocument: Sendable, Equatable {
     var carried: Bool = false
 }
 
+/// Review 2026-11-16 A16: how deep the running reading is and how many bytes
+/// of the attachment's archive budget are left, across every level — an
+/// archive member, an Office package's /embeddings/ member, and whatever
+/// those hold. Bound (task-local) around each nested read, so a nested
+/// archive or embedded document continues the SAME depth count and budget
+/// instead of starting afresh at depth 1 with a full budget. Nil at the top
+/// of an attachment (depth 1, the whole `ExtractionLimits.effective` budget).
+final class ExtractionNesting: @unchecked Sendable {
+    /// The level of the reader running now: 1 = the attachment itself.
+    let depth: Int
+    /// Bytes still to be extracted from this attachment's archives.
+    var budget: Int64
+
+    init(depth: Int, budget: Int64) {
+        self.depth = depth
+        self.budget = budget
+    }
+
+    @TaskLocal static var current: ExtractionNesting?
+
+    /// The level and budget the reader running now works under.
+    static var here: (depth: Int, budget: Int64) {
+        if let current { return (current.depth, current.budget) }
+        return (1, ExtractionLimits.effective.totalArchiveBytes)
+    }
+
+    /// Runs `body` (a nested reader) at `depth` with what is left of
+    /// `budget`; what the nested reader spends is taken off `budget`.
+    static func reading<R>(atDepth depth: Int, budget: inout Int64, _ body: () throws -> R) rethrows -> R {
+        let nesting = ExtractionNesting(depth: depth, budget: budget)
+        defer { budget = nesting.budget }
+        return try $current.withValue(nesting) { try body() }
+    }
+
+    /// The named reason a nested read is not opened at this level.
+    static var tooDeepReason: String { "an archive nested deeper than \(ExtractionLimits.effective.archiveDepth) levels" }
+    static var budgetReason: String { "the \(ExtractionLimits.effective.totalArchiveBytes)-byte budget for one attachment's archives is used up" }
+}
+
 /// Audit 2026-11-06 A04. Every child of an archive attachment is accounted
 /// for: documents through the document facade, text files directly, every
 /// other kind through the app's reader when one is installed (PDF text
@@ -1170,10 +1219,14 @@ enum ContainerTextExtractor {
 
     static func extract(fileURL: URL, kind: DocumentKind, logicalName: String? = nil, password: String? = nil,
                         siblings: [SplitVolumeSet.Sibling] = []) throws -> OfficeTextExtractor.Result {
-        var budget = ExtractionLimits.effective.totalArchiveBytes
+        // A16: an archive met inside another reading (an Office package's
+        // embedded zip) continues that reading's depth and budget.
+        let here = ExtractionNesting.here
+        var budget = here.budget
+        defer { ExtractionNesting.current?.budget = budget }
         let name = logicalName ?? fileURL.lastPathComponent
         let neighbours = siblings.isEmpty ? (siblingResolver?(fileURL, name) ?? []) : siblings
-        return try extract(fileURL: fileURL, kind: kind, logicalName: name, depth: 1, prefix: "", budget: &budget, password: password, siblings: neighbours)
+        return try extract(fileURL: fileURL, kind: kind, logicalName: name, depth: here.depth, prefix: "", budget: &budget, password: password, siblings: neighbours)
     }
 
     /// What a failed extraction means for the child — one vocabulary for
@@ -1395,7 +1448,11 @@ enum ContainerTextExtractor {
                     continue
                 }
                 do {
-                    let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: member.name, password: password)
+                    // A16: a document member is read one level down, on what is left of the budget
+                    // (its own embedded documents and archives continue the count).
+                    let inner = try ExtractionNesting.reading(atDepth: depth + 1, budget: &budget) {
+                        try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: member.name, password: password)
+                    }
                     skipped.append(contentsOf: inner.skipped.map { "\(name): \($0)" })
                     record(name, member, inner.partial ? .partial : .extracted, text: inner.text,
                            note: inner.childNote,
@@ -1422,7 +1479,7 @@ enum ContainerTextExtractor {
                     record(name, member, .extracted, text: body, sha256: sha, bytes: size)
                 }
             } else if let reader = childReader {
-                let reading = reader(destination, member.name)
+                let reading = ExtractionNesting.reading(atDepth: depth + 1, budget: &budget) { reader(destination, member.name) }
                 if let body = reading.text, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     if let why = reading.notRead { skipped.append("\(name): \(why)") }
                     record(name, member, reading.notRead == nil ? .extracted : .partial, text: body, note: reading.notRead, sha256: sha, bytes: size)

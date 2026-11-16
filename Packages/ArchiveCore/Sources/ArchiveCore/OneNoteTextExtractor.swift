@@ -226,22 +226,28 @@ enum OneNoteTextExtractor {
         var pos: Int
         var end: Int
 
-        init(_ b: [UInt8], pos: Int, end: Int) { self.b = b; self.pos = pos; self.end = min(end, b.count) }
+        // A8: `end` is kept within 0…count and every bound is checked as
+        // `n <= end - pos` (pos ≥ 0), so no decoded offset or length — up to
+        // Int.max from `Int(clamping:)` — can overflow a sum inside a guard.
+        init(_ b: [UInt8], pos: Int, end: Int) { self.b = b; self.pos = pos; self.end = max(0, min(end, b.count)) }
 
-        var remaining: Int { end - pos }
+        var remaining: Int { pos >= 0 && pos <= end ? end - pos : 0 }
+
+        /// True when `n` more bytes from `pos` lie inside the structure.
+        private func fits(_ n: Int) -> Bool { n >= 0 && pos >= 0 && pos <= end && n <= end - pos }
 
         mutating func u8() throws -> UInt8 {
-            guard pos >= 0, pos < end else { throw Issue("read past the end of the structure at offset \(pos)") }
+            guard fits(1) else { throw Issue("read past the end of the structure at offset \(pos)") }
             defer { pos += 1 }
             return b[pos]
         }
         mutating func u16() throws -> UInt16 {
-            guard pos >= 0, pos + 2 <= end else { throw Issue("read past the end of the structure at offset \(pos)") }
+            guard fits(2) else { throw Issue("read past the end of the structure at offset \(pos)") }
             defer { pos += 2 }
             return UInt16(b[pos]) | UInt16(b[pos + 1]) << 8
         }
         mutating func u32() throws -> UInt32 {
-            guard pos >= 0, pos + 4 <= end else { throw Issue("read past the end of the structure at offset \(pos)") }
+            guard fits(4) else { throw Issue("read past the end of the structure at offset \(pos)") }
             defer { pos += 4 }
             return UInt32(b[pos]) | UInt32(b[pos + 1]) << 8 | UInt32(b[pos + 2]) << 16 | UInt32(b[pos + 3]) << 24
         }
@@ -250,12 +256,12 @@ enum OneNoteTextExtractor {
             return low | high << 32
         }
         mutating func bytes(_ n: Int) throws -> [UInt8] {
-            guard n >= 0, pos >= 0, pos + n <= end else { throw Issue("read past the end of the structure at offset \(pos)") }
+            guard fits(n) else { throw Issue("read past the end of the structure at offset \(pos)") }
             defer { pos += n }
             return Array(b[pos..<(pos + n)])
         }
         mutating func skip(_ n: Int) throws {
-            guard n >= 0, pos + n <= end else { throw Issue("read past the end of the structure at offset \(pos)") }
+            guard fits(n) else { throw Issue("read past the end of the structure at offset \(pos)") }
             pos += n
         }
     }
@@ -522,7 +528,13 @@ extension OneNoteTextExtractor {
             let stp: Int
             let cb: Int
             var isNil: Bool { stp < 0 || (stp == 0 && cb == 0) }
-            var end: Int { stp + cb }
+            /// A8: stp and cb are decoded 64-bit values (header bytes 172–179
+            /// can be `FF…7F`); their sum saturates instead of overflowing, so
+            /// every `end <= count` check simply fails for such a reference.
+            var end: Int {
+                let (sum, overflow) = stp.addingReportingOverflow(cb)
+                return overflow ? (cb > 0 ? Int.max : Int.min) : sum
+            }
         }
 
         final class Node {
@@ -768,7 +780,7 @@ extension OneNoteTextExtractor {
                 encrypted = true
             case 0x94:
                 _ = try n.bytes(16)                                   // guidReference
-                if let ref = node.ref, !ref.isNil, ref.stp + 40 <= b.count {
+                if let ref = node.ref, !ref.isNil, ref.stp >= 0, ref.stp <= b.count - 40 {   // A8: no stp + 40 overflow
                     var f = Cursor(b, pos: ref.stp + 16, end: b.count)
                     let length = try f.u64()
                     embeddedFiles.append(Int(clamping: length))
@@ -810,8 +822,8 @@ extension OneNoteTextExtractor {
                 for child in list.children {
                     if isRevisionStart(child.id) { inValidRevision = child.gosid == valid && valid != nil }
                     guard inValidRevision, child.id == 0x59 || child.id == 0x5A, child.rootRole == 1, let root = child.gosid else { continue }
-                    var active: Set<ObjectIdentifier> = []
-                    walk(root, parentProperty: nil, depth: 0, active: &active, sink: sink)
+                    var visited: Set<WalkKey> = []
+                    walk(root, parentProperty: nil, depth: 0, visited: &visited, sink: sink)
                 }
                 let lines = sink.drain()
                 if !lines.isEmpty { pages.append(lines) }
@@ -825,15 +837,22 @@ extension OneNoteTextExtractor {
 
         private func isRevisionStart(_ id: Int) -> Bool { id == 0x1B || id == 0x1E || id == 0x1F }
 
-        private func walk(_ oid: ObjectID, parentProperty: UInt32?, depth: Int, active: inout Set<ObjectIdentifier>, sink: TextSink) {
+        /// One object reached through one referencing property.
+        struct WalkKey: Hashable { let node: ObjectIdentifier; let parentProperty: UInt32? }
+
+        /// A17: `visited` is permanent for the walk (as the FSSHTTPB walk's
+        /// set is), not only the current path — objects that reference the
+        /// next one twice form a DAG whose paths double per level (2^60 walks
+        /// for 60 objects); each object is read once per referencing
+        /// property, which is all the text sink can ever emit (it emits each
+        /// byte range once), and a cycle stops the same way.
+        private func walk(_ oid: ObjectID, parentProperty: UInt32?, depth: Int, visited: inout Set<WalkKey>, sink: TextSink) {
             guard depth < Self.maxWalkDepth else { depthLimitHit = true; return }
             guard let node = objects[oid], let set = node.propertySet else { return }
-            let key = ObjectIdentifier(node)
-            guard active.insert(key).inserted else { return }
-            defer { active.remove(key) }
+            guard visited.insert(WalkKey(node: ObjectIdentifier(node), parentProperty: parentProperty)).inserted else { return }
             var pending: [(ObjectID, UInt32)] = []
             OneNoteTextExtractor.emitText(of: set, parentProperty: parentProperty, into: sink) { child, property in pending.append((child, property)) }
-            for (child, property) in pending { walk(child, parentProperty: property, depth: depth + 1, active: &active, sink: sink) }
+            for (child, property) in pending { walk(child, parentProperty: property, depth: depth + 1, visited: &visited, sink: sink) }
         }
     }
 }
@@ -1112,6 +1131,11 @@ extension OneNoteTextExtractor {
                 let v = UInt32(b0) | UInt32(try c.u8()) << 8 | UInt32(try c.u8()) << 16 | UInt32(try c.u8()) << 24
                 var length = Int((v >> 17) & 0x7FFF)
                 if length == 32767 { length = Int(clamping: try compactUInt(&c)) }
+                // A8: a 64-bit length (Int.max after clamping) would overflow every
+                // `c.pos + length` that follows; a stream object's own bytes lie in what is left.
+                guard length <= c.remaining else {
+                    throw Issue("stream object at offset \(c.pos) names \(length) bytes, past the end of the file")
+                }
                 return .start(type: Int((v >> 3) & 0x3FFF), length: length, compound: (v >> 2) & 1 == 1)
             case 1:
                 return .end(type: Int(b0 >> 2))

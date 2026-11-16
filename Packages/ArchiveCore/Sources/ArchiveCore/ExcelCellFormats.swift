@@ -172,7 +172,9 @@ enum ExcelNumberFormat {
     /// has no calendar day (negative, non-finite, day 0 of the 1900 system
     /// for a date format).
     static func render(serial: Double, kind: Kind, date1904: Bool) -> String? {
-        guard serial.isFinite else { return nil }
+        // A10: a stored double can be 1e300; Int() of it traps. Any serial a calendar day
+        // or elapsed time can come from is far below 1e15 (Excel's last day is 2,958,465).
+        guard serial.isFinite, abs(serial) < 1e15 else { return nil }
         switch kind {
         case .date, .time, .dateTime, .elapsedTime: break
         default: return nil
@@ -324,9 +326,11 @@ enum ExcelFormulaText {
         rest = rest.dropFirst(letters.count)
         let rowAbsolute = rest.hasPrefix("$"); if rowAbsolute { rest = rest.dropFirst() }
         guard !rest.isEmpty, rest.allSatisfy({ $0.isNumber }), let row = Int(rest), let column = columnIndex(String(letters)) else { return nil }
-        let newColumn = columnAbsolute ? column : column + columnDelta
-        let newRow = rowAbsolute ? row : row + rowDelta
-        guard newColumn >= 0, newColumn < maxColumn, newRow >= 1, newRow <= maxRow else { throw ShiftError.outOfRange(token) }
+        // A10: the row in the part can be any integer ("9223372036854775807"); the sum is
+        // checked, an overflow is out of range like any row past the sheet.
+        let (newColumn, columnOverflow) = columnAbsolute ? (column, false) : column.addingReportingOverflow(columnDelta)
+        let (newRow, rowOverflow) = rowAbsolute ? (row, false) : row.addingReportingOverflow(rowDelta)
+        guard !columnOverflow, !rowOverflow, newColumn >= 0, newColumn < maxColumn, newRow >= 1, newRow <= maxRow else { throw ShiftError.outOfRange(token) }
         return (columnAbsolute ? "$" : "") + OfficeTextExtractor.columnName(newColumn) + (rowAbsolute ? "$" : "") + String(newRow)
     }
 
@@ -335,8 +339,8 @@ enum ExcelFormulaText {
         let absolute = token.hasPrefix("$")
         guard let column = columnIndex(absolute ? String(token.dropFirst()) : token) else { return nil }
         if absolute { return token }
-        let moved = column + columnDelta
-        guard moved >= 0, moved < maxColumn else { throw ShiftError.outOfRange(token) }
+        let (moved, overflow) = column.addingReportingOverflow(columnDelta)
+        guard !overflow, moved >= 0, moved < maxColumn else { throw ShiftError.outOfRange(token) }
         return OfficeTextExtractor.columnName(moved)
     }
 
@@ -345,8 +349,8 @@ enum ExcelFormulaText {
         let absolute = token.hasPrefix("$")
         guard let row = Int(absolute ? String(token.dropFirst()) : token) else { return nil }
         if absolute { return token }
-        let moved = row + rowDelta
-        guard moved >= 1, moved <= maxRow else { throw ShiftError.outOfRange(token) }
+        let (moved, overflow) = row.addingReportingOverflow(rowDelta)   // A10: checked, as in shiftCell
+        guard !overflow, moved >= 1, moved <= maxRow else { throw ShiftError.outOfRange(token) }
         return String(moved)
     }
 }

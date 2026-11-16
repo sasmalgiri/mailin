@@ -566,7 +566,9 @@ enum ExcelNumberFormatRenderer {
             if let fixed = fixedDenominator, fixed > 0 {
                 den = Double(fixed); num = (part * den).rounded(.toNearestOrAwayFromZero)
             } else {
-                let maxDen = Int(pow(10, Double(denominator.count))) - 1
+                // A10: 10^19 and up does not fit an Int (Int(pow(10, 19)) traps); a run that long
+                // allows every denominator an Int holds.
+                let maxDen = denominator.count >= 19 ? Int.max : Int(pow(10, Double(denominator.count))) - 1
                 (num, den) = bestRational(part, maxDenominator: max(maxDen, 1))
             }
             if hasInteger && num == den && den > 0 { whole += 1; num = 0 }

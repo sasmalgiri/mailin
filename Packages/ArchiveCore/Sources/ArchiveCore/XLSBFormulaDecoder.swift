@@ -568,7 +568,10 @@ enum XLSBFormulaDecoder {
                 defer { extraPos += 4 }
                 return Int(UInt32(rgcb[extraPos]) | UInt32(rgcb[extraPos + 1]) << 8 | UInt32(rgcb[extraPos + 2]) << 16 | UInt32(rgcb[extraPos + 3]) << 24)
             }
-            guard let cols = u32x(), let rows = u32x(), cols >= 1, rows >= 1, cols * rows <= 1 << 20 else { return "(array constant not decoded)" }
+            // A9: rows × cols of two decoded 32-bit counts can overflow Int — checked before comparing.
+            guard let cols = u32x(), let rows = u32x(), cols >= 1, rows >= 1 else { return "(array constant not decoded)" }
+            let (cellCount, overflow) = cols.multipliedReportingOverflow(by: rows)
+            guard !overflow, cellCount <= 1 << 20 else { return "(array constant not decoded)" }
             var lines: [String] = []
             for _ in 0..<rows {
                 var cells: [String] = []

@@ -333,7 +333,8 @@ enum XLSBReader {
             case 0x003C:   // BrtColInfo: colFirst, colLast, coldx, ixfe, flags (fHidden)
                 if p.count >= 18, u16(p, 16) & 0x1 != 0 {
                     let first = Int(u32(p, 0)), last = Int(u32(p, 4))
-                    if first >= 0, last >= first { for column in first...min(last, ExcelFormulaText.maxColumn - 1) { hiddenColumns.insert(column) } }
+                    // A5: a range starting past the sheet's last column names none of its columns.
+                    if first >= 0, last >= first, first <= ExcelFormulaText.maxColumn - 1 { for column in first...min(last, ExcelFormulaText.maxColumn - 1) { hiddenColumns.insert(column) } }
                 }
             case 0x0001...0x000B:
                 guard p.count >= 8 else { continue }

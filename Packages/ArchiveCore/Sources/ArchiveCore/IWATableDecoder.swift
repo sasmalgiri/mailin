@@ -124,7 +124,11 @@ enum IWATableDecoder {
             guard let ref = references(field: 2, in: entry).first, let tile = objects[ref], tile.type == tileType else { continue }
             for rowInfo in ProtobufWalker.messages(field: 5, in: tile.payload) {
                 let rowInTile = ProtobufWalker.varints(field: 1, in: rowInfo).first ?? 0
-                let row = tileID * tileSize + rowInTile
+                // A7: decoded tile ids and sizes can be anything; a row number that
+                // overflows names no row of the table, and the row is not placed.
+                let (base, baseOverflow) = tileID.multipliedReportingOverflow(by: tileSize)
+                let (row, rowOverflow) = base.addingReportingOverflow(rowInTile)
+                guard !baseOverflow, !rowOverflow else { continue }
                 for (column, value) in cells(rowInfo: rowInfo, strings: strings, rich: rich) where value != .empty {
                     grid[row, default: [:]][column] = value
                 }
@@ -249,6 +253,7 @@ enum IWATableDecoder {
     /// Seconds since 2001-01-01 (the cell's wall-clock time): the ISO date,
     /// with the time when it is not midnight.
     static func date(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "\(seconds)" }   // A7: not a date any calendar holds
         let d = Date(timeIntervalSinceReferenceDate: seconds)
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -261,12 +266,15 @@ enum IWATableDecoder {
 
     /// Seconds as "2d 3h 4m 5s" (zero parts left out; "0s" for zero).
     static func duration(_ seconds: Double) -> String {
+        // A7: a stored double is any bit pattern — infinity and NaN are shown as such,
+        // and a count too large for Int64 is printed as the double, never converted.
+        guard seconds.isFinite else { return "\(seconds)s" }
         let negative = seconds < 0
         var rest = abs(seconds)
         var parts: [String] = []
         for (unit, size) in [("w", 604_800.0), ("d", 86_400.0), ("h", 3_600.0), ("m", 60.0)] {
             let n = (rest / size).rounded(.down)
-            if n > 0 { parts.append("\(Int64(n))\(unit)"); rest -= n * size }
+            if n > 0 { parts.append("\(number(n))\(unit)"); rest -= n * size }
         }
         if rest > 0 || parts.isEmpty { parts.append("\(number((rest * 1000).rounded() / 1000))s") }
         return (negative ? "-" : "") + parts.joined(separator: " ")
@@ -353,14 +361,15 @@ extension IWAFile {
         var out: [(Int, Object)] = []
         var pos = 0
         while pos < raw.count {
-            guard let (length, next) = ProtobufWalker.varint(raw, at: pos), next + length <= raw.count else { break }
+            // A6: decoded lengths are non-negative and compared with what is left (no overflowing sum).
+            guard let (length, next) = ProtobufWalker.length(raw, at: pos), length <= raw.count - next else { break }
             let info = raw.subdata(in: next..<(next + length))
             pos = next + length
             let id = ProtobufWalker.varints(field: 1, in: info).first ?? 0
             for (n, message) in ProtobufWalker.messages(field: 2, in: info).enumerated() {
                 let type = ProtobufWalker.varints(field: 1, in: message).first ?? 0
                 let size = ProtobufWalker.varints(field: 3, in: message).first ?? 0
-                guard size >= 0, pos + size <= raw.count else { return out }
+                guard size >= 0, size <= raw.count - pos else { return out }
                 if n == 0 { out.append((id, Object(type: type, payload: raw.subdata(in: pos..<(pos + size))))) }
                 pos += size
             }

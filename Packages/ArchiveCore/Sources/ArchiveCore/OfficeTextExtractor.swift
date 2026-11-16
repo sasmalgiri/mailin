@@ -345,25 +345,51 @@ enum OfficeTextExtractor {
 
         // §13.3 (5): embedded documents are children with their own state.
         var children: [ChildDocument] = []
+        // A16: embedded documents are one level down and spend the same
+        // attachment's budget — a docx inside a docx inside a docx stops at
+        // the archive depth, an embedded zip bomb at the byte budget, each
+        // with its named reason (resumable), never by recursing without end.
+        let here = ExtractionNesting.here
+        var budget = here.budget
+        defer { ExtractionNesting.current?.budget = budget }
         for member in embedded.sorted(by: { $0.name < $1.name }) {
             let filename = (member.name as NSString).lastPathComponent
             let ext = (filename as NSString).pathExtension.lowercased()
+            let declared = member.uncompressedSize
+            if declared > ExtractionLimits.effective.partBytes || declared > budget {
+                let why = declared > ExtractionLimits.effective.partBytes
+                    ? "\(declared) bytes, over the \(ExtractionLimits.effective.partBytes)-byte guard" : ExtractionNesting.budgetReason
+                skipped.append("\(member.name) (\(why))")
+                children.append(ChildDocument(path: member.name, filename: filename, kind: ext, sha256: "", bytes: Int(clamping: declared),
+                                              text: nil, state: .unsupported, note: why))
+                continue
+            }
             let destination = scratch.appendingPathComponent(UUID().uuidString + (ext.isEmpty ? "" : "." + ext))
             do { try ZIPArchiveReader.extract(member, from: fileURL, to: destination) } catch {
-                children.append(ChildDocument(path: member.name, filename: filename, kind: ext, sha256: "", bytes: Int(member.uncompressedSize),
+                children.append(ChildDocument(path: member.name, filename: filename, kind: ext, sha256: "", bytes: Int(clamping: declared),
                                               text: nil, state: .failed, note: "\(error)"))
                 continue
             }
             defer { try? FileManager.default.removeItem(at: destination) }
+            budget -= declared   // ZIPArchiveReader refuses a member that produces more than it declares
             let sha = (try? ExportInventory.sha256(of: destination)) ?? ""
-            let size = Int(member.uncompressedSize)
+            let size = Int(clamping: declared)
             guard let innerKind = DocumentKind.detect(mimeType: "", filename: filename) ?? DocumentTextExtractor.sniff(fileURL: destination) else {
                 children.append(ChildDocument(path: member.name, filename: filename, kind: ext, sha256: sha, bytes: size, text: nil, state: .unsupported,
                                               note: ext == "bin" ? "embedded OLE object; not read" : "embedded object of a kind not read: .\(ext)"))
                 continue
             }
+            guard here.depth < ExtractionLimits.effective.archiveDepth else {
+                let why = ExtractionNesting.tooDeepReason
+                skipped.append("\(member.name) (\(why))")
+                children.append(ChildDocument(path: member.name, filename: filename, kind: innerKind.rawValue, sha256: sha, bytes: size, text: nil,
+                                              state: .unsupported, note: why))
+                continue
+            }
             do {
-                let inner = try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: filename)
+                let inner = try ExtractionNesting.reading(atDepth: here.depth + 1, budget: &budget) {
+                    try DocumentTextExtractor.extract(fileURL: destination, kind: innerKind, logicalName: filename)
+                }
                 children.append(ChildDocument(path: member.name, filename: filename, kind: innerKind.rawValue, sha256: sha, bytes: size, text: inner.text,
                                               state: inner.partial ? .partial : .extracted,
                                               note: inner.childNote, components: inner.components))
@@ -680,8 +706,9 @@ final class OOXMLTextCollector: NSObject, XMLParserDelegate {
             switch name {
             case "col":
                 if let flag = attributes["hidden"], flag == "1" || flag.lowercased() == "true",
-                   let first = Int(attributes["min"] ?? ""), let last = Int(attributes["max"] ?? ""), first >= 1, last >= first {
-                    // Column indexes are 1-based in the part; at most the sheet's width is ever named.
+                   let first = Int(attributes["min"] ?? ""), let last = Int(attributes["max"] ?? ""), first >= 1, last >= first, first <= ExcelFormulaText.maxColumn {
+                    // Column indexes are 1-based in the part; at most the sheet's width is ever named
+                    // (A5: a range that starts past the last column names none of the sheet's columns).
                     for column in first...min(last, ExcelFormulaText.maxColumn) { hiddenColumns.insert(column - 1) }
                 }
             case "row":
