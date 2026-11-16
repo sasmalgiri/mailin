@@ -11903,7 +11903,7 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
         _ = try await backend.signIn(.gmail, address: "asha@example.com", existing: id, extraScopes: [])
         XCTAssertNotEqual(try env.credentials.read(.oauthTokenSet, account: id), Data("old-secret".utf8))
 
-        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        #if (MAILIN_CONNECTED_MAIL || MAILIN_TEST_CONFIGURATION_Debug_Connected || MAILIN_TEST_CONFIGURATION_Release_Connected) && !NO_NETWORK_BUILD
         XCTAssertNil(ConnectedMailProductionTransports.stated(graph: nil))
         XCTAssertEqual(ConnectedMailProductionTransports.stated(graph: GraphProfileAddress(address: "a@example.com", source: .userPrincipalName)),
                        ProviderStatedAddress(address: "a@example.com", isConfirmed: false),
@@ -11974,7 +11974,7 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
                                            specialUse: "\\Trash", messages: 0, unread: 0, selected: true)
         XCTAssertEqual(ConnectedMailRuntime.trashMailbox(in: [inbox, trash]), "Deleted Messages")
         XCTAssertNil(ConnectedMailRuntime.trashMailbox(in: [inbox]))
-        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        #if (MAILIN_CONNECTED_MAIL || MAILIN_TEST_CONFIGURATION_Debug_Connected || MAILIN_TEST_CONFIGURATION_Release_Connected) && !NO_NETWORK_BUILD
         let account = MailAccount(provider: .imap, host: "imap.example.org", port: 993, loginName: "me", displayIdentity: "me@example.org",
                                   enabledModes: [.serverActions], connectionState: .connected)
         let context = ConnectedAdapterContext(account: account, credentials: ConnectedFiveJobsCredentials(), tokens: nil,
@@ -12278,10 +12278,37 @@ final class ConnectedFixIntegrationTests: XCTestCase {
         return try await engine.status()
     }
 
+    // MARK: 0 — the connected-only test blocks really compile in the connected build
+
+    /// The test target cannot read the app's `MAILIN_CONNECTED_MAIL`; it gets
+    /// `MAILIN_TEST_CONFIGURATION_<configuration>` instead (set for every
+    /// configuration, so only Debug-Connected / Release-Connected match the
+    /// gate). Without it the connected-only blocks silently never compiled.
+    func testConnectedOnlyTestBlocks_compileExactlyWhenTheAppHasMailTransports() throws {
+        #if (MAILIN_CONNECTED_MAIL || MAILIN_TEST_CONFIGURATION_Debug_Connected || MAILIN_TEST_CONFIGURATION_Release_Connected) && !NO_NETWORK_BUILD
+        let testBlocksCompiled = true
+        #else
+        let testBlocksCompiled = false
+        #endif
+        XCTAssertEqual(testBlocksCompiled, ConnectedBuildFeatures.mailTransportsCompiled,
+                       "the test bundle's connected gate must match the app's (maxmailinTests SWIFT_ACTIVE_COMPILATION_CONDITIONS)")
+        // Every connected-only block in the test sources uses the gate the test target defines.
+        let tests = Self.repo.appendingPathComponent("maxmailinTests")
+        for name in try FileManager.default.contentsOfDirectory(atPath: tests.path) where name.hasSuffix(".swift") {
+            let text = try String(contentsOf: tests.appendingPathComponent(name), encoding: .utf8)
+            for line in text.split(separator: "\n") {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("#if") && t.contains("MAILIN_CONNECTED_MAIL") {
+                    XCTAssertTrue(t.contains("MAILIN_TEST_CONFIGURATION_Debug_Connected"), "\(name): \(t) never compiles in the test target")
+                }
+            }
+        }
+    }
+
     // MARK: 1, 2 — Graph Sent lookup, one no-redirect transport
 
     func testGraphSendRoute_hasASentLookup_andTheAppUsesTheSharedNoRedirectTransport() throws {
-        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        #if (MAILIN_CONNECTED_MAIL || MAILIN_TEST_CONFIGURATION_Debug_Connected || MAILIN_TEST_CONFIGURATION_Release_Connected) && !NO_NETWORK_BUILD
         struct Tokens: AccessTokenSource {
             func accessToken(for account: UUID, audience: String) async throws -> String { "t" }
             func refreshAfterRejection(account: UUID, audience: String) async throws -> String { "t" }
