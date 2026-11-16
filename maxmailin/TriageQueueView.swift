@@ -118,6 +118,9 @@ struct TriageQueueView: View {
                 Text("Last intake \(last.formatted(date: .abbreviated, time: .shortened))")
                     .font(Typography.caption2)
                     .foregroundColor(AppColors.secondary)
+                Text("\(watchManager.filesTakenIn) files taken in; the intake log keeps the newest \(WatchFolderManager.maxLogEntries).")
+                    .font(Typography.caption2)
+                    .foregroundColor(AppColors.secondary)
             }
         }
         .padding(.horizontal, Spacing.medium)

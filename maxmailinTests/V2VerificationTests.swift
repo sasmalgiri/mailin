@@ -12540,4 +12540,42 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(calls.count, 1, "one write for the whole set")
         XCTAssertEqual(Set(calls.first ?? []), Set(emails.map(\.id)))
     }
+
+    /// C6 (rule 5): a watched file is recorded (log, "last intake", known) only after
+    /// its archive write succeeded; a failed write is not logged and is retried.
+    func testC6_watchFolder_recordsOnlyAfterTheStoreWrite_andRetriesAFailure() async throws {
+        let suite = "r1116.c6.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("c6-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let manager = WatchFolderManager(defaults: defaults)
+        manager.watchPath = dir
+        var attempts = 0
+        var fail = true
+        manager.storeWriter = { _, _ in
+            attempts += 1
+            if fail { throw CocoaError(.fileWriteUnknown) }
+        }
+        let eml = "From: a@b.com\r\nTo: c@d.com\r\nSubject: c6\r\nMessage-ID: <c6@x>\r\nDate: Wed, 15 Jan 2025 14:30:00 +0000\r\n\r\nbody\r\n"
+        try eml.write(to: dir.appendingPathComponent("one.eml"), atomically: true, encoding: .utf8)
+
+        await manager.scanForNewFiles()
+        XCTAssertEqual(attempts, 1)
+        XCTAssertTrue(manager.importLog.isEmpty, "a failed write is not logged as imported")
+        XCTAssertNil(manager.lastImportDate)
+        XCTAssertEqual(manager.filesTakenIn, 0)
+
+        fail = false
+        await manager.scanForNewFiles()
+        XCTAssertEqual(attempts, 2, "the failed file is tried again at the next scan")
+        XCTAssertEqual(manager.importLog.map(\.fileName), ["one.eml"])
+        XCTAssertNotNil(manager.lastImportDate)
+        XCTAssertEqual(manager.filesTakenIn, 1)
+
+        await manager.scanForNewFiles()
+        XCTAssertEqual(attempts, 2, "a file taken in is not written again")
+    }
 }

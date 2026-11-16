@@ -43,14 +43,27 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
     }
     @Published var isWatching: Bool = false
     @Published var lastImportDate: Date?
+    /// The newest `maxLogEntries` files taken in (stated beside the count).
     @Published var importLog: [ImportLogEntry] = []
+    /// Every file whose messages reached the archive, since the log began —
+    /// the log itself keeps only the newest `maxLogEntries`.
+    @Published private(set) var filesTakenIn: Int = 0
 
     /// The sender email used for parsing. Set this before starting the watcher.
     var senderEmail: String = ""
 
     private static let watchPathKey = "com.mailin.watchFolderPath"
     private static let importLogKey = "com.mailin.importLog"
-    private static let maxLogEntries = 50
+    private static let filesTakenInKey = "com.mailin.importLog.filesTakenIn"
+    /// Real limit, stated in the Triage bar: the log keeps the newest 50 files.
+    static let maxLogEntries = 50
+
+    /// Writes a parsed file's messages to the archive. The file counts as taken
+    /// in only after this returns; a throw leaves it to the next scan.
+    var storeWriter: @MainActor ([MBOXParser.RawEmail], String) async throws -> Void = { emails, fileName in
+        try await TriageQueueService.shared.intake(emails, from: fileName)
+    }
+    private let defaults: UserDefaults
 
     #if os(macOS)
     private var dispatchSource: DispatchSourceFileSystemObject?
@@ -61,12 +74,17 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
 
     /// Tracks already-imported file names so the same file is not imported twice.
     private var knownFiles: Set<String> = []
+    /// Files parsed and on their way to the archive (not scanned again meanwhile).
+    private var inFlight: Set<String> = []
 
     private let importQueue = DispatchQueue(label: "com.mailin.watchImport", qos: .utility)
 
     // MARK: - Init
 
-    private init() {
+    private convenience init() { self.init(defaults: .standard) }
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
         restoreWatchPath()
         restoreImportLog()
     }
@@ -126,7 +144,8 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
         )
 
         source.setEventHandler { [weak self] in
-            self?.scanForNewFiles()
+            guard let self else { return }
+            Task { await self.scanForNewFiles() }
         }
 
         source.setCancelHandler { [weak self] in
@@ -150,7 +169,7 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard !Task.isCancelled, let self else { break }
-                self.importQueue.async { self.scanForNewFiles() }
+                await self.scanForNewFiles()
             }
         }
     }
@@ -165,22 +184,33 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
         importQueue.sync { knownFiles = snapshot }
     }
 
-    private func scanForNewFiles() {
+    /// One scan: every new .mbox/.eml file is parsed and written to the
+    /// archive; returns when those writes have finished. A file is recorded
+    /// (known, logged, "last intake") only after its write succeeded — a
+    /// failed write leaves it to the next scan.
+    func scanForNewFiles() async {
         guard let directory = watchPath else { return }
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
 
         let supportedExtensions: Set<String> = ["mbox", "eml"]
-
-        for fileURL in contents {
+        let candidates: [URL] = importQueue.sync {
+            var picked: [URL] = []
+            for fileURL in contents {
+                let fileName = fileURL.lastPathComponent
+                guard supportedExtensions.contains(fileURL.pathExtension.lowercased()),
+                      !knownFiles.contains(fileName), !inFlight.contains(fileName) else { continue }
+                inFlight.insert(fileName)
+                picked.append(fileURL)
+            }
+            return picked
+        }
+        for fileURL in candidates {
             let fileName = fileURL.lastPathComponent
-            let ext = fileURL.pathExtension.lowercased()
-
-            guard supportedExtensions.contains(ext),
-                  !knownFiles.contains(fileName) else { continue }
-
-            if importFile(at: fileURL) {
-                knownFiles.insert(fileName)
+            let taken = await importFile(at: fileURL)
+            importQueue.sync {
+                inFlight.remove(fileName)
+                if taken { knownFiles.insert(fileName) }
             }
         }
     }
@@ -188,10 +218,9 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
     // MARK: - File Import
 
     @discardableResult
-    private func importFile(at fileURL: URL) -> Bool {
+    private func importFile(at fileURL: URL) async -> Bool {
+        let emails: [MBOXParser.RawEmail]
         do {
-            let emails: [MBOXParser.RawEmail]
-
             switch fileURL.pathExtension.lowercased() {
             case "mbox":
                 emails = try MBOXParser.parse(fileURL: fileURL, senderEmail: senderEmail)
@@ -203,47 +232,50 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
             default:
                 return false
             }
-
-            guard !emails.isEmpty else { return false }
-
-            let logEntry = ImportLogEntry(date: Date(), fileName: fileURL.lastPathComponent, count: emails.count)
-
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                self.lastImportDate = logEntry.date
-                self.importLog.insert(logEntry, at: 0)
-                if self.importLog.count > Self.maxLogEntries {
-                    self.importLog = Array(self.importLog.prefix(Self.maxLogEntries))
-                }
-                self.persistImportLog()
-
-                NotificationCenter.default.post(
-                    name: .newEmailsImported,
-                    object: self,
-                    userInfo: ["emails": emails, "fileName": fileURL.lastPathComponent]
-                )
-            }
-            return true
         } catch {
             #if DEBUG
-            print("[WatchFolderManager] Failed to import \(fileURL.lastPathComponent): \(error.localizedDescription)")
+            print("[WatchFolderManager] Failed to read \(fileURL.lastPathComponent): \(error.localizedDescription)")
             #endif
             return false
         }
+        guard !emails.isEmpty else { return false }
+        let fileName = fileURL.lastPathComponent
+
+        return await recordAfterWrite(emails, fileName: fileName)
+    }
+
+    /// Writes to the archive first; only a write that succeeded is logged.
+    @MainActor
+    private func recordAfterWrite(_ emails: [MBOXParser.RawEmail], fileName: String) async -> Bool {
+        do {
+            try await storeWriter(emails, fileName)
+        } catch {
+            return false   // not recorded; the next scan tries again
+        }
+        let logEntry = ImportLogEntry(date: Date(), fileName: fileName, count: emails.count)
+        lastImportDate = logEntry.date
+        filesTakenIn += 1
+        importLog.insert(logEntry, at: 0)
+        if importLog.count > Self.maxLogEntries {
+            importLog = Array(importLog.prefix(Self.maxLogEntries))
+        }
+        persistImportLog()
+        NotificationCenter.default.post(name: .newEmailsImported, object: self, userInfo: ["fileName": fileName])
+        return true
     }
 
     // MARK: - Persistence
 
     private func persistWatchPath() {
         if let path = watchPath?.path {
-            UserDefaults.standard.set(path, forKey: Self.watchPathKey)
+            defaults.set(path, forKey: Self.watchPathKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: Self.watchPathKey)
+            defaults.removeObject(forKey: Self.watchPathKey)
         }
     }
 
     private func restoreWatchPath() {
-        if let path = UserDefaults.standard.string(forKey: Self.watchPathKey) {
+        if let path = defaults.string(forKey: Self.watchPathKey) {
             let url = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: path) {
                 watchPath = url
@@ -253,19 +285,22 @@ final class WatchFolderManager: ObservableObject, @unchecked Sendable {
 
     private func persistImportLog() {
         guard let data = try? JSONEncoder().encode(importLog) else { return }
-        UserDefaults.standard.set(data, forKey: Self.importLogKey)
+        defaults.set(data, forKey: Self.importLogKey)
+        defaults.set(filesTakenIn, forKey: Self.filesTakenInKey)
     }
 
     private func restoreImportLog() {
-        guard let data = UserDefaults.standard.data(forKey: Self.importLogKey),
+        guard let data = defaults.data(forKey: Self.importLogKey),
               let log = try? JSONDecoder().decode([ImportLogEntry].self, from: data) else { return }
         importLog = log
+        filesTakenIn = max(defaults.integer(forKey: Self.filesTakenInKey), log.count)
     }
 
     // MARK: - Utility
 
     func clearImportLog() {
         importLog.removeAll()
+        filesTakenIn = 0
         persistImportLog()
     }
 }

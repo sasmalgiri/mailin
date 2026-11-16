@@ -65,8 +65,6 @@ final class TriageQueueService: ObservableObject {
 
     @Published private(set) var lastIntakeNote: String? = nil
 
-    private var observer: NSObjectProtocol?
-
     /// The SQL query for the pending queue.
     static var pendingQuery: EmailQuery {
         var q = EmailQuery.all
@@ -76,24 +74,16 @@ final class TriageQueueService: ObservableObject {
 
     private init() {}
 
-    /// Start receiving watch-folder imports. Idempotent.
-    func activate() {
-        guard observer == nil else { return }
-        observer = NotificationCenter.default.addObserver(
-            forName: .newEmailsImported, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard let emails = notification.userInfo?["emails"] as? [MBOXParser.RawEmail] else { return }
-            let fileName = notification.userInfo?["fileName"] as? String ?? "watched folder"
-            Task { @MainActor in
-                await self?.intake(emails, from: fileName)
-            }
-        }
-    }
+    /// Kept for callers; the watch folder now writes through `intake`
+    /// directly and records a file only after that write succeeded (C6), so
+    /// nothing is taken in from the notification any more.
+    func activate() {}
 
     /// Persist + index + stamp pending + audit-log. Message-ID dedup means a
     /// re-forwarded email doesn't duplicate; already-stored emails still get
-    /// queued (the tag applies by id either way).
-    func intake(_ emails: [MBOXParser.RawEmail], from fileName: String) async {
+    /// queued (the tag applies by id either way). Throws when the archive
+    /// write failed — the watch folder then tries the file again.
+    func intake(_ emails: [MBOXParser.RawEmail], from fileName: String) async throws {
         guard !emails.isEmpty else { return }
         do {
             let result = try await SQLiteEmailStore.shared.insertBatch(
@@ -105,8 +95,8 @@ final class TriageQueueService: ObservableObject {
             try? await FTSSearchIndex.shared.indexBatch(result.inserted(from: emails))
             _ = try? await ArchiveCorpusRevision.shared.bump()
         } catch {
-            lastIntakeNote = "Intake failed for \(fileName): \(error.localizedDescription)"
-            return
+            lastIntakeNote = String(localized: "Could not add \(fileName) to the archive: \(error.localizedDescription) — it is tried again at the next scan.")
+            throw error
         }
         ReviewStateService.shared.addTag(TriageVerdict.pendingTag, to: emails.map(\.id))
         ForensicManager.shared.logAction(
