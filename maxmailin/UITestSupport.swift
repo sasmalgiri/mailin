@@ -12,10 +12,28 @@
 
 import Foundation
 
+/// Whether this launch is a UI-test launch the app honours (review 2026-11-16 D2).
+/// Only a Debug build (Debug, Debug-Connected) honours `--uitest`: it pre-accepts
+/// the Terms, completes persona selection, seeds the demo archive, can turn on
+/// connected mail and quiets crash safety — none of which a shipped (Release)
+/// binary may do because someone passed a launch argument. In Release the
+/// argument is not compiled in and this answers false.
+enum UITestLaunch {
+    nonisolated static func isHonoured(arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
+        #if DEBUG
+        return arguments.contains("--uitest")
+        #else
+        return false
+        #endif
+    }
+}
+
 @MainActor
 enum UITestSupport {
 
     static func prepareForUITests(modules: ModuleRegistry? = nil) {
+        // Never in a Release build, whoever calls this (D2).
+        guard UITestLaunch.isHonoured() else { return }
         let defaults = UserDefaults.standard
         // No first-run sheets over the UI while the test clicks through.
         defaults.set(true, forKey: "hasSeenGettingStarted")

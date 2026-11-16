@@ -100,7 +100,7 @@ final class SafeMode {
     /// Mode: two earlier launches that never settled, plus this one.
     /// A launch by the unit-test host or by a UI test.
     nonisolated static func isTestLaunch(environment: [String: String], arguments: [String]) -> Bool {
-        environment["XCTestConfigurationFilePath"] != nil || arguments.contains("--uitest")
+        environment["XCTestConfigurationFilePath"] != nil || UITestLaunch.isHonoured(arguments: arguments)
     }
 
     nonisolated static func recordLaunchStart() {

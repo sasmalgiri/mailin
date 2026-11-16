@@ -1205,7 +1205,12 @@ final class V3CompatibilityTests: XCTestCase {
     /// Test launches (unit-test host, `--uitest`) never count toward Safe Mode;
     /// a normal launch does.
     func testSafeMode_testLaunchesAreNotCounted() {
+        #if DEBUG
         XCTAssertTrue(SafeMode.isTestLaunch(environment: [:], arguments: ["mailin", "--uitest"]))
+        #else
+        // D2: a Release binary does not honour --uitest.
+        XCTAssertFalse(SafeMode.isTestLaunch(environment: [:], arguments: ["mailin", "--uitest"]))
+        #endif
         XCTAssertTrue(SafeMode.isTestLaunch(environment: ["XCTestConfigurationFilePath": "/x"], arguments: ["mailin"]))
         XCTAssertFalse(SafeMode.isTestLaunch(environment: [:], arguments: ["mailin"]))
     }

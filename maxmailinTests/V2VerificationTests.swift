@@ -12910,4 +12910,19 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(ok.outcome, .complete)
         XCTAssertNil(ok.errorMessage)
     }
+
+    /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
+    /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
+    /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.
+    func testD2_uitestLaunchArgument_isHonouredOnlyInDebugBuilds() {
+        let args = ["mailin", "--uitest"]
+        #if DEBUG
+        XCTAssertTrue(UITestLaunch.isHonoured(arguments: args), "the Debug UI-test harness must keep working")
+        XCTAssertTrue(SafeMode.isTestLaunch(environment: [:], arguments: args))
+        #else
+        XCTAssertFalse(UITestLaunch.isHonoured(arguments: args), "a Release binary honours --uitest")
+        XCTAssertFalse(SafeMode.isTestLaunch(environment: [:], arguments: args))
+        #endif
+        XCTAssertFalse(UITestLaunch.isHonoured(arguments: ["mailin"]))
+    }
 }

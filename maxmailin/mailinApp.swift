@@ -274,8 +274,8 @@ struct mailinApp: App {
                         // deterministic state — onboarding suppressed, demo
                         // archive imported — so XCUITests can click through
                         // every surface against real data.
-                        if storageState == .active,
-                           ProcessInfo.processInfo.arguments.contains("--uitest") {
+                        // Debug builds only (D2): a Release binary ignores it.
+                        if storageState == .active, UITestLaunch.isHonoured() {
                             UITestSupport.prepareForUITests(modules: modules)
                         }
                         // C-2: every launch-time job — fidelity repair,
