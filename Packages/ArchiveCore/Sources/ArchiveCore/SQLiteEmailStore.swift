@@ -2630,6 +2630,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let now = Int64(Date().timeIntervalSince1970)
 
         var offset = 0
+        // C23: one breadcrumb per batch for the search model's chunk index (not one per email).
+        let endCrumb = EngineBreadcrumbs.start(SearchChunkPolicy.isEnabled ? "searchQueryModel" : nil)
+        defer { endCrumb() }
         for chunk in emails.chunked(into: max(1, batchSize)) {
             try exec(db, SQLiteHygiene.beginWrite)
             do {
@@ -2751,9 +2754,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         }
                         // FIND-07: the message's searchable documents, whole, in chunks.
                         if SearchChunkPolicy.isEnabled {
-                            try EngineBreadcrumbs.run("searchQueryModel") {
-                                try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false)
-                            }
+                            try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false)
                         }
                         for domain in email.domains where !domain.isEmpty {
                             sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
