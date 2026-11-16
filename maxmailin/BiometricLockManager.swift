@@ -102,10 +102,7 @@ class BiometricLockManager: ObservableObject {
             policy = .deviceOwnerAuthentication
         } else {
             isAuthenticating = false
-            isLocked = false
-            isEnabled = false
-            authError = biometricUnavailableMessage(for: error) + " Biometric lock has been disabled to prevent lockout."
-            return true
+            return handleNoDeviceOwnerPolicy(error: error)
         }
 
         do {
@@ -153,6 +150,26 @@ class BiometricLockManager: ObservableObject {
             authError = error.localizedDescription
             return false
         }
+    }
+
+    /// Neither biometrics nor a device passcode can be evaluated (D3, review
+    /// 2026-11-16). The user's own lock is switched off so they are not locked
+    /// out of their archive. A lock the organisation REQUIRES (managed
+    /// `requireBiometricLock`) fails closed: the app stays locked, the setting
+    /// stays on, and the lock screen says why and what to do.
+    @discardableResult
+    func handleNoDeviceOwnerPolicy(error: NSError?,
+                                   managed: Bool = ManagedConfig.requireBiometricLock) -> Bool {
+        if managed {
+            isLocked = true
+            isEnabled = true
+            authError = String(localized: "Your organization requires this lock, but this device has no passcode, Touch ID or Face ID set up. Set a device passcode in System Settings, then try again.")
+            return false
+        }
+        isLocked = false
+        isEnabled = false
+        authError = biometricUnavailableMessage(for: error) + " " + String(localized: "Biometric lock has been disabled to prevent lockout.")
+        return true
     }
 
     // MARK: - Lock

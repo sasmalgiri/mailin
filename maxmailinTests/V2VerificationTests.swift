@@ -12911,6 +12911,29 @@ final class Review1116CTests: XCTestCase {
         XCTAssertNil(ok.errorMessage)
     }
 
+    /// D3: with no device-owner policy a managed (organisation-required) lock stays
+    /// locked and says why; the user's own lock still switches off to avoid lockout.
+    @MainActor
+    func testD3_managedHardLock_failsClosedWithoutDevicePolicy() {
+        let lock = BiometricLockManager.shared
+        let saved = (lock.isLocked, lock.isEnabled, lock.authError)
+        defer { lock.isLocked = saved.0; lock.isEnabled = saved.1; lock.authError = saved.2 }
+
+        lock.isLocked = true
+        lock.isEnabled = true
+        let managedUnlocked = lock.handleNoDeviceOwnerPolicy(error: nil, managed: true)
+        XCTAssertFalse(managedUnlocked, "a required lock was opened with no way to authenticate")
+        XCTAssertTrue(lock.isLocked)
+        XCTAssertTrue(lock.isEnabled)
+        XCTAssertTrue(lock.authError?.contains("organization requires") ?? false, lock.authError ?? "no reason shown")
+
+        lock.isLocked = true
+        lock.isEnabled = true
+        XCTAssertTrue(lock.handleNoDeviceOwnerPolicy(error: nil, managed: false))
+        XCTAssertFalse(lock.isLocked)
+        XCTAssertFalse(lock.isEnabled)
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.
