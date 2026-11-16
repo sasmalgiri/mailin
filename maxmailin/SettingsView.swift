@@ -126,9 +126,9 @@ struct SettingsView: View {
     @AppStorage(DigestScheduler.enabledKey) private var weeklyDigestEnabled = false
     #if os(macOS)
     @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
+    #endif
     /// B6 / rule 7: online-capable, off by default.
     @AppStorage(SpotlightIndexer.appleIntelligenceKey) private var spotlightAppleIntelligence = false
-    #endif
     @State private var showClearTempConfirmation = false
     @State private var showResetSettingsConfirmation = false
     @State private var showClearForensicConfirmation = false
