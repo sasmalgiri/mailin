@@ -8450,6 +8450,28 @@ private final class FakeMailWorkspaceBackend: MailWorkspaceBackend {
     }
 }
 
+/// C11: every server change answered with the next scripted outcome (nil = throws).
+private final class ScriptedServerBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var providerInfo: [String: String] = [:]
+    var snapshots: [MailAccountSnapshot] = []
+    var listed: [ConnectedMailboxRow] = []
+    var script: [RemoteOperationOutcome?] = []
+    func accounts() async throws -> [MailAccountSnapshot] { snapshots }
+    func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {
+        ConnectedMailboxPage(rows: listed, total: listed.count, next: nil)
+    }
+    func changeOnServer(_ request: RemoteChangeRequest, row: ConnectedMailboxRow) async throws -> RemoteOperation {
+        guard !script.isEmpty, let outcome = script.removeFirst() else { throw URLError(.timedOut) }
+        var op = RemoteOperation(accountID: row.accountID, identity: row.identity, emailID: row.emailID, request: request)
+        op.outcome = outcome
+        return op
+    }
+    func tags(_ ids: [UUID]) async -> [UUID: Set<String>] { [:] }
+    func setTag(_ tag: String, on ids: [UUID], present: Bool) async throws {}
+    func knownTags() async -> [String] { [] }
+}
+
 /// Live Mail organise tools (2026-11-15): records the queries the list asks
 /// for, keeps tags in memory, and counts server calls.
 private final class OrganizeFakeBackend: MailWorkspaceBackend {
@@ -8727,6 +8749,30 @@ final class MailWorkspaceTests: XCTestCase {
                             from: "Asha Rao <asha@example.com>", date: Date(timeIntervalSince1970: 1_760_000_000 - day * 86_400),
                             hasAttachments: false, isRead: false, isFlagged: false, onServer: true, folderServerIDs: [],
                             identityKey: UUID().uuidString, preview: "Hello\n\n  there", messageID: messageID, references: references)
+    }
+
+    /// C11 (rule 5): a several-message server change counts and explains every row that
+    /// did not change — thrown, refused, conflict, uncertain — not only ineligible ones.
+    func testC11_bulkServerChange_countsAndExplainsEveryUnchangedRow() async throws {
+        let account = MailAccount(provider: .gmail, displayIdentity: "asha@example.com",
+                                  enabledModes: [.capture, .serverActions], connectionState: .connected)
+        let rows = (0..<5).map { organizeRow(account.id, subject: "M\($0)", day: Double($0)) }
+        let fake = ScriptedServerBackend()
+        fake.snapshots = [MailAccountSnapshot(account: account, status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        fake.listed = rows
+        fake.script = [.applied(verified: true, alreadyInState: false), .rejected(.unsupported("labels")),
+                       .conflict("changed elsewhere"), .uncertain("timeout after send"), nil]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refresh()
+        XCTAssertTrue(rows.allSatisfy { model.canChangeOnServer($0) })
+
+        await model.changeOnServer(.flag, rows: rows)
+        let text = try XCTUnwrap(model.message)
+        XCTAssertTrue(text.contains("1 of 5"), text)
+        XCTAssertTrue(text.contains("1 refused"), text)
+        XCTAssertTrue(text.contains("1 changed by another app first"), text)
+        XCTAssertTrue(text.contains("1 may or may not have reached the server"), text)
+        XCTAssertTrue(text.contains("1 failed"), text)
     }
 
     /// Live Mail 2026-11-15 (Apple Mail look + Thunderbird tools): conversations

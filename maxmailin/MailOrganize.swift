@@ -387,36 +387,71 @@ extension MailWorkspaceModel {
     /// folder each one is in now); a message with no request is not changed and counted.
     func changeOnServer(rows chosen: [ConnectedMailboxRow], _ requestFor: (ConnectedMailboxRow) -> RemoteChangeRequest?) async {
         let eligible = chosen.filter { canChangeOnServer($0) && requestFor($0) != nil }
-        var changed = 0
+        var changed = 0, refused = 0, conflicts = 0, uncertain = 0, failed = 0, attempted = 0
+        var firstFailure: String?
         var moved = false
         for row in eligible {
             guard let request = requestFor(row) else { continue }
-            var applied = false
-            var scope: String?
-            await run {
-                let op = try await self.backend.changeOnServer(request, row: row)
-                if case .applied? = op.outcome { applied = true; self.noteServerMark(request, on: row.emailID) }
-                scope = MailServerChangeText.missingScope(op.outcome)
+            attempted += 1
+            let op: RemoteOperation
+            do {
+                op = try await backend.changeOnServer(request, row: row)
+            } catch {
+                failed += 1
+                if firstFailure == nil { firstFailure = ConnectedMailErrorText.text(for: error) }
+                continue
             }
-            if let scope {
+            if let scope = MailServerChangeText.missingScope(op.outcome) {
+                refused += 1
                 pendingReconsent = MailReconsentRequest(accountID: row.accountID, scope: scope, mode: .serverActions)
                 break
             }
-            if applied {
+            switch op.outcome {
+            case .applied?:
                 changed += 1
+                noteServerMark(request, on: row.emailID)
                 if request.changesFolders { moved = true }
+            case .rejected?: refused += 1
+            case .conflict?: conflicts += 1
+            case .uncertain?: uncertain += 1
+            case nil: failed += 1
             }
         }
+        if failed == 0 { lastError = nil } else if let firstFailure { lastError = firstFailure }
         // A move changes where the server keeps the message: read the folders
         // again so the lists show it there (the archived copy itself is unchanged).
         if moved {
             for account in Set(eligible.map(\.accountID)) { await syncNow(account) }
         }
-        var text = String(localized: "Changed \(changed) of \(chosen.count) messages on the server.")
-        if eligible.count < chosen.count {
-            text += " " + String(localized: "\(chosen.count - eligible.count) could not be changed: Change server mail is off for their account, they are no longer on the server, or the change does not apply to them.")
+        message = Self.serverChangeSummary(chosen: chosen.count, ineligible: chosen.count - eligible.count,
+                                           changed: changed, refused: refused, conflicts: conflicts,
+                                           uncertain: uncertain, failed: failed, firstFailure: firstFailure,
+                                           notTried: eligible.count - attempted)
+    }
+
+    /// "Changed X of Y" and why each of the others did not change (rule 5).
+    static func serverChangeSummary(chosen: Int, ineligible: Int, changed: Int, refused: Int, conflicts: Int,
+                                    uncertain: Int, failed: Int, firstFailure: String?, notTried: Int) -> String {
+        var text = String(localized: "Changed \(changed) of \(chosen) messages on the server.")
+        if ineligible > 0 {
+            text += " " + String(localized: "\(ineligible) could not be changed: Change server mail is off for their account, they are no longer on the server, or the change does not apply to them.")
         }
-        message = text
+        if refused > 0 {
+            text += " " + String(localized: "\(refused) refused by the server or the account's permissions; nothing was changed.")
+        }
+        if conflicts > 0 {
+            text += " " + String(localized: "\(conflicts) changed by another app first; nothing was changed.")
+        }
+        if uncertain > 0 {
+            text += " " + String(localized: "\(uncertain) may or may not have reached the server; they are not repeated automatically.")
+        }
+        if failed > 0 {
+            text += " " + String(localized: "\(failed) failed: \(firstFailure ?? String(localized: "the server did not answer."))")
+        }
+        if notTried > 0 {
+            text += " " + String(localized: "\(notTried) not tried: the account needs extra permission first.")
+        }
+        return text
     }
 
     // MARK: Saved searches
