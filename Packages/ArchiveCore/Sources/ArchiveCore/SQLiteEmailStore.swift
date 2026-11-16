@@ -3229,6 +3229,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
             bind: "%\(needle)%", limit: limit, offset: offset)
     }
 
+    /// C19: the one document with exactly this number, however many newer
+    /// documents mention it (nil when none was issued).
+    func document(number: String) throws -> IssuedDocument? {
+        try documentQuery(where: "doc_number = ?", bind: number, limit: 1).first
+    }
+
     /// Every document of one type, newest first — deliberately uncapped, so
     /// a cross-document report never silently drops older documents.
     func documents(ofType type: String) throws -> [IssuedDocument] {

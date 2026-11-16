@@ -12727,6 +12727,26 @@ final class Review1116CTests: XCTestCase {
         XCTAssertFalse(entities.contains("up to 10,000 per run"), "the intent returns every email with the tag")
     }
 
+    /// C19 (rule 6): a clean-up's numbered document is found by its number even when
+    /// more than five newer documents mention that number.
+    func testC19_documentExists_findsTheNumberBehindFiveNewerMentions() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("c19-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let number = try await store.issueDocument(type: "DUP", summary: "Duplicate clean-up", now: base)
+        for i in 1...6 {
+            _ = try await store.issueDocument(type: "NOTE", summary: "Follow-up on \(number) #\(i)", now: base.addingTimeInterval(Double(i)))
+        }
+        let found = await PersistedReceiptVerifier.documentExists(number, in: store)
+        XCTAssertTrue(found, "the clean-up document is there; five newer mentions must not hide it")
+        let missing = await PersistedReceiptVerifier.documentExists("NOPE-2027-000001", in: store)
+        XCTAssertFalse(missing)
+        // The recipes home says when more results exist than it lists.
+        XCTAssertEqual(PracticalRecipesHome.recentHeader(shown: 5, total: 12), String(localized: "Recent results — 5 of 12"))
+        XCTAssertEqual(PracticalRecipesHome.recentHeader(shown: 3, total: 3), String(localized: "Recent results"))
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

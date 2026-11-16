@@ -459,8 +459,7 @@ final class PracticalRecipeEngine {
         /// Numbered registry document for a clean-up (rule 5: after it happened).
         var postDocument: (DocumentType, String) async -> String? = { type, summary in await DocumentRegistry.post(type, summary: summary) }
         var documentExists: (String) async -> Bool = { number in
-            let docs = (try? await SQLiteEmailStore.shared.lookupDocuments(matching: number, limit: 5)) ?? []
-            return docs.contains { $0.number == number }
+            await PersistedReceiptVerifier.documentExists(number, in: .shared)
         }
         var scratch: URL = FileManager.default.temporaryDirectory
 

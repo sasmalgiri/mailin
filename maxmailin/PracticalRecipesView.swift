@@ -48,6 +48,14 @@ struct PracticalRecipesHome: View {
     @State private var running: PracticalRecipeKind?
     @State private var runningOnline: OnlineRecipeKind?
     @State private var recent: [PracticalRecipeResult] = []
+    @State private var showAllRecent = false
+
+    static let recentShown = 5
+
+    /// "Recent results", or "Recent results — 5 of 12" when more exist (rule 6).
+    static func recentHeader(shown: Int, total: Int) -> String {
+        shown < total ? String(localized: "Recent results — \(shown) of \(total)") : String(localized: "Recent results")
+    }
 
     var body: some View {
         NavigationStack {
@@ -62,8 +70,8 @@ struct PracticalRecipesHome: View {
                 // REC-07: connected-mail recipes, only while Mail runs.
                 OnlineRecipesSection(running: $runningOnline)
                 if !recent.isEmpty {
-                    Section(String(localized: "Recent results")) {
-                        ForEach(recent.prefix(5)) { result in
+                    Section {
+                        ForEach(showAllRecent ? recent : Array(recent.prefix(Self.recentShown))) { result in
                             HStack {
                                 Image(systemName: result.recipe.icon)
                                 VStack(alignment: .leading) {
@@ -73,6 +81,14 @@ struct PracticalRecipesHome: View {
                                 }
                             }
                         }
+                        if recent.count > Self.recentShown {
+                            Button(showAllRecent ? String(localized: "Show fewer")
+                                                 : String(localized: "Show all \(recent.count) results")) {
+                                showAllRecent.toggle()
+                            }
+                        }
+                    } header: {
+                        Text(Self.recentHeader(shown: showAllRecent ? recent.count : min(recent.count, Self.recentShown), total: recent.count))
                     }
                 }
                 if let onOpenSpecialist {

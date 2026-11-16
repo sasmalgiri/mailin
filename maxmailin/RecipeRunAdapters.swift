@@ -125,8 +125,13 @@ struct PersistedReceiptVerifier: RecipeReceiptVerifying {
     var importStore = ImportReceiptStore.production
     /// Document lookup for duplicate cleanup receipts (injectable).
     var documentExists: (String) async -> Bool = { number in
-        let docs = (try? await SQLiteEmailStore.shared.lookupDocuments(matching: number, limit: 5)) ?? []
-        return docs.contains { $0.number == number }
+        await PersistedReceiptVerifier.documentExists(number, in: .shared)
+    }
+
+    /// True when a document with exactly this number was issued — looked up
+    /// by its number (C19), not among the newest few that mention it.
+    static func documentExists(_ number: String, in store: SQLiteEmailStore) async -> Bool {
+        ((try? await store.document(number: number)) ?? nil) != nil
     }
 
     static func outcome(of r: ExportReceipt) -> RecipeJobOutcome {
