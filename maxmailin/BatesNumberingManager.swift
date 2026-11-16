@@ -262,9 +262,12 @@ struct BatesConfigView: View {
     /// won and numbers were reissued after a relaunch.
     @ObservedObject var manager: BatesNumberingManager
 
-    init(emails: [MBOXParser.RawEmail], manager: BatesNumberingManager = .shared) {
+    /// `manager` nil = `.shared` (a default argument cannot name the
+    /// main-actor singleton).
+    @MainActor
+    init(emails: [MBOXParser.RawEmail], manager: BatesNumberingManager? = nil) {
         self.emails = emails
-        self.manager = manager
+        self.manager = manager ?? .shared
     }
     // §3-L6: whole-scope numbering that never renumbers.
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
