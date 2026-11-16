@@ -179,9 +179,9 @@ final class V2SecurityTests: XCTestCase {
 
     /// Structural invariants of the verdict model itself.
     func testSMIME_verdictModelInvariants() {
-        // Exactly the four semantic states + notSigned passthrough.
+        // The four semantic states + the B4 signer/sender mismatch + notSigned passthrough.
         XCTAssertEqual(Set(V.allCases),
-                       [.validTrusted, .validUntrustedCert, .invalid, .unverifiable, .notSigned])
+                       [.validTrusted, .validUntrustedCert, .validSignerMismatch, .invalid, .unverifiable, .notSigned])
         // No ambiguous bare "Valid" label anywhere.
         for v in V.allCases where v != .notSigned {
             XCTAssertNotEqual(v.rawValue, "Valid", "no ambiguous 'Valid' presentation")

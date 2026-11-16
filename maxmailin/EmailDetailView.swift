@@ -2317,11 +2317,17 @@ struct EmailDetailView: View {
                             .foregroundColor(Self.smimeBadgeColor(for: sigResult.status))
                             .font(.footnote)
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("Signature: \(sigResult.status.rawValue)")
+                            Text("Signature: \(sigResult.status.localizedLabel)")
                                 .font(Typography.caption1)
                                 .fontWeight(.semibold)
                             if let name = sigResult.signerName {
                                 Text(name)
+                                    .font(Typography.caption2)
+                                    .foregroundColor(AppColors.secondary)
+                            }
+                            // B4: who actually signed, when it is not the sender.
+                            if sigResult.status == .validSignerMismatch, let signer = sigResult.signerEmail {
+                                Text(verbatim: signer)
                                     .font(Typography.caption2)
                                     .foregroundColor(AppColors.secondary)
                             }
@@ -2358,6 +2364,7 @@ struct EmailDetailView: View {
         switch status {
         case .validTrusted:      return "checkmark.seal.fill"
         case .validUntrustedCert: return "checkmark.seal"
+        case .validSignerMismatch: return "person.crop.circle.badge.exclamationmark"
         case .invalid:           return "xmark.seal.fill"
         case .unverifiable:      return "questionmark.circle.fill"
         case .notSigned:         return "seal"
@@ -2368,6 +2375,7 @@ struct EmailDetailView: View {
         switch status {
         case .validTrusted:      return .green
         case .validUntrustedCert: return .orange
+        case .validSignerMismatch: return .pink
         case .invalid:           return .red
         case .unverifiable:      return .gray
         case .notSigned:         return .secondary

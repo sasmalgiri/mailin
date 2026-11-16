@@ -458814,6 +458814,70 @@
           }
         }
       }
+    },
+    "Valid Signature — Signer Does Not Match Sender" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gültige Signatur — Unterzeichner ist nicht der Absender"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Firma válida — el firmante no coincide con el remitente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Signature valide — le signataire ne correspond pas à l'expéditeur"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "वैध हस्ताक्षर — हस्ताक्षरकर्ता प्रेषक से मेल नहीं खाता"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Firma valida — il firmatario non corrisponde al mittente"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有効な署名 — 署名者が送信者と一致しません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "유효한 서명 — 서명자가 보낸 사람과 일치하지 않음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assinatura válida — o signatário não corresponde ao remetente"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "签名有效 — 签名者与发件人不符"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "簽名有效 — 簽署者與寄件者不符"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

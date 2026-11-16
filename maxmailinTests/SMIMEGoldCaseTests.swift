@@ -39,6 +39,7 @@
 //  comment is here so the next person knows why.
 //
 
+import Security
 import XCTest
 @testable import maxmailin
 
@@ -157,6 +158,55 @@ final class SMIMEGoldCaseTests: XCTestCase {
     /// never be reached by accident: flipping bytes inside the signature must
     /// produce `invalid` or `unverifiable` — never any valid state.
     ///
+    // MARK: - B4 (review 2026-11-16): signer must be the sender
+
+    /// A genuine signature by `signer@example.com` on a message whose From is
+    /// `ceo@bank.com` must never read as the sender's signature — on the Mac
+    /// (CMSDecoder) or the portable reader. The same message from the signer's
+    /// own address (any letter case) keeps its verdict.
+    func testB4_signatureBySomeoneElse_isSignerMismatch_neverTrustedSigner() throws {
+        var spoofed = email(base64: Self.signedCMSBase64)
+        spoofed.headers["From"] = "CEO <ceo@bank.com>"
+        #if os(macOS)
+        XCTAssertEqual(SMIMEHandler.verifySignature(of: spoofed).status, .validSignerMismatch)
+        var ownCase = email(base64: Self.signedCMSBase64)
+        ownCase.headers["From"] = "Test Signer <SIGNER@Example.COM>"
+        XCTAssertEqual(SMIMEHandler.verifySignature(of: ownCase).status, .validUntrustedCert)
+        #endif
+        let blob = try XCTUnwrap(Data(base64Encoded: Self.signedCMSBase64))
+        let portable = SMIMEHandler.verifyPortable(signedData: blob, detachedContent: nil, from: "CEO <ceo@bank.com>")
+        XCTAssertEqual(portable.status, .validSignerMismatch)
+        XCTAssertEqual(portable.signerEmail, "signer@example.com", "the real signer is still reported")
+        XCTAssertEqual(SMIMEHandler.verifyPortable(signedData: blob, detachedContent: nil, from: "signer@EXAMPLE.com").status,
+                       .validUntrustedCert)
+    }
+
+    /// The pure sender check: a trusted chain does not rescue a signer who is
+    /// not the sender; non-valid verdicts and a missing From pass through.
+    func testB4_senderCheck_isPureAndCaseInsensitive() {
+        typealias S = SMIMEHandler.SignatureStatus
+        XCTAssertEqual(SMIMEHandler.senderChecked(.validTrusted, signerEmails: ["someone@else.com"], from: "ceo@bank.com"),
+                       .validSignerMismatch)
+        XCTAssertEqual(SMIMEHandler.senderChecked(.validTrusted, signerEmails: [], from: "ceo@bank.com"), .validSignerMismatch,
+                       "a certificate without an email address (a TLS certificate) never vouches for a sender")
+        XCTAssertEqual(SMIMEHandler.senderChecked(.validTrusted, signerEmails: ["x@y.com", "CEO@Bank.com"], from: "\"The CEO\" <ceo@bank.com>"),
+                       .validTrusted)
+        XCTAssertEqual(SMIMEHandler.senderChecked(.validTrusted, signerEmails: ["x@y.com"], from: nil), .validTrusted)
+        for passthrough in [S.invalid, .unverifiable, .notSigned] {
+            XCTAssertEqual(SMIMEHandler.senderChecked(passthrough, signerEmails: [], from: "ceo@bank.com"), passthrough)
+        }
+        XCTAssertEqual(SMIMEHandler.senderAddress("Name <A@B.example>"), "a@b.example")
+        XCTAssertNil(SMIMEHandler.senderAddress("undisclosed-recipients"))
+    }
+
+    /// Trust is judged with Apple's S/MIME policy, not the basic X.509 one.
+    func testB4_trustPolicyIsSMIME() throws {
+        let policy = try XCTUnwrap(SMIMEHandler.smimeTrustPolicy())
+        let properties = try XCTUnwrap(SecPolicyCopyProperties(policy) as? [String: Any])
+        XCTAssertEqual(properties[kSecPolicyOid as String] as? String, kSecPolicyAppleSMIME as String)
+        XCTAssertNotEqual(SMIMEHandler.SignatureStatus.validSignerMismatch.localizedLabel, "")
+    }
+
     /// Both are acceptable outcomes because corrupting DER can either break
     /// the signature check (`invalid`) or break the structure so the decoder
     /// never gets that far (`unverifiable`). What matters is that neither is

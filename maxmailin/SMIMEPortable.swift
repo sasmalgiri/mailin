@@ -56,7 +56,9 @@ extension SMIMEHandler {
     /// Verifies a SignedData blob with the portable reader and maps the result
     /// through the same verdict function as the CMSDecoder path. Trust is
     /// judged by the system with network fetching turned off (offline-first).
-    static func verifyPortable(signedData: Data, detachedContent: Data?) -> VerificationResult {
+    /// B4: `from` is the message's From header; a valid signature whose
+    /// signer certificate does not carry that address is `validSignerMismatch`.
+    static func verifyPortable(signedData: Data, detachedContent: Data?, from: String? = nil) -> VerificationResult {
         let results: [CMSSignatureVerification]
         do {
             results = try CMSSignedData.verify(signedData, detachedContent: detachedContent)
@@ -79,15 +81,17 @@ extension SMIMEHandler {
         if let signer = first.signer, let leaf = SecCertificateCreateWithData(nil, Data(signer.der) as CFData) {
             let others = first.certificates.filter { $0 != signer }.compactMap { SecCertificateCreateWithData(nil, Data($0.der) as CFData) }
             var trust: SecTrust?
-            if SecTrustCreateWithCertificates([leaf] + others as CFArray, SecPolicyCreateBasicX509(), &trust) == errSecSuccess, let trust {
+            if let policy = smimeTrustPolicy(),
+               SecTrustCreateWithCertificates([leaf] + others as CFArray, policy, &trust) == errSecSuccess, let trust {
                 SecTrustSetNetworkFetchAllowed(trust, false)
                 trustOutcome = SecTrustEvaluateWithError(trust, nil) ? .trusted : .untrusted
                 chain = (SecTrustCopyCertificateChain(trust) as? [SecCertificate]) ?? [leaf]
             }
         }
         let info = first.signer.map { certificateInfo($0, chainLength: max(chain.count, 1)) }
-        let status = mapVerdict(parseError: false, decoderStatus: decoderStatus, trustResult: trustOutcome,
-                                certsPresent: info != nil, certExpired: info?.isExpired ?? false)
+        let status = senderChecked(mapVerdict(parseError: false, decoderStatus: decoderStatus, trustResult: trustOutcome,
+                                              certsPresent: info != nil, certExpired: info?.isExpired ?? false),
+                                   signerEmails: first.signer?.emailAddresses ?? [], from: from)
         return VerificationResult(status: status, signerName: first.signer?.commonName, signerEmail: first.signer?.emailAddresses.first,
                                   certificateInfo: info)
     }
@@ -109,6 +113,6 @@ extension SMIMEHandler {
         }
         let detached = contentType.lowercased().contains("multipart/signed")
             ? detachedSignedEntity(rawSource: email.rawSource, contentType: contentType) : nil
-        return verifyPortable(signedData: blob, detachedContent: detached)
+        return verifyPortable(signedData: blob, detachedContent: detached, from: fromHeader(of: email))
     }
 }

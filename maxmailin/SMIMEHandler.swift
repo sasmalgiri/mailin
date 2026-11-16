@@ -19,12 +19,69 @@ struct SMIMEHandler {
     ///                         reconstruct, or an unsupported structure.
     ///                         MUST NOT be presented as valid OR invalid.
     ///  • notSigned          — passthrough: the message carries no signature.
+    ///  • validSignerMismatch — B4 (review 2026-11-16): signature
+    ///                         cryptographically valid, but none of the
+    ///                         signer certificate's email addresses is the
+    ///                         From address. Whatever the chain says, the
+    ///                         message is not vouched for by its sender.
     enum SignatureStatus: String, Codable, CaseIterable {
         case validTrusted = "Valid — Trusted Signer"
         case validUntrustedCert = "Valid Signature — Untrusted Certificate"
+        case validSignerMismatch = "Valid Signature — Signer Does Not Match Sender"
         case invalid = "Invalid — Failed Cryptographic Check"
         case unverifiable = "Unverifiable"
         case notSigned = "Not Signed"
+
+        /// The verdict in the person's language (the raw value stays the
+        /// stable English record).
+        var localizedLabel: String {
+            switch self {
+            case .validTrusted:        return String(localized: "Valid — Trusted Signer")
+            case .validUntrustedCert:  return String(localized: "Valid Signature — Untrusted Certificate")
+            case .validSignerMismatch: return String(localized: "Valid Signature — Signer Does Not Match Sender")
+            case .invalid:             return String(localized: "Invalid — Failed Cryptographic Check")
+            case .unverifiable:        return String(localized: "Unverifiable")
+            case .notSigned:           return String(localized: "Not Signed")
+            }
+        }
+    }
+
+    /// B4: the address part of a From header (`Name <a@b>` or `a@b`),
+    /// lower-cased; nil when there is no address.
+    static func senderAddress(_ from: String?) -> String? {
+        guard let from else { return nil }
+        var part = Substring(from)
+        if let open = from.lastIndex(of: "<"), let close = from[open...].firstIndex(of: ">") {
+            part = from[from.index(after: open)..<close]
+        }
+        let address = part.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return address.contains("@") ? address : nil
+    }
+
+    /// B4: a cryptographically valid signature only vouches for the sender
+    /// when the signer certificate carries the From address (compared
+    /// case-insensitively). Otherwise — any certificate, even a publicly
+    /// trusted one issued to someone else — the verdict is
+    /// `validSignerMismatch`, never "Trusted Signer". Other verdicts, and
+    /// messages without a From address, pass through unchanged.
+    static func senderChecked(_ status: SignatureStatus, signerEmails: [String], from: String?) -> SignatureStatus {
+        guard status == .validTrusted || status == .validUntrustedCert,
+              let sender = senderAddress(from) else { return status }
+        let signers = Set(signerEmails.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        return signers.contains(sender) ? status : .validSignerMismatch
+    }
+
+    /// B4: the trust policy for a signer certificate — Apple's S/MIME policy
+    /// (email-protection usage), not the basic X.509 policy that accepts any
+    /// certificate chaining to a trusted root (a TLS server certificate, say).
+    /// nil only if the system cannot create it; the caller then reports trust
+    /// as unavailable.
+    static func smimeTrustPolicy() -> SecPolicy? {
+        SecPolicyCreateWithProperties(kSecPolicyAppleSMIME, nil)
+    }
+
+    static func fromHeader(of email: MBOXParser.RawEmail) -> String? {
+        email.headers["From"] ?? email.headers["from"] ?? email.headers["FROM"]
     }
 
     /// Platform-independent mirror of `CMSSignerStatus`, so the status→verdict
@@ -164,7 +221,8 @@ struct SMIMEHandler {
         var signerStatus: CMSSignerStatus = .unsigned
         var trust: SecTrust?
         var certVerifyResult: OSStatus = errSecSuccess
-        let policy = SecPolicyCreateBasicX509()
+        let smimePolicy = smimeTrustPolicy()
+        let policy: SecPolicy = smimePolicy ?? SecPolicyCreateBasicX509()
 
         let status = CMSDecoderCopySignerStatus(cmsDecoder, 0, policy, true, &signerStatus, &trust, &certVerifyResult)
         guard status == errSecSuccess else {
@@ -175,6 +233,7 @@ struct SMIMEHandler {
 
         var signerName: String?
         var signerEmail: String?
+        var signerEmails: [String] = []
         var certInfo: CertificateInfo?
 
         if let trust = trust,
@@ -188,6 +247,7 @@ struct SMIMEHandler {
             if SecCertificateCopyEmailAddresses(certRef, &emailAddresses) == errSecSuccess,
                let emails = emailAddresses as? [String] {
                 signerEmail = emails.first
+                signerEmails = emails
             }
             certInfo = extractCertificateInfo(from: certRef, chain: certChain)
         }
@@ -206,15 +266,16 @@ struct SMIMEHandler {
         @unknown default:           decoderStatus = nil
         }
 
-        let trustOutcome: TrustOutcome = (trust == nil)
+        let trustOutcome: TrustOutcome = (trust == nil || smimePolicy == nil)
             ? .unavailable
             : (certVerifyResult == errSecSuccess ? .trusted : .untrusted)
 
-        let resultStatus = mapVerdict(parseError: false,
-                                      decoderStatus: decoderStatus,
-                                      trustResult: trustOutcome,
-                                      certsPresent: certInfo != nil,
-                                      certExpired: certInfo?.isExpired ?? false)
+        let resultStatus = senderChecked(mapVerdict(parseError: false,
+                                                    decoderStatus: decoderStatus,
+                                                    trustResult: trustOutcome,
+                                                    certsPresent: certInfo != nil,
+                                                    certExpired: certInfo?.isExpired ?? false),
+                                         signerEmails: signerEmails, from: fromHeader(of: email))
 
         return VerificationResult(status: resultStatus, signerName: signerName, signerEmail: signerEmail, certificateInfo: certInfo)
         #else
