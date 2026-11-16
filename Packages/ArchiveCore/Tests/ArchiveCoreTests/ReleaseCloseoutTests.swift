@@ -5,6 +5,11 @@
 //  Review 2026-11-16, open items closed in the package:
 //    1. ArchiveDataService: a store error while listing an attachment's
 //       children or text is an error, not "no files inside" / "no text".
+//    2. Owner decision D-2: deleting an email also deletes its rows in
+//       email_custom_values, email_recovery, the attachment coverage store and
+//       the search registry (indexed_message); forensic, custody, review
+//       coding and custodian rows are kept (the audit record); a held email
+//       keeps everything.
 //
 
 import XCTest
@@ -79,5 +84,72 @@ final class ReleaseCloseoutTests: XCTestCase {
             let has = try await archive.attachmentDocumentHasText(emailID: email.id, ordinal: 0)
             XCTFail("a store error was read as hasText = \(has)")
         } catch {}
+    }
+
+    // MARK: 2 — D-2 delete cleanup
+
+    private func count(_ db: URL, _ sql: String) throws -> Int {
+        var raw: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(db.path, &raw), SQLITE_OK)
+        defer { sqlite3_close(raw) }
+        var stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(raw, sql, -1, &stmt, nil), SQLITE_OK, String(cString: sqlite3_errmsg(raw)))
+        defer { sqlite3_finalize(stmt) }
+        XCTAssertEqual(sqlite3_step(stmt), SQLITE_ROW)
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    static let cleanedTables = ["email_custom_values", "email_recovery"]
+    static let keptTables = ["review_coding", "custodian_assignments", "custody_events", "forensic_email_hashes",
+                             "forensic_annotations", "forensic_evidence_tags"]
+
+    func testD2_deleteRemovesCustomRecoveryCoverageAndSearchRows_keepsAuditRows_heldKeepsAll() async throws {
+        let store = SQLiteEmailStore(directory: dir)
+        let emails = try await insert(store, count: 2, prefix: "d2")
+        let gone = emails[0].id, held = emails[1].id
+        let fts = FTSSearchIndex(shardsDirectory: dir.appendingPathComponent("fts", isDirectory: true))
+        for e in emails { try await fts.index(e) }
+        let coverage = try AttachmentCoverageStore(url: await store.attachmentCoverageURL)
+        for id in [gone, held] {
+            try coverage.record(row: AttachmentCoverageRow(emailID: id, ordinal: 0, filename: "a.txt", mimeType: "text/plain",
+                                                           state: .extracted, extractor: "text", extractorVersion: 1,
+                                                           characters: 4, note: nil))
+            let u = id.uuidString
+            try rawExec("""
+                INSERT INTO email_custom_values(email_id, key, value) VALUES ('\(u)', 'k', 'v');
+                INSERT INTO email_recovery(email_id, state) VALUES ('\(u)', 'carved');
+                INSERT INTO review_coding(workspace, email_id, field, value, updated_at) VALUES ('w', '\(u)', 'responsive', 'yes', 1);
+                INSERT INTO custodian_assignments(email_id, custodian, assigned_at) VALUES ('\(u)', 'Asha', 1);
+                INSERT INTO custody_events(event_id, email_id, at, payload) VALUES ('ev-\(u)', '\(u)', 1, x'00');
+                INSERT INTO forensic_email_hashes(email_id, sha256) VALUES ('\(u)', 'abc');
+                INSERT INTO forensic_annotations(email_id, note) VALUES ('\(u)', 'seen');
+                INSERT INTO forensic_evidence_tags(email_id, tag) VALUES ('\(u)', 'key');
+            """)
+        }
+        try await store.legalHoldsAdd([held])
+        await store.setEnforcesDatabaseLegalHolds(true)
+
+        try await EmailStoreRepository(store: store, fts: fts).delete(ids: [gone, held])
+
+        let db = dir.appendingPathComponent("emails.db")
+        let total = try await store.totalCount()
+        XCTAssertEqual(total, 1, "the held email is not deleted")
+        for table in Self.cleanedTables {
+            XCTAssertEqual(try count(db, "SELECT COUNT(*) FROM \(table) WHERE email_id = '\(gone.uuidString)';"), 0,
+                           "\(table) still holds rows of the deleted email")
+            XCTAssertEqual(try count(db, "SELECT COUNT(*) FROM \(table) WHERE email_id = '\(held.uuidString)';"), 1,
+                           "\(table) lost the held email's row")
+        }
+        for table in Self.keptTables {
+            for id in [gone, held] {
+                XCTAssertEqual(try count(db, "SELECT COUNT(*) FROM \(table) WHERE email_id = '\(id.uuidString)';"), 1,
+                               "\(table) is the audit record and must be kept (\(id == held ? "held" : "deleted"))")
+            }
+        }
+        let coverageAfter = try AttachmentCoverageStore(url: await store.attachmentCoverageURL)
+        XCTAssertEqual(try coverageAfter.rows(for: gone).count, 0, "coverage still counts the deleted email's attachment")
+        XCTAssertEqual(try coverageAfter.rows(for: held).count, 1, "the held email's coverage is kept")
+        let indexed = try await fts.indexedSubset(of: [gone, held])
+        XCTAssertEqual(indexed, [held], "the search registry keeps the held email and drops the deleted one")
     }
 }

@@ -392,7 +392,13 @@ struct EmailStoreRepository: EmailRepository {
         // FTS first, then store: if the store delete fails afterward, the
         // canonical row still exists and bounded reconcile restores search —
         // no ghost FTS row. Errors propagate (no silent try?).
-        for id in ids { try await fts.delete(id: id) }
+        // D-2: an email the store will refuse (a recorded legal hold) keeps
+        // its search rows (`indexed_message` / FTS) — held mail keeps everything.
+        var held: Set<UUID> = []
+        if let sqlite = store as? SQLiteEmailStore, await sqlite.enforcesDatabaseLegalHolds {
+            held = try await sqlite.legalHeldAmong(ids)
+        }
+        for id in ids where !held.contains(id) { try await fts.delete(id: id) }
         try await store.delete(ids: Set(ids))
     }
 }

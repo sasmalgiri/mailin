@@ -6085,7 +6085,19 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                      // (held ones were subtracted above) reach here.
                                      ("email_folders", "email_id"), ("message_locators", "email_id"),
                                      ("part_locators", "email_id"), ("attachment_children", "email_id"),
-                                     ("search_docs", "email_id"), ("search_chunks", "email_id")] {
+                                     ("search_docs", "email_id"), ("search_chunks", "email_id"),
+                                     // Owner decision D-2 (2026-11-16): a script's custom
+                                     // values and the recovery state are about the email
+                                     // and go with it. KEPT on purpose — the audit record
+                                     // of what happened to the email, which outlives it:
+                                     // forensic_* (hashes, tags, annotations, audit log),
+                                     // custody_events, evidence_seals, review_coding and
+                                     // custodian_assignments. Do not add them here.
+                                     // The attachment coverage store (its own file) and
+                                     // the search registry (indexed_message, in the FTS
+                                     // shards) are cleaned after the commit below and by
+                                     // EmailStoreRepository.delete.
+                                     ("email_custom_values", "email_id"), ("email_recovery", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
@@ -6096,6 +6108,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
         } catch {
             try? exec(db, "ROLLBACK;")
             throw error
+        }
+        // D-2: the attachment coverage rows of the emails really deleted (held
+        // ones were subtracted above). A separate database file, so not in the
+        // transaction: the emails are gone either way, so a failure here is
+        // logged, not thrown (the caller must not report a done delete as failed).
+        if FileManager.default.fileExists(atPath: attachmentCoverageURL.path) {
+            do { try AttachmentCoverageStore(url: attachmentCoverageURL).remove(emailIDs: Array(ids)) }
+            catch { sqliteStoreLog.error("delete: coverage rows of \(ids.count, privacy: .public) deleted emails not removed: \(error.localizedDescription, privacy: .public)") }
         }
         return held
     }
