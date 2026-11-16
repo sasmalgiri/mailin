@@ -144,9 +144,16 @@ enum ChildHashRepair {
         var rowsRepaired = 0
         /// Rows whose child bytes could not be read back: marked, never changed.
         var rowsUnverifiable = 0
+        /// Messages whose repair threw and is still owed (C8: one per
+        /// entry of `failedMessageIDs`).
         var rowsFailed = 0
         var startedAt: Date
         var updatedAt: Date
+        /// C8: messages whose repair threw. The cursor moves past them, so
+        /// each later run retries exactly these first; the record is not
+        /// `completed` while any is left. Optional: records written before
+        /// this field decode with nil.
+        var failedMessageIDs: [UUID]? = nil
     }
 
     /// What ONE run did (the record accumulates across runs).
@@ -176,10 +183,13 @@ enum ChildHashRepair {
 
     /// "Child file hashes (reader 7 fault): 1,204 rows checked, 310 repaired, 2 unverifiable, on 7 Nov 2026."
     static func reportText(_ record: Record?) -> String? {
-        guard let record, record.rowsChecked > 0 || record.rowsUnverifiable > 0 else { return nil }
+        guard let record, record.rowsChecked > 0 || record.rowsUnverifiable > 0 || record.rowsFailed > 0 else { return nil }
         let when = record.updatedAt.formatted(date: .abbreviated, time: .omitted)
+        // C8: failures are stated, never folded into "checked".
+        let failed = record.rowsFailed > 0
+            ? String(localized: " \(record.rowsFailed.formatted()) messages failed to repair — retried at the next pass.") : ""
         let suffix = record.completed ? "" : String(localized: " Not finished — continues at the next pass.")
-        return String(localized: "Hashes of files inside attached messages: \(record.rowsChecked.formatted()) rows checked, \(record.rowsRepaired.formatted()) repaired, \(record.rowsUnverifiable.formatted()) unverifiable, last on \(when).\(suffix)")
+        return String(localized: "Hashes of files inside attached messages: \(record.rowsChecked.formatted()) rows checked, \(record.rowsRepaired.formatted()) repaired, \(record.rowsUnverifiable.formatted()) unverifiable, last on \(when).\(suffix)") + failed
     }
 
     /// Runs (or resumes) the repair. `stopAfterMessages` is a test seam that
@@ -190,27 +200,64 @@ enum ChildHashRepair {
         var receipt = Receipt()
         let path = store.storeDirectory.path
         var state: Record
-        if let existing = Self.record(defaults: defaults), existing.version == currentVersion, existing.storePath == path {
+        if let existing = Self.record(defaults: defaults), existing.version == currentVersion, existing.storePath == path,
+           // C8: a record from before failures were kept says "completed"
+           // with failures it cannot name — it is not trusted; start over
+           // (the repair is idempotent: right hashes are only checked).
+           !(existing.completed && existing.rowsFailed > 0 && (existing.failedMessageIDs ?? []).isEmpty) {
             if existing.completed { receipt.completed = true; receipt.alreadyDone = true; return receipt }
             state = existing
         } else {
             state = Record(version: currentVersion, storePath: path, startedAt: now, updatedAt: now)
         }
+        func add(_ outcome: MessageOutcome) {
+            receipt.rowsChecked += outcome.checked; state.rowsChecked += outcome.checked
+            receipt.rowsRepaired += outcome.repaired; state.rowsRepaired += outcome.repaired
+            receipt.rowsUnverifiable += outcome.unverifiable; state.rowsUnverifiable += outcome.unverifiable
+        }
+        // C8: first the messages earlier runs failed on (the cursor is past them).
+        var owed = state.failedMessageIDs ?? []
+        var index = 0
+        while index < owed.count, !Task.isCancelled {
+            if let stop = stopAfterMessages, receipt.messages >= stop { break }
+            let id = owed[index]
+            let outcome = await repair(store: store, emailID: id)
+            receipt.messages += 1
+            if outcome.failed > 0 {
+                receipt.rowsFailed += outcome.failed
+                index += 1
+            } else {
+                add(outcome)
+                owed.remove(at: index)
+                state.rowsFailed = max(0, state.rowsFailed - 1)
+            }
+            state.failedMessageIDs = owed.isEmpty ? nil : owed
+            state.updatedAt = Date()
+            save(state, defaults: defaults)
+        }
         var cursor = state.cursor
         outer: while !Task.isCancelled {
             let page: [UUID]
+            // A page that cannot be read is this run's failure; the record
+            // stays incomplete and the next run reads the page again.
             do { page = try await store.childHashRepairPage(after: cursor, maxExtractorVersion: lastAffectedExtractorVersion, limit: pageSize) }
-            catch { receipt.rowsFailed += 1; state.rowsFailed += 1; break }
-            if page.isEmpty { state.completed = true; receipt.completed = true; break }
+            catch { receipt.rowsFailed += 1; break }
+            if page.isEmpty {
+                // Complete only when no message is still owed a repair.
+                state.completed = (state.failedMessageIDs ?? []).isEmpty
+                receipt.completed = state.completed
+                break
+            }
             for id in page {
                 if Task.isCancelled { break outer }
                 if let stop = stopAfterMessages, receipt.messages >= stop { break outer }
                 let outcome = await repair(store: store, emailID: id)
                 receipt.messages += 1; state.messages += 1
-                receipt.rowsChecked += outcome.checked; state.rowsChecked += outcome.checked
-                receipt.rowsRepaired += outcome.repaired; state.rowsRepaired += outcome.repaired
-                receipt.rowsUnverifiable += outcome.unverifiable; state.rowsUnverifiable += outcome.unverifiable
-                receipt.rowsFailed += outcome.failed; state.rowsFailed += outcome.failed
+                add(outcome)
+                if outcome.failed > 0 {
+                    receipt.rowsFailed += outcome.failed; state.rowsFailed += outcome.failed
+                    state.failedMessageIDs = (state.failedMessageIDs ?? []) + [id]
+                }
                 cursor = id
                 state.cursor = id
                 state.updatedAt = Date()
@@ -282,7 +329,9 @@ enum ChildHashRepair {
             }
             try await store.repairAttachmentChildHashes(emailID: emailID, updates: updates)
         } catch {
-            outcome.failed += 1
+            // The message's transaction rolled back: nothing it counted
+            // happened (C8 — no "repaired" for an update that never landed).
+            return MessageOutcome(failed: 1)
         }
         return outcome
     }

@@ -365,9 +365,21 @@ extension SQLiteEmailStore {
             return ("(lower(\(mimeColumn)) LIKE 'text/%' OR \(ext(exts)))", exts.map { .text("%.\($0)") })
         default:
             // A bare extension such as "docx".
+            // Review 2026-11-16 §E: the person's text is a literal — `%`, `_`
+            // and the escape character itself match only themselves.
             let clean = type.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". "))
-            return ("lower(\(nameColumn)) LIKE ?", [.text("%.\(clean)")])
+            return ("lower(\(nameColumn)) LIKE ? ESCAPE '\\'", [.text("%." + likeLiteral(clean))])
         }
+    }
+
+    /// `value` as a LIKE pattern that matches only itself (escape char `\`).
+    static func likeLiteral(_ value: String) -> String {
+        var out = ""
+        for ch in value {
+            if ch == "\\" || ch == "%" || ch == "_" { out.append("\\") }
+            out.append(ch)
+        }
+        return out
     }
 }
 

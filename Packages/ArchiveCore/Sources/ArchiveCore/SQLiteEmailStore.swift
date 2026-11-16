@@ -2871,7 +2871,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             sqlite3_bind_int64(up, 5, Int64(now.timeIntervalSince1970))
             bindText(up, 6, createdBy)
             guard sqlite3_step(up) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
-            try exec(db, "DELETE FROM workflow_operations WHERE def_id = '\(defID)';")
+            try execBound(db, "DELETE FROM workflow_operations WHERE def_id = ?;", [.text(defID)])
             for op in operations {
                 let oi = try prepare(db, """
                     INSERT INTO workflow_operations(def_id, seq, op_key, title, hint, posts_doc_type)
@@ -2889,9 +2889,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     func definitions(persona: String? = nil) throws -> [StoredDefinition] {
         let db = try ensureDB()
-        let clause = persona.map { "WHERE persona = '\($0)'" } ?? ""
+        let clause = persona == nil ? "" : "WHERE persona = ?"
         let stmt = try prepare(db, "SELECT def_id, name, persona, builtin FROM workflow_definitions \(clause) ORDER BY builtin DESC, name;")
         defer { sqlite3_finalize(stmt) }
+        if let persona { bindText(stmt, 1, persona) }
         var defs: [(String, String, String, Bool)] = []
         while try stepRow(stmt, db) {
             defs.append((columnText(stmt, 0), columnText(stmt, 1), columnText(stmt, 2), sqlite3_column_int(stmt, 3) == 1))
@@ -2940,33 +2941,70 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func confirmOperation(wf: String, seq: Int, totalOps: Int, result: String, note: String,
                           docNumber: String?, confirmedBy: String = "", now: Date = Date()) throws {
         let db = try ensureDB()
-        let stmt = try prepare(db, """
-            INSERT INTO workflow_confirmations(wf_number, seq, confirmed_at, confirmed_by, result, note, doc_number)
-            VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(wf_number, seq) DO UPDATE SET
-                confirmed_at=excluded.confirmed_at, confirmed_by=excluded.confirmed_by,
-                result=excluded.result, note=excluded.note, doc_number=excluded.doc_number;
-        """)
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, wf); sqlite3_bind_int64(stmt, 2, Int64(seq))
-        sqlite3_bind_int64(stmt, 3, Int64(now.timeIntervalSince1970))
-        bindText(stmt, 4, confirmedBy); bindText(stmt, 5, result); bindText(stmt, 6, note)
-        bindTextOrNull(stmt, 7, docNumber)
-        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
-        let done = try scalarInt(db, "SELECT COUNT(*) FROM workflow_confirmations WHERE wf_number = '\(wf)';")
-        let newStatus = done >= totalOps ? "confirmed" : "released"
-        let prior = columnScalarText(db, "SELECT status FROM workflow_instances WHERE wf_number = '\(wf)';") ?? ""
-        try exec(db, "UPDATE workflow_instances SET status = '\(newStatus)', updated_at = \(Int64(now.timeIntervalSince1970)) WHERE wf_number = '\(wf)';")
-        if prior != newStatus {
-            let hist = try prepare(db, """
-                INSERT INTO workflow_status_history(wf_number, changed_at, changed_by, from_status, to_status)
-                VALUES (?,?,?,?,?);
-            """)
-            defer { sqlite3_finalize(hist) }
-            bindText(hist, 1, wf); sqlite3_bind_int64(hist, 2, Int64(now.timeIntervalSince1970))
-            bindText(hist, 3, confirmedBy); bindText(hist, 4, prior); bindText(hist, 5, newStatus)
-            _ = sqlite3_step(hist)
+        let at = Int64(now.timeIntervalSince1970)
+        // Review 2026-11-16 §E: confirmation, status and its history row are
+        // one transaction — a failed history insert undoes the confirmation
+        // instead of leaving a status change with no history.
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            try execBound(db, """
+                INSERT INTO workflow_confirmations(wf_number, seq, confirmed_at, confirmed_by, result, note, doc_number)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(wf_number, seq) DO UPDATE SET
+                    confirmed_at=excluded.confirmed_at, confirmed_by=excluded.confirmed_by,
+                    result=excluded.result, note=excluded.note, doc_number=excluded.doc_number;
+            """, [.text(wf), .int(Int64(seq)), .int(at), .text(confirmedBy), .text(result), .text(note), .text(docNumber)])
+            let done = try scalarIntBound(db, "SELECT COUNT(*) FROM workflow_confirmations WHERE wf_number = ?;", [.text(wf)])
+            let newStatus = done >= totalOps ? "confirmed" : "released"
+            let prior = try scalarTextBound(db, "SELECT status FROM workflow_instances WHERE wf_number = ?;", [.text(wf)]) ?? ""
+            try execBound(db, "UPDATE workflow_instances SET status = ?, updated_at = ? WHERE wf_number = ?;",
+                          [.text(newStatus), .int(at), .text(wf)])
+            if prior != newStatus {
+                try execBound(db, """
+                    INSERT INTO workflow_status_history(wf_number, changed_at, changed_by, from_status, to_status)
+                    VALUES (?,?,?,?,?);
+                """, [.text(wf), .int(at), .text(confirmedBy), .text(prior), .text(newStatus)])
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// A value bound to a `?` placeholder — never interpolated into SQL.
+    enum BoundValue {
+        case text(String?)
+        case int(Int64)
+    }
+
+    private func prepareBound(_ db: OpaquePointer, _ sql: String, _ values: [BoundValue]) throws -> OpaquePointer? {
+        let stmt = try prepare(db, sql)
+        for (i, value) in values.enumerated() {
+            switch value {
+            case .text(let s): bindTextOrNull(stmt, Int32(i + 1), s)
+            case .int(let n): sqlite3_bind_int64(stmt, Int32(i + 1), n)
+            }
         }
+        return stmt
+    }
+
+    /// One write statement with bound values; throws unless it ran to DONE.
+    func execBound(_ db: OpaquePointer, _ sql: String, _ values: [BoundValue]) throws {
+        let stmt = try prepareBound(db, sql, values)
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func scalarIntBound(_ db: OpaquePointer, _ sql: String, _ values: [BoundValue]) throws -> Int {
+        let stmt = try prepareBound(db, sql, values)
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    func scalarTextBound(_ db: OpaquePointer, _ sql: String, _ values: [BoundValue]) throws -> String? {
+        let stmt = try prepareBound(db, sql, values)
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return nil }
+        return sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : columnText(stmt, 0)
     }
 
     struct StoredVariant: Sendable, Identifiable {
@@ -3011,24 +3049,36 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     func instances(status: String? = nil, limit: Int = 200, offset: Int = 0) throws -> [StoredInstance] {
         let db = try ensureDB()
-        let clause = status.map { "WHERE status = '\($0.replacingOccurrences(of: "'", with: "''"))'" } ?? ""
-        let stmt = try prepare(db, "SELECT wf_number, def_id, title, status, created_at, created_by, updated_at, reverses FROM workflow_instances \(clause) ORDER BY updated_at DESC LIMIT \(limit) OFFSET \(max(0, offset));")
+        var values: [BoundValue] = []
+        var clause = ""
+        if let status { clause = "WHERE status = ?"; values.append(.text(status)) }
+        values.append(.int(Int64(limit))); values.append(.int(Int64(max(0, offset))))
+        let stmt = try prepareBound(db, "SELECT \(Self.instanceColumns) FROM workflow_instances \(clause) ORDER BY updated_at DESC LIMIT ? OFFSET ?;", values)
         defer { sqlite3_finalize(stmt) }
         var out: [StoredInstance] = []
-        while try stepRow(stmt, db) {
-            out.append(StoredInstance(
-                wfNumber: columnText(stmt, 0), defID: columnText(stmt, 1), title: columnText(stmt, 2),
-                status: columnText(stmt, 3),
-                createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
-                createdBy: columnText(stmt, 5),
-                updatedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 6))),
-                reverses: sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : columnText(stmt, 7)))
-        }
+        while try stepRow(stmt, db) { out.append(storedInstance(stmt)) }
         return out
     }
 
+    private static let instanceColumns = "wf_number, def_id, title, status, created_at, created_by, updated_at, reverses"
+
+    private func storedInstance(_ stmt: OpaquePointer?) -> StoredInstance {
+        StoredInstance(
+            wfNumber: columnText(stmt, 0), defID: columnText(stmt, 1), title: columnText(stmt, 2),
+            status: columnText(stmt, 3),
+            createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+            createdBy: columnText(stmt, 5),
+            updatedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 6))),
+            reverses: sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : columnText(stmt, 7))
+    }
+
+    /// C17: by its number, whatever its age — not "the first of the newest
+    /// 10,000", which lost every older run.
     func instance(wf: String) throws -> StoredInstance? {
-        try instances(status: nil, limit: 10000).first { $0.wfNumber == wf }
+        let db = try ensureDB()
+        let stmt = try prepareBound(db, "SELECT \(Self.instanceColumns) FROM workflow_instances WHERE wf_number = ?;", [.text(wf)])
+        defer { sqlite3_finalize(stmt) }
+        return try stepRow(stmt, db) ? storedInstance(stmt) : nil
     }
 
     /// Persist the values entered at one operation (upsert per field).
@@ -3063,13 +3113,6 @@ actor SQLiteEmailStore: EmailArchiveStore {
             out[seq, default: [:]][columnText(stmt, 1)] = columnText(stmt, 2)
         }
         return out
-    }
-
-    private func columnScalarText(_ db: OpaquePointer, _ sql: String) -> String? {
-        guard let stmt = try? prepare(db, sql) else { return nil }
-        defer { sqlite3_finalize(stmt) }
-        guard (try? stepRow(stmt, db)) == true else { return nil }
-        return sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : columnText(stmt, 0)
     }
 
     func confirmations(wf: String) throws -> [StoredConfirmation] {
@@ -3121,8 +3164,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         var number = ""
         try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
         do {
-            try exec(db, "INSERT OR IGNORE INTO doc_counters(doc_type, year, next_seq) VALUES ('\(type)', \(year), 1);")
-            let seq = try scalarInt(db, "SELECT next_seq FROM doc_counters WHERE doc_type = '\(type)' AND year = \(year);")
+            try execBound(db, "INSERT OR IGNORE INTO doc_counters(doc_type, year, next_seq) VALUES (?, ?, 1);", [.text(type), .int(Int64(year))])
+            let seq = try scalarIntBound(db, "SELECT next_seq FROM doc_counters WHERE doc_type = ? AND year = ?;", [.text(type), .int(Int64(year))])
             number = DocumentNumberFormat.format(type: type, year: year, sequence: seq)
             let insert = try prepare(db, """
                 INSERT INTO documents(doc_number, doc_type, created_at, summary, refs, created_by, reverses)
@@ -3137,10 +3180,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
             bindText(insert, 6, createdBy)
             bindTextOrNull(insert, 7, reverses)
             if let reverses {
-                try exec(db, "UPDATE documents SET reversed_by = '\(number)' WHERE doc_number = '\(reverses)';")
+                try execBound(db, "UPDATE documents SET reversed_by = ? WHERE doc_number = ?;", [.text(number), .text(reverses)])
             }
             guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
-            try exec(db, "UPDATE doc_counters SET next_seq = next_seq + 1 WHERE doc_type = '\(type)' AND year = \(year);")
+            try execBound(db, "UPDATE doc_counters SET next_seq = next_seq + 1 WHERE doc_type = ? AND year = ?;", [.text(type), .int(Int64(year))])
             try exec(db, "COMMIT;")
         } catch {
             try? exec(db, "ROLLBACK;")
@@ -5933,7 +5976,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                      ("attachment_search", "email_id"), ("attachment_text_state", "email_id"),
                                      ("features", "email_id"), ("ioc_rows", "email_id"),
                                      ("minhash_bands", "email_id"), ("fingerprints", "email_id"),
-                                     ("entity_rows", "email_id")] {
+                                     ("entity_rows", "email_id"),
+                                     // Review 2026-11-16 §E: with foreign keys off these
+                                     // outlived the email — folder counts, backup
+                                     // inventory (locators) and the chunk index still
+                                     // carried deleted mail. Only ids really deleted
+                                     // (held ones were subtracted above) reach here.
+                                     ("email_folders", "email_id"), ("message_locators", "email_id"),
+                                     ("part_locators", "email_id"), ("attachment_children", "email_id"),
+                                     ("search_docs", "email_id"), ("search_chunks", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }

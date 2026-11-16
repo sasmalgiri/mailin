@@ -63,6 +63,36 @@ public struct ConnectedAccountArchiveDeletion: Sendable, Equatable {
     public var blobsRemoved: Int
     public var bytesReclaimed: Int64
     public var blobsKeptShared: Int
+    /// C7: the confirmed deletable count this run worked through ("of Y").
+    /// 0 when built by an older caller.
+    public var total: Int = 0
+    /// C7: of `deletedEmailIDs`, how many the per-page search-index purge
+    /// could not drop (they leave search at the next launch prune).
+    public var searchIndexNotPurged: Int = 0
+
+    /// Records of `total` that are still in the archive (a stopped run, or a
+    /// record placed under a hold while the run went).
+    public var notDeleted: Int { max(0, total - deletedEmailIDs.count) }
+}
+
+/// C7: the deletion stopped part-way. Everything in `partial` really
+/// happened (records deleted, their occurrences and exclusive blobs
+/// removed); the other `partial.notDeleted` records are still in the
+/// archive, untouched. Thrown instead of the bare store error so the
+/// caller can say "X of Y".
+public struct ConnectedAccountArchiveDeletionIncomplete: LocalizedError, Sendable, Equatable {
+    public var partial: ConnectedAccountArchiveDeletion
+    /// What stopped it (the store or search-index error, as text).
+    public var reason: String
+
+    public var errorDescription: String? {
+        let done = partial.deletedEmailIDs.count
+        var text = "Deleted \(done) of \(partial.total) messages; the other \(partial.notDeleted) are still in the archive. Stopped by: \(reason)"
+        if partial.searchIndexNotPurged > 0 {
+            text += " \(partial.searchIndexNotPurged) deleted messages are removed from search at the next launch."
+        }
+        return text
+    }
 }
 
 public enum ConnectedLifecycleError: LocalizedError, Equatable {
@@ -298,36 +328,89 @@ extension SQLiteEmailStore {
     /// Nothing of any other account is read for writing.
     func deleteConnectedAccountArchive(accountID: UUID, confirmedCount: Int, pageSize: Int = 1_000,
                                        progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil) throws -> ConnectedAccountArchiveDeletion {
+        let plan = try planConnectedAccountDeletion(accountID: accountID, confirmedCount: confirmedCount)
+        let total = plan.ids.count
+        var deleted: [UUID] = []
+        var done = 0
+        var stop: String?
+        progress?(0, total)
+        for page in Self.deletionPages(plan.ids, pageSize) {
+            do { deleted.append(contentsOf: try deleteConnectedAccountPage(page)) } catch {
+                // C7: a failed page rolled back whole; the pages before it are
+                // committed. Stop here and say "X of Y" — never a bare error.
+                stop = error.localizedDescription
+                break
+            }
+            done += page.count
+            progress?(done, total)
+        }
+        return try finishConnectedAccountDeletion(plan, deleted: deleted, stoppedBy: stop)
+    }
+
+    /// The set the deletion works through, computed once — the same records
+    /// `connectedDeletableRecordIDs` lists — and the blobs only they use.
+    struct ConnectedAccountDeletionPlan: Sendable {
+        let accountID: UUID
+        let before: ConnectedAccountArchiveSummary
+        /// Deletable record ids in id order.
+        let ids: [UUID]
+        /// Blobs only the deletable records reference: (digest, length).
+        let exclusiveDigests: [(String, Int64)]
+    }
+
+    /// The plan's ids in pages of `size` (at least 1), in order.
+    nonisolated static func deletionPages(_ ids: [UUID], _ size: Int) -> [[UUID]] {
+        let size = max(1, size)
+        return stride(from: 0, to: ids.count, by: size).map { Array(ids[$0..<min($0 + size, ids.count)]) }
+    }
+
+    func planConnectedAccountDeletion(accountID: UUID, confirmedCount: Int) throws -> ConnectedAccountDeletionPlan {
         let db = try ensureDB()
         defer { dropAccountDeletableSet(db) }
         let total = try fillAccountDeletableSet(db, accountID: accountID)
         let (before, blobs) = try summaryOfDeletableSet(db, accountID: accountID, deletable: total)
         guard before.deletable == confirmedCount else { throw ConnectedLifecycleError.countChanged(shown: confirmedCount, now: before.deletable) }
-        let digests = blobs.filter { !$0.shared }.map { ($0.digest, $0.length) }
-        var deleted: [UUID] = []
-        var done = 0
-        progress?(0, total)
-        let pageStmt = try prepare(db, "SELECT email_id FROM \(Self.deletableSetTable) WHERE email_id > ?1 ORDER BY email_id LIMIT ?2;")
-        defer { sqlite3_finalize(pageStmt) }
-        var after = ""
-        while true {
-            sqlite3_reset(pageStmt); sqlite3_clear_bindings(pageStmt)
-            bindText(pageStmt, 1, after); sqlite3_bind_int64(pageStmt, 2, Int64(max(1, pageSize)))
-            var page: [UUID] = []
-            while try stepRow(pageStmt, db) {
-                after = columnText(pageStmt, 0)
-                if let id = UUID(uuidString: after) { page.append(id) }
-            }
-            sqlite3_reset(pageStmt)
-            if page.isEmpty { break }
-            // No Message-ID tombstones: removing an account's archive is not
-            // "never import this message again" — a later import of the same
-            // mail (a file, or the account reconnected) stores it as new.
-            let refused = try deleteReportingHeld(ids: Set(page), recordTombstones: false)
-            deleted.append(contentsOf: page.filter { !refused.contains($0) })
-            done += page.count
-            progress?(done, total)
+        let stmt = try prepare(db, "SELECT email_id FROM \(Self.deletableSetTable) ORDER BY email_id;")
+        defer { sqlite3_finalize(stmt) }
+        var ids: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { ids.append(id) } }
+        return ConnectedAccountDeletionPlan(accountID: accountID, before: before, ids: ids,
+                                            exclusiveDigests: blobs.filter { !$0.shared }.map { ($0.digest, $0.length) })
+    }
+
+    /// One page, one transaction (`deleteReportingHeld`); returns the ids
+    /// really deleted (a record placed under a hold meanwhile is kept).
+    func deleteConnectedAccountPage(_ page: [UUID]) throws -> [UUID] {
+        // No Message-ID tombstones: removing an account's archive is not
+        // "never import this message again" — a later import of the same
+        // mail (a file, or the account reconnected) stores it as new.
+        let refused = try deleteReportingHeld(ids: Set(page), recordTombstones: false)
+        return page.filter { !refused.contains($0) }
+    }
+
+    /// After the pages (all, or up to a failure): the account's occurrence
+    /// rows of records that no longer exist and the blobs nothing references
+    /// now. With `stoppedBy` set, throws `ConnectedAccountArchiveDeletionIncomplete`
+    /// carrying what really happened.
+    func finishConnectedAccountDeletion(_ plan: ConnectedAccountDeletionPlan, deleted: [UUID], stoppedBy: String?,
+                                        searchIndexNotPurged: Int = 0) throws -> ConnectedAccountArchiveDeletion {
+        var result = ConnectedAccountArchiveDeletion(accountID: plan.accountID, deletedEmailIDs: deleted, heldKept: plan.before.held,
+                                                     keptOnlyCopy: plan.before.keptOnlyCopy, blobsRemoved: 0, bytesReclaimed: 0,
+                                                     blobsKeptShared: plan.before.sharedBlobs, total: plan.ids.count,
+                                                     searchIndexNotPurged: searchIndexNotPurged)
+        do {
+            let (removed, reclaimed) = try cleanUpAfterConnectedAccountDeletion(accountID: plan.accountID, digests: plan.exclusiveDigests)
+            result.blobsRemoved = removed
+            result.bytesReclaimed = reclaimed
+        } catch {
+            throw ConnectedAccountArchiveDeletionIncomplete(partial: result, reason: stoppedBy ?? error.localizedDescription)
         }
+        if let stoppedBy { throw ConnectedAccountArchiveDeletionIncomplete(partial: result, reason: stoppedBy) }
+        return result
+    }
+
+    private func cleanUpAfterConnectedAccountDeletion(accountID: UUID, digests: [(String, Int64)]) throws -> (Int, Int64) {
+        let db = try ensureDB()
         // The account's occurrence rows of records that no longer exist.
         try exec(db, SQLiteHygiene.beginWrite)
         do {
@@ -355,9 +438,7 @@ extension SQLiteEmailStore {
             let url = blobStore.url(for: digest)
             if (try? FileManager.default.removeItem(at: url)) != nil { removed += 1; reclaimed += length }
         }
-        return ConnectedAccountArchiveDeletion(accountID: accountID, deletedEmailIDs: deleted, heldKept: before.held,
-                                               keptOnlyCopy: before.keptOnlyCopy,
-                                               blobsRemoved: removed, bytesReclaimed: reclaimed, blobsKeptShared: before.sharedBlobs)
+        return (removed, reclaimed)
     }
 
     /// Drops the account's sync cursors and its queue of listed-but-not-captured
@@ -624,6 +705,44 @@ extension ConnectedArchiveSink {
     public func deleteAccountArchive(accountID: UUID, confirmedCount: Int,
                                      progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil) async throws -> ConnectedAccountArchiveDeletion {
         try await store.deleteConnectedAccountArchive(accountID: accountID, confirmedCount: confirmedCount, progress: progress)
+    }
+
+    /// C7: the same deletion with the search index purged PAGE BY PAGE,
+    /// after each page's archive delete has committed — `afterPage` gets
+    /// exactly the ids that page really deleted. A page that fails (archive
+    /// or index) stops the run: the records not reached stay in the archive
+    /// AND searchable, and `ConnectedAccountArchiveDeletionIncomplete`
+    /// says "X of Y". Callers must not purge the index up front.
+    public func deleteAccountArchive(accountID: UUID, confirmedCount: Int, pageSize: Int = 1_000,
+                                     progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil,
+                                     afterPage: @Sendable (_ deletedIDs: [UUID]) async throws -> Void) async throws -> ConnectedAccountArchiveDeletion {
+        let plan = try await store.planConnectedAccountDeletion(accountID: accountID, confirmedCount: confirmedCount)
+        let total = plan.ids.count
+        var deleted: [UUID] = []
+        var done = 0
+        var stop: String?
+        var notPurged = 0
+        progress?(0, total)
+        for page in SQLiteEmailStore.deletionPages(plan.ids, pageSize) {
+            let gone: [UUID]
+            do { gone = try await store.deleteConnectedAccountPage(page) } catch {
+                stop = error.localizedDescription
+                break
+            }
+            deleted.append(contentsOf: gone)
+            if !gone.isEmpty {
+                do { try await afterPage(gone) } catch {
+                    // The page's records ARE deleted; only their index rows
+                    // remain (the launch ghost prune drops them).
+                    notPurged += gone.count
+                    stop = error.localizedDescription
+                    break
+                }
+            }
+            done += page.count
+            progress?(done, total)
+        }
+        return try await store.finishConnectedAccountDeletion(plan, deleted: deleted, stoppedBy: stop, searchIndexNotPurged: notPurged)
     }
 
     /// The account's records in the archive (one count; no deletion planning).
