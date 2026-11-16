@@ -1,6 +1,7 @@
 @testable import ArchiveCore
 import AppIntents
 import Foundation
+import os
 
 //
 //  MailinAppEntities.swift
@@ -21,7 +22,13 @@ import Foundation
 
 /// Pushed by CapabilityWiring; intents can run without any view on screen.
 enum ShortcutsPolicy {
-    nonisolated(unsafe) static var actionsEnabled = false
+    /// Written by CapabilityWiring on the main actor, read by intents off it:
+    /// held behind a lock (review 2026-11-16 D4).
+    private static let actionsEnabledStore = OSAllocatedUnfairLock<Bool>(initialState: false)
+    static var actionsEnabled: Bool {
+        get { actionsEnabledStore.withLock { $0 } }
+        set { actionsEnabledStore.withLock { $0 = newValue } }
+    }
     /// CAP-05: Find has no cap of its own. Shortcuts' own "Limit" option on
     /// the Find action bounds the list when the person wants it; without it,
     /// every match is returned (a Shortcuts list lives in memory — that is

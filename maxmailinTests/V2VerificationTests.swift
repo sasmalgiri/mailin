@@ -12934,6 +12934,31 @@ final class Review1116CTests: XCTestCase {
         XCTAssertFalse(lock.isEnabled)
     }
 
+    /// D4: the tier and the Shortcuts switch are written on the main actor and read
+    /// from intents off it — their storage is lock-protected, not `nonisolated(unsafe)`.
+    func testD4_tierAndShortcutsSwitch_areLockProtected() throws {
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        for file in ["TierAccess.swift", "MailinAppEntities.swift"] {
+            let source = try String(contentsOf: app.appendingPathComponent(file), encoding: .utf8)
+            XCTAssertFalse(source.contains("nonisolated(unsafe) static var"), "\(file) still shares an unprotected static")
+        }
+        let savedTier = TierAccess.tier, savedSwitch = ShortcutsPolicy.actionsEnabled
+        defer { TierAccess.tier = savedTier; ShortcutsPolicy.actionsEnabled = savedSwitch }
+        DispatchQueue.concurrentPerform(iterations: 2_000) { i in
+            if i % 2 == 0 {
+                TierAccess.tier = i % 4 == 0 ? .professional : .free
+                ShortcutsPolicy.actionsEnabled = i % 4 == 0
+            } else {
+                _ = TierAccess.allows(.personal)
+                _ = ShortcutsPolicy.actionsEnabled
+            }
+        }
+        TierAccess.tier = .personal
+        XCTAssertEqual(TierAccess.tier, .personal)
+        XCTAssertTrue(TierAccess.allows(.recovery))
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.

@@ -15,10 +15,17 @@
 //
 
 import SwiftUI
+import os
 
 enum TierAccess {
     /// The effective tier (StoreManager.publishAccessScope keeps it current).
-    nonisolated(unsafe) static var tier: PurchaseTier = .free
+    /// Written on the main actor, read from intents and background work, so
+    /// it is held behind a lock (review 2026-11-16 D4).
+    private static let tierStore = OSAllocatedUnfairLock<PurchaseTier>(initialState: .free)
+    static var tier: PurchaseTier {
+        get { tierStore.withLock { $0 } }
+        set { tierStore.withLock { $0 = newValue } }
+    }
 
     static func allows(_ needed: PurchaseTier) -> Bool { tier >= needed }
 
