@@ -631,6 +631,20 @@ struct ChainOfCustodyView: View {
         }
     }
 
+    /// The file and its `.sig` sidecar to share; when signing fails (e.g. the
+    /// stored signing key cannot be read) the file goes alone and says why.
+    static func signedShareItems(_ url: URL, signer: ExportSigner) -> (items: [Any], status: String?, auditDetail: String) {
+        do {
+            let sig = try signer.signFile(url)
+            return ([url, sig], nil, "\(url.lastPathComponent) signed and shared")
+        } catch {
+            // ExportSignerError.storedKeyUnreadable included: said, never swallowed.
+            return ([url],
+                    String(localized: "\(url.lastPathComponent) is shared without a signature: \(error.localizedDescription)"),
+                    "\(url.lastPathComponent) shared UNSIGNED: \(error.localizedDescription)")
+        }
+    }
+
     #if os(macOS)
     /// Save, read back, then sign with a `.sig` sidecar — the same
     /// tamper-evidence the iOS share path has always produced.
@@ -661,16 +675,11 @@ struct ChainOfCustodyView: View {
             try data.write(to: url, options: .atomic)
             // Tamper-evident signing: produce a .sig sidecar so recipients
             // can verify the audit trail was not modified after export.
-            if let sig = try? ExportSigner.shared.signFile(url) {
-                shareItems = [url, sig]
-            } else {
-                shareItems = [url]
-            }
+            let signed = Self.signedShareItems(url, signer: .shared)
+            shareItems = signed.items
+            exportStatus = signed.status
             showShareSheet = true
-            _ = try? HMACChainAuditLog.shared.append(
-                action: "export.auditTrail",
-                detail: "chain_of_custody_audit.csv signed and shared"
-            )
+            _ = try? HMACChainAuditLog.shared.append(action: "export.auditTrail", detail: signed.auditDetail)
         } catch {
             // Best-effort; share sheet won't present if write fails.
         }
@@ -685,16 +694,11 @@ struct ChainOfCustodyView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("chain_of_custody_report.pdf")
         do {
             try data.write(to: url, options: .atomic)
-            if let sig = try? ExportSigner.shared.signFile(url) {
-                shareItems = [url, sig]
-            } else {
-                shareItems = [url]
-            }
+            let signed = Self.signedShareItems(url, signer: .shared)
+            shareItems = signed.items
+            exportStatus = signed.status
             showShareSheet = true
-            _ = try? HMACChainAuditLog.shared.append(
-                action: "export.custodyReport",
-                detail: "chain_of_custody_report.pdf signed and shared"
-            )
+            _ = try? HMACChainAuditLog.shared.append(action: "export.custodyReport", detail: signed.auditDetail)
         } catch {
             // Best-effort; share sheet won't present if write fails.
         }

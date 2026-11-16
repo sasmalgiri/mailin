@@ -12868,6 +12868,24 @@ final class Review1116CTests: XCTestCase {
         XCTAssertGreaterThan(data.count, 512)
     }
 
+    /// Follow-up (review 2026-11-16): a custody export shared on iPhone/iPad says when
+    /// it could not be signed (an unreadable stored key) instead of sharing it unsigned
+    /// in silence, and its audit line does not claim a signature.
+    func testCustodyShare_unreadableSigningKey_isStated() throws {
+        final class BrokenKeyStore: ExportSigningKeyStore {
+            func load() throws -> Data? { Data([1, 2, 3]) }
+            func save(_ data: Data) throws { XCTFail("an unreadable key is never replaced") }
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("custody-\(UUID().uuidString).csv")
+        try Data("a,b\n".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let r = ChainOfCustodyView.signedShareItems(url, signer: ExportSigner(keyStore: BrokenKeyStore()))
+        XCTAssertEqual(r.items.count, 1, "the file alone")
+        let status = try XCTUnwrap(r.status, "the person is told it is unsigned")
+        XCTAssertTrue(status.contains(ExportSignerError.storedKeyUnreadable(byteCount: 3).localizedDescription), status)
+        XCTAssertTrue(r.auditDetail.contains("UNSIGNED"), r.auditDetail)
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {
