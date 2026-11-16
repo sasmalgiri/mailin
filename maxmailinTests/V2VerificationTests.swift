@@ -13209,6 +13209,23 @@ final class Review1116CTests: XCTestCase {
         XCTAssertTrue(outside.isEmpty, "shared model state touched outside fmStateQueue:\n" + outside.joined(separator: "\n"))
     }
 
+    /// Rule 10: the saved / printed import receipt is written in the app's language
+    /// (it was English in all 10).
+    @MainActor
+    func testRule10_importReceiptSavedCopy_isInTheAppLanguage() {
+        let receipt = ImportReceipt(startedAt: Date(), completedAt: Date())
+        let view = ImportReceiptView(receipt: receipt)
+        let de = view.plainText(locale: Locale(identifier: "de"))
+        XCTAssertTrue(de.contains("mailin-Importbeleg"), de)
+        XCTAssertTrue(de.contains("Bilanz"), de)
+        XCTAssertTrue(de.contains("gefunden: 0"), de)
+        XCTAssertFalse(de.contains("Accounting"), de)
+        let ja = view.plainText(locale: Locale(identifier: "ja"))
+        XCTAssertTrue(ja.contains("集計"), ja)
+        let en = view.plainText(locale: Locale(identifier: "en"))
+        XCTAssertTrue(en.contains("Accounting") && en.contains("discovered: 0"), en)
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.

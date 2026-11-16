@@ -431,53 +431,62 @@ struct ImportReceiptView: View {
     #endif
 
     /// The printable/saveable form — deliberately plain text so it can be filed
-    /// alongside a case without depending on this app to read it.
-    func plainText() -> String {
+    /// alongside a case without depending on this app to read it. Written in the
+    /// app's language (review 2026-11-16: the saved/printed copy was English
+    /// on every language); `locale` picks another one (tests).
+    func plainText(locale: Locale = .current) -> String {
+        func t(_ resource: LocalizedStringResource) -> String {
+            var resource = resource
+            resource.locale = locale
+            return String(localized: resource)
+        }
+        func count(_ value: Int?) -> String { value.map(String.init) ?? t("unavailable") }
+        let when = Date.FormatStyle(date: .abbreviated, time: .standard).locale(locale)
         var lines: [String] = []
-        lines.append("mailin import receipt")
-        lines.append("Verdict: \(receipt.verdict.label) — \(receipt.verdict.summary)")
-        lines.append("Started: \(receipt.startedAt.formatted(date: .abbreviated, time: .standard))")
-        lines.append("Finished: \(receipt.completedAt.formatted(date: .abbreviated, time: .standard))")
-        lines.append(String(format: "Duration: %.1f s", receipt.durationSeconds))
+        lines.append(t("mailin import receipt"))
+        lines.append(t("Verdict: \(receipt.verdict.label) — \(receipt.verdict.summary)"))
+        lines.append(t("Started: \(receipt.startedAt.formatted(when))"))
+        lines.append(t("Finished: \(receipt.completedAt.formatted(when))"))
+        lines.append(t("Duration: \(String(format: "%.1f", receipt.durationSeconds)) s"))
         lines.append("")
-        lines.append("Sources")
+        lines.append(t("Sources"))
         for source in receipt.sources {
             lines.append("  \(source.filename) — \(byteText(source.sizeBytes)), \(source.parser) v\(source.parserVersion)")
             lines.append("    SHA-256 \(source.sha256)")
             if let accounting = Self.accountingLine(for: source) { lines.append("    \(accounting)") }
         }
         lines.append("")
-        lines.append("Accounting")
-        lines.append("  discovered: \(receipt.discovered)")
-        lines.append("  read: \(receipt.parsed)")
-        lines.append("  saved: \(countText(receipt.inserted))")
-        lines.append("  duplicates: \(countText(receipt.duplicates))")
-        lines.append("  damaged: \(receipt.damaged)")
-        lines.append("  could not save: \(receipt.persistFailed)")
-        lines.append("  files skipped: \(receipt.skipped)")
-        lines.append("  indexed: \(receipt.indexed)")
-        lines.append("  attachments seen: \(receipt.attachmentsSeen)")
-        lines.append("  store rows: \(countText(receipt.storeCountBefore)) -> \(countText(receipt.storeCountAfter))")
-        lines.append("  index rows: \(countText(receipt.ftsRowCount))")
+        lines.append(t("Accounting"))
+        lines.append("  " + t("discovered: \(receipt.discovered)"))
+        lines.append("  " + t("read: \(receipt.parsed)"))
+        lines.append("  " + t("saved: \(count(receipt.inserted))"))
+        lines.append("  " + t("duplicates: \(count(receipt.duplicates))"))
+        lines.append("  " + t("damaged: \(receipt.damaged)"))
+        lines.append("  " + t("could not save: \(receipt.persistFailed)"))
+        lines.append("  " + t("files skipped: \(receipt.skipped)"))
+        lines.append("  " + t("indexed: \(receipt.indexed)"))
+        lines.append("  " + t("attachments seen: \(receipt.attachmentsSeen)"))
+        lines.append("  " + t("store rows: \(count(receipt.storeCountBefore)) -> \(count(receipt.storeCountAfter))"))
+        lines.append("  " + t("index rows: \(count(receipt.ftsRowCount))"))
         if !receipt.fileFailures.isEmpty {
             lines.append("")
-            lines.append("Failures")
+            lines.append(t("Failures"))
             for failure in receipt.fileFailures {
                 lines.append("  \(failure.filename): \(failure.message)")
             }
         }
         if !receipt.warnings.isEmpty {
             lines.append("")
-            lines.append("Warnings")
+            lines.append(t("Warnings"))
             for warning in receipt.warnings { lines.append("  \(warning)") }
         }
         lines.append("")
         switch receipt.verifyDetailed() {
-        case .verified: lines.append("Integrity: verified (keyed signature)")
-        case .checksumOnly: lines.append("Integrity: checksum only (pre-signing receipt)")
-        case .tampered(let reason): lines.append("Integrity: DOES NOT VERIFY — \(reason)")
+        case .verified: lines.append(t("Integrity: verified (keyed signature)"))
+        case .checksumOnly: lines.append(t("Integrity: checksum only (pre-signing receipt)"))
+        case .tampered(let reason): lines.append(t("Integrity: DOES NOT VERIFY — \(reason)"))
         }
-        lines.append("Content hash: \(receipt.contentHash.isEmpty ? "not recorded" : receipt.contentHash)")
+        lines.append(t("Content hash: \(receipt.contentHash.isEmpty ? t("not recorded") : receipt.contentHash)"))
         return lines.joined(separator: "\n")
     }
 
