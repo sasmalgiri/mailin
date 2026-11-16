@@ -3164,6 +3164,61 @@ final class V2ForensicPersistenceTests: XCTestCase {
         XCTAssertTrue(details.contains("1"), "identifies the tampered entry: \(details)")
     }
 
+    /// Review C12: the external chain root never runs ahead of the durable log (it is
+    /// saved after the row is appended, in order), and a root one step behind — the app
+    /// ended between the append and the root save — is advanced at launch, not TAMPERED.
+    @MainActor
+    func testC12_chainRoot_neverAheadOfTheDurableLog_andALaggingRootIsRepaired() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            ForensicManager.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        ForensicManager.testStoreOverride = store
+        let fm = ForensicManager.shared
+        let wasEnabled = fm.isEnabled
+        defer { fm.isEnabled = wasEnabled; fm.clearForensicData() }
+        fm.clearForensicData()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        await fm.bootstrapFromStore()
+        fm.isEnabled = true
+        func storedRoot() -> String? {
+            try? String(contentsOf: fm.chainRootURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        fm.logAction("C12 A", detail: "first")
+        // The app could end right here: the root must not name a row the log lacks.
+        XCTAssertNil(storedRoot(), "the root was saved before the row was durable")
+        for _ in 0..<100 {
+            if try await store.forensicAuditCount() == 1, storedRoot() != nil { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        for i in 0..<20 { fm.logAction("C12 burst", detail: "\(i)") }
+        for _ in 0..<200 {
+            if try await store.forensicAuditCount() == 21, storedRoot() == fm.auditLog.last?.entryHash { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(storedRoot(), fm.auditLog.last?.entryHash, "the root ends on the last appended row")
+        let ok = await fm.verifyAuditLogIntegrityStreamed()
+        XCTAssertEqual(ok, .verified)
+
+        // Ended between the append and the root save: the root is the previous hash.
+        let lastRow = try await store.forensicAuditLast()
+        let last = try XCTUnwrap(lastRow)
+        try last.previousHash.write(to: fm.chainRootURL, atomically: true, encoding: .utf8)
+        await fm.bootstrapFromStore()
+        let afterLaunch = await fm.verifyAuditLogIntegrityStreamed()
+        XCTAssertEqual(afterLaunch, .verified, "a root one append behind is not tampering")
+        XCTAssertEqual(storedRoot(), last.entryHash)
+
+        // A root that names something else is still caught.
+        try "deadbeef".write(to: fm.chainRootURL, atomically: true, encoding: .utf8)
+        await fm.bootstrapFromStore()
+        let forged = await fm.verifyAuditLogIntegrityStreamed()
+        guard case .tampered = forged else { return XCTFail("a foreign root must be reported, got \(forged)") }
+    }
+
     /// Review C15 (rule 6): the Audit Trail searches, counts and pages the
     /// whole durable log — not the 500-entry memory window.
     @MainActor

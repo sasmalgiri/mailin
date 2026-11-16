@@ -284,7 +284,7 @@ class ForensicManager: ObservableObject {
     private let tagsURL = appSupportDir.appendingPathComponent("forensic_tags.json")
     private let annotationsURL = appSupportDir.appendingPathComponent("forensic_annotations.json")
     private let emailHashesURL = appSupportDir.appendingPathComponent("forensic_email_hashes.json")
-    private let chainRootURL = appSupportDir.appendingPathComponent("forensic_chain_root.txt")
+    let chainRootURL = appSupportDir.appendingPathComponent("forensic_chain_root.txt")
 
     private init() {
         Task { @MainActor in await bootstrapFromStore() }
@@ -310,6 +310,7 @@ class ForensicManager: ObservableObject {
             if let last = try await store.forensicAuditLast() {
                 auditSequence = last.seq + 1
                 lastAuditHash = last.entryHash
+                repairLaggingChainRoot(lastRow: last)
             } else {
                 auditSequence = 0
                 lastAuditHash = "GENESIS"
@@ -558,14 +559,23 @@ class ForensicManager: ObservableObject {
         auditLog.append(entry)
         if auditLog.count > Self.auditDisplayLimit { auditLog.removeFirst(auditLog.count - Self.auditDisplayLimit) }
         auditTotalCount += 1
-        saveChainRoot(entryHash)
         let row = SQLiteEmailStore.ForensicAuditRow(
             seq: entry.sequence, entryID: entry.id, timestamp: entry.timestamp,
             action: entry.action, detail: entry.detail, examiner: entry.examiner,
             previousHash: entry.previousHash, entryHash: entry.entryHash)
-        Task { @MainActor [store] in
-            do { try await store.forensicAuditAppend(row) }
-            catch {
+        // C12: appends run one after another, and the external chain root is
+        // saved only once its row is durable — it never names a row the log
+        // lacks. Ending between the two leaves the root one step behind, which
+        // `bootstrapFromStore` advances (`repairLaggingChainRoot`).
+        let previousAppend = auditAppendTail
+        appendsInFlight += 1
+        auditAppendTail = Task { @MainActor [store] in
+            await previousAppend?.value
+            defer { self.appendsInFlight -= 1 }
+            do {
+                try await store.forensicAuditAppend(row)
+                self.saveChainRoot(row.entryHash)
+            } catch {
                 forensicLog.fault("audit append failed (seq \(row.seq)): \(error.localizedDescription, privacy: .public)")
                 self.integrityStatus = .tampered(details: "Audit entry #\(row.seq) could not be persisted: \(error.localizedDescription)")
             }
@@ -651,12 +661,32 @@ class ForensicManager: ObservableObject {
         }
         if let storedRoot = try? String(contentsOf: chainRootURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
            let lastHash = auditLog.last?.entryHash,
-           storedRoot != lastHash {
+           storedRoot != lastHash,
+           // C12: while appends are still landing the root trails the window.
+           !(appendsInFlight > 0 && auditLog.contains { $0.entryHash == storedRoot || $0.previousHash == storedRoot }) {
             integrityStatus = .tampered(details: "Chain root mismatch: log was modified outside the application")
             return integrityStatus
         }
         integrityStatus = .verified
         return .verified
+    }
+
+    /// The last durable append in flight (appends are chained in order).
+    private var auditAppendTail: Task<Void, Never>?
+    /// Rows logged whose durable append (and root save) has not finished yet.
+    private var appendsInFlight = 0
+
+    /// C12: the app ended after a row was appended but before the root was
+    /// saved — the root is exactly the last row's previous hash. Advance it.
+    /// Any other mismatch is left for verification to report.
+    private func repairLaggingChainRoot(lastRow: SQLiteEmailStore.ForensicAuditRow) {
+        guard let storedRoot = try? String(contentsOf: chainRootURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return
+        }
+        if storedRoot != lastRow.entryHash, storedRoot == lastRow.previousHash {
+            saveChainRoot(lastRow.entryHash)
+        }
     }
 
     private func saveChainRoot(_ lastHash: String) {
