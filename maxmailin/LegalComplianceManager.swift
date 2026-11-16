@@ -79,6 +79,18 @@ class LegalComplianceManager: ObservableObject {
         }
     }
 
+    // MARK: - Language of the legal texts
+
+    /// D-3 (owner 2026-11-16): the legal texts (terms, privacy summaries,
+    /// forensic disclaimer, third-party notices) stay in English. In any other
+    /// interface language a translated line says so where they are shown.
+    /// `interfaceLanguage` is the localization the app is running in.
+    nonisolated static func englishOnlyNotice(interfaceLanguage: String? = Bundle.main.preferredLocalizations.first) -> String? {
+        guard let language = interfaceLanguage, !language.isEmpty,
+              !language.lowercased().hasPrefix("en"), language != "Base" else { return nil }
+        return String(localized: "Legal terms are provided in English.")
+    }
+
     // MARK: - Privacy Policy Text
 
     // The shipped builds set no MAILIN_CLOUD_AI: the summary describes no cloud
@@ -169,6 +181,21 @@ class LegalComplianceManager: ObservableObject {
     """ + VendoredNotices.libarchive
 }
 
+// MARK: - English-only notice (D-3)
+
+/// Shown above a legal text in a non-English interface: the text itself stays English.
+struct LegalEnglishNoticeView: View {
+    var body: some View {
+        if let notice = LegalComplianceManager.englishOnlyNotice() {
+            Label(notice, systemImage: "globe")
+                .font(Typography.caption1)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("legal.englishOnlyNotice")
+        }
+    }
+}
+
 // MARK: - Terms Acceptance View
 
 struct TermsAcceptanceView: View {
@@ -213,12 +240,15 @@ struct TermsAcceptanceView: View {
             Divider()
 
             ScrollView {
-                Text(activeTab == 0
-                     ? LegalComplianceManager.termsOfUseSummary
-                     : LegalComplianceManager.privacyPolicyText())
-                    .font(.system(.caption, design: .monospaced))
-                    .padding(Spacing.medium)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: Spacing.small) {
+                    LegalEnglishNoticeView()
+                    Text(activeTab == 0
+                         ? LegalComplianceManager.termsOfUseSummary
+                         : LegalComplianceManager.privacyPolicyText())
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(Spacing.medium)
             }
             .background(AppColors.backgroundSecondary)
 

@@ -210,10 +210,14 @@ struct AboutView: View {
     private func legalSheetContent(_ sheet: LegalSheet) -> some View {
         NavigationStack {
             ScrollView {
-                Text(textForSheet(sheet))
-                    .font(.system(.caption, design: .monospaced))
-                    .padding(Spacing.medium)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: Spacing.small) {
+                    // D-3: the legal texts stay English; a translated line says so.
+                    if sheet != .accessibility { LegalEnglishNoticeView() }
+                    Text(textForSheet(sheet))
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(Spacing.medium)
             }
             .navigationTitle(titleForSheet(sheet))
             #if os(iOS)

@@ -9871,6 +9871,33 @@ final class V414ClaimsTests: XCTestCase {
                        LegalComplianceManager.privacyPolicySummary)
     }
 
+    /// D-3 (owner 2026-11-16): legal texts stay English; a non-English interface
+    /// shows a translated line saying so wherever they are shown.
+    func testD3_legalTextsStayEnglish_withATranslatedNoticeInOtherLanguages() throws {
+        for english in ["en", "en-GB", "Base", nil] as [String?] {
+            XCTAssertNil(LegalComplianceManager.englishOnlyNotice(interfaceLanguage: english), english ?? "nil")
+        }
+        for language in ["de", "es", "fr", "hi", "it", "ja", "ko", "pt-BR", "zh-Hans", "zh-Hant"] {
+            XCTAssertEqual(LegalComplianceManager.englishOnlyNotice(interfaceLanguage: language),
+                           String(localized: "Legal terms are provided in English."), language)
+        }
+        // Translated in every language (not left English).
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: repo.appendingPathComponent("maxmailin/Localizable.xcstrings"))) as? [String: Any]
+        let entry = (catalog?["strings"] as? [String: Any])?["Legal terms are provided in English."] as? [String: Any]
+        let locs = try XCTUnwrap(entry?["localizations"] as? [String: Any])
+        XCTAssertEqual(locs.count, 10)
+        // Both places that show the legal texts carry the notice.
+        let legal = try String(contentsOf: repo.appendingPathComponent("maxmailin/LegalComplianceManager.swift"), encoding: .utf8)
+        let acceptance = try XCTUnwrap(legal.range(of: "struct TermsAcceptanceView"))
+        XCTAssertTrue(legal[acceptance.upperBound...].contains("LegalEnglishNoticeView()"), "the Terms & Privacy sheet")
+        let about = try String(contentsOf: repo.appendingPathComponent("maxmailin/AboutView.swift"), encoding: .utf8)
+        let sheet = try XCTUnwrap(about.range(of: "func legalSheetContent("))
+        XCTAssertTrue(about[sheet.upperBound...].prefix(600).contains("LegalEnglishNoticeView()"), "About's legal sheets")
+        // The texts themselves are still English.
+        XCTAssertTrue(LegalComplianceManager.termsOfUseSummary.contains("PERMITTED USE"))
+    }
+
     func testV414_connectedEditionNoLongerClaimsNoMailServers() {
         let off = EditionPrivacyClaim.about(mailTransportsCompiled: true, connectedMailOn: false)
         let on = EditionPrivacyClaim.about(mailTransportsCompiled: true, connectedMailOn: true)
