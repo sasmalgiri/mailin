@@ -12502,3 +12502,42 @@ final class MailRemovalProgressTests: XCTestCase {
         XCTAssertEqual(MailRemovalPhase.removing.text, MailRemovalText.removing)
     }
 }
+
+// MARK: - Review 2026-11-16 section C/E follow-ups
+
+@MainActor
+final class Review1116CTests: XCTestCase {
+
+    static func email(_ n: Int, subject: String = "S") -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<r1116-\(n)@x>", "Subject": "\(subject) \(n)", "From": "a@b.com",
+                      "To": "c@d.com", "Date": "Wed, 15 Jan 2025 14:30:00 +0000"],
+            rawSource: "From a@b.com\nbody \(n)", messageType: "email", attachments: [],
+            timestamp: "2025-01-15T14:30:00Z", domains: ["b.com"], plainBody: "body \(n)", htmlBody: "")
+    }
+
+    /// C5 (rule 4): with no confirmation handler a destructive step does not run;
+    /// with one, a tag step writes the whole working set in ONE call (one audit row,
+    /// one auto-export), not one per email.
+    func testC5_agenticDestructiveStep_needsConfirmation_andTagsInOneWrite() async throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("FoundationModels") }
+        let saved = AgenticPlanner.tagWriter
+        defer { AgenticPlanner.tagWriter = saved }
+        var calls: [[UUID]] = []
+        AgenticPlanner.tagWriter = { ids, _ in calls.append(ids) }
+        let emails = (1...3).map { Self.email($0) }
+        let plan = AgenticPlan(needsAgenticPlan: true,
+                               steps: [AgenticStep(stepType: .tagEmails, description: "Tag them", parameters: "relevant")],
+                               goal: "g")
+
+        let unconfirmed = await AgenticPlanner.runSteps(plan: plan, workingSet: emails, profile: "",
+                                                         onUpdate: { _ in }, onConfirmAction: nil)
+        XCTAssertTrue(calls.isEmpty, "a destructive step ran without confirmation")
+        XCTAssertEqual(unconfirmed.results.first?.metrics["skipped"], 1)
+
+        _ = await AgenticPlanner.runSteps(plan: plan, workingSet: emails, profile: "",
+                                          onUpdate: { _ in }, onConfirmAction: { _ in true })
+        XCTAssertEqual(calls.count, 1, "one write for the whole set")
+        XCTAssertEqual(Set(calls.first ?? []), Set(emails.map(\.id)))
+    }
+}

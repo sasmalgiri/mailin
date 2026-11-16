@@ -93,6 +93,11 @@ struct AgenticPlanner {
     /// broader search go back through `ArchiveRetrievalService` (FTS5).
     static let workingSetCap = 50
 
+    /// Where a tag step writes evidence tags (tests substitute a recorder).
+    @MainActor static var tagWriter: ([UUID], ForensicManager.EvidenceTag) -> Void = { ids, tag in
+        ForensicManager.shared.bulkTag(Set(ids), as: tag)
+    }
+
     static func generatePlan(
         query: String,
         workingSet: [MBOXParser.RawEmail],
@@ -145,6 +150,32 @@ struct AgenticPlanner {
         onUpdate: @MainActor @Sendable @escaping (String) -> Void,
         onConfirmAction: (@MainActor @Sendable (String) async -> Bool)? = nil
     ) async throws -> String {
+        let (header, progressLines, stepResults) = await runSteps(
+            plan: plan, workingSet: workingSet, profile: profile,
+            onUpdate: onUpdate, onConfirmAction: onConfirmAction)
+
+        await onUpdate(header + progressLines.joined(separator: "\n") + "\n\n*Synthesizing final answer...*\n")
+
+        let answer = try await synthesizeAgenticResults(
+            plan: plan,
+            query: query,
+            stepResults: stepResults,
+            profile: profile,
+            onUpdate: onUpdate
+        )
+
+        return answer
+    }
+
+    /// Runs the plan's steps (no model call). Separate from `executePlan` so
+    /// the confirmation rule is testable without the on-device model.
+    static func runSteps(
+        plan: AgenticPlan,
+        workingSet: [MBOXParser.RawEmail],
+        profile: String,
+        onUpdate: @MainActor @Sendable @escaping (String) -> Void,
+        onConfirmAction: (@MainActor @Sendable (String) async -> Bool)?
+    ) async -> (header: String, progressLines: [String], results: [StepResult]) {
         let emails = Array(workingSet.prefix(workingSetCap))
         let totalSteps = plan.steps.count
         var stepResults: [StepResult] = []
@@ -174,7 +205,18 @@ struct AgenticPlanner {
                         continue
                     }
                 } else {
+                    // Rule 4: nothing that changes the archive runs without the
+                    // person's yes — with no way to ask, the step is not run.
+                    let skipped = StepResult(
+                        stepIndex: i, stepType: step.stepType, description: step.description,
+                        emailCount: 0, emailIDs: [],
+                        textOutput: "⏭ Not run: \(step.description) — needs confirmation (\(desc)).",
+                        metrics: ["skipped": 1]
+                    )
+                    stepResults.append(skipped)
+                    progressLines[i] = "[–] Step \(i + 1)/\(totalSteps): \(step.description) — not run, needs confirmation"
                     await onUpdate(header + progressLines.joined(separator: "\n") + "\n\n⚠️ **Confirmation needed**: \(desc)\n")
+                    continue
                 }
             }
 
@@ -214,18 +256,7 @@ struct AgenticPlanner {
 
             await onUpdate(progressText + resultsPreview + "\n")
         }
-
-        await onUpdate(header + progressLines.joined(separator: "\n") + "\n\n*Synthesizing final answer...*\n")
-
-        let answer = try await synthesizeAgenticResults(
-            plan: plan,
-            query: query,
-            stepResults: stepResults,
-            profile: profile,
-            onUpdate: onUpdate
-        )
-
-        return answer
+        return (header, progressLines, stepResults)
     }
 
     // MARK: - Step Dispatch
@@ -697,10 +728,10 @@ struct AgenticPlanner {
         else { tag = .flagged }
 
         let tagCount = emails.count
+        // One write for the whole (bounded) set: one audit row, one store
+        // write, one team auto-export — not one per email.
         await MainActor.run {
-            for email in emails {
-                ForensicManager.shared.tag(email.id, as: tag)
-            }
+            tagWriter(emails.map(\.id), tag)
         }
 
         let output = "✅ Tagged \(tagCount) email\(tagCount == 1 ? "" : "s") as **\(tag.rawValue)**.\n\nTagged subjects:\n" +
