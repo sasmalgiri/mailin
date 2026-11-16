@@ -171,18 +171,45 @@ enum DuplicateVerification {
     /// DUP-04: which copy survives each group the selection touches. The
     /// survivor is the first member the user did not tick; when every member
     /// is ticked the first one stays (a group never loses all its copies).
+    ///
+    /// Review 2026-11-16 (E): groups that share a member (an exact group
+    /// [A, B] and a near group [B, C]) are one set of copies — they are
+    /// joined first and get ONE survivor, so a copy is never merged into a
+    /// survivor that another plan moves to the Trash.
     static func plans(for selected: Set<UUID>, among groups: [[MBOXParser.RawEmail]]) -> [SQLiteEmailStore.DuplicateRemovalPlan] {
+        // Union-find over member ids; components keep first-appearance order.
+        var parent: [UUID: UUID] = [:]
+        func find(_ x: UUID) -> UUID {
+            var root = x
+            while let p = parent[root], p != root { root = p }
+            var node = x
+            while let p = parent[node], p != root { parent[node] = root; node = p }
+            return root
+        }
+        var order: [UUID] = []
+        for members in groups where !members.isEmpty {
+            for m in members where parent[m.id] == nil { parent[m.id] = m.id; order.append(m.id) }
+            let first = find(members[0].id)
+            for m in members.dropFirst() {
+                let r = find(m.id)
+                if r != first { parent[r] = first }
+            }
+        }
+        var components: [UUID: [UUID]] = [:]
+        var componentOrder: [UUID] = []
+        for id in order {
+            let root = find(id)
+            if components[root] == nil { componentOrder.append(root) }
+            components[root, default: []].append(id)
+        }
         var plans: [SQLiteEmailStore.DuplicateRemovalPlan] = []
-        var planned = Set<UUID>()
-        for members in groups {
-            let ids = members.map(\.id)
-            let removed = ids.filter { selected.contains($0) && !planned.contains($0) }
-            guard !removed.isEmpty else { continue }
+        for root in componentOrder {
+            let ids = components[root] ?? []
+            guard ids.contains(where: { selected.contains($0) }) else { continue }
             let survivor = ids.first { !selected.contains($0) } ?? ids[0]
-            let finalRemoved = removed.filter { $0 != survivor }
-            guard !finalRemoved.isEmpty else { continue }
-            planned.formUnion(finalRemoved)
-            plans.append(.init(survivor: survivor, removed: finalRemoved))
+            let removed = ids.filter { selected.contains($0) && $0 != survivor }
+            guard !removed.isEmpty else { continue }
+            plans.append(.init(survivor: survivor, removed: removed))
         }
         return plans
     }

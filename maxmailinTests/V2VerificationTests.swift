@@ -12776,6 +12776,25 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(WorkingSetLabel.reportLine(shown: 40, total: 40), String(localized: "\(40) total emails"))
     }
 
+    /// E (review 2026-11-16): overlapping groups (an exact group [A, B] and a near group
+    /// [B, C]) share one survivor — C is never merged into B while B goes to the Trash.
+    func testE_overlappingDuplicateGroups_neverMergeIntoATrashedCopy() {
+        let a = Self.email(1), b = Self.email(2), c = Self.email(3), d = Self.email(4), e = Self.email(5)
+        let plans = DuplicateVerification.plans(for: [b.id, c.id, e.id], among: [[a, b], [b, c], [d, e]])
+        let removed = Set(plans.flatMap(\.removed))
+        XCTAssertEqual(removed, [b.id, c.id, e.id], "every ticked copy is planned once")
+        XCTAssertEqual(plans.flatMap(\.removed).count, 3)
+        for plan in plans {
+            XCTAssertFalse(removed.contains(plan.survivor), "a survivor that another plan trashes")
+        }
+        XCTAssertEqual(Set(plans.map(\.survivor)), [a.id, d.id])
+        // Everything ticked in one chain: one copy still stays.
+        let all = DuplicateVerification.plans(for: [a.id, b.id, c.id], among: [[a, b], [b, c]])
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.survivor, a.id)
+        XCTAssertEqual(Set(all.first?.removed ?? []), [b.id, c.id])
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

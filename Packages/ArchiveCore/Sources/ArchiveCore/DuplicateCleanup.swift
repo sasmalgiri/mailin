@@ -44,10 +44,44 @@ extension SQLiteEmailStore {
         var accountLinksCarried = 0
     }
 
+    /// Review 2026-11-16 (E): plans whose survivor another plan moves to the
+    /// Trash are pointed at that plan's survivor (followed to the end of the
+    /// chain), so nothing is merged into a copy that is itself going away.
+    static func resolvedRemovalPlans(_ plans: [DuplicateRemovalPlan]) -> [DuplicateRemovalPlan] {
+        var removedInto: [UUID: UUID] = [:]
+        for plan in plans { for copy in plan.removed where copy != plan.survivor { removedInto[copy] = plan.survivor } }
+        func finalSurvivor(_ start: UUID) -> UUID {
+            var current = start
+            var seen: Set<UUID> = [start]
+            while let next = removedInto[current], !seen.contains(next) {
+                seen.insert(next)
+                current = next
+            }
+            // A cycle (every copy removed into another) keeps the copy it started from.
+            return removedInto[current] == nil ? current : start
+        }
+        var out: [DuplicateRemovalPlan] = []
+        var planned = Set<UUID>()
+        for plan in plans {
+            let survivor = finalSurvivor(plan.survivor)
+            let removed = plan.removed.filter { $0 != survivor && !planned.contains($0) }
+            guard !removed.isEmpty else { continue }
+            planned.formUnion(removed)
+            out.append(DuplicateRemovalPlan(survivor: survivor, removed: removed))
+        }
+        // A copy kept as a survivor is never also trashed.
+        let survivors = Set(out.map(\.survivor))
+        return out.compactMap { plan in
+            let removed = plan.removed.filter { !survivors.contains($0) }
+            return removed.isEmpty ? nil : DuplicateRemovalPlan(survivor: plan.survivor, removed: removed)
+        }
+    }
+
     /// Merge, then trash. One transaction: either every copy of every plan is
     /// handled or nothing changed.
     func removeDuplicateCopies(_ plans: [DuplicateRemovalPlan]) throws -> DuplicateCleanupResult {
         var result = DuplicateCleanupResult()
+        let plans = Self.resolvedRemovalPlans(plans)
         guard !plans.isEmpty else { return result }
         let db = try ensureDB()
         // Holds are checked here, always — not only when the Professional
