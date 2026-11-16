@@ -12959,6 +12959,20 @@ final class Review1116CTests: XCTestCase {
         XCTAssertTrue(TierAccess.allows(.recovery))
     }
 
+    /// D5: the About ▸ Privacy Policy summary matches the shipped build — no
+    /// configuration sets MAILIN_CLOUD_AI, so it must not describe a Cloud AI
+    /// feature that sends excerpts to OpenAI or Anthropic.
+    func testD5_privacySummary_describesNoCloudAIInThisBuild() {
+        for text in [LegalComplianceManager.privacyPolicySummary,
+                     LegalComplianceManager.privacyPolicyText(mailTransportsCompiled: false),
+                     LegalComplianceManager.privacyPolicyText(mailTransportsCompiled: true)] {
+            XCTAssertFalse(text.contains("OpenAI"), text)
+            XCTAssertFalse(text.contains("Anthropic"), text)
+            XCTAssertFalse(text.contains("Cloud AI feature"), text)
+            XCTAssertTrue(text.contains("no cloud AI"), text)
+        }
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.

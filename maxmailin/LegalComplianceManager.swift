@@ -81,16 +81,19 @@ class LegalComplianceManager: ObservableObject {
 
     // MARK: - Privacy Policy Text
 
+    // The shipped builds set no MAILIN_CLOUD_AI: the summary describes no cloud
+    // AI (review 2026-11-16 D5). English, like the other legal texts.
+
     static let privacyPolicySummary = """
     PRIVACY POLICY SUMMARY
 
     Data Collection: mailin collects NO personal data. Zero analytics, zero tracking, zero telemetry.
 
-    On-Device Processing: Email parsing, NLP analysis, search indexing, and the default AI features run entirely on your device. Your email data never leaves your device unless you explicitly enable the optional Cloud AI feature (see Third-Party Services below).
+    On-Device Processing: Email parsing, NLP analysis, search indexing, and the default AI features run entirely on your device. This build contains no cloud AI: no email content is sent to an AI provider, and your email data never leaves your device.
 
     Data Storage: Parsed emails and settings are stored locally using Apple's standard frameworks (UserDefaults, file system). No server-side storage. If you enable iCloud Sync, review metadata (tags, annotations, case info) syncs via Apple's iCloud Drive — your email content is never uploaded.
 
-    Third-Party Services: Apple App Store for purchases. The optional Cloud AI feature may transmit email excerpts you choose to analyze to your selected provider (OpenAI or Anthropic) using your own API key — only when you explicitly enable it. No advertising SDKs, no analytics frameworks, no tracking. mailin does not connect to any mail server; there is no send or receive functionality.
+    Third-Party Services: Apple App Store for purchases. No advertising SDKs, no analytics frameworks, no tracking. mailin does not connect to any mail server; there is no send or receive functionality.
 
     Data Deletion: You can delete all data at any time via Settings > Data & Privacy > Delete All Data.
 
