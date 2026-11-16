@@ -562,12 +562,15 @@ extension AIGroundingGate {
     /// (correct: 33,800) — Apple lists math under "capabilities to avoid".
     /// A figure counts as supported when its digits occur in a source, in the
     /// question, or in `allowed` (counts the app itself stated).
+    /// Compiled once, not per source / per sentence (review 2026-11-16 E).
+    static let sourceNumberPattern = #/\d[\d,]*(?:\.\d+)?/#
+    static let figurePattern = #/(?:₹|INR\s?|Rs\.?\s?)\s?\d[\d,]*(?:\.\d+)?|\b\d{1,3}(?:,\d{2,3})+(?:\.\d+)?\b|\b\d{4,}(?:\.\d+)?\b/#
+
     static func removingUnsupportedFigures(_ text: String, sources: [String], allowed: Set<String> = []) -> (text: String, removed: Int) {
-        let figure = #"(?:₹|INR\s?|Rs\.?\s?)\s?\d[\d,]*(?:\.\d+)?|\b\d{1,3}(?:,\d{2,3})+(?:\.\d+)?\b|\b\d{4,}(?:\.\d+)?\b"#
         func digits(_ s: String) -> String { s.filter(\.isNumber) }
         var known = allowed
         for source in sources {
-            for match in source.matches(of: try! Regex(#"\d[\d,]*(?:\.\d+)?"#)) {
+            for match in source.matches(of: sourceNumberPattern) {
                 let d = digits(String(source[match.range]))
                 if d.count >= 3 { known.insert(d) }
             }
@@ -581,7 +584,7 @@ extension AIGroundingGate {
             var keptPieces: [String] = []
             for piece in pieces {
                 // Years (1900–2100) are dates, not arithmetic: not checked.
-                let figures = piece.matches(of: try! Regex(figure)).map { digits(String(piece[$0.range])) }
+                let figures = piece.matches(of: figurePattern).map { digits(String(piece[$0.range])) }
                     .filter { $0.count >= 3 && !($0.count == 4 && (1900...2100).contains(Int($0) ?? 0)) }
                 if figures.contains(where: { !known.contains($0) }) {
                     removed += 1

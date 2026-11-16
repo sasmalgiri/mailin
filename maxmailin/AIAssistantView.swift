@@ -2627,12 +2627,14 @@ struct AIAssistantView: View {
     }
 
     /// Sentences that state an amount together with the question's words.
+    /// Compiled once, not per email (review 2026-11-16 E).
+    nonisolated private static let amountPattern = #/(?i)(?:INR|Rs\.?|₹)\s?[\d,]+(?:\.\d{1,2})?(?:\/-)?/#
+
     nonisolated private static func smartAmounts(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
         let stop: Set<String> = ["how", "much", "was", "is", "are", "the", "my", "for", "me", "did", "do", "does", "approved", "what", "amount", "money", "pay", "paid", "cost"]
         let words = query.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
             .filter { $0.count >= 3 && !stop.contains($0) }
             .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
-        let amount = #"(?i)(?:INR|Rs\.?|₹)\s?[\d,]+(?:\.\d{1,2})?(?:/-)?"#
         let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
         var hits: [(sentence: String, email: MBOXParser.RawEmail, score: Int)] = []
         var seen = Set<String>()
@@ -2643,7 +2645,7 @@ struct AIAssistantView: View {
                 .joined(separator: " ")
                 .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             // Short windows around each amount, not whole paragraphs.
-            for match in text.matches(of: try! Regex(amount)) {
+            for match in text.matches(of: Self.amountPattern) {
                 let start = text.index(match.range.lowerBound, offsetBy: -120, limitedBy: text.startIndex) ?? text.startIndex
                 let end = text.index(match.range.upperBound, offsetBy: 40, limitedBy: text.endIndex) ?? text.endIndex
                 let window = String(text[start..<end])

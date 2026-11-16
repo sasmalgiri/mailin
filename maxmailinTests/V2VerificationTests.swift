@@ -13115,6 +13115,32 @@ final class Review1116CTests: XCTestCase {
         XCTAssertTrue(plain.contains("the server is closed for maintenance"), plain)
     }
 
+    /// E: the hex viewer reads only the bytes it shows, once per source (it used to
+    /// copy the whole raw source twice per redraw); constant regexes are compiled
+    /// once (static let), not with `try! Regex` inside loops.
+    @MainActor
+    func testE_hexViewerLayoutOnce_andRegexesHoisted() throws {
+        let source = String(repeating: "AB\u{01}", count: 40_000)   // 120,000 bytes
+        let layout = HexViewerView.layout(of: source, bytesPerRow: 16)
+        XCTAssertEqual(layout.totalBytes, 120_000)
+        XCTAssertEqual(layout.rows.count, HexViewerView.rowLimit)
+        XCTAssertEqual(layout.shownBytes, 16 * HexViewerView.rowLimit)
+        XCTAssertEqual(layout.rows.first?.hex.hasPrefix("41 42 01 41"), true)
+        XCTAssertEqual(layout.rows.first?.ascii.hasPrefix("AB.AB."), true)
+        XCTAssertEqual(layout.rows[1].offset, 16)
+        let short = HexViewerView.layout(of: "hello", bytesPerRow: 16)
+        XCTAssertEqual(short.rows.count, 1)
+        XCTAssertEqual(short.shownBytes, short.totalBytes)
+
+        let hex = try Self.appSource("HexViewerView.swift")
+        XCTAssertFalse(hex.contains("Data(rawSource.utf8)"), "the whole raw source is copied per redraw")
+        for file in ["AIGroundingGate.swift", "AIAssistantView.swift"] {
+            XCTAssertFalse(try Self.appSource(file).contains("try! Regex("), "\(file) compiles a constant regex inside a loop")
+        }
+        // The hoisted patterns still find what they found.
+        XCTAssertEqual(AIGroundingGate.removingUnsupportedFigures("It was ₹ 47,600. Fine.", sources: ["paid 33,800"]).removed, 1)
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.
