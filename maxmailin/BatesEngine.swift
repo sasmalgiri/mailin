@@ -38,6 +38,23 @@ enum BatesEngine {
         try await ScopeJobEnvironment.store.reviewCoding(workspace: workspace, field: field)
     }
 
+    /// Rows per committed batch (tests shrink it).
+    static var batchSize = 2_000
+    /// Test seam: called before each batch commit with its 1-based index;
+    /// throwing simulates a failure part-way through a run.
+    static var beforeBatchCommitForTesting: ((Int) throws -> Void)?
+
+    /// Review C3: a run that stopped after some batches were committed. The
+    /// committed numbers are in the manager too; the message says how many.
+    struct PartialNumbering: LocalizedError {
+        let numbered: Int
+        let total: Int
+        let underlying: String
+        var errorDescription: String? {
+            String(localized: "\(numbered) of \(total) emails in scope have a Bates number; the run stopped: \(underlying)")
+        }
+    }
+
     /// The numeric part of `number` when it carries `prefix`.
     static func numericPart(_ number: String, prefix: String) -> Int? {
         guard number.hasPrefix(prefix) else { return nil }
@@ -55,8 +72,31 @@ enum BatesEngine {
         if !legacy.isEmpty {
             try await store.reviewCodingSet(workspace: workspace, field: field, values: legacy.mapValues { Optional($0) })
         }
-        let result = try await number(query: scope.query, prefix: manager.prefix,
+        let committedBefore = stored.count + legacy.count
+        let result: (state: AssignState, receipt: ScopeJobReceipt)
+        do {
+            result = try await number(query: scope.query, prefix: manager.prefix,
                                       start: max(manager.startNumber, 1), format: manager.formatNumber)
+        } catch {
+            // Review C3: batches committed before the failure stay committed
+            // (a number once given is never taken back), so the manager must
+            // learn them now — otherwise the previous engine's fallback would
+            // hand the same numbers out again.
+            guard let all = try? await store.reviewCoding(workspace: workspace, field: field) else { throw error }
+            let new = all.filter { manager.assignments[$0.key] == nil }
+            let committedNow = max(0, all.count - committedBefore)
+            if !new.isEmpty {
+                manager.merge(assignments: new, nextStart: manager.nextFreeNumber(alsoUsed: all), log: false)
+            }
+            guard committedNow > 0 else { throw error }
+            ScopeJobEnvironment.logAction(
+                "Bates Numbers Assigned",
+                detail: "\(committedNow) new numbers committed before the run stopped (\(error.localizedDescription)); partial")
+            if error is CancellationError { throw error }
+            let total = (try? await ScopeJobEnvironment.archive.count(query: scope.query)) ?? 0
+            let numbered = await numberedCount(scope: scope)
+            throw PartialNumbering(numbered: numbered, total: total, underlying: error.localizedDescription)
+        }
         let all = try await store.reviewCoding(workspace: workspace, field: field)
         let new = all.filter { manager.assignments[$0.key] == nil }
         // One action, one audit entry: this one (merge's own entry is off).
@@ -80,11 +120,13 @@ enum BatesEngine {
         let used = alreadyNumbered.values.compactMap { numericPart($0, prefix: prefix) }.max() ?? 0
         var query = scopeQuery
         query.sort = .dateAsc
+        var batchIndex = 0
         return try await ScopeJob.runIDs(
             key: "bates.assign", title: String(localized: "Assign Bates numbers"),
-            capability: .v3Bates, query: query, batchSize: 2_000,
+            capability: .v3Bates, query: query, batchSize: batchSize,
             initialState: AssignState(next: max(start, used + 1))
         ) { state, page in
+            batchIndex += 1
             var batch: [UUID: String?] = [:]
             for summary in page {
                 if alreadyNumbered[summary.id] != nil { state.skipped += 1; continue }
@@ -96,6 +138,7 @@ enum BatesEngine {
                 state.last = number
             }
             if !batch.isEmpty {
+                try beforeBatchCommitForTesting?(batchIndex)
                 try await store.reviewCodingSet(workspace: workspace, field: field, values: batch)
             }
         }

@@ -459134,6 +459134,70 @@
           }
         }
       }
+    },
+    "%lld of %lld emails in scope have a Bates number; the run stopped: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld von %lld E-Mails im Umfang haben eine Bates-Nummer; der Lauf wurde angehalten: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld de %lld correos del alcance tienen número Bates; la ejecución se detuvo: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld e-mails sur %lld dans le périmètre ont un numéro Bates ; l'exécution s'est arrêtée : %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "दायरे के %2$lld में से %1$lld ईमेल के पास Bates नंबर है; रन रुक गया: %3$@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld di %lld email nell'ambito hanno un numero Bates; l'esecuzione si è interrotta: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "範囲内の%2$lld件中%1$lld件のメールにBates番号があります。実行が停止しました：%3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "범위의 이메일 %2$lld개 중 %1$lld개에 Bates 번호가 있습니다. 실행이 중지됨: %3$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld de %lld e-mails no escopo têm número Bates; a execução parou: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "范围内 %2$lld 封邮件中有 %1$lld 封已有 Bates 编号；运行已停止：%3$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "範圍內 %2$lld 封郵件中有 %1$lld 封已有 Bates 編號；執行已停止：%3$@"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

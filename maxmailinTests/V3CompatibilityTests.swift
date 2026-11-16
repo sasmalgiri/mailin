@@ -251,6 +251,54 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
+    // MARK: - Bates: a run that fails part-way (review C3)
+
+    func testBates_failureOnBatchTwo_mergesCommittedNumbers_andTheFallbackNeverReusesThem() async throws {
+        let env = makeEnv()
+        let suite = "mailin-bates-partial-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        try await env.store.insertBatch((0..<5).map { makeEmail($0, from: "a@a.com", tag: "partial") }, batchSize: 10)
+        let savedSize = BatesEngine.batchSize
+        BatesEngine.batchSize = 2
+        defer { BatesEngine.batchSize = savedSize; BatesEngine.beforeBatchCommitForTesting = nil }
+        struct Injected: Error {}
+        BatesEngine.beforeBatchCommitForTesting = { if $0 == 2 { throw Injected() } }
+
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let manager = BatesNumberingManager(defaults: defaults)
+            manager.prefix = "C"
+            manager.zeroPadding = 2
+            do {
+                _ = try await BatesEngine.assign(scope: .wholeArchive, manager: manager)
+                XCTFail("batch 2 fails")
+            } catch let partial as BatesEngine.PartialNumbering {
+                XCTAssertEqual(partial.numbered, 2)
+                XCTAssertEqual(partial.total, 5)
+                XCTAssertTrue(partial.localizedDescription.contains("2 of 5"), partial.localizedDescription)
+            }
+            let committed = try await BatesEngine.committedNumbers()
+            XCTAssertEqual(committed.count, 2, "batch 1 stays committed")
+            XCTAssertEqual(manager.assignments, committed, "the manager learned the committed batch")
+            XCTAssertEqual(manager.nextFreeNumber(alsoUsed: committed), 3)
+
+            // The previous engine's fallback numbers the rest after them.
+            let emails = try await env.archive.fullEmails(ids: try await ids(env))
+            let fallback = manager.assignNumbers(to: emails, alsoUsed: committed)
+            XCTAssertEqual(Set(fallback.values), ["C03", "C04", "C05"])
+            let numbers = Array(manager.assignments.values)
+            XCTAssertEqual(numbers.count, 5)
+            XCTAssertEqual(Set(numbers).count, 5, "no number on two emails")
+
+            // The next 3.0 run carries the fallback numbers in and changes nothing.
+            BatesEngine.beforeBatchCommitForTesting = nil
+            let again = try await BatesEngine.assign(scope: .wholeArchive, manager: manager)
+            XCTAssertEqual(again.state.assigned, 0)
+            let stored = try await BatesEngine.committedNumbers()
+            XCTAssertEqual(stored, manager.assignments)
+        }
+    }
+
     // MARK: - Production never renumbers (review C1, rule 3)
 
     func testProduction_overlappingScopeTwice_keepsEveryNumber_andNeverIssuesOneTwice() async throws {

@@ -81,9 +81,9 @@ class BatesNumberingManager: ObservableObject {
     /// with a fresh sequence over the given emails.)
     /// Returns the numbers assigned by this call.
     @discardableResult
-    func assignNumbers(to emails: [MBOXParser.RawEmail]) -> [UUID: String] {
+    func assignNumbers(to emails: [MBOXParser.RawEmail], alsoUsed committed: [UUID: String] = [:]) -> [UUID: String] {
         guard OrgPolicy.allows(.produce) else { return [:] }   // enterprise role (OrgPolicy)
-        let sorted = emails.filter { assignments[$0.id] == nil }.sorted { email1, email2 in
+        let sorted = emails.filter { assignments[$0.id] == nil && committed[$0.id] == nil }.sorted { email1, email2 in
             let date1 = MBOXParser.parseDate(email1.headers["Date"])
             let date2 = MBOXParser.parseDate(email2.headers["Date"])
             switch (date1, date2) {
@@ -93,7 +93,7 @@ class BatesNumberingManager: ObservableObject {
             }
         }
         let alreadyNumbered = emails.count - sorted.count
-        let first = nextFreeNumber()
+        let first = nextFreeNumber(alsoUsed: committed)
 
         var newAssignments: [UUID: String] = [:]
         for (index, email) in sorted.enumerated() {
@@ -548,7 +548,10 @@ struct BatesConfigView: View {
                     // §3-M3: the previous engine numbers the loaded emails
                     // (it never renumbers either, finding #4).
                     v3Status = EngineGuard.fellBack(.v3Bates, error: error)
-                    lastAssigned = manager.assignNumbers(to: emails).count
+                    // Review C3: numbers the database already holds are used
+                    // and never handed out again by the previous engine.
+                    let committed = (try? await BatesEngine.committedNumbers()) ?? [:]
+                    lastAssigned = manager.assignNumbers(to: emails, alsoUsed: committed).count
                     assignmentComplete = true
                 }
             }
