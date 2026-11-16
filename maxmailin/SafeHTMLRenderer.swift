@@ -146,10 +146,8 @@ enum SafeHTMLRenderer {
                 if value.hasPrefix("\"") || value.hasPrefix("'") { value = String(value.dropFirst().dropLast()) }
                 var decoded = decodeEntities(value)
                 if name == "style" { decoded = decodeCSSEscapes(decoded) }
-                let compact = String(decoded.unicodeScalars.filter { $0.value > 0x20 }.map(Character.init)).lowercased()
                 let remote = !inertAttributes.contains(name) && !name.hasPrefix("on")
-                    && !(name != "style" && (compact.hasPrefix("data:") || compact.hasPrefix("cid:")))
-                    && namesRemoteURL(compact)
+                    && attributeNamesRemoteURL(name: name, decodedValue: decoded)
                 if remote {
                     blocked += 1
                     kept += t.substring(with: a.range(at: 1)).contains("/") ? "/" : " "
@@ -162,6 +160,60 @@ enum SafeHTMLRenderer {
         }
         out += ns.substring(from: cursor)
         return out
+    }
+
+    /// B5 (review 2026-11-16): an attribute is remote when ANY URL it carries
+    /// is. List attributes are split into their candidates — a `data:` / `cid:`
+    /// first candidate used to exempt the whole value, so
+    /// `srcset="data:… 1x, https://t.example/px.gif 2x"` kept its tracker.
+    /// A lone `data:` / `cid:` URL is inline (its base64 may contain `//`);
+    /// `style` is never exempt (any url() naming the network removes it).
+    nonisolated static func attributeNamesRemoteURL(name: String, decodedValue: String) -> Bool {
+        func compact(_ text: Substring) -> String {
+            String(text.unicodeScalars.filter { $0.value > 0x20 }.map(Character.init)).lowercased()
+        }
+        let candidates: [String]
+        switch name {
+        case "style":
+            return namesRemoteURL(decodedValue)
+        case "srcset", "imagesrcset":
+            candidates = srcsetURLs(decodedValue)
+        case "ping", "archive":
+            candidates = decodedValue.split(whereSeparator: { $0.isWhitespace }).map { compact($0) }
+        default:
+            candidates = [compact(Substring(decodedValue))]
+        }
+        return candidates.contains { url in
+            !(url.hasPrefix("data:") || url.hasPrefix("cid:")) && namesRemoteURL(url)
+        }
+    }
+
+    /// The URL of every image candidate in a `srcset` value (HTML's parsing
+    /// rules: a URL is a run of non-whitespace — so a data: URL keeps its
+    /// commas — trailing commas end a candidate, otherwise descriptors run to
+    /// the next comma outside parentheses). Lower-cased.
+    nonisolated static func srcsetURLs(_ value: String) -> [String] {
+        let chars = Array(value)
+        var urls: [String] = []
+        var i = 0
+        while i < chars.count {
+            while i < chars.count, chars[i].isWhitespace || chars[i] == "," { i += 1 }
+            guard i < chars.count else { break }
+            var url = ""
+            while i < chars.count, !chars[i].isWhitespace { url.append(chars[i]); i += 1 }
+            if url.hasSuffix(",") {
+                while url.hasSuffix(",") { url.removeLast() }
+            } else {
+                var depth = 0
+                while i < chars.count {
+                    let c = chars[i]
+                    if c == "(" { depth += 1 } else if c == ")" { depth = max(0, depth - 1) } else if c == ",", depth == 0 { break }
+                    i += 1
+                }
+            }
+            if !url.isEmpty { urls.append(url.lowercased()) }
+        }
+        return urls
     }
 
     /// True when (already decoded) text references a network URL.

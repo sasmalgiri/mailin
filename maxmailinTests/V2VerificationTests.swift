@@ -10567,6 +10567,32 @@ final class T02HostileHTMLZeroNetworkTests: XCTestCase {
             """
     }
 
+    /// B5 (review 2026-11-16): a `data:` / `cid:` first candidate exempted the whole attribute, so a
+    /// later remote srcset candidate (or ping URL) survived — and the print / PDF importer has no CSP
+    /// backstop. Every candidate is judged; a list of only data:/cid: candidates is kept.
+    func testB5_dataOrCidFirstCandidate_neverExemptsALaterRemoteCandidate() {
+        let hostile = [
+            #"<img src="cid:a@b" srcset="data:image/png;base64,iVBORw0KGgo= 1x, https://t.example/px.gif 2x">"#,
+            #"<img srcset="cid:logo@mail 1x, //t.example/px.gif 2x">"#,
+            #"<img srcset="data:image/png;base64,AA//BB 1x,https://t.example/px.gif 2x">"#,
+            #"<picture><source srcset="data:image/gif;base64,R0lG 1x, &#104;ttps://t.example/px.gif 2x"></picture>"#,
+            #"<img srcset='data:image/gif;base64,R0lG 100w,ftp://t.example/px.gif 200w'>"#,
+            #"<a href="https://example.com/read" ping="cid:x https://t.example/ping">r</a>"#,
+            #"<div style="background:url(data:image/png;base64,AA), url(https://t.example/bg.png)">x</div>"#,
+        ]
+        for html in hostile {
+            let safe = SafeHTMLRenderer.sanitize(html)
+            XCTAssertFalse(safe.html.contains("t.example"), "a remote candidate survived: \(safe.html)")
+            XCTAssertGreaterThan(safe.blockedRemoteItems, 0, html)
+        }
+        // Only inline candidates (base64 may contain "//"): kept, nothing counted as blocked.
+        let inline = #"<img src="cid:logo@mail" srcset="data:image/png;base64,AA//BB 1x, cid:logo2@mail 2x">"#
+        let kept = SafeHTMLRenderer.sanitize(inline)
+        XCTAssertTrue(kept.html.contains("srcset="), kept.html)
+        XCTAssertEqual(kept.blockedRemoteItems, 0)
+        XCTAssertTrue(SafeHTMLRenderer.sanitize(#"<img src="data:image/png;base64,AA//BB">"#).html.contains("src="))
+    }
+
     func testT02_mailOnAIOff_hostileHTMLMakesZeroRequests_andPolicyRefusesNonMailDestinations() async throws {
         // Connected mail ON, an account with every mode, cloud AI off.
         let shared = MailNetworkPolicy.shared
