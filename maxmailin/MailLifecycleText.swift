@@ -118,6 +118,23 @@ enum MailLifecycleText {
 
     // MARK: Search index
 
+    /// C7: an account-archive deletion that stopped part-way (rule 5: X of Y).
+    static func deletionStopped(deleted: Int, total: Int, notDeleted: Int) -> String {
+        String(localized: "Deleted \(deleted) of \(total) messages; the other \(notDeleted) are still in the archive.")
+    }
+
+    /// The whole sentence for a stopped deletion: X of Y, what stopped it,
+    /// and deleted messages whose search rows the launch prune drops.
+    static func deletionIncomplete(_ e: ConnectedAccountArchiveDeletionIncomplete) -> String {
+        let p = e.partial
+        var text = deletionStopped(deleted: p.deletedEmailIDs.count, total: p.total, notDeleted: p.notDeleted)
+        text += " " + String(localized: "Stopped by: \(e.reason)")
+        if p.searchIndexNotPurged > 0 {
+            text += " " + String(localized: "\(p.searchIndexNotPurged) deleted messages are removed from search at the next launch.")
+        }
+        return text
+    }
+
     static func searchRemovalFailed(failed: Int, total: Int) -> String {
         String(localized: "\(failed) of \(total) messages could not be removed from search, so nothing was deleted. Try again; if it keeps failing, rebuild the search index.")
     }

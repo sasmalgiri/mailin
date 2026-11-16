@@ -11872,7 +11872,7 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
         XCTAssertTrue(runtimeSource.contains("await sink.reopenAfterDriveReturned()"))
     }
 
-    // MARK: 16 — deleting an account's mail: search index first
+    // MARK: 16 — deleting an account's mail: counted, then deleted
 
     func testDeletingAnAccountsArchivedMail_refusesAChangedCount_thenDeletesAndBumpsTheRevision() async throws {
         let provider = ConnectedFiveJobsProvider(accountID: UUID())
@@ -11899,12 +11899,51 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
         XCTAssertEqual(Set(env.deleted.value), Set(result.deletedEmailIDs), "the follow-ups of a delete ran (corpus revision, lists)")
         let left = try await env.store.totalCount()
         XCTAssertEqual(left, 0)
-        let backendSource = try source("maxmailin/MailWorkspaceBackend.swift")
-        let body = String(backendSource[try XCTUnwrap(backendSource.range(of: "func deleteArchivedMail(")).upperBound...].prefix(1_800))
-        let index = try XCTUnwrap(body.range(of: "runtime.searchIndex.delete(ids:"), "the search index drops the set in one batch")
-        let archive = try XCTUnwrap(body.range(of: "removal.deleteArchivedMail("))
-        XCTAssertLessThan(index.lowerBound, archive.lowerBound, "search index first, then the archive")
-        XCTAssertTrue(body.contains("searchRemovalFailed"), "an index failure is stated")
+        // C7: the order (archive page, then that page's search rows) and the
+        // "X of Y" on a stop are tested by
+        // testDeletingAnAccountsArchivedMail_stoppedPartWay_purgesPerPage_andSaysXofY.
+    }
+
+    // MARK: 16b — C7: a deletion that stops part-way says "X of Y"
+
+    /// Page 2 of 3 fails in the search purge: pages 1–2 are deleted (their
+    /// follow-ups run), page 3 stays in the archive AND searchable, and the
+    /// person reads "Deleted 2 of 3 messages; the other 1 are still in the archive."
+    func testDeletingAnAccountsArchivedMail_stoppedPartWay_purgesPerPage_andSaysXofY() async throws {
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        for n in 1...3 { await provider.add("m\(n)", bytes: Self.plain(n), folders: ["INBOX"]) }
+        let env = makeEnv(adapters: { _ in provider })
+        let id = provider.accountID
+        try await env.runtime.registry.add(gmail(id), secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+        try await env.runtime.start()
+        _ = await env.runtime.sync(id)
+        let (backend, _) = try backend(env)
+        _ = try await backend.remove(id)
+        let all = try await env.runtime.sink.deletableRecordIDs(accountID: id)
+        XCTAssertEqual(all.count, 3)
+
+        let purged = AuditBox<[[UUID]]>([])
+        backend.deletionPageSize = 1
+        backend.searchIndexPurge = { ids in
+            let calls = purged.value.count
+            purged.mutate { $0.append(ids) }
+            if calls == 1 { throw NSError(domain: "fts", code: 5, userInfo: [NSLocalizedDescriptionKey: "disk I/O error"]) }
+        }
+        do {
+            _ = try await backend.deleteArchivedMail(id, confirmedCount: 3)
+            XCTFail("a deletion that stopped part-way is not reported as finished")
+        } catch {
+            let text = ConnectedMailErrorText.sentence(for: error)
+            XCTAssertTrue(text.hasPrefix(MailLifecycleText.deletionStopped(deleted: 2, total: 3, notDeleted: 1)), text)
+            XCTAssertTrue(text.contains("disk I/O error"), "what stopped it is stated: \(text)")
+        }
+        XCTAssertEqual(purged.value.map(\.count), [1, 1], "the search index is purged page by page, never up front for all")
+        XCTAssertEqual(Set(env.deleted.value), Set(purged.value.flatMap { $0 }), "the deleted pages' follow-ups ran")
+        let left = try await env.store.totalCount()
+        XCTAssertEqual(left, 1, "the page not reached stays in the archive")
+        let stillThere = Set(all).subtracting(env.deleted.value)
+        XCTAssertEqual(stillThere.count, 1)
     }
 
     // MARK: 17 — iOS background task registered at launch

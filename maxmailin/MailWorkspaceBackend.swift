@@ -97,6 +97,10 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     let transports: ConnectedMailTransports?
     let providerInfo: [String: String]
     private var driver: Task<Void, Never>?
+    /// C7 test seams: the records per archive-deletion page, and the search
+    /// purge run after each committed page (nil = the runtime's index).
+    var deletionPageSize = 1_000
+    var searchIndexPurge: (@Sendable (_ ids: [UUID]) async throws -> Void)?
 
     var availability: MailWorkspaceAvailability {
         ConnectedMailRuntime.shared === runtime ? .ready : .mailSwitchedOff
@@ -492,31 +496,33 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
         try await removal.planArchiveDeletion(account)
     }
 
-    /// Search index first, then the archive (the order every delete uses): a
-    /// failure in between leaves archive rows the launch reconcile indexes
-    /// again, never search results for deleted mail. Any index failure stops
-    /// the deletion and is stated.
+    /// C7: the archive and the search index page by page — each page's
+    /// records leave the archive (one transaction), then exactly those ids
+    /// leave search. A failing page stops the run: the records not reached
+    /// stay in the archive AND searchable, the pages already deleted get
+    /// their follow-ups, and the person reads "Deleted X of Y messages".
     func deleteArchivedMail(_ account: UUID, confirmedCount: Int) async throws -> ConnectedAccountArchiveDeletion {
         try await deleteArchivedMail(account, confirmedCount: confirmedCount, progress: { _, _ in })
     }
 
     /// Owner report 2026-11-15: the deletable set is computed once (it IS the
-    /// confirmed count — exactly what the store deletes), the search index
-    /// drops it in one batch (one pass per shard, not one scan per message),
-    /// and the archive deletion reports `progress(done, total)` page by page.
+    /// confirmed count — the store refuses a changed count before deleting),
+    /// and the deletion reports `progress(done, total)` page by page.
     func deleteArchivedMail(_ account: UUID, confirmedCount: Int,
                             progress: @escaping @Sendable (_ done: Int, _ total: Int) -> Void) async throws -> ConnectedAccountArchiveDeletion {
-        let ids = try await runtime.sink.deletableRecordIDs(accountID: account)
-        guard ids.count == confirmedCount else {
-            throw ConnectedLifecycleError.countChanged(shown: confirmedCount, now: ids.count)
+        let index = runtime.searchIndex
+        let purge = searchIndexPurge ?? { ids in try await index.delete(ids: ids) }
+        do {
+            let result = try await runtime.sink.deleteAccountArchive(accountID: account, confirmedCount: confirmedCount,
+                                                                     pageSize: deletionPageSize, progress: progress,
+                                                                     afterPage: { try await purge($0) })
+            if !result.deletedEmailIDs.isEmpty { await runtime.afterDelete(result.deletedEmailIDs) }
+            return result
+        } catch let stopped as ConnectedAccountArchiveDeletionIncomplete {
+            // What really happened is kept: the deleted pages' follow-ups run.
+            if !stopped.partial.deletedEmailIDs.isEmpty { await runtime.afterDelete(stopped.partial.deletedEmailIDs) }
+            throw MailWorkspaceError(MailLifecycleText.deletionIncomplete(stopped))
         }
-        progress(0, ids.count)
-        do { try await runtime.searchIndex.delete(ids: ids) } catch {
-            throw MailWorkspaceError(MailLifecycleText.searchRemovalFailed(failed: ids.count, total: ids.count))
-        }
-        let result = try await removal.deleteArchivedMail(account, confirmedCount: confirmedCount, progress: progress)
-        if !result.deletedEmailIDs.isEmpty { await runtime.afterDelete(result.deletedEmailIDs) }
-        return result
     }
 
     // MARK: Mailbox

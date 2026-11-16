@@ -1369,7 +1369,9 @@ final class MailWorkspaceModel {
             self.message = MailRemovalText.deletionReport(r)
         }
         sink.finish()
-        if result != nil { await refresh() }
+        // C7: a run that stopped part-way still deleted pages — the lists
+        // show what is really left either way.
+        await refresh()
         return result
     }
 

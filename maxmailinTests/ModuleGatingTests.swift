@@ -1117,6 +1117,25 @@ struct InterfaceLocalizationTests {
             #expect(declared.contains(lang), "Bundle.main.localizations lacks \(lang)")
         }
     }
+
+    /// Review 2026-11-16: strings built in code (and the package's, which
+    /// resolve from the app catalog) reach the built app in German — one
+    /// representative per fixed file.
+    static let reviewKeys: [String] = [
+        // C7 (MailLifecycleText) and C8 (ArchiveCore ChildHashRepair)
+        "Deleted %lld of %lld messages; the other %lld are still in the archive.",
+        " %@ messages failed to repair — retried at the next pass.",
+    ]
+
+    @Test("Review 2026-11-16 strings resolve to German in the built app")
+    func reviewStringsResolveInGerman() throws {
+        let path = try #require(Bundle.main.path(forResource: "de", ofType: "lproj"), "the app has a de.lproj")
+        let german = try #require(Bundle(path: path))
+        for key in Self.reviewKeys {
+            let value = german.localizedString(forKey: key, value: "\u{1}missing", table: nil)
+            #expect(value != "\u{1}missing" && value != key, "not translated in the built app: \(key)")
+        }
+    }
 }
 
 
