@@ -18,6 +18,7 @@ struct AttachmentChildrenList: View {
     var archive: ArchiveDataService = .shared
     @State private var children: [AttachmentChildRow] = []
     @State private var failure: String?
+    @State private var listFailure: String?
     /// IPAD-04: open on arrival, so the files inside are on screen without a
     /// tap (a long list starts closed; its count is in the label).
     @State private var isExpanded = true
@@ -62,6 +63,11 @@ struct AttachmentChildrenList: View {
                 }
                 .accessibilityIdentifier("attachment.children.\(position)")
             }
+            if let listFailure {
+                Text(listFailure).font(Typography.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("attachment.children.failure.\(position)")
+            }
         }
         .task(id: "\(emailID.uuidString)#\(position)") { await load() }
         // IPAD-04: the indexing job records the files inside after import; a
@@ -72,7 +78,15 @@ struct AttachmentChildrenList: View {
     }
 
     private func load() async {
-        let rows = await Self.rows(emailID: emailID, position: position, archive: archive)
+        let rows: [AttachmentChildRow]
+        do {
+            rows = try await Self.rows(emailID: emailID, position: position, archive: archive)
+            listFailure = nil
+        } catch {
+            // Review 2026-11-16: a store error is said, never shown as "no files inside".
+            listFailure = String(localized: "The files inside this attachment could not be listed: \(error.localizedDescription)")
+            return
+        }
         if rows.map(\.childIndex) != children.map(\.childIndex) {
             isExpanded = Self.startsExpanded(count: rows.count)
         }
@@ -80,8 +94,9 @@ struct AttachmentChildrenList: View {
     }
 
     /// The files inside attachment `position` of one message, as recorded.
-    static func rows(emailID: EmailID, position: Int, archive: ArchiveDataService) async -> [AttachmentChildRow] {
-        await archive.attachmentChildren(emailID: emailID).filter { $0.position == position }
+    /// Throws when the store cannot answer (an empty array means none recorded).
+    static func rows(emailID: EmailID, position: Int, archive: ArchiveDataService) async throws -> [AttachmentChildRow] {
+        try await archive.attachmentChildren(emailID: emailID).filter { $0.position == position }
     }
 
     /// Open when the list is short enough to read at a glance.

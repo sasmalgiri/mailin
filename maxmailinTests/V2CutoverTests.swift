@@ -5007,7 +5007,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(wholeRows[0].state, .noText, wholeRows[0].note ?? "")
         XCTAssertTrue(wholeRows[0].note?.contains("set.zip") == true, "the volume row points at the entry volume: \(wholeRows[0].note ?? "")")
         XCTAssertEqual(wholeRows[1].state, .extracted, wholeRows[1].note ?? "")
-        let wholeChildren = await env.archive.attachmentChildren(emailID: whole.id)
+        let wholeChildren = try await env.archive.attachmentChildren(emailID: whole.id)
         XCTAssertEqual(Set(wholeChildren.map(\.filename)), ["minutes.txt", "tail.txt"])
         XCTAssertEqual(wholeChildren.first { $0.filename == "minutes.txt" }?.state, ChildDocument.State.extracted.rawValue)
         func inSet(_ phrase: String) -> SearchSpec {
@@ -5021,7 +5021,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(lastRows.count, 1)
         XCTAssertEqual(lastRows[0].state, .partial, lastRows[0].note ?? "")
         XCTAssertTrue(lastRows[0].note?.contains("volume 1 (set.z01) missing") == true, "the missing volume is named: \(lastRows[0].note ?? "")")
-        let lastChildren = await env.archive.attachmentChildren(emailID: lastOnly.id)
+        let lastChildren = try await env.archive.attachmentChildren(emailID: lastOnly.id)
         XCTAssertEqual(lastChildren.first { $0.filename == "minutes.txt" }?.state, ChildDocument.State.unsupported.rawValue)
         XCTAssertEqual(lastChildren.first { $0.filename == "minutes.txt" }?.note, "not opened: volume 1 (set.z01) missing")
         XCTAssertEqual(lastChildren.first { $0.filename == "tail.txt" }?.state, ChildDocument.State.extracted.rawValue)

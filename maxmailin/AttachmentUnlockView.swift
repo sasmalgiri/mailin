@@ -65,8 +65,10 @@ struct AttachmentUnlockView: View {
     @MainActor
     private func refresh() async {
         row = await AttachmentTextIndexJob.shared.coverageRow(emailID: emailID, position: position)
-        lockedChildren = await ArchiveDataService.shared.attachmentChildren(emailID: emailID)
-            .filter { $0.position == position && $0.state == ChildDocument.State.locked.rawValue }.count
+        // A store error leaves the last count in place rather than reading as "none locked".
+        if let children = try? await ArchiveDataService.shared.attachmentChildren(emailID: emailID) {
+            lockedChildren = children.filter { $0.position == position && $0.state == ChildDocument.State.locked.rawValue }.count
+        }
     }
 }
 

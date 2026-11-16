@@ -625,7 +625,7 @@ final class PracticalRecipeEngine {
         for try await batch in env.archive.streamSelected(scope: .query(preview.selection.query, exclusions: [])) {
             try Task.checkCancellation()
             for email in batch {
-                let children = await env.archive.attachmentChildren(emailID: email.id)
+                let children = try await env.archive.attachmentChildren(emailID: email.id)
                 out.append(contentsOf: RecipeFileBrowser.candidates(email: email, children: children, spec: preview.spec))
             }
         }

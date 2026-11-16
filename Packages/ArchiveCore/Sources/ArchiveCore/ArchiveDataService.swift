@@ -215,21 +215,25 @@ final class ArchiveDataService {
     }
 
     /// §13.3 (5): the files inside the attachments of one message, as recorded by the indexing job.
-    func attachmentChildren(emailID: EmailID) async -> [AttachmentChildRow] {
+    /// Review 2026-11-16 (E): a store error is thrown, never read as "no files inside" —
+    /// an empty array means the store answered and recorded none.
+    func attachmentChildren(emailID: EmailID) async throws -> [AttachmentChildRow] {
         guard let sqlite = sqliteStore else { return [] }
-        return (try? await sqlite.attachmentChildren(forEmailID: emailID)) ?? []
+        return try await sqlite.attachmentChildren(forEmailID: emailID)
     }
 
     /// §13.3 (9): the extracted text of one attachment document or child, for the text view.
-    func attachmentDocumentText(emailID: EmailID, ordinal: Int) async -> String? {
+    /// `nil` means the store answered and holds no text; a store error is thrown.
+    func attachmentDocumentText(emailID: EmailID, ordinal: Int) async throws -> String? {
         guard let sqlite = sqliteStore else { return nil }
-        return try? await sqlite.attachmentDocumentText(emailID: emailID, ordinal: ordinal)
+        return try await sqlite.attachmentDocumentText(emailID: emailID, ordinal: ordinal)
     }
 
     /// R7: whether that text exists — one EXISTS on the document row, no text read.
-    func attachmentDocumentHasText(emailID: EmailID, ordinal: Int) async -> Bool {
+    /// A store error is thrown, never read as "no text".
+    func attachmentDocumentHasText(emailID: EmailID, ordinal: Int) async throws -> Bool {
         guard let sqlite = sqliteStore else { return false }
-        return (try? await sqlite.attachmentDocumentHasText(emailID: emailID, ordinal: ordinal)) ?? false
+        return try await sqlite.attachmentDocumentHasText(emailID: emailID, ordinal: ordinal)
     }
 
     /// LIFE-06 (audit A08): the paid tier recorded inside the archive (raw

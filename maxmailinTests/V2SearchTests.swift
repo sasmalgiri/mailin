@@ -571,10 +571,10 @@ extension V2SearchTests {
             AttachmentTextIndexJob.testSuppressKicks = false
         }
         let (env, docx, zip) = try await ipadArchive()
-        let rows = await AttachmentChildrenList.rows(emailID: zip.id, position: 0, archive: env.archive)
+        let rows = try await AttachmentChildrenList.rows(emailID: zip.id, position: 0, archive: env.archive)
         XCTAssertEqual(rows.map(\.path), ["inner/Contract.docx"])
         XCTAssertEqual(rows.first.map { AttachmentChildrenList.stateLabel($0.state) }, String(localized: "read for search"))
-        let none = await AttachmentChildrenList.rows(emailID: docx.id, position: 0, archive: env.archive)
+        let none = try await AttachmentChildrenList.rows(emailID: docx.id, position: 0, archive: env.archive)
         XCTAssertTrue(none.isEmpty, "a DOCX is a document, not a container: no Contents list")
         XCTAssertTrue(AttachmentChildrenList.startsExpanded(count: rows.count), "a short list is open on arrival — no tap to see the file")
         XCTAssertFalse(AttachmentChildrenList.startsExpanded(count: 500))
@@ -793,7 +793,7 @@ extension V2SearchTests {
         let outline = try XCTUnwrap(outlineRead)
         XCTAssertEqual(outline.kind, .attachmentText)
         XCTAssertEqual(outline.characters, text.count, "the size comes from the document row")
-        let archiveHas = await env.archive.attachmentDocumentHasText(emailID: email.id, ordinal: 0)
+        let archiveHas = try await env.archive.attachmentDocumentHasText(emailID: email.id, ordinal: 0)
         XCTAssertTrue(archiveHas)
 
         // Source guard: neither the button nor the sheet reads the joined text.

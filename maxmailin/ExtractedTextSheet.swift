@@ -46,7 +46,10 @@ struct AttachmentTextButton: View {
         }
         .task(id: "\(emailID.uuidString)#\(ordinal)") {
             // R7: one EXISTS on the document row — no text is read to decide this.
-            hasText = await ArchiveDataService.shared.attachmentDocumentHasText(emailID: emailID, ordinal: ordinal)
+            // A store error offers the text view anyway, so opening it reports the
+            // error instead of the button silently meaning "no text".
+            do { hasText = try await ArchiveDataService.shared.attachmentDocumentHasText(emailID: emailID, ordinal: ordinal) }
+            catch { hasText = true }
         }
     }
 }
