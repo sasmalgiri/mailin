@@ -12698,6 +12698,17 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(ids, [one.id])
     }
 
+    /// C14: a store error during the archive-wide duplicate check is shown and the
+    /// check is not marked done — never "no duplicates" from an empty list.
+    func testC14_archiveWideDuplicateCheck_storeErrorIsNotNoDuplicates() async {
+        let failed = await DuplicateManagerView.archiveDupCheck { throw CocoaError(.fileReadCorruptFile) }
+        XCTAssertFalse(failed.checked, "a failed check is not a finished one")
+        XCTAssertNotNil(failed.error)
+        let ok = await DuplicateManagerView.archiveDupCheck { ([], 0, []) }
+        XCTAssertTrue(ok.checked)
+        XCTAssertNil(ok.error)
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

@@ -574,6 +574,8 @@ struct DuplicateManagerView: View {
     /// Archive-wide: same-Message-ID groups whose content differed — never removed here.
     @State private var archiveCandidateGroups = 0
     @State private var archiveDupChecked = false
+    /// Why the archive-wide check could not finish (shown; the card is not marked checked).
+    @State private var archiveDupError: String?
     @State private var showArchiveDedupConfirm = false
 
     /// Archive-wide dedup — one click, SQL over the WHOLE store. Same
@@ -584,6 +586,19 @@ struct DuplicateManagerView: View {
         // A view that is always there: `.task` on an empty Group never runs,
         // so the content it loads could never appear.
         VStack(alignment: .leading, spacing: 0) {
+            if let archiveDupError {
+                HStack(spacing: Spacing.small) {
+                    Label(archiveDupError, systemImage: "exclamationmark.triangle.fill")
+                        .font(Typography.caption1)
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Try Again") { Task { await loadArchiveWide() } }
+                        .controlSize(.small)
+                }
+                .padding(Spacing.small)
+                .padding(.horizontal, Spacing.medium)
+            }
             if archiveDupChecked && (!archiveRemovable.isEmpty || archiveCandidateGroups > 0) {
                 HStack(spacing: Spacing.small) {
                     Image(systemName: archiveRemovable.isEmpty ? "questionmark.circle" : "checkmark.seal.fill")
@@ -645,9 +660,34 @@ struct DuplicateManagerView: View {
         }
     }
 
+    /// What an archive-wide check found — or why it could not finish.
+    struct ArchiveDupCheck {
+        var removable: [UUID] = []
+        var plans: [SQLiteEmailStore.DuplicateRemovalPlan] = []
+        var candidateGroups = 0
+        /// True only when the whole archive was really checked.
+        var checked = false
+        var error: String?
+    }
+
+    /// Runs the archive-wide check (`verify`), turning its result or error into state.
+    static func archiveDupCheck(
+        _ verify: () async throws -> (removable: [UUID], candidateGroups: Int, plans: [SQLiteEmailStore.DuplicateRemovalPlan])
+    ) async -> ArchiveDupCheck {
+        do {
+            let r = try await verify()
+            return ArchiveDupCheck(removable: r.removable, plans: r.plans, candidateGroups: r.candidateGroups, checked: true)
+        } catch is CancellationError {
+            return ArchiveDupCheck(checked: false)
+        } catch {
+            // C14: never an empty list marked checked — that reads as "no duplicates".
+            return ArchiveDupCheck(checked: false, error: String(localized: "The whole archive could not be checked for duplicates: \(error.localizedDescription)"))
+        }
+    }
+
     /// The archive-wide Message-ID groups, verified — also re-run after a move.
     private func loadArchiveWide() async {
-        do {
+        let check = await Self.archiveDupCheck {
             let store = SQLiteEmailStore.shared
             var groups = try await Self.withoutTrashed(try await store.messageIDDuplicateGroups(), store: store)
             // REC-05: opened from a recipe step, only copies inside the run's frozen selection are offered.
@@ -657,22 +697,20 @@ struct DuplicateManagerView: View {
             let result = try await DuplicateVerification.verifyArchiveWide(groups: groups) { ids in
                 try await ArchiveDataService.shared.fullEmails(ids: ids)
             }
-            archiveRemovable = result.removable
-            archivePlans = result.plans
-            archiveCandidateGroups = result.candidateGroups
-            // v4.0 REC-02: a measured "nothing to remove" is a dedupe result;
-            // groups whose content differed still need the person.
-            if result.removable.isEmpty && result.candidateGroups == 0 {
-                RecipeJobBroker.shared.report(.dedupe, outcome: .succeeded,
-                                              receipt: .init(kind: .measurement, id: "0 verified duplicate copies archive-wide"),
-                                              summary: "Checked archive-wide: 0 verified duplicate copies to remove", count: 0)
-            }
-        } catch {
-            archiveRemovable = []
-            archivePlans = []
-            archiveCandidateGroups = 0
+            return (result.removable, result.candidateGroups, result.plans)
         }
-        archiveDupChecked = true
+        archiveRemovable = check.removable
+        archivePlans = check.plans
+        archiveCandidateGroups = check.candidateGroups
+        archiveDupError = check.error
+        // v4.0 REC-02: a measured "nothing to remove" is a dedupe result;
+        // groups whose content differed still need the person.
+        if check.checked && check.removable.isEmpty && check.candidateGroups == 0 {
+            RecipeJobBroker.shared.report(.dedupe, outcome: .succeeded,
+                                          receipt: .init(kind: .measurement, id: "0 verified duplicate copies archive-wide"),
+                                          summary: "Checked archive-wide: 0 verified duplicate copies to remove", count: 0)
+        }
+        archiveDupChecked = check.checked
     }
 
     /// IPAD-05 (b): a copy already in the Trash is not a duplicate to offer
