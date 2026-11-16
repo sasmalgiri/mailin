@@ -154,10 +154,26 @@ enum PSTSpecValue {
 final class PSTSpecWriter: PSTStreamWriting {
     typealias F = PSTSpecFormat
 
-    enum WriteError: LocalizedError {
+    enum WriteError: LocalizedError, Equatable {
         case io(String)
-        var errorDescription: String? { if case .io(let s) = self { return s }; return nil }
+        /// A limit the PST format itself sets (review 2026-11-16 E), stated to
+        /// the user as the reason the export stopped — never a crash.
+        case formatLimit(String)
+        /// The writer was asked for something its own layout cannot hold — a
+        /// defect, reported as a failed export instead of a trap.
+        case inconsistent(String)
+        var errorDescription: String? {
+            switch self {
+            case .io(let s): return s
+            case .formatLimit(let s): return "The PST could not be written: \(s)"
+            case .inconsistent(let s): return "The PST could not be written (internal check failed: \(s))"
+            }
+        }
     }
+
+    /// [MS-PST] 2.2.2.8.3.2: an XBLOCK / XXBLOCK records an item's total size
+    /// in the 32-bit `lcbTotal`, so one item's data is at most 4 GiB − 1 bytes.
+    static let maxItemBytes = Int(UInt32.max)
 
     // File
     private let url: URL
@@ -305,7 +321,7 @@ final class PSTSpecWriter: PSTStreamWriting {
 
     init(url: URL, exportFolderName: String = "mailin export", layout: PSTWriterLayout = .unicodePST,
          cryptMethod: UInt8 = 0, storePasswordCRC: UInt32 = 0) throws {
-        precondition(cryptMethod <= 2, "bCryptMethod 0, 1 or 2")
+        guard cryptMethod <= 2 else { throw WriteError.inconsistent("bCryptMethod \(cryptMethod) is not 0, 1 or 2") }
         self.url = url
         self.layout = layout
         self.cryptMethod = cryptMethod
@@ -418,7 +434,9 @@ final class PSTSpecWriter: PSTStreamWriting {
     /// One block (≤ 8176 bytes), aligned to the layout's block alignment (64 bytes; 512 in
     /// a 4 KiB-page file), with its trailer; recorded in the block index.
     func writeBlock(_ data: Data, isInternal: Bool) throws -> UInt64 {
-        precondition(data.count <= F.blockDataMax)
+        guard data.count <= F.blockDataMax else {
+            throw WriteError.inconsistent("a block of \(data.count) bytes is above the \(F.blockDataMax)-byte block size")
+        }
         let bid = nextBid | (isInternal ? 2 : 0)
         nextBid += 4
         let align = layout.blockAlign, trailer = layout.blockTrailer
@@ -448,6 +466,10 @@ final class PSTSpecWriter: PSTStreamWriting {
     func dataTree(_ bids: [UInt64], totalBytes: Int) throws -> UInt64 {
         if bids.isEmpty { return 0 }
         if bids.count == 1 { return bids[0] }
+        // lcbTotal is 32-bit: an item above 4 GiB − 1 is a stated limit, not a trap.
+        guard totalBytes >= 0, totalBytes <= Self.maxItemBytes else {
+            throw WriteError.formatLimit("one item is \(totalBytes) bytes, above the PST format's limit of \(Self.maxItemBytes) bytes (4 GiB) for a single message, attachment or table. Export that message on its own as EML or MSG instead.")
+        }
         func xblock(level: UInt8, _ children: [UInt64], _ total: Int) throws -> UInt64 {
             var d = Data(); d.u8(1); d.u8(level); d.u16(UInt16(children.count)); d.u32(UInt32(total))
             for c in children { d.u64(c) }
@@ -490,12 +512,16 @@ final class PSTSpecWriter: PSTStreamWriting {
             return try writeBlock(d, isInternal: true)
         }
         if sorted.count <= 340 { return try sl(sorted[...]) }
+        // One SIBLOCK level over SLBLOCKs: 510 × 340 subnodes in one item. Checked
+        // before any block is written.
+        guard (sorted.count + 339) / 340 <= 510 else {
+            throw WriteError.formatLimit("one message has \(sorted.count) sub-objects (attachments, recipients and tables); the PST writer holds at most \(510 * 340) in one message")
+        }
         var d = Data(); var children: [(UInt32, UInt64)] = []
         for start in stride(from: 0, to: sorted.count, by: 340) {
             let part = sorted[start..<min(start + 340, sorted.count)]
             children.append((part.first!.nid, try sl(part)))
         }
-        precondition(children.count <= 510)
         d.u8(2); d.u8(1); d.u16(UInt16(children.count)); d.u32(0)
         for (nid, bid) in children { d.u64(UInt64(nid)); d.u64(bid) }
         return try writeBlock(d, isInternal: true)
@@ -529,10 +555,16 @@ final class PSTSpecWriter: PSTStreamWriting {
         private func pageMapSize(_ allocs: Int) -> Int { 4 + 2 * (allocs + 1) }
 
         func alloc(_ bytes: Data) throws -> UInt32 {
-            precondition(bytes.count <= PSTSpecFormat.maxAllocation)
+            guard bytes.count <= PSTSpecFormat.maxAllocation else {
+                throw WriteError.inconsistent("a heap allocation of \(bytes.count) bytes is above the \(PSTSpecFormat.maxAllocation)-byte maximum")
+            }
             let used = header + current.count + bytes.count
             if (used + 1) / 2 * 2 + pageMapSize(starts.count + 1) > PSTSpecFormat.blockDataMax {
                 try closeBlock()
+            }
+            // A HID names its block in 16 bits ([MS-PST] 2.3.1.1).
+            guard blockIndex <= 0xFFFF else {
+                throw WriteError.formatLimit("one item's property heap is above the PST format's 65,536 blocks")
             }
             starts.append(header + current.count)
             current.append(bytes)
@@ -541,17 +573,25 @@ final class PSTSpecWriter: PSTStreamWriting {
 
         /// Replaces an allocation of the open block, or of block 0 (held until `finish`), with
         /// bytes of the same length.
-        func overwrite(_ hid: UInt32, with bytes: Data) {
+        func overwrite(_ hid: UInt32, with bytes: Data) throws {
             let index = Int((hid >> 5) & 0x7FF) - 1
             if Int(hid >> 16) == blockIndex {
-                precondition(starts.indices.contains(index))
+                guard starts.indices.contains(index) else { throw WriteError.inconsistent("heap id \(hid) names no allocation") }
                 let start = starts[index] - header
-                precondition(start + bytes.count <= current.count)
+                guard start + bytes.count <= current.count else {
+                    throw WriteError.inconsistent("an overwrite of heap id \(hid) runs past its block")
+                }
                 current.replaceSubrange(start..<start + bytes.count, with: bytes)
             } else {
-                precondition(hid >> 16 == 0 && block0 != nil && block0Starts.indices.contains(index))
+                guard hid >> 16 == 0, var b0 = block0, block0Starts.indices.contains(index) else {
+                    throw WriteError.inconsistent("heap id \(hid) is not in an open or held block")
+                }
                 let start = block0Starts[index]
-                block0!.replaceSubrange(start..<start + bytes.count, with: bytes)
+                guard start + bytes.count <= b0.count else {
+                    throw WriteError.inconsistent("an overwrite of heap id \(hid) runs past block 0")
+                }
+                b0.replaceSubrange(start..<start + bytes.count, with: bytes)
+                block0 = b0
             }
         }
         private var block0Starts: [Int] = []
@@ -680,7 +720,9 @@ final class PSTSpecWriter: PSTStreamWriting {
         init(heap: HeapBuilder, cbKey: Int, cbEnt: Int) { self.heap = heap; self.cbKey = cbKey; self.cbEnt = cbEnt }
 
         func add(key: Data, value: Data) throws {
-            precondition(key.count == cbKey && value.count == cbEnt)
+            guard key.count == cbKey, value.count == cbEnt else {
+                throw WriteError.inconsistent("a BTH record of \(key.count)+\(value.count) bytes where \(cbKey)+\(cbEnt) are required")
+            }
             if leafFirst == nil { leafFirst = key }
             leaf.append(key); leaf.append(value); inLeaf += 1
             if inLeaf == perLeaf { try flush() }
@@ -1214,7 +1256,7 @@ final class PSTSpecWriter: PSTStreamWriting {
         // folder and message row — the layout of SCANPST's repair and of Outlook 2010's PSTs.
         let hmpBTHHeader = try hmpBTH.finish()
         var hmpRootValue = Data(); hmpRootValue.u32(hmpBTHHeader)
-        hmpHeap.overwrite(hmpRootHID, with: hmpRootValue)
+        try hmpHeap.overwrite(hmpRootHID, with: hmpRootValue)
         specialNodes.append((0xC01, try hmpHeap.finish(root: hmpRootHID), 0, 0))
 
         // [MS-PST] 2.7.1 mandatory node 0x2223, the spam search folder (2.7.3.4.4), with the
@@ -1279,7 +1321,9 @@ final class PSTSpecWriter: PSTStreamWriting {
     }
 
     private func writePage(_ content: Data, ptype: UInt8, at ib: UInt64, bid: UInt64) throws {
-        precondition(content.count == layout.mapBytes)
+        guard content.count == layout.mapBytes else {
+            throw WriteError.inconsistent("a page of \(content.count) bytes where \(layout.mapBytes) are required")
+        }
         var d = content
         d.u8(ptype); d.u8(ptype); d.u16(F.sig(ib, bid)); d.u32(F.crc(content)); d.u64(bid)
         if layout.pageTrailer > 16 { d.append(Data(count: layout.pageTrailer - 16)) }

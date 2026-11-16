@@ -879,7 +879,9 @@ final class ArchiveExportService {
                         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
                         onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         let result = try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
-            guard let data = MSGWriter.write(email: email) else { return nil }
+            // B13: a message the writer cannot produce stops the export with
+            // the writer's reason (MSGWriterError), not an unexplained skip.
+            let data = try MSGWriter.data(for: email)
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "msg"), data)
         }
         return await withProvenanceSidecar(result, folder: folder)

@@ -164,9 +164,8 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
                     guard r.completion.status == .ok else { throw Self.refusal(r, "move") }
                     let moved = Self.copyUID(r, source: uid, mailbox: destination)
                     // A UID command on a UID that no longer exists succeeds and does
-                    // nothing: no COPYUID and no EXPUNGE means another client took it first.
-                    let expunged = r.untagged.contains { if case .numbered(_, "EXPUNGE") = $0 { return true }; return false }
-                    if moved == nil && !expunged { throw RemoteRequestFailure.gone }
+                    // nothing: no COPYUID and no EXPUNGE / VANISHED means another client took it first.
+                    if moved == nil && !Self.sourceRemoved(r, uid: uid) { throw RemoteRequestFailure.gone }
                     return moved
                 }
                 // UIDPLUS: COPY, mark exactly this UID, expunge exactly this UID.
@@ -262,6 +261,27 @@ public struct IMAPActionExecutor: RemoteActionExecutor {
             if let list = items.first(where: { $0.name == "FLAGS" })?.value.list { return list.compactMap(\.atomText) }
         }
         return nil
+    }
+
+    /// Evidence in a `UID MOVE` reply that the source message left the folder:
+    /// an `EXPUNGE`, or — with QRESYNC enabled, where RFC 7162 §3.2.10 has the
+    /// server send `VANISHED` instead of `EXPUNGE` — a `VANISHED` whose UID set
+    /// contains the moved UID. (`VANISHED (EARLIER)` reports older removals,
+    /// not this move, and is not counted.)
+    static func sourceRemoved(_ r: IMAPCommandResult, uid: UInt32) -> Bool {
+        for u in r.untagged {
+            switch u {
+            case .numbered(_, let kind) where kind.uppercased() == "EXPUNGE":
+                return true
+            case .data(let keyword, let values) where keyword.uppercased() == "VANISHED":
+                if values.contains(where: { $0.list != nil }) { continue }       // (EARLIER)
+                guard let text = values.last?.atomText, let set = IMAPUIDSet(sequenceSet: text) else { continue }
+                if set.contains(uid) { return true }
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     /// RFC 4315 `COPYUID <uidvalidity> <source-uids> <dest-uids>` (tagged OK

@@ -431,7 +431,7 @@ public actor IMAPSession {
             }
         case .oauth(let login, let token):
             if mechanisms.contains("OAUTHBEARER") {
-                let gs2 = "n,a=\(login),\u{1}host=\(endpoint.host)\u{1}port=\(endpoint.port)\u{1}auth=Bearer \(token)\u{1}\u{1}"
+                let gs2 = "n,a=\(Self.saslname(login)),\u{1}host=\(endpoint.host)\u{1}port=\(endpoint.port)\u{1}auth=Bearer \(token)\u{1}\u{1}"
                 try await sasl("OAUTHBEARER", initial: Array(Data(gs2.utf8).base64EncodedString().utf8), saslIR: saslIR,
                                failureReply: Array("AQ==".utf8), oauth: true)
             } else if mechanisms.contains("XOAUTH2") {
@@ -442,6 +442,22 @@ public actor IMAPSession {
                 throw MailProviderError.permanent("the mail server offers no OAuth sign-in (OAUTHBEARER or XOAUTH2)")
             }
         }
+    }
+
+    /// RFC 5801 §4 saslname, as RFC 7628 OAUTHBEARER's gs2 header requires:
+    /// "=" is sent as "=3D" and "," as "=2C" (a login with either would
+    /// otherwise end the authzid early or be read as an escape). XOAUTH2 has no
+    /// gs2 header and no escaping — its `user=` value is sent as it is.
+    static func saslname(_ login: String) -> String {
+        var out = ""
+        for ch in login {
+            switch ch {
+            case "=": out += "=3D"
+            case ",": out += "=2C"
+            default: out.append(ch)
+            }
+        }
+        return out
     }
 
     /// AUTHENTICATE with the initial response inline (SASL-IR) or after the
