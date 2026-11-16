@@ -5880,6 +5880,38 @@ final class V2CutoverTests: XCTestCase {
     /// text"; a mixed PDF is read page by page (text layer where it is real,
     /// recognition where it is not); the failed pages are named and the
     /// attachment is partial or failed — never complete.
+    /// CLOSE-06 (Release run 2026-11-15): Vision failed once on a page it reads the next time.
+    /// A failed row is only re-read when the reader changes, so one transient error is retried
+    /// on the spot; a second error is still the named failure.
+    func testOCR_transientVisionErrorIsRetriedOnce_aRepeatedErrorIsStillNamed() throws {
+        let original = AttachmentOCR.recognizer
+        defer { AttachmentOCR.recognizer = original }
+        struct Boom: Error, LocalizedError { var errorDescription: String? { "Vision stopped" } }
+        final class Calls: @unchecked Sendable { var count = 0 }
+        let calls = Calls()
+        AttachmentOCR.recognizer = { _ in
+            calls.count += 1
+            return calls.count == 1 ? .failure(Boom()) : .success("ledger quorum")
+        }
+        let image = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertTrue(image.isComplete, image.failures.joined(separator: "; "))
+        XCTAssertEqual(image.text, "ledger quorum")
+        XCTAssertEqual(calls.count, 2)
+
+        calls.count = 0
+        let scan = try XCTUnwrap(PDFDocument(data: Self.pdfData(pages: [""])))
+        let page = AttachmentOCR.outcome(fromPDF: scan)
+        XCTAssertTrue(page.isComplete, page.failures.joined(separator: "; "))
+        XCTAssertEqual(page.recognised, 1)
+
+        calls.count = 0
+        AttachmentOCR.recognizer = { _ in calls.count += 1; return .failure(Boom()) }
+        let failing = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertEqual(failing.failed, 1)
+        XCTAssertEqual(calls.count, 2, "tried twice, not forever")
+        XCTAssertTrue(failing.failures[0].contains("Vision stopped"))
+    }
+
     func testA06_ocrFailuresAreNamed_mixedPDFsReadPageByPage_neverComplete() throws {
         let original = AttachmentOCR.recognizer
         defer { AttachmentOCR.recognizer = original }

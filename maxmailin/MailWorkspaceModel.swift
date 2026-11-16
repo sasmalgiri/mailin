@@ -411,6 +411,11 @@ enum MailRemovalText {
         String(localized: "Account removed. \(r.archivedRecordsKept) archived messages kept; \(r.keptAsDrafts.count + r.keptInOutbox.count) unsent messages kept; \(r.awaitingOutcome.count) awaiting their outcome.")
     }
 
+    /// The account was removed and its archived mail then deleted: nothing about mail "kept".
+    static func removedAndDeleted(_ r: AccountRemovalReport) -> String {
+        String(localized: "Account removed. \(r.keptAsDrafts.count + r.keptInOutbox.count) unsent messages kept as drafts; \(r.awaitingOutcome.count) awaiting their outcome.")
+    }
+
     /// The separate, counted deletion of the account's archived mail.
     static func removeAndDeleteTitle(_ s: ConnectedAccountArchiveSummary) -> String {
         // Never a second button titled "Remove" next to Remove.
@@ -743,8 +748,12 @@ struct MailIMAPForm: Equatable, Sendable {
         self.choice = choice
         if let preset = choice.preset, choice != .otherIMAP {
             host = preset.host; port = String(preset.port)
+        } else if choice == .otherIMAP {
+            // Another provider's servers are never left filled in (QA 2026-11-15: Gmail's stayed).
+            host = ""; port = "993"
         }
         if let smtp = choice.smtpDefault { smtpHost = smtp.host; smtpPort = String(smtp.port) }
+        else if choice == .otherIMAP { smtpHost = ""; smtpPort = "465" }
     }
 
     /// Why Add is not possible yet (nil = it is).
@@ -1381,13 +1390,20 @@ final class MailWorkspaceModel {
             return nil
         }
         var scope: String?
+        var applied = false
         await run {
             let op = try await self.backend.changeOnServer(request, row: row)
             self.message = MailServerChangeText.outcome(op.outcome)
             scope = MailServerChangeText.missingScope(op.outcome)
-            if case .applied? = op.outcome { self.noteServerMark(request, on: row.emailID) }
+            if case .applied? = op.outcome { applied = true; self.noteServerMark(request, on: row.emailID) }
         }
         if let scope { pendingReconsent = MailReconsentRequest(accountID: row.accountID, scope: scope, mode: .serverActions) }
+        // A move changes where the server keeps it: read the folders again (MailOrganize.swift).
+        if applied, request.changesFolders {
+            let said = message
+            await syncNow(row.accountID)
+            message = said
+        }
         return scope
     }
 

@@ -28,6 +28,16 @@ import AppKit
 import UIKit
 #endif
 
+/// A thread-safe Bool: OCR runs on the indexing job's background threads.
+final class OCRFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 enum AttachmentOCR {
     /// Capability `.attachmentOCR`, pushed by CapabilityWiring.
     nonisolated(unsafe) static var isEnabled = false
@@ -63,6 +73,16 @@ enum AttachmentOCR {
     /// The recogniser, replaceable by tests. The production one asks Vision.
     nonisolated(unsafe) static var recognizer: @Sendable (CGImage) -> Result<String?, Error> = visionRecognizer
 
+    /// One recognition, tried a second time when Vision returns an error: under load Vision
+    /// can fail once on a page it reads the next time (CLOSE-06 Release run, 2026-11-15), and
+    /// a failed row is only re-read when the reader changes — so one transient error would
+    /// leave the attachment unsearchable. A second error is the recorded failure.
+    static func recognizeRetryingOnce(_ image: CGImage) -> Result<String?, Error> {
+        let first = recognizer(image)
+        if case .failure = first { return recognizer(image) }
+        return first
+    }
+
     static func isImage(mimeType: String, filename: String) -> Bool {
         mimeType.lowercased().hasPrefix("image/") || imageExtensions.contains((filename as NSString).pathExtension.lowercased())
     }
@@ -91,11 +111,31 @@ enum AttachmentOCR {
     }
 
     /// Vision: the recognised lines in reading order; nil when none; the error when it failed.
+    ///
+    /// 2026-11-16 (macOS 27.0.1, 26A434): the accurate recogniser reads the first image of a process
+    /// and then fails every later one with an E5 runtime error (code 13, "Must re-compile the E5"),
+    /// and once it has failed the older accurate revision fails too; the same happens outside
+    /// mailin. The fast recogniser keeps reading. So on an error the image is read again at the
+    /// fast level, and the rest of the session uses it directly. A Mac where the accurate
+    /// recogniser works never takes this path.
     @Sendable static func visionRecognizer(_ image: CGImage) -> Result<String?, Error> {
+        if !fastFallbackInUse.value {
+            switch recognize(image, level: .accurate) {
+            case .success(let text): return .success(text)
+            case .failure: fastFallbackInUse.value = true
+            }
+        }
+        return recognize(image, level: .fast)
+    }
+
+    /// Set once the accurate recogniser has failed in this process (see `visionRecognizer`).
+    static let fastFallbackInUse = OCRFlag()
+
+    private static func recognize(_ image: CGImage, level: VNRequestTextRecognitionLevel) -> Result<String?, Error> {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
+        request.recognitionLevel = level
         request.usesLanguageCorrection = true
-        request.automaticallyDetectsLanguage = true
+        if level == .accurate { request.automaticallyDetectsLanguage = true }
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         do { try handler.perform([request]) } catch { return .failure(error) }
         let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
@@ -131,7 +171,7 @@ enum AttachmentOCR {
             outcome.failures.append(String(localized: "the image could not be decoded"))
             return outcome
         }
-        switch recognizer(image) {
+        switch recognizeRetryingOnce(image) {
         case .success(let text):
             if let text, !text.isEmpty { outcome.recognised = 1; outcome.text = text }
         case .failure(let error):
@@ -163,7 +203,7 @@ enum AttachmentOCR {
                     outcome.failures.append(String(localized: "page \(index + 1) could not be rendered"))
                     return
                 }
-                switch recognizer(image) {
+                switch recognizeRetryingOnce(image) {
                 case .success(let text):
                     if let text, !text.isEmpty { outcome.recognised += 1; pages.append(text) }
                 case .failure(let error):

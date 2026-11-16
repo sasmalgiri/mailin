@@ -177,12 +177,13 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// (whole bodies and attachment texts, no cutoff; groups; honest unknowns).
     case searchQueryModel
     /// GAP-NSF (owner 2026-11-07): Lotus Notes databases read by the ODS
-    /// layout (NotesODSPolicy) instead of the heuristic NSF parser. Preview:
-    /// verified on one public sample only.
+    /// layout (NotesODSPolicy) instead of the heuristic NSF parser. Stable since
+    /// 2026-11-15 (EngineSpec).
     case notesODSReader
     /// V4-01: connected mail — the runtime network policy every mail transport
     /// asks (MailNetworkPolicy). Owned by the Live Mail page, which the offline
-    /// edition excludes, so it can never be on there. Preview, off by default.
+    /// edition excludes, so it can never be on there. Stable: on whenever the
+    /// Live Mail page is on (the page itself is off on a fresh install).
     case connectedMail
 
     var id: String { rawValue }
@@ -240,14 +241,12 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         // M5 (owner, 2026-10-21): "Archive on another volume" is on by default on
         // the Mac after the disk-image run (RelocationVolumeTests: move, verify,
         // forced eject, fallback, re-attach), which found and fixed two bugs.
-        // iPhone and iPad reach external drives through the Files picker, which
-        // that run does not cover, so they keep it opt-in.
-        case .externalStorage:
-            #if os(macOS)
+        // iPhone and iPad (owner 2026-11-15, "no preview"): on as well — the same
+        // verified copy, reached through the Files picker.
+        // Connected mail (owner 2026-11-15): stable; it is still off until the
+        // Live Mail page is turned on, so turning the page on is the one step.
+        case .externalStorage, .connectedMail:
             return .stable
-            #else
-            return .preview
-            #endif
         // S4 verdict (owner, 2026-09-27): the offset engine is 3.0's default
         // import engine — equal throughput to the streaming parser on the
         // 1.5 GB real-content run, imports the >100 MB messages the streaming

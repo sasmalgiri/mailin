@@ -83,6 +83,108 @@ struct MailConversation: Identifiable, Equatable {
     var hasUnread: Bool { rows.contains { $0.isRead == false } }
 }
 
+// MARK: - Move, restore and labels on the server
+
+/// V4-11 (owner 2026-11-15, "no hidden features"): the folder moves, Trash
+/// restores and Gmail label edits the server-action engine already performs,
+/// offered from the message's "On the server" menu. This decides which folders
+/// a message can go to and builds the request; RemoteActionService journals
+/// it and checks the message is still where the request says it is.
+enum MailServerMoves {
+    /// Trash on each provider: IMAP special-use, Graph well-known name, Gmail system label.
+    static func isTrash(_ f: ConnectedFolderSummary) -> Bool {
+        guard let s = f.specialUse?.lowercased() else { return false }
+        return s == "\\trash" || s == "deleteditems" || s == "trash"
+    }
+
+    static func isInbox(_ f: ConnectedFolderSummary) -> Bool {
+        f.specialUse?.lowercased() == "inbox"
+    }
+
+    /// Gmail's system labels other than INBOX (SENT, DRAFT, SPAM, IMPORTANT,
+    /// CATEGORY_…, All Mail) are not move targets and cannot be added by hand.
+    static func isGmailSystemLabel(_ f: ConnectedFolderSummary) -> Bool {
+        f.kind == .label && f.specialUse != nil && !isInbox(f)
+    }
+
+    private static func account(_ row: ConnectedMailboxRow, _ folders: [ConnectedFolderSummary]) -> [ConnectedFolderSummary] {
+        folders.filter { $0.accountID == row.accountID }
+    }
+
+    /// The folder the message is in now, as the server names it. IMAP: the
+    /// mailbox in the message's identity; Graph: its one folder; Gmail: the
+    /// first user label or INBOX it carries (a move swaps that label).
+    static func currentFolder(of row: ConnectedMailboxRow, in folders: [ConnectedFolderSummary]) -> String? {
+        if case .imap(let mailbox, _, _) = row.identity { return mailbox }
+        let mine = account(row, folders)
+        let memberships = mine.filter { row.folderServerIDs.contains($0.serverID) }
+        if case .gmail = row.identity {
+            return (memberships.first(where: isInbox) ?? memberships.first { !isGmailSystemLabel($0) && !isTrash($0) })?.serverID
+        }
+        return memberships.first { !isTrash($0) }?.serverID ?? memberships.first?.serverID
+    }
+
+    static func isInTrash(_ row: ConnectedMailboxRow, in folders: [ConnectedFolderSummary]) -> Bool {
+        if case .imap(let mailbox, _, _) = row.identity {
+            return account(row, folders).contains { $0.serverID == mailbox && isTrash($0) }
+        }
+        return account(row, folders).contains { row.folderServerIDs.contains($0.serverID) && isTrash($0) }
+    }
+
+    /// Folders the message can be moved to: every folder of its account except
+    /// the one it is in, Trash (Move to the server's Trash has its own review)
+    /// and Gmail's system labels. Sorted by the path shown in the sidebar.
+    static func moveTargets(for row: ConnectedMailboxRow, in folders: [ConnectedFolderSummary]) -> [ConnectedFolderSummary] {
+        guard row.identity.supportsServerMoves, !isInTrash(row, in: folders),
+              let current = currentFolder(of: row, in: folders) else { return [] }
+        return account(row, folders)
+            .filter { $0.serverID != current && !isTrash($0) && !isGmailSystemLabel($0) }
+            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
+    static func moveRequest(_ row: ConnectedMailboxRow, to target: ConnectedFolderSummary,
+                            in folders: [ConnectedFolderSummary]) -> RemoteChangeRequest? {
+        guard moveTargets(for: row, in: folders).contains(target),
+              let current = currentFolder(of: row, in: folders) else { return nil }
+        return .move(from: current, to: target.serverID)
+    }
+
+    /// Back out of Trash into the Inbox (Gmail: its own labels come back).
+    static func restoreRequest(_ row: ConnectedMailboxRow, in folders: [ConnectedFolderSummary]) -> RemoteChangeRequest? {
+        guard row.identity.supportsServerMoves, isInTrash(row, in: folders) else { return nil }
+        if case .gmail = row.identity { return .restoreFromTrash(to: nil) }
+        guard let inbox = account(row, folders).first(where: isInbox) else { return nil }
+        return .restoreFromTrash(to: inbox.serverID)
+    }
+
+    /// Gmail (API) only: user labels the message has, and the ones it could get.
+    static func labels(for row: ConnectedMailboxRow, in folders: [ConnectedFolderSummary]) -> (present: [ConnectedFolderSummary], addable: [ConnectedFolderSummary]) {
+        guard case .gmail = row.identity else { return ([], []) }
+        let user = account(row, folders).filter { $0.kind == .label && $0.specialUse == nil }
+            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        return (user.filter { row.folderServerIDs.contains($0.serverID) },
+                user.filter { !row.folderServerIDs.contains($0.serverID) })
+    }
+}
+
+extension RemoteChangeRequest {
+    /// Moves, restores and label edits: the message's folders on the server change.
+    var changesFolders: Bool {
+        switch self {
+        case .move, .moveToTrash, .restoreFromTrash, .addLabel, .removeLabel, .archiveOnServer: return true
+        case .markRead, .markUnread, .flag, .unflag: return false
+        }
+    }
+}
+
+extension ProviderMessageIdentity {
+    /// Gmail over IMAP (app password) changes nothing on the server in 4.0.
+    var supportsServerMoves: Bool {
+        if case .gmailIMAP = self { return false }
+        return true
+    }
+}
+
 // MARK: - Drafts after sending
 
 /// Which drafts the Drafts list shows once messages go to the outbox.
@@ -278,9 +380,17 @@ extension MailWorkspaceModel {
     /// The same server change for several messages, one at a time; reports
     /// "X of Y". Messages that cannot be changed are named, never skipped silently.
     func changeOnServer(_ request: RemoteChangeRequest, rows chosen: [ConnectedMailboxRow]) async {
-        let eligible = chosen.filter(canChangeOnServer)
+        await changeOnServer(rows: chosen) { _ in request }
+    }
+
+    /// The same, with the request built for each message (a move names the
+    /// folder each one is in now); a message with no request is not changed and counted.
+    func changeOnServer(rows chosen: [ConnectedMailboxRow], _ requestFor: (ConnectedMailboxRow) -> RemoteChangeRequest?) async {
+        let eligible = chosen.filter { canChangeOnServer($0) && requestFor($0) != nil }
         var changed = 0
+        var moved = false
         for row in eligible {
+            guard let request = requestFor(row) else { continue }
             var applied = false
             var scope: String?
             await run {
@@ -292,11 +402,19 @@ extension MailWorkspaceModel {
                 pendingReconsent = MailReconsentRequest(accountID: row.accountID, scope: scope, mode: .serverActions)
                 break
             }
-            if applied { changed += 1 }
+            if applied {
+                changed += 1
+                if request.changesFolders { moved = true }
+            }
+        }
+        // A move changes where the server keeps the message: read the folders
+        // again so the lists show it there (the archived copy itself is unchanged).
+        if moved {
+            for account in Set(eligible.map(\.accountID)) { await syncNow(account) }
         }
         var text = String(localized: "Changed \(changed) of \(chosen.count) messages on the server.")
         if eligible.count < chosen.count {
-            text += " " + String(localized: "\(chosen.count - eligible.count) could not be changed: Change server mail is off for their account, or they are no longer on the server.")
+            text += " " + String(localized: "\(chosen.count - eligible.count) could not be changed: Change server mail is off for their account, they are no longer on the server, or the change does not apply to them.")
         }
         message = text
     }

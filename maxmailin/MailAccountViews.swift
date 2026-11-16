@@ -44,6 +44,19 @@ struct MailAddAccountView: View {
                     Text("A new account is allowed nothing until you switch on what it may do: preserve mail, send mail, change server mail.")
                 }
 
+                // At the top, where it is seen without scrolling past the keyboard (owner QA 2026-11-15:
+                // on iPhone the error sat below the keyboard and Add seemed to do nothing).
+                if working {
+                    Section {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Checking the sign-in with the server…")
+                        }
+                    }
+                } else if let error = model.lastError {
+                    Section { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("mail.add.error") }
+                }
+
                 switch model.providerReadiness(choice) {
                 case .unavailable(let reason):
                     Section {
@@ -55,9 +68,6 @@ struct MailAddAccountView: View {
                     if choice.usesOAuth { oauthSection } else { imapSection }
                 }
 
-                if let error = model.lastError {
-                    Section { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("mail.add.error") }
-                }
             }
             .formStyle(.grouped)
             .navigationTitle(String(localized: "Add account"))
@@ -119,17 +129,32 @@ struct MailAddAccountView: View {
         } footer: {
             if let note = choice.signInNote { Text(note) }
         }
+        // Labelled rows: a filled-in field alone ("imap.gmail.com", "993") did not say what it was.
         Section(String(localized: "Incoming server (IMAP)")) {
-            TextField(String(localized: "Server"), text: $form.host).autocorrectionDisabled()
-            TextField(String(localized: "Port"), text: $form.port)
+            LabeledContent(String(localized: "Server")) {
+                TextField(String(localized: "Server"), text: $form.host).autocorrectionDisabled().labelsHidden()
+                    .multilineTextAlignment(.trailing)
+            }
+            LabeledContent(String(localized: "Port")) {
+                TextField(String(localized: "Port"), text: $form.port).labelsHidden().multilineTextAlignment(.trailing)
+            }
         }
         Section {
-            TextField(String(localized: "Server"), text: $form.smtpHost).autocorrectionDisabled()
-            TextField(String(localized: "Port"), text: $form.smtpPort)
+            LabeledContent(String(localized: "Server")) {
+                TextField(String(localized: "Server"), text: $form.smtpHost).autocorrectionDisabled().labelsHidden()
+                    .multilineTextAlignment(.trailing)
+            }
+            LabeledContent(String(localized: "Port")) {
+                TextField(String(localized: "Port"), text: $form.smtpPort).labelsHidden().multilineTextAlignment(.trailing)
+            }
         } header: {
             Text("Outgoing server (SMTP), for sending")
         } footer: {
-            Text("Presets fill in the provider's published settings; they have not yet been checked against the real servers.")
+            if choice == .otherIMAP {
+                Text("Enter the servers your provider gives you. 993 and 465 are the usual secure ports.")
+            } else {
+                Text("Presets fill in the provider's published settings. Change them only if your provider gives different ones.")
+            }
         }
     }
 
@@ -266,6 +291,8 @@ struct MailAccountSettingsView: View {
                                 Task { await model.setPaused(!snapshot.isPaused, account: accountID) }
                             }
                         }
+                        // Two buttons, not one run-on line of text (iPhone QA 2026-11-15).
+                        .buttonStyle(.bordered)
                         if let status = snapshot.status {
                             let times = MailStatusText.syncTimes(status)
                             LabeledContent(String(localized: "Last successful sync"), value: times.successful)
@@ -320,6 +347,9 @@ struct MailAccountSettingsView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(snapshot.account.displayIdentity)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)   // a long address fits (QA 2026-11-15: cut off as a large title)
+            #endif
             .task(id: accountID) { await loadIdentity(snapshot.account) }
             .confirmationDialog(String(localized: "Confirm Sending Address…"), isPresented: $confirmingAddress) {
                 Button(String(localized: "Confirm")) {
@@ -520,7 +550,9 @@ struct MailRemoveAccountView: View {
                 }
                 if let report = flow.report {
                     Section {
-                        Text(MailRemovalText.report(report))
+                        // After "Remove and Delete Mail" the mail was not kept: say what happened, once
+                        // (QA 2026-11-15: "1,712 archived messages kept" stood above "1,712 … deleted").
+                        Text(flow.deleted == nil ? MailRemovalText.report(report) : MailRemovalText.removedAndDeleted(report))
                             .accessibilityIdentifier("mail.remove.report")
                     }
                     if let deleted = flow.deleted {

@@ -50,6 +50,9 @@ struct EmailHTMLView: View {
 
     private func parseHTML() {
         var resolved = html
+        #if os(iOS)
+        resolved = Self.linearizedTables(resolved)
+        #endif
         if !attachments.isEmpty {
             resolved = resolveInlineImages(in: resolved, attachments: attachments)
         }
@@ -89,6 +92,23 @@ struct EmailHTMLView: View {
             )
             didParse = true
         }
+    }
+
+    /// iPhone and iPad: email layout tables (Outlook / Microsoft 365 send whole messages as tables)
+    /// rendered as text tables squeezed the text into narrow columns that broke words ("confi rm");
+    /// each table, row and cell becomes a block instead, read top to bottom (QA 2026-11-15).
+    static func linearizedTables(_ html: String) -> String {
+        let rules: [(String, String)] = [
+            ("<table\\b[^>]*>", "<div>"), ("</table\\s*>", "</div>"),
+            ("</?(thead|tbody|tfoot|colgroup|col)\\b[^>]*>", ""),
+            ("<tr\\b[^>]*>", "<div>"), ("</tr\\s*>", "</div>"),
+            ("<t[dh]\\b[^>]*>", "<div>"), ("</t[dh]\\s*>", "</div>"),
+        ]
+        var out = html
+        for (pattern, replacement) in rules {
+            out = out.replacingOccurrences(of: pattern, with: replacement, options: [.regularExpression, .caseInsensitive])
+        }
+        return out
     }
 
     private func resolveInlineImages(in html: String, attachments: [AttachmentMetadata]) -> String {

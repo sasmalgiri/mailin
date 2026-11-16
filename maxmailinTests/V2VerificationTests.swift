@@ -5183,6 +5183,30 @@ final class AboutCopyrightTests: XCTestCase {
 /// the behaviour the walk found.
 @MainActor
 final class IPadGate1FixTests: XCTestCase {
+    /// iPad QA 2026-11-15: the badge said "Current plan: Professional" while the home screen
+    /// offered upgrades and the sidebar read "Personal Use". Every view asks the one tier the
+    /// purchase gates use (`effectiveTier`), and the use mode is named as a workspace.
+    func testPlanShownTheSameEverywhere_viewsReadTheEffectiveTier_personaIsAWorkspace() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" && $0.lastPathComponent != "StoreManager.swift" }
+        var raw: [String] = []
+        for f in files {
+            let text = try String(contentsOf: f, encoding: .utf8)
+            for line in text.split(separator: "\n") where line.range(of: #"(storeManager|store|StoreManager\.shared)\.currentTier\b"#, options: .regularExpression) != nil {
+                raw.append("\(f.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        XCTAssertEqual(raw, [], "views read the raw tier instead of effectiveTier:\n" + raw.joined(separator: "\n"))
+
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains(#"Text("Workspace: \(personaManager.selectedPersona.displayName)")"#))
+        // Narrow sidebar: the reply-count row and the import buttons fall back to a stacked layout.
+        XCTAssertTrue(content.contains("minReplyCountLabel\n                            minReplyCountControls"))
+        XCTAssertTrue(content.contains("VStack(spacing: Spacing.xxSmall) {\n                            newImportButton"))
+    }
+
 
     // IPAD-09 (rule 5): a Share sheet closed without saving is not "Complete".
     func testIPAD09_dismissedShareSheetIsNotComplete() {
@@ -5252,7 +5276,8 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .authorized))
         XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .personTurnedSwitchOn, switchOn: true, status: .denied))
         XCTAssertTrue(AttachmentSpeech.shouldRequestAuthorization(trigger: .personTurnedSwitchOn, switchOn: true, status: .notDetermined))
-        XCTAssertTrue(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .notDetermined))
+        XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .recordingAboutToBeRecognised, switchOn: true, status: .notDetermined),
+                       "never from the background indexing job — only when the person asks (QA 2026-11-15)")
 
         // With the switch off, neither entry point reaches the system call; launch wiring never does.
         let savedHook = AttachmentSpeech.requestHook
@@ -5269,6 +5294,8 @@ final class IPadGate1FixTests: XCTestCase {
         AttachmentSpeech.isEnabled = true
         AttachmentSpeech.requestAuthorizationIfAppropriate(trigger: .launchWiring)
         XCTAssertEqual(counter.calls, 0, "launch wiring never asks, even with the switch on")
+        _ = AttachmentSpeech.requestAuthorizationBeforeRecognising()
+        XCTAssertEqual(counter.calls, 0, "the background indexing job never asks, even with the switch on")
     }
 
     // IPAD-06 (b): the backup goes into the folder the person chose, never the temporary folder.
@@ -6510,17 +6537,19 @@ final class MailPolicyTests: XCTestCase {
                      "no mail work may even be registered while Mail is off")
     }
 
-    /// T01 through the real wiring: a fresh registry leaves `connectedMail` off
-    /// (preview, Live Mail page off) and the shared policy closed.
+    /// T01 through the real wiring: a fresh registry leaves the shared policy
+    /// closed because the Live Mail page is off. `connectedMail` itself is
+    /// stable (owner 2026-11-15: "no preview") — turning the page on is the one
+    /// step that allows accounts; no second, hidden switch.
     func testT01_freshRegistryLeavesSharedPolicyClosed() {
         let registry = ModuleRegistry(
             store: ModuleStateStore(url: FileManager.default.temporaryDirectory
                 .appendingPathComponent("modules-\(UUID().uuidString).json")),
             excludedByBuild: [], trapsOnMisuse: false)
         XCTAssertEqual(Capability.connectedMail.owner, .liveMail)
-        XCTAssertEqual(Capability.connectedMail.maturity, .preview)
-        XCTAssertFalse(Capability.connectedMail.defaultsOn)
-        XCTAssertFalse(registry.isOn(.connectedMail))
+        XCTAssertEqual(Capability.connectedMail.maturity, .stable)
+        XCTAssertTrue(Capability.connectedMail.defaultsOn)
+        XCTAssertFalse(registry.isOn(.connectedMail), "off while its page is off")
         CapabilityWiring.applyAll(registry)
         XCTAssertFalse(MailNetworkPolicy.shared.isMailEnabled)
         for r in everyRequest(accountID: UUID(), host: imapHost) {
@@ -6528,10 +6557,10 @@ final class MailPolicyTests: XCTestCase {
         }
         XCTAssertEqual(MailNetworkPolicy.shared.snapshot().permittedAttempts, 0)
 
-        // Switching the page and the capability on opens the runtime switch;
+        // Switching the page on opens the runtime switch by itself (however the
+        // page is turned on — tab, Settings ▸ Modules or managed config);
         // switching the page off closes it again.
         XCTAssertNoThrow(try registry.enable(.liveMail))
-        registry.set(.connectedMail, enabled: true)
         XCTAssertTrue(registry.isOn(.connectedMail))
         XCTAssertTrue(MailNetworkPolicy.shared.isMailEnabled)
         registry.disable(.liveMail)
@@ -6739,8 +6768,9 @@ final class MailPolicyTests: XCTestCase {
         }
         // V4-08: ConnectedMailRuntime.swift is the ninth (its production adapters); V4-13 adds
         // ConnectedMailProductionTransports.swift and MailWorkspaceBackend.swift; the live Gmail
-        // UI-test hook in UITestSupport.swift (5ce933d) is the twelfth.
-        XCTAssertEqual(mailGated, 12, "the twelve mail files carry the mail gate")
+        // UI-test hook in UITestSupport.swift (5ce933d) is the twelfth; FourPageShell.swift
+        // (c1857d3: turning the Live Mail page on allows accounts in the same step) the thirteenth.
+        XCTAssertEqual(mailGated, 13, "the thirteen mail files carry the mail gate")
         XCTAssertEqual(aiGated, 4, "the four cloud-AI files carry the cloud-AI gate")
         XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
@@ -7969,7 +7999,8 @@ final class ConnectedFiveJobsTests: XCTestCase {
         let rowsB = try await coverageRows(env, captured)
         XCTAssertGreaterThanOrEqual(imported.attachments.count, 4, "PDF, ZIP, inline image, nested message, S/MIME part")
         XCTAssertEqual(rowsA.count, imported.attachments.count)
-        XCTAssertEqual(rowsA.map(Self.key), rowsB.map(Self.key), "the same coverage, attachment by attachment")
+        XCTAssertEqual(rowsA.map(Self.key), rowsB.map(Self.key), "the same coverage, attachment by attachment; notes "
+                       + "\((rowsA + rowsB).compactMap(\.note))")
         let childA = try await env.store.attachmentChildren(forEmailID: imported.id).map { "\($0.path)|\($0.kind)|\($0.sha256)|\($0.state)" }
         let childB = try await env.store.attachmentChildren(forEmailID: captured).map { "\($0.path)|\($0.kind)|\($0.sha256)|\($0.state)" }
         XCTAssertFalse(childA.isEmpty, "the DOCX inside the ZIP and the nested message are documents")
@@ -8410,6 +8441,66 @@ final class MailWorkspaceTests: XCTestCase {
         return form
     }()
 
+    /// V4-11 (owner 2026-11-15, "no hidden features"): the engine's folder move,
+    /// Trash restore and Gmail label edits are offered from "On the server". Each
+    /// provider gets a request naming the folder the message is in now and a target
+    /// it can really go to; Gmail over IMAP (no server changes in 4.0) gets none.
+    func testServerMoves_targetsAndRequestsPerProvider() {
+        let a = UUID()
+        func folder(_ id: String, _ path: String, _ kind: RemoteFolderOccurrence.Kind = .folder, _ special: String? = nil) -> ConnectedFolderSummary {
+            ConnectedFolderSummary(accountID: a, serverID: id, path: path, kind: kind, specialUse: special, messages: 1, unread: 0, selected: true)
+        }
+        func row(_ identity: ProviderMessageIdentity, _ folders: [String]) -> ConnectedMailboxRow {
+            ConnectedMailboxRow(emailID: UUID(), accountID: a, identity: identity, subject: "s", from: "x@example.com", date: .now,
+                                hasAttachments: false, isRead: true, isFlagged: false, onServer: true, folderServerIDs: folders,
+                                identityKey: UUID().uuidString)
+        }
+
+        // IMAP: the mailbox in the identity is the source; Trash is not a move target.
+        let imapFolders = [folder("INBOX", "Inbox", .folder, "INBOX"), folder("Projects/2026", "Projects/2026"),
+                           folder("Trash", "Trash", .folder, "\\Trash"), folder("Other", "Other", .folder)]
+        let inInbox = row(.imap(mailbox: "INBOX", uidValidity: 7, uid: 3), ["INBOX"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: inInbox, in: imapFolders).map(\.serverID), ["Other", "Projects/2026"])
+        XCTAssertEqual(MailServerMoves.moveRequest(inInbox, to: imapFolders[1], in: imapFolders), .move(from: "INBOX", to: "Projects/2026"))
+        XCTAssertNil(MailServerMoves.moveRequest(inInbox, to: imapFolders[2], in: imapFolders), "Trash goes through the reviewed cleanup")
+        XCTAssertNil(MailServerMoves.restoreRequest(inInbox, in: imapFolders), "not in Trash: nothing to restore")
+        let inTrash = row(.imap(mailbox: "Trash", uidValidity: 9, uid: 1), ["Trash"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: inTrash, in: imapFolders), [], "out of Trash only by Restore")
+        XCTAssertEqual(MailServerMoves.restoreRequest(inTrash, in: imapFolders), .restoreFromTrash(to: "INBOX"))
+
+        // Outlook (Graph): folder ids, Deleted Items by its well-known name.
+        let graphFolders = [folder("AAMk-inbox", "Inbox", .folder, "inbox"), folder("AAMk-deleted", "Deleted Items", .folder, "deleteditems"),
+                            folder("AAMk-arch", "Archive", .folder, "archive")]
+        let graphDeleted = row(.graph(mailbox: "me", immutableID: "id1"), ["AAMk-deleted"])
+        XCTAssertEqual(MailServerMoves.restoreRequest(graphDeleted, in: graphFolders), .restoreFromTrash(to: "AAMk-inbox"))
+        let graphInbox = row(.graph(mailbox: "me", immutableID: "id2"), ["AAMk-inbox"])
+        XCTAssertEqual(MailServerMoves.moveRequest(graphInbox, to: graphFolders[2], in: graphFolders), .move(from: "AAMk-inbox", to: "AAMk-arch"))
+
+        // Gmail (API): a move swaps INBOX for a user label; system labels are never targets; labels add and remove.
+        let gmailFolders = [folder("INBOX", "Inbox", .label, "INBOX"), folder("SENT", "Sent", .label, "SENT"),
+                            folder("TRASH", "Trash", .label, "TRASH"), folder("Label_1", "Clients", .label), folder("Label_2", "Receipts", .label)]
+        let gmail = row(.gmail(messageID: "m1"), ["INBOX", "Label_1"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: gmail, in: gmailFolders).map(\.serverID), ["Label_1", "Label_2"])
+        XCTAssertEqual(MailServerMoves.moveRequest(gmail, to: gmailFolders[4], in: gmailFolders), .move(from: "INBOX", to: "Label_2"))
+        let labels = MailServerMoves.labels(for: gmail, in: gmailFolders)
+        XCTAssertEqual(labels.present.map(\.serverID), ["Label_1"])
+        XCTAssertEqual(labels.addable.map(\.serverID), ["Label_2"])
+        XCTAssertEqual(MailServerMoves.restoreRequest(row(.gmail(messageID: "m2"), ["TRASH"]), in: gmailFolders), .restoreFromTrash(to: nil),
+                       "Gmail's untrash brings back the message's own labels")
+
+        // Gmail over IMAP: no server change of any kind.
+        let gmailIMAP = row(.gmailIMAP(messageID: 42), ["INBOX"])
+        XCTAssertEqual(MailServerMoves.moveTargets(for: gmailIMAP, in: imapFolders), [])
+        XCTAssertNil(MailServerMoves.restoreRequest(row(.gmailIMAP(messageID: 43), ["Trash"]), in: imapFolders))
+
+        // A folder of another account is never offered.
+        let elsewhere = ConnectedFolderSummary(accountID: UUID(), serverID: "Elsewhere", path: "Elsewhere", kind: .folder, specialUse: nil,
+                                               messages: 1, unread: 0, selected: true)
+        XCTAssertFalse(MailServerMoves.moveTargets(for: inInbox, in: imapFolders + [elsewhere]).contains(elsewhere))
+        XCTAssertTrue(RemoteChangeRequest.move(from: "a", to: "b").changesFolders)
+        XCTAssertFalse(RemoteChangeRequest.markRead.changesFolders)
+    }
+
     /// The offline build (the test build compiles no mail transport) shows
     /// one honest state and offers no actionable control.
     func testOfflineBuildShowsHonestStateAndNoActionableControls() async throws {
@@ -8750,6 +8841,67 @@ final class MailWorkspaceTests: XCTestCase {
         XCTAssertEqual(MailDraftSettling.sent(all, sending: outbox).map(\.id), [accepted.id])
         XCTAssertEqual(Set(MailDraftSettling.listed(all, sending: outbox).map(\.id)),
                        Set([undone.id, rejected.id, edited.id, untouched.id]))
+    }
+
+    /// iPhone / iPad QA 2026-11-15 (simulator walks): folder names, Other IMAP servers, the
+    /// remove-and-delete message, layout tables on iPhone, and the source-level fixes for the
+    /// missing compose button, the shrinking composer and the stuck file picker.
+    func testIPhoneIPadQA_folderNames_otherIMAP_removalText_tables_andLayoutFixes() throws {
+        XCTAssertEqual(MailFolderStyle.displayName("[Gmail]/Sent Mail"), "Sent Mail")
+        XCTAssertEqual(MailFolderStyle.displayName("INBOX"), String(localized: "Inbox"))
+        XCTAssertEqual(MailFolderStyle.displayName("Projects/2025"), "Projects/2025")
+        let account = UUID()
+        func f(_ path: String, _ n: Int) -> ConnectedFolderSummary {
+            ConnectedFolderSummary(accountID: account, serverID: path, path: path, kind: .folder, specialUse: nil, messages: n, unread: 0, selected: true)
+        }
+        XCTAssertFalse(MailFolderStyle.isListed(f("[Gmail]", 0)), "Gmail's empty container is not a folder to show")
+        XCTAssertTrue(MailFolderStyle.isListed(f("[Gmail]/All Mail", 3)))
+
+        var form = MailIMAPForm()
+        form.apply(.gmailAppPassword)
+        XCTAssertEqual(form.host, "imap.gmail.com")
+        form.apply(.otherIMAP)
+        XCTAssertEqual(form.host, "", "another provider's servers are never left filled in")
+        XCTAssertEqual(form.smtpHost, "")
+
+        let html = "<table width=\"600\"><tbody><tr><td width=\"600\"><p>Please confirm</p></td></tr></tbody></table>"
+        let flat = EmailHTMLView.linearizedTables(html)
+        XCTAssertFalse(flat.lowercased().contains("<table") || flat.lowercased().contains("<td") || flat.lowercased().contains("<tr"), flat)
+        XCTAssertTrue(flat.contains("<p>Please confirm</p>"))
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func source(_ name: String) throws -> String { try String(contentsOf: root.appendingPathComponent("maxmailin/\(name)"), encoding: .utf8) }
+        let view = try source("MailWorkspaceView.swift")
+        XCTAssertTrue(view.contains(".toolbar { if sizeClass == .compact { toolbar } }"), "iPhone: Compose / Sync now on the first screen")
+        XCTAssertTrue(view.contains("#if os(macOS)\n        // The window toolbar band exists only on the Mac."), "the Mac-only toolbar fix must not break the iOS build")
+        let compose = try source("MailComposeViews.swift")
+        XCTAssertTrue(compose.contains("ScrollView { content() }") && compose.contains("frame(minHeight: Self.minimumBodyHeight)"),
+                      "iPhone: the composer scrolls and its text never shrinks to nothing")
+        XCTAssertTrue(compose.contains("IconOnlyLabelStyle().makeBody(configuration: configuration)"), "icons keep their VoiceOver names")
+        let content = try source("ContentView.swift")
+        XCTAssertEqual(content.components(separatedBy: ".onChange(of: showFileImporter) { _, open in").count - 1, 2,
+                       "both Filters & Tools sheets (iPhone and iPad layouts) close before the file picker opens")
+        let whatsNew = try source("WhatsNewView.swift")
+        XCTAssertTrue(whatsNew.contains("ReleaseNote(version: \"4.0\""), "What's New has a 4.0 entry")
+    }
+
+    /// 2026-11-15: Xcode saved its own copy of the string catalog over translations written by
+    /// the scripts, and two batches silently lost their 10 languages. Today's user-facing strings
+    /// must keep every language.
+    func testTodaysStrings_keepAllTenLanguages() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: root.appendingPathComponent("maxmailin/Localizable.xcstrings"))
+        let strings = try XCTUnwrap((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["strings"] as? [String: Any])
+        let keys = ["New Message", "Smart Folders", "Tags", "Filter these messages", "Group by Conversation", "New Tag…",
+                    "Attach from Archive…", "Save Draft", "Bold", "No recipients yet", "Allow speech recognition",
+                    "Speech in recordings", "Every Email Body Read Correctly", "Lotus Notes Databases",
+                    "Checking the sign-in with the server…", "No messages in %@", "Open mailin Drafts (%lld)",
+                    "Counting archived messages…", "Deleting %lld of %lld messages…", "Workspace: %@"]
+        for key in keys {
+            let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing key: \(key)")
+            let languages = (entry["localizations"] as? [String: Any])?.count ?? 0
+            XCTAssertGreaterThanOrEqual(languages, 10, "\(key): \(languages) languages")
+        }
     }
 
     func testIdentityPickerRequired() throws {
@@ -9466,6 +9618,22 @@ final class AppLimitsReconciliationTests: XCTestCase {
             XCTAssertNil(gmail, "a build that cannot send lists no send limit")
             XCTAssertNil(graph)
         }
+    }
+
+    /// Owner 2026-11-15 ("no hidden limitation"): what connected mail does not do
+    /// in this version is listed on the Limits page, not left to be discovered.
+    func testNotInThisVersion_connectedMailGapsAreListed() {
+        let names = ["Sending from another address (alias)", "Changing Gmail mail on the server", "Microsoft 365 online archive"]
+        for name in names {
+            let row = AppLimits.all.first { $0.what == name }
+            if ConnectedBuildFeatures.mailTransportsCompiled {
+                XCTAssertEqual(row?.kind, .notInThisVersion, name)
+                XCTAssertFalse(row?.why.isEmpty ?? true, name)
+            } else {
+                XCTAssertNil(row, "the offline edition has no connected mail to qualify: \(name)")
+            }
+        }
+        XCTAssertEqual(AppLimit.Kind.notInThisVersion.label, String(localized: "Not in this version"))
     }
 
     func testCLOSE05_helpTextSaysWhatIsTrue() throws {

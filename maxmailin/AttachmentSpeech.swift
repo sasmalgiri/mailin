@@ -55,7 +55,7 @@ enum AttachmentSpeech {
         case .denied, .restricted:
             return Transcript(text: nil, locale: nil, failure: String(localized: "speech recognition is not allowed for mailin — allow it in System Settings ▸ Privacy & Security ▸ Speech Recognition"), notAuthorized: true)
         case .notDetermined:
-            return Transcript(text: nil, locale: nil, failure: String(localized: "speech recognition has not been allowed yet — the next time the app is in front it asks once"), notAuthorized: true)
+            return Transcript(text: nil, locale: nil, failure: String(localized: "speech recognition has not been allowed yet — choose “Allow speech recognition” in Settings ▸ Health"), notAuthorized: true)
         @unknown default:
             return Transcript(text: nil, locale: nil, failure: String(localized: "speech recognition is not available"), notAuthorized: true)
         }
@@ -114,8 +114,12 @@ enum AttachmentSpeech {
                                            status: SFSpeechRecognizerAuthorizationStatus) -> Bool {
         guard switchOn, status == .notDetermined else { return false }
         switch trigger {
-        case .launchWiring: return false
-        case .personTurnedSwitchOn, .recordingAboutToBeRecognised: return true
+        // Never from the background: the indexing job reached a recording while the person was doing
+        // something else and the prompt appeared out of context (iPhone QA 2026-11-15; App Review
+        // 5.1.1 wants permission asked in context). The person asks from Settings ▸ Health or by
+        // turning the switch on; until then a recording says how.
+        case .launchWiring, .recordingAboutToBeRecognised: return false
+        case .personTurnedSwitchOn: return true
         }
     }
 

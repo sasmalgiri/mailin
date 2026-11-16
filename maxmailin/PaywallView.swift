@@ -1028,7 +1028,7 @@ struct FeatureGateModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .topTrailing) {
-                if store.currentTier < requiredTier {
+                if store.effectiveTier < requiredTier {
                     FeatureLockedBadge(tier: requiredTier)
                         .padding(4)
                 }

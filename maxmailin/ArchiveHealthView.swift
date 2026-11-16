@@ -75,6 +75,8 @@ struct ArchiveHealthView: View {
             }
 
             // V4-01: the mail network policy — Mail on/off, account modes, refused attempts.
+            // Near the top, where it is found (iPad QA 2026-11-15: it sat a third of the way down).
+            SpeechPermissionSection()
             MailNetworkHealthSection()
 
             // LIFE-05: every recovery action in one place, each saying what it
@@ -460,6 +462,32 @@ struct ArchiveHealthView: View {
             ForensicManager.shared.logAction("Archive integrity check", detail: result)
         } catch {
             integrity = error.localizedDescription
+        }
+    }
+}
+
+/// Speech in recordings needs the person's permission; it is asked here, when they choose it —
+/// never by the background indexing job (iPhone QA 2026-11-15).
+private struct SpeechPermissionSection: View {
+    @State private var status = AttachmentSpeech.authorizationStatus()
+
+    var body: some View {
+        if AttachmentSpeech.isEnabled, status != .authorized {
+            Section(String(localized: "Speech in recordings")) {
+                if status == .notDetermined {
+                    Text("Words spoken in voice memos and videos attached to emails can be made searchable, on this device. mailin needs your permission once.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Button(String(localized: "Allow speech recognition")) {
+                        Task { @MainActor in
+                            status = await AttachmentSpeech.requestAuthorization()
+                            if status == .authorized { AttachmentTextIndexJob.shared.kickIfNeeded() }
+                        }
+                    }
+                } else {
+                    Text("Speech recognition is not allowed for mailin. Allow it in System Settings ▸ Privacy & Security ▸ Speech Recognition.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
         }
     }
 }

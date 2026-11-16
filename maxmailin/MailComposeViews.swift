@@ -188,6 +188,7 @@ struct MailComposeSheet: View {
 
     @ViewBuilder
     private func editor(_ current: Draft) -> some View {
+        composerScroll {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 addressField(String(localized: "To"), text: $to, field: .to)
@@ -235,6 +236,7 @@ struct MailComposeSheet: View {
                 .accessibilityLabel(Text("From"))
                 .accessibilityIdentifier("mail.compose.identity")
                 .accessibilityHint(Text("Required. Only this account's own addresses are offered."))
+                .help(Text("Required. Only this account's own addresses are offered."))
                 Spacer(minLength: 0)
             }
             if current.kind != .new {
@@ -279,6 +281,7 @@ struct MailComposeSheet: View {
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minHeight: Self.minimumBodyHeight)
                     .accessibilityLabel(Text("Message text"))
             }
             if let signature = current.signature {
@@ -313,6 +316,7 @@ struct MailComposeSheet: View {
 
             Divider()
             statusBar
+        }
         }
         .onChange(of: to) { _, _ in parseRecipients() }
         .onChange(of: cc) { _, _ in parseRecipients() }
@@ -381,12 +385,33 @@ struct MailComposeSheet: View {
                 Label(String(localized: "Delete draft"), systemImage: "trash")
             }
         }
-        .labelStyle(.titleAndIcon)
+        .labelStyle(MailCompactLabelStyle())
         .buttonStyle(.borderless)
         .controlSize(.small)
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
     }
+
+    /// iPhone and iPad: the whole message scrolls, so the keyboard never squeezes the text
+    /// to nothing (owner QA 2026-11-15: 34 pt, then gone after Cc/Bcc). Mac: the text fills the window.
+    @ViewBuilder
+    private func composerScroll<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        #if os(iOS)
+        ScrollView { content() }
+            .scrollDismissesKeyboard(.interactively)
+        #else
+        content()
+        #endif
+    }
+
+    /// The writing area never shrinks below this (iPhone landscape with the keyboard up included).
+    static let minimumBodyHeight: CGFloat = {
+        #if os(iOS)
+        return 260
+        #else
+        return 0
+        #endif
+    }()
 
     private func attachmentChip(_ attachment: DraftAttachment) -> some View {
         let why = unavailable[attachment.id]
@@ -613,7 +638,7 @@ struct MailReplySetupView: View {
             NavigationStack {
                 Form {
                     Section {
-                        Picker(String(localized: "Reply from account"), selection: $accountID) {
+                        Picker(kind == .reply || kind == .replyAll ? String(localized: "Reply from account") : String(localized: "Send from account"), selection: $accountID) {
                             Text("Choose an account").tag(UUID?.none)
                             ForEach(sendAccounts) { Text($0.account.displayIdentity).tag(UUID?.some($0.id)) }
                         }
@@ -697,5 +722,28 @@ enum MailSignatureStore {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         all[account.uuidString] = trimmed.isEmpty ? nil : trimmed
         UserDefaults.standard.set(all, forKey: key)
+    }
+}
+
+/// Title and icon where there is room; the icon alone in a compact width (iPhone), where the
+/// composer's action bar wrapped its labels a letter at a time (owner QA 2026-11-15).
+struct MailCompactLabelStyle: LabelStyle {
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        #if os(iOS)
+        if sizeClass == .compact {
+            // The built-in icon-only style keeps the title for VoiceOver; 44-point tap target.
+            IconOnlyLabelStyle().makeBody(configuration: configuration)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        } else {
+            TitleAndIconLabelStyle().makeBody(configuration: configuration)
+        }
+        #else
+        TitleAndIconLabelStyle().makeBody(configuration: configuration)
+        #endif
     }
 }

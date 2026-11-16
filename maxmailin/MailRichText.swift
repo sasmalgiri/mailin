@@ -189,6 +189,7 @@ struct MailRichBodyEditor: View {
                 .padding(.horizontal, 11)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minHeight: MailComposeSheet.minimumBodyHeight)
                 .accessibilityLabel(Text("Message text"))
         }
         .onAppear(perform: load)

@@ -804,7 +804,7 @@ struct ContentView: View {
     @ViewBuilder
     private func sidebarRow(_ dest: HubDestination, _ title: String, _ icon: String) -> some View {
         if dest.owner == .archive || modules.isEnabled(dest.owner) {
-            let isLocked = storeManager.currentTier < dest.requiredTier
+            let isLocked = storeManager.effectiveTier < dest.requiredTier
             NavigationLink(value: dest) {
                 HStack(spacing: Spacing.xSmall) {
                     Label(title, systemImage: icon)
@@ -1419,6 +1419,16 @@ struct ContentView: View {
             .onChange(of: appState.showDuplicateManager) { _, open in
                 if open { showFiltersSheet = false }
             }
+            // The same for the file picker: asked for from inside Filters & Tools ("Open Email
+            // Archive", "Browse Files") it could not appear over the sheet, and the request stayed
+            // on, so every later tap did nothing (iPad QA 2026-11-15 — opening an archive is job 1).
+            // Close the sheet, then ask again once it is gone.
+            .onChange(of: showFileImporter) { _, open in
+                guard open, showFiltersSheet else { return }
+                showFiltersSheet = false
+                showFileImporter = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showFileImporter = true }
+            }
             // iPhone has no docked panel under the email, so Tools ▸ Topics showed nothing:
             // the topics panel opens as its own sheet instead.
             .sheet(isPresented: iPhoneTopicsSheet) {
@@ -1867,6 +1877,14 @@ struct ContentView: View {
             }
             .presentationDetents([.medium, .large])
         }
+        // iPad's own Filters & Tools sheet: the same as the iPhone layout's — the file picker
+        // cannot appear over the sheet, so close it and ask again (iPad QA 2026-11-15).
+        .onChange(of: showFileImporter) { _, open in
+            guard open, showFiltersSheet else { return }
+            showFiltersSheet = false
+            showFileImporter = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showFileImporter = true }
+        }
     }
     #endif
 
@@ -2189,6 +2207,64 @@ struct ContentView: View {
 
     // Inside leftSidebar view:
 
+    private var newImportButton: some View {
+        Button {
+            askToClearArchive()
+        } label: {
+            Label("New Import", systemImage: "house")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(CompactSecondaryButtonStyle())
+        .help("Start over with a different archive — clears the current view and opens the import picker")
+        .accessibilityLabel("Start new import")
+        .accessibilityHint("Go back to the welcome screen to import a different archive")
+    }
+
+    private var addFilesButton: some View {
+        Button {
+            openPanelFallback()
+        } label: {
+            Label("Add Files", systemImage: "plus")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(CompactSecondaryButtonStyle())
+        .help("Import more .mbox/.eml files INTO the current archive — duplicates are detected and skipped")
+        .accessibilityLabel("Add more email files")
+    }
+
+    private var minReplyCountLabel: some View {
+        HStack(spacing: Spacing.xSmall) {
+            Text("Min Reply Count")
+                .font(Typography.caption1)
+                .fontWeight(.semibold)
+                .fixedSize()
+            HelpDot(text: "Only show emails from senders with at least this many messages in the archive. 0 shows everyone; raise it to focus on people you actually correspond with. Type a number or use the arrows.")
+        }
+    }
+
+    private var minReplyCountControls: some View {
+        HStack(spacing: Spacing.xSmall) {
+            TextField("0", value: Binding(
+                get: { modelVM.minReplyCount },
+                set: { modelVM.minReplyCount = max(0, $0) }
+            ), format: .number)
+            .textFieldStyle(.roundedBorder)
+            .multilineTextAlignment(.center)
+            .frame(width: 44)
+            #if os(iOS)
+            .keyboardType(.numberPad)
+            #endif
+            .accessibilityLabel("Minimum reply count: \(modelVM.minReplyCount)")
+            Stepper(value: $modelVM.minReplyCount, in: 0...max(0, modelVM.maxReplyCount), step: 1) {
+                EmptyView()
+            }
+            .labelsHidden()
+            .accessibilityLabel("Adjust minimum reply count")
+            .accessibilityHint("Filter senders by minimum number of messages")
+        }
+        .fixedSize()
+    }
+
     private var leftSidebar: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: Spacing.small) {
@@ -2201,7 +2277,9 @@ struct ContentView: View {
                             Text("mailin")
                                 .font(.system(.headline, design: .rounded))
                                 .fontWeight(.bold)
-                            Text(personaManager.selectedPersona.displayName)
+                            // The use mode, named as one — "Personal Use" alone read as a plan name
+                            // beside the plan badge (iPad QA 2026-11-15).
+                            Text("Workspace: \(personaManager.selectedPersona.displayName)")
                                 .font(.caption2)
                                 .fontWeight(.medium)
                                 .foregroundColor(personaManager.selectedPersona.accentColor)
@@ -2308,27 +2386,17 @@ struct ContentView: View {
                 }
 
                 if modelVM.isParsed {
-                    HStack(spacing: Spacing.xSmall) {
-                        Button {
-                            askToClearArchive()
-                        } label: {
-                            Label("New Import", systemImage: "house")
-                                .frame(maxWidth: .infinity)
+                    // Side by side when they fit; stacked in a narrow sidebar instead of
+                    // breaking "New Im- / port" (iPad QA 2026-11-15).
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Spacing.xSmall) {
+                            newImportButton
+                            addFilesButton
                         }
-                        .buttonStyle(CompactSecondaryButtonStyle())
-                        .help("Start over with a different archive — clears the current view and opens the import picker")
-                        .accessibilityLabel("Start new import")
-                        .accessibilityHint("Go back to the welcome screen to import a different archive")
-
-                        Button {
-                            openPanelFallback()
-                        } label: {
-                            Label("Add Files", systemImage: "plus")
-                                .frame(maxWidth: .infinity)
+                        VStack(spacing: Spacing.xxSmall) {
+                            newImportButton
+                            addFilesButton
                         }
-                        .buttonStyle(CompactSecondaryButtonStyle())
-                        .help("Import more .mbox/.eml files INTO the current archive — duplicates are detected and skipped")
-                        .accessibilityLabel("Add more email files")
                     }
 
                     // The archive total behind the list (unscoped), not the launch-time count — that
@@ -2362,29 +2430,18 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                     }
 
-                    HStack(spacing: Spacing.xSmall) {
-                        Text("Min Reply Count")
-                            .font(Typography.caption1)
-                            .fontWeight(.semibold)
-                        HelpDot(text: "Only show emails from senders with at least this many messages in the archive. 0 shows everyone; raise it to focus on people you actually correspond with. Type a number or use the arrows.")
-                        Spacer()
-                        TextField("0", value: Binding(
-                            get: { modelVM.minReplyCount },
-                            set: { modelVM.minReplyCount = max(0, $0) }
-                        ), format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.center)
-                        .frame(width: 44)
-                        #if os(iOS)
-                        .keyboardType(.numberPad)
-                        #endif
-                        .accessibilityLabel("Minimum reply count: \(modelVM.minReplyCount)")
-                        Stepper(value: $modelVM.minReplyCount, in: 0...max(0, modelVM.maxReplyCount), step: 1) {
-                            EmptyView()
+                    // A narrow sidebar (iPad portrait, larger text) puts the label above the
+                    // controls instead of squeezing it to "Min Re…" (iPad QA 2026-11-15).
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Spacing.xSmall) {
+                            minReplyCountLabel
+                            Spacer(minLength: Spacing.xSmall)
+                            minReplyCountControls
                         }
-                        .labelsHidden()
-                        .accessibilityLabel("Adjust minimum reply count")
-                        .accessibilityHint("Filter senders by minimum number of messages")
+                        VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                            minReplyCountLabel
+                            minReplyCountControls
+                        }
                     }
                     .help("Hide emails from senders you've replied to fewer than this many times — 0 shows everyone; raise it to focus on people you actually correspond with")
 
@@ -2680,7 +2737,7 @@ struct ContentView: View {
                                     if storeManager.requirePremium() { appState.showRedaction = true }
                                 }
                                 detailToolButton(
-                                    title: storeManager.isPremium ? storeManager.currentTier.displayName : "Upgrade",
+                                    title: storeManager.isPremium ? storeManager.effectiveTier.displayName : "Upgrade",
                                     icon: storeManager.isPremium ? "crown.fill" : "crown",
                                     color: .orange
                                 ) {

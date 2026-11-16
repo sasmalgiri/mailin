@@ -22,8 +22,12 @@ import MailConnectivity
 struct AppLimit: Identifiable, Equatable, Sendable {
     enum Kind: String, Sendable {
         case plan, format, device, safety, previousEngine, none
+        /// Owner 2026-11-15 ("no hidden limitation"): something this version does
+        /// not do, said here instead of being discovered.
+        case notInThisVersion
         var label: String {
             switch self {
+            case .notInThisVersion: return String(localized: "Not in this version")
             case .plan: return String(localized: "Plan rule")
             case .format: return String(localized: "Format's own limit")
             case .device: return String(localized: "Device fact")
@@ -154,6 +158,15 @@ enum AppLimits {
                 AppLimit(kind: .format, what: String(localized: "Sending through Microsoft 365"),
                          value: String(localized: "\(binaryBytes(Int64(GraphSendSubmitter.maximumRequestBytes))) per message, once encoded"),
                          why: String(localized: "Microsoft's limit for one send request. A message that is larger once encoded is not sent; the outbox says why.")),
+                AppLimit(kind: .notInThisVersion, what: String(localized: "Sending from another address (alias)"),
+                         value: String(localized: "the account's own address only"),
+                         why: String(localized: "mailin sends from the address the provider confirmed for the account. Other addresses on the same account (Gmail send-as, Outlook aliases) are not offered as senders.")),
+                AppLimit(kind: .notInThisVersion, what: String(localized: "Changing Gmail mail on the server"),
+                         value: String(localized: "not with an app password"),
+                         why: String(localized: "A Gmail account added with an app password saves and sends mail. Marking, flagging, moving or deleting its mail on Google's server needs Google sign-in, which this version does not offer; Change server mail says so on the account.")),
+                AppLimit(kind: .notInThisVersion, what: String(localized: "Microsoft 365 online archive"),
+                         value: String(localized: "not read"),
+                         why: String(localized: "The separate online (in-place) archive mailbox of a Microsoft 365 account is not reached by Microsoft sign-in here. Export it from Outlook as a .pst file and open that in mailin.")),
             ]
         }
         return rows

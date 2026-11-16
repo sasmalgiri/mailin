@@ -293,7 +293,7 @@ struct PageActivationSheet: View {
         case .professional:
             return String(localized: "Case work: intake, custodians, review, productions and a tamper-evident audit trail.")
         case .liveMail:
-            return String(localized: "Connect mail accounts to send and receive, kept separate from your archive.")
+            return String(localized: "Connect mail accounts to read, save and send mail; what you choose to preserve is saved into your archive.")
         }
     }
 }
