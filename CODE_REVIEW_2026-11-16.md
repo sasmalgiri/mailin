@@ -1,6 +1,32 @@
 # Whole-codebase review — 2026-11-16 (read-only; nothing changed)
 
-## Status 2026-11-16 (fix pass on `v3-architecture`, a177c8b..4d056c1)
+## Status 2026-11-16 (fix pass on `v3-architecture`, a177c8b..4d056c1; closeout of the open items 40cae41..b34d6c4)
+
+**Closeout 2026-11-17 (open items 1–10, owner decisions D-1…D-6).** Every open item below now has a
+resolution and a commit; the merged tree (package API change in ab4cd27 + parallel app changes) was
+verified on b34d6c4, MacBook Air arm64, macOS 27.0.1:
+- Debug-Connected (scheme "maxmailin Connected", My Mac), build for testing green. Five-jobs gate
+  V2CutoverTests 202 + ConnectedFiveJobsTests 10 + ConnectedFiveJobsFixPassTests 4: **214 passed,
+  2 skipped (COMP14 S/MIME keychain identity, TYPE05 speech permission — owner-bound), 0 failed**.
+  Review1116C 26, InterfaceLocalization 6 (incl. the new package-texts German test), V3Lint 2,
+  ConnectedLifecycleAudit 19, ConnectedFixIntegration 9, AppLimitsReconciliation 4, WhatsNewGate 4,
+  SearchMatchFields 13, V2Search 26, V2Export 13, V3Compatibility 53, ProfessionalGating 7,
+  SMIMEGoldCase 7, T02HostileHTMLZeroNetwork 3, V2ForensicPersistence 9, V31Shortcuts 4:
+  **205 passed, 0 skipped, 0 failed**.
+- Offline scheme "maxmailin": Review1116C + AppLimitsReconciliation + WhatsNewGate + V414Claims
+  **39 passed, 1 skipped (T47 Release-only), 0 failed**.
+- Package (`swift test --skip LargeSingleMessageTests`): **890 run — MailConnectivity 179 (2 skipped),
+  ArchiveCore 711 (22 skipped), 0 failed**.
+- Builds: macOS connected, iPhone 17 and iPad Pro 11-inch (M5) simulators — all succeed. App-target
+  warnings: only the two known ones (SpeechPermissionSection `@State` macro, ContentViewModel.swift:313
+  Sendable). The test target also shows 10 pre-existing "no 'async' operations occur within 'await'"
+  warnings in V2CutoverTests.swift (lines from 2026-11-05/06, MainActor test calling the MainActor
+  ArchiveDataService); none from this pass.
+- No failure found; nothing needed fixing in the merge.
+
+Remaining, owner only: open the B13 `.msg` output in real Outlook; native-speaker review of the machine
+translations (~150 keys from this review); the two skipped owner-bound tests (S/MIME keychain identity,
+speech permission); review and push `v3-architecture`; a signed release candidate.
 
 Every item below was fixed with a test that failed before the fix (or, for the
 refactor-only items, a source check that failed on the old code / did not
@@ -30,14 +56,14 @@ ContentViewModel.swift:312 Sendable warning; none from this pass).
 | B4 | Fixed | f5a0e0b |
 | B5 | Fixed | 857ef55 |
 | B6 | Fixed (Spotlight Apple Intelligence summarisation off by default behind a setting; deletes reach both indexes) | 1c397c2, 215202a |
-| B8, B9 | Fixed — B9 only for literals that end at a word boundary; see Open (regex mid-word) | 1a00bc5 |
+| B8, B9 | Fixed — B9 only for literals that end at a word boundary; mid-word literal a stated limit (D-1) | 1a00bc5, ade94be |
 | B11 | Fixed | e87e5a9 |
 | B12 | Fixed | 0de9dd7, 102d4a3 |
 | B13 | Fixed in code (MS-OXMSG/MS-CFB structure, DIFAT, named reasons) — **Owner run**: not yet opened in real Outlook | f6ef254, 4a1ce38 |
 | C1, C2, C3 | Fixed | 541cffb; 15194f2, 1e3e936; ac70905 |
 | C4 | Fixed | df030e9 |
 | C5, C6 | Fixed | 7f63f2f; 10011cf |
-| C7, C8 | Fixed (app: "Deleted X of Y"; package error text still English, see Open) | 7c0edeb, 2bced96 |
+| C7, C8 | Fixed (app and package: "Deleted X of Y", package text through the catalog) | 7c0edeb, 2bced96, d172d13 |
 | C9, C10, C11, C12, C13, C14 | Fixed | 3c9be7b, b03e614, 0b69ccd, f8802d6, 92949cd, 7e6122f |
 | C15 | Fixed | bbfbf02 |
 | C16 | Fixed | dd795b1 |
@@ -47,19 +73,19 @@ ContentViewModel.swift:312 Sendable warning; none from this pass).
 | C23 | Fixed | 5145c6e, fe2bf4d |
 | C24, C25 | Fixed | 2139f7f, 7cfba19 |
 | D1 | Fixed | 34d9d3b |
-| D2 | Fixed — `--uitest` honoured only in Debug builds (`UITestLaunch.isHonoured`, also Safe Mode's test-launch check). Note: the "maxmailin Release Tests" scheme also lists maxmailinUITests; UI tests that rely on `--uitest` now run only in Debug / Debug-Connected | 9486ee3 |
+| D2 | Fixed — `--uitest` honoured only in Debug builds (`UITestLaunch.isHonoured`, also Safe Mode's test-launch check). Note: the "maxmailin Release Tests" scheme also lists maxmailinUITests; UI tests that rely on `--uitest` now run only in Debug / Debug-Connected. D-4 (owner): stays Debug-only — the 24 UI tests cannot pass under "maxmailin Release Tests"; run them on Debug-Connected | 9486ee3 |
 | D3 | Fixed — managed lock fails closed with a translated reason | bcfd95b |
 | D4 | Fixed — `OSAllocatedUnfairLock` | 7d4e45c |
-| D5 | Fixed — summary says this build contains no cloud AI. Kept in English like every legal text (Terms, both privacy summaries); translating the legal texts is an **owner decision** | 87c3973 |
-| Rule 7 (latent connectors, token transport) | Fixed — token exchanges go through `MailNetworkPolicy.permitTokenExchange` per account (counted in Health; account-less refused; session built in init); legacy Gmail/Outlook/IMAP/SMTP connectors (reachable from no view, menu or intent) ask `LegacyMailTransportGate` before every socket/request and are refused (no policy account); legacy SMTP refuses AUTH without TLS/STARTTLS, a failing QUIT after 250 is "sent", a lost answer to DATA is "may have been sent" and compose never resends it. Still open in that dead code: its STARTTLS opens a new TLS connection instead of upgrading the socket (it cannot work; unreachable) | 430adc6 |
+| D5 | Fixed — summary says this build contains no cloud AI. Kept in English like every legal text (Terms, both privacy summaries); translating the legal texts was an owner decision — D-3: they stay English, with a translated line saying so | 87c3973, a3a9835 |
+| Rule 7 (latent connectors, token transport) | Fixed — token exchanges go through `MailNetworkPolicy.permitTokenExchange` per account (counted in Health; account-less refused; session built in init); legacy Gmail/Outlook/IMAP/SMTP connectors (reachable from no view, menu or intent) ask `LegacyMailTransportGate` before every socket/request and are refused (no policy account); legacy SMTP refuses AUTH without TLS/STARTTLS, a failing QUIT after 250 is "sent", a lost answer to DATA is "may have been sent" and compose never resends it. Still open in that dead code: its STARTTLS opens a new TLS connection instead of upgrading the socket (it cannot work; unreachable and blocked by the gate — **accepted**, owner 2026-11-16) | 430adc6 |
 | Rule 8 | Fixed — every expert's findings (enhanceWithAI, digest narration, consults) and the structured triage pass the figures gate with the code-computed data as allowed source | 94ce6a1 |
-| Rule 10 | Fixed (listed strings; saved/printed import receipt) | 049c93a, 4d056c1 |
+| Rule 10 | Fixed (listed strings; saved/printed import receipt; package texts through the catalog) | 049c93a, 4d056c1, d172d13, b34d6c4 |
 | Rule 11 (OCR fallback) | Fixed | 023ded2 |
 | E registry SQL interpolation | Fixed | 7c0edeb |
 | E FTS `clear()` | Fixed | 1a00bc5 |
-| E `deleteReportingHeld` | Partly fixed (email_folders, message/part locators, attachment_children, search_docs/chunks) — rest Open | 7c0edeb |
+| E `deleteReportingHeld` | Fixed (email_folders, message/part locators, attachment_children, search_docs/chunks; D-2: custom values, recovery, coverage, search registry; audit tables kept by decision) | 7c0edeb, b19f652 |
 | E SearchSpecCompiler LIKE / confirmOperation | Fixed | 7c0edeb |
-| E ArchiveDataService store error read as "no files inside" / "no text" | **Open** — `attachmentChildren` / `attachmentDocumentText` still `try?` to empty | — |
+| E ArchiveDataService store error read as "no files inside" / "no text" | Fixed — the store error is thrown and stated (Contents list, recipe file search, unlock row, Show text) | ab4cd27 |
 | E duplicate survivors across overlapping groups | Fixed | 72a216c |
 | E AttachmentTextIndexJob whole-file load | Fixed | ea32b19 |
 | E ExportRunCenter restoreAfterLaunch | Fixed | b1f6d62 |
@@ -73,17 +99,30 @@ ContentViewModel.swift:312 Sendable warning; none from this pass).
 | E `try! Regex` in loops | Fixed | 5d475bc |
 | E PluginManager timeout | Fixed — cancelled, switched off, stated on the card; never started again while the abandoned call runs (in-process code cannot be killed) | f3d8f40 |
 
-**Open / owner decisions**
+**Open / owner decisions** (resolutions 2026-11-16/17; the owner's decisions D-1…D-6)
 
 1. Regex search pre-filter: a literal inside a word (`voice\s` in "invoice") cannot be pre-filtered — there is no unstemmed index. The filter now drops such literals (correct, slower). An unstemmed (trigram) index is an **owner decision** (index size, migration).
+   **Resolved (D-1, stated limit):** no trigram index in this release; "a pattern's fixed text must start a word" is stated on the Limits page and in the search help — ade94be.
 2. `deleteReportingHeld` still leaves rows in `email_custom_values`, `email_recovery`, coverage, `indexed_message`, `review_coding`, `custodian_assignments` and the forensic/custody tables. Some may be meant as audit trails — **owner decision** which are evidence and which are orphans.
-3. MSG output (B13) not yet opened in real Outlook — **owner run**.
+   **Resolved (D-2):** custom values, recovery rows, attachment coverage and search registry rows go with a really deleted email; a held email keeps everything; forensic, custody, evidence seal, review_coding and custodian rows are kept as the audit record — b19f652.
+3. MSG output (B13) not yet opened in real Outlook — **owner run**. **Still owner-only.**
 4. 112 machine translations from the earlier review-fix commits, plus 29 keys added in this pass (D3, E login text, plugin stop, import receipt), not reviewed by a native speaker.
+   **Still owner-only:** native-speaker review of ~150 keys (these plus the D-3/D-6/D-1 and package-text keys added in the closeout).
 5. `.msg` attachment Content-IDs are not written — needs an ExportReconciliation rule change.
+   **Resolved (D-5):** the writer writes PR_ATTACH_CONTENT_ID, PR_ATTACHMENT_HIDDEN and ATT_MHTML_REF; the reader and ExportReconciliation check them — d916f62.
 6. NSF ODS reader's step-limit reason is logged, not shown on screen.
+   **Resolved:** its own import category, named with the limit in the import summary and receipt — de60ff3.
 7. Package error texts are English (IMAP limit messages, C7 "Deleted X of Y" inside the package).
+   **Resolved:** looked up in the app's string catalog through `PackageLocalization.bundle` — d172d13; the eight new keys translated in 10 languages with a German resolve test — b34d6c4.
 8. ArchiveDataService: a store error while listing an attachment's children or text still reads as "no files inside" / "no text" (see table).
+   **Resolved:** thrown and stated — ab4cd27.
 9. Test-target finding: `maxmailinTests` has no `MAILIN_CONNECTED_MAIL` condition in Debug-Connected / Release-Connected (the app target does), so the `#if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD` blocks inside V2VerificationTests (around the ConnectedMailProductionTransports / IMAPActionExecutor / sentLookup checks) never compile or run. Adding the condition to the test target needs a build-setting change (owner, Xcode).
+   **Resolved:** the test target defines `MAILIN_TEST_CONFIGURATION_$(CONFIGURATION:identifier)`; the blocks compile and pass in Debug-Connected / Release-Connected, guarded by a test — d213d6b.
+10. Owner decisions on the remaining rows:
+    - **D-3 legal texts:** stay English; a translated line says so in every other interface language — a3a9835.
+    - **D-4 UI tests:** `--uitest` stays Debug-only (D2, 9486ee3). The 24 UI tests that rely on it cannot pass under the "maxmailin Release Tests" scheme and must be run on Debug-Connected.
+    - **D-6 search operators / Spotlight:** AND, OR, NOT are operators only in capitals on the search model too — 46aab88; What's New 4.0 explains it and that Spotlight summaries are off by default — 7d95199.
+    - **Legacy SMTP STARTTLS** (Rule 7 row): its STARTTLS cannot work, but the connector is unreachable and blocked by `LegacyMailTransportGate` — **accepted** as is.
 
 
 Scope: app target `maxmailin/` (365 files, 172,850 lines), package `Packages/ArchiveCore` (223 files, 88,016 lines),
