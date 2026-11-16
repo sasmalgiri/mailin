@@ -81,27 +81,27 @@ struct AuditTrailView: View {
     @State private var isGeneratingDailyReport = false
     @State private var dailyReportNote: String? = nil
     @State private var expandedEntryID: UUID? = nil
+    /// Review C15: what the store returned for the current filter (the whole
+    /// log, paged) — never the 500-entry memory window.
+    @State private var visible: [ForensicManager.AuditEntry] = []
+    @State private var matchCount = 0
+    @State private var total = 0
+    @State private var kindCounts: [AuditKindCount] = []
+    @State private var nextBeforeSeq: Int? = nil
+    @State private var loaded = false
+    @State private var loadError: String? = nil
+    @State private var loadingMore = false
 
     /// Entries shown below Professional; every entry is kept (listed in Settings ▸ Health ▸ Limits).
     static let freeViewLimit = 10
+    /// Rows read per page for Professional; "Show older entries" reads the next page.
+    static let pageSize = 500
 
-    private var filtered: [ForensicManager.AuditEntry] {
-        forensicManager.auditLog.reversed().filter {
-            AuditTrailFilter.matches(
-                action: $0.action, detail: $0.detail, examiner: $0.examiner,
-                timestamp: $0.timestamp, search: search,
-                kind: selectedKind, scope: scope)
-        }
-    }
+    private var pageLimit: Int { storeManager.isProfessional ? Self.pageSize : Self.freeViewLimit }
 
-    private var visible: [ForensicManager.AuditEntry] {
-        storeManager.isProfessional ? filtered : Array(filtered.prefix(Self.freeViewLimit))
-    }
-
-    private var kindCounts: [(kind: String, count: Int)] {
-        Dictionary(grouping: forensicManager.auditLog, by: { AuditTrailFilter.kind(of: $0.action) })
-            .map { (kind: $0.key, count: $0.value.count) }
-            .sorted { $0.count > $1.count }
+    /// Reloads when the filter, the plan or the log changes.
+    private var queryKey: String {
+        "\(search)\u{1}\(selectedKind ?? "")\u{1}\(scope.rawValue)\u{1}\(forensicManager.auditTotalCount)\u{1}\(storeManager.isProfessional)"
     }
 
     /// Day-grouped, newest day first (entries within a day newest first).
@@ -124,7 +124,12 @@ struct AuditTrailView: View {
             Divider()
             filterBar
             Divider()
-            if forensicManager.auditLog.isEmpty {
+            if let loadError {
+                errorState(loadError)
+            } else if !loaded {
+                ProgressView(String(localized: "Reading the audit log…"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if total == 0 {
                 emptyState
             } else if visible.isEmpty {
                 noMatchState
@@ -134,6 +139,7 @@ struct AuditTrailView: View {
         }
         .toolWindowFrame()
         .task { await verifyChain() }
+        .task(id: queryKey) { await reload() }
     }
 
     // MARK: header
@@ -144,7 +150,7 @@ struct AuditTrailView: View {
                 VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                     Label("Audit Trail", systemImage: "clock.badge.checkmark")
                         .font(Typography.title2)
-                    Text("\(forensicManager.auditLog.count) recorded action(s) — every entry's hash links to the one before it, so tampering shows")
+                    Text("\(total) recorded action(s) — every entry's hash links to the one before it, so tampering shows")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -290,15 +296,26 @@ struct AuditTrailView: View {
                     }
                 }
             }
-            if !storeManager.isProfessional && filtered.count > Self.freeViewLimit {
+            if !storeManager.isProfessional && matchCount > Self.freeViewLimit {
                 Section {
                     Button {
                         storeManager.showPaywall = true
                     } label: {
-                        Label("\(filtered.count - Self.freeViewLimit) more entries — unlock the full trail with Pro",
+                        Label("\(matchCount - Self.freeViewLimit) more entries — unlock the full trail with Pro",
                               systemImage: "crown.fill")
                             .foregroundColor(.purple)
                     }
+                }
+            } else if storeManager.isProfessional, nextBeforeSeq != nil {
+                Section {
+                    Button {
+                        Task { await loadMore() }
+                    } label: {
+                        Label(String(localized: "Show older entries (\(visible.count) of \(matchCount) shown)"),
+                              systemImage: "arrow.down.circle")
+                    }
+                    .disabled(loadingMore)
+                    .accessibilityIdentifier("audit.loadMore")
                 }
             }
         }
@@ -386,7 +403,58 @@ struct AuditTrailView: View {
         .frame(maxWidth: .infinity)
     }
 
+    private func errorState(_ message: String) -> some View {
+        VStack(spacing: Spacing.small) {
+            Spacer()
+            Image(systemName: "exclamationmark.triangle")
+                .font(.largeTitle)
+                .foregroundColor(.orange)
+            Text(String(localized: "The audit log could not be read: \(message)"))
+                .font(Typography.callout)
+                .foregroundColor(AppColors.secondary)
+                .multilineTextAlignment(.center)
+            Button(String(localized: "Try Again")) { Task { await reload() } }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     // MARK: actions
+
+    @MainActor
+    private func reload() async {
+        do {
+            let page = try await forensicManager.auditTrailPage(search: search, kind: selectedKind, scope: scope, limit: pageLimit)
+            guard !Task.isCancelled else { return }
+            visible = page.entries
+            matchCount = page.matchCount
+            total = page.total
+            kindCounts = page.kindCounts
+            nextBeforeSeq = page.nextBeforeSeq
+            loadError = nil
+            loaded = true
+        } catch is CancellationError {
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func loadMore() async {
+        guard let before = nextBeforeSeq, !loadingMore else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        do {
+            let page = try await forensicManager.auditTrailPage(search: search, kind: selectedKind, scope: scope,
+                                                                beforeSeq: before, limit: Self.pageSize)
+            visible += page.entries
+            matchCount = page.matchCount
+            total = page.total
+            nextBeforeSeq = page.nextBeforeSeq
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
 
     @MainActor
     private func verifyChain() async {
@@ -405,13 +473,28 @@ struct AuditTrailView: View {
         case .tampered: chainOK = false
         case .unknown, .noData: chainOK = nil
         }
+        // C15: today's entries from the whole log (paged), not the memory window;
+        // read before anything is numbered, so a failed read numbers nothing.
+        var today: [ForensicManager.AuditEntry] = []
+        var before: Int? = nil
+        do {
+            repeat {
+                let page = try await forensicManager.auditTrailPage(search: "", kind: nil, scope: .today,
+                                                                    beforeSeq: before, limit: Self.pageSize)
+                today += page.entries
+                before = page.nextBeforeSeq
+            } while before != nil
+        } catch {
+            dailyReportNote = String(localized: "The audit log could not be read: \(error.localizedDescription)")
+            return
+        }
         var inputs = CaseActivityReportBuilder.Inputs()
         inputs.documentNumber = await DocumentRegistry.post(
             .report, summary: "Daily activity report — case \(forensicManager.caseNumber.isEmpty ? "(none)" : forensicManager.caseNumber)")
         inputs.caseNumber = forensicManager.caseNumber
         inputs.examiner = forensicManager.examinerName
         inputs.day = Date()
-        inputs.auditEntries = forensicManager.auditLog.map {
+        inputs.auditEntries = today.reversed().map {
             ($0.timestamp, $0.sequence, $0.action, $0.detail, $0.examiner)
         }
         inputs.chainVerified = chainOK

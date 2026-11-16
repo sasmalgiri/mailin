@@ -5786,6 +5786,92 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return try scalarInt(db, "SELECT COUNT(*) FROM forensic_audit_log;")
     }
 
+    /// Review C15: what the Audit Trail view filters by — read in SQL over
+    /// the whole log, never over a memory window.
+    struct ForensicAuditFilter: Sendable, Equatable {
+        /// Matched literally (case-insensitive for ASCII) in action, detail or examiner.
+        var search: String = ""
+        /// The action's first clause ("Triage verdict: …" → "Triage verdict").
+        var kind: String?
+        /// Entries at or after `since` and before `until`.
+        var since: Date?
+        var until: Date?
+        init(search: String = "", kind: String? = nil, since: Date? = nil, until: Date? = nil) {
+            self.search = search; self.kind = kind; self.since = since; self.until = until
+        }
+    }
+
+    private static let auditKindExpression =
+        "trim(CASE WHEN instr(action, ':') > 0 THEN substr(action, 1, instr(action, ':') - 1) ELSE action END)"
+
+    private enum AuditBind { case text(String), int(Int64), double(Double) }
+
+    private static func auditWhere(_ filter: ForensicAuditFilter, beforeSeq: Int?) -> (String, [AuditBind]) {
+        var clauses: [String] = []
+        var binds: [AuditBind] = []
+        let needle = filter.search.trimmingCharacters(in: .whitespaces)
+        if !needle.isEmpty {
+            let escaped = needle.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
+            let pattern = "%" + escaped + "%"
+            clauses.append("(action LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\' OR examiner LIKE ? ESCAPE '\\')")
+            binds += [.text(pattern), .text(pattern), .text(pattern)]
+        }
+        if let kind = filter.kind { clauses.append("\(auditKindExpression) = ?"); binds.append(.text(kind)) }
+        if let since = filter.since { clauses.append("ts >= ?"); binds.append(.double(since.timeIntervalSince1970)) }
+        if let until = filter.until { clauses.append("ts < ?"); binds.append(.double(until.timeIntervalSince1970)) }
+        if let beforeSeq { clauses.append("seq < ?"); binds.append(.int(Int64(beforeSeq))) }
+        return (clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND "), binds)
+    }
+
+    private func bindAudit(_ stmt: OpaquePointer?, _ binds: [AuditBind]) {
+        for (i, value) in binds.enumerated() {
+            let index = Int32(i + 1)
+            switch value {
+            case .text(let t): bindText(stmt, index, t)
+            case .int(let n): sqlite3_bind_int64(stmt, index, n)
+            case .double(let d): sqlite3_bind_double(stmt, index, d)
+            }
+        }
+    }
+
+    /// One page of the filtered log, newest first; page on with `beforeSeq` = the last row's seq.
+    func forensicAuditSearch(_ filter: ForensicAuditFilter, beforeSeq: Int?, limit: Int) throws -> [ForensicAuditRow] {
+        let db = try ensureDB()
+        let (whereSQL, binds) = Self.auditWhere(filter, beforeSeq: beforeSeq)
+        let stmt = try prepare(db, "SELECT \(Self.auditColumns) FROM forensic_audit_log \(whereSQL) ORDER BY seq DESC LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindAudit(stmt, binds)
+        sqlite3_bind_int64(stmt, Int32(binds.count + 1), Int64(max(0, limit)))
+        var out: [ForensicAuditRow] = []
+        while try stepRow(stmt, db) { if let r = forensicAuditRow(stmt) { out.append(r) } }
+        return out
+    }
+
+    /// How many entries of the whole log match `filter`.
+    func forensicAuditMatchCount(_ filter: ForensicAuditFilter) throws -> Int {
+        let db = try ensureDB()
+        let (whereSQL, binds) = Self.auditWhere(filter, beforeSeq: nil)
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM forensic_audit_log \(whereSQL);")
+        defer { sqlite3_finalize(stmt) }
+        bindAudit(stmt, binds)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Entries per kind over the whole log, most frequent first.
+    func forensicAuditKindCounts() throws -> [(kind: String, count: Int)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT \(Self.auditKindExpression) AS kind, COUNT(*) AS n FROM forensic_audit_log
+            GROUP BY kind ORDER BY n DESC, kind ASC;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [(kind: String, count: Int)] = []
+        while try stepRow(stmt, db) { out.append((columnText(stmt, 0), Int(sqlite3_column_int64(stmt, 1)))) }
+        return out
+    }
+
     func forensicAuditLast() throws -> ForensicAuditRow? {
         try forensicAuditRecent(limit: 1).first
     }

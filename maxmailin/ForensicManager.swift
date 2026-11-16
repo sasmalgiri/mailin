@@ -1666,3 +1666,70 @@ class ForensicManager: ObservableObject {
         )
     }
 }
+
+// MARK: - Audit trail pages (review C15)
+
+/// One page of the audit trail for the Audit Trail view: the entries, how
+/// many match the filter, how many the whole log holds, and the kind chips.
+struct AuditTrailPage: Sendable {
+    var entries: [ForensicManager.AuditEntry] = []
+    /// Entries matching the filter (all pages).
+    var matchCount = 0
+    /// Every entry in the log.
+    var total = 0
+    var kindCounts: [AuditKindCount] = []
+    /// Pass as `beforeSeq` for the next (older) page; nil when this was the last.
+    var nextBeforeSeq: Int?
+}
+
+struct AuditKindCount: Sendable, Equatable {
+    var kind: String
+    var count: Int
+}
+
+extension ForensicManager {
+    /// Review C15 (rule 6): search, kind chips, date scope, counts and paging
+    /// read the whole durable log in SQL (the 500-entry `auditLog` is only a
+    /// cache). Entries appended in memory whose row has not landed yet are
+    /// included, so a just-taken action is never missing.
+    func auditTrailPage(search: String, kind: String?, scope: AuditTrailFilter.DateScope, now: Date = Date(),
+                        calendar: Calendar = .current, beforeSeq: Int? = nil, limit: Int) async throws -> AuditTrailPage {
+        var filter = SQLiteEmailStore.ForensicAuditFilter(search: search, kind: kind)
+        switch scope {
+        case .today:
+            let start = calendar.startOfDay(for: now)
+            filter.since = start
+            filter.until = calendar.date(byAdding: .day, value: 1, to: start)
+        case .week:
+            filter.since = calendar.date(byAdding: .day, value: -7, to: now)
+        case .all:
+            break
+        }
+        let store = self.store
+        let stored = try await store.forensicAuditSearch(filter, beforeSeq: beforeSeq, limit: limit + 1)
+        let storedMatches = try await store.forensicAuditMatchCount(filter)
+        let storedTotal = try await store.forensicAuditCount()
+        let storedKinds = try await store.forensicAuditKindCounts()
+        let lastStored = try await store.forensicAuditLast()?.seq ?? -1
+
+        let unsaved = auditLog.filter { $0.sequence > lastStored }
+        let unsavedMatches = unsaved.reversed().filter {
+            AuditTrailFilter.matches(action: $0.action, detail: $0.detail, examiner: $0.examiner, timestamp: $0.timestamp,
+                                     search: search, kind: kind, scope: scope, now: now, calendar: calendar)
+        }
+        let combined = unsavedMatches.filter { $0.sequence < (beforeSeq ?? .max) } + stored.map {
+            AuditEntry(id: $0.entryID, sequence: $0.seq, timestamp: $0.timestamp, action: $0.action, detail: $0.detail,
+                       examiner: $0.examiner, previousHash: $0.previousHash, entryHash: $0.entryHash)
+        }
+        var page = AuditTrailPage()
+        page.entries = Array(combined.prefix(limit))
+        page.matchCount = storedMatches + unsavedMatches.count
+        page.total = storedTotal + unsaved.count
+        var kinds = Dictionary(storedKinds.map { ($0.kind, $0.count) }, uniquingKeysWith: +)
+        for entry in unsaved { kinds[AuditTrailFilter.kind(of: entry.action), default: 0] += 1 }
+        page.kindCounts = kinds.map { AuditKindCount(kind: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.kind < $1.kind }
+        page.nextBeforeSeq = combined.count > limit ? page.entries.last?.sequence : nil
+        return page
+    }
+}

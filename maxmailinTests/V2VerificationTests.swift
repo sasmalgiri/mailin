@@ -3164,6 +3164,61 @@ final class V2ForensicPersistenceTests: XCTestCase {
         XCTAssertTrue(details.contains("1"), "identifies the tampered entry: \(details)")
     }
 
+    /// Review C15 (rule 6): the Audit Trail searches, counts and pages the
+    /// whole durable log — not the 500-entry memory window.
+    @MainActor
+    func testAuditTrail_searchFindsTheOldestOf600_andTheHeaderCountsAll() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            ForensicManager.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        ForensicManager.testStoreOverride = store
+        let fm = ForensicManager.shared
+        let wasEnabled = fm.isEnabled
+        defer { fm.isEnabled = wasEnabled; fm.clearForensicData() }
+        fm.clearForensicData()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        await fm.bootstrapFromStore()
+        fm.isEnabled = true
+        for i in 1...600 {
+            fm.logAction(i % 2 == 0 ? "Tag applied: Relevant" : "Import completed", detail: String(format: "marker-%04d", i))
+        }
+        for _ in 0..<100 {
+            if try await store.forensicAuditCount() == 600 { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let stored = try await store.forensicAuditCount()
+        XCTAssertEqual(stored, 600)
+        XCTAssertLessThan(fm.auditLog.count, 600, "the memory window is smaller than the log — the case under test")
+
+        let first = try await fm.auditTrailPage(search: "marker-0001", kind: nil, scope: .all, limit: 500)
+        XCTAssertEqual(first.entries.map(\.detail), ["marker-0001"], "entry #1 is found")
+        XCTAssertEqual(first.matchCount, 1)
+        XCTAssertEqual(first.total, 600, "the header shows every recorded action")
+
+        let all = try await fm.auditTrailPage(search: "", kind: nil, scope: .all, limit: 500)
+        XCTAssertEqual(all.matchCount, 600)
+        XCTAssertEqual(all.entries.count, 500)
+        XCTAssertEqual(all.entries.first?.detail, "marker-0600", "newest first")
+        let older = try await fm.auditTrailPage(search: "", kind: nil, scope: .all, beforeSeq: all.nextBeforeSeq, limit: 500)
+        XCTAssertEqual(older.entries.count, 100, "the next page reaches the oldest entries")
+        XCTAssertEqual(older.entries.last?.detail, "marker-0001")
+        XCTAssertNil(older.nextBeforeSeq)
+
+        XCTAssertEqual(all.kindCounts.first(where: { $0.kind == "Import completed" })?.count, 300, "chips count the whole log")
+        let kind = try await fm.auditTrailPage(search: "marker-000", kind: "Tag applied", scope: .all, limit: 500)
+        XCTAssertEqual(kind.entries.map(\.detail), ["marker-0008", "marker-0006", "marker-0004", "marker-0002"])
+        let literal = try await fm.auditTrailPage(search: "%", kind: nil, scope: .all, limit: 500)
+        XCTAssertEqual(literal.matchCount, 0, "a LIKE wildcard typed in the search is a literal")
+        let today = try await fm.auditTrailPage(search: "marker-0001", kind: nil, scope: .today, limit: 500)
+        XCTAssertEqual(today.matchCount, 1, "the date scope is applied in SQL over the whole log")
+        let tomorrow = try await fm.auditTrailPage(search: "", kind: nil, scope: .today,
+                                                   now: Date().addingTimeInterval(86_400 * 2), limit: 500)
+        XCTAssertEqual(tomorrow.matchCount, 0)
+    }
+
     // §9: streamed multi-digest source hashing matches a whole-file reference.
     func testStreamingSourceHash_matchesWholeFileReference() throws {
         let url = FileManager.default.temporaryDirectory
