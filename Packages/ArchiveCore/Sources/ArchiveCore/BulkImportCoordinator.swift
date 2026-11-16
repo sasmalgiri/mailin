@@ -1268,7 +1268,9 @@ final class BulkImportCoordinator {
         // Never fatal. An orphan costs disk; failing an import that has
         // already committed its mail would cost far more.
         do {
-            let collected = try await store.collectBlobOrphans()
+            // B2: with the age grace, so a blob another writer published
+            // moments ago (its row not yet committed) is never collected.
+            let collected = try await store.collectBlobOrphans(minimumAge: SQLiteEmailStore.blobOrphanGraceSeconds)
             if collected.deleted > 0 {
                 Self.logger.info("""
                     reclaimed \(collected.deleted, privacy: .public) orphaned body blob(s), \

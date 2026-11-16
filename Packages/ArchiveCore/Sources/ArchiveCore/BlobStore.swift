@@ -104,7 +104,12 @@ struct BlobStore: Sendable {
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let reference = BlobReference(digest: digest, length: Int64(data.count))
         let destination = url(for: digest)
-        if FileManager.default.fileExists(atPath: destination.path) { return reference }
+        // B2: an existing copy may be an orphan the collector is about to
+        // reclaim; refreshing its date puts it inside the collector's grace.
+        if FileManager.default.fileExists(atPath: destination.path) {
+            touch(destination)
+            return reference
+        }
 
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -129,8 +134,15 @@ struct BlobStore: Sendable {
 
     /// Stores the contents of `fileURL` without ever holding it all in memory —
     /// the case a multi-gigabyte message needs. Hashes and copies in one pass.
+    ///
+    /// `pin: true` (B2) registers the digest as in flight BEFORE the blob is
+    /// looked up or published, so `collectOrphans` skips it until the caller
+    /// calls `unpin(_:)` — after its row commits, or after it gives up. A
+    /// caller that publishes outside the store actor and commits the row
+    /// later (the connected-mail sink) must pin; otherwise a collection run in
+    /// between sees no row and deletes the bytes the row is about to name.
     @discardableResult
-    func write(contentsOf fileURL: URL, chunkSize: Int = 4 * 1_048_576) throws -> BlobReference {
+    func write(contentsOf fileURL: URL, chunkSize: Int = 4 * 1_048_576, pin: Bool = false) throws -> BlobReference {
         guard let input = try? FileHandle(forReadingFrom: fileURL) else {
             throw BlobStoreError.writeFailed("cannot open \(fileURL.lastPathComponent)")
         }
@@ -163,9 +175,14 @@ struct BlobStore: Sendable {
 
         let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
         let destination = url(for: digest)
+        // Pin before the existence check: a collector that has not yet
+        // deleted the existing copy will now skip it; one that already has
+        // leaves nothing, and the staged copy is published below.
+        if pin { BlobInFlightRegistry.shared.pin(pinKey(digest)) }
         if FileManager.default.fileExists(atPath: destination.path) {
             // Already stored — drop the duplicate copy.
             try? FileManager.default.removeItem(at: staging)
+            touch(destination)
             return BlobReference(digest: digest, length: total)
         }
         do {
@@ -175,6 +192,7 @@ struct BlobStore: Sendable {
             try FileManager.default.moveItem(at: staging, to: destination)
         } catch {
             try? FileManager.default.removeItem(at: staging)
+            if pin { BlobInFlightRegistry.shared.unpin(pinKey(digest)) }
             throw BlobStoreError.write(error)
         }
         return BlobReference(digest: digest, length: total)
@@ -229,17 +247,41 @@ struct BlobStore: Sendable {
         return digests
     }
 
+    /// Releases a `write(contentsOf:pin: true)` registration. Call once per
+    /// pinned write, after the row naming the blob committed or the write was
+    /// abandoned; the blob is then an ordinary orphan candidate again.
+    func unpin(_ digest: String) {
+        BlobInFlightRegistry.shared.unpin(pinKey(digest))
+    }
+
+    /// True while a pinned write of `digest` has not been released.
+    func isPinned(_ digest: String) -> Bool {
+        BlobInFlightRegistry.shared.isPinned(pinKey(digest))
+    }
+
     /// Deletes blobs no row references any more. Because writes publish the
     /// blob before the row commits, an interrupted import leaves orphans —
     /// this is how they are reclaimed. Never deletes anything in `referenced`.
+    ///
+    /// B2: never deletes a pinned blob (published, row not yet committed),
+    /// and never one modified less than `minimumAge` seconds ago — belt and
+    /// braces for a writer this process does not know about.
     @discardableResult
-    func collectOrphans(referenced: Set<String>) -> (deleted: Int, bytesReclaimed: Int64) {
+    func collectOrphans(referenced: Set<String>, minimumAge: TimeInterval = 0) -> (deleted: Int, bytesReclaimed: Int64) {
         var deleted = 0
         var bytes: Int64 = 0
+        let cutoff = Date().addingTimeInterval(-max(0, minimumAge))
         for digest in storedDigests() where !referenced.contains(digest) {
             let location = url(for: digest)
-            let size = (try? location.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            if (try? FileManager.default.removeItem(at: location)) != nil {
+            let values = try? location.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            if minimumAge > 0, let modified = values?.contentModificationDate, modified > cutoff { continue }
+            let size = values?.fileSize ?? 0
+            // The pin check and the unlink are one step under the registry's
+            // lock, so a writer cannot pin between them.
+            let removed = BlobInFlightRegistry.shared.unlessPinned(pinKey(digest)) {
+                (try? FileManager.default.removeItem(at: location)) != nil
+            }
+            if removed == true {
                 deleted += 1
                 bytes += Int64(size)
             }
@@ -261,9 +303,55 @@ struct BlobStore: Sendable {
 
     // MARK: - Private
 
+    /// Registry key: the tier's root plus the digest, so two archives holding
+    /// the same content pin independently.
+    private func pinKey(_ digest: String) -> String {
+        root.standardizedFileURL.path + "/" + digest
+    }
+
+    /// Refresh the modification date of an existing blob a writer has just
+    /// re-used, so the collector's age grace covers it.
+    private func touch(_ url: URL) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
     private func fsync(url: URL) throws {
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         try handle.synchronize()
+    }
+}
+
+/// B2: digests published to a blob tier whose row has not committed yet.
+/// Process-wide, because `BlobStore` is a value rebuilt on every access; keys
+/// carry the tier root. Counted, so two captures of the same bytes each hold
+/// their own pin.
+final class BlobInFlightRegistry: @unchecked Sendable {
+    static let shared = BlobInFlightRegistry()
+
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+
+    func pin(_ key: String) {
+        lock.lock(); defer { lock.unlock() }
+        counts[key, default: 0] += 1
+    }
+
+    func unpin(_ key: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard let n = counts[key] else { return }
+        counts[key] = n <= 1 ? nil : n - 1
+    }
+
+    func isPinned(_ key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return counts[key] != nil
+    }
+
+    /// Runs `body` with the lock held unless `key` is pinned; nil when pinned.
+    func unlessPinned<T>(_ key: String, _ body: () -> T) -> T? {
+        lock.lock(); defer { lock.unlock() }
+        guard counts[key] == nil else { return nil }
+        return body()
     }
 }

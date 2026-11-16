@@ -106,6 +106,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// moved carries its bodies with it.
     nonisolated var blobStore: BlobStore { BlobStore.production(storeDirectory: directory) }
 
+    /// B7: marks that the one-time folder-membership repair ran for this
+    /// archive (`repairFolderMembershipsIfNeeded`).
+    nonisolated var folderPairRepairMarker: URL {
+        directory.appendingPathComponent(".folder-pair-repair-v1", isDirectory: false)
+    }
+
     /// The raw MIME for a row, from whichever tier holds it.
     ///
     /// Returns "" when the row genuinely has no raw source (pre-v2 migrated
@@ -164,13 +170,24 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return digests
     }
 
-    /// Deletes blobs no row references. Safe to call at any time: it asks the
-    /// database for the live set first, so a blob written by an import that is
-    /// still in flight is only collected if that import never committed.
+    /// How long a freshly written or re-used blob is left alone by the
+    /// production collector (B2 belt and braces): ten minutes.
+    static let blobOrphanGraceSeconds: TimeInterval = 10 * 60
+
+    /// Deletes blobs no row references. It asks the database for the live set
+    /// first. B2: that alone was not enough — a writer that publishes a blob
+    /// and commits its row in a later actor hop (`ConnectedArchiveSink`) has
+    /// no row yet when the set is read. Such a writer pins the digest
+    /// (`BlobStore.write(contentsOf:pin:)`) until its commit, and the
+    /// collector skips pinned blobs; the in-actor writers (`rawTier`,
+    /// `replaceRawSource`) write and commit within one synchronous actor call,
+    /// so no collection can run between. `minimumAge` additionally spares any
+    /// blob modified within that many seconds (the production caller passes
+    /// `blobOrphanGraceSeconds`).
     @discardableResult
-    func collectBlobOrphans() throws -> (deleted: Int, bytesReclaimed: Int64) {
+    func collectBlobOrphans(minimumAge: TimeInterval = 0) throws -> (deleted: Int, bytesReclaimed: Int64) {
         let referenced = try referencedBlobDigests()
-        return blobStore.collectOrphans(referenced: referenced)
+        return blobStore.collectOrphans(referenced: referenced, minimumAge: minimumAge)
     }
 
     /// Total bytes held in the blob tier — `StoragePlanner` counts this as
@@ -807,6 +824,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
             throw SQLiteStoreError.schema(
                 "store schema v\(v) is newer than this app supports (v\(Self.currentSchemaVersion)); refusing to open")
         }
+        // B7: an archive already at v21+ ran the pre-fix folder backfill.
+        let ranOldFolderBackfill = v >= 21
         if v == 0 {
             // Either a brand-new database or a store created before schema
             // versioning existed (whose implicit schema is v1). Every v1 DDL
@@ -1298,6 +1317,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
             v = 26
         }
+        // B7: fill (email, folder) memberships the pre-fix v21 backfill
+        // dropped at its page boundaries. Additive, once per archive; a
+        // failure (disk full, …) never blocks opening — the key stays unset
+        // and the next open retries.
+        try? repairFolderMembershipsIfNeeded(handle, needed: ranOldFolderBackfill)
     }
 
     /// v19 tables. Every statement is IF NOT EXISTS.

@@ -72,13 +72,29 @@ extension SQLiteEmailStore {
         try backfillFolders(handle)
     }
 
-    /// Folder memberships for every email that has none yet, from its parser
-    /// tags — a page of tag rows at a time, so the upgrade's memory does not
-    /// grow with the archive.
+    /// Rows per backfill page. A static so a test can force page boundaries
+    /// with a handful of rows (B7); production never changes it.
+    nonisolated(unsafe) static var folderBackfillPageSize = 20_000
+
+    /// Folder memberships from the parser tags — a page of tag rows at a
+    /// time, so the upgrade's memory does not grow with the archive.
+    ///
+    /// B7: a tag row is skipped when THAT (email, folder path) membership
+    /// already exists, not when the email has any membership. The old
+    /// per-email test, combined with the (email_id, tag) keyset cursor,
+    /// dropped every membership after the first for an email whose tag rows
+    /// straddled a page boundary: page N inserted (X, Inbox), so page N+1
+    /// excluded X and (X, Work) was never written. The path is matched in any
+    /// source, so a membership a duplicate merge carried over from another
+    /// source still counts. Tags are folders plus Apple Mail flags only
+    /// (`folderPaths(for:)`), and the flags are excluded below, so the
+    /// per-pair rule writes nothing the import itself would not have.
+    /// Additive and idempotent (INSERT OR IGNORE).
     func backfillFolders(_ db: OpaquePointer) throws {
         let insert = try prepare(db, "INSERT OR IGNORE INTO email_folders(email_id, folder_id) VALUES (?,?);")
         defer { sqlite3_finalize(insert) }
         var cache: [String: Int64] = [:]
+        let pageSize = max(1, Self.folderBackfillPageSize)
         // `email_tags` is WITHOUT ROWID: the cursor is its (email_id, tag) key.
         var lastEmail = ""
         var lastTag = ""
@@ -88,8 +104,9 @@ extension SQLiteEmailStore {
                 FROM email_tags t JOIN emails e ON e.id = t.email_id
                 LEFT JOIN sources s ON s.source_id = e.source_id
                 WHERE (t.email_id > ? OR (t.email_id = ? AND t.tag > ?)) AND t.tag <> ''
-                  AND NOT EXISTS (SELECT 1 FROM email_folders ef WHERE ef.email_id = t.email_id)
-                ORDER BY t.email_id, t.tag LIMIT 20000;
+                  AND NOT EXISTS (SELECT 1 FROM email_folders ef JOIN folders f ON f.folder_id = ef.folder_id
+                                  WHERE ef.email_id = t.email_id AND f.path = t.tag)
+                ORDER BY t.email_id, t.tag LIMIT \(pageSize);
             """)
             defer { sqlite3_finalize(page) }
             bindText(page, 1, lastEmail)
@@ -200,6 +217,37 @@ extension SQLiteEmailStore {
 
     func folderTotal() throws -> Int {
         try scalarInt(try ensureDB(), "SELECT COUNT(*) FROM folders;")
+    }
+
+    /// B7 repair, once per archive at open (`migrateSchema`): an archive that
+    /// ran the v21 backfill before the fix lost (email, folder) memberships at
+    /// every page boundary; `email_tags` still holds them (rule 16). This
+    /// re-runs the per-pair backfill — additive only (rule 1): it inserts the
+    /// missing rows and the folders they need, and changes or deletes
+    /// nothing. Then writes `folderPairRepairMarker` (a file beside the
+    /// database, not a row: an open adds no row to an existing table) so
+    /// later opens skip the scan. A lost marker costs one more idempotent
+    /// scan, nothing else. `needed` false (a new archive, or one being
+    /// upgraded through v21 by this build's fixed backfill) does nothing; such
+    /// an archive gets one empty repair pass on its next open.
+    func repairFolderMembershipsIfNeeded(_ db: OpaquePointer, needed: Bool) throws {
+        guard needed else { return }
+        let marker = folderPairRepairMarker
+        guard !FileManager.default.fileExists(atPath: marker.path) else { return }
+        try inExclusiveTransaction(db) { try backfillFolders(db) }
+        // Written only after the repair committed.
+        try Data().write(to: marker, options: .atomic)
+        ArtifactProtection.applyBackgroundReadable(to: marker)
+    }
+
+    /// Folder memberships the tags record but `email_folders` lacks, filled
+    /// in (additive, idempotent). Returns the rows added.
+    @discardableResult
+    func repairFolderMembershipsFromTags() throws -> Int {
+        let db = try ensureDB()
+        let before = try scalarInt(db, "SELECT COUNT(*) FROM email_folders;")
+        try inExclusiveTransaction(db) { try backfillFolders(db) }
+        return try scalarInt(db, "SELECT COUNT(*) FROM email_folders;") - before
     }
 
     /// Recovery action: rebuild memberships from the tags (the dual-written

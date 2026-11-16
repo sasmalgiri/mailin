@@ -458,7 +458,13 @@ public actor ConnectedArchiveSink {
         try faultHook?(.afterStaging)
 
         // 2. Publish: temp → fsync → atomic rename, hashed again while copied.
-        let blob = try store.blobStore.write(contentsOf: item.raw.fileURL)
+        // B2: pinned, so an orphan collection that runs between this publish
+        // and the commit below (a file import finishing meanwhile) cannot
+        // delete the bytes the row is about to name. Released on every exit —
+        // after the commit, or when any step below throws.
+        let blobs = store.blobStore
+        let blob = try blobs.write(contentsOf: item.raw.fileURL, pin: true)
+        defer { blobs.unpin(blob.digest) }
         guard blob.digest == item.raw.sha256 else {
             throw ConnectedArchiveError.stagedBytesMismatch(expected: item.raw.sha256, actual: blob.digest)
         }
