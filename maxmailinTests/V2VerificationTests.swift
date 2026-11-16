@@ -12709,6 +12709,24 @@ final class Review1116CTests: XCTestCase {
         XCTAssertNil(ok.error)
     }
 
+    /// C18 (rule 6): the Limits page says what the code does — the Free import size
+    /// is cumulative, Free imports stop after `freeEmailLimit` emails per run (a
+    /// separate rule from reading/search), and the tag Shortcut has no 10,000 cap.
+    func testC18_limitsTextMatchesTheCode() throws {
+        let rows = AppLimits.all
+        let size = try XCTUnwrap(rows.first { $0.what == String(localized: "Free plan — import size") })
+        XCTAssertNotEqual(size.why, String(localized: "Per import, under the Free plan only."), "the allowance is cumulative")
+        // The code: a second request past the cumulative total is denied.
+        let limit = StoreManager.freeInputByteLimit
+        XCTAssertNotEqual(ImportAllowance.evaluate(requestedBytes: limit / 2 + 1, ingestedBytes: limit / 2, limitBytes: limit), .allowed)
+        let perImport = rows.first { $0.what == String(localized: "Free plan — emails per import") }
+        XCTAssertNotNil(perImport, "the Free import stop is listed as its own rule")
+        XCTAssertTrue(perImport?.value.contains("\(StoreManager.freeEmailLimit)") == true)
+        let entities = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/MailinMoreEntities.swift"), encoding: .utf8)
+        XCTAssertFalse(entities.contains("up to 10,000 per run"), "the intent returns every email with the tag")
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

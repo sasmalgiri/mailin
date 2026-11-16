@@ -26028,6 +26028,70 @@
         }
       }
     },
+    "%lld per import" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pro Import"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld por importación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld par importation"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "प्रति आयात %lld"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld per importazione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1回の読み込みにつき%lld件"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가져오기당 %lld개"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld por importação"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次导入 %lld 封"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次匯入 %lld 封"
+          }
+        }
+      }
+    },
     "%lld percent" : {
       "localizations" : {
         "de" : {
@@ -188604,6 +188668,70 @@
         }
       }
     },
+    "Free plan — emails per import" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gratis-Plan – E-Mails pro Import"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan Gratis: correos por importación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forfait Gratuit — e-mails par importation"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मुफ़्त प्लान — प्रति आयात ईमेल"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Piano Gratuito — email per importazione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無料プラン — 1回の読み込みあたりのメール数"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "무료 요금제 — 가져오기당 이메일"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plano Gratuito — e-mails por importação"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免费方案 — 每次导入的邮件数"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免費方案 — 每次匯入的郵件數"
+          }
+        }
+      }
+    },
     "Free plan — import size" : {
       "localizations" : {
         "de" : {
@@ -214292,6 +214420,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此版本中包含"
+          }
+        }
+      }
+    },
+    "In total across every import, under the Free plan only: what the archive already holds counts, and an import that would go past it is refused whole, never cut." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Insgesamt über alle Importe, nur im Gratis-Plan: Was das Archiv schon enthält, zählt mit, und ein Import, der darüber hinausginge, wird ganz abgelehnt, nie gekürzt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En total entre todas las importaciones, solo con el plan Gratis: cuenta lo que ya contiene el archivo, y una importación que lo superaría se rechaza entera, nunca se recorta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Au total sur toutes les importations, avec le forfait Gratuit uniquement : ce que l’archive contient déjà compte, et une importation qui dépasserait est refusée en entier, jamais tronquée."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सभी आयातों को मिलाकर, केवल मुफ़्त प्लान में: संग्रह में पहले से मौजूद डेटा भी गिना जाता है, और जो आयात इससे आगे जाता वह पूरा अस्वीकार होता है, कभी काटा नहीं जाता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In totale su tutte le importazioni, solo con il piano Gratuito: conta ciò che l’archivio contiene già, e un’importazione che lo supererebbe viene rifiutata per intero, mai tagliata."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無料プランのみ、すべての読み込みの合計です。アーカイブにすでにある分も数えられ、超える読み込みは途中で切らずに全体が拒否されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "무료 요금제에서만, 모든 가져오기의 합계입니다. 아카이브에 이미 있는 양도 포함되며, 이를 넘는 가져오기는 잘리지 않고 전체가 거부됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No total de todas as importações, só no plano Gratuito: o que o arquivo já contém conta, e uma importação que passaria do limite é recusada inteira, nunca cortada."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅限免费方案，按所有导入的总量计算：归档中已有的内容也计入，超出的导入会被整体拒绝，绝不截断。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅限免費方案，按所有匯入的總量計算：封存中已有的內容也計入，超出的匯入會被整體拒絕，絕不截斷。"
           }
         }
       }
@@ -277284,6 +277476,70 @@
         }
       }
     },
+    "On the Free plan an import stops after this many emails and says so; the file keeps its place, so after an upgrade the import continues with the rest." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Im Gratis-Plan endet ein Import nach so vielen E-Mails und sagt das; die Datei behält ihre Stelle, sodass der Import nach einem Upgrade mit dem Rest fortfährt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con el plan Gratis, una importación se detiene tras esta cantidad de correos y lo indica; el archivo conserva su posición, así que tras mejorar el plan la importación continúa con el resto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec le forfait Gratuit, une importation s’arrête après ce nombre d’e-mails et le signale ; le fichier garde sa position, donc après une mise à niveau l’importation reprend avec le reste."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मुफ़्त प्लान में आयात इतने ईमेल के बाद रुक जाता है और यह बताता है; फ़ाइल अपनी जगह याद रखती है, इसलिए अपग्रेड के बाद आयात बाकी के साथ जारी रहता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con il piano Gratuito un’importazione si ferma dopo questo numero di email e lo dice; il file mantiene la sua posizione, quindi dopo l’upgrade l’importazione prosegue con il resto."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無料プランでは、読み込みはこの件数で止まり、その旨を表示します。ファイルは位置を保つため、アップグレード後に残りの読み込みが続きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "무료 요금제에서는 가져오기가 이 개수 후에 멈추고 그렇다고 알려 줍니다. 파일 위치가 유지되므로 업그레이드 후 나머지를 이어서 가져옵니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No plano Gratuito, uma importação para depois desta quantidade de e-mails e avisa; o arquivo mantém sua posição, então após o upgrade a importação continua com o restante."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在免费方案中，导入达到此数量的邮件后会停止并告知；文件会保留位置，升级后导入将继续处理其余部分。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在免費方案中，匯入達到此數量的郵件後會停止並告知；檔案會保留位置，升級後匯入將繼續處理其餘部分。"
+          }
+        }
+      }
+    },
     "On the Mac, Send to DEVONthink hands emails over as standard .eml files, and Copy Link to Email gives a link that reopens the email from any app." : {
       "localizations" : {
         "de" : {
@@ -291456,6 +291712,7 @@
       }
     },
     "Per import, under the Free plan only." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -336834,6 +337091,72 @@
         }
       }
     },
+    "Returns every email carrying a tag, newest first. Count Emails gives the exact total; Shortcuts' Limit action shortens the list when wanted." : {
+      "comment" : "Description of the Find Emails with Tag intent.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gibt jede E-Mail mit einem Tag zurück, neueste zuerst. „E-Mails zählen“ liefert die genaue Gesamtzahl; die Kurzbefehle-Aktion „Begrenzen“ kürzt die Liste bei Bedarf."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Devuelve todos los correos con una etiqueta, los más recientes primero. Contar correos da el total exacto; la acción Limitar de Atajos acorta la lista cuando se quiera."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renvoie chaque e-mail portant une étiquette, du plus récent au plus ancien. Compter les e-mails donne le total exact ; l’action Limiter de Raccourcis raccourcit la liste au besoin."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "टैग वाला हर ईमेल लौटाता है, सबसे नया पहले। Count Emails सटीक कुल संख्या देता है; ज़रूरत हो तो Shortcuts की Limit क्रिया सूची छोटी करती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restituisce ogni email con un tag, dalla più recente. Conta email fornisce il totale esatto; l’azione Limita di Comandi accorcia l’elenco quando serve."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タグが付いたすべてのメールを新しい順に返します。正確な合計は「メールを数える」で得られ、必要ならショートカットの「制限」アクションで一覧を短くできます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "태그가 있는 모든 이메일을 최신순으로 반환합니다. 정확한 합계는 이메일 개수 세기로 알 수 있으며, 필요하면 단축어의 제한 동작으로 목록을 줄일 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retorna todos os e-mails com uma etiqueta, do mais recente ao mais antigo. Contar e-mails dá o total exato; a ação Limitar do Atalhos encurta a lista quando desejado."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回带有某个标签的所有邮件，最新的在前。“统计邮件”给出精确总数；需要时可用快捷指令的“限制”操作缩短列表。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "傳回帶有某個標籤的所有郵件，最新的在前。「計算郵件」提供精確總數；需要時可用捷徑的「限制」動作縮短列表。"
+          }
+        }
+      }
+    },
     "Returns statistics about the current email archive" : {
       "localizations" : {
         "de" : {
@@ -336900,6 +337223,7 @@
     },
     "Returns the emails carrying a tag, newest first (up to 10,000 per run; Count Emails gives the exact total)." : {
       "comment" : "Description of the Find Emails with Tag intent.",
+      "extractionState" : "stale",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "de" : {

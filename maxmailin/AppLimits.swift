@@ -69,7 +69,10 @@ enum AppLimits {
             AppLimit(kind: .plan, what: String(localized: "Free plan — reading and search"), value: String(localized: "newest \(StoreManager.freeEmailLimit) emails"),
                      why: AccessPolicy.afterExpiryStatement),
             AppLimit(kind: .plan, what: String(localized: "Free plan — import size"), value: bytes(Int64(StoreManager.freeInputByteLimit)),
-                     why: String(localized: "Per import, under the Free plan only.")),
+                     why: String(localized: "In total across every import, under the Free plan only: what the archive already holds counts, and an import that would go past it is refused whole, never cut.")),
+            // C18: the import run's own stop (BulkImportCoordinator `maxEmails`), a separate rule from reading.
+            AppLimit(kind: .plan, what: String(localized: "Free plan — emails per import"), value: String(localized: "\(StoreManager.freeEmailLimit) per import"),
+                     why: String(localized: "On the Free plan an import stops after this many emails and says so; the file keeps its place, so after an upgrade the import continues with the rest.")),
             AppLimit(kind: .plan, what: String(localized: "Free plan — attachment saves"), value: String(localized: "\(StoreManager.freeAttachmentDownloadsPerDay) a day"),
                      why: String(localized: "Opening attachments is never limited; saving them in bulk is, on the Free plan.")),
             AppLimit(kind: .plan, what: String(localized: "Free plan — AI questions"), value: String(localized: "\(AIAssistantView.freeQueryLimit) a day"),

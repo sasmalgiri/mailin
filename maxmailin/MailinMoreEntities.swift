@@ -156,7 +156,7 @@ struct DocumentEntityQuery: EntityStringQuery {
 
 struct FindEmailsWithTagIntent: AppIntent {
     static var title: LocalizedStringResource = "Find Emails with Tag in mailin"
-    static var description: IntentDescription = "Returns the emails carrying a tag, newest first (up to 10,000 per run; Count Emails gives the exact total)."
+    static var description: IntentDescription = "Returns every email carrying a tag, newest first. Count Emails gives the exact total; Shortcuts' Limit action shortens the list when wanted."
 
     @Parameter(title: "Tag") var tag: TagEntity
 
