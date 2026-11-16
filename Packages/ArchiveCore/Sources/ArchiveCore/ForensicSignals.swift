@@ -372,7 +372,14 @@ public enum DKIMVerifier {
 
         // Body hash.
         var cbody = bCanon == "relaxed" ? relaxedBody(body) : simpleBody(body)
-        if let l = tags["l"], let n = Int(l), n < cbody.utf8.count { cbody = String(decoding: Array(cbody.utf8).prefix(n), as: UTF8.self) }
+        if let l = tags["l"] {
+            // RFC 6376 §3.5: l= is 1*76DIGIT. Anything else (e.g. "l=-1", which
+            // was prefix(-1) — a trap) makes the signature unverifiable.
+            guard !l.isEmpty, l.allSatisfy({ $0.isASCII && $0.isNumber }) else {
+                return .fail("the signature's body length (l=\(l)) is not a number")
+            }
+            if let n = Int(l), n < cbody.utf8.count { cbody = String(decoding: Array(cbody.utf8).prefix(n), as: UTF8.self) }
+        }
         let bodyHash = Data(SHA256.hash(data: Data(cbody.utf8))).base64EncodedString()
         guard bodyHash == bh.filter({ !$0.isWhitespace }) else { return .fail("body hash does not match: the body was changed after signing") }
 
@@ -461,6 +468,8 @@ public enum DKIMVerifier {
         }
         guard let n = sets.keys.max() else { return .none }
         guard n <= 50 else { return .fail(instance: n, why: "more than 50 ARC sets") }   // RFC 8617 §4.2.1
+        // Instances run 1…50 (RFC 8617 §4.2.1); i=0 or a negative i made `1...n` trap.
+        if let low = sets.keys.min(), low < 1 { return .fail(instance: low, why: "ARC instance i=\(low) is outside 1…50") }
         for i in 1...n {
             guard let set = sets[i], set.aar != nil, set.ams != nil, set.seal != nil else {
                 return .fail(instance: i, why: "ARC set \(i) is incomplete or missing")
@@ -607,7 +616,9 @@ public enum DKIMVerifier {
         i += algLen
         guard i < b.count, b[i] == 0x03 else { return nil }   // BIT STRING
         i += 1
-        guard let bitLen = length(&i), i < b.count else { return nil }
+        // A BIT STRING holds at least its unused-bits byte; length 0 made the
+        // slice below run backwards (a trap).
+        guard let bitLen = length(&i), bitLen >= 1, i < b.count else { return nil }
         i += 1                                                // unused-bits byte
         guard i + bitLen - 1 <= b.count else { return nil }
         return Data(b[i..<(i + bitLen - 1)])

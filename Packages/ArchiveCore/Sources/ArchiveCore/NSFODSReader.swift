@@ -627,37 +627,19 @@ struct NSFODSReader {
             if !valid(entries, inSummary: placement!, tableEnd: tableEnd, noteEnd: off + size, nsStart: 0) { placement = nil }
         } else {
             let defaultSummary = Set(sized.filter { entries[$0].flags & 0x0004 != 0 })
-            let defaultNS = sized.filter { !defaultSummary.contains($0) }.reduce(0) { $0 + entries[$1].size }
-            let need = nsBytes - defaultNS
-            // Signed effect on the non-summary length of flipping one item.
-            let delta: (Int) -> Int = { defaultSummary.contains($0) ? entries[$0].size : -entries[$0].size }
-            func attempt(_ flips: [Int]) -> Bool {
-                let set = defaultSummary.symmetricDifference(flips)
-                if valid(entries, inSummary: set, tableEnd: tableEnd, noteEnd: off + size, nsStart: nsStart + 68) {
-                    placement = set
-                    return true
-                }
-                return false
+            let required: [UInt16] = entries.map { e in
+                let key = names[e.unk]
+                if key.cls == 5, key.type == 2 { return 0x000E }       // RFC822_TEXT / MIME_PART structure version
+                if key.cls == 0, key.type == 25 { return 0x0002 }
+                return 0
             }
-            if need == 0 { _ = attempt([]) }
-            if placement == nil {
-                outer: for (x, i) in sized.enumerated() {
-                    if delta(i) == need, attempt([i]) { break outer }
-                    for j in sized[(x + 1)...] where delta(i) + delta(j) == need {
-                        if attempt([i, j]) { break outer }
-                    }
-                }
-            }
-            if placement == nil {
-                var bySize: [Int: [Int]] = [:]
-                for i in sized { bySize[delta(i), default: []].append(i) }
-                outer3: for (x, i) in sized.enumerated() {
-                    for j in sized[(x + 1)...] {
-                        for k in bySize[need - delta(i) - delta(j)] ?? [] where k > j {
-                            if attempt([i, j, k]) { break outer3 }
-                        }
-                    }
-                }
+            switch Self.searchPlacement(sizes: entries.map(\.size), defaultSummary: defaultSummary, required: required,
+                                        nsBytes: nsBytes, data: data, tableEnd: tableEnd, nsBase: nsStart + 68, noteEnd: off + size,
+                                        confirm: { valid(entries, inSummary: $0, tableEnd: tableEnd, noteEnd: off + size, nsStart: nsStart + 68) }) {
+            case .placed(let set): placement = set
+            case .notFound, .cancelled: break
+            case .stepLimit:
+                Self.logger.error("NSF ODS: note 0x\(String(Self.u32(self.data, off + 6), radix: 16), privacy: .public) unplaced: the item placement search passed its limit of \(Self.placementStepLimit, privacy: .public) steps (\(count, privacy: .public) items)")
             }
         }
         guard let inSummary = placement else { return nil }
@@ -698,6 +680,193 @@ struct NSFODSReader {
             if key.cls == 0, key.type == 25, e.size >= 2, Self.u16(data, at) != 0x0002 { return false }
         }
         return s <= noteEnd
+    }
+
+    // MARK: Item placement search (code review 2026-11-16, A18)
+
+    /// Most work one note's placement search may take: 16,777,216 steps (one
+    /// step = one item looked at or one candidate weighed — well under a
+    /// second). A real note is placed in a few thousand steps; only a hostile
+    /// item table reaches this. The note is then reported unplaced (counted in
+    /// the import's failures, never dropped silently) and the limit is logged.
+    static let placementStepLimit = 1 << 24
+
+    enum PlacementOutcome: Equatable {
+        case placed(Set<Int>)
+        case notFound
+        case stepLimit
+        case cancelled
+    }
+
+    /// Finds which items' values sit on the other side of what their
+    /// ITEM_SUMMARY flag says: no flip, then one, two or three flips whose
+    /// sizes make the non-summary length come out exactly — the FIRST such set
+    /// in the order of the earlier search (single i, then pairs (i, j) for
+    /// each i in item order; then triples in lexicographic order) for which
+    /// every RFC822_TEXT / MIME_PART value starts with its structure version.
+    ///
+    /// The earlier search tried every combination and checked each one over
+    /// all items: O(n³–n⁴) for up to 65,535 items, with no way out. Here a
+    /// candidate is checked in O(1): an item's position after the flips
+    /// depends only on its side and on the summed size change of the flips
+    /// before it, so with per-side prefix sums each checked item is one
+    /// lookup, and a stretch between two flips is scanned once per size
+    /// change (remembered). Candidates come from a by-size index, never by
+    /// scanning every pair. The chosen set is still confirmed by `confirm`
+    /// (the full check). `stepLimit` bounds hostile tables; cancellation is
+    /// honoured.
+    ///
+    /// - Parameters:
+    ///   - sizes: value length per item (0 = no value).
+    ///   - defaultSummary: items whose flag says "summary" (sized items only).
+    ///   - required: the 16-bit structure version a value must start with, 0 = unchecked.
+    static func searchPlacement(sizes: [Int], defaultSummary: Set<Int>, required: [UInt16], nsBytes: Int,
+                                data: Data, tableEnd: Int, nsBase: Int, noteEnd: Int,
+                                stepLimit: Int = placementStepLimit,
+                                confirm: (Set<Int>) -> Bool) -> PlacementOutcome {
+        struct Stop: Error { let outcome: PlacementOutcome }
+        let sized = sizes.indices.filter { sizes[$0] > 0 }
+        let m = sized.count
+        var inSummary = [Bool](repeating: false, count: m)
+        var delta = [Int](repeating: 0, count: m)
+        var summaryBefore = [Int](repeating: 0, count: m)
+        var nsBefore = [Int](repeating: 0, count: m)
+        var req = [UInt16](repeating: 0, count: m)
+        var summaryTotal = 0, nsTotal = 0
+        for p in 0..<m {
+            let i = sized[p], size = sizes[i]
+            inSummary[p] = defaultSummary.contains(i)
+            summaryBefore[p] = summaryTotal
+            nsBefore[p] = nsTotal
+            if inSummary[p] { summaryTotal += size; delta[p] = size } else { nsTotal += size; delta[p] = -size }
+            req[p] = size >= 2 ? required[i] : 0
+        }
+        // Flipping p changes the non-summary length by delta[p]; the flips must add up to `need`.
+        let need = nsBytes - nsTotal
+        // Every candidate leaves the same lengths on each side (summary: all
+        // sizes minus nsBytes), so the bounds part of the full check is the
+        // same for all of them: decided once.
+        let summaryAfter = summaryTotal + nsTotal - nsBytes
+        guard summaryAfter >= 0, tableEnd + summaryAfter <= noteEnd,
+              summaryAfter == 0 || tableEnd + summaryAfter <= data.count,
+              nsBytes == 0 || nsBase + nsBytes <= data.count else { return .notFound }
+
+        // `d` = summed delta of the flips before p.
+        func okStay(_ p: Int, _ d: Int) -> Bool {
+            guard req[p] != 0 else { return true }
+            return u16(data, inSummary[p] ? tableEnd + summaryBefore[p] - d : nsBase + nsBefore[p] + d) == req[p]
+        }
+        func okMove(_ p: Int, _ d: Int) -> Bool {
+            guard req[p] != 0 else { return true }
+            return u16(data, inSummary[p] ? nsBase + nsBefore[p] + d : tableEnd + summaryBefore[p] - d) == req[p]
+        }
+        var steps = 0
+        func step() throws {
+            steps += 1
+            if steps > stepLimit { throw Stop(outcome: .stepLimit) }
+            if steps & 0xFFFF == 0, Task.isCancelled { throw Stop(outcome: .cancelled) }
+        }
+        func placed(_ flips: [Int]) throws -> Set<Int>? {
+            for _ in 0..<(m >> 10) { try step() }                     // the full check is O(n)
+            let set = defaultSummary.symmetricDifference(flips.map { sized[$0] })
+            return confirm(set) ? set : nil
+        }
+        // First item failing in place with no flip before it / with all flips before it.
+        let firstFailAtZero = (0..<m).first { !okStay($0, 0) } ?? m
+        let lastFailAtNeed = (0..<m).last { !okStay($0, need) } ?? -1
+        var byDelta: [Int: [Int]] = [:]
+        for p in 0..<m { byDelta[delta[p], default: []].append(p) }
+        func firstIndex(in list: [Int], after v: Int) -> Int {
+            var lo = 0, hi = list.count
+            while lo < hi { let mid = (lo + hi) / 2; if list[mid] <= v { lo = mid + 1 } else { hi = mid } }
+            return lo
+        }
+        // Per summed delta: items [from, okUntil) stay valid; `failed` = okUntil itself does not.
+        var runs: [Int: (from: Int, okUntil: Int, failed: Bool)] = [:]
+        /// The first item in [s, t) that is not valid in place after flips summing to `d`.
+        func firstFail(_ d: Int, _ s: Int, _ t: Int) throws -> Int? {
+            guard s < t else { return nil }
+            var from = s, p = s
+            if let r = runs[d], r.from <= s, s <= r.okUntil {
+                if r.okUntil >= t { return nil }
+                if r.failed { return r.okUntil }
+                from = r.from; p = r.okUntil
+            }
+            while p < t {
+                try step()
+                if !okStay(p, d) { runs[d] = (from, p, true); return p }
+                p += 1
+            }
+            runs[d] = (from, t, false)
+            return nil
+        }
+
+        do {
+            if need == 0, firstFailAtZero == m, let set = try placed([]) { return .placed(set) }
+            // An item before the first flip sees no change, so the first flip
+            // is at or before `firstFailAtZero`; the last at or after `lastFailAtNeed`.
+            let xEnd = min(m, firstFailAtZero + 1)
+            for x in 0..<xEnd {
+                try step()
+                guard okMove(x, 0) else { continue }
+                let d = delta[x]
+                if d == need, lastFailAtNeed <= x, let set = try placed([x]) { return .placed(set) }
+                guard let ys = byDelta[need - d] else { continue }
+                var k = firstIndex(in: ys, after: max(x, lastFailAtNeed - 1))
+                while k < ys.count {
+                    let y = ys[k]
+                    try step()
+                    if try firstFail(d, x + 1, y) != nil { break }
+                    if okMove(y, d), let set = try placed([x, y]) { return .placed(set) }
+                    k += 1
+                }
+            }
+            // Triples. The third flip is at or after `lastFailAtNeed`; when few
+            // size changes occur there, only the y that can pair with one are visited.
+            var zDeltas = Set<Int>()
+            for p in max(lastFailAtNeed, 0)..<m { zDeltas.insert(delta[p]) }
+            let fewZ = zDeltas.count <= 16
+            for x in 0..<xEnd {
+                try step()
+                guard okMove(x, 0) else { continue }
+                let d1 = delta[x]
+                var candidates: [Int] = []
+                if fewZ {
+                    for v in zDeltas {
+                        guard let list = byDelta[need - d1 - v] else { continue }
+                        let from = firstIndex(in: list, after: x)
+                        for _ in 0..<((list.count - from) >> 6) { try step() }
+                        candidates += list[from...]
+                    }
+                    candidates.sort()
+                }
+                var c = 0
+                var y = fewZ ? (candidates.first ?? m) : x + 1
+                while y < m {
+                    try step()
+                    if try firstFail(d1, x + 1, y) != nil { break }
+                    if okMove(y, d1) {
+                        let d2 = d1 + delta[y]
+                        if let zs = byDelta[need - d2] {
+                            var k = firstIndex(in: zs, after: max(y, lastFailAtNeed - 1))
+                            while k < zs.count {
+                                let z = zs[k]
+                                try step()
+                                if try firstFail(d2, y + 1, z) != nil { break }
+                                if okMove(z, d2), let set = try placed([x, y, z]) { return .placed(set) }
+                                k += 1
+                            }
+                        }
+                    }
+                    if fewZ { c += 1; y = c < candidates.count ? candidates[c] : m } else { y += 1 }
+                }
+            }
+        } catch let stop as Stop {
+            return stop.outcome
+        } catch {
+            return .notFound
+        }
+        return .notFound
     }
 
     // MARK: Byte helpers

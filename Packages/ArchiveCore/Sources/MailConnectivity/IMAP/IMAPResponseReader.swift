@@ -104,12 +104,46 @@ public enum IMAPResponse: Sendable, Equatable {
 public enum IMAPProtocolError: Error, Sendable, Equatable, LocalizedError {
     case malformed(String)
     case literalTooLarge(String)
+    /// A stated reader limit was passed (code review 2026-11-16, A19).
+    case limitExceeded(IMAPReaderLimit)
     public var errorDescription: String? {
         switch self {
         case .malformed(let why): return "The mail server sent a response mailin cannot read: \(why)."
         case .literalTooLarge(let n): return "The mail server announced a literal of \(n) bytes, which is not a valid size."
+        case .limitExceeded(let limit): return "The mail server sent \(limit.what), more than mailin reads (\(limit.stated))."
         }
     }
+}
+
+/// The reader's stated limits. They bound what one response may make mailin
+/// hold in memory or recurse over; none of them bounds a message: a message
+/// body (BODY[] / BINARY[] / RFC822) is streamed to its sink by byte count
+/// and has no limit here.
+public enum IMAPReaderLimit: String, Sendable, Equatable {
+    /// Text of one response line without its LF.
+    case lineLength
+    /// One literal that is kept in memory (anything but a message body).
+    case bufferedLiteral
+    /// Parenthesised lists inside one another.
+    case nestingDepth
+
+    var what: String {
+        switch self {
+        case .lineLength: return "a response line longer than \(Self.mebibytes(IMAPResponseFramer.maximumLineBytes))"
+        case .bufferedLiteral: return "a literal (not a message) longer than \(Self.mebibytes(IMAPResponseFramer.maximumBufferedLiteralBytes))"
+        case .nestingDepth: return "lists nested more than \(IMAPTokenCursor.maximumNestingDepth) deep"
+        }
+    }
+
+    var stated: String {
+        switch self {
+        case .lineLength: return "limit: \(Self.mebibytes(IMAPResponseFramer.maximumLineBytes)) per line"
+        case .bufferedLiteral: return "limit: \(Self.mebibytes(IMAPResponseFramer.maximumBufferedLiteralBytes)) per literal; messages are not limited"
+        case .nestingDepth: return "limit: \(IMAPTokenCursor.maximumNestingDepth) levels"
+        }
+    }
+
+    private static func mebibytes(_ n: Int) -> String { "\(n >> 20) MiB" }
 }
 
 // MARK: - Framing
@@ -130,6 +164,17 @@ public typealias IMAPLiteralSink = @Sendable (Data) throws -> Void
 /// Incremental framer: feed it network chunks of any size; it returns every
 /// response completed by those bytes. Not thread-safe (one per connection).
 public final class IMAPResponseFramer {
+    /// Longest response line (text up to LF) the framer holds: 128 MiB. The
+    /// longest legitimate line mailin asks for is a plain `* SEARCH` reply
+    /// (servers without ESEARCH) — about 11 bytes per UID, so this is room
+    /// for more than 11 million messages in one mailbox. Message bodies are
+    /// literals, never line text.
+    public static let maximumLineBytes = 128 << 20
+    /// Longest literal kept in memory: 64 MiB. Only protocol values arrive
+    /// this way (mailbox names, labels, quoted text); a message body is routed
+    /// to its sink and streamed, whatever its size.
+    public static let maximumBufferedLiteralBytes = 64 << 20
+
     /// Decides, from the text of the current response so far (ending just
     /// before the literal marker), whether a literal is streamed. nil = buffered.
     public var literalRouter: ((_ precedingText: [UInt8], _ length: Int64) -> IMAPLiteralSink?)?
@@ -169,6 +214,9 @@ public final class IMAPResponseFramer {
                 // Text: scan to LF.
                 var j = i
                 while j < n && bytes[j] != 0x0A { j += 1 }
+                guard line.count + (j - i) <= Self.maximumLineBytes + 1 else {    // + the CR before LF
+                    throw IMAPProtocolError.limitExceeded(.lineLength)
+                }
                 line.append(contentsOf: UnsafeBufferPointer(rebasing: bytes[i..<j]))
                 if j == n { i = n; break }
                 i = j + 1                       // past LF
@@ -177,7 +225,7 @@ public final class IMAPResponseFramer {
                     segments.append(.text(line))
                     let preceding = line
                     line = []
-                    beginLiteral(length: length, preceding: preceding)
+                    try beginLiteral(length: length, preceding: preceding)
                     if literalRemaining == 0 { endLiteral() }
                 } else {
                     segments.append(.text(line))
@@ -190,11 +238,16 @@ public final class IMAPResponseFramer {
         return out
     }
 
-    private func beginLiteral(length: Int64, preceding: [UInt8]) {
+    private func beginLiteral(length: Int64, preceding: [UInt8]) throws {
+        let sink = literalRouter?(precedingText(preceding), length)
+        // Refused at the marker: nothing of it is held.
+        guard sink != nil || length <= Int64(Self.maximumBufferedLiteralBytes) else {
+            throw IMAPProtocolError.limitExceeded(.bufferedLiteral)
+        }
         inLiteral = true
         literalRemaining = length
         literalBuffer = []
-        literalSink = literalRouter?(precedingText(preceding), length)
+        literalSink = sink
         if literalSink != nil {
             segments.append(.streamed(length))
         }
@@ -238,6 +291,10 @@ public final class IMAPResponseFramer {
 
 /// Reads values from a framed response: text bytes with literals in place.
 struct IMAPTokenCursor {
+    /// Deepest list nesting read: 128 levels. No response mailin asks for
+    /// nests more than a few levels; each level is one recursion of `value()`.
+    static let maximumNestingDepth = 128
+
     private let segments: [IMAPRawResponse.Segment]
     private var seg = 0
     private var pos = 0
@@ -316,7 +373,7 @@ struct IMAPTokenCursor {
         return String(decoding: out, as: UTF8.self)
     }
 
-    mutating func value() throws -> IMAPValue {
+    mutating func value(depth: Int = 0) throws -> IMAPValue {
         skipSpaces()
         if atLiteral {
             let s = normalizedSegment()!
@@ -330,13 +387,14 @@ struct IMAPTokenCursor {
         guard let c = peek else { throw IMAPProtocolError.malformed("a value was expected") }
         switch c {
         case UInt8(ascii: "("):
+            guard depth < Self.maximumNestingDepth else { throw IMAPProtocolError.limitExceeded(.nestingDepth) }
             advance()
             var items: [IMAPValue] = []
             while true {
                 skipSpaces()
                 if peek == UInt8(ascii: ")") { advance(); return .list(items) }
                 if atEnd { throw IMAPProtocolError.malformed("an unclosed list") }
-                items.append(try value())
+                items.append(try value(depth: depth + 1))
             }
         case UInt8(ascii: "\""):
             advance()
@@ -459,15 +517,16 @@ public struct IMAPUIDSet: Sendable, Equatable {
         for u in uids.sorted() { appendAscending(u) }
     }
 
-    /// Parses "1:5,7,9:12" (no "*").
+    /// Parses "1:5,7,9:12" (no "*"). nil for anything else — ":", "1:",
+    /// "1::2", "1,,2", "1,", a number past 4294967295 — never a trap.
     public init?(sequenceSet: String) {
         if sequenceSet.isEmpty { return }
         var all: [ClosedRange<UInt32>] = []
-        for part in sequenceSet.split(separator: ",") {
-            let ends = part.split(separator: ":")
-            guard let a = UInt32(ends[0]) else { return nil }
-            let b = ends.count > 1 ? UInt32(ends[1]) : a
-            guard let b, ends.count <= 2 else { return nil }
+        for part in sequenceSet.split(separator: ",", omittingEmptySubsequences: false) {
+            let ends = part.split(separator: ":", omittingEmptySubsequences: false)
+            guard ends.count == 1 || ends.count == 2,
+                  ends.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy { $0 >= 0x30 && $0 <= 0x39 } }),
+                  let a = UInt32(ends[0]), let b = UInt32(ends[ends.count - 1]) else { return nil }
             all.append(min(a, b)...max(a, b))
         }
         // Sort once, then merge in one pass: O(n log n), not one O(n) insert

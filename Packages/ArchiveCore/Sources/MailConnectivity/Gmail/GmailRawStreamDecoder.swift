@@ -85,6 +85,14 @@ struct Base64URLStreamDecoder {
 
 /// The streaming reader of one `format=raw` response.
 struct GmailRawStreamDecoder {
+    /// Most metadata kept beside the streamed raw value: 1 MiB. A `format=raw`
+    /// response carries id, threadId, labelIds, snippet, historyId,
+    /// internalDate and sizeEstimate — a few hundred bytes; 10,000 label IDs
+    /// (Gmail's label limit) are about 300 KB. Past this the response is
+    /// refused by name instead of growing without end. The raw message itself
+    /// is not limited.
+    static let maximumMetadataBytes = 1 << 20
+
     /// The response JSON with the raw value emptied (small).
     private(set) var metadataJSON = Data()
     private(set) var rawByteCount: Int64 = 0
@@ -134,6 +142,9 @@ struct GmailRawStreamDecoder {
         if depth == 0 {
             if Self.isWhitespace(byte) { return }
             guard byte == UInt8(ascii: "{") else { throw GmailRawDecodeError.malformed("not a JSON object") }
+        }
+        guard metadataJSON.count < Self.maximumMetadataBytes else {
+            throw GmailRawDecodeError.malformed("the message metadata beside the raw value is larger than 1 MiB, the limit")
         }
         metadataJSON.append(byte)
         if inString {

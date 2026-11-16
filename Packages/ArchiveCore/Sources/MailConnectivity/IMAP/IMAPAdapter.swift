@@ -605,7 +605,11 @@ public actor IMAPAdapter: MailProviderAdapter {
             var items: [RemoteItemRef] = []
             while true {
                 if let top, after >= top { return EnumerationPage(items: items, nextCursor: nil) }
-                let lo = after + 1
+                // UID 4294967295 is the highest a UID can be: nothing is newer
+                // (`after + 1` trapped there on servers that send no UIDNEXT).
+                let (firstUID, overflow) = after.addingReportingOverflow(1)
+                if overflow { return EnumerationPage(items: items, nextCursor: nil) }
+                let lo = firstUID
                 let hi: UInt32? = top.map { UInt32(min(UInt64($0), UInt64(lo) + UInt64(window) - 1)) }
                 let set = hi.map { "\(lo):\($0)" } ?? "\(lo):*"
                 let listed: [IMAPGmailListing] = gmail
