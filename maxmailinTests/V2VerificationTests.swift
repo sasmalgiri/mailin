@@ -13064,6 +13064,43 @@ final class Review1116CTests: XCTestCase {
     }
 
 
+    /// Rule 8: an expert's findings (enhanceWithAI, digest narration, consults all
+    /// read them) and triage go through the figures gate. A fake model answer with
+    /// a figure found nowhere loses that finding; a figure from the emails or from
+    /// the code-computed data the expert was handed stays.
+    func testRule8_expertFindingsAndTriage_dropUnsupportedFigures() throws {
+        #if canImport(FoundationModels)
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("FoundationModels types need macOS 26") }
+        var email = Self.email(1, subject: "Invoice")
+        email.plainBody = "Please pay the invoice of 33,800 by Friday."
+        let stated = ["CONTACTS: a@b.com: 1,250 emails"]
+        let fake = AISessionFindings(findings: [
+            AIFinding(finding: "The invoice totals 47,600 across three payments.", evidence: "Invoice 1", relevance: .high),
+            AIFinding(finding: "The invoice asks for 33,800 by Friday.", evidence: "Invoice 1", relevance: .high),
+            AIFinding(finding: "a@b.com sent 1,250 emails.", evidence: "a@b.com", relevance: .medium),
+        ], summary: "Payments add up to 47,600. One invoice is due.", confidence: 4)
+        let grounded = FoundationModelEngine.groundedFindings(fake, emails: [email], stated: stated)
+        XCTAssertEqual(grounded.findings.map(\.finding), ["The invoice asks for 33,800 by Friday.", "a@b.com sent 1,250 emails."])
+        XCTAssertFalse(grounded.summary.contains("47,600"), grounded.summary)
+        XCTAssertTrue(grounded.summary.contains("One invoice is due"), grounded.summary)
+
+        let triage = EmailTriageResult(items: [
+            EmailTriageItem(subject: "Invoice 1", sender: "a@b.com", reason: "Owes 98,000 overall", action: "Pay", urgency: .today),
+            EmailTriageItem(subject: "Invoice 1", sender: "a@b.com", reason: "Invoice of 33,800 due", action: "Pay by Friday", urgency: .today),
+        ], summary: "Total due is 98,000.")
+        let gatedTriage = FoundationModelEngine.groundedTriage(triage, emails: [email], stated: [])
+        XCTAssertEqual(gatedTriage.items.map(\.reason), ["Invoice of 33,800 due"])
+        XCTAssertFalse(gatedTriage.summary.contains("98,000"))
+
+        // The model paths really call the gate.
+        let engine = try Self.appSource("FoundationModelEngine.swift")
+        XCTAssertTrue(engine.contains("return groundedFindings(response.content, emails: emails, stated: [query, enrichedData])"))
+        XCTAssertTrue(engine.contains("return groundedTriage(response.content, emails: emails, stated: [context])"))
+        #else
+        throw XCTSkip("no FoundationModels")
+        #endif
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.

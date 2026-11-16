@@ -2931,7 +2931,8 @@ struct FoundationModelEngine {
             to: "Triage these emails:\n\n\(context)",
             generating: EmailTriageResult.self
         )
-        return response.content
+        // Rule 8: figures only from the emails or the scores computed above.
+        return groundedTriage(response.content, emails: emails, stated: [context])
     }
 
     static func insightsStructured(_ emails: [MBOXParser.RawEmail]) async throws -> EmailInsightsResult {
@@ -5528,7 +5529,7 @@ struct FoundationModelEngine {
         }
         // Amounts and long numbers the emails don't contain are the model's
         // own arithmetic or guesses: those sentences are removed.
-        let sources = emails.map { ($0.headers["Subject"] ?? "") + " " + $0.plainBody + " " + ($0.headers["Date"] ?? "") }
+        let sources = groundingSources(emails)
         var allowed: Set<String> = [String(emails.count)]
         for match in query.matches(of: /\d{3,}/) { allowed.insert(String(query[match.range])) }
         cleaned = AIGroundingGate.removingUnsupportedFigures(cleaned, sources: sources, allowed: allowed).text
@@ -5761,6 +5762,48 @@ struct FoundationModelEngine {
         }
 
         return result
+    }
+
+    // MARK: - Rule 8: figures in model prose must come from the emails or the code
+
+    /// What a model answer may take its figures from: each email's subject, body and date.
+    static func groundingSources(_ emails: [MBOXParser.RawEmail]) -> [String] {
+        emails.map { ($0.headers["Subject"] ?? "") + " " + $0.plainBody + " " + ($0.headers["Date"] ?? "") }
+    }
+
+    /// Prose the model wrote, with every sentence that states an amount or long
+    /// number found neither in the emails nor in `stated` (the question and the
+    /// figures the code computed and handed to the model) removed — and said so.
+    static func groundedProse(_ text: String, emails: [MBOXParser.RawEmail], stated: [String]) -> String {
+        AIGroundingGate.removingUnsupportedFigures(text, sources: groundingSources(emails) + stated).text
+    }
+
+    /// True when `text` states a figure that is in neither the emails nor `stated`.
+    private static func hasUnsupportedFigure(_ text: String, sources: [String]) -> Bool {
+        AIGroundingGate.removingUnsupportedFigures(text, sources: sources).removed > 0
+    }
+
+    /// An expert's findings with every finding that states an unsupported
+    /// figure dropped (a finding is one sentence: it goes whole) and the
+    /// summary's unsupported sentences removed.
+    @available(macOS 26, iOS 26, *)
+    static func groundedFindings(_ findings: AISessionFindings, emails: [MBOXParser.RawEmail], stated: [String]) -> AISessionFindings {
+        let sources = groundingSources(emails) + stated
+        var out = findings
+        out.findings = findings.findings.filter { !hasUnsupportedFigure($0.finding + " — " + $0.evidence, sources: sources) }
+        out.summary = AIGroundingGate.removingUnsupportedFigures(findings.summary, sources: sources).text
+        return out
+    }
+
+    /// Triage with every item whose reason or action states an unsupported
+    /// figure dropped and the summary's unsupported sentences removed.
+    @available(macOS 26, iOS 26, *)
+    static func groundedTriage(_ triage: EmailTriageResult, emails: [MBOXParser.RawEmail], stated: [String]) -> EmailTriageResult {
+        let sources = groundingSources(emails) + stated
+        var out = triage
+        out.items = triage.items.filter { !hasUnsupportedFigure($0.reason + ". " + $0.action, sources: sources) }
+        out.summary = AIGroundingGate.removingUnsupportedFigures(triage.summary, sources: sources).text
+        return out
     }
 
     private static func runExpertStructured(
@@ -6240,7 +6283,10 @@ struct FoundationModelEngine {
                 to: "Question: \(query)\n\nData:\n\(enrichedData)",
                 generating: AISessionFindings.self
             )
-            return response.content
+            // Rule 8: a figure the expert states must be in the emails or in the
+            // code-computed data it was given (enhanceWithAI, digest narration and
+            // every consult read their findings from here).
+            return groundedFindings(response.content, emails: emails, stated: [query, enrichedData])
         } catch {
             return AISessionFindings(
                 findings: [AIFinding(finding: enrichedData, evidence: "", relevance: .medium)],
