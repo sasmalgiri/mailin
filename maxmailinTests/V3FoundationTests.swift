@@ -1224,6 +1224,54 @@ final class V31ShortcutsTests: XCTestCase {
         defer { ShortcutsPolicy.actionsEnabled = was }
         XCTAssertThrowsError(try ShortcutsPolicy.requireEnabled())
     }
+
+    /// Review C16: the older AI intents (Ask AI, Digest, Sentiment, Security
+    /// Report) make the newer intents' checks — page, Shortcuts switch and
+    /// purchase — and Ask AI counts against Free's daily AI questions.
+    @MainActor
+    func testLegacyAIIntents_areGatedLikeTheNewerOnes() throws {
+        let suite = "mailin-legacy-intents-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+        let open: () throws -> Void = {}
+        let off: () throws -> Void = { throw ShortcutsActionError.switchedOff }
+
+        // A Page-1-only install: refused, model or not.
+        for usesModel in [true, false] {
+            XCTAssertThrowsError(try LegacyIntentPolicy.requireAllowed(usesModel: usesModel, aiEnabled: false, shortcutsCheck: open,
+                                                                       tier: .professional, defaults: defaults)) {
+                guard case ShortcutsActionError.aiPageOff = $0 else { return XCTFail("\($0)") }
+            }
+        }
+        // The Shortcuts-actions switch / purchase check runs too.
+        XCTAssertThrowsError(try LegacyIntentPolicy.requireAllowed(usesModel: false, aiEnabled: true, shortcutsCheck: off,
+                                                                   tier: .professional, defaults: defaults))
+        // Free: the daily allowance, then refused; analysis without the model is not counted.
+        for _ in 0..<AIAssistantView.freeQueryLimit {
+            XCTAssertNoThrow(try LegacyIntentPolicy.requireAllowed(usesModel: true, aiEnabled: true, shortcutsCheck: open,
+                                                                   tier: .free, defaults: defaults))
+            LegacyIntentPolicy.countModelQuestion(tier: .free, defaults: defaults)
+        }
+        XCTAssertThrowsError(try LegacyIntentPolicy.requireAllowed(usesModel: true, aiEnabled: true, shortcutsCheck: open,
+                                                                   tier: .free, defaults: defaults)) {
+            guard case ShortcutsActionError.freeAIQuestionsUsed = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertNoThrow(try LegacyIntentPolicy.requireAllowed(usesModel: false, aiEnabled: true, shortcutsCheck: open,
+                                                               tier: .free, defaults: defaults))
+        // Personal and up: unlimited, never counted.
+        XCTAssertNoThrow(try LegacyIntentPolicy.requireAllowed(usesModel: true, aiEnabled: true, shortcutsCheck: open,
+                                                               tier: .personal, defaults: defaults))
+        let before = defaults.integer(forKey: LegacyIntentPolicy.freeQueryKey)
+        LegacyIntentPolicy.countModelQuestion(tier: .professional, defaults: defaults)
+        XCTAssertEqual(defaults.integer(forKey: LegacyIntentPolicy.freeQueryKey), before)
+
+        // Rule 6: the sample is the person's choice and the answer states it.
+        XCTAssertEqual(LegacyIntentPolicy.sampleLine(read: 200, total: 900), "200 most recent of 900 emails")
+        XCTAssertEqual(LegacyIntentPolicy.sampleLine(read: 50, total: 50), "all 50 emails")
+        XCTAssertEqual(AnalyzeSentimentIntent().sampleSize, 200)
+        XCTAssertEqual(GetSecurityReportIntent().sampleSize, 500)
+        XCTAssertEqual(GetDigestIntent().sampleSize, 300)
+    }
 }
 
 // MARK: - 3.1 T12: two reviewers on one shared folder

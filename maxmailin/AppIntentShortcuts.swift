@@ -22,8 +22,11 @@ private enum ArchiveIntentSupport {
         return try? await ArchiveAggregateService.shared.total()
     }
 
-    /// The `limit` most recent full emails via bounded keyset pages. `limit`
-    /// is a hard cap (callers pass ≤500) — the corpus is never materialized.
+    /// The `limit` most recent full emails via bounded keyset pages. Rule 6
+    /// (review C16): `limit` is never a hidden constant — it is the intent's
+    /// "Most recent emails" parameter, which the person sets and the answer
+    /// states ("N of TOTAL"), or the on-device model's context for Ask AI
+    /// (rule 8: the model reads 4,096 tokens).
     static func recentEmails(limit: Int) async -> [MBOXParser.RawEmail] {
         guard limit > 0 else { return [] }
         var acc: [MBOXParser.RawEmail] = []
@@ -35,6 +38,49 @@ private enum ArchiveIntentSupport {
             }
         } catch { }
         return Array(acc.prefix(limit))
+    }
+}
+
+// MARK: - Gates for the older AI intents (review C16)
+
+/// The four older intents (Ask AI, Digest, Sentiment, Security Report) used
+/// to skip every gate: Siri ran the on-device model on a Page-1-only Free
+/// install, unlimited. They now make the checks the newer intents make — the
+/// AI Insights page, the Shortcuts-actions switch and purchase
+/// (`ShortcutsPolicy.requireEnabled()`), and for the model, Free's daily
+/// AI-question allowance.
+enum LegacyIntentPolicy {
+    /// Pushed by `CapabilityWiring` (`aiAssistant`: AI Insights page + switch).
+    nonisolated(unsafe) static var aiPageEnabled = false
+    static let freeQueryKey = "freeAIQueryCount"
+
+    @MainActor
+    static func requireAllowed(usesModel: Bool,
+                               aiEnabled: Bool = aiPageEnabled,
+                               shortcutsCheck: () throws -> Void = ShortcutsPolicy.requireEnabled,
+                               tier: PurchaseTier = TierAccess.tier,
+                               defaults: UserDefaults = .standard) throws {
+        guard aiEnabled else { throw ShortcutsActionError.aiPageOff }
+        try shortcutsCheck()
+        guard usesModel, tier < .personal else { return }
+        if defaults === UserDefaults.standard { StoreManager.resetDailyCountersIfNeeded() }
+        if defaults.integer(forKey: freeQueryKey) >= AIAssistantView.freeQueryLimit {
+            throw ShortcutsActionError.freeAIQuestionsUsed
+        }
+    }
+
+    /// One model answer given: counts against Free's allowance.
+    static func countModelQuestion(tier: PurchaseTier = TierAccess.tier, defaults: UserDefaults = .standard) {
+        guard tier < .personal else { return }
+        defaults.set(defaults.integer(forKey: freeQueryKey) + 1, forKey: freeQueryKey)
+    }
+
+    /// "Analyzed 200 of 12,000 emails (the most recent)" — the sample the
+    /// person chose, stated with the whole archive.
+    static func sampleLine(read: Int, total: Int) -> String {
+        read < total
+            ? String(localized: "\(read) most recent of \(total) emails")
+            : String(localized: "all \(total) emails")
     }
 }
 
@@ -141,19 +187,22 @@ struct AnalyzeSentimentIntent: AppIntent {
     static var title: LocalizedStringResource = "Analyze Email Sentiment"
     static var description: IntentDescription = "Analyzes the emotional tone of imported emails"
 
+    @Parameter(title: "Most recent emails", description: "How many of the newest emails to read. The answer says how many it read of the whole archive.", default: 200)
+    var sampleSize: Int
+
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        try await MainActor.run { try LegacyIntentPolicy.requireAllowed(usesModel: false) }
         guard let total = await ArchiveIntentSupport.activatedTotal() else {
             return .result(value: ArchiveIntentSupport.notReadyMessage)
         }
         guard total > 0 else {
             return .result(value: ArchiveIntentSupport.emptyMessage)
         }
-        // Analyze a bounded recent sample (cap: 200) to keep Siri response fast
-        let sample = await ArchiveIntentSupport.recentEmails(limit: 200)
+        // The newest `sampleSize` emails — the person's choice, stated.
+        let sample = await ArchiveIntentSupport.recentEmails(limit: max(1, sampleSize))
         let (average, label, positive, negative, neutral) = EmailNLPEngine.averageSentiment(of: sample)
-        let analyzed = sample.count
         let scoreFormatted = String(format: "%.2f", average)
-        return .result(value: "Analyzed \(analyzed) emails: overall \(label) (score: \(scoreFormatted)). \(positive) positive, \(negative) negative, \(neutral) neutral.")
+        return .result(value: "Analyzed the \(LegacyIntentPolicy.sampleLine(read: sample.count, total: total)): overall \(label) (score: \(scoreFormatted)). \(positive) positive, \(negative) negative, \(neutral) neutral.")
     }
 
     static var openAppWhenRun: Bool = true
@@ -169,6 +218,7 @@ struct AskAIAboutEmailsIntent: AppIntent {
     var question: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        try await MainActor.run { try LegacyIntentPolicy.requireAllowed(usesModel: true) }
         guard let total = await ArchiveIntentSupport.activatedTotal() else {
             return .result(value: ArchiveIntentSupport.notReadyMessage)
         }
@@ -181,8 +231,9 @@ struct AskAIAboutEmailsIntent: AppIntent {
             guard FoundationModelEngine.isAvailable else {
                 return .result(value: "Apple Intelligence is not available on this device.")
             }
-            // Bounded evidence (cap: 20): FTS5-ranked retrieval for the
-            // question; falls back to the 20 most recent when nothing matches.
+            // Evidence sized to the on-device model's context (rule 8, 4,096
+            // tokens): FTS5-ranked retrieval for the question; falls back to
+            // the 20 most recent when nothing matches.
             var evidence = ((try? await ArchiveRetrievalService.shared.retrieve(question, limit: 20)) ?? []).map(\.email)
             if evidence.isEmpty {
                 evidence = await ArchiveIntentSupport.recentEmails(limit: 20)
@@ -194,6 +245,7 @@ struct AskAIAboutEmailsIntent: AppIntent {
                 allEmailCount: total,
                 onUpdate: { _ in }
             )
+            LegacyIntentPolicy.countModelQuestion()
             let trimmed = String(result.prefix(500))
             return .result(value: trimmed)
         }
@@ -210,7 +262,11 @@ struct GetSecurityReportIntent: AppIntent {
     static var title: LocalizedStringResource = "Get Email Security Report"
     static var description: IntentDescription = "Run a security scan on your email archive and get a summary"
 
+    @Parameter(title: "Most recent emails", description: "How many of the newest emails to scan. The answer says how many it scanned of the whole archive.", default: 500)
+    var sampleSize: Int
+
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        try await MainActor.run { try LegacyIntentPolicy.requireAllowed(usesModel: false) }
         guard let total = await ArchiveIntentSupport.activatedTotal() else {
             return .result(value: ArchiveIntentSupport.notReadyMessage)
         }
@@ -218,15 +274,15 @@ struct GetSecurityReportIntent: AppIntent {
             return .result(value: ArchiveIntentSupport.emptyMessage)
         }
 
-        // Bounded scan of the most recent emails (cap: 500, same as before).
-        let sample = await ArchiveIntentSupport.recentEmails(limit: 500)
+        // The newest `sampleSize` emails — the person's choice, stated.
+        let sample = await ArchiveIntentSupport.recentEmails(limit: max(1, sampleSize))
         let phishingFlags = EmailNLPEngine.detectPhishing(in: sample)
         let highRisk = phishingFlags.filter { $0.riskLevel == .high }.count
         let medRisk = phishingFlags.filter { $0.riskLevel == .medium }.count
         let pii = EmailNLPEngine.piiSummary(in: sample)
         let anomalies = AnomalyDetectionEngine.detectAnomalies(in: sample)
 
-        var report = "Security scan of \(sample.count) emails:\n"
+        var report = "Security scan of the \(LegacyIntentPolicy.sampleLine(read: sample.count, total: total)):\n"
         report += "Phishing risk: \(highRisk) high-risk, \(medRisk) medium-risk\n"
 
         let piiCount = pii.values.reduce(0, +)
@@ -255,7 +311,11 @@ struct GetDigestIntent: AppIntent {
     static var title: LocalizedStringResource = "Get Email Digest"
     static var description: IntentDescription = "Generate an AI-powered digest summary of your email archive"
 
+    @Parameter(title: "Most recent emails", description: "How many of the newest emails the topics and mood come from. The answer says how many it read of the whole archive.", default: 300)
+    var sampleSize: Int
+
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        try await MainActor.run { try LegacyIntentPolicy.requireAllowed(usesModel: false) }
         guard let total = await ArchiveIntentSupport.activatedTotal() else {
             return .result(value: ArchiveIntentSupport.notReadyMessage)
         }
@@ -263,14 +323,15 @@ struct GetDigestIntent: AppIntent {
             return .result(value: ArchiveIntentSupport.emptyMessage)
         }
 
-        // Topics/mood from a bounded recent sample (cap: 300, same as before);
-        // top senders from an exact whole-archive SQL aggregate.
-        let sample = await ArchiveIntentSupport.recentEmails(limit: 300)
+        // Topics/mood from the newest `sampleSize` emails (the person's
+        // choice, stated); top senders from an exact whole-archive SQL aggregate.
+        let sample = await ArchiveIntentSupport.recentEmails(limit: max(1, sampleSize))
         let topics = EmailNLPEngine.extractTopics(from: sample, limit: 5)
         let sentiment = EmailNLPEngine.averageSentiment(of: sample)
         let topSenders = (try? await ArchiveAggregateService.shared.topSenders(limit: 5)) ?? []
 
         var digest = "Digest for \(total) emails:\n\n"
+        digest += "Topics and mood from the \(LegacyIntentPolicy.sampleLine(read: sample.count, total: total)).\n"
         digest += "Top topics: \(topics.map(\.word).joined(separator: ", "))\n"
         digest += "Overall mood: \(sentiment.label) (score: \(String(format: "%.2f", sentiment.average)))\n"
         digest += "Top senders: \(topSenders.map { "\($0.value.prefix(30)) (\($0.count))" }.joined(separator: ", "))\n"

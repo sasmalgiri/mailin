@@ -40,6 +40,10 @@ enum ShortcutsActionError: Error, CustomLocalizedStringResourceConvertible {
     case notReady
     case denied(String)
     case failed(String)
+    /// Review C16: the AI Insights page (or its "Ask questions" switch) is off.
+    case aiPageOff
+    /// Review C16: Free's daily AI questions are used up.
+    case freeAIQuestionsUsed
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
@@ -48,6 +52,8 @@ enum ShortcutsActionError: Error, CustomLocalizedStringResourceConvertible {
         case .notReady: return "mailin's archive isn't ready yet. Open mailin once, then try again."
         case .denied(let why): return "\(why)"
         case .failed(let why): return "\(why)"
+        case .aiPageOff: return "AI Insights is off. Turn it on in mailin ▸ Settings ▸ Modules."
+        case .freeAIQuestionsUsed: return "Today's free AI questions are used. Unlock mailin Personal or Professional for unlimited questions."
         }
     }
 }

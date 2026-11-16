@@ -459198,6 +459198,518 @@
           }
         }
       }
+    },
+    "AI Insights is off. Turn it on in mailin ▸ Settings ▸ Modules." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights ist aus. Schalten Sie es in mailin ▸ Einstellungen ▸ Module ein."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights está desactivado. Actívalo en mailin ▸ Ajustes ▸ Módulos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights est désactivé. Activez-le dans mailin ▸ Réglages ▸ Modules."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights बंद है। इसे mailin ▸ सेटिंग्स ▸ मॉड्यूल में चालू करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights è disattivato. Attivalo in mailin ▸ Impostazioni ▸ Moduli."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insightsはオフです。mailin ▸ 設定 ▸ モジュールでオンにしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights가 꺼져 있습니다. mailin ▸ 설정 ▸ 모듈에서 켜십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AI Insights está desativado. Ative-o em mailin ▸ Ajustes ▸ Módulos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights 已关闭。请在 mailin ▸ 设置 ▸ 模块中打开。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI Insights 已關閉。請在 mailin ▸ 設定 ▸ 模組中開啟。"
+          }
+        }
+      }
+    },
+    "Today's free AI questions are used. Unlock mailin Personal or Professional for unlimited questions." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die kostenlosen KI-Fragen für heute sind aufgebraucht. Schalten Sie mailin Personal oder Professional für unbegrenzte Fragen frei."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya usaste las preguntas de IA gratuitas de hoy. Desbloquea mailin Personal o Professional para preguntas ilimitadas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les questions IA gratuites du jour sont épuisées. Débloquez mailin Personal ou Professional pour des questions illimitées."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आज के मुफ़्त AI प्रश्न समाप्त हो गए हैं। असीमित प्रश्नों के लिए mailin Personal या Professional अनलॉक करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le domande IA gratuite di oggi sono esaurite. Sblocca mailin Personal o Professional per domande illimitate."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本日の無料AI質問を使い切りました。無制限に質問するにはmailin PersonalまたはProfessionalを入手してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오늘의 무료 AI 질문을 모두 사용했습니다. 무제한 질문을 하려면 mailin Personal 또는 Professional을 잠금 해제하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As perguntas de IA gratuitas de hoje acabaram. Desbloqueie o mailin Personal ou Professional para perguntas ilimitadas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天的免费 AI 提问已用完。解锁 mailin Personal 或 Professional 即可无限提问。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天的免費 AI 提問已用完。解鎖 mailin Personal 或 Professional 即可無限提問。"
+          }
+        }
+      }
+    },
+    "Most recent emails" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neueste E-Mails"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Correos más recientes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E-mails les plus récents"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सबसे हाल के ईमेल"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Email più recenti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新のメール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최근 이메일"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E-mails mais recentes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近的邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近的郵件"
+          }
+        }
+      }
+    },
+    "How many of the newest emails to read. The answer says how many it read of the whole archive." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wie viele der neuesten E-Mails gelesen werden. Die Antwort nennt, wie viele es vom gesamten Archiv waren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuántos de los correos más nuevos leer. La respuesta indica cuántos leyó del archivo completo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Combien des e-mails les plus récents lire. La réponse indique combien ont été lus sur l'archive entière."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सबसे नए कितने ईमेल पढ़ने हैं। उत्तर बताता है कि पूरे संग्रह में से कितने पढ़े गए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quante delle email più recenti leggere. La risposta indica quante ne ha lette dell'intero archivio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み取る最新メールの件数。回答には、アーカイブ全体のうち何件を読んだかが示されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "읽을 최신 이메일 수입니다. 답변에 전체 아카이브 중 몇 개를 읽었는지 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quantos dos e-mails mais novos ler. A resposta diz quantos leu do arquivo inteiro."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要读取的最新邮件数量。回答会说明读取了整个归档中的多少封。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要讀取的最新郵件數量。回答會說明讀取了整個封存中的多少封。"
+          }
+        }
+      }
+    },
+    "How many of the newest emails to scan. The answer says how many it scanned of the whole archive." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wie viele der neuesten E-Mails geprüft werden. Die Antwort nennt, wie viele es vom gesamten Archiv waren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuántos de los correos más nuevos analizar. La respuesta indica cuántos analizó del archivo completo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Combien des e-mails les plus récents analyser. La réponse indique combien ont été analysés sur l'archive entière."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सबसे नए कितने ईमेल स्कैन करने हैं। उत्तर बताता है कि पूरे संग्रह में से कितने स्कैन हुए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quante delle email più recenti analizzare. La risposta indica quante ne ha analizzate dell'intero archivio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキャンする最新メールの件数。回答には、アーカイブ全体のうち何件をスキャンしたかが示されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검사할 최신 이메일 수입니다. 답변에 전체 아카이브 중 몇 개를 검사했는지 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quantos dos e-mails mais novos verificar. A resposta diz quantos verificou do arquivo inteiro."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要扫描的最新邮件数量。回答会说明扫描了整个归档中的多少封。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要掃描的最新郵件數量。回答會說明掃描了整個封存中的多少封。"
+          }
+        }
+      }
+    },
+    "How many of the newest emails the topics and mood come from. The answer says how many it read of the whole archive." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus wie vielen der neuesten E-Mails Themen und Stimmung stammen. Die Antwort nennt, wie viele es vom gesamten Archiv waren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De cuántos de los correos más nuevos salen los temas y el tono. La respuesta indica cuántos leyó del archivo completo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De combien des e-mails les plus récents proviennent les sujets et le ton. La réponse indique combien ont été lus sur l'archive entière."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "विषय और मनोदशा सबसे नए कितने ईमेल से ली जाती है। उत्तर बताता है कि पूरे संग्रह में से कितने पढ़े गए।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Da quante delle email più recenti provengono argomenti e tono. La risposta indica quante ne ha lette dell'intero archivio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "トピックと雰囲気を求める最新メールの件数。回答には、アーカイブ全体のうち何件を読んだかが示されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주제와 분위기를 가져올 최신 이메일 수입니다. 답변에 전체 아카이브 중 몇 개를 읽었는지 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De quantos dos e-mails mais novos vêm os temas e o tom. A resposta diz quantos leu do arquivo inteiro."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主题和情绪取自多少封最新邮件。回答会说明读取了整个归档中的多少封。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主題和情緒取自多少封最新郵件。回答會說明讀取了整個封存中的多少封。"
+          }
+        }
+      }
+    },
+    "%lld most recent of %lld emails" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld neueste von %lld E-Mails"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld más recientes de %lld correos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld plus récents sur %lld e-mails"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld ईमेल में से सबसे हाल के %1$lld"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld più recenti di %lld email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld件中最新の%1$lld件のメール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이메일 %2$lld개 중 최근 %1$lld개"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld mais recentes de %lld e-mails"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 封邮件中最近的 %1$lld 封"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 封郵件中最近的 %1$lld 封"
+          }
+        }
+      }
+    },
+    "all %lld emails" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "alle %lld E-Mails"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "los %lld correos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "les %lld e-mails"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सभी %lld ईमेल"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tutte le %lld email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全%lld件のメール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이메일 %lld개 전체"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "todos os %lld e-mails"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部 %lld 封邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部 %lld 封郵件"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

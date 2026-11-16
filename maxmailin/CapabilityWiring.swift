@@ -192,6 +192,8 @@ enum CapabilityWiring {
             // @Sendable closure through `?:` and fails with an unhelpful
             // "failed to produce diagnostic" — the same trap as `.locatorReads`
             // above.
+            // Review C16: the older Siri intents read the same switch.
+            LegacyIntentPolicy.aiPageEnabled = isOn
             if isOn {
                 let gate: @Sendable () -> Bool = { true }
                 EmailNLPEngine.modelLanguageFallbackGate = gate
