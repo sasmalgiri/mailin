@@ -340,7 +340,7 @@ struct PersonalEmailOrganizerView: View {
                 welcomeCard
 
                 HStack(spacing: 12) {
-                    quickStatCard("Total Emails", value: "\(workingSet.count)", icon: "envelope", color: .blue)
+                    quickStatCard(WorkingSetLabel.cardTitle(shown: workingSet.count, total: archiveTotal), value: "\(workingSet.count)", icon: "envelope", color: .blue)
                     quickStatCard("Contacts", value: "\(uniqueContacts.count)", icon: "person.2", color: .green)
                     quickStatCard("Attachments", value: "\(totalAttachments)", icon: "paperclip", color: .brown)
                     quickStatCard("Date Range", value: dateRangeString, icon: "calendar", color: .purple)

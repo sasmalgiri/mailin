@@ -1598,7 +1598,8 @@ struct JournalistInvestigationView: View {
                 Text("This report will include:")
                     .font(.system(size: 12, weight: .medium))
                 let bookmarked = bookmarkedEmailIDs.count
-                Text("• \(bookmarked > 0 ? "\(bookmarked) bookmarked" : "\(workingSet.count) total") emails")
+                Text(verbatim: "• " + (bookmarked > 0 ? String(localized: "\(bookmarked) bookmarked emails")
+                                                      : WorkingSetLabel.reportLine(shown: workingSet.count, total: archiveTotal)))
                 Text("• \(leads.count) investigation leads")
                 Text("• \(keyQuotes.count) key quotes")
                 Text("• AI-enhanced analysis (if available)")

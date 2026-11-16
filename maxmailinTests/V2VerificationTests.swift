@@ -12765,6 +12765,17 @@ final class Review1116CTests: XCTestCase {
         XCTAssertTrue(tone.detail.contains("100 of 200"), tone.detail)
     }
 
+    /// C21 (rule 6): a tool's 2,000-email working set is not labelled "Total Emails"
+    /// when the scope holds more; it reads "Newest X of Y".
+    func testC21_workingSetLabels_sayNewestXofY_whenTheScopeIsLarger() {
+        XCTAssertEqual(WorkingSetLabel.cardTitle(shown: 2_000, total: 2_000), String(localized: "Total Emails"))
+        XCTAssertNotEqual(WorkingSetLabel.cardTitle(shown: 2_000, total: 9_000), String(localized: "Total Emails"))
+        XCTAssertTrue(WorkingSetLabel.cardTitle(shown: 2_000, total: 9_000).contains("9"), WorkingSetLabel.cardTitle(shown: 2_000, total: 9_000))
+        XCTAssertFalse(WorkingSetLabel.reportLine(shown: 2_000, total: 9_000).contains("total"))
+        XCTAssertTrue(WorkingSetLabel.reportLine(shown: 2_000, total: 9_000).contains("of"))
+        XCTAssertEqual(WorkingSetLabel.reportLine(shown: 40, total: 40), String(localized: "\(40) total emails"))
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

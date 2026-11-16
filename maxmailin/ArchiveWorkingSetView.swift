@@ -95,6 +95,20 @@ extension View {
     }
 }
 
+/// C21 (rule 6): how a tool names the emails it counted — its working set is
+/// the whole scope only when nothing was left out.
+enum WorkingSetLabel {
+    /// A stat card's title over `shown`.
+    static func cardTitle(shown: Int, total: Int) -> String {
+        total > shown ? String(localized: "Newest \(shown) of \(total) emails") : String(localized: "Total Emails")
+    }
+
+    /// A report line about the emails a tool worked on.
+    static func reportLine(shown: Int, total: Int) -> String {
+        total > shown ? String(localized: "the newest \(shown) of \(total) emails") : String(localized: "\(shown) total emails")
+    }
+}
+
 /// Shown above a tool whose working set is smaller than its scope.
 struct WorkingSetLimitNotice: View {
     let shown: Int
