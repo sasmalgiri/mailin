@@ -251,6 +251,53 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
+    // MARK: - Snapshot restore asks first, with the count, on every platform (review C4, rule 4)
+
+    func testSnapshotRestore_asksWithTheCountAndDate_andCancelLeavesTheArchive() async throws {
+        let env = makeEnv()
+        let file = env.root.appendingPathComponent("emails-20261116-manual.db")
+        try FileManager.default.createDirectory(at: env.root, withIntermediateDirectories: true)
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(file.path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE emails(id TEXT); INSERT INTO emails VALUES('a'),('b'),('c');", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+        XCTAssertEqual(ArchiveSnapshots.messageCount(in: file), 3)
+        XCTAssertNil(ArchiveSnapshots.messageCount(in: env.root.appendingPathComponent("missing.db")))
+
+        let date = Date(timeIntervalSince1970: 1_763_251_200)
+        let snap = ArchiveSnapshot(url: file, date: date, reason: "manual", bytes: 0)
+        let title = ArchiveSnapshots.confirmationTitle(date: date, messages: 3)
+        XCTAssertTrue(title.contains(CountPhrase.messages(3)), title)
+        XCTAssertTrue(title.contains(date.formatted(date: .abbreviated, time: .shortened)), title)
+
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            var asked: ArchiveSnapshots.RestoreRequest?
+            var restored = 0
+            // Cancel (the default): nothing is replaced.
+            let cancelled = await ArchiveSnapshots.restoreLatestInteractively(
+                confirm: { asked = $0; return false }, snapshot: snap, perform: { _ in restored += 1 })
+            XCTAssertEqual(cancelled, String(localized: "Restore cancelled."))
+            XCTAssertEqual(restored, 0, "no restore without a yes")
+            let request = try XCTUnwrap(asked)
+            XCTAssertEqual(request.messages, 3)
+            XCTAssertEqual(request.title, title)
+
+            // Restore confirmed: the snapshot is restored once.
+            _ = await ArchiveSnapshots.restoreLatestInteractively(
+                confirm: { _ in true }, snapshot: snap, perform: { url in XCTAssertEqual(url, file); restored += 1 })
+            XCTAssertEqual(restored, 1)
+        }
+
+        // The SwiftUI asker: dismissing is Cancel.
+        let asker = SnapshotRestoreAsker()
+        let answer = Task { await asker.ask(ArchiveSnapshots.RestoreRequest(snapshot: snap, messages: 3)) }
+        while asker.pending == nil { await Task.yield() }
+        asker.answer(false)
+        let restore = await answer.value
+        XCTAssertFalse(restore)
+        XCTAssertNil(asker.pending)
+    }
+
     // MARK: - Bates: a run that fails part-way (review C3)
 
     func testBates_failureOnBatchTwo_mergesCommittedNumbers_andTheFallbackNeverReusesThem() async throws {

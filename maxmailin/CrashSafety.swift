@@ -182,6 +182,8 @@ final class SafeMode {
 struct SafeModeBanner: View {
     @State private var safeMode = SafeMode.shared
     @State private var working = false
+    /// Review C4: the snapshot-restore question, on every platform.
+    @State private var restoreAsker = SnapshotRestoreAsker()
 
     var body: some View {
         if safeMode.isActive {
@@ -202,7 +204,7 @@ struct SafeModeBanner: View {
                         Task { @MainActor in
                             working = true
                             defer { working = false }
-                            safeMode.note(await ArchiveSnapshots.restoreLatestInteractively())
+                            safeMode.note(await ArchiveSnapshots.restoreLatestInteractively(confirm: restoreAsker.ask))
                         }
                     }
                     .disabled(working || ArchiveSnapshots.latest() == nil)
@@ -227,6 +229,7 @@ struct SafeModeBanner: View {
             }
             .padding(Spacing.small)
             .background(Color.orange.opacity(0.12))
+            .snapshotRestoreConfirmation(restoreAsker)
         }
     }
 }

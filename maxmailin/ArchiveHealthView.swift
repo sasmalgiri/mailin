@@ -44,6 +44,8 @@ struct ArchiveHealthView: View {
     @State private var missingSources: [MissingLocatorSource] = []
     @State private var relinking: MissingLocatorSource?
     @State private var sourceCopyBytes: Int64 = 0
+    /// Review C4: the snapshot-restore question, on every platform.
+    @State private var restoreAsker = SnapshotRestoreAsker()
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -206,7 +208,7 @@ struct ArchiveHealthView: View {
                     Button(String(localized: "Restore latest…")) {
                         Task { @MainActor in
                             working = true; defer { working = false }
-                            note = await ArchiveSnapshots.restoreLatestInteractively()
+                            note = await ArchiveSnapshots.restoreLatestInteractively(confirm: restoreAsker.ask)
                             reload()
                         }
                     }
@@ -405,6 +407,7 @@ struct ArchiveHealthView: View {
             }
         }
         .formStyle(.grouped)
+        .snapshotRestoreConfirmation(restoreAsker)
         .task {
             reload()
             rebuildText = AttachmentTextIndexJob.rebuildReportText(

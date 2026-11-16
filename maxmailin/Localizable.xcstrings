@@ -459710,6 +459710,70 @@
           }
         }
       }
+    },
+    "Restore the archive from the snapshot of %@ (%@)?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archiv aus dem Snapshot vom %@ (%@) wiederherstellen?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Restaurar el archivo desde la instantánea del %@ (%@)?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurer l’archive à partir de l’instantané du %@ (%@) ?"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "क्या आर्काइव को %@ के स्नैपशॉट (%@) से पुनर्स्थापित करना है?"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ripristinare l’archivio dall’istantanea del %@ (%@)?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のスナップショット（%@）からアーカイブを復元しますか？"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 스냅샷(%@)에서 보관함을 복원할까요?"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurar o arquivo a partir do instantâneo de %@ (%@)?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要从 %@ 的快照（%@）恢复归档吗？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要從 %@ 的快照（%@）還原封存嗎？"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

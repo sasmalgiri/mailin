@@ -10,9 +10,8 @@
 //
 
 import Foundation
-#if os(macOS)
-import AppKit
-#endif
+import SwiftUI
+import SQLite3
 
 /// §3-S9: folds the write-ahead log into the archive while nothing is
 /// running — no import in the queue, no whole-archive job — every two
@@ -133,26 +132,109 @@ enum ArchiveSnapshots {
         }
     }
 
+    /// What the person is asked before a snapshot replaces the live
+    /// database (rule 4: the count first).
+    struct RestoreRequest: Identifiable, Equatable {
+        let id = UUID()
+        let snapshot: ArchiveSnapshot
+        /// Messages in the snapshot; nil when the file could not be read.
+        let messages: Int?
+        var title: String { ArchiveSnapshots.confirmationTitle(date: snapshot.date, messages: messages) }
+        var message: String { ArchiveSnapshots.confirmationExplanation }
+    }
+
+    /// Review C4: the question, with the snapshot's message count and date.
+    nonisolated static func confirmationTitle(date: Date, messages: Int?) -> String {
+        let when = date.formatted(date: .abbreviated, time: .shortened)
+        guard let messages else { return String(localized: "Restore the archive from the snapshot of \(when)?") }
+        return String(localized: "Restore the archive from the snapshot of \(when) (\(CountPhrase.messages(messages)))?")
+    }
+
+    nonisolated static var confirmationExplanation: String {
+        String(localized: "The current archive database is kept as a separate snapshot first, so this can be undone. Emails imported after the snapshot will need to be imported again, and the search index should be rebuilt afterwards.")
+    }
+
+    /// Messages in a snapshot file, read without changing it (immutable,
+    /// read-only — no journal files are created beside the snapshot).
+    nonisolated static func messageCount(in url: URL) -> Int? {
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        comps?.scheme = "file"
+        comps?.queryItems = [URLQueryItem(name: "immutable", value: "1"), URLQueryItem(name: "mode", value: "ro")]
+        guard let uri = comps?.string else { return nil }
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        guard sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else { return nil }
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM emails;", -1, &stmt, nil) == SQLITE_OK,
+              sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
     /// User-initiated restore of the newest snapshot, after confirmation.
     /// Returns a one-line status for the screen that asked.
-    static func restoreLatestInteractively() async -> String {
+    ///
+    /// Review C4: confirmation is required on every platform — `confirm`
+    /// shows the snapshot's date and message count and returns false on
+    /// Cancel (the default button). It used to confirm only on the Mac, so
+    /// one tap on iPhone/iPad replaced the live database.
+    static func restoreLatestInteractively(
+        confirm: @MainActor (RestoreRequest) async -> Bool,
+        snapshot: ArchiveSnapshot? = nil,
+        perform: ((URL) async throws -> Void)? = nil
+    ) async -> String {
         if let why = OrgPolicy.denial(.restoreSnapshot) { return why }   // enterprise role (OrgPolicy)
-        guard let snap = latest() else { return String(localized: "There is no snapshot to restore.") }
-        #if os(macOS)
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Restore the archive from the snapshot of \(snap.date.formatted(date: .abbreviated, time: .shortened))?")
-        alert.informativeText = String(localized: "The current archive database is kept as a separate snapshot first, so this can be undone. Emails imported after the snapshot will need to be imported again, and the search index should be rebuilt afterwards.")
-        alert.addButton(withTitle: String(localized: "Restore"))
-        alert.addButton(withTitle: String(localized: "Cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return String(localized: "Restore cancelled.") }
-        #endif
+        guard let snap = snapshot ?? latest() else { return String(localized: "There is no snapshot to restore.") }
+        let request = RestoreRequest(snapshot: snap, messages: messageCount(in: snap.url))
+        guard await confirm(request) else { return String(localized: "Restore cancelled.") }
         do {
-            try await SQLiteEmailStore.shared.restore(from: snap.url)
-            ForensicManager.shared.logAction("Archive restored from snapshot",
-                                             detail: "\(snap.url.lastPathComponent); the previous database was kept as a before-restore snapshot")
+            if let perform {
+                try await perform(snap.url)
+            } else {
+                try await SQLiteEmailStore.shared.restore(from: snap.url)
+            }
+            ScopeJobEnvironment.logAction("Archive restored from snapshot",
+                                          detail: "\(snap.url.lastPathComponent) (\(request.messages.map(String.init) ?? "unknown") messages); the previous database was kept as a before-restore snapshot")
             return String(localized: "Restored from the snapshot of \(snap.date.formatted(date: .abbreviated, time: .shortened)). Rebuild the search index next.")
         } catch {
             return error.localizedDescription
+        }
+    }
+}
+
+/// Review C4: asks the restore question in SwiftUI on every platform and
+/// waits for the answer. Cancel is the default; dismissing is Cancel.
+@MainActor
+@Observable
+final class SnapshotRestoreAsker {
+    var pending: ArchiveSnapshots.RestoreRequest?
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    func ask(_ request: ArchiveSnapshots.RestoreRequest) async -> Bool {
+        answer(false)   // a question still open is cancelled, never left hanging
+        return await withCheckedContinuation { c in
+            continuation = c
+            pending = request
+        }
+    }
+
+    func answer(_ restore: Bool) {
+        pending = nil
+        continuation?.resume(returning: restore)
+        continuation = nil
+    }
+}
+
+extension View {
+    /// The restore question for `asker` (Restore is destructive; Cancel is the default).
+    func snapshotRestoreConfirmation(_ asker: SnapshotRestoreAsker) -> some View {
+        alert(asker.pending?.title ?? "",
+              isPresented: Binding(get: { asker.pending != nil }, set: { if !$0 { asker.answer(false) } }),
+              presenting: asker.pending) { _ in
+            Button(String(localized: "Restore"), role: .destructive) { asker.answer(true) }
+            Button(String(localized: "Cancel"), role: .cancel) { asker.answer(false) }
+        } message: { request in
+            Text(request.message)
         }
     }
 }
