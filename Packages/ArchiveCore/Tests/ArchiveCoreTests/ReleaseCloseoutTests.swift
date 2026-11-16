@@ -10,6 +10,9 @@
 //       the search registry (indexed_message); forensic, custody, review
 //       coding and custodian rows are kept (the audit record); a held email
 //       keeps everything.
+//    4. NSF: a note the item placement search gave up on at its step limit
+//       is named with that reason in the import report and the receipt's
+//       warnings, not only in the log.
 //
 
 import XCTest
@@ -151,5 +154,43 @@ final class ReleaseCloseoutTests: XCTestCase {
         XCTAssertEqual(try coverageAfter.rows(for: held).count, 1, "the held email's coverage is kept")
         let indexed = try await fts.indexedSubset(of: [gone, held])
         XCTAssertEqual(indexed, [held], "the search registry keeps the held email and drops the deleted one")
+    }
+
+    // MARK: 4 — NSF step limit reason reaches the import
+
+    func testNSF_placementStepLimit_reasonReachesReportAndWarning() throws {
+        let data = try HostileHeaderSignalsTests.hostileDatabase(nonSummary: [0, 0, 0])
+        var reader = try NSFODSReader(data: data)
+        reader.placementStepLimit = 1_000
+        var cursor = NSFODSReader.Cursor()
+        var record: NSFODSReader.Record?
+        while let r = reader.next(&cursor) {
+            if case .object = r { continue }
+            record = r
+            break
+        }
+        guard case .unplacedAtStepLimit(let id)? = record else { return XCTFail("expected unplaced at the step limit, got \(String(describing: record))") }
+        XCTAssertEqual(id, HostileHeaderSignalsTests.hostileNoteID)
+
+        // The same file through the parser's inventory and report.
+        let url = dir.appendingPathComponent("hostile.nsf")
+        try data.write(to: url)
+        let inventory = try NSFODSParser.inventory(fileURL: url, placementStepLimit: 1_000)
+        XCTAssertEqual(inventory.unplacedDocuments, [HostileHeaderSignalsTests.hostileNoteID], "still counted as unplaced")
+        XCTAssertEqual(inventory.unplacedAtStepLimit, [HostileHeaderSignalsTests.hostileNoteID])
+        let report = NSFODSParser.report(NSFODSParser.Streamed(emitted: 0, inventory: inventory))
+        XCTAssertEqual(report.failed, 1, "one failure, not counted twice")
+        XCTAssertEqual(report.errorCategories[NSFODSReader.stepLimitCategory], 1)
+        XCTAssertNil(report.errorCategories["nsf_document_items_unplaced"], "the reason replaces the generic category")
+
+        let line = try XCTUnwrap(BulkImportCoordinator.nsfStepLimitLine(sourceName: "mail.nsf", categories: report.errorCategories))
+        XCTAssertTrue(line.hasPrefix("mail.nsf: "), line)
+        XCTAssertTrue(line.contains(NSFODSReader.placementStepLimit.formatted()), line)
+        XCTAssertNil(BulkImportCoordinator.nsfStepLimitLine(sourceName: "mail.nsf", categories: ["nsf_document_items_unplaced": 2]))
+
+        // Under the real limit the same table is simply unplaced (no step-limit reason).
+        let plain = try NSFODSParser.inventory(fileURL: url)
+        XCTAssertEqual(plain.unplacedAtStepLimit, [])
+        XCTAssertEqual(plain.unplacedDocuments.count, 1)
     }
 }

@@ -198,6 +198,8 @@ struct NSFODSReader {
         var otherDocumentsByForm: [String: Int] = [:]
         /// Documents whose item values could not be placed (named, not read).
         var unplacedDocuments: [UInt32] = []
+        /// Of those, the ones the placement search gave up on at its step limit.
+        var unplacedAtStepLimit: [UInt32] = []
         /// Mail notes found / turned into messages / failed (note ID → reason).
         var mailNotes = 0
         var mailRead = 0
@@ -505,6 +507,9 @@ struct NSFODSReader {
         case deletionStub(id: UInt32)
         case empty(id: UInt32)
         case unplaced(id: UInt32)
+        /// Unplaced because the placement search passed `placementStepLimit`
+        /// (a hostile item table) — named with that reason in the import.
+        case unplacedAtStepLimit(id: UInt32)
         case object
         case unresolved(id: UInt32)
     }
@@ -573,7 +578,9 @@ struct NSFODSReader {
                 if size < 100 || Self.u32(data, off + 2) < 100 { return .deletionStub(id: e.id) }
                 if noteClass & 0x7FFF != 0x0001 { return .design(id: e.id, noteClass: noteClass) }
                 if Self.u16(data, off + 50) == 0 { return .empty(id: e.id) }
-                guard let items = readItems(noteOffset: off, size: size) else { return .unplaced(id: e.id) }
+                let read = readItemsOutcome(noteOffset: off, size: size)
+                if read.stepLimit { return .unplacedAtStepLimit(id: e.id) }
+                guard let items = read.items else { return .unplaced(id: e.id) }
                 return .note(Note(id: e.id, noteClass: noteClass, statusFlags: Self.u16(data, off + 38), items: items,
                                   header: data.subdata(in: off..<(off + 100))))
             }
@@ -592,6 +599,17 @@ struct NSFODSReader {
     /// MIME_PART value must start with its structure version or the
     /// placement is rejected. Up to three such items per note are searched.
     private func readItems(noteOffset off: Int, size: Int) -> [Item]? {
+        readItemsOutcome(noteOffset: off, size: size).items
+    }
+
+    /// The items, or nil; `stepLimit` when the placement search stopped at its limit.
+    private func readItemsOutcome(noteOffset off: Int, size: Int) -> (items: [Item]?, stepLimit: Bool) {
+        var stepLimited = false
+        let items = placeItems(noteOffset: off, size: size, stepLimited: &stepLimited)
+        return (items, stepLimited)
+    }
+
+    private func placeItems(noteOffset off: Int, size: Int, stepLimited: inout Bool) -> [Item]? {
         let count = Int(Self.u16(data, off + 50))
         let tableEnd = off + 100 + 8 * count
         guard tableEnd <= off + size else { return nil }
@@ -635,11 +653,13 @@ struct NSFODSReader {
             }
             switch Self.searchPlacement(sizes: entries.map(\.size), defaultSummary: defaultSummary, required: required,
                                         nsBytes: nsBytes, data: data, tableEnd: tableEnd, nsBase: nsStart + 68, noteEnd: off + size,
+                                        stepLimit: placementStepLimit,
                                         confirm: { valid(entries, inSummary: $0, tableEnd: tableEnd, noteEnd: off + size, nsStart: nsStart + 68) }) {
             case .placed(let set): placement = set
             case .notFound, .cancelled: break
             case .stepLimit:
-                Self.logger.error("NSF ODS: note 0x\(String(Self.u32(self.data, off + 6), radix: 16), privacy: .public) unplaced: the item placement search passed its limit of \(Self.placementStepLimit, privacy: .public) steps (\(count, privacy: .public) items)")
+                stepLimited = true
+                Self.logger.error("NSF ODS: note 0x\(String(Self.u32(self.data, off + 6), radix: 16), privacy: .public) unplaced: the item placement search passed its limit of \(placementStepLimit, privacy: .public) steps (\(count, privacy: .public) items)")
             }
         }
         guard let inSummary = placement else { return nil }
@@ -690,6 +710,13 @@ struct NSFODSReader {
     /// item table reaches this. The note is then reported unplaced (counted in
     /// the import's failures, never dropped silently) and the limit is logged.
     static let placementStepLimit = 1 << 24
+
+    /// This reader's limit (the stated one; tests lower it to reach the path).
+    var placementStepLimit = NSFODSReader.placementStepLimit
+
+    /// Import-report category for documents unplaced at the step limit
+    /// (a subset of the unplaced documents, never counted twice).
+    static let stepLimitCategory = "nsf_document_items_unplaced_step_limit"
 
     enum PlacementOutcome: Equatable {
         case placed(Set<Int>)

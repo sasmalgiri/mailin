@@ -112,7 +112,12 @@ enum NSFODSParser {
         let inv = streamed.inventory
         var categories: [String: Int] = [:]
         if !inv.mailFailed.isEmpty { categories["nsf_mail_note_unreadable"] = inv.mailFailed.count }
-        if !inv.unplacedDocuments.isEmpty { categories["nsf_document_items_unplaced"] = inv.unplacedDocuments.count }
+        // Review 2026-11-16: the step-limit reason is its own category (the
+        // receipt names it); the rest stay "unplaced". Together they are the
+        // unplaced documents, each counted once.
+        let atLimit = inv.unplacedAtStepLimit.count
+        if inv.unplacedDocuments.count > atLimit { categories["nsf_document_items_unplaced"] = inv.unplacedDocuments.count - atLimit }
+        if atLimit > 0 { categories[NSFODSReader.stepLimitCategory] = atLimit }
         let failed = inv.mailFailed.count + inv.unplacedDocuments.count
         var report = MBOXParser.ParseRecoveryReport(
             totalMessages: streamed.emitted + failed, successfullyParsed: streamed.emitted,
@@ -122,16 +127,19 @@ enum NSFODSParser {
     }
 
     /// The inventory alone (still builds each message, to count failures honestly).
-    static func inventory(fileURL: URL) throws -> NSFODSReader.Inventory {
+    static func inventory(fileURL: URL, placementStepLimit: Int = NSFODSReader.placementStepLimit) throws -> NSFODSReader.Inventory {
         var declared: [String] = []
-        return try walk(fileURL: fileURL, senderEmail: "", onProgress: nil, declared: &declared) { _ in }
+        return try walk(fileURL: fileURL, senderEmail: "", onProgress: nil, declared: &declared,
+                        placementStepLimit: placementStepLimit) { _ in }
     }
 
     private static func walk(fileURL: URL, senderEmail: String, onProgress: ((Double) -> Void)?,
                              declared: inout [String],
+                             placementStepLimit: Int = NSFODSReader.placementStepLimit,
                              emit: (MBOXParser.RawEmail) -> Void) throws -> NSFODSReader.Inventory {
         let data = try mapped(fileURL)
-        let reader = try NSFODSReader(data: data)
+        var reader = try NSFODSReader(data: data)
+        reader.placementStepLimit = placementStepLimit
         let folders = NotesFolders.read(reader)
         declared = folders.declared
         var inventory = start(reader, folders)
@@ -171,6 +179,9 @@ enum NSFODSParser {
             inventory.rrvEntries += 1; inventory.noteRecords += 1; inventory.emptyDocuments += 1
         case .unplaced(let id):
             inventory.rrvEntries += 1; inventory.noteRecords += 1; inventory.unplacedDocuments.append(id)
+        case .unplacedAtStepLimit(let id):
+            inventory.rrvEntries += 1; inventory.noteRecords += 1; inventory.unplacedDocuments.append(id)
+            inventory.unplacedAtStepLimit.append(id)
         case .note(let note):
             inventory.rrvEntries += 1; inventory.noteRecords += 1
             guard isMail(note) else {

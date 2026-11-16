@@ -1094,6 +1094,10 @@ final class BulkImportCoordinator {
                     if let line = Self.containerRefusalLine(sourceName: sourceName, categories: report.errorCategories) {
                         summary.warnings.append(line)
                     }
+                    // Review 2026-11-16: Notes documents the placement search gave up on, with why.
+                    if let line = Self.nsfStepLimitLine(sourceName: sourceName, categories: report.errorCategories) {
+                        summary.warnings.append(line)
+                    }
                     // The previous engine's whole-read ceiling, inside a folder source.
                     if let n = report.errorCategories[WholeMessageReadLimit.category], n > 0 {
                         summary.warnings.append("\(sourceName): \(n) message\(n == 1 ? "" : "s") not imported — larger than the previous import engine reads whole into memory (\(ByteCountFormatter.string(fromByteCount: WholeMessageReadLimit.emlxBytes, countStyle: .file)) .emlx, \(ByteCountFormatter.string(fromByteCount: WholeMessageReadLimit.msgBytes, countStyle: .file)) .msg). Turn the offset import engine on to import \(n == 1 ? "it" : "them") by range.")
@@ -1388,6 +1392,14 @@ extension BulkImportCoordinator {
     /// CLOSE-02: "<source>: 3 archive members not imported — 1 encrypted, 1
     /// volume missing, 1 unsafe path", plus archives skipped by the
     /// self-containing guard; nil when every member was read.
+    /// The NSF reader's stated work limit, when it stopped item placement
+    /// for some documents (they are counted as damaged; this says why).
+    nonisolated static func nsfStepLimitLine(sourceName: String, categories: [String: Int]) -> String? {
+        guard let n = categories[NSFODSReader.stepLimitCategory], n > 0 else { return nil }
+        let limit = NSFODSReader.placementStepLimit.formatted()
+        return String(localized: "\(sourceName): \(n) Notes documents not read — their item table needs more than the reader's limit of \(limit) placement steps.")
+    }
+
     nonisolated static func containerRefusalLine(sourceName: String, categories: [String: Int]) -> String? {
         var parts = categories
             .filter { $0.key.hasPrefix("reason:") && $0.value > 0 }
