@@ -394396,6 +394396,70 @@
         }
       }
     },
+    "Stopped: it ran past its time limit and was switched off. Switch it on to run it again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gestoppt: Das Plug-in hat sein Zeitlimit überschritten und wurde ausgeschaltet. Schalten Sie es ein, um es erneut auszuführen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Detenido: superó su límite de tiempo y se desactivó. Actívelo para volver a ejecutarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrêté : il a dépassé sa limite de temps et a été désactivé. Activez-le pour le relancer."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "रोका गया: यह अपनी समय सीमा से आगे चला गया और बंद कर दिया गया। इसे फिर से चलाने के लिए चालू करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Interrotto: ha superato il limite di tempo ed è stato disattivato. Attivalo per eseguirlo di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止しました：制限時間を超えたためオフにしました。もう一度実行するにはオンにしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "중지됨: 시간 제한을 넘겨 꺼졌습니다. 다시 실행하려면 켜세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Interrompido: excedeu o limite de tempo e foi desativado. Ative-o para executá-lo novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止：运行超出时间限制，已被关闭。打开它即可再次运行。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止：執行超出時間限制，已被關閉。開啟它即可再次執行。"
+          }
+        }
+      }
+    },
     "Storage" : {
       "localizations" : {
         "de" : {
@@ -413805,6 +413869,70 @@
         }
       }
     },
+    "The incoming mail server did not accept the sign-in. Nothing was saved." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für eingehende E-Mails hat die Anmeldung nicht angenommen. Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo entrante no aceptó el inicio de sesión. No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de courrier entrant n’a pas accepté la connexion. Rien n’a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in arrivo non ha accettato l’accesso. Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信メールサーバがサインインを受け付けませんでした。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받는 메일 서버가 로그인을 받아들이지 않았습니다. 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de entrada de e-mail não aceitou o início de sessão. Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件服务器未接受登录。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件伺服器未接受登入。未儲存任何內容。"
+          }
+        }
+      }
+    },
     "The incoming mail server refused the user name or password. Nothing was saved." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -418000,6 +418128,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "寄件伺服器未接受登入（%@）。未儲存任何內容。"
+          }
+        }
+      }
+    },
+    "The outgoing mail server did not accept the sign-in. Nothing was saved." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server für ausgehende E-Mails hat die Anmeldung nicht angenommen. Es wurde nichts gespeichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor de correo saliente no aceptó el inicio de sesión. No se guardó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur de courrier sortant n’a pas accepté la connexion. Rien n’a été enregistré."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जाने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया। कुछ भी सहेजा नहीं गया।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server della posta in uscita non ha accettato l’accesso. Non è stato salvato nulla."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信メールサーバがサインインを受け付けませんでした。何も保存されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보내는 메일 서버가 로그인을 받아들이지 않았습니다. 아무것도 저장되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor de saída de e-mail não aceitou o início de sessão. Nada foi salvo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发件服务器未接受登录。未保存任何内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄件伺服器未接受登入。未儲存任何內容。"
           }
         }
       }
@@ -470056,134 +470248,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "非真實 PII 項目的從零開始編號 — Unix 時間戳記、訂單/參照/追蹤/序號、訊息 ID、版本字串。若所有項目均為真實則為空。"
-          }
-        }
-      }
-    },
-    "The incoming mail server did not accept the sign-in. Nothing was saved." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Der Server für eingehende E-Mails hat die Anmeldung nicht angenommen. Es wurde nichts gespeichert."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "El servidor de correo entrante no aceptó el inicio de sesión. No se guardó nada."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le serveur de courrier entrant n’a pas accepté la connexion. Rien n’a été enregistré."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "आने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया। कुछ भी सहेजा नहीं गया।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Il server della posta in arrivo non ha accettato l’accesso. Non è stato salvato nulla."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "受信メールサーバがサインインを受け付けませんでした。何も保存されていません。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "받는 메일 서버가 로그인을 받아들이지 않았습니다. 아무것도 저장되지 않았습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O servidor de entrada de e-mail não aceitou o início de sessão. Nada foi salvo."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "收件服务器未接受登录。未保存任何内容。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "收件伺服器未接受登入。未儲存任何內容。"
-          }
-        }
-      }
-    },
-    "The outgoing mail server did not accept the sign-in. Nothing was saved." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Der Server für ausgehende E-Mails hat die Anmeldung nicht angenommen. Es wurde nichts gespeichert."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "El servidor de correo saliente no aceptó el inicio de sesión. No se guardó nada."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le serveur de courrier sortant n’a pas accepté la connexion. Rien n’a été enregistré."
-          }
-        },
-        "hi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "जाने वाले मेल सर्वर ने साइन-इन स्वीकार नहीं किया। कुछ भी सहेजा नहीं गया।"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Il server della posta in uscita non ha accettato l’accesso. Non è stato salvato nulla."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "送信メールサーバがサインインを受け付けませんでした。何も保存されていません。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "보내는 메일 서버가 로그인을 받아들이지 않았습니다. 아무것도 저장되지 않았습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O servidor de saída de e-mail não aceitou o início de sessão. Nada foi salvo."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "发件服务器未接受登录。未保存任何内容。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "寄件伺服器未接受登入。未儲存任何內容。"
           }
         }
       }

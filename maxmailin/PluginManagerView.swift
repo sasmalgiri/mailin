@@ -196,6 +196,12 @@ struct PluginManagerView: View {
                 .disabled(!entry.isEnabled || emails.isEmpty)
             }
 
+            if manager.stoppedForTimeLimit.contains(entry.id) {
+                Label("Stopped: it ran past its time limit and was switched off. Switch it on to run it again.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 10)).foregroundColor(.orange)
+            }
+
             if let findings = manager.pluginFindings[entry.id], !findings.isEmpty {
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     ForEach(findings.prefix(5), id: \.title) { finding in

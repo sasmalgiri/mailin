@@ -20,6 +20,13 @@ class PluginManager: ObservableObject {
     @Published private(set) var pluginFindings: [String: [MailinPluginFinding]] = [:]
     /// The deadline one plugin call gets (§8 #7); tests shorten it.
     var sandboxTimeout: Duration = .seconds(30)
+    /// Plugins that overran their deadline (review 2026-11-16 E): cancelled,
+    /// switched off, and stated on their card. In-process plugin code cannot be
+    /// killed — cancellation is cooperative — so a plugin that ignores it is
+    /// never started again while its abandoned call may still be running.
+    @Published private(set) var stoppedForTimeLimit: Set<String> = []
+    /// Calls still running, including ones abandoned at the deadline.
+    private var running: Set<String> = []
 
     struct PluginEntry: Identifiable {
         let id: String
@@ -59,7 +66,11 @@ class PluginManager: ObservableObject {
         if let idx = loadedPlugins.firstIndex(where: { $0.id == pluginID }) {
             loadedPlugins[idx].isEnabled = enabled
         }
+        if enabled { stoppedForTimeLimit.remove(pluginID) }
     }
+
+    /// True while a call of this plugin (finished or abandoned) has not returned.
+    func isStillRunning(_ pluginID: String) -> Bool { running.contains(pluginID) }
 
     // MARK: - Validation
 
@@ -107,24 +118,42 @@ class PluginManager: ObservableObject {
     /// kept the call waiting forever. Now the first of {plugin, deadline}
     /// resumes the call; a stuck plugin is abandoned, not awaited. Findings
     /// are no longer cut at 100 without a word (rule 6).
+    ///
+    /// At the deadline the call is cancelled (a plugin that checks cancellation
+    /// stops there) and the plugin is switched off and marked
+    /// `stoppedForTimeLimit`; it is not started again while that call has not
+    /// returned (review 2026-11-16 E: the deadline used to abandon the plugin
+    /// and leave it on, so the next run started a second copy beside it).
     private func runPluginSandboxed(_ plugin: MailinPlugin, emails: [MailinPluginEmail]) async -> [MailinPluginFinding] {
+        let id = plugin.pluginID
+        guard !running.contains(id) else {
+            pluginTimeoutLog.warning("plugin \(id, privacy: .public) is still running an earlier call; not started again")
+            return []
+        }
+        running.insert(id)
         let timeout = sandboxTimeout
         let box = UncheckedPluginBox(plugin)
-        return await withCheckedContinuation { (continuation: CheckedContinuation<[MailinPluginFinding], Never>) in
+        let (findings, timedOut) = await withCheckedContinuation { (continuation: CheckedContinuation<([MailinPluginFinding], Bool), Never>) in
             let gate = PluginResumeGate()
             let work = Task {
                 let findings = await box.plugin.analyze(emails: emails)
-                if gate.claim() { continuation.resume(returning: findings) }
+                await MainActor.run { _ = self.running.remove(id) }
+                if gate.claim() { continuation.resume(returning: (findings, false)) }
             }
             Task {
                 try? await Task.sleep(for: timeout)
                 if gate.claim() {
                     work.cancel()
-                    pluginTimeoutLog.warning("plugin \(box.plugin.pluginID, privacy: .public) exceeded its time limit and was abandoned")
-                    continuation.resume(returning: [])
+                    pluginTimeoutLog.warning("plugin \(id, privacy: .public) exceeded its time limit: cancelled and switched off")
+                    continuation.resume(returning: ([], true))
                 }
             }
         }
+        if timedOut {
+            setEnabled(false, pluginID: id)
+            stoppedForTimeLimit.insert(id)
+        }
+        return findings
     }
 
     /// §3-A16: store a whole-archive run's findings (v2 runner).

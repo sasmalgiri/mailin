@@ -13141,6 +13141,47 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(AIGroundingGate.removingUnsupportedFigures("It was ₹ 47,600. Fine.", sources: ["paid 33,800"]).removed, 1)
     }
 
+    /// A plugin that ignores cancellation for a while (in-process code cannot be killed).
+    private final class StubbornPlugin: MailinPlugin, @unchecked Sendable {
+        let pluginID = "test.stubborn", pluginName = "Stubborn", pluginVersion = "1", pluginDescription = "ignores cancel"
+        private let lock = NSLock()
+        private var _calls = 0
+        var calls: Int { lock.withLock { _calls } }
+        func analyze(emails: [MailinPluginEmail]) async -> [MailinPluginFinding] {
+            lock.withLock { _calls += 1 }
+            let until = Date().addingTimeInterval(1.5)
+            while Date() < until { try? await Task.sleep(nanoseconds: 20_000_000) }   // `try?`: cancellation ignored
+            return [MailinPluginFinding(title: "late", detail: "", severity: .info, relatedEmailIDs: [])]
+        }
+        func export(emails: [MailinPluginEmail], format: String) async -> Data? { nil }
+    }
+
+    /// E: a plugin past its deadline is cancelled, switched off and stated on its
+    /// card; it is not started a second time while its abandoned call still runs.
+    @MainActor
+    func testE_pluginPastItsDeadline_isStoppedNotJustAbandoned() async throws {
+        let manager = PluginManager()
+        manager.sandboxTimeout = .milliseconds(200)
+        let plugin = StubbornPlugin()
+        manager.register(plugin: plugin)
+        let first = await manager.runPlugin(id: plugin.pluginID, emails: [])
+        XCTAssertTrue(first.isEmpty)
+        XCTAssertEqual(manager.loadedPlugins.first?.isEnabled, false, "a plugin past its deadline stays switched on")
+        XCTAssertTrue(manager.stoppedForTimeLimit.contains(plugin.pluginID))
+        XCTAssertTrue(manager.isStillRunning(plugin.pluginID))
+
+        manager.setEnabled(true, pluginID: plugin.pluginID)
+        XCTAssertFalse(manager.stoppedForTimeLimit.contains(plugin.pluginID))
+        _ = await manager.runPlugin(id: plugin.pluginID, emails: [])
+        XCTAssertEqual(plugin.calls, 1, "a second copy started beside the abandoned call")
+
+        // The abandoned call ends by itself after ~1.5 s (allow a busy test host 15 s).
+        for _ in 0..<150 where manager.isStillRunning(plugin.pluginID) {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertFalse(manager.isStillRunning(plugin.pluginID), "the abandoned call's end is noticed")
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.
