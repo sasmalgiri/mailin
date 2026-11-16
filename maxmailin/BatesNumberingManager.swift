@@ -52,13 +52,20 @@ class BatesNumberingManager: ObservableObject {
 
     // MARK: - Assignment
 
-    /// The next number that can be used: above every number already
-    /// assigned with the current prefix, never below the configured start.
-    func nextFreeNumber() -> Int {
-        let used = assignments.values.compactMap { number -> Int? in
+    /// The highest numeric part among `numbers` that carry the current prefix (0 when none).
+    func highestUsed<C: Collection>(in numbers: C) -> Int where C.Element == String {
+        numbers.compactMap { number -> Int? in
             guard number.hasPrefix(prefix) else { return nil }
             return Int(number.dropFirst(prefix.count))
         }.max() ?? 0
+    }
+
+    /// The next number that can be used: above every number already
+    /// assigned with the current prefix — here and in `alsoUsed` (the
+    /// numbers the 3.0 engine committed to the archive database, review
+    /// C3) — never below the configured start.
+    func nextFreeNumber(alsoUsed committed: [UUID: String] = [:]) -> Int {
+        let used = max(highestUsed(in: assignments.values), highestUsed(in: committed.values))
         return max(startNumber, used + 1)
     }
 
@@ -115,14 +122,37 @@ class BatesNumberingManager: ObservableObject {
     /// continues after them, so two productions never reuse a number.
     /// `log: false` when the caller writes the audit entry itself (the 3.0
     /// engine), so one action is one entry.
-    func merge(assignments new: [UUID: String], nextStart: Int, log: Bool = true) {
-        for (id, number) in new { assignments[id] = number }
+    ///
+    /// Rule 3 (review C1): an email that already has a number keeps it — a
+    /// different number offered for it is a conflict, never an overwrite.
+    /// Conflicts are always written to the audit trail and returned.
+    @discardableResult
+    func merge(assignments new: [UUID: String], nextStart: Int, log: Bool = true) -> [UUID] {
+        var conflicts: [UUID] = []
+        var added = 0
+        for (id, number) in new {
+            if let existing = assignments[id] {
+                if existing != number { conflicts.append(id) }
+                continue
+            }
+            assignments[id] = number
+            added += 1
+        }
         startNumber = max(startNumber, nextStart)
         persistAssignments()
-        guard log else { return }
+        if !conflicts.isEmpty {
+            batesLog.error("Bates merge: \(conflicts.count) email(s) already numbered were offered a different number; existing numbers kept")
+            ScopeJobEnvironment.logAction(
+                "Bates Number Conflict",
+                detail: "\(conflicts.count) email(s) already had a Bates number and were offered another; the existing numbers were kept: "
+                    + conflicts.prefix(20).map { "\($0.uuidString) keeps \(assignments[$0] ?? "?") (offered \(new[$0] ?? "?"))" }.joined(separator: "; ")
+                    + (conflicts.count > 20 ? "; and \(conflicts.count - 20) more" : ""))
+        }
+        guard log else { return conflicts }
         ScopeJobEnvironment.logAction(
             "Bates Numbers Assigned",
-            detail: "Production assigned \(new.count) Bates numbers; sequence continues at \(formatNumber(startNumber))")
+            detail: "Production assigned \(added) Bates numbers; sequence continues at \(formatNumber(startNumber))")
+        return conflicts
     }
 
     /// Removes all Bates number assignments. This is typically irreversible

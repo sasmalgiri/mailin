@@ -31,6 +31,9 @@ struct ProductionRun: Codable, Equatable, Sendable {
     /// original file gone. Withheld with the reason in excluded.csv, never
     /// produced as a headers-only PDF over an empty hash.
     var excludedNoContent: Int = 0
+    /// Rule 3 (review C1): included documents that already had a Bates
+    /// number (an earlier production or numbering run) and kept it.
+    var keptBates: Int = 0
     var firstBates: String?
     var lastBates: String?
     var pages: Int
@@ -77,9 +80,16 @@ struct ProductionWindowView: View {
             }
             Section("Bates") {
                 TextField("Prefix", text: $bates.prefix)
-                Stepper("Start at \(bates.startNumber)", value: $bates.startNumber, in: 1...999_999_999)
+                // Rule 3 (review C1): the stepper cannot go below the next
+                // free number, so a range is never reused.
+                Stepper("Start at \(max(bates.startNumber, bates.nextFreeNumber()))",
+                        value: Binding(get: { max(bates.startNumber, bates.nextFreeNumber()) },
+                                       set: { bates.startNumber = $0 }),
+                        in: bates.nextFreeNumber()...999_999_999)
                 Stepper("Zero padding \(bates.zeroPadding)", value: $bates.zeroPadding, in: 1...12)
-                Text("Next number: \(bates.formatNumber(bates.startNumber)). The sequence continues from the last number after this run.")
+                Text("Next number: \(bates.formatNumber(bates.nextFreeNumber())). The sequence continues from the last number after this run.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Messages that already have a Bates number keep it; numbers already used are never issued again.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Where") {
@@ -114,6 +124,9 @@ struct ProductionWindowView: View {
                     LabeledContent("Included", value: "\(result.included)")
                     LabeledContent("Excluded", value: "\(result.excluded) (\(result.excludedByTag) by tag, \(result.excludedOnHold) on hold)")
                     LabeledContent("Bates range", value: "\(result.firstBates ?? "—") – \(result.lastBates ?? "—")")
+                    if result.keptBates > 0 {
+                        LabeledContent("Already numbered, kept", value: "\(result.keptBates)")
+                    }
                     LabeledContent("Pages", value: "\(result.pages)")
                     LabeledContent("Attachment families", value: result.attachmentFamilies.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: " · "))
                     if let hash = result.manifestSHA256 {
@@ -213,8 +226,16 @@ enum ProductionEngine {
         var included = 0, excludedByTag = 0, excludedOnHold = 0, excludedNoContent = 0, pages = 0
         var families: [String: Int] = [:]
         var firstBates: String?, lastBates: String?
-        var number = bates.startNumber
+        // Rule 3 (review C1): an email that already has a number keeps it,
+        // and new numbers continue after every number ever used — in the
+        // manager and in the archive database (3.0 engine) — never from a
+        // lower "Start at" value.
+        let committed = try await BatesEngine.committedNumbers()
+        var existing = committed
+        for (id, n) in bates.assignments { existing[id] = n }
+        var number = bates.nextFreeNumber(alsoUsed: committed)
         var assignments: [UUID: String] = [:]
+        var keptBates = 0
 
         var manifest = "BatesNumber,EmailID,MessageID,Date,From,Subject,Attachments,SHA256,PDFSHA256\n"
         var exclusions = "EmailID,MessageID,Subject,Reason\n"
@@ -269,9 +290,18 @@ enum ProductionEngine {
                     continue
                 }
                 // Bates + PDF.
-                let batesNumber = bates.formatNumber(number)
-                number += 1
-                assignments[email.id] = batesNumber
+                let batesNumber: String
+                if let kept = existing[email.id] ?? assignments[email.id] {
+                    batesNumber = kept
+                    keptBates += 1
+                    // A database-only number joins the manager too, so both
+                    // engines see it (rule 16).
+                    if bates.assignments[email.id] == nil { assignments[email.id] = kept }
+                } else {
+                    batesNumber = bates.formatNumber(number)
+                    number += 1
+                    assignments[email.id] = batesNumber
+                }
                 if firstBates == nil { firstBates = batesNumber }
                 lastBates = batesNumber
                 var lines: [String] = []
@@ -323,6 +353,7 @@ enum ProductionEngine {
                                 requested: requested, included: included, excluded: excluded,
                                 excludedByTag: excludedByTag, excludedOnHold: excludedOnHold,
                                 excludedNoContent: excludedNoContent,
+                                keptBates: keptBates,
                                 firstBates: firstBates, lastBates: lastBates, pages: pages,
                                 attachmentFamilies: families, folder: folder.path,
                                 manifestSHA256: manifestHash,

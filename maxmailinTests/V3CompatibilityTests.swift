@@ -251,6 +251,60 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
+    // MARK: - Production never renumbers (review C1, rule 3)
+
+    func testProduction_overlappingScopeTwice_keepsEveryNumber_andNeverIssuesOneTwice() async throws {
+        let env = makeEnv()
+        let suite = "mailin-bates-production-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        try await env.store.insertBatch((0..<5).map { makeEmail($0, from: "a@a.com", tag: "prod") }, batchSize: 10)
+        let all = try await ids(env)
+        XCTAssertEqual(all.count, 5)
+        let out = env.root.appendingPathComponent("out", isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let bates = BatesNumberingManager(defaults: defaults)
+            bates.prefix = "P"
+            bates.zeroPadding = 3
+            bates.startNumber = 1
+
+            // First production: emails 0…2.
+            let first = try await ProductionEngine.produce(
+                title: "One", caseNumber: "", scope: .explicit(Set(all[0...2])), excludeTag: "", excludeHeld: false,
+                into: out, bates: bates, archive: env.archive)
+            XCTAssertEqual(first.included, 3)
+            let afterFirst = bates.assignments
+            XCTAssertEqual(Set(afterFirst.values), ["P001", "P002", "P003"])
+
+            // The 3.0 engine committed a number to the database the manager has not seen.
+            try await env.store.reviewCodingSet(workspace: BatesEngine.workspace, field: BatesEngine.field,
+                                                values: [all[4]: "P010"])
+
+            // Second production over an overlapping scope, with "Start at" lowered to 1.
+            bates.startNumber = 1
+            let second = try await ProductionEngine.produce(
+                title: "Two", caseNumber: "", scope: .explicit(Set(all[1...4])), excludeTag: "", excludeHeld: false,
+                into: out, bates: bates, archive: env.archive)
+            XCTAssertEqual(second.included, 4)
+            XCTAssertEqual(second.keptBates, 3, "emails 1, 2 (production one) and 4 (database) keep their numbers")
+
+            for (id, number) in afterFirst {
+                XCTAssertEqual(bates.assignments[id], number, "no number changes on a second production")
+            }
+            XCTAssertEqual(bates.assignments[all[4]], "P010", "the database number is kept")
+            XCTAssertEqual(bates.assignments[all[3]], "P011", "new numbers continue after every number ever used")
+            let numbers = Array(bates.assignments.values)
+            XCTAssertEqual(numbers.count, Set(numbers).count, "no number issued twice")
+
+            // merge never overwrites: a different number for a numbered email is a conflict.
+            let conflicts = bates.merge(assignments: [all[0]: "P999"], nextStart: 0, log: false)
+            XCTAssertEqual(conflicts, [all[0]])
+            XCTAssertEqual(bates.assignments[all[0]], afterFirst[all[0]])
+        }
+    }
+
     // MARK: - Privilege flags outside the scanned scope are kept
 
     func testPrivilegeScan_keepsFlagsOutsideTheScope() async throws {

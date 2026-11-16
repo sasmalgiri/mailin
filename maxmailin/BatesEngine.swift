@@ -33,6 +33,11 @@ enum BatesEngine {
         var last: String?
     }
 
+    /// Every number committed to the archive database (the 3.0 record).
+    static func committedNumbers() async throws -> [UUID: String] {
+        try await ScopeJobEnvironment.store.reviewCoding(workspace: workspace, field: field)
+    }
+
     /// The numeric part of `number` when it carries `prefix`.
     static func numericPart(_ number: String, prefix: String) -> Int? {
         guard number.hasPrefix(prefix) else { return nil }

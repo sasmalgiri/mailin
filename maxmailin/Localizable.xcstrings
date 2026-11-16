@@ -459006,6 +459006,134 @@
           }
         }
       }
+    },
+    "Messages that already have a Bates number keep it; numbers already used are never issued again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nachrichten mit einer Bates-Nummer behalten sie; bereits verwendete Nummern werden nie erneut vergeben."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los mensajes que ya tienen un número Bates lo conservan; los números ya usados nunca se vuelven a asignar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les messages qui ont déjà un numéro Bates le conservent ; les numéros déjà utilisés ne sont jamais réattribués."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "जिन संदेशों के पास पहले से Bates नंबर है, वे उसे रखते हैं; पहले से उपयोग किए गए नंबर फिर कभी जारी नहीं होते।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I messaggi che hanno già un numero Bates lo mantengono; i numeri già usati non vengono mai riassegnati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既にBates番号があるメッセージはその番号を保持します。使用済みの番号が再発行されることはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미 Bates 번호가 있는 메시지는 그 번호를 유지하며, 이미 사용된 번호는 다시 발급되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensagens que já têm um número Bates o mantêm; números já usados nunca são emitidos novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已有 Bates 编号的邮件保留原编号；已使用的编号绝不会再次发放。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已有 Bates 編號的郵件保留原編號；已使用的編號絕不會再次發放。"
+          }
+        }
+      }
+    },
+    "Already numbered, kept" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bereits nummeriert, beibehalten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya numerados, conservados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déjà numérotés, conservés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पहले से क्रमांकित, बरकरार"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Già numerati, mantenuti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "番号付け済み（保持）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미 번호 있음, 유지됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já numerados, mantidos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已编号，保留"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已編號，保留"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

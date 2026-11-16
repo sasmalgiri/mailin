@@ -66,10 +66,12 @@ enum DocumentRegistry {
     /// workflow itself; the audit entry still records the action.
     @MainActor
     static func post(_ type: DocumentType, summary: String, refs: String = "") async -> String? {
-        let number = try? await SQLiteEmailStore.shared.issueDocument(
+        // The app's store and audit chain; a bound test environment keeps
+        // its numbers and entries to itself.
+        let number = try? await ScopeJobEnvironment.store.issueDocument(
             type: type.rawValue, summary: summary, refs: refs)
         if let number {
-            ForensicManager.shared.logAction(
+            ScopeJobEnvironment.logAction(
                 "Document posted: \(number)", detail: summary)
         }
         return number
