@@ -707,6 +707,21 @@ public actor IMAPAdapter: MailProviderAdapter {
         let known = gmailLocations[id]
         var places: [String] = known.map { [$0.mailbox] } ?? []
         for p in [gmailAllMail, item.folder?.serverID].compactMap({ $0 }) where !places.contains(p) { places.append(p) }
+        if known == nil {
+            // Review B10 (2026-11-16): a message this page did not list — an
+            // earlier failure retried with no folder — is searched for by
+            // X-GM-MSGID in every listed folder, not only All Mail. With All
+            // Mail hidden from IMAP `places` was empty and a message still on
+            // the server was recorded "deleted or moved", terminally.
+            // Ordered: INBOX, then folders by name, Spam and Trash last.
+            let skipped = gmailSkipped
+            let rest = folders.filter { $0.value.selectable && !places.contains($0.key) }.map(\.key)
+                .sorted { a, b in
+                    func rank(_ id: String) -> Int { id == "INBOX" ? 0 : skipped.contains(id) ? 2 : 1 }
+                    return (rank(a), a) < (rank(b), b)
+                }
+            places.append(contentsOf: rest)
+        }
         return try await withSession(context) { s in
             for mailbox in places {
                 let cached = known.flatMap { $0.mailbox == mailbox ? $0 : nil }

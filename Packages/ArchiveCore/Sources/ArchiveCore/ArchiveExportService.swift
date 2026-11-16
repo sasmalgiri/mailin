@@ -1157,32 +1157,75 @@ final class ArchiveExportService {
         }
     }
 
-    /// Attachment bulk save: streams the scope and copies each attachment file.
-    /// `maxAttachments` is the free-tier cap (nil = unlimited).
+    /// What an attachment bulk save did, counted per attachment (rule 5:
+    /// partial work says "X of Y", never "complete").
+    struct AttachmentExportOutcome: Sendable, Equatable {
+        /// Attachments whose bytes were written to the folder.
+        var saved = 0
+        /// Attachments reached but not written: bytes not recoverable from the
+        /// archive (no live file, no inline payload, no raw MIME or source),
+        /// or the write itself failed.
+        var failed = 0
+        /// The free-tier cap stopped the run.
+        var capped = false
+        /// Attachments the run reached (saved + failed).
+        var attempted: Int { saved + failed }
+        /// True only when every attachment reached was written and the cap did not stop the run.
+        var isComplete: Bool { failed == 0 && !capped }
+        /// "Saved X of Y attachments …" when something failed; nil otherwise.
+        var partialSummary: String? {
+            failed == 0 ? nil : "Saved \(saved) of \(attempted) attachments — \(failed) could not be read from the archive or written"
+        }
+    }
+
+    /// Attachment bulk save: streams the scope and writes each attachment's
+    /// bytes. `maxAttachments` is the free-tier cap (nil = unlimited).
+    ///
+    /// Review B12 (2026-11-16): a store-loaded attachment never carries a
+    /// `fileURL` (parse-time temp files do not survive), so copying only
+    /// `fileURL`s saved nothing for imported mail and still reported success.
+    /// The bytes now come from `AttachmentHydrator` — the route the PST / MSG /
+    /// EML writers use — and every attachment that cannot be produced is
+    /// counted in `failed`.
     func exportAttachments(scope: ArchiveSelectionScope, to folder: URL,
                            maxAttachments: Int? = nil,
-                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> (saved: Int, capped: Bool) {
+                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> AttachmentExportOutcome {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var saved = 0, emailsDone = 0
+        var outcome = AttachmentExportOutcome()
+        var emailsDone = 0
         let total = try await archive.count(scope: scope)
         for try await batch in archive.streamSelected(scope: scope) {
             try Task.checkCancellation()
             for email in batch {
+                let cache = AttachmentHydrator.Cache()
+                defer { cache.removeTemporaryFiles() }
                 for (attIndex, att) in email.attachments.enumerated() {
-                    if let maxAttachments, saved >= maxAttachments { return (saved, true) }
-                    guard let source = att.fileURL else { continue }
-                    let safeName = att.filename
+                    if let maxAttachments, outcome.saved >= maxAttachments {
+                        outcome.capped = true
+                        return outcome
+                    }
+                    var safeName = att.filename
                         .replacingOccurrences(of: "/", with: "_")
                         .replacingOccurrences(of: "\\", with: "_")
                         .replacingOccurrences(of: "..", with: "_")
+                    if safeName.isEmpty { safeName = "attachment" }
                     var target = folder.appendingPathComponent(safeName)
-                    if FileManager.default.fileExists(atPath: target.path) {
-                        target = folder.appendingPathComponent("\(saved + 1)_\(attIndex)_\(safeName)")
+                    var attempt = 0
+                    while FileManager.default.fileExists(atPath: target.path) {
+                        attempt += 1
+                        target = folder.appendingPathComponent("\(outcome.saved + attempt)_\(attIndex)_\(safeName)")
+                    }
+                    guard let bytes = AttachmentHydrator.data(for: att, index: attIndex, email: email, cache: cache) else {
+                        outcome.failed += 1
+                        FileUtilsAudit.logError(CocoaError(.fileReadNoSuchFile),
+                                                context: "Attachment Export: bytes not recoverable", path: target.path)
+                        continue
                     }
                     do {
-                        try FileUtils.copyFile(from: source, to: target)
-                        saved += 1
+                        try bytes.write(to: target, options: .withoutOverwriting)
+                        outcome.saved += 1
                     } catch {
+                        outcome.failed += 1
                         FileUtilsAudit.logError(error, context: "Attachment Export", path: target.path)
                     }
                 }
@@ -1190,7 +1233,7 @@ final class ArchiveExportService {
             }
             onProgress?(emailsDone, total)
         }
-        return (saved, false)
+        return outcome
     }
 
     // MARK: - PST parts (§3-H9)

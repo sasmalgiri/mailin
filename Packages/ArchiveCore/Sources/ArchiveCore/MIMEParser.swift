@@ -223,7 +223,10 @@ public class MIMEParser {
             return trimmed
         case "quoted-printable":
             return QuotedPrintableDecoder.decode(trimmed, isHeader: false, charset: charset)
-        case "7bit", "8bit", "binary":
+        default:
+            // 7bit / 8bit / binary, no Content-Transfer-Encoding header (the
+            // RFC 2045 default is 7bit) and an unknown one are all identity
+            // encodings: the text is the part's bytes, read with its charset.
             // A Swift String is already valid UTF-8: re-decoding it as UTF-8
             // is the identity and cost two copies of every text body.
             let encoding = stringEncoding(for: charset)
@@ -231,14 +234,6 @@ public class MIMEParser {
             if let original = latin1DecodedBytes(trimmed), let decoded = String(data: original, encoding: encoding) {
                 return decoded
             }
-            if let data = trimmed.data(using: .utf8),
-               let decoded = String(data: data, encoding: encoding) {
-                return decoded
-            }
-            return trimmed
-        default:
-            let encoding = stringEncoding(for: charset)
-            if encoding == .utf8 { return trimmed }
             if let data = trimmed.data(using: .utf8),
                let decoded = String(data: data, encoding: encoding) {
                 return decoded
