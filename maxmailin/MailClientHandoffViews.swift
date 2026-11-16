@@ -346,6 +346,29 @@ struct MailClientExportSheet: View {
         #endif
     }
 
+    /// The receipt a hand-off ends in (A8): what was asked for, what was
+    /// written, when the run started.
+    static func handoffReceipt(client: MailClient, outcome: HandoffExportResult,
+                               requested: Int, startedAt: Date, completedAt: Date = Date()) -> ExportReceipt {
+        let outcomeKind: ExportReceipt.Outcome
+        let note: String?
+        if !outcome.verified {
+            outcomeKind = .failed
+            note = String(localized: "Read-back returned \(outcome.reparsed) of \(outcome.records) messages")
+        } else if outcome.records < requested {
+            outcomeKind = .partial
+            note = String(localized: "Wrote \(outcome.records) of \(requested) messages")
+        } else {
+            outcomeKind = .complete
+            note = nil
+        }
+        return ExportReceipt(
+            title: "Export to \(client.name)", destination: outcome.folder.path, isFolder: true,
+            requested: requested, written: outcome.records, bytesWritten: Int(outcome.bytes),
+            outcome: outcomeKind, errorMessage: note,
+            startedAt: startedAt, completedAt: completedAt)
+    }
+
     private func run() async {
         guard let destination else { return }
         isRunning = true
@@ -353,7 +376,9 @@ struct MailClientExportSheet: View {
         result = nil
         defer { isRunning = false }
         let folder = destination.appendingPathComponent("mailin-handoff", isDirectory: true)
+        let startedAt = Date()
         do {
+            let requested = try await ArchiveDataService.shared.count(scope: scope)
             stage = String(localized: "Writing mbox files…")
             let service = ArchiveExportService.shared
             let results = try await service.exportMBOXPartitions(scope: scope, toDirectory: folder, baseName: "mailin-handoff")
@@ -371,12 +396,8 @@ struct MailClientExportSheet: View {
                                               bytes: bytes, reparsed: reparsed, reparseFailed: failed)
             result = outcome
             // A8: the handoff is an export like any other — it ends in a receipt.
-            ExportRunCenter.shared.record(ExportReceipt(
-                title: "Export to \(client.name)", destination: folder.path, isFolder: true,
-                requested: records, written: records, bytesWritten: Int(bytes),
-                outcome: outcome.verified ? .complete : .failed,
-                errorMessage: outcome.verified ? nil : "Read-back returned \(reparsed) of \(records) messages",
-                startedAt: Date(), completedAt: Date()))
+            ExportRunCenter.shared.record(Self.handoffReceipt(client: client, outcome: outcome,
+                                                              requested: requested, startedAt: startedAt))
         } catch {
             errorMessage = error.localizedDescription
         }

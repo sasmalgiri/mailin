@@ -12578,4 +12578,29 @@ final class Review1116CTests: XCTestCase {
         await manager.scanForNewFiles()
         XCTAssertEqual(attempts, 2, "a file taken in is not written again")
     }
+
+    /// C10 (rule 5): the hand-off receipt states what was asked for against what was
+    /// written (X of Y) and when the run started — not written/written and "now".
+    func testC10_handoffReceipt_realRequestedCount_andStartTime() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let end = Date(timeIntervalSince1970: 1_000_060)
+        let folder = URL(fileURLWithPath: "/tmp/handoff")
+        let short = MailClientExportSheet.HandoffExportResult(folder: folder, records: 7, partitions: 1,
+                                                              bytes: 700, reparsed: 7, reparseFailed: 0)
+        let r = MailClientExportSheet.handoffReceipt(client: .appleMail, outcome: short, requested: 10,
+                                                     startedAt: start, completedAt: end)
+        XCTAssertEqual(r.requested, 10)
+        XCTAssertEqual(r.written, 7)
+        XCTAssertEqual(r.startedAt, start)
+        XCTAssertEqual(r.durationSeconds, 60)
+        XCTAssertNotEqual(r.outcome, .complete, "7 of 10 is not complete")
+        XCTAssertTrue(r.errorMessage?.contains("7 of 10") == true, r.errorMessage ?? "nil")
+
+        let full = MailClientExportSheet.HandoffExportResult(folder: folder, records: 10, partitions: 1,
+                                                             bytes: 1_000, reparsed: 10, reparseFailed: 0)
+        let ok = MailClientExportSheet.handoffReceipt(client: .appleMail, outcome: full, requested: 10,
+                                                      startedAt: start, completedAt: end)
+        XCTAssertEqual(ok.outcome, .complete)
+        XCTAssertNil(ok.errorMessage)
+    }
 }
