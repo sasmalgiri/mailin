@@ -101,7 +101,10 @@ enum SMIMEKeychainIdentities {
         guard let entries = items as? [[CFString: Any]],
               let first = entries.first(where: { $0[kSecImportItemIdentity] != nil }),
               let anyIdentity = first[kSecImportItemIdentity] else { throw ImportError.noIdentity }
-        let ref = anyIdentity as! SecIdentity   // CF type: the bridge cannot fail once present
+        // A CF type: check its type ID, then the cast cannot fail (no force-cast).
+        let cfIdentity = anyIdentity as CFTypeRef
+        guard CFGetTypeID(cfIdentity) == SecIdentityGetTypeID() else { throw ImportError.noIdentity }
+        let ref = unsafeDowncast(cfIdentity, to: SecIdentity.self)
         guard let parsed = identity(ref) else { throw ImportError.noIdentity }
         var add: [CFString: Any] = [kSecValueRef: ref, kSecAttrLabel: "mailin S/MIME — \(parsed.commonName)"]
         #if os(iOS)

@@ -24,7 +24,9 @@ struct AttachmentUnlockView: View {
     @State private var showingSheet = false
 
     var body: some View {
-        Group {
+        // A view that is always there: `.task` on an empty Group never runs,
+        // so the content it loads could never appear.
+        VStack(alignment: .leading, spacing: 0) {
             if let current = row, current.state == .locked || lockedChildren > 0 {
                 HStack(spacing: Spacing.xSmall) {
                     Image(systemName: "lock.fill").foregroundStyle(.secondary)

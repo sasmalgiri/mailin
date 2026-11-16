@@ -37,7 +37,7 @@ final class AttachmentTextIndexJob {
 
     static let shared = AttachmentTextIndexJob()
 
-    private static let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "AttachmentIndex")
+    nonisolated private static let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "AttachmentIndex")
 
     /// Test seam.
     static var testStoreOverride: SQLiteEmailStore?
@@ -873,8 +873,13 @@ final class AttachmentTextIndexJob {
         }
         pending.messagesRequeued += requeued
         guard let data = try? JSONEncoder().encode(pending) else { return }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            // The re-read still runs; only its Health record is missing — say so in the log.
+            Self.logger.error("Could not record \(requeued) re-queued messages for the reader upgrade: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// The pass ended without being cancelled: the pending re-read becomes the

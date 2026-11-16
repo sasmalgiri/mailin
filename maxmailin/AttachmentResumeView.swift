@@ -22,7 +22,9 @@ struct AttachmentResumeView: View {
     @State private var message: String?
 
     var body: some View {
-        Group {
+        // A view that is always there: `.task` on an empty Group never runs,
+        // so the content it loads could never appear.
+        VStack(alignment: .leading, spacing: 0) {
             if let current = row, Self.canResume(current) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: Spacing.xSmall) {
