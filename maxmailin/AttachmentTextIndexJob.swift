@@ -1167,14 +1167,22 @@ final class AttachmentTextIndexJob {
         let read = outcome.recognised + outcome.layerPages
         let reasons = outcome.failures.prefix(3).joined(separator: "; ")
             + (outcome.failures.count > 3 ? String(localized: "; and \(outcome.failures.count - 3) more") : "")
+        // Review 2026-11-16: a page read at the fast level (the accurate recogniser failed) is said so on the row.
+        let fast: String? = outcome.fastPages > 0
+            ? String(localized: "\(outcome.fastPages) pages read with the fast recogniser because the accurate one failed")
+            : nil
+        func with(_ note: String?) -> String? {
+            guard let fast else { return note }
+            return note.map { $0 + "; " + fast } ?? fast
+        }
         if outcome.isComplete {
             let words = outcome.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if words.isEmpty { return Reading("", .noText, "ocr", String(localized: "no text was recognised in the image")) }
-            return Reading(outcome.text, .extracted, "ocr", nil)
+            if words.isEmpty { return Reading("", .noText, "ocr", with(String(localized: "no text was recognised in the image"))) }
+            return Reading(outcome.text, .extracted, "ocr", with(nil))
         }
         if read > 0 {
             return Reading(outcome.text, .partial, "ocr",
-                    String(localized: "\(outcome.failed) of \(max(pages, read + outcome.failed)) pages could not be read: \(reasons)"))
+                    with(String(localized: "\(outcome.failed) of \(max(pages, read + outcome.failed)) pages could not be read: \(reasons)")))
         }
         return Reading(nil, .failed, "ocr", reasons)
     }

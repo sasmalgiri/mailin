@@ -140,6 +140,12 @@ struct ArchiveHealthView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("health.formats.ocrLanguages")
+                // Review 2026-11-16: the accurate → fast downgrade, stated (nil when it never happened).
+                if let downgrade = AttachmentOCR.downgradeSummary() {
+                    Text(downgrade).font(.caption2).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("health.formats.ocrDowngrade")
+                }
                 // §13.3 (11): what the last reader upgrade re-read.
                 // R7: this archive's record, written when the re-reading pass finished.
                 if let rebuild = rebuildText {

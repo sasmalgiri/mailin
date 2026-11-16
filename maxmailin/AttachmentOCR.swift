@@ -28,14 +28,50 @@ import AppKit
 import UIKit
 #endif
 
-/// A thread-safe Bool: OCR runs on the indexing job's background threads.
-final class OCRFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored = false
-    var value: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return stored }
-        set { lock.lock(); stored = newValue; lock.unlock() }
+/// The accurate → fast fallback of one session (see `AttachmentOCR.recognizeRetryingOnce`),
+/// thread-safe: OCR runs on the indexing job's background threads.
+final class OCRFallbackState: @unchecked Sendable {
+    struct Snapshot: Sendable, Equatable {
+        var consecutiveAccurateFailures = 0
+        var skippedSinceProbe = 0
+        var fastReads = 0
+        var lastAccurateError: String?
+        var skippingAccurate: Bool { consecutiveAccurateFailures >= AttachmentOCR.accurateFailuresBeforeSkipping }
     }
+    private let lock = NSLock()
+    private var state = Snapshot()
+
+    var snapshot: Snapshot { lock.withLock { state } }
+
+    /// False while the accurate recogniser is known to fail, except every probe-interval-th image.
+    func shouldTryAccurate() -> Bool {
+        lock.withLock {
+            guard state.skippingAccurate else { return true }
+            state.skippedSinceProbe += 1
+            if state.skippedSinceProbe >= AttachmentOCR.accurateProbeInterval {
+                state.skippedSinceProbe = 0
+                return true
+            }
+            return false
+        }
+    }
+
+    func accurateSucceeded() {
+        lock.withLock { state.consecutiveAccurateFailures = 0; state.skippedSinceProbe = 0 }
+    }
+
+    /// The image went to the fast level: `accurateError` is set when accurate was tried (twice) and failed.
+    func readFast(accurateError: Error?, succeeded: Bool) {
+        lock.withLock {
+            if let accurateError {
+                state.consecutiveAccurateFailures += 1
+                state.lastAccurateError = accurateError.localizedDescription
+            }
+            if succeeded { state.fastReads += 1 }
+        }
+    }
+
+    func reset() { lock.withLock { state = Snapshot() } }
 }
 
 enum AttachmentOCR {
@@ -60,6 +96,8 @@ enum AttachmentOCR {
         var layerPages = 0
         /// Pages that could not be read, with the reason for each.
         var failures: [String] = []
+        /// Pages (or the one image) read at the fast level because the accurate recogniser failed.
+        var fastPages = 0
         var failed: Int { failures.count }
         var isComplete: Bool { failures.isEmpty }
     }
@@ -70,17 +108,48 @@ enum AttachmentOCR {
         (try? VNRecognizeTextRequest().supportedRecognitionLanguages()) ?? []
     }
 
-    /// The recogniser, replaceable by tests. The production one asks Vision.
-    nonisolated(unsafe) static var recognizer: @Sendable (CGImage) -> Result<String?, Error> = visionRecognizer
+    /// A whole-recognition override, replaceable by tests (nil in the app): it is
+    /// tried twice like the accurate level, and what it reads counts as accurate.
+    nonisolated(unsafe) static var recognizer: (@Sendable (CGImage) -> Result<String?, Error>)?
 
-    /// One recognition, tried a second time when Vision returns an error: under load Vision
-    /// can fail once on a page it reads the next time (CLOSE-06 Release run, 2026-11-15), and
-    /// a failed row is only re-read when the reader changes — so one transient error would
-    /// leave the attachment unsearchable. A second error is the recorded failure.
-    static func recognizeRetryingOnce(_ image: CGImage) -> Result<String?, Error> {
-        let first = recognizer(image)
-        if case .failure = first { return recognizer(image) }
-        return first
+    /// One recognition and the level that produced it.
+    struct Recognition: Sendable {
+        var result: Result<String?, Error>
+        var level: Level
+    }
+
+    /// One recognition, each level tried a second time when Vision returns an error: under
+    /// load Vision can fail once on a page it reads the next time (CLOSE-06 Release run,
+    /// 2026-11-15), and a failed row is only re-read when the reader changes — so one
+    /// transient error would leave the attachment unsearchable.
+    ///
+    /// 2026-11-16 (macOS 27.0.1, 26A434): the accurate recogniser can fail every image after
+    /// the first with an E5 runtime error (code 13, "Must re-compile the E5") while the fast
+    /// one keeps reading. So: accurate, accurate again, then fast (twice at most). The
+    /// downgrade is recorded (`Outcome.fastPages`, the row's note, Health). After
+    /// `accurateFailuresBeforeSkipping` images in a row fail accurate twice, images go
+    /// straight to fast, and every `accurateProbeInterval`-th image asks accurate again — a
+    /// recovered recogniser is used again, one transient error never downgrades the session.
+    static func recognizeRetryingOnce(_ image: CGImage) -> Recognition {
+        if let recognizer {
+            let first = recognizer(image)
+            if case .failure = first { return Recognition(result: recognizer(image), level: .accurate) }
+            return Recognition(result: first, level: .accurate)
+        }
+        var accurateError: Error?
+        if fallback.shouldTryAccurate() {
+            for _ in 0..<2 {
+                let r = levelRecognizer(image, .accurate)
+                if case .failure(let error) = r { accurateError = error; continue }
+                fallback.accurateSucceeded()
+                return Recognition(result: r, level: .accurate)
+            }
+        }
+        let first = levelRecognizer(image, .fast)
+        let fast: Result<String?, Error>
+        if case .failure = first { fast = levelRecognizer(image, .fast) } else { fast = first }
+        fallback.readFast(accurateError: accurateError, succeeded: (try? fast.get()) != nil)
+        return Recognition(result: fast, level: .fast)
     }
 
     static func isImage(mimeType: String, filename: String) -> Bool {
@@ -110,26 +179,33 @@ enum AttachmentOCR {
         (text ?? "").unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }.count
     }
 
-    /// Vision: the recognised lines in reading order; nil when none; the error when it failed.
-    ///
-    /// 2026-11-16 (macOS 27.0.1, 26A434): the accurate recogniser reads the first image of a process
-    /// and then fails every later one with an E5 runtime error (code 13, "Must re-compile the E5"),
-    /// and once it has failed the older accurate revision fails too; the same happens outside
-    /// mailin. The fast recogniser keeps reading. So on an error the image is read again at the
-    /// fast level, and the rest of the session uses it directly. A Mac where the accurate
-    /// recogniser works never takes this path.
-    @Sendable static func visionRecognizer(_ image: CGImage) -> Result<String?, Error> {
-        if !fastFallbackInUse.value {
-            switch recognize(image, level: .accurate) {
-            case .success(let text): return .success(text)
-            case .failure: fastFallbackInUse.value = true
-            }
-        }
-        return recognize(image, level: .fast)
+    enum Level: String, Sendable { case accurate, fast }
+
+    /// One Vision recognition at one level: the recognised lines in reading order; nil when
+    /// none; the error when it failed. Replaceable by tests (a fake recogniser, no Vision).
+    nonisolated(unsafe) static var levelRecognizer: @Sendable (CGImage, Level) -> Result<String?, Error> = { image, level in
+        recognize(image, level: level == .accurate ? .accurate : .fast)
     }
 
-    /// Set once the accurate recogniser has failed in this process (see `visionRecognizer`).
-    static let fastFallbackInUse = OCRFlag()
+    /// Images in a row whose accurate recognition failed twice before images go straight to fast.
+    static let accurateFailuresBeforeSkipping = 2
+    /// While skipping, every this-many-th image asks the accurate recogniser again.
+    static let accurateProbeInterval = 25
+
+    /// The session's accurate → fast fallback (OCR runs on the indexing job's threads).
+    static let fallback = OCRFallbackState()
+
+    static func resetFallback() { fallback.reset() }
+
+    /// Health: the downgrade this session, stated; nil when the accurate recogniser was never replaced.
+    static func downgradeSummary() -> String? {
+        let s = fallback.snapshot
+        guard s.fastReads > 0 else { return nil }
+        let reason = s.lastAccurateError ?? String(localized: "unknown error")
+        return s.skippingAccurate
+            ? String(localized: "Text recognition read \(s.fastReads) images at the fast level this session; the accurate level keeps failing (\(reason)) and is tried again every \(accurateProbeInterval) images.")
+            : String(localized: "Text recognition read \(s.fastReads) images at the fast level this session after the accurate level failed (\(reason)).")
+    }
 
     private static func recognize(_ image: CGImage, level: VNRequestTextRecognitionLevel) -> Result<String?, Error> {
         let request = VNRecognizeTextRequest()
@@ -145,7 +221,7 @@ enum AttachmentOCR {
     /// The recognised text of one image, lines in reading order; nil when none was found OR when
     /// recognition failed — callers that must tell the two apart use `outcome(…)`.
     static func recognize(_ image: CGImage) -> String? {
-        (try? recognizer(image).get()) ?? nil
+        (try? recognizeRetryingOnce(image).result.get()) ?? nil
     }
 
     /// Text in an image file's bytes, decoded downsampled; nil when none or on failure.
@@ -171,7 +247,9 @@ enum AttachmentOCR {
             outcome.failures.append(String(localized: "the image could not be decoded"))
             return outcome
         }
-        switch recognizeRetryingOnce(image) {
+        let recognition = recognizeRetryingOnce(image)
+        if recognition.level == .fast { outcome.fastPages = 1 }
+        switch recognition.result {
         case .success(let text):
             if let text, !text.isEmpty { outcome.recognised = 1; outcome.text = text }
         case .failure(let error):
@@ -203,7 +281,9 @@ enum AttachmentOCR {
                     outcome.failures.append(String(localized: "page \(index + 1) could not be rendered"))
                     return
                 }
-                switch recognizeRetryingOnce(image) {
+                let recognition = recognizeRetryingOnce(image)
+                if recognition.level == .fast { outcome.fastPages += 1 }
+                switch recognition.result {
                 case .success(let text):
                     if let text, !text.isEmpty { outcome.recognised += 1; pages.append(text) }
                 case .failure(let error):

@@ -5951,6 +5951,94 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(failing.failures[0].contains("Vision stopped"))
     }
 
+    /// Review 2026-11-16 (rule 11): the accurate → fast fallback for the E5 error
+    /// (macOS 27.0.1), with a fake recogniser — no Vision. Accurate gets its
+    /// second try first; the downgrade is recorded in the outcome, the row's
+    /// note and Health; one transient error does not downgrade the session.
+    private final class LevelCalls: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [AttachmentOCR.Level] = []
+        var levels: [AttachmentOCR.Level] { lock.withLock { stored } }
+        func append(_ level: AttachmentOCR.Level) { lock.withLock { stored.append(level) } }
+        func reset() { lock.withLock { stored = [] } }
+    }
+    nonisolated private static let e5 = NSError(domain: "com.apple.Vision", code: 13,
+                                    userInfo: [NSLocalizedDescriptionKey: "Must re-compile the E5 (code 13)"])
+
+    func testOCR_accurateE5Error_retriesAccurateOnce_thenReadsFast_andRecordsTheDowngrade() throws {
+        let original = AttachmentOCR.levelRecognizer
+        defer { AttachmentOCR.levelRecognizer = original; AttachmentOCR.resetFallback() }
+        AttachmentOCR.resetFallback()
+        let calls = LevelCalls()
+        AttachmentOCR.levelRecognizer = { _, level in
+            calls.append(level)
+            return level == .accurate ? .failure(Self.e5) : .success("fast words")
+        }
+        let image = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertEqual(image.text, "fast words")
+        XCTAssertTrue(image.isComplete, image.failures.joined(separator: "; "))
+        XCTAssertEqual(calls.levels, [.accurate, .accurate, .fast], "accurate gets its second try before the downgrade")
+        XCTAssertEqual(image.fastPages, 1, "the outcome records the downgrade")
+        let reading = AttachmentTextIndexJob.ocrState(image, pages: 1)
+        XCTAssertEqual(reading.state, .extracted)
+        XCTAssertTrue(reading.note?.contains("fast") == true, reading.note ?? "no note")
+        let health = try XCTUnwrap(AttachmentOCR.downgradeSummary(), "Health states the downgrade")
+        XCTAssertTrue(health.contains("Must re-compile the E5"), health)
+
+        // A scanned PDF page the same way.
+        calls.reset()
+        let scan = try XCTUnwrap(PDFDocument(data: Self.pdfData(pages: [""])))
+        let page = AttachmentOCR.outcome(fromPDF: scan)
+        XCTAssertEqual(page.recognised, 1)
+        XCTAssertEqual(page.fastPages, 1)
+    }
+
+    func testOCR_oneTransientAccurateError_isNotStickyForTheSession_aBrokenRecogniserIsProbedAgain() throws {
+        let original = AttachmentOCR.levelRecognizer
+        defer { AttachmentOCR.levelRecognizer = original; AttachmentOCR.resetFallback() }
+        AttachmentOCR.resetFallback()
+        let calls = LevelCalls()
+        final class Mode: @unchecked Sendable { var accurateFailsNext = 1; var accurateBroken = false }
+        let mode = Mode()
+        AttachmentOCR.levelRecognizer = { _, level in
+            calls.append(level)
+            guard level == .accurate else { return .success("fast words") }
+            if mode.accurateBroken { return .failure(Self.e5) }
+            if mode.accurateFailsNext > 0 { mode.accurateFailsNext -= 1; return .failure(Self.e5) }
+            return .success("accurate words")
+        }
+        // One transient error: accurate's retry reads it; nothing is downgraded.
+        let first = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertEqual(first.text, "accurate words")
+        XCTAssertEqual(first.fastPages, 0)
+        XCTAssertEqual(calls.levels, [.accurate, .accurate])
+        calls.reset()
+        _ = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertEqual(calls.levels, [.accurate], "the next image still starts at the accurate level")
+        XCTAssertNil(AttachmentOCR.downgradeSummary(), "no downgrade happened")
+
+        // Broken for real: two images each fail accurate twice → the session reads fast directly…
+        mode.accurateBroken = true
+        calls.reset()
+        _ = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        _ = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertEqual(calls.levels, [.accurate, .accurate, .fast, .accurate, .accurate, .fast])
+        calls.reset()
+        let third = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertEqual(calls.levels, [.fast], "a recogniser that keeps failing is not asked twice per image")
+        XCTAssertEqual(third.fastPages, 1)
+        // …and asks the accurate one again within the probe interval; once it works, it is used again.
+        mode.accurateBroken = false
+        calls.reset()
+        for _ in 0..<AttachmentOCR.accurateProbeInterval { _ = AttachmentOCR.outcome(fromImageData: Self.pngData()) }
+        XCTAssertTrue(calls.levels.contains(.accurate), "the accurate recogniser is probed again")
+        calls.reset()
+        let back = AttachmentOCR.outcome(fromImageData: Self.pngData())
+        XCTAssertEqual(calls.levels, [.accurate])
+        XCTAssertEqual(back.text, "accurate words")
+        XCTAssertEqual(back.fastPages, 0)
+    }
+
     func testA06_ocrFailuresAreNamed_mixedPDFsReadPageByPage_neverComplete() throws {
         let original = AttachmentOCR.recognizer
         defer { AttachmentOCR.recognizer = original }
