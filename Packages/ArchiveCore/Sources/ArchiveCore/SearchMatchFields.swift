@@ -106,9 +106,9 @@ struct SearchMatchTerms: Equatable, Sendable {
         var terms: [String] = []
         var skipNext = false
         for token in ArchiveQueryCompiler.tokenize(trimmed) {
-            let upper = token.uppercased()
-            if upper == "AND" || upper == "OR" { continue }
-            if upper == "NOT" { skipNext = true; continue }
+            // D-6: operators only in capitals, like the search itself.
+            if token == "AND" || token == "OR" { continue }
+            if token == "NOT" { skipNext = true; continue }
             if skipNext { skipNext = false; continue }
             var term = token.trimmingCharacters(in: CharacterSet(charactersIn: "()\"*"))
             // A quoted phrase inside parentheses: `("exact phrase")`.

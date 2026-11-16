@@ -5505,6 +5505,23 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(narrowed, 2_300 - 600)
     }
 
+    /// D-6 (owner 2026-11-16): AND, OR, NOT are operators only in capitals, on the
+    /// search model as in the previous search; lower-case and/or/not are words.
+    func testD6_plainBoxOperatorsOnlyInCapitals_lowerCaseAreWords() throws {
+        let lower = try XCTUnwrap(PlainSearchTranslator.spec(from: "salt or pepper"))
+        XCTAssertEqual(lower.groups, [SearchGroup(.all, [SearchCondition(.anyText, .contains, "pepper"),
+                                                        SearchCondition(.anyText, .allWords, "salt or")])])
+        let notWord = try XCTUnwrap(PlainSearchTranslator.spec(from: "not guilty"))
+        XCTAssertEqual(notWord.groups, [SearchGroup(.all, [SearchCondition(.anyText, .contains, "guilty"),
+                                                          SearchCondition(.anyText, .allWords, "not")])])
+        XCTAssertNotNil(PlainSearchTranslator.spec(from: "and"), "a lone lower-case word is a search, not an empty operator")
+        XCTAssertEqual(PlainSearchTranslator.spec(from: "salt OR pepper")?.groups.first?.kind, .any)
+        XCTAssertEqual(SearchMatchTerms.positiveTerms(in: "salt and pepper"), ["salt", "and", "pepper"])
+        XCTAssertEqual(SearchMatchTerms.positiveTerms(in: "salt AND pepper NOT cumin"), ["salt", "pepper"])
+        // The previous search agrees.
+        XCTAssertFalse(FTSQueryBuilder.freeTextOrBoolean("salt or pepper")?.contains(" OR ") ?? true)
+    }
+
     func testCAP01_plainBoxTranslatesToTheModel_andIsOffWhenTheModelIsOff() throws {
         let wasOn = SearchChunkPolicy.isEnabled
         defer { SearchChunkPolicy.isEnabled = wasOn }

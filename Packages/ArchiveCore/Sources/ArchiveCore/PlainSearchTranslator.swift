@@ -15,6 +15,7 @@
 //    a OR b           either (each side may be several words and phrases)
 //    NOT word, -word  leave out — within the alternative it is typed in
 //    AND              ignored (the default)
+//    (operators only in capitals; lower-case and/or/not are words — D-6)
 //    in:attachments   the words must be inside one attachment's text
 //
 
@@ -40,10 +41,12 @@ enum PlainSearchTranslator {
         var alternatives: [[Term]] = [[]]
         var negateNext = false
         for token in tokens {
-            let upper = token.uppercased()
-            if upper == "AND" { continue }
-            if upper == "OR" { if !(alternatives.last?.isEmpty ?? true) { alternatives.append([]) }; continue }
-            if upper == "NOT" { negateNext = true; continue }
+            // D-6 (owner 2026-11-16): operators only in capitals, as in the
+            // previous search (FTSQueryBuilder) and the help: in "salt and
+            // pepper" the "and" is a word to search for, not an operator.
+            if token == "AND" { continue }
+            if token == "OR" { if !(alternatives.last?.isEmpty ?? true) { alternatives.append([]) }; continue }
+            if token == "NOT" { negateNext = true; continue }
             var text = token
             var negated = negateNext
             negateNext = false
