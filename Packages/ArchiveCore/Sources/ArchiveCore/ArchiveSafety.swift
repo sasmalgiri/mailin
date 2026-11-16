@@ -27,6 +27,10 @@ public enum SQLiteHygiene {
     ///    the database file referencing pages that never reached the disk.
     static func apply(to handle: OpaquePointer) {
         guard isEnabled else { return }
+        EngineBreadcrumbs.run("v3SQLiteHygiene") { applySettings(to: handle) }
+    }
+
+    private static func applySettings(to handle: OpaquePointer) {
         sqlite3_exec(handle, "PRAGMA busy_timeout = 5000;", nil, nil, nil)
         #if os(macOS)
         sqlite3_exec(handle, "PRAGMA checkpoint_fullfsync = ON;", nil, nil, nil)

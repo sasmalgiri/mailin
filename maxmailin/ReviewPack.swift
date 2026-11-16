@@ -278,6 +278,8 @@ enum ReviewPackBuilder {
     /// Writes every email in `scope` to `url` (streamed), signs it and records it as issued.
     static func build(scope: ArchiveScope, title: String, codes: [String], instructions: String,
                       to url: URL, progress: (Int, Int) -> Void) async throws -> IssuedPacks.Entry {
+        let crumb = EngineGuard.begin(.v31ReviewPack)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         let key = try ReviewSigningKey.privateKey()
         let total = try await ScopeJobEnvironment.archive.count(query: scope.query)
         let packID = UUID()
@@ -340,6 +342,8 @@ enum ReviewResponseMerger {
     /// Verifies and merges a response. Nothing is written unless the whole
     /// file verifies. Existing codes are never overwritten.
     static func merge(url: URL) async throws -> ReviewMergeResult {
+        let crumb = EngineGuard.begin(.v31ReviewPack)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         var header: ReviewResponseHeader?
         _ = try SignedLineReader.verify(url: url) { first in
             guard let h = try? SignedLineReader.decoder().decode(ReviewResponseHeader.self, from: first),

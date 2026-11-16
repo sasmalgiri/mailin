@@ -167,6 +167,10 @@ final class SafeMode {
         }
     }
 
+    /// The launch's decision, readable before the main actor's first view
+    /// (review C23: the store-level engines are armed from the app's init).
+    nonisolated static var isActiveAtLaunch: Bool { decidedAtLaunch }
+
     /// Whether background work and 3.0 engines may run this launch.
     var allowsBackgroundWork: Bool { !isActive }
 

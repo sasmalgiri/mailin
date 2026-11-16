@@ -202,7 +202,7 @@ struct ThreadStoryView: View {
         defer { isLoading = false }
         if v3 {
             do {
-                members = try await ThreadStoryEngine.completeThread(of: email)
+                members = try await EngineGuard.run(.v3Threads) { try await ThreadStoryEngine.completeThread(of: email) }
                 truncated = false
                 return
             } catch is CancellationError {

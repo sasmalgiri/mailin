@@ -161,6 +161,8 @@ struct EmailEntityQuery: EntityPropertyQuery {
     /// "All" = one query; "any" = one query per clause, merged without repeats.
     static func find(_ clauses: [EmailEntityClause], mode: ComparatorMode, limit: Int) async throws -> [EmailEntity] {
         guard await ScopeJobEnvironment.archiveReady() else { throw ShortcutsActionError.notReady }
+        let crumb = EngineGuard.begin(.v31ShortcutsActions)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         let queries: [EmailQuery]
         if mode == .or, clauses.count > 1 {
             queries = clauses.map { c in var q = EmailQuery(); c.apply(to: &q); return q }

@@ -299,7 +299,8 @@ struct LegalReviewWorkspaceView: View {
 
     private func loadInitial() async {
         restoreLegalState()
-        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        // C23: the whole-archive statistics are the v3LegalReview engine.
+        archiveTotal = await EngineGuard.run(v3Stats ? .v3LegalReview : nil) { (try? await ArchiveDataService.shared.count()) ?? 0 }
         if pagedEmails.isEmpty { await loadNextPage() }
         if workingSet.isEmpty {
             var acc: [MBOXParser.RawEmail] = []

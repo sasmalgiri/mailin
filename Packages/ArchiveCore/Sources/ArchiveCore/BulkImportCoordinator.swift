@@ -614,9 +614,11 @@ final class BulkImportCoordinator {
                 if SourceCopyPolicy.isEnabled,
                    FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue {
                     let storeDirectory = store.storeDirectory
-                    importURL = try await Task.detached(priority: .utility) {
-                        try SourceCopies.copyIntoArchive(original: url, sha256: hash, storeDirectory: storeDirectory)
-                    }.value
+                    importURL = try await EngineBreadcrumbs.run("selfContainedArchive") {
+                        try await Task.detached(priority: .utility) {
+                            try SourceCopies.copyIntoArchive(original: url, sha256: hash, storeDirectory: storeDirectory)
+                        }.value
+                    }
                 }
                 // The identity of the engine that will ACTUALLY run, not the
                 // one the filename implies. Two reasons, both load-bearing:
@@ -1189,7 +1191,8 @@ final class BulkImportCoordinator {
 
         // Phase 12: build, sign (self-hash) and persist the import receipt.
         var receipt = ImportReceipt(startedAt: startedAt, completedAt: completedAt)
-        if let context = ImportReceipt.collectionContextProvider?() {
+        if let provider = ImportReceipt.collectionContextProvider,
+           case let context = EngineBreadcrumbs.run("v3EvidenceReceipts", { provider() }) {
             receipt.custodian = context.custodian
             receipt.collectingTool = context.tool
             receipt.collectionSettings = context.settings

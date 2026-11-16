@@ -464,6 +464,8 @@ enum ScriptEngine {
         guard ScriptPolicy.isEnabled else { throw ScriptError.runtime(String(localized: "Scripts are off in Settings ▸ Modules.")) }
         guard TierAccess.allows(.scripts) else { throw ScriptError.runtime(String(localized: "mailin Scripts are part of Professional.")) }
         if apply, let why = OrgPolicy.denial(.review) { throw ScriptError.runtime(why) }
+        let crumb = EngineGuard.begin(.v31Scripts)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         let runtime = try ScriptRuntime(script)
         let store = ScopeJobEnvironment.store
         var summary = ScriptRunSummary()
@@ -598,6 +600,8 @@ final class ScriptImportRunner {
     func handle(_ emails: [MBOXParser.RawEmail], source: String) async -> [String: [String: Int]] {
         let scripts = ScriptLibraryStore.shared.scripts.filter(\.runsAtImport)
         guard ScriptPolicy.isEnabled, TierAccess.allows(.scripts), !scripts.isEmpty else { return [:] }
+        let crumb = EngineGuard.begin(.v31Scripts)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         var batchCounts: [String: [String: Int]] = [:]
         for script in scripts {
             guard let runtime = try? ScriptRuntime(script) else {

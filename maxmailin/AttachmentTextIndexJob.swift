@@ -1288,13 +1288,16 @@ final class AttachmentTextIndexJob {
             return Reading(nil, .locked, "smime", String(localized: "S/MIME-protected content — turn on \"Read S/MIME with your keychain key\" in Settings ▸ Modules to read it on this device"))
             #endif
         }
-        #if os(macOS)
-        // The Mac's CMSDecoder path first, as before; R6's portable reader opens what it cannot.
-        if let plain = SMIMEHandler.decodeCMS(data) {
-            return readEmbeddedMessage(plain, ocr: ocr, depth: depth, extractor: "smime")
+        // C23: the decrypt engine runs inside its breadcrumb.
+        return EngineGuard.run(.protectedMessageDecrypt) {
+            #if os(macOS)
+            // The Mac's CMSDecoder path first, as before; R6's portable reader opens what it cannot.
+            if let plain = SMIMEHandler.decodeCMS(data) {
+                return readEmbeddedMessage(plain, ocr: ocr, depth: depth, extractor: "smime")
+            }
+            #endif
+            return readSMIMEPortable(data, ocr: ocr, depth: depth, keyOperation: nil)
         }
-        #endif
-        return readSMIMEPortable(data, ocr: ocr, depth: depth, keyOperation: nil)
     }
 
     /// R6: the portable CMS reader — iPhone and iPad's only S/MIME path, the
@@ -1752,7 +1755,8 @@ final class AttachmentTextIndexJob {
             // (audit A06: text-layer pages and scanned pages mixed; every
             // failed page named, never "no text").
             if ocr, AttachmentOCR.pdfNeedsOCR(document) {
-                return ocrState(AttachmentOCR.outcome(fromPDF: document), pages: document.pageCount)
+                // C23: a file that crashes the recogniser trips OCR at the next launch.
+                return ocrState(EngineGuard.run(.attachmentOCR) { AttachmentOCR.outcome(fromPDF: document) }, pages: document.pageCount)
             }
             if !ocr, AttachmentOCR.pdfNeedsOCR(document) {
                 return Reading(nil, .unsupported, "pdfkit", String(localized: "scanned PDF — turn on attachment OCR to read it"))
@@ -1763,7 +1767,7 @@ final class AttachmentTextIndexJob {
             guard ocr else {
                 return Reading(nil, .unsupported, "none", String(localized: "image — turn on attachment OCR to read it"))
             }
-            return ocrState(AttachmentOCR.outcome(fromImageData: data), pages: 1)
+            return ocrState(EngineGuard.run(.attachmentOCR) { AttachmentOCR.outcome(fromImageData: data) }, pages: 1)
         }
         // TYPE-05: audio and video — the spoken words, recognised on this device.
         if AttachmentSpeech.isMedia(mimeType: mime, filename: attachment.filename) {
@@ -1779,7 +1783,8 @@ final class AttachmentTextIndexJob {
                 temporary = t; url = t
             }
             defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
-            let transcript = AttachmentSpeech.transcribe(fileURL: url!)
+            let media = url!
+            let transcript = EngineGuard.run(.attachmentSpeech) { AttachmentSpeech.transcribe(fileURL: media) }
             if let failure = transcript.failure, transcript.text == nil {
                 return Reading(nil, transcript.notAuthorized ? .unsupported : .failed, "speech", failure)
             }

@@ -95,18 +95,98 @@ enum EngineGuard {
         try? FileManager.default.removeItem(at: token.url)
     }
 
-    /// Runs `body` inside a breadcrumb.
-    static func run<T>(_ capability: Capability, _ body: () throws -> T) rethrows -> T {
+    /// Runs `body` inside a breadcrumb; nil runs it unguarded (the engine's switch is off).
+    static func run<T>(_ capability: Capability?, _ body: () throws -> T) rethrows -> T {
+        guard let capability else { return try body() }
         let token = begin(capability)
         defer { end(token) }
         return try body()
     }
 
-    static func run<T>(_ capability: Capability, _ body: () async throws -> T) async rethrows -> T {
+    /// Runs on the caller's actor (`isolation`), so the body is never sent across actors.
+    static func run<T>(_ capability: Capability?, isolation: isolated (any Actor)? = #isolation,
+                       _ body: () async throws -> T) async rethrows -> T {
+        guard let capability else { return try await body() }
         let token = begin(capability)
         defer { end(token) }
         return try await body()
     }
+
+    // MARK: Package engines and coverage (review C23, rule 15)
+
+    /// The package's engines (PST spec reader, Notes ODS reader, streaming
+    /// parsers, store-level switches …) leave their breadcrumbs through here.
+    static func installPackageBreadcrumbs() {
+        EngineBreadcrumbs.begin = { name in
+            guard let capability = Capability(rawValue: name) else {
+                engineGuardLog.error("breadcrumb for an unknown engine \(name, privacy: .public)")
+                return {}
+            }
+            let token = EngineGuard.begin(capability)
+            return { EngineGuard.end(token) }
+        }
+    }
+
+    /// Where every 3.0 engine's run seam carries its crash breadcrumb (an
+    /// `EngineGuard.begin/run/withFallback`, a scope job's `capability:` or a
+    /// package `EngineBreadcrumbs.run/start`). V3CompatibilityTests compares
+    /// this to `Capability.v3Engines` and reads each file for the breadcrumb:
+    /// a new engine cannot ship without one.
+    static let runSeams: [Capability: String] = [
+        .v3SafeHTML: "maxmailin/EmailHTMLView.swift",
+        .v3SQLiteHygiene: "\(P)ArchiveSafety.swift",
+        .v3Snapshots: "\(P)SQLiteEmailStore.swift",
+        .v3ScopeEngine: "maxmailin/ScopeJob.swift",
+        .v3FeatureIndex: "maxmailin/FeatureIndex.swift",
+        .v3Fingerprints: "maxmailin/FeatureIndex.swift",
+        .v3PagedLists: "\(P)SQLiteEmailStore.swift",
+        .v3SemanticSearch: "maxmailin/ArchiveRetrievalService.swift",
+        .v3Duplicates: "maxmailin/DuplicatesEngine.swift",
+        .v3SearchOperators: "\(P)ArchiveQueryCompiler.swift",
+        .v3AnalysisQueries: "maxmailin/DigestEngine.swift",
+        .v3AlertsAnomalies: "maxmailin/BackgroundAnalysisManager.swift",
+        .v3PredictiveCoding: "maxmailin/PredictiveCodingEngine.swift",
+        .v3NearDuplicates: "maxmailin/NearDuplicatesEngine.swift",
+        .v3TopicClusters: "maxmailin/TopicClustersEngine.swift",
+        .v3Threads: "maxmailin/ThreadStoryView.swift",
+        .v3AIAnswers: "maxmailin/AIContextSelector.swift",
+        .v3Graphs: "maxmailin/RelationshipGraphView.swift",
+        .v3KeywordMonitor: "maxmailin/KeywordMonitorEngine.swift",
+        .v3LegalState: "maxmailin/LegalStateEngine.swift",
+        .v3EDiscovery: "maxmailin/EDiscoveryEngine.swift",
+        .v3Bates: "maxmailin/BatesEngine.swift",
+        .v3ChainOfCustody: "maxmailin/ChainOfCustodyManager.swift",
+        .v3Custodians: "maxmailin/CustodianEngine.swift",
+        .v3ReviewBatches: "maxmailin/ReviewBatchPanelView.swift",
+        .v3BatchOperations: "maxmailin/BatchOperationsEngine.swift",
+        .v3AutomationRules: "maxmailin/AutomationRulesRunEngine.swift",
+        .v3PrivilegeScan: "maxmailin/PrivilegeScanEngine.swift",
+        .v3PIIReport: "maxmailin/PIIEngine.swift",
+        .v3IOC: "maxmailin/IOCEngine.swift",
+        .v3InvestigationReport: "maxmailin/InvestigationReportData.swift",
+        .v3LegalReview: "maxmailin/LegalReviewWorkspaceView.swift",
+        .v3EvidenceDesks: "maxmailin/EvidenceDesksStudio.swift",
+        .v3EvidenceReceipts: "\(P)BulkImportCoordinator.swift",
+        .v3PreservationExport: "maxmailin/PreservationExporter.swift",
+        .v3PSTSpecReader: "\(P)EmailParserProtocol.swift",
+        .v3PSTSpecWriter: "\(P)ArchiveExportService.swift",
+        .v31Recovery: "\(P)PSTParser.swift",
+        .v31DeepRecovery: "\(P)PSTParser.swift",
+        .v31ShortcutsActions: "maxmailin/MailinAppEntities.swift",
+        .v31Scripts: "maxmailin/ScriptEngine.swift",
+        .v31ReviewPack: "maxmailin/ReviewPack.swift",
+        .v31TeamCase: "maxmailin/TeamCase.swift",
+        .v31ForensicTimestamps: "maxmailin/ForensicSignalsView.swift",
+        .devonthinkHandOff: "maxmailin/DEVONthinkHandOff.swift",
+        .attachmentOCR: "maxmailin/AttachmentTextIndexJob.swift",
+        .attachmentSpeech: "maxmailin/AttachmentTextIndexJob.swift",
+        .protectedMessageDecrypt: "maxmailin/AttachmentTextIndexJob.swift",
+        .streamingBinaryParsers: "\(P)EmailParserProtocol.swift",
+        .selfContainedArchive: "\(P)BulkImportCoordinator.swift",
+        .searchQueryModel: "\(P)SQLiteEmailStore.swift",
+        .notesODSReader: "\(P)EmailParserProtocol.swift",
+    ]
+    private static let P = "Packages/ArchiveCore/Sources/ArchiveCore/"
 
     // MARK: Fallback (M3)
 
@@ -262,29 +342,68 @@ final class EngineTripCenter {
     /// Engines a new version switched back on at this launch.
     private(set) var newlyRestored: [Capability] = []
 
-    /// Call once at launch, before any 3.0 engine can run: trips every engine
-    /// whose breadcrumb survived the previous process.
-    func checkAtLaunch(registry: ModuleRegistry) {
+    /// What this launch decided: engines a new version switched back on, and
+    /// engines the previous process stopped inside (their trips are recorded).
+    struct LaunchDecision: Sendable, Equatable {
+        var restored: [Capability] = []
+        var tripped: [Capability] = []
+    }
+
+    /// Set by `decideAtLaunch()` in the app's init; taken by `checkAtLaunch`.
+    nonisolated(unsafe) static var pendingDecision: LaunchDecision?
+
+    /// Review C23 (rule 15): the trips decided straight from the breadcrumb
+    /// files and written to the switch file, from the app's `init` — before
+    /// the registry loads and before `applyStoreLevelEarly` arms the
+    /// store-level engines. The banner and audit lines follow in `checkAtLaunch`.
+    nonisolated static func decideAtLaunch(stateStore: ModuleStateStore = ModuleStateStore(url: ModuleStateStore.productionURL)) {
+        let decision = collectDecision()
+        if !decision.restored.isEmpty || !decision.tripped.isEmpty {
+            var state = stateStore.load()
+            for capability in decision.restored { state.set(capability, enabled: true) }
+            for capability in decision.tripped { state.set(capability, enabled: false) }
+            stateStore.save(state)
+        }
+        pendingDecision = decision
+    }
+
+    /// Restorable trips and leftover breadcrumbs, the trips recorded.
+    nonisolated static func collectDecision() -> LaunchDecision {
         // A new app version gets one fresh chance for engines an earlier
         // version tripped (unless the user decided since), §3-M2.
         let restored = EngineGuard.takeRestorableTrips(currentVersion: EngineGuard.appVersion)
+        let leftovers = EngineGuard.collectLeftoverBreadcrumbs()
+        if !leftovers.isEmpty {
+            var trips = EngineGuard.loadTrips()
+            for capability in leftovers {
+                trips.append(EngineTrip(capability: capability.rawValue, date: Date(), appVersion: EngineGuard.appVersion))
+            }
+            EngineGuard.saveTrips(trips)
+        }
+        return LaunchDecision(restored: restored, tripped: leftovers)
+    }
+
+    /// Call once at launch, before any 3.0 engine can run: applies this
+    /// launch's decision (taken in the app's init, or now) to the registry,
+    /// records it in the audit trail and shows the banner.
+    func checkAtLaunch(registry: ModuleRegistry) {
+        let decision = Self.pendingDecision ?? Self.collectDecision()
+        Self.pendingDecision = nil
+        let restored = decision.restored
         for capability in restored {
             registry.set(capability, enabled: true)
             ScopeJobEnvironment.logAction("Engine switched back on in a new version",
                 detail: "\(capability.rawValue) — it had stopped unexpectedly in an earlier version; switched off again automatically if it stops")
         }
         newlyRestored = restored
-        let leftovers = EngineGuard.collectLeftoverBreadcrumbs()
+        let leftovers = decision.tripped
         guard !leftovers.isEmpty else { return }
-        var trips = EngineGuard.loadTrips()
         for capability in leftovers {
             registry.set(capability, enabled: false)
-            trips.append(EngineTrip(capability: capability.rawValue, date: Date(), appVersion: EngineGuard.appVersion))
             ScopeJobEnvironment.logAction(
                 "Engine switched off after an unexpected stop",
                 detail: "\(capability.rawValue) — the previous engine is used; no data was changed")
         }
-        EngineGuard.saveTrips(trips)
         newlyTripped = leftovers
     }
 

@@ -57,6 +57,13 @@ enum ArchiveQueryCompiler {
 
     static func compile(_ input: String, base: EmailQuery = .all,
                         exclusions exclusionsOn: Bool = exclusionsEnabled) -> EmailQuery {
+        // C23: the operator grammar is the v3SearchOperators engine.
+        EngineBreadcrumbs.run(exclusionsOn ? "v3SearchOperators" : nil) {
+            compileQuery(input, base: base, exclusions: exclusionsOn)
+        }
+    }
+
+    private static func compileQuery(_ input: String, base: EmailQuery, exclusions exclusionsOn: Bool) -> EmailQuery {
         var query = base
         var freeText: [String] = []
         var negateNext = false

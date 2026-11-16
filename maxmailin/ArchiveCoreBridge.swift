@@ -18,6 +18,8 @@ enum ArchiveCoreBridge {
         ArchiveCoreDefaults.defaultStoreProvider = { EmailStore.shared }
         ArchiveCoreDefaults.storageAuthorityIsActive = { await StorageActivationCoordinator.shared.isActive }
         ArchiveCoreDefaults.observedMemoryPressure = { Self.currentPressure() }
+        // Review C23: the package's engines leave crash breadcrumbs too.
+        EngineGuard.installPackageBreadcrumbs()
     }
 
     /// The reading the adaptive batch controller used to take directly from

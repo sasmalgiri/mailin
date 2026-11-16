@@ -249,10 +249,12 @@ enum CapabilityWiring {
     /// open). Called from the app's `init`, before any view exists, straight
     /// from the persisted switch positions. Both are Archive-page engines, and
     /// the Archive page is always on.
-    static func applyStoreLevelEarly() {
-        let state = ModuleStateStore(url: ModuleStateStore.productionURL).load()
-        SQLiteHygiene.isEnabled = state.isCapabilitySet(.v3SQLiteHygiene)
-        ArchiveSnapshotPolicy.isEnabled = state.isCapabilitySet(.v3Snapshots)
+    /// Review C23: runs after `EngineTripCenter.decideAtLaunch()` (a tripped
+    /// engine is already off in the file) and arms nothing in a Safe Mode launch.
+    static func applyStoreLevelEarly(state: ModuleState = ModuleStateStore(url: ModuleStateStore.productionURL).load(),
+                                     safeMode: Bool = SafeMode.isActiveAtLaunch) {
+        SQLiteHygiene.isEnabled = !safeMode && state.isCapabilitySet(.v3SQLiteHygiene)
+        ArchiveSnapshotPolicy.isEnabled = !safeMode && state.isCapabilitySet(.v3Snapshots)
     }
 
     @MainActor

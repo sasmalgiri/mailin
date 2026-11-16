@@ -61,7 +61,7 @@ final class SearchDocBackfillJob {
         self.registry?.register(id: Self.jobID, module: .archive, label: Self.jobLabel) { [weak self] in self?.cancel() }
         task = Task(priority: .utility) { @MainActor [weak self] in
             guard let self else { return }
-            _ = await self.run()
+            _ = await EngineGuard.run(.searchQueryModel) { await self.run() }   // C23
             self.task = nil
             self.registry?.finish(id: Self.jobID)
         }

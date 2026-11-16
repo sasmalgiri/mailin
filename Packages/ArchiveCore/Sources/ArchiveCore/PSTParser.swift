@@ -37,7 +37,8 @@ struct PSTParser {
             specRead = true
             messages = spec.messages()
             if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled && !messages.isEmpty {
-                messages += spec.carveUnallocated(listed: messages)
+                let listed = messages
+                messages += EngineBreadcrumbs.run("v31DeepRecovery") { spec.carveUnallocated(listed: listed) }
             }
             onProgress?(1)
         }
@@ -135,8 +136,10 @@ struct PSTParser {
     /// FOLD-02: the folders a PST lists, for the array path (the streaming
     /// path returns them with its result).
     static func declaredFolders(fileURL: URL) -> [String] {
-        guard let data = try? mappedData(for: fileURL), let spec = specReader(for: data) else { return [] }
-        return spec.folderPaths()
+        guard let data = try? mappedData(for: fileURL) else { return [] }
+        return EngineBreadcrumbs.run(PSTReaderPolicy.useSpecReader ? "v3PSTSpecReader" : nil) {
+            specReader(for: data)?.folderPaths() ?? []
+        }
     }
 
     /// The spec reader for this file, when it applies (see `parse`).
@@ -352,7 +355,8 @@ struct PSTReader {
         let messageNodes = nodeEntries.filter { ($0.nid & 0x1F) == 0x0C }
         // 3.1 R5/R6: the folder tree (folders are NID type 0x02; each names
         // itself in PidTagDisplayName 0x3001 and points at its parent).
-        let folders = RecoveryPolicy.isEnabled ? folderTree(nodeEntries, blockEntries: blockEntries) : [:]
+        let folders = RecoveryPolicy.isEnabled
+            ? EngineBreadcrumbs.run("v31Recovery") { folderTree(nodeEntries, blockEntries: blockEntries) } : [:]
 
         var messages: [PSTMessage] = []
         let total = Double(max(messageNodes.count, 1))
@@ -384,7 +388,7 @@ struct PSTReader {
 
         // 3.1 R7: messages left in unallocated space (deep recovery switch).
         if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled {
-            messages.append(contentsOf: carveUnallocated(blockEntries: blockEntries))
+            messages.append(contentsOf: EngineBreadcrumbs.run("v31DeepRecovery") { carveUnallocated(blockEntries: blockEntries) })
         }
         return messages
     }

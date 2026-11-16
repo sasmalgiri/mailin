@@ -43,7 +43,9 @@ struct mailinApp: App {
     @State private var appState = AppStateManager()
     /// v3.0 §3.3: the one authority for which pages are active. Everything
     /// optional is gated on this, so a Page-1-only user runs nothing else.
-    @State private var modules = ModuleRegistry()
+    /// Created in `init`, after the launch's engine trips are written to the
+    /// switch file (review C23), so it loads the decided positions.
+    @State private var modules: ModuleRegistry
     @StateObject private var storeManager = StoreManager()
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
@@ -77,6 +79,11 @@ struct mailinApp: App {
         // crash breadcrumbs and the Safe Mode counter see the right boundary.
         _ = EngineGuard.launchDate
         SafeMode.recordLaunchStart()
+        // Review C23 (rule 15): an engine the previous process stopped inside is
+        // switched off in the switch file BEFORE anything reads it — the
+        // registry below and the store-level arming after it.
+        EngineTripCenter.decideAtLaunch()
+        _modules = State(initialValue: ModuleRegistry())
         CapabilityWiring.applyStoreLevelEarly()
         // Enterprise: the person's role guards permanent deletion and legal
         // holds in the archive itself (OrgPolicy).

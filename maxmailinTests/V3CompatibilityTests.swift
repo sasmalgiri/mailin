@@ -516,6 +516,7 @@ final class V3CompatibilityTests: XCTestCase {
             let current = EngineGuard.begin(.v3IOC)   // running in THIS launch: not a leftover
             defer { EngineGuard.end(current) }
 
+            EngineTripCenter.pendingDecision = nil   // the test host's own launch decision is not this one
             let center = EngineTripCenter()
             center.checkAtLaunch(registry: registry)
             XCTAssertEqual(center.newlyTripped, [.v3SafeHTML])
@@ -527,6 +528,104 @@ final class V3CompatibilityTests: XCTestCase {
             again.checkAtLaunch(registry: registry)
             XCTAssertTrue(again.newlyTripped.isEmpty, "a breadcrumb trips once")
         }
+    }
+
+    // MARK: - C23 (review 2026-11-16, rule 15): every engine's run seam carries a breadcrumb
+
+    /// Every member of `Capability.v3Engines` names the file of its run seam,
+    /// and that file really starts a breadcrumb for it — an app engine through
+    /// EngineGuard (or a scope job's `capability:`), a package engine through
+    /// `EngineBreadcrumbs` with its raw name.
+    func testC23_everyV3EngineHasACrashBreadcrumbAtItsRunSeam() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        XCTAssertEqual(Set(EngineGuard.runSeams.keys), Set(Capability.v3Engines),
+                       "every 3.0 engine is registered (missing: \(Set(Capability.v3Engines).subtracting(EngineGuard.runSeams.keys).map(\.rawValue).sorted()))")
+        var missing: [String] = []
+        for (capability, path) in EngineGuard.runSeams.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            let source = try String(contentsOf: repo.appendingPathComponent(path), encoding: .utf8)
+            let raw = NSRegularExpression.escapedPattern(for: capability.rawValue)
+            let patterns = [
+                #"EngineGuard\.(begin|run|withFallback)\([^)\n]*\."# + raw + #"\b"#,
+                #"capability: \."# + raw + #"\b"#,
+                #"EngineBreadcrumbs\.(run|start)\([^\n]*""# + raw + "\"",
+            ]
+            let found = try patterns.contains { pattern in
+                try NSRegularExpression(pattern: pattern)
+                    .firstMatch(in: source, range: NSRange(source.startIndex..., in: source)) != nil
+            }
+            if !found { missing.append("\(capability.rawValue) in \(path)") }
+        }
+        XCTAssertTrue(missing.isEmpty, "no breadcrumb at the run seam: \(missing.joined(separator: "; "))")
+    }
+
+    /// A PST read by the spec reader runs inside its breadcrumb; a process that
+    /// died inside it switches the reader off at the next launch — decided from
+    /// the app's init, before the registry and the store-level engines are armed.
+    @MainActor
+    func testC23_pstSpecReaderCrash_tripsTheReaderAtTheNextLaunch_beforeAnythingIsArmed() throws {
+        let env = makeEnv(engineOn: false)
+        let wasWriter = PSTWriterPolicy.useSpecWriter, wasReader = PSTReaderPolicy.useSpecReader
+        let wasHook = EngineBreadcrumbs.begin
+        defer { PSTWriterPolicy.useSpecWriter = wasWriter; PSTReaderPolicy.useSpecReader = wasReader; EngineBreadcrumbs.begin = wasHook }
+        PSTWriterPolicy.useSpecWriter = true
+        PSTReaderPolicy.useSpecReader = true
+        try ScopeJobEnvironment.$current.withValue(env.job) {
+            EngineGuard.installPackageBreadcrumbs()
+            let installed = EngineBreadcrumbs.begin
+            final class Seen: @unchecked Sendable { var names: [String] = [] }
+            let seen = Seen()
+            EngineBreadcrumbs.begin = { name in
+                seen.names.append(name)
+                let running = (try? FileManager.default.contentsOfDirectory(atPath: EngineGuard.directory.appendingPathComponent("running").path)) ?? []
+                let end: @Sendable () -> Void = installed?(name) ?? { @Sendable in }
+                let after = (try? FileManager.default.contentsOfDirectory(atPath: EngineGuard.directory.appendingPathComponent("running").path)) ?? []
+                if after.count <= running.count { seen.names.append("no-file:\(name)") }
+                return end
+            }
+            let pst = env.root.appendingPathComponent("c23.pst")
+            try PSTWriter.write(emails: (0..<3).map { makeEmail($0, from: "a@a.com", tag: "c23") }, to: pst)
+            let parsed = try ParserFactory.parse(fileURL: pst, senderEmail: "")
+            XCTAssertEqual(parsed.count, 3)
+            XCTAssertTrue(seen.names.contains("v3PSTSpecReader"), "the spec reader ran inside its breadcrumb: \(seen.names)")
+            XCTAssertTrue(seen.names.contains("v3PSTSpecWriter"), "so did the spec writer: \(seen.names)")
+            XCTAssertFalse(seen.names.contains { $0.hasPrefix("no-file:") }, "a breadcrumb file was written: \(seen.names)")
+            let left = (try? FileManager.default.contentsOfDirectory(atPath: EngineGuard.directory.appendingPathComponent("running").path)) ?? []
+            XCTAssertTrue(left.isEmpty, "a finished read leaves no breadcrumb: \(left)")
+
+            // The process dies inside the reader: its breadcrumb outlives it.
+            let died = EngineGuard.begin(.v3PSTSpecReader)
+            try FileManager.default.setAttributes([.modificationDate: EngineGuard.launchDate.addingTimeInterval(-60)],
+                                                  ofItemAtPath: died.url.path)
+            let stateStore = ModuleStateStore(url: env.root.appendingPathComponent("modules-c23.json"))
+            var state = stateStore.load()
+            state.set(.v3PSTSpecReader, enabled: true)
+            state.set(.v3SQLiteHygiene, enabled: true)
+            stateStore.save(state)
+
+            // Next launch, in the app's init order: decide, load the registry, arm early.
+            EngineTripCenter.decideAtLaunch(stateStore: stateStore)
+            XCTAssertFalse(stateStore.load().isCapabilitySet(.v3PSTSpecReader), "switched off in the file before anything reads it")
+            let registry = ModuleRegistry(store: stateStore, trapsOnMisuse: false)
+            XCTAssertFalse(registry.isOn(.v3PSTSpecReader))
+            let center = EngineTripCenter()
+            center.checkAtLaunch(registry: registry)
+            XCTAssertEqual(center.newlyTripped, [.v3PSTSpecReader])
+            XCTAssertEqual(EngineGuard.lastTrip(.v3PSTSpecReader)?.capability, Capability.v3PSTSpecReader.rawValue)
+            XCTAssertTrue(env.job.auditLines().contains { $0.hasPrefix("Engine switched off after an unexpected stop") })
+            CapabilityWiring.applyAll(registry)
+            XCTAssertFalse(PSTReaderPolicy.useSpecReader, "the earlier reader reads the next PST")
+        }
+        // A Safe Mode launch arms no store-level engine early.
+        let wasHygiene = SQLiteHygiene.isEnabled, wasSnapshots = ArchiveSnapshotPolicy.isEnabled
+        defer { SQLiteHygiene.isEnabled = wasHygiene; ArchiveSnapshotPolicy.isEnabled = wasSnapshots }
+        var on = ModuleState()
+        on.set(.v3SQLiteHygiene, enabled: true)
+        on.set(.v3Snapshots, enabled: true)
+        CapabilityWiring.applyStoreLevelEarly(state: on, safeMode: true)
+        XCTAssertFalse(SQLiteHygiene.isEnabled)
+        XCTAssertFalse(ArchiveSnapshotPolicy.isEnabled)
+        CapabilityWiring.applyStoreLevelEarly(state: on, safeMode: false)
+        XCTAssertTrue(SQLiteHygiene.isEnabled)
     }
 
     // MARK: - M3: a fallback is recorded, audited and stated in the receipt

@@ -75,14 +75,19 @@ struct ParserFactory {
         case "msg":
             return try MSGParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "pst", "ost":
-            return try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            // C23: a PST that crashes the spec reader trips it at the next launch.
+            return try EngineBreadcrumbs.run(PSTReaderPolicy.useSpecReader ? "v3PSTSpecReader" : nil) {
+                try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            }
         case "nsf":
             // GAP-NSF seam: the Notes ODS reader when its switch is on (default since 2026-11-15), else
             // the old heuristic — which also gets any file the ODS reader does not recognise as a Notes
             // database layout, so switching the new reader on never reads a file worse than before.
             if NotesODSPolicy.isEnabled {
                 do {
-                    return try NSFODSParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+                    return try EngineBreadcrumbs.run("notesODSReader") {
+                        try NSFODSParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+                    }
                 } catch let error as NSFODSReader.ReadError where error.isLayoutRefusal {
                     return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
                 }
@@ -574,10 +579,15 @@ struct ParserFactory {
             // when the switch is on — memory follows the batch, not the file.
             if ext == "pst" || ext == "ost", StreamingParserPolicy.binaryStreaming {
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
-                let result = try await PSTParser.parseStreaming(
-                    fileURL: fileURL, senderEmail: senderEmail,
-                    batchSize: max(1, min(batchSize, chunkLimit)),
-                    onProgress: onProgress, onBatch: onBatch)
+                // C23: both engines this read depends on carry a breadcrumb.
+                let result = try await EngineBreadcrumbs.run("streamingBinaryParsers") {
+                    try await EngineBreadcrumbs.run(PSTReaderPolicy.useSpecReader ? "v3PSTSpecReader" : nil) {
+                        try await PSTParser.parseStreaming(
+                            fileURL: fileURL, senderEmail: senderEmail,
+                            batchSize: max(1, min(batchSize, chunkLimit)),
+                            onProgress: onProgress, onBatch: onBatch)
+                    }
+                }
                 var report = MBOXParser.ParseRecoveryReport(
                     totalMessages: result.count, successfullyParsed: result.count, failed: 0, errorCategories: [:])
                 report.declaredFolders = result.declaredFolders
@@ -606,10 +616,12 @@ struct ParserFactory {
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
                 var emitted = false
                 do {
-                    let streamed = try await NSFODSParser.parseStreamingWithInventory(
-                        fileURL: fileURL, senderEmail: senderEmail,
-                        batchSize: max(1, min(batchSize, chunkLimit)),
-                        onProgress: onProgress, onBatch: { batch in emitted = true; try await onBatch(batch) })
+                    let streamed = try await EngineBreadcrumbs.run("notesODSReader") {
+                        try await NSFODSParser.parseStreamingWithInventory(
+                            fileURL: fileURL, senderEmail: senderEmail,
+                            batchSize: max(1, min(batchSize, chunkLimit)),
+                            onProgress: onProgress, onBatch: { batch in emitted = true; try await onBatch(batch) })
+                    }
                     return NSFODSParser.report(streamed)
                 } catch let error as NSFODSReader.ReadError where error.isLayoutRefusal && !emitted {
                     odsRefusedLayout = true
@@ -617,10 +629,12 @@ struct ParserFactory {
             }
             if ext == "nsf", StreamingParserPolicy.binaryStreaming || odsRefusedLayout {
                 let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
-                let total = try await NSFParser.parseStreaming(
-                    fileURL: fileURL, senderEmail: senderEmail,
-                    batchSize: max(1, min(batchSize, chunkLimit)),
-                    onProgress: onProgress, onBatch: onBatch)
+                let total = try await EngineBreadcrumbs.run(StreamingParserPolicy.binaryStreaming ? "streamingBinaryParsers" : nil) {
+                    try await NSFParser.parseStreaming(
+                        fileURL: fileURL, senderEmail: senderEmail,
+                        batchSize: max(1, min(batchSize, chunkLimit)),
+                        onProgress: onProgress, onBatch: onBatch)
+                }
                 return MBOXParser.ParseRecoveryReport(
                     totalMessages: total, successfullyParsed: total, failed: 0, errorCategories: [:])
             }

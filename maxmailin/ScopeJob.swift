@@ -374,7 +374,7 @@ enum ScopeJob {
         // `State` (too large to checkpoint): always start over, never leave a
         // checkpoint behind.
         if !resumable { ScopeJobCheckpointStore.remove(key) }
-        if resumable, let saved = ScopeJobCheckpointStore.load(key, as: State.self), saved.query == query {
+        if resumable, let saved = EngineGuard.run(.v3ScopeEngine, { ScopeJobCheckpointStore.load(key, as: State.self) }), saved.query == query {
             cp = saved
             cp.total = total
             resumed = true
@@ -426,7 +426,7 @@ enum ScopeJob {
                     if emails.isEmpty { continue }
                 }
                 try await handle(emails, requested: emails.count)
-                if resumable { ScopeJobCheckpointStore.save(cp) }
+                if resumable { EngineGuard.run(.v3ScopeEngine) { ScopeJobCheckpointStore.save(cp) } }   // C23
             }
         } else {
             var cursor: EmailPageCursor? = cp.cursorDate.flatMap { d in cp.cursorID.map { EmailPageCursor(beforeDate: d, beforeID: $0) } }
@@ -440,7 +440,7 @@ enum ScopeJob {
                 cursor = next
                 cp.cursorDate = next.beforeDate
                 cp.cursorID = next.beforeID
-                if resumable { ScopeJobCheckpointStore.save(cp) }
+                if resumable { EngineGuard.run(.v3ScopeEngine) { ScopeJobCheckpointStore.save(cp) } }   // C23
             }
         }
 

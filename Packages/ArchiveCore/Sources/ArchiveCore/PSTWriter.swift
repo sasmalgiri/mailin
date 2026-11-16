@@ -46,6 +46,8 @@ struct PSTWriter {
     @discardableResult
     static func write(emails: [MBOXParser.RawEmail], to url: URL) throws -> Int {
         guard !emails.isEmpty else { throw WriterError.emptyInput }
+        let endCrumb = EngineBreadcrumbs.start(PSTWriterPolicy.useSpecWriter ? "v3PSTSpecWriter" : nil)   // C23
+        defer { endCrumb() }
         let writer = try PSTWriterFactory.make(url: url)
         do {
             for email in emails { try writer.appendMessage(email) }

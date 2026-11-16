@@ -112,6 +112,8 @@ enum DEVONthinkHandOff {
     /// Opens the folder's .eml files with DEVONthink (or shows them in Finder).
     @MainActor
     static func deliver(folder: URL, workspace: NSWorkspace = .shared) async -> Delivery {
+        let crumb = EngineGuard.begin(.devonthinkHandOff)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         let files = emlFiles(in: folder)
         guard !files.isEmpty else { return .nothingToSend }
         guard let app = applicationURL(workspace: workspace) else {

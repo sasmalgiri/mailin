@@ -1260,6 +1260,8 @@ final class ArchiveExportService {
                         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> [(url: URL, messages: Int)] {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let limit = partBytes ?? Self.pstPartBytes(for: directory)
+        let endCrumb = EngineBreadcrumbs.start(PSTWriterPolicy.useSpecWriter ? "v3PSTSpecWriter" : nil)   // C23
+        defer { endCrumb() }
         let total = try await archive.count(scope: scope)
         var parts: [(url: URL, messages: Int)] = []
         var part = 1
@@ -1320,6 +1322,8 @@ final class ArchiveExportService {
     func exportPST(scope: ArchiveSelectionScope,
                    to url: URL,
                    onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> Int {
+        let endCrumb = EngineBreadcrumbs.start(PSTWriterPolicy.useSpecWriter ? "v3PSTSpecWriter" : nil)   // C23
+        defer { endCrumb() }
         let total = try await archive.count(scope: scope)
         let writer = try PSTWriterFactory.make(url: url)
         // R3: the expected-record manifest beside the PST.

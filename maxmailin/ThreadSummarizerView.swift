@@ -758,7 +758,7 @@ struct ThreadSummarizerView: View {
             Task { @MainActor in
                 let emails: [MBOXParser.RawEmail]
                 do {
-                    emails = try await ThreadStoryEngine.completeThreads(for: input) ?? input
+                    emails = try await EngineGuard.run(.v3Threads) { try await ThreadStoryEngine.completeThreads(for: input) } ?? input
                 } catch {
                     // §3-M3: the previous engine summarises the emails given.
                     if !(error is CancellationError) { _ = EngineGuard.fellBack(.v3Threads, error: error) }

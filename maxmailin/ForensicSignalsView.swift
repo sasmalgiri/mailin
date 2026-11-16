@@ -114,6 +114,8 @@ struct ForensicSignalsView: View {
             Text("DKIM (offline)").font(.subheadline.weight(.semibold))
             HStack {
                 Button(String(localized: "Check signature")) {
+                    let crumb = EngineGuard.begin(.v31ForensicTimestamps)   // C23: crash breadcrumb
+                    defer { EngineGuard.end(crumb) }
                     let keys = DKIMKeyStore.load()
                     dkim = DKIMVerifier.verify(rawSource: email.rawSource, keys: keys)
                     let a = DKIMVerifier.verify(rawSource: email.rawSource, keys: keys, signatureHeader: "ARC-Message-Signature")

@@ -43,7 +43,9 @@ final class ArchiveRetrievalService {
         // from the on-device embedding index (reciprocal-rank fusion). With
         // the switch off, or the index empty, this is keyword search as before.
         if Self.semanticFusionEnabled {
-            let semantic = await SemanticIndexController.shared.neighbors(of: trimmed, limit: limit)
+            let semantic = await EngineGuard.run(.v3SemanticSearch) {
+                await SemanticIndexController.shared.neighbors(of: trimmed, limit: limit)
+            }
             if !semantic.isEmpty { ids = Self.reciprocalRankFusion([ids, semantic], limit: limit) }
         }
         guard !ids.isEmpty else { return [] }

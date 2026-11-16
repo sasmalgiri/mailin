@@ -35,7 +35,9 @@ enum AIContextSelector {
     /// window is replaced only while the 3.0 engine is on.
     static func context(for emails: [MBOXParser.RawEmail], isWindow: Bool, scopeName: String,
                         enabled: Bool = isEnabled) async -> (emails: [MBOXParser.RawEmail], basedOn: String?) {
-        guard enabled, isWindow, let selection = await select(for: scopeName) else { return (emails, nil) }
+        guard enabled, isWindow else { return (emails, nil) }
+        // C23: the 3.0 selection runs inside its breadcrumb.
+        guard let selection = await EngineGuard.run(.v3AIAnswers, { await select(for: scopeName) }) else { return (emails, nil) }
         return (selection.emails, selection.note)
     }
 

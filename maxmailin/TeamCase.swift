@@ -287,6 +287,8 @@ final class TeamCase: @unchecked Sendable {
                        layout: CodingLayout? = .standard,
                        progress: @escaping (Int, Int) -> Void) async throws -> URL {
         if let why = OrgPolicy.denial(.export) { throw ReviewPackError.unreadable(why) }
+        let crumb = EngineGuard.begin(.v31TeamCase)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         let folder = parent.appendingPathComponent("\(title).mailincase", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let packURL = folder.appendingPathComponent("evidence.\(ReviewPackFormat.packExtension)")
@@ -403,6 +405,8 @@ final class TeamCase: @unchecked Sendable {
 
     /// Deterministic fold: Lamport, then author, then seq.
     static func fold(_ entries: [TeamLogEntry], manifest: TeamCaseManifest) -> TeamCaseState {
+        let crumb = EngineGuard.begin(.v31TeamCase)   // C23: crash breadcrumb
+        defer { EngineGuard.end(crumb) }
         var s = TeamCaseState()
         let sorted = entries.sorted { ($0.lamport, $0.author, $0.seq) < ($1.lamport, $1.author, $1.seq) }
         for e in sorted {

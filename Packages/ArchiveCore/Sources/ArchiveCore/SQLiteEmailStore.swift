@@ -587,7 +587,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
            let v = try? scalarInt(handle, "PRAGMA user_version;"),
            v >= 1, v < Self.currentSchemaVersion {
             do {
-                _ = try writeSnapshot(handle, reason: "before-upgrade-v\(v)-to-v\(Self.currentSchemaVersion)")
+                _ = try EngineBreadcrumbs.run("v3Snapshots") {
+                    try writeSnapshot(handle, reason: "before-upgrade-v\(v)-to-v\(Self.currentSchemaVersion)")
+                }
                 ArchiveSnapshotPolicy.upgradeSnapshotFailure = nil
             } catch {
                 ArchiveSnapshotPolicy.upgradeSnapshotFailure = error.localizedDescription
@@ -2749,7 +2751,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         }
                         // FIND-07: the message's searchable documents, whole, in chunks.
                         if SearchChunkPolicy.isEnabled {
-                            try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false)
+                            try EngineBreadcrumbs.run("searchQueryModel") {
+                                try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false)
+                            }
                         }
                         for domain in email.domains where !domain.isEmpty {
                             sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
@@ -3642,6 +3646,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
     }
 
     func senderRollups(limit requested: Int) throws -> [SenderRollup] {
+        try EngineBreadcrumbs.run(Self.unboundedIDLookups ? "v3PagedLists" : nil) { try senderRollupRows(limit: requested) }
+    }
+
+    private func senderRollupRows(limit requested: Int) throws -> [SenderRollup] {
         // §3-H5: one row per distinct sender — complete under v3PagedLists.
         let limit = Self.unboundedIDLookups ? Int(Int32.max) : requested
         let db = try ensureDB()
