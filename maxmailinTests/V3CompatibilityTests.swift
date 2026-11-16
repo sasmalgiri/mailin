@@ -488,6 +488,26 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
+    /// C25: the synchronous `withFallback` treats a cancellation as a cancellation —
+    /// rethrown, no fallback run, nothing recorded — like the async one.
+    func testC25_syncWithFallback_doesNotFallBackOnCancellation() {
+        let env = makeEnv(engineOn: false)
+        ScopeJobEnvironment.$current.withValue(env.job) {
+            let before = EngineGuard.loadFallbacks().count
+            var oldRan = false
+            do {
+                let _: Int = try EngineGuard.withFallback(.v3PIIReport, isOn: true,
+                                                          new: { throw CancellationError() },
+                                                          old: { oldRan = true; return 1 })
+                XCTFail("a cancellation must be rethrown")
+            } catch {
+                XCTAssertTrue(error is CancellationError, "\(error)")
+            }
+            XCTAssertFalse(oldRan, "no fallback for a cancellation")
+            XCTAssertEqual(EngineGuard.loadFallbacks().count, before, "a cancellation is not an engine failure")
+        }
+    }
+
     // MARK: - M1 / M5: every 3.0 engine is a switch, promoted (on by default)
 
     func testEveryEngine_hasAMatrixEntry_andIsOnByDefaultAfterPromotion() {

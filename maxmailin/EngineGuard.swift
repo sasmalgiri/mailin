@@ -227,6 +227,9 @@ enum EngineGuard {
         guard isOn else { return try old() }
         do {
             return try run(capability) { try new() }
+        } catch is CancellationError {
+            // C25: a cancelled run is not an engine failure — no fallback, nothing recorded.
+            throw CancellationError()
         } catch {
             engineGuardLog.error("\(capability.rawValue, privacy: .public) threw, falling back: \(error.localizedDescription, privacy: .public)")
             recordFallback(capability, error: error)
