@@ -149,6 +149,8 @@ final class OutlookConnector: ObservableObject {
             throw OutlookError.invalidConfiguration("Failed to build authorization URL")
         }
 
+        // Rule 7: the legacy connector asks the mail policy before any request.
+        try LegacyMailTransportGate.permit(host: authURL.host ?? "", destination: .authorization, operation: .request)
         outlookLog.info("Starting OAuth PKCE flow")
         statusMessage = "Opening Microsoft sign-in..."
         isLoading = true
@@ -259,7 +261,7 @@ final class OutlookConnector: ObservableObject {
             .data(using: .utf8)
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await LegacyMailTransportGate.data(for: request, destination: .authorization, operation: .oauthRefresh)
         guard let http = response as? HTTPURLResponse else {
             throw OutlookError.networkError("Invalid response")
         }
@@ -288,7 +290,7 @@ final class OutlookConnector: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 60
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await LegacyMailTransportGate.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw OutlookError.networkError("Invalid response")
         }

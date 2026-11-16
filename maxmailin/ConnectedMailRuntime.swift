@@ -1014,35 +1014,50 @@ enum ConnectedMailProduction {
 }
 
 /// The token endpoint transport: POST only, ephemeral session, no redirect
-/// followed, and only to a sign-in host an enabled account was granted in
-/// the mail policy (the engine also asks before every refresh).
-final class PolicyCheckedTokenTransport: NSObject, TokenTransport, URLSessionTaskDelegate, @unchecked Sendable {
+/// followed, and only to a sign-in host the account was granted in the mail
+/// policy. Every exchange goes through `policy.permitTokenExchange` for its
+/// account, so it is counted in Health and checked per account (review
+/// 2026-11-16, rule 7); an exchange that names no account is refused.
+final class PolicyCheckedTokenTransport: TokenTransport, @unchecked Sendable {
     private let policy: MailNetworkPolicy
-    private lazy var session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+    /// Created once, in init (a `lazy var` raced on first use from two tasks).
+    private let session: URLSession
 
-    init(policy: MailNetworkPolicy) { self.policy = policy }
+    init(policy: MailNetworkPolicy) {
+        self.policy = policy
+        session = URLSession(configuration: .ephemeral, delegate: NoRedirects(), delegateQueue: nil)
+    }
 
     struct Refused: LocalizedError {
         var errorDescription: String? { String(localized: "The server is not one this account uses.") }
     }
 
+    /// Never followed: a token endpoint that redirects is not answered.
+    private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest) async -> URLRequest? {
+            nil
+        }
+    }
+
+    /// No account named: refused (and counted) — the policy cannot check it.
     func postForm(_ url: URL, body: Data) async throws -> (status: Int, body: Data) {
-        let snapshot = policy.snapshot()
-        let host = MailNetworkPolicy.normalized(url.host ?? "")
-        guard snapshot.isMailEnabled, url.scheme?.lowercased() == "https",
-              snapshot.accounts.contains(where: { $0.isEnabled && $0.authorizationHosts.contains { MailNetworkPolicy.normalized($0) == host } })
-        else { throw Refused() }
+        try await postForm(url, body: body, accountID: nil)
+    }
+
+    func postForm(_ url: URL, body: Data, accountID: UUID) async throws -> (status: Int, body: Data) {
+        try await postForm(url, body: body, accountID: Optional(accountID))
+    }
+
+    private func postForm(_ url: URL, body: Data, accountID: UUID?) async throws -> (status: Int, body: Data) {
+        guard url.scheme?.lowercased() == "https" else { throw Refused() }
+        try policy.permitTokenExchange(accountID: accountID, host: url.host ?? "")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(FormURLEncoding.contentType, forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         let (data, response) = try await session.data(for: request)
         return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest) async -> URLRequest? {
-        nil
     }
 }
 #endif

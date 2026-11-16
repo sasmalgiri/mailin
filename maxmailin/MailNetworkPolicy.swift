@@ -274,6 +274,43 @@ final class MailNetworkPolicy: @unchecked Sendable {
         }
     }
 
+    /// A token exchange or refresh for one account (review 2026-11-16, rule 7):
+    /// counted like every other step (Health shows it) and checked for THAT
+    /// account — mail on, the account known and on, the host one of its
+    /// sign-in hosts. No mode is required: a token serves whichever modes the
+    /// account has (and a first sign-in has none yet); the engine's own ask
+    /// before a refresh still checks the purpose.
+    func permitTokenExchange(accountID: UUID?, host: String) throws {
+        let refusal: MailNetworkRefusal? = lock.withLock {
+            let reason = evaluateTokenExchange(accountID: accountID, host: host)
+            if let reason {
+                refused += 1
+                refusals[reason, default: 0] += 1
+            } else {
+                permitted += 1
+            }
+            return reason
+        }
+        notify()
+        if let refusal {
+            log.notice("refused token exchange with \(host, privacy: .public): \(refusal.rawValue, privacy: .public)")
+            throw refusal
+        }
+    }
+
+    private func evaluateTokenExchange(accountID: UUID?, host: String) -> MailNetworkRefusal? {
+        if Self.isAIHost(host) { return .aiDestination }
+        guard transportsCompiled else { return .notCompiled }
+        guard mailEnabled else { return .mailOff }
+        guard let accountID, let account = accounts[accountID] else { return .noAccount }
+        guard account.isEnabled else { return .accountOff }
+        let normalized = Self.normalized(host)
+        guard !normalized.isEmpty, account.authorizationHosts.contains(where: { Self.normalized($0) == normalized }) else {
+            return .hostNotAuthorized
+        }
+        return nil
+    }
+
     /// The decision without counting it, for UI that wants to say why a button
     /// would not work.
     func wouldPermit(_ request: MailNetworkRequest) -> MailNetworkRefusal? {
@@ -387,3 +424,4 @@ final class MailNetworkPolicy: @unchecked Sendable {
         }
     }
 }
+

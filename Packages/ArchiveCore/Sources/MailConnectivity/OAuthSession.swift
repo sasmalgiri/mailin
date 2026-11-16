@@ -182,6 +182,16 @@ public enum OAuthError: LocalizedError, Equatable {
 /// The transport sets `Content-Type: application/x-www-form-urlencoded`.
 public protocol TokenTransport: Sendable {
     func postForm(_ url: URL, body: Data) async throws -> (status: Int, body: Data)
+    /// The same POST for one account, so a transport that checks a network
+    /// policy can check (and count) it for that account. Defaults to the
+    /// account-less form.
+    func postForm(_ url: URL, body: Data, accountID: UUID) async throws -> (status: Int, body: Data)
+}
+
+extension TokenTransport {
+    public func postForm(_ url: URL, body: Data, accountID: UUID) async throws -> (status: Int, body: Data) {
+        try await postForm(url, body: body)
+    }
 }
 
 struct TokenResponse: Decodable {
@@ -356,7 +366,7 @@ public actor OAuthSession {
             ("client_id", configuration.clientID),
             ("code_verifier", attempt.verifier),
         ])
-        let (status, data) = try await transport.postForm(configuration.tokenEndpoint, body: body)
+        let (status, data) = try await transport.postForm(configuration.tokenEndpoint, body: body, accountID: accountID)
         // Cancelled (or restarted) while the exchange was in flight: discard.
         guard generation == attempt.generation else { throw OAuthError.cancelled }
         try Task.checkCancellation()
@@ -486,7 +496,8 @@ public actor TokenRefreshCoordinator {
                                         ("client_id", configuration.clientID)]
         if configuration.sendsScopeOnRefresh { form.append(("scope", configuration.scopes.joined(separator: " "))) }
         refreshes[account, default: 0] += 1
-        let (status, body) = try await transport.postForm(configuration.tokenEndpoint, body: FormURLEncoding.encode(form))
+        let (status, body) = try await transport.postForm(configuration.tokenEndpoint, body: FormURLEncoding.encode(form),
+                                                          accountID: account)
         let response: TokenResponse
         do { response = try decodeTokenResponse(status: status, body: body) } catch OAuthError.tokenEndpoint(let code, let error, let description) {
             if let error, reauthorisationErrors.contains(error) {

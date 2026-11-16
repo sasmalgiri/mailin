@@ -184,7 +184,13 @@ class ComposeViewModel: ObservableObject {
                 NotificationCenter.default.post(name: .composeEmailSent, object: nil)
                 return
             } catch {
-                if sendAttempts > Self.maxRetries {
+                if !LegacySMTPRules.mayRetry(after: error) {
+                    // May already be sent, refused by the mail policy, or no
+                    // encrypted connection: never resent automatically.
+                    saveDraft(clear: false)
+                    errorMessage = "\(error.localizedDescription) Draft saved."
+                    break
+                } else if sendAttempts > Self.maxRetries {
                     saveDraft(clear: false)
                     errorMessage = "\(error.localizedDescription) (failed after \(sendAttempts) attempts). Draft saved."
                 } else {

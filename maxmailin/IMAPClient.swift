@@ -107,6 +107,13 @@ final class IMAPClient: ObservableObject {
             throw IMAPError.connectionFailed("Invalid port number: \(config.port)")
         }
 
+        // Rule 7: the legacy connector asks the mail policy before it opens a socket.
+        do {
+            try LegacyMailTransportGate.permit(host: config.server, operation: .socket)
+        } catch {
+            connectionState = .error(error.localizedDescription)
+            throw error
+        }
         let conn = NWConnection(host: host, port: port, using: params)
         self.connection = conn
 

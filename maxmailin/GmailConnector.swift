@@ -89,7 +89,6 @@ class GmailConnector: ObservableObject {
     @Published var statusMessage = ""
 
     private let config: GmailOAuthConfig
-    private let session = URLSession.shared
     private var authSession: AnyObject?
     private let baseURL = "https://www.googleapis.com/gmail/v1/users/me"
     private let tokenURL = "https://oauth2.googleapis.com/token"
@@ -150,6 +149,8 @@ class GmailConnector: ObservableObject {
         guard let authorizationURL = comp.url else {
             throw GmailConnectorError.authenticationFailed("Bad authorization URL")
         }
+        // Rule 7: the legacy connector asks the mail policy before any request.
+        try LegacyMailTransportGate.permit(host: authorizationURL.host ?? "", destination: .authorization, operation: .request)
         gmailLog.info("Starting OAuth PKCE flow")
 
         let callbackURL = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
@@ -227,7 +228,7 @@ class GmailConnector: ObservableObject {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = body.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
             .joined(separator: "&").data(using: .utf8)
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await LegacyMailTransportGate.data(for: req, destination: .authorization, operation: .oauthRefresh)
         guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw GmailConnectorError.authenticationFailed(String(data: data, encoding: .utf8) ?? "Unknown")
         }
@@ -246,13 +247,13 @@ class GmailConnector: ObservableObject {
         guard let token = accessToken else { throw GmailConnectorError.notAuthenticated }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await LegacyMailTransportGate.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw GmailConnectorError.invalidResponse }
         if http.statusCode == 401 {
             try await refreshAccessToken()
             guard let newToken = accessToken else { throw GmailConnectorError.notAuthenticated }
             req.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
-            let (d2, r2) = try await session.data(for: req)
+            let (d2, r2) = try await LegacyMailTransportGate.data(for: req)
             guard let h2 = r2 as? HTTPURLResponse else { throw GmailConnectorError.invalidResponse }
             guard (200...299).contains(h2.statusCode) else {
                 throw GmailConnectorError.apiError(h2.statusCode, String(data: d2, encoding: .utf8) ?? "")

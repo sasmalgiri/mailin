@@ -82,7 +82,8 @@ actor SMTPClient {
 
         let capabilities = try await sendEHLO()
 
-        if !config.useSSL && capabilities.contains(where: { $0.contains("STARTTLS") }) {
+        // Rule 7: no plaintext AUTH — implicit TLS or STARTTLS, or refused.
+        if try LegacySMTPRules.securityStep(useSSL: config.useSSL, capabilities: capabilities) == .startTLS {
             try await startTLS()
             _ = try await sendEHLO()
         }
@@ -96,7 +97,10 @@ actor SMTPClient {
         }
 
         try await sendData(buildMIMEMessage(email))
-        try await sendQuit()
+        // The server answered 250: the message is sent. A QUIT that fails
+        // (the server closed first) must not turn that into an error — the
+        // caller would send the whole message again.
+        try? await sendQuit()
     }
 
     // MARK: - Connection
@@ -113,6 +117,8 @@ actor SMTPClient {
         guard let port = NWEndpoint.Port(rawValue: config.port) else {
             throw SMTPError.connectionFailed("Invalid port: \(config.port)")
         }
+        // Rule 7: the legacy client asks the mail policy before every socket.
+        try LegacyMailTransportGate.permit(host: config.server, operation: .socket, purpose: .sendMail)
         let conn = NWConnection(host: host, port: port, using: params)
 
         connection = conn
@@ -183,6 +189,8 @@ actor SMTPClient {
         guard let tlsPort = NWEndpoint.Port(rawValue: config.port) else {
             throw SMTPError.connectionFailed("Invalid port: \(config.port)")
         }
+        // Rule 7: the legacy client asks the mail policy before every socket.
+        try LegacyMailTransportGate.permit(host: config.server, operation: .socket, purpose: .sendMail)
         let newConn = NWConnection(host: NWEndpoint.Host(config.server),
                                     port: tlsPort,
                                     using: params)
@@ -250,8 +258,16 @@ actor SMTPClient {
             throw SMTPError.sendFailed("DATA command rejected: \(response)")
         }
 
-        try await sendRaw(message + "\r\n.\r\n")
-        let finalResponse = try await readResponse()
+        // From the moment the message bytes go out the server may accept it: a
+        // lost write completion or answer is "may have been sent", never a
+        // plain failure that invites a resend.
+        let finalResponse: String
+        do {
+            try await sendRaw(message + "\r\n.\r\n")
+            finalResponse = try await readResponse()
+        } catch {
+            throw LegacySMTPRules.Failure.outcomeUncertain(error.localizedDescription)
+        }
         guard finalResponse.hasPrefix("250") else {
             throw SMTPError.sendFailed("Message rejected: \(finalResponse)")
         }

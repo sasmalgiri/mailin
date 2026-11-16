@@ -6910,8 +6910,10 @@ final class MailPolicyTests: XCTestCase {
         // V4-08: ConnectedMailRuntime.swift is the ninth (its production adapters); V4-13 adds
         // ConnectedMailProductionTransports.swift and MailWorkspaceBackend.swift; the live Gmail
         // UI-test hook in UITestSupport.swift (5ce933d) is the twelfth; FourPageShell.swift
-        // (c1857d3: turning the Live Mail page on allows accounts in the same step) the thirteenth.
-        XCTAssertEqual(mailGated, 13, "the thirteen mail files carry the mail gate")
+        // (c1857d3: turning the Live Mail page on allows accounts in the same step) the thirteenth;
+        // LegacyMailTransportGate.swift (review 2026-11-16 rule 7: the legacy connectors' policy
+        // gated request helper) the fourteenth.
+        XCTAssertEqual(mailGated, 14, "the fourteen mail files carry the mail gate")
         XCTAssertEqual(aiGated, 4, "the four cloud-AI files carry the cloud-AI gate")
         XCTAssertTrue(violations.isEmpty, "mail and cloud AI cross their gates:\n" + violations.joined(separator: "\n"))
     }
@@ -12972,6 +12974,95 @@ final class Review1116CTests: XCTestCase {
             XCTAssertTrue(text.contains("no cloud AI"), text)
         }
     }
+
+    /// Rule 7: a token exchange is asked of the policy for ITS account — counted
+    /// (Health) and checked per account — not against a snapshot any enabled
+    /// account with the same sign-in host satisfies; an account-less one is refused.
+    /// The connected build's PolicyCheckedTokenTransport routes through it.
+    func testRule7_tokenExchange_isCheckedAndCountedPerAccount() throws {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let on = MailAccountNetworkPolicy(id: UUID(), isEnabled: true, modes: [],
+                                          mailHosts: [], authorizationHosts: ["login.example.com"])
+        let off = MailAccountNetworkPolicy(id: UUID(), isEnabled: false, modes: [.preserveMail],
+                                           mailHosts: [], authorizationHosts: ["login.example.com"])
+        policy.setAccount(on)
+        policy.setAccount(off)
+        XCTAssertThrowsError(try policy.permitTokenExchange(accountID: nil, host: "login.example.com")) {
+            XCTAssertEqual($0 as? MailNetworkRefusal, .noAccount)
+        }
+        XCTAssertThrowsError(try policy.permitTokenExchange(accountID: off.id, host: "login.example.com")) {
+            XCTAssertEqual($0 as? MailNetworkRefusal, .accountOff)
+        }
+        XCTAssertThrowsError(try policy.permitTokenExchange(accountID: on.id, host: "evil.example.net")) {
+            XCTAssertEqual($0 as? MailNetworkRefusal, .hostNotAuthorized)
+        }
+        // A first sign-in has no modes yet; its own sign-in host is allowed.
+        XCTAssertNoThrow(try policy.permitTokenExchange(accountID: on.id, host: "LOGIN.example.com"))
+        let snap = policy.snapshot()
+        XCTAssertEqual(snap.refusedAttempts, 3)
+        XCTAssertEqual(snap.permittedAttempts, 1)
+
+        let runtime = try Self.appSource("ConnectedMailRuntime.swift")
+        let transport = try XCTUnwrap(runtime.range(of: "final class PolicyCheckedTokenTransport").map { String(runtime[$0.lowerBound...]) })
+        XCTAssertTrue(transport.contains("policy.permitTokenExchange(accountID:"), "the token transport must ask the policy per account")
+        XCTAssertFalse(transport.contains("policy.snapshot()"), "the token transport still decides from a snapshot")
+        XCTAssertFalse(transport.contains("lazy var session"), "a lazy session on an @unchecked Sendable class races")
+    }
+
+    /// Rule 7: the switched-off legacy connectors ask the mail policy before every
+    /// socket or request; with no policy account they are refused (and counted).
+    func testRule7_legacyConnectors_askTheMailPolicyFirst() throws {
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        XCTAssertThrowsError(try LegacyMailTransportGate.permit(host: "smtp.example.org", operation: .socket, policy: policy)) {
+            XCTAssertEqual($0 as? MailNetworkRefusal, .noAccount)
+        }
+        XCTAssertEqual(policy.snapshot().refusedAttempts, 1)
+
+        for file in ["GmailConnector.swift", "OutlookConnector.swift"] {
+            let source = try Self.appSource(file)
+            XCTAssertFalse(source.contains("URLSession.shared"), "\(file) opens URLSession.shared outside the mail policy")
+            XCTAssertFalse(source.contains("session.data(for:"), "\(file) has a request outside the mail policy")
+            XCTAssertTrue(source.contains("LegacyMailTransportGate.permit(host: "), "\(file): sign-in starts without asking the policy")
+        }
+        for file in ["IMAPClient.swift", "SMTPClient.swift"] {
+            let lines = try Self.appSource(file).components(separatedBy: "\n")
+            for (i, line) in lines.enumerated() where line.contains("NWConnection(") && !line.contains("//") {
+                let before = lines[max(0, i - 8)..<i].joined(separator: "\n")
+                XCTAssertTrue(before.contains("LegacyMailTransportGate.permit("), "\(file):\(i + 1) opens a socket without asking the mail policy")
+            }
+        }
+    }
+
+    /// Rule 7: no plaintext AUTH when the server offers no STARTTLS; a message the
+    /// server may have accepted (answer lost, or QUIT failing after 250) is never resent.
+    func testRule7_smtp_refusesPlaintextAuth_andNeverResendsAfterAcceptance() throws {
+        XCTAssertThrowsError(try LegacySMTPRules.securityStep(useSSL: false, capabilities: ["250-smtp.example.org", "250 AUTH PLAIN LOGIN"])) {
+            XCTAssertEqual($0 as? LegacySMTPRules.Failure, .plaintextRefused)
+        }
+        XCTAssertEqual(try LegacySMTPRules.securityStep(useSSL: false, capabilities: ["250-smtp.example.org", "250-STARTTLS", "250 AUTH PLAIN"]), .startTLS)
+        XCTAssertEqual(try LegacySMTPRules.securityStep(useSSL: true, capabilities: []), .implicitTLS)
+        // A capability that merely mentions STARTTLS is not an offer of it.
+        XCTAssertThrowsError(try LegacySMTPRules.securityStep(useSSL: false, capabilities: ["250-X-NO-STARTTLS-HERE", "250 AUTH PLAIN"]))
+
+        XCTAssertFalse(LegacySMTPRules.mayRetry(after: LegacySMTPRules.Failure.outcomeUncertain("closed")))
+        XCTAssertFalse(LegacySMTPRules.mayRetry(after: LegacySMTPRules.Failure.plaintextRefused))
+        XCTAssertFalse(LegacySMTPRules.mayRetry(after: MailNetworkRefusal.noAccount))
+        XCTAssertTrue(LegacySMTPRules.mayRetry(after: URLError(.cannotConnectToHost)))
+
+        let smtp = try Self.appSource("SMTPClient.swift")
+        XCTAssertTrue(smtp.contains("LegacySMTPRules.securityStep(useSSL:"), "SMTPClient decides TLS without the shared rule")
+        XCTAssertFalse(smtp.contains("try await sendQuit()"), "a failing QUIT after 250 turns a sent message into an error")
+        let compose = try Self.appSource("ComposeEmailView.swift")
+        XCTAssertTrue(compose.contains("LegacySMTPRules.mayRetry(after: error)"), "compose retries without asking whether the message may be sent")
+    }
+
+    static func appSource(_ file: String) throws -> String {
+        try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin").appendingPathComponent(file), encoding: .utf8)
+    }
+
 
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
