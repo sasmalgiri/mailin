@@ -12680,6 +12680,24 @@ final class Review1116CTests: XCTestCase {
         XCTAssertEqual(attempts, 2, "a file taken in is not written again")
     }
 
+    /// C13: a subject's emails are selected only when every page arrived — a read
+    /// error part-way is thrown, never handed on as a partial selection.
+    func testC13_subjectSelection_readErrorIsNotAPartialSelection() async {
+        let one = EmailSummary(id: UUID(), messageID: nil, subject: "s", from: "a@b.com", date: Date(),
+                               bodyPreview: "", hasAttachments: false, sizeBytes: 1)
+        let stream = AsyncThrowingStream<[EmailSummary], Error> { c in
+            c.yield([one])
+            c.finish(throwing: CocoaError(.fileReadUnknown))
+        }
+        do {
+            let ids = try await ArchiveSubjectGroupsView.collectIDs(stream)
+            XCTFail("a partial selection of \(ids.count) was handed on")
+        } catch {}
+        let whole = AsyncThrowingStream<[EmailSummary], Error> { c in c.yield([one]); c.finish() }
+        let ids = try? await ArchiveSubjectGroupsView.collectIDs(whole)
+        XCTAssertEqual(ids, [one.id])
+    }
+
     /// C10 (rule 5): the hand-off receipt states what was asked for against what was
     /// written (X of Y) and when the run started — not written/written and "now".
     func testC10_handoffReceipt_realRequestedCount_andStartTime() {

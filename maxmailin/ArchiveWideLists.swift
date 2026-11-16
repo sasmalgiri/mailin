@@ -155,8 +155,17 @@ struct ArchiveSubjectGroupsView: View {
     @State private var scopeLimit: Int? = nil
     @State private var loading = false
     @State private var exhausted = false
+    @State private var selectError: String?
 
     static let pageSize = 100
+
+    /// Every id the stream yields; a read error part-way is thrown (C13) —
+    /// the pages that arrived are never handed on as the selection.
+    static func collectIDs(_ pages: AsyncThrowingStream<[EmailSummary], Error>) async throws -> Set<UUID> {
+        var ids = Set<UUID>()
+        for try await page in pages { ids.formUnion(page.map(\.id)) }
+        return ids
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -168,19 +177,26 @@ struct ArchiveSubjectGroupsView: View {
                 }
             }
             .font(.caption).foregroundStyle(.secondary).padding(Spacing.small)
+            if let selectError {
+                Label(selectError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Spacing.small)
+            }
             List {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     Button {
                         Task { @MainActor in
                             var q = EmailQuery.all
                             q.subjectContains = row.subject
-                            var ids = Set<UUID>()
+                            selectError = nil
                             do {
-                                for try await page in ArchiveDataService.shared.streamSummaries(query: q, batchSize: 5_000) {
-                                    ids.formUnion(page.map(\.id))
-                                }
-                            } catch {}
-                            onSelect(ids)
+                                onSelect(try await Self.collectIDs(ArchiveDataService.shared.streamSummaries(query: q, batchSize: 5_000)))
+                            } catch is CancellationError {
+                                return
+                            } catch {
+                                selectError = String(localized: "The emails with this subject could not all be read, so none were selected: \(error.localizedDescription)")
+                            }
                         }
                     } label: {
                         HStack {
