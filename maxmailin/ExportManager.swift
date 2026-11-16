@@ -189,22 +189,9 @@ struct ExportManager {
         guard CGImageDestinationFinalize(dest) else { return nil }
         return mutableData as Data
         #else
-        let text = formatEmailForPrint(email)
-        let size = CGSize(width: 612, height: 792)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let data = renderer.pngData { ctx in
-            UIColor.white.setFill()
-            ctx.fill(CGRect(origin: .zero, size: size))
-            let paragraphStyle = NSMutableParagraphStyle()
-            paragraphStyle.lineBreakMode = .byWordWrapping
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-                .foregroundColor: UIColor.label,
-                .paragraphStyle: paragraphStyle
-            ]
-            (text as NSString).draw(in: CGRect(x: 36, y: 36, width: 540, height: 720), withAttributes: attrs)
-        }
-        return data
+        // B11: was PNG bytes under a .tiff name, one clipped page. Real
+        // multi-page TIFF, as many pages as the message needs.
+        return PaginatedTextRenderer.tiff(formatEmailForPrint(email))
         #endif
     }
 
@@ -835,6 +822,14 @@ struct ExportManager {
         generateSinglePDF(email: email)
     }
 
+    /// The per-message PDF text: the header block, a blank line, the body
+    /// (HTML tags stripped when there is no plain body).
+    static func singlePDFText(_ email: MBOXParser.RawEmail) -> String {
+        let headerText = "From: \(email.headers["From"] ?? "")\nTo: \(email.headers["To"] ?? "")\nDate: \(email.headers["Date"] ?? "")\nSubject: \(email.headers["Subject"] ?? "")\n"
+        let body = email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody
+        return headerText + "\n" + body
+    }
+
     private static func generateSinglePDF(email: MBOXParser.RawEmail) -> Data {
         #if os(macOS)
         let pageWidth: CGFloat = 612
@@ -887,18 +882,9 @@ struct ExportManager {
         context.closePDF()
         return mutableData as Data
         #else
-        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 612, height: 792))
-        return renderer.pdfData { ctx in
-            ctx.beginPage()
-            let body = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
-            let text = "From: \(email.headers["From"] ?? "")\nTo: \(email.headers["To"] ?? "")\nSubject: \(email.headers["Subject"] ?? "")\n\n\(body)"
-            let paragraphStyle = NSMutableParagraphStyle()
-            paragraphStyle.lineBreakMode = .byWordWrapping
-            (text as NSString).draw(in: CGRect(x: 50, y: 50, width: 512, height: 692), withAttributes: [
-                .font: UIFont.systemFont(ofSize: 10),
-                .paragraphStyle: paragraphStyle
-            ])
-        }
+        // B11: was one beginPage() into a 692-pt rectangle — everything past
+        // the first page was clipped. Same text as the Mac, every page.
+        return PaginatedTextRenderer.pdf(singlePDFText(email))
         #endif
     }
 

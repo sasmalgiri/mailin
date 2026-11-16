@@ -1,6 +1,11 @@
 @testable import ArchiveCore
 import XCTest
 import CryptoKit
+import ImageIO
+import UniformTypeIdentifiers
+#if canImport(PDFKit)
+import PDFKit
+#endif
 @testable import maxmailin
 
 /// Part O regression net: every bulk export streams from the store via an
@@ -378,5 +383,45 @@ final class V2ExportTests: XCTestCase {
         // Digest sidecar records the same hex.
         let sidecar = try String(contentsOf: url.appendingPathExtension("sha256"), encoding: .utf8)
         XCTAssertEqual(sidecar, whole)
+    }
+
+    // MARK: B11 (review 2026-11-16) — iPhone/iPad per-message PDF and TIFF
+
+    /// A long message: the per-message PDF has every page (it used to be one
+    /// clipped page on iPhone/iPad), and the last line is in the document.
+    func testB11_perMessagePDF_paginates_everyLineIsInTheDocument() throws {
+        let lines = (1...400).map { "Line \($0) of a long message body that wraps." }
+        let text = "From: a@example.com\nSubject: long\n\n" + lines.joined(separator: "\n") + "\nTHE-LAST-LINE"
+        let expected = PaginatedTextRenderer.pageCount(text)
+        XCTAssertGreaterThan(expected, 3, "400 lines need several pages")
+        let pdf = PaginatedTextRenderer.pdf(text)
+        let document = try XCTUnwrap(CGPDFDocument(CGDataProvider(data: pdf as CFData)!))
+        XCTAssertEqual(document.numberOfPages, expected)
+        XCTAssertEqual(PaginatedTextRenderer.pageCount("short"), 1)
+        XCTAssertEqual(CGPDFDocument(CGDataProvider(data: PaginatedTextRenderer.pdf("") as CFData)!)?.numberOfPages, 1,
+                       "an empty body is still one page")
+        #if canImport(PDFKit)
+        let text2 = try XCTUnwrap(PDFDocument(data: pdf)?.page(at: expected - 1)?.string)
+        XCTAssertTrue(text2.contains("THE-LAST-LINE"), "the end of the message is on the last page")
+        #endif
+        // The iOS branch renders through it (the Mac keeps its own paginating path).
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("maxmailin/ExportManager.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("return PaginatedTextRenderer.pdf(singlePDFText(email))"))
+        XCTAssertTrue(source.contains("return PaginatedTextRenderer.tiff(formatEmailForPrint(email))"))
+        XCTAssertFalse(source.contains("renderer.pngData"), "no PNG bytes under a .tiff name")
+    }
+
+    /// TIFF export writes real TIFF (`II*\0` / `MM\0*`), one image per page.
+    func testB11_tiff_isRealMultiPageTIFF() throws {
+        let text = (1...300).map { "Row \($0)" }.joined(separator: "\n")
+        let data = try XCTUnwrap(PaginatedTextRenderer.tiff(text, scale: 1))
+        let magic = [UInt8](data.prefix(4))
+        XCTAssertTrue(magic == [0x49, 0x49, 0x2A, 0x00] || magic == [0x4D, 0x4D, 0x00, 0x2A], "not TIFF: \(magic)")
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        XCTAssertEqual(CGImageSourceGetType(source) as String?, UTType.tiff.identifier)
+        let layout = PaginatedTextRenderer.Layout(margin: 36, monospaced: true)
+        XCTAssertEqual(CGImageSourceGetCount(source), PaginatedTextRenderer.pageCount(text, layout: layout))
+        XCTAssertGreaterThan(CGImageSourceGetCount(source), 1)
     }
 }
