@@ -4473,6 +4473,45 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(receipts.list().count, 2)
     }
 
+    /// B1 (review 2026-11-16): a store user arriving while a restore replaces the running archive's
+    /// database (indexer, list refresh, Health) must not reopen the OLD file; every write after the
+    /// restore lands in the restored file and is still there when the archive is opened again.
+    func testB1_restoreIntoRunningArchive_concurrentStoreUse_writesLandInTheRestoredFile() async throws {
+        final class Users: @unchecked Sendable {
+            let lock = NSLock()
+            var tasks: [Task<Void, Never>] = []
+            func add(_ task: Task<Void, Never>) { lock.lock(); tasks.append(task); lock.unlock() }
+        }
+        let env = try makeEnv()
+        _ = try await seed(env, count: 3)
+        let backup = env.root.appendingPathComponent("b1-backup", isDirectory: true)
+        _ = try await ArchiveBackup.create(store: env.store, to: backup)
+        let store = env.store
+        let users = Users()
+        _ = try await ArchiveBackups.replaceDatabaseHoldingStore(store, backup: backup, receiptDirectories: []) { _, _, _ in
+            // A store user arriving mid-restore: reads, then writes.
+            users.add(Task.detached {
+                _ = try? await store.totalCount()
+                try? await store.insertBatch([MBOXParser.RawEmail(
+                    headers: ["Message-ID": "<b1-during@test>", "Subject": "during", "From": "a@example.com",
+                              "Date": "Wed, 01 Mar 2023 12:00:00 +0000"],
+                    rawSource: "during", messageType: "received", attachments: [], timestamp: "2023-03-01T12:00:00Z",
+                    domains: ["example.com"], plainBody: "during", htmlBody: "")], batchSize: 10)
+            })
+            usleep(300_000)
+        }
+        for task in users.tasks { await task.value }
+        try await store.insertBatch([makeEmail(i: 99, total: 100, body: "written after the restore")], batchSize: 10)
+
+        let live = try await store.totalCount()
+        let reopened = SQLiteEmailStore(directory: store.storeDirectory)
+        let onDisk = try await reopened.totalCount()
+        XCTAssertEqual(live, 5, "3 restored + the one written during the restore + the one written after")
+        XCTAssertEqual(onDisk, live, "every write the running store made is in the file on disk")
+        let found = try await reopened.emailIDs(forMessageIDs: ["b1-during@test", "cutover-99@test"])
+        XCTAssertEqual(Set(found.keys), ["b1-during@test", "cutover-99@test"])
+    }
+
     /// Recovery survives a process restart (a fresh store on the same directory sees the repaired rows
     /// and has nothing left to do) and a clean-profile backup restore — both before the repair (the
     /// restored archive can be recovered there, from the copies the backup carried) and after it.

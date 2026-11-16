@@ -11385,7 +11385,7 @@ final class ConnectedLifecycleAuditTests: XCTestCase {
         let restore = try source("maxmailin/ArchiveBackups.swift")
         let body = String(restore[try XCTUnwrap(restore.range(of: "private static func performRestore")).upperBound...])
         let suspend = try XCTUnwrap(body.range(of: "ConnectedMailRuntime.suspendForArchiveChange()"))
-        let placed = try XCTUnwrap(body.range(of: "ArchiveBackup.restore("))
+        let placed = try XCTUnwrap(body.range(of: "replaceDatabaseHoldingStore("))
         let prepare = try XCTUnwrap(body.range(of: "prepareConnectedMailAfterRestore("))
         XCTAssertLessThan(suspend.lowerBound, placed.lowerBound)
         XCTAssertLessThan(placed.lowerBound, prepare.lowerBound)

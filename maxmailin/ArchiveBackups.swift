@@ -206,11 +206,8 @@ enum ArchiveBackups {
         do {
             let store = SQLiteEmailStore.shared
             _ = try await store.snapshot(reason: "before-restore")
-            await store.reopenConnection()
-            let target = store.storeDirectory
-            let inventory = try ArchiveBackup.restore(backup: backup, intoStoreDirectory: target, mode: .replaceDatabaseKeepFiles,
-                                                      receiptDirectories: receiptDirectories)
-            _ = try await store.schemaVersion()   // reopens; runs migrations if the backup predates an upgrade
+            let inventory = try await replaceDatabaseHoldingStore(store, backup: backup, receiptDirectories: receiptDirectories)
+            _ = try await store.schemaVersion()   // runs migrations if the backup predates an upgrade
             // Connected mail, first thing after the files are placed and before
             // anything restarts: the restored outbox is held, accounts sign in again.
             let connected = await prepareConnectedMailAfterRestore(store: store, credentials: KeychainCredentialStore())
@@ -228,6 +225,21 @@ enum ArchiveBackups {
             RecipeJobBroker.shared.report(.restore, outcome: .failed, receipt: .init(kind: .none, id: ""),
                                           summary: "Restore failed: \(error.localizedDescription)")
             return error.localizedDescription
+        }
+    }
+
+    /// B1 (review 2026-11-16): places the backup's files into the running
+    /// archive WHILE the store actor is held — closing the connection and
+    /// copying off the actor let any store call in between (indexer, list
+    /// refresh, Health, Spotlight) reopen the OLD file, and every write until
+    /// relaunch went to the unlinked file. `afterEachCopy` is a test seam.
+    nonisolated static func replaceDatabaseHoldingStore(_ store: SQLiteEmailStore, backup: URL,
+                                                        receiptDirectories: [(name: String, url: URL)],
+                                                        afterEachCopy: (@Sendable (String, Int, Int) -> Void)? = nil) async throws -> ArchiveBackupInventory {
+        let target = store.storeDirectory
+        return try await store.replacingDatabaseFiles {
+            try ArchiveBackup.restore(backup: backup, intoStoreDirectory: target, mode: .replaceDatabaseKeepFiles,
+                                      receiptDirectories: receiptDirectories, afterEachCopy: afterEachCopy)
         }
     }
 }

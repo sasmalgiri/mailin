@@ -510,6 +510,19 @@ actor SQLiteEmailStore: EmailArchiveStore {
         handleForDeinit = nil
     }
 
+    /// B1 (review 2026-11-16): replaces the database files while this actor is
+    /// held. The connection is closed, `replace` runs synchronously inside the
+    /// actor (no other store call can interleave and lazily reopen the OLD
+    /// file), and the store reopens on whatever file is now in place. If
+    /// `replace` throws, the connection stays closed and the next call reopens
+    /// lazily on the file that is there.
+    func replacingDatabaseFiles<T: Sendable>(_ replace: @Sendable () throws -> T) throws -> T {
+        reopenConnection()
+        let result = try replace()
+        _ = try ensureDB()
+        return result
+    }
+
     // MARK: - Open / schema
 
     func ensureDB() throws -> OpaquePointer {
