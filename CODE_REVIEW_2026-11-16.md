@@ -1,5 +1,91 @@
 # Whole-codebase review — 2026-11-16 (read-only; nothing changed)
 
+## Status 2026-11-16 (fix pass on `v3-architecture`, a177c8b..4d056c1)
+
+Every item below was fixed with a test that failed before the fix (or, for the
+refactor-only items, a source check that failed on the old code / did not
+compile against it), the touched classes run, build green, one commit per item.
+Release check on 4d056c1 (Debug-Connected, My Mac): five-jobs gate
+(V2CutoverTests + ConnectedFiveJobsTests + ConnectedFiveJobsFixPassTests)
+**213 passed, 2 skipped (COMP14 S/MIME keychain identity, TYPE05 speech
+permission — owner-bound), 0 failed**; every class touched or added today
+(19 classes + the 2 new ProfessionalGating tests) 237 passed, 2 skipped
+(T47 Release-only, offline-only workspace test), 0 failed; offline scheme
+Review1116CTests + MailPolicyTests 34/34; package suite 883 run (MailConnectivity
+178, 2 skipped; ArchiveCore 705, 22 skipped), 0 failed, with LargeSingleMessageTests
+(11 tests, multi-GB files, 193 s) run on its own: 11/11. Builds: macOS, iPhone 17
+simulator, iPad Air 11-inch (M4) simulator, offline macOS — all succeed; warnings
+unchanged (the pre-existing SpeechPermissionSection macro warning and
+ContentViewModel.swift:312 Sendable warning; none from this pass).
+
+| ID | State | Commit(s) |
+|---|---|---|
+| A1, A4, A14 | Fixed | 68070e0 |
+| A2, A3, A12, A15, A20 | Fixed (A2's TAR case is real: a PAX `size=9223372036854775807` or a base-256 size reached the overflow; now `size > fileSize - dataOffset`, a negative PAX size refused) | 8b3ce88 |
+| A5–A10, A16, A17 | Fixed | ce3a457 |
+| A11, A13, A18, A19 | Fixed (A18: NSF item placement has a step limit, 1<<24) | beada60 |
+| B1 | Fixed | a36495b |
+| B2, B7 | Fixed | c25f88c |
+| B3, B10 | Fixed | 0de9dd7 |
+| B4 | Fixed | f5a0e0b |
+| B5 | Fixed | 857ef55 |
+| B6 | Fixed (Spotlight Apple Intelligence summarisation off by default behind a setting; deletes reach both indexes) | 1c397c2, 215202a |
+| B8, B9 | Fixed — B9 only for literals that end at a word boundary; see Open (regex mid-word) | 1a00bc5 |
+| B11 | Fixed | e87e5a9 |
+| B12 | Fixed | 0de9dd7, 102d4a3 |
+| B13 | Fixed in code (MS-OXMSG/MS-CFB structure, DIFAT, named reasons) — **Owner run**: not yet opened in real Outlook | f6ef254, 4a1ce38 |
+| C1, C2, C3 | Fixed | 541cffb; 15194f2, 1e3e936; ac70905 |
+| C4 | Fixed | df030e9 |
+| C5, C6 | Fixed | 7f63f2f; 10011cf |
+| C7, C8 | Fixed (app: "Deleted X of Y"; package error text still English, see Open) | 7c0edeb, 2bced96 |
+| C9, C10, C11, C12, C13, C14 | Fixed | 3c9be7b, b03e614, 0b69ccd, f8802d6, 92949cd, 7e6122f |
+| C15 | Fixed | bbfbf02 |
+| C16 | Fixed | dd795b1 |
+| C17 | Fixed | 7c0edeb |
+| C18, C19, C20, C21 | Fixed | e9eabc5, 601190e, f739543, a0e97f4 |
+| C22 | Fixed | 1a00bc5 |
+| C23 | Fixed | 5145c6e, fe2bf4d |
+| C24, C25 | Fixed | 2139f7f, 7cfba19 |
+| D1 | Fixed | 34d9d3b |
+| D2 | Fixed — `--uitest` honoured only in Debug builds (`UITestLaunch.isHonoured`, also Safe Mode's test-launch check). Note: the "maxmailin Release Tests" scheme also lists maxmailinUITests; UI tests that rely on `--uitest` now run only in Debug / Debug-Connected | 9486ee3 |
+| D3 | Fixed — managed lock fails closed with a translated reason | bcfd95b |
+| D4 | Fixed — `OSAllocatedUnfairLock` | 7d4e45c |
+| D5 | Fixed — summary says this build contains no cloud AI. Kept in English like every legal text (Terms, both privacy summaries); translating the legal texts is an **owner decision** | 87c3973 |
+| Rule 7 (latent connectors, token transport) | Fixed — token exchanges go through `MailNetworkPolicy.permitTokenExchange` per account (counted in Health; account-less refused; session built in init); legacy Gmail/Outlook/IMAP/SMTP connectors (reachable from no view, menu or intent) ask `LegacyMailTransportGate` before every socket/request and are refused (no policy account); legacy SMTP refuses AUTH without TLS/STARTTLS, a failing QUIT after 250 is "sent", a lost answer to DATA is "may have been sent" and compose never resends it. Still open in that dead code: its STARTTLS opens a new TLS connection instead of upgrading the socket (it cannot work; unreachable) | 430adc6 |
+| Rule 8 | Fixed — every expert's findings (enhanceWithAI, digest narration, consults) and the structured triage pass the figures gate with the code-computed data as allowed source | 94ce6a1 |
+| Rule 10 | Fixed (listed strings; saved/printed import receipt) | 049c93a, 4d056c1 |
+| Rule 11 (OCR fallback) | Fixed | 023ded2 |
+| E registry SQL interpolation | Fixed | 7c0edeb |
+| E FTS `clear()` | Fixed | 1a00bc5 |
+| E `deleteReportingHeld` | Partly fixed (email_folders, message/part locators, attachment_children, search_docs/chunks) — rest Open | 7c0edeb |
+| E SearchSpecCompiler LIKE / confirmOperation | Fixed | 7c0edeb |
+| E ArchiveDataService store error read as "no files inside" / "no text" | **Open** — `attachmentChildren` / `attachmentDocumentText` still `try?` to empty | — |
+| E duplicate survivors across overlapping groups | Fixed | 72a216c |
+| E AttachmentTextIndexJob whole-file load | Fixed | ea32b19 |
+| E ExportRunCenter restoreAfterLaunch | Fixed | b1f6d62 |
+| E IMAP UID MOVE with VANISHED, OAUTHBEARER escaping | Fixed | f6ef254 |
+| E IMAPAdapter `after + 1` at UID 4294967295 | Fixed | beada60 |
+| E MailLifecycleText server greeting | Fixed | a002158 |
+| E ExportSigner silent new key | Fixed | f6ef254, 8e075af |
+| E PSTSpecWriter preconditions | Fixed (thrown errors; 4 GiB item size a stated limit) | f6ef254 |
+| E FoundationModelEngine state | Fixed — mutations were already inside `fmStateQueue`; the one read outside it and the answer-cache copy-then-write-back fixed | 142d2a3 |
+| E HexViewerView | Fixed | 5d475bc |
+| E `try! Regex` in loops | Fixed | 5d475bc |
+| E PluginManager timeout | Fixed — cancelled, switched off, stated on the card; never started again while the abandoned call runs (in-process code cannot be killed) | f3d8f40 |
+
+**Open / owner decisions**
+
+1. Regex search pre-filter: a literal inside a word (`voice\s` in "invoice") cannot be pre-filtered — there is no unstemmed index. The filter now drops such literals (correct, slower). An unstemmed (trigram) index is an **owner decision** (index size, migration).
+2. `deleteReportingHeld` still leaves rows in `email_custom_values`, `email_recovery`, coverage, `indexed_message`, `review_coding`, `custodian_assignments` and the forensic/custody tables. Some may be meant as audit trails — **owner decision** which are evidence and which are orphans.
+3. MSG output (B13) not yet opened in real Outlook — **owner run**.
+4. 112 machine translations from the earlier review-fix commits, plus 29 keys added in this pass (D3, E login text, plugin stop, import receipt), not reviewed by a native speaker.
+5. `.msg` attachment Content-IDs are not written — needs an ExportReconciliation rule change.
+6. NSF ODS reader's step-limit reason is logged, not shown on screen.
+7. Package error texts are English (IMAP limit messages, C7 "Deleted X of Y" inside the package).
+8. ArchiveDataService: a store error while listing an attachment's children or text still reads as "no files inside" / "no text" (see table).
+9. Test-target finding: `maxmailinTests` has no `MAILIN_CONNECTED_MAIL` condition in Debug-Connected / Release-Connected (the app target does), so the `#if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD` blocks inside V2VerificationTests (around the ConnectedMailProductionTransports / IMAPActionExecutor / sentLookup checks) never compile or run. Adding the condition to the test target needs a build-setting change (owner, Xcode).
+
+
 Scope: app target `maxmailin/` (365 files, 172,850 lines), package `Packages/ArchiveCore` (223 files, 88,016 lines),
 on `v3-architecture` at f2ba312. Eight area reviews, every finding re-verified against the source and its callers
 before listing; the headline items were spot-checked a second time by hand. Tests (142 files, 75,553 lines) were
