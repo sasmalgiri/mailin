@@ -70,7 +70,7 @@ LIVE MAIL — THE FIVE JOBS NOW WORK ON YOUR LIVE MAIL TOO
 • Preserve mail saves a read-only copy of every message into your archive, so folders, search, duplicates and verified export work on it — and it stays even if the server deletes it.
 • An Apple Mail–style mailbox with Thunderbird-style tools: message previews, hover and swipe actions, a quick filter (text, unread, flagged, attachments, tags), colour tags, conversations, smart folders and actions on several messages at once.
 • Write and send: bold, italic, colours, lists and links; signatures per account; drag files in, or attach messages straight from your archive. Undo Send holds a message before it goes.
-• You decide what each account may do: Preserve mail, Send mail and Change server mail (mark, flag, move to Trash — only when you ask, every change listed).
+• You decide what each account may do: Preserve mail, Send mail and Change server mail (mark, flag, move to another folder, move to Trash and restore — only when you ask, every change listed).
 • Remove an account and keep its mail, or delete it too — counts first, then progress.
 • Gmail connects with a Google app password; Outlook with Microsoft's own sign-in.
 
@@ -92,16 +92,15 @@ build connects to mail servers when the user turns it on.)
 mailin is a local email archive. Version 4.0 adds optional connected mail, which is OFF on a fresh install. There is no mailin server, no sign-up and no data collection; the device connects directly to the account's own mail provider. Cloud AI is not included.
 
 To test connected mail (Mac; iPhone / iPad use the same names in Settings):
-1. Open Settings ▸ Modules. Switch on "Live Mail" (the sheet explains that enabling the page connects to nothing by itself).
-2. Next to Live Mail, click "Features…" and make sure "Connected mail" is on.
-   (Steps 1–2 are already on in a fresh 4.0 install if the Live Mail tab shows a green dot.)
+1. Click the "Live Mail" tab (or Settings ▸ Modules ▸ Live Mail) and turn it on. The sheet explains that this connects to nothing by itself; no second switch is needed.
+2. (Nothing else to enable: "Connected mail" under Live Mail ▸ Features… is on by default once the page is on.)
 3. Open the Live Mail tab ▸ "Add account" (sidebar, bottom left) and choose a provider:
    • Gmail: 4.0 connects Gmail over IMAP with a Google app password — there is no Google sign-in page in this version. Enter the demo Gmail address and paste its 16-character app password into "App password". The servers are filled in (imap.gmail.com:993 and smtp.gmail.com:465, TLS).
    • iCloud Mail: enter the demo iCloud address and its app-specific password.
    • Outlook and Microsoft 365: enter the demo Outlook.com address, click "Sign in…" and sign in on Microsoft's page. Only reading mail is requested (Mail.Read, User.Read, offline_access); sending or changing mail asks again when that switch is turned on.
 4. The new account has Preserve mail, Send mail and Change server mail all off. Switch on Preserve mail, then "Sync now": folders and counts appear, and messages can be opened and searched in the Archive.
 5. Switch on Send mail (Outlook asks once for the send permission; Gmail and iCloud send with the same app password over SMTP). Write a message to any address you control and send it from the outbox.
-6. Change server mail (mark read, flag, move, move to Trash — each change listed before it runs) works for the Outlook and iCloud / IMAP accounts. For Gmail over IMAP it is not available in 4.0: the switch is disabled with the reason "Not available for Gmail with an app password in this version. Saving and sending mail work." A Gmail message sits in several label folders, so a folder-level change is not safe; it returns with Google sign-in in 4.0.x.
+6. Change server mail works for the Outlook and iCloud / IMAP accounts: select a message ▸ "On the server" ▸ mark read / unread, flag, "Move to" another folder, "Move to the server's Trash…" (count shown first) and, for a message in Trash, "Restore from the server's Trash". For Gmail over IMAP it is not available in 4.0: the switch is disabled with the reason "Not available for Gmail with an app password in this version. Saving and sending mail work." A Gmail message sits in several label folders, so a folder-level change is not safe; it returns with Google sign-in in 4.0.x.
 7. Also try: the quick filter above the list, right-click ▸ Tag, Group by Conversation (⋯ menu), and in a new message "Attach from Archive…" (attaches any archived message as an .eml).
 8. Remove the account: Accounts and status ▸ the account ▸ "Remove". "Remove" keeps the saved mail; "Remove and Delete Mail…" also deletes it after showing the count. The account's password or tokens are deleted from the Keychain.
 
