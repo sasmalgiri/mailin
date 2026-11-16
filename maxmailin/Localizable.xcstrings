@@ -471787,6 +471787,198 @@
           }
         }
       }
+    },
+    "Pattern search inside a word" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mustersuche innerhalb eines Worts"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Búsqueda por patrón dentro de una palabra"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recherche par motif à l’intérieur d’un mot"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "किसी शब्द के भीतर पैटर्न खोज"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricerca per modello all’interno di una parola"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "単語の途中からのパターン検索"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "단어 중간부터의 패턴 검색"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pesquisa por padrão dentro de uma palavra"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在单词内部进行模式搜索"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在單字內部進行模式搜尋"
+          }
+        }
+      }
+    },
+    "fixed text must start a word" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "fester Text muss ein Wort beginnen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el texto fijo debe empezar una palabra"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le texte fixe doit commencer un mot"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्थिर पाठ किसी शब्द की शुरुआत में होना चाहिए"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "il testo fisso deve iniziare una parola"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "固定テキストは単語の先頭から始める必要があります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "고정 텍스트는 단어의 처음부터 시작해야 합니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o texto fixo deve começar uma palavra"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "固定文本必须位于单词开头"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "固定文字必須位於單字開頭"
+          }
+        }
+      }
+    },
+    "A pattern's fixed text must start a word: /voice\\s/ does not find “invoice”. Start the pattern where the word starts." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der feste Text eines Musters muss ein Wort beginnen: /voice\\s/ findet „invoice“ nicht. Beginnen Sie das Muster dort, wo das Wort beginnt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El texto fijo de un patrón debe empezar una palabra: /voice\\s/ no encuentra «invoice». Empiece el patrón donde empieza la palabra."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le texte fixe d’un motif doit commencer un mot : /voice\\s/ ne trouve pas « invoice ». Commencez le motif là où le mot commence."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पैटर्न का स्थिर पाठ किसी शब्द की शुरुआत में होना चाहिए: /voice\\s/ “invoice” नहीं ढूँढता। पैटर्न वहीं से शुरू करें जहाँ शब्द शुरू होता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il testo fisso di un modello deve iniziare una parola: /voice\\s/ non trova «invoice». Fai iniziare il modello dove inizia la parola."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パターンの固定テキストは単語の先頭から始める必要があります。/voice\\s/ では「invoice」は見つかりません。単語の先頭からパターンを書いてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패턴의 고정 텍스트는 단어의 처음부터 시작해야 합니다. /voice\\s/로는 “invoice”를 찾지 못합니다. 단어가 시작되는 곳부터 패턴을 쓰세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O texto fixo de um padrão deve começar uma palavra: /voice\\s/ não encontra “invoice”. Comece o padrão onde a palavra começa."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模式中的固定文本必须位于单词开头：/voice\\s/ 找不到“invoice”。请从单词开头处编写模式。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模式中的固定文字必須位於單字開頭：/voice\\s/ 找不到「invoice」。請從單字開頭處撰寫模式。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

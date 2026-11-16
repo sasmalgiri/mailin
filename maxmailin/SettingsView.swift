@@ -858,7 +858,7 @@ struct SettingsView: View {
                 helpRow(icon: "gearshape", title: String(localized: "Pro Button"), description: String(localized: "Shows forensic, legal, and evidence features: Bates numbering, legal hold, chain of custody."), color: .orange)
                 helpRow(icon: "tag", title: String(localized: "Tag Pills"), description: String(localized: "Click any tag on an email to see all applicable tags. Set manual tags to override AI suggestions."), color: .teal)
                 helpRow(icon: "line.3.horizontal.decrease.circle", title: String(localized: "Filter Chips"), description: String(localized: "Add filter chips from the + menu. Active chips narrow the visible email list. Click × to remove."), color: .blue)
-                helpRow(icon: "magnifyingglass", title: String(localized: "Search Syntax"), description: String(localized: "Use AND, OR, NOT for boolean search. Wrap regex in /slashes/. Use \"word1\" NEAR/5 \"word2\" for proximity."), color: .green)
+                helpRow(icon: "magnifyingglass", title: String(localized: "Search Syntax"), description: String(localized: "Use AND, OR, NOT for boolean search. Wrap regex in /slashes/. Use \"word1\" NEAR/5 \"word2\" for proximity.") + " " + AppLimits.regexWordStartNote, color: .green)
             } header: {
                 Label("Feature Guide", systemImage: "lightbulb")
                     .font(.headline)

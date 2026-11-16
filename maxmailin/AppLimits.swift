@@ -49,6 +49,11 @@ enum AppLimits {
     /// whole-archive engine is on by default). Named here so it is listed.
     static let previousEngineDuplicateWindow = 5_000
 
+    /// D-1 (owner 2026-11-16): shown on the Limits page and in the search help.
+    static var regexWordStartNote: String {
+        String(localized: "A pattern's fixed text must start a word: /voice\\s/ does not find “invoice”. Start the pattern where the word starts.")
+    }
+
     static var all: [AppLimit] {
         let bytes = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
         // CLOSE-05: limits defined in binary units (MiB, GiB) are shown in them, so 35 MiB reads "35 MB".
@@ -128,6 +133,11 @@ enum AppLimits {
             AppLimit(kind: .safety, what: String(localized: "Pattern (regular expression) search"),
                      value: String(localized: "\(BoundedRegexSearch.literalCandidateCap) candidates, or \(BoundedRegexSearch.defaultNoLiteralScanCap) messages for a pattern without a word; patterns up to \(BoundedRegexSearch.maxPatternLength) characters"),
                      why: String(localized: "A broader pattern stops there and the results say so; each candidate is checked against its whole text.")),
+            // D-1 (owner 2026-11-16): the pre-filter looks a pattern's fixed text up as the start of a word
+            // (there is no index of word parts), so text that begins inside a word is not found. Kept, and said.
+            AppLimit(kind: .notInThisVersion, what: String(localized: "Pattern search inside a word"),
+                     value: String(localized: "fixed text must start a word"),
+                     why: regexWordStartNote),
             // CLOSE-05: the reader guards against files built to exhaust the device.
             AppLimit(kind: .safety, what: String(localized: "Encrypted 7z key derivation"),
                      value: String(localized: "\(1 << SevenZipReader.maxCyclesPower) iterations"),

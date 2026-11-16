@@ -9825,6 +9825,23 @@ final class AppLimitsReconciliationTests: XCTestCase {
         XCTAssertEqual(AppLimit.Kind.notInThisVersion.label, String(localized: "Not in this version"))
     }
 
+    /// D-1 (owner 2026-11-16): a regex literal that begins inside a word is not
+    /// found (the pre-filter has no index of word parts). Kept, and stated on the
+    /// Limits page and in the search help — matching what the search really does.
+    func testD1_regexLiteralMustStartAWord_isStatedOnLimitsAndInHelp() throws {
+        let row = try XCTUnwrap(row("Pattern search inside a word"))
+        XCTAssertEqual(row.kind, .notInThisVersion)
+        XCTAssertEqual(row.value, "fixed text must start a word")
+        XCTAssertEqual(row.why, AppLimits.regexWordStartNote)
+        XCTAssertTrue(row.why.contains(#"/voice\s/ does not find “invoice”"#), row.why)
+        // It is what the pre-filter does: `voice\s` is looked up as the word "voice".
+        XCTAssertEqual(RegexLiteralExtractor.prefilterTokens(from: #"voice\s"#), ["voice"])
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let settings = try String(contentsOf: repo.appendingPathComponent("maxmailin/SettingsView.swift"), encoding: .utf8)
+        let help = try XCTUnwrap(settings.range(of: #"title: String(localized: "Search Syntax")"#))
+        XCTAssertTrue(settings[help.upperBound...].prefix(400).contains("AppLimits.regexWordStartNote"), "the search help states the rule")
+    }
+
     func testCLOSE05_helpTextSaysWhatIsTrue() throws {
         // The AI page no longer claims the app has no network access (a connected-mail build does).
         let ai = PageFeatureCatalog.consequences(for: .aiInsights).joined(separator: " ")
