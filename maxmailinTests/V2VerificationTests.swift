@@ -10593,6 +10593,29 @@ final class T02HostileHTMLZeroNetworkTests: XCTestCase {
         XCTAssertTrue(SafeHTMLRenderer.sanitize(#"<img src="data:image/png;base64,AA//BB">"#).html.contains("src="))
     }
 
+    /// B6 (review 2026-11-16): Spotlight handed every body to Apple Intelligence (summarisation +
+    /// priority, which may use Private Cloud Compute) with no switch. Rule 7: off by default; the
+    /// options are set only when the person turns the setting on. Deletes reach both the default
+    /// and the protected index, so flipping `v3SemanticSearch` mid-session leaves nothing searchable.
+    @MainActor
+    func testB6_spotlightAppleIntelligence_offByDefault_onlyWhenTurnedOn_deletesReachEveryIndex() {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: SpotlightIndexer.appleIntelligenceKey)
+        defer { defaults.set(saved, forKey: SpotlightIndexer.appleIntelligenceKey) }
+
+        defaults.removeObject(forKey: SpotlightIndexer.appleIntelligenceKey)
+        XCTAssertFalse(SpotlightIndexer.appleIntelligenceAllowed, "off by default")
+        if #available(macOS 15.4, iOS 18.4, *) {
+            XCTAssertEqual(SpotlightIndexer.updateListenerOptions(appleIntelligenceAllowed: SpotlightIndexer.appleIntelligenceAllowed), [])
+            defaults.set(true, forKey: SpotlightIndexer.appleIntelligenceKey)
+            XCTAssertTrue(SpotlightIndexer.appleIntelligenceAllowed)
+            XCTAssertEqual(SpotlightIndexer.updateListenerOptions(appleIntelligenceAllowed: SpotlightIndexer.appleIntelligenceAllowed),
+                           [.summarization, .priority])
+        }
+        XCTAssertEqual(Set(SpotlightIndexer.deletionIndexKinds), Set(SpotlightIndexer.IndexKind.allCases),
+                       "a delete reaches the default AND the protected index")
+    }
+
     func testT02_mailOnAIOff_hostileHTMLMakesZeroRequests_andPolicyRefusesNonMailDestinations() async throws {
         // Connected mail ON, an account with every mode, cloud AI off.
         let shared = MailNetworkPolicy.shared

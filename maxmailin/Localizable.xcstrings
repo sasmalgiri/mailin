@@ -458878,6 +458878,134 @@
           }
         }
       }
+    },
+    "Let Apple Intelligence summarise mail in Spotlight" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence E-Mails in Spotlight zusammenfassen lassen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir que Apple Intelligence resuma el correo en Spotlight"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autoriser Apple Intelligence à résumer les e-mails dans Spotlight"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence को Spotlight में मेल का सारांश बनाने दें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Consenti ad Apple Intelligence di riassumere le email in Spotlight"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple IntelligenceにSpotlightでメールを要約させる"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence가 Spotlight에서 메일을 요약하도록 허용"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir que a Apple Intelligence resuma e-mails no Spotlight"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Apple 智能在“聚焦”中总结邮件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允許 Apple Intelligence 在 Spotlight 中摘要郵件"
+          }
+        }
+      }
+    },
+    "Off: mail is indexed for Spotlight on this device only. On: the system may summarise and rank indexed mail with Apple Intelligence, which can use Private Cloud Compute. Changing this indexes the archive again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus: E-Mails werden nur auf diesem Gerät für Spotlight indiziert. Ein: Das System kann indizierte E-Mails mit Apple Intelligence zusammenfassen und priorisieren, wobei Private Cloud Compute verwendet werden kann. Eine Änderung indiziert das Archiv erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivado: el correo se indexa para Spotlight solo en este dispositivo. Activado: el sistema puede resumir y priorizar el correo indexado con Apple Intelligence, que puede usar Private Cloud Compute. Al cambiarlo, el archivo se vuelve a indexar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Désactivé : les e-mails sont indexés pour Spotlight sur cet appareil uniquement. Activé : le système peut résumer et classer les e-mails indexés avec Apple Intelligence, qui peut utiliser Private Cloud Compute. Modifier ce réglage réindexe l'archive."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "बंद: मेल केवल इसी डिवाइस पर Spotlight के लिए इंडेक्स होती है। चालू: सिस्टम इंडेक्स की गई मेल का Apple Intelligence से सारांश और प्राथमिकता तय कर सकता है, जो Private Cloud Compute का उपयोग कर सकता है। इसे बदलने पर संग्रह फिर से इंडेक्स होता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disattivato: le email vengono indicizzate per Spotlight solo su questo dispositivo. Attivato: il sistema può riassumere e classificare le email indicizzate con Apple Intelligence, che può usare Private Cloud Compute. Modificando questa opzione l'archivio viene indicizzato di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフ：メールはこのデバイス上でのみSpotlight用にインデックスされます。オン：システムはインデックスされたメールをApple Intelligenceで要約・優先度付けすることがあり、Private Cloud Computeが使われる場合があります。変更するとアーカイブが再インデックスされます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "끔: 메일은 이 기기에서만 Spotlight용으로 색인됩니다. 켬: 시스템이 Apple Intelligence로 색인된 메일을 요약하고 우선순위를 매길 수 있으며, 이때 Private Cloud Compute가 사용될 수 있습니다. 변경하면 아카이브를 다시 색인합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desativado: os e-mails são indexados para o Spotlight apenas neste dispositivo. Ativado: o sistema pode resumir e priorizar os e-mails indexados com a Apple Intelligence, que pode usar o Private Cloud Compute. Alterar esta opção indexa o arquivo novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭：邮件仅在此设备上为“聚焦”建立索引。打开：系统可能会使用 Apple 智能总结已索引的邮件并判断优先级，这可能会使用私有云计算。更改此设置会重新索引归档。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉：郵件僅在此裝置上為 Spotlight 建立索引。開啟：系統可能會使用 Apple Intelligence 摘要已索引的郵件並判斷優先順序，這可能會使用私密雲端運算。變更此設定會重新索引封存。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

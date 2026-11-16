@@ -17,9 +17,38 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
     nonisolated static let protectedIndexName = "com.ecosanskriti.mailin.archive"
 
     nonisolated static func makeIndex() -> CSSearchableIndex {
-        useProtectedIndex
-            ? CSSearchableIndex(name: protectedIndexName, protectionClass: .completeUntilFirstUserAuthentication)
-            : CSSearchableIndex.default()
+        index(for: useProtectedIndex ? .protected : .standard)
+    }
+
+    /// The two indexes an email can be in, depending on `v3SemanticSearch`
+    /// when it was indexed.
+    enum IndexKind: CaseIterable, Sendable { case standard, protected }
+
+    nonisolated static func index(for kind: IndexKind) -> CSSearchableIndex {
+        switch kind {
+        case .standard:  return CSSearchableIndex.default()
+        case .protected: return CSSearchableIndex(name: protectedIndexName, protectionClass: .completeUntilFirstUserAuthentication)
+        }
+    }
+
+    /// B6 (review 2026-11-16): indexing follows the current switch, so after
+    /// `v3SemanticSearch` flips mid-session an email can sit in either index.
+    /// Every delete goes to both — deleted mail never stays searchable.
+    nonisolated static let deletionIndexKinds: [IndexKind] = IndexKind.allCases
+
+    /// B6 / rule 7: summarisation and priority hand the body to Apple
+    /// Intelligence (which may use Private Cloud Compute). Off by default;
+    /// the person turns it on in Settings → Data & Privacy.
+    nonisolated static let appleIntelligenceKey = "spotlightAppleIntelligence"
+    nonisolated static var appleIntelligenceAllowed: Bool {
+        UserDefaults.standard.bool(forKey: appleIntelligenceKey)
+    }
+
+    /// The listener options for an indexed email: none unless the person
+    /// allowed Apple Intelligence.
+    @available(macOS 15.4, iOS 18.4, *)
+    nonisolated static func updateListenerOptions(appleIntelligenceAllowed: Bool) -> CSSearchableItem.UpdateListenerOptions {
+        appleIntelligenceAllowed ? [.summarization, .priority] : []
     }
 
     private var aiSummaries: [String: String] = [:]
@@ -46,10 +75,11 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
     }
 
     /// Index emails into CoreSpotlight in batches of 100.
-    /// Uses CSPerson for authors, full textContent for AI summarization,
-    /// and updateListenerOptions for Apple Intelligence summaries + priority.
+    /// Uses CSPerson for authors and full textContent; Apple Intelligence
+    /// summaries + priority only when the person allowed them (B6).
     func indexEmails(_ emails: [MBOXParser.RawEmail]) {
         let emailsCopy = emails
+        let allowAppleIntelligence = Self.appleIntelligenceAllowed
         Task.detached(priority: .utility) {
             let batchSize = 100
             for batchStart in stride(from: 0, to: emailsCopy.count, by: batchSize) {
@@ -144,9 +174,9 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
                         attributeSet: attributeSet
                     )
 
-                    // Enable Apple Intelligence summarization + priority classification
+                    // Apple Intelligence summarisation + priority only when the person allowed it (B6).
                     if #available(macOS 15.4, iOS 18.4, *) {
-                        item.updateListenerOptions = [.summarization, .priority]
+                        item.updateListenerOptions = SpotlightIndexer.updateListenerOptions(appleIntelligenceAllowed: allowAppleIntelligence)
                     }
 
                     items.append(item)
@@ -243,23 +273,25 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
     /// survivors (legal-hold rows after a clear) can do so without the
     /// deletion racing the re-add.
     func removeAllIndexedEmails(completion: (@MainActor () -> Void)? = nil) {
-        searchableIndex.deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailin.emails"]) { [weak self] _ in
-            Task { @MainActor in
-                self?.aiSummaries.removeAll()
-                self?.aiPriorities.removeAll()
-                completion?()
+        Task { @MainActor in
+            for kind in Self.deletionIndexKinds {
+                try? await Self.index(for: kind).deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailin.emails"])
             }
+            self.aiSummaries.removeAll()
+            self.aiPriorities.removeAll()
+            completion?()
         }
     }
 
     func removeEmails(withIDs ids: [UUID]) {
         let idStrings = ids.map(\.uuidString)
-        searchableIndex.deleteSearchableItems(withIdentifiers: idStrings) { [weak self] _ in
-            Task { @MainActor in
-                for id in idStrings {
-                    self?.aiSummaries.removeValue(forKey: id)
-                    self?.aiPriorities.remove(id)
-                }
+        Task { @MainActor in
+            for kind in Self.deletionIndexKinds {
+                try? await Self.index(for: kind).deleteSearchableItems(withIdentifiers: idStrings)
+            }
+            for id in idStrings {
+                self.aiSummaries.removeValue(forKey: id)
+                self.aiPriorities.remove(id)
             }
         }
     }

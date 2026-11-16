@@ -126,6 +126,8 @@ struct SettingsView: View {
     @AppStorage(DigestScheduler.enabledKey) private var weeklyDigestEnabled = false
     #if os(macOS)
     @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
+    /// B6 / rule 7: online-capable, off by default.
+    @AppStorage(SpotlightIndexer.appleIntelligenceKey) private var spotlightAppleIntelligence = false
     #endif
     @State private var showClearTempConfirmation = false
     @State private var showResetSettingsConfirmation = false
@@ -747,6 +749,15 @@ struct SettingsView: View {
                     Text("180 days").tag(180)
                     Text("1 year").tag(365)
                 }
+
+                Toggle("Let Apple Intelligence summarise mail in Spotlight", isOn: $spotlightAppleIntelligence)
+                    .onChange(of: spotlightAppleIntelligence) { _, _ in
+                        // Every indexed email carries the current choice.
+                        SpotlightIndexer.shared.indexAllFromArchive()
+                    }
+                Text("Off: mail is indexed for Spotlight on this device only. On: the system may summarise and rank indexed mail with Apple Intelligence, which can use Private Cloud Compute. Changing this indexes the archive again.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
                 Button("Delete All My Data", role: .destructive) {
                     showDeleteAllConfirmation = true
