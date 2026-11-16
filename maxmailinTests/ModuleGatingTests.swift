@@ -1147,6 +1147,32 @@ struct InterfaceLocalizationTests {
             #expect(value != "\u{1}missing" && value != key, "not translated in the built app: \(key)")
         }
     }
+
+    /// Review 2026-11-16 closeout (d172d13): the package's IMAP reader-limit,
+    /// Gmail metadata and NSF step-limit sentences and the app's attachment
+    /// Contents error are looked up in the app catalog — every one must reach
+    /// the built app in German, with its placeholders unchanged.
+    static let packageCloseoutKeys: [String] = [
+        "The files inside this attachment could not be listed: %@",                       // AttachmentChildrenList
+        "The mail server sent a response line longer than %lld MiB, more than mailin reads (limit: %lld MiB per line).",
+        "The mail server sent a literal (not a message) longer than %lld MiB, more than mailin reads (limit: %lld MiB per literal; messages are not limited).",
+        "The mail server sent lists nested more than %lld deep, more than mailin reads (limit: %lld levels).",
+        "The Gmail response could not be read (%@).",
+        "the message metadata beside the raw value is larger than %lld MiB, the limit",
+        "Gmail's message metadata could not be read.",
+        "%@: %lld Notes documents not read — their item table needs more than the reader's limit of %@ placement steps.",
+    ]
+
+    @Test("Review 2026-11-16 package texts resolve to German in the built app")
+    func packageCloseoutStringsResolveInGerman() throws {
+        let path = try #require(Bundle.main.path(forResource: "de", ofType: "lproj"), "the app has a de.lproj")
+        let german = try #require(Bundle(path: path))
+        for key in Self.packageCloseoutKeys {
+            let value = german.localizedString(forKey: key, value: "\u{1}missing", table: nil)
+            #expect(value != "\u{1}missing" && value != key, "not translated in the built app: \(key)")
+            #expect(Self.placeholders(value) == Self.placeholders(key), "placeholders changed: \(key) -> \(value)")
+        }
+    }
 }
 
 
