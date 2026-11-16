@@ -410,8 +410,23 @@ final class ExportReconciliationTests: XCTestCase {
         let folder = try writeFolder([("m.msg", msg, source.id, nil)])
         let report = await ExportReconciliation.reconcile(folder: folder, lookup: lookup([source]))
         XCTAssertEqual(report.outcome, .complete, report.summary)
-        XCTAssertEqual(report.transformations["the .msg writer does not carry attachment Content-IDs"], 1)
-        XCTAssertEqual(report.transformations["the .msg writer does not carry the inline disposition"], 1)
+        // D-5 (owner, 2026-11-16): the .msg writer carries Content-IDs and the
+        // inline disposition, so reconciliation checks them like any field.
+        XCTAssertNil(report.transformations["the .msg writer does not carry attachment Content-IDs"], "\(report.transformations)")
+        XCTAssertNil(report.transformations["the .msg writer does not carry the inline disposition"], "\(report.transformations)")
+        XCTAssertEqual(ExportReconciliation.FormatRules.rules(for: .msg).notCarried[.attachmentContentIDs], nil)
+        XCTAssertEqual(ExportReconciliation.FormatRules.rules(for: .msg).notCarried[.attachmentDispositions], nil)
+        // A Content-ID that does not round-trip is a loss, not a writer limit.
+        let otherCID = try Self.message(Self.raw(bcc: "hidden@q.org", inReplyTo: "<m0@t>", references: "<a@t> <m0@t>",
+                                                 html: "<p>Hi <img src=\"cid:logo@x\"></p>",
+                                                 parts: [Part(name: "logo.png", bytes: png, cid: "other@x", mime: "image/png"),
+                                                         Part(name: "a.txt", bytes: Data("alpha".utf8))]))
+        let otherCIDRecord = MBOXParser.RawEmail(id: source.id, headers: otherCID.headers, rawSource: otherCID.rawSource, messageType: otherCID.messageType,
+                                                 attachments: otherCID.attachments, timestamp: otherCID.timestamp, domains: otherCID.domains,
+                                                 plainBody: otherCID.plainBody, htmlBody: otherCID.htmlBody)
+        let cidLost = await ExportReconciliation.reconcile(folder: folder, lookup: lookup([otherCIDRecord]))
+        XCTAssertEqual(cidLost.outcome, .failed, cidLost.summary)
+        XCTAssertEqual(cidLost.findings.first.flatMap { outcome($0, .attachmentContentIDs) }, .lost("Content-IDs differ"))
         XCTAssertNotNil(report.transformations.keys.first { $0.hasPrefix("date re-expressed") }, "\(report.transformations)")
         // The same writer limits do not hide a real loss: a record with a different payload.
         let altered = try Self.message(Self.raw(bcc: "hidden@q.org", inReplyTo: "<m0@t>", references: "<a@t> <m0@t>",
@@ -433,6 +448,27 @@ final class ExportReconciliationTests: XCTestCase {
                                               plainBody: noBcc.plainBody, htmlBody: noBcc.htmlBody)
         let extra = await ExportReconciliation.reconcile(folder: folder, lookup: lookup([noBccRecord]))
         XCTAssertEqual(outcome(extra.findings[0], .bcc), .lost("added in output"))
+    }
+
+    /// D-5: a non-image attachment that has a Content-ID is not inline in the
+    /// record; the .msg keeps both facts (Content-ID written, hidden = false),
+    /// so the reconciliation of that export is clean.
+    func testMSGOutput_contentIDOnARegularAttachment_roundTripsWithoutBecomingInline() async throws {
+        let pdf = Data("%PDF-1.4 tiny".utf8)
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 1, 2, 3])
+        let source = try Self.message(Self.raw(html: "<p>See <img src=\"cid:logo@x\"></p>",
+                                               parts: [Part(name: "logo.png", bytes: png, cid: "logo@x", mime: "image/png"),
+                                                       Part(name: "doc.pdf", bytes: pdf, cid: "doc@x", mime: "application/pdf")]))
+        XCTAssertEqual(source.attachments.map(\.isInline), [true, false], "fixture: the image is inline, the PDF is not")
+        XCTAssertEqual(source.attachments.map(\.contentID), ["logo@x", "doc@x"])
+        let msg = try XCTUnwrap(MSGWriter.write(email: source))
+        let back = try MSGParser.parse(data: msg)
+        XCTAssertEqual(back.attachments.map(\.isInline), [true, false])
+        XCTAssertEqual(back.attachments.map(\.contentID), ["logo@x", "doc@x"])
+        let folder = try writeFolder([("m.msg", msg, source.id, nil)])
+        let report = await ExportReconciliation.reconcile(folder: folder, lookup: lookup([source]))
+        XCTAssertEqual(report.outcome, .complete, report.summary)
+        XCTAssertNil(report.transformations.keys.first { $0.contains("Content-ID") || $0.contains("inline") }, "\(report.transformations)")
     }
 
     // MARK: - 6. Container outputs

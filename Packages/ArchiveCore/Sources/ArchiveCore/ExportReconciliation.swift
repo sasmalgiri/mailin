@@ -188,10 +188,9 @@ enum ExportReconciliation {
             case .eml:
                 return FormatRules(kind: kind, notCarried: [:])
             case .msg:
-                return FormatRules(kind: kind, notCarried: [
-                    .attachmentContentIDs: "the .msg writer does not carry attachment Content-IDs",
-                    .attachmentDispositions: "the .msg writer does not carry the inline disposition",
-                ])
+                // D-5 (owner, 2026-11-16): the .msg writer carries attachment
+                // Content-IDs and the inline disposition, so both are checked.
+                return FormatRules(kind: kind, notCarried: [:])
             case .mbox:
                 return FormatRules(kind: kind, notCarried: [
                     .folder: "mbox carries no folder path",

@@ -431,6 +431,7 @@ enum MAPIPropertyID: UInt16 {
     case attachMethod = 0x3705
     case attachContentId = 0x3712
     case attachFlags = 0x3714
+    case attachmentHidden = 0x7FFE
     case attachSize = 0x0E20
 }
 

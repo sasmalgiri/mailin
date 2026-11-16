@@ -280,9 +280,20 @@ struct MSGWriter {
         ]
         let ext = (attachment.filename as NSString).pathExtension
         if !ext.isEmpty { ap.append((0x3703, .unicode("." + ext))) }              // PR_ATTACH_EXTENSION
-        // PR_ATTACH_CONTENT_ID (0x3712) is not written yet: ExportReconciliation's
-        // .msg rules record Content-IDs and the inline disposition as "not
-        // carried", and change together with this line.
+        // D-5 (owner, 2026-11-16; MS-OXCMSG 2.2.2.29 / 2.2.2.18 / PidTagAttachmentHidden):
+        // the Content-ID is written for every attachment that has one, so an
+        // HTML body's cid: references resolve. An inline attachment is hidden
+        // from the attachment list (PR_ATTACHMENT_HIDDEN = true) and, when the
+        // HTML body references it by Content-ID, flagged ATT_MHTML_REF; every
+        // other attachment says hidden = false, so a Content-ID alone does not
+        // make the reader take it for inline. ExportReconciliation's .msg rules
+        // check both facts (they are no longer "not carried").
+        let contentID = attachment.contentID?.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t\r\n")) ?? ""
+        if !contentID.isEmpty { ap.append((0x3712, .unicode(contentID))) }         // PR_ATTACH_CONTENT_ID
+        ap.append((0x7FFE, .bool(attachment.isInline && embedded == nil)))      // PR_ATTACHMENT_HIDDEN
+        if attachment.isInline, embedded == nil, !contentID.isEmpty {
+            ap.append((0x3714, .long(0x0000_0004)))                                // PR_ATTACH_FLAGS: ATT_MHTML_REF
+        }
         if let bytes { ap.append((0x0E20, .long(UInt32(clamping: bytes.count)))) } // PR_ATTACH_SIZE
         if embedded != nil {
             ap.append((0x3701, .object))                                           // PR_ATTACH_DATA_OBJ

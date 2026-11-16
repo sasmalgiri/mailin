@@ -470,6 +470,75 @@ final class WriterConformanceTests: XCTestCase {
         XCTAssertEqual(back.attachments.count, 3)
     }
 
+    /// D-5: an inline image keeps its Content-ID (PR_ATTACH_CONTENT_ID), is
+    /// hidden from the attachment list (PR_ATTACHMENT_HIDDEN) and marked as
+    /// referenced from the HTML body (PR_ATTACH_FLAGS ATT_MHTML_REF); a
+    /// regular attachment is not hidden and carries no flags — read here from
+    /// the compound file, not through MSGParser.
+    func testMSG_inlineImage_contentIDHiddenAndMHTMLRef_readIndependently() throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4]).base64EncodedString()
+        let raw = """
+        From: Ann <ann@x.com>\r
+        To: bob@y.org\r
+        Subject: Logo\r
+        Date: Wed, 15 Jan 2025 10:00:30 +0000\r
+        Message-ID: <cid1@t>\r
+        MIME-Version: 1.0\r
+        Content-Type: multipart/mixed; boundary="OUTER"\r
+        \r
+        --OUTER\r
+        Content-Type: multipart/related; boundary="REL"\r
+        \r
+        --REL\r
+        Content-Type: text/html; charset=utf-8\r
+        \r
+        <p>Hi <img src="cid:logo.123@x"></p>\r
+        --REL\r
+        Content-Type: image/png; name="logo.png"\r
+        Content-ID: <logo.123@x>\r
+        Content-Disposition: inline; filename="logo.png"\r
+        Content-Transfer-Encoding: base64\r
+        \r
+        \(png)\r
+        --REL--\r
+        --OUTER\r
+        Content-Type: text/plain; name="a.txt"\r
+        Content-Disposition: attachment; filename="a.txt"\r
+        \r
+        alpha\r
+        --OUTER--\r
+
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        let logoIndex = try XCTUnwrap(email.attachments.firstIndex { $0.filename == "logo.png" })
+        let textIndex = try XCTUnwrap(email.attachments.firstIndex { $0.filename == "a.txt" })
+        XCTAssertTrue(email.attachments[logoIndex].isInline, "fixture: the image is inline")
+        let data = try MSGWriter.data(for: email)
+        dump(data, "inline-image.msg")
+        let cfb = try CFBFile(data)
+        var problems: [String] = []
+        try MSGConformance.check(cfb, storage: 0, kind: .topLevel, path: "", problems: &problems)
+        XCTAssertEqual(problems, [], problems.joined(separator: "\n"))
+        let root = try cfb.children(of: 0)
+
+        let logo = try cfb.children(of: try XCTUnwrap(root["__attach_version1.0_#" + String(format: "%08X", logoIndex)]))
+        XCTAssertEqual(try MSGConformance.string(cfb, logo, "3712001F"), "logo.123@x", "PR_ATTACH_CONTENT_ID")
+        let (_, lp) = try MSGConformance.properties(cfb, logo, kind: .attachment)
+        XCTAssertEqual(lp[0x7FFE_000B].map { CFBFile.u32($0.value, 0) }, 1, "PR_ATTACHMENT_HIDDEN = true")
+        XCTAssertEqual(lp[0x3714_0003].map { CFBFile.u32($0.value, 0) }, 0x4, "PR_ATTACH_FLAGS = ATT_MHTML_REF")
+
+        let text = try cfb.children(of: try XCTUnwrap(root["__attach_version1.0_#" + String(format: "%08X", textIndex)]))
+        XCTAssertNil(text["__substg1.0_3712001F"], "no Content-ID on the regular attachment")
+        let (_, tp) = try MSGConformance.properties(cfb, text, kind: .attachment)
+        XCTAssertEqual(tp[0x7FFE_000B].map { CFBFile.u32($0.value, 0) }, 0, "PR_ATTACHMENT_HIDDEN = false")
+        XCTAssertNil(tp[0x3714_0003], "no PR_ATTACH_FLAGS on the regular attachment")
+
+        let back = try MSGParser.parse(data: data)
+        XCTAssertEqual(back.attachments[logoIndex].contentID, "logo.123@x")
+        XCTAssertTrue(back.attachments[logoIndex].isInline)
+        XCTAssertFalse(back.attachments[textIndex].isInline)
+    }
+
     /// The minimal message (no recipients, no attachments) is conformant too.
     func testMSG_minimalMessageConformant() throws {
         let email = try MBOXParser.processRawMessage("Subject: only\r\n\r\nbody\r\n", senderEmail: "")

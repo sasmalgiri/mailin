@@ -461,8 +461,12 @@ struct OLE2Reader {
             let contentID = attachProps.strings[MAPIPropertyID.attachContentId.rawValue]
             let attachData = attachProps.binaries[MAPIPropertyID.attachDataBinary.rawValue]
             let deferredData = attachProps.deferred[MAPIPropertyID.attachDataBinary.rawValue]?.entry
-            let isInline = contentID != nil ||
-                (attachProps.ints[MAPIPropertyID.attachFlags.rawValue].map { $0 & 0x04 != 0 } ?? false)
+            // ATT_MHTML_REF, or PR_ATTACHMENT_HIDDEN = true, marks an inline
+            // attachment. A Content-ID alone counts only when the file does not
+            // say hidden = false (D-5: a regular attachment may carry a Content-ID).
+            let referencedInHTML = attachProps.ints[MAPIPropertyID.attachFlags.rawValue].map { $0 & 0x04 != 0 } ?? false
+            let hidden = attachProps.ints[MAPIPropertyID.attachmentHidden.rawValue].map { $0 != 0 }
+            let isInline = referencedInHTML || hidden == true || (contentID != nil && hidden == nil)
 
             let metadata = AttachmentMetadata(
                 filename: filename.trimmingCharacters(in: .controlCharacters),
