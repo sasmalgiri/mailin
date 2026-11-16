@@ -3761,7 +3761,9 @@ struct FoundationModelEngine {
                 general: anything else. Also extract key search terms and detect follow-ups.
                 """
             var prompt = "Classify: \(query)"
-            if let lastTurn = conversationHistory.last {
+            // Read under the state queue (review 2026-11-16 E: this was the one
+            // access to the shared history outside it).
+            if let lastTurn = fmStateQueue.sync(execute: { conversationHistory.last }) {
                 prompt += "\nPrevious question was: \(lastTurn.query)"
             }
             let session = LanguageModelSession(instructions: instructions)
@@ -4879,15 +4881,15 @@ struct FoundationModelEngine {
     }
 
     private static func checkCache(query: String, emailCount: Int) -> String? {
-        var cacheCopy = fmStateQueue.sync { answerCache }
+        // Prune and copy in ONE step under the queue: a copy-then-write-back let
+        // an answer cached in between be erased (review 2026-11-16 E).
+        let cutoff = Date().addingTimeInterval(-3600)
+        let cacheCopy = fmStateQueue.sync { () -> [CachedAnswer] in
+            answerCache.removeAll { $0.emailCount != emailCount || $0.timestamp < cutoff }
+            return answerCache
+        }
 
         guard !cacheCopy.isEmpty else { return nil }
-
-        cacheCopy.removeAll { $0.emailCount != emailCount }
-        let cutoff = Date().addingTimeInterval(-3600)
-        cacheCopy.removeAll { $0.timestamp < cutoff }
-
-        fmStateQueue.sync { answerCache = cacheCopy }
 
         guard let embedding = NLEmbedding.sentenceEmbedding(for: .english),
               let queryVector = embedding.vector(for: query) else {

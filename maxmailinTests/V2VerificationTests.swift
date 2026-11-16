@@ -13182,6 +13182,33 @@ final class Review1116CTests: XCTestCase {
         XCTAssertFalse(manager.isStillRunning(plugin.pluginID), "the abandoned call's end is noticed")
     }
 
+    /// E: the model engine's shared state (conversation history, semantic facts,
+    /// answer cache) is read and written only on its state queue.
+    func testE_modelEngineSharedState_onlyTouchedOnItsQueue() throws {
+        let lines = try Self.appSource("FoundationModelEngine.swift").components(separatedBy: "\n")
+        var inside = Array(repeating: false, count: lines.count)
+        var i = 0
+        while i < lines.count {
+            if lines[i].contains("fmStateQueue.sync") {
+                var depth = 0, j = i, opened = false
+                repeat {
+                    for ch in lines[j] { if ch == "{" { depth += 1; opened = true } else if ch == "}" { depth -= 1 } }
+                    inside[j] = true
+                    j += 1
+                } while j < lines.count && (!opened || depth > 0)
+                i = j
+            } else { i += 1 }
+        }
+        var outside: [String] = []
+        for (n, line) in lines.enumerated() where !inside[n] && !line.contains("private static var") {
+            let code = line.components(separatedBy: "//").first ?? ""
+            for name in ["conversationHistory", "semanticFacts", "answerCache"] where code.range(of: "\\b\(name)\\b", options: .regularExpression) != nil {
+                outside.append("\(n + 1): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        XCTAssertTrue(outside.isEmpty, "shared model state touched outside fmStateQueue:\n" + outside.joined(separator: "\n"))
+    }
+
     /// D2: `--uitest` (pre-accepts Terms, completes persona, seeds the demo archive,
     /// can turn on connected mail, quiets Safe Mode) is honoured only by a Debug build.
     /// Run under the "maxmailin Release Tests" scheme this asserts the Release answer.
