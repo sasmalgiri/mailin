@@ -50,19 +50,76 @@ enum FTSQueryBuilder {
         return "NEAR(\(escapeTerm(a)) \(escapeTerm(b)), \(max(1, distance)))"
     }
 
-    /// Free-text / Boolean: preserve AND/OR/NOT operators, quote every leaf
-    /// term, and prefix-match the last term (`"budg"*` matches "budget"). Nil if
+    /// Free-text / Boolean: quote every leaf term, prefix-match the last term
+    /// (`"budg"*` matches "budget"), and keep the Boolean operators. Nil if
     /// there are no tokens.
+    ///
+    /// B8 (review 2026-11-16): the result is ALWAYS a valid FTS5 expression,
+    /// whatever the person typed. Before, "not guilty" became `NOT "guilty"*`,
+    /// "report and" became `"report" AND` and a lone "or" became `OR` — all
+    /// FTS5 syntax errors, which the step loops then showed as "No results".
+    /// The rules:
+    ///   • `AND`, `OR`, `NOT` are operators only when written in capitals (as
+    ///     in FTS5 itself and the in-app help) AND they stand between two
+    ///     terms. Lower-case "and"/"or"/"not", and a capital operator with
+    ///     nothing on one side ("NOT guilty", "report AND"), are searched as
+    ///     ordinary words. `AND NOT` reads as `NOT`; any other run of
+    ///     operators keeps the first and searches the rest as words.
+    ///   • `NEAR` is always a word here (proximity has its own builder).
+    ///   • A word starting with `-` ("-spam") excludes that word from the
+    ///     results when the query has at least one other term to search for
+    ///     ("budget -spam", "-spam budget" → `("budget"*) NOT "spam"`). On its
+    ///     own it is searched as the word.
     static func freeTextOrBoolean(_ raw: String) -> String? {
-        let operators: Set<String> = ["AND", "OR", "NOT"]
         let tokens = raw.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         guard !tokens.isEmpty else { return nil }
-        let lastTermIndex = tokens.lastIndex(where: { !operators.contains($0.uppercased()) })
-        return tokens.enumerated().map { idx, tok in
-            if operators.contains(tok.uppercased()) { return tok.uppercased() }
-            let quoted = escapeTerm(tok)
-            return idx == lastTermIndex ? quoted + "*" : quoted
+        let operators: Set<String> = ["AND", "OR", "NOT"]
+
+        func isExclusion(_ tok: String) -> Bool {
+            tok.count > 1 && tok.hasPrefix("-")
+                && tok.dropFirst().contains(where: { $0.isLetter || $0.isNumber })
+        }
+        let hasPositiveTerm = tokens.contains { !operators.contains($0) && !isExclusion($0) }
+
+        enum Piece { case term(String), op(String) }
+        var pieces: [Piece] = []
+        var excluded: [String] = []
+        for tok in tokens {
+            if hasPositiveTerm, isExclusion(tok) {
+                excluded.append(String(tok.dropFirst()))
+                continue
+            }
+            if operators.contains(tok) {
+                switch pieces.last {
+                case .term?:
+                    pieces.append(.op(tok))
+                case .op("AND")? where tok == "NOT":
+                    pieces[pieces.count - 1] = .op("NOT")
+                default:
+                    // Nothing on the left (start of query, or straight after
+                    // another operator): a word, not an operator.
+                    pieces.append(.term(tok))
+                }
+            } else {
+                pieces.append(.term(tok))
+            }
+        }
+        // Nothing on the right of a trailing operator: a word as well.
+        if case .op(let dangling)? = pieces.last { pieces[pieces.count - 1] = .term(dangling) }
+
+        let lastTermIndex = pieces.lastIndex { if case .term = $0 { return true } else { return false } }
+        let positive = pieces.enumerated().map { idx, piece -> String in
+            switch piece {
+            case .op(let op): return op
+            case .term(let t):
+                let quoted = escapeTerm(t)
+                return idx == lastTermIndex ? quoted + "*" : quoted
+            }
         }.joined(separator: " ")
+        guard !excluded.isEmpty else { return positive }
+        // FTS5's NOT binds tighter than AND/OR, so the positive part is
+        // grouped: the exclusion applies to the whole query, not its last term.
+        return "(" + positive + ")" + excluded.map { " NOT " + escapeTerm($0) }.joined()
     }
 }
 
@@ -440,7 +497,7 @@ actor FTSSearchIndex {
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, trimmed)
             sqlite3_bind_int(stmt, 2, Int32(limit))
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try stepRow(stmt, db) {
                 guard let cstr = sqlite3_column_text(stmt, 0) else { continue }
                 let idStr = String(cString: cstr)
                 guard let uuid = UUID(uuidString: idStr) else { continue }
@@ -561,7 +618,7 @@ actor FTSSearchIndex {
             sqlite3_bind_int(stmt, 2, Int32(limit))
             sqlite3_bind_int(stmt, 3, Int32(offset))
             var rows: [Row] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try stepRow(stmt, db) {
                 let idString = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
                 // Malformed ids stay in the buffer (they occupy an offset slot)
                 // but are never emitted.
@@ -653,7 +710,7 @@ actor FTSSearchIndex {
                 defer { sqlite3_finalize(stmt) }
                 bindText(stmt, 1, trimmed)
                 for (i, s) in chunk.enumerated() { bindText(stmt, Int32(i + 2), s) }
-                while sqlite3_step(stmt) == SQLITE_ROW {
+                while try stepRow(stmt, db) {
                     if let c = sqlite3_column_text(stmt, 0), let u = UUID(uuidString: String(cString: c)) {
                         found.insert(u)
                     }
@@ -675,7 +732,7 @@ actor FTSSearchIndex {
             let stmt = try prepare(db, "SELECT COUNT(*) FROM email_search WHERE email_search MATCH ?;")
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, trimmed)
-            if sqlite3_step(stmt) == SQLITE_ROW {
+            if try stepRow(stmt, db) {
                 total += Int(sqlite3_column_int64(stmt, 0))
             }
         }
@@ -704,7 +761,7 @@ actor FTSSearchIndex {
                 defer { sqlite3_finalize(stmt) }
                 bindText(stmt, 1, trimmed)
                 for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 2), id.uuidString) }
-                while sqlite3_step(stmt) == SQLITE_ROW {
+                while try stepRow(stmt, db) {
                     if let c = sqlite3_column_text(stmt, 0), let id = UUID(uuidString: String(cString: c)) {
                         out.insert(id)
                     }
@@ -721,11 +778,21 @@ actor FTSSearchIndex {
         let years = try discoverAllShardYears()
         for year in years {
             let db = try ensureShard(year: year)
-            try exec(db, "DELETE FROM email_search;")
             // Reset the registry too, or it would falsely report rows as indexed
-            // after the FTS content is gone (store↔registry drift).
-            try exec(db, "DELETE FROM indexed_message;")
-            try exec(db, "VACUUM;")
+            // after the FTS content is gone (store↔registry drift). Both
+            // DELETEs are ONE transaction (review 2026-11-16 §E): a crash or
+            // error between them used to leave the registry saying "indexed"
+            // over an empty shard, and the reconciler never re-indexed those.
+            try exec(db, SQLiteHygiene.beginWrite)
+            do {
+                try exec(db, "DELETE FROM email_search;")
+                try exec(db, "DELETE FROM indexed_message;")
+                try exec(db, "COMMIT;")
+            } catch {
+                try? exec(db, "ROLLBACK;")
+                throw error
+            }
+            try exec(db, "VACUUM;")   // outside the transaction: VACUUM cannot run inside one
         }
     }
 
@@ -816,8 +883,10 @@ actor FTSSearchIndex {
             // Cheap gate: only rewrite shards that actually carry duplicates.
             let check = try prepare(db, "SELECT count(*) - count(DISTINCT email_id) FROM email_search;")
             var dupes = 0
-            if sqlite3_step(check) == SQLITE_ROW { dupes = Int(sqlite3_column_int(check, 0)) }
-            sqlite3_finalize(check)
+            do {
+                defer { sqlite3_finalize(check) }
+                if try stepRow(check, db) { dupes = Int(sqlite3_column_int(check, 0)) }
+            }
             guard dupes > 0 else { continue }
             try exec(db, SQLiteHygiene.beginWrite)
             do {
@@ -852,7 +921,7 @@ actor FTSSearchIndex {
         sqlite3_bind_int64(stmt, 1, afterRowID)
         sqlite3_bind_int(stmt, 2, Int32(limit))
         var rows: [(rowID: Int64, id: UUID?)] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        while try stepRow(stmt, db) {
             let id = sqlite3_column_text(stmt, 1).flatMap { UUID(uuidString: String(cString: $0)) }
             rows.append((sqlite3_column_int64(stmt, 0), id))
         }
@@ -891,7 +960,7 @@ actor FTSSearchIndex {
             let db = try ensureShard(year: year)
             let stmt = try prepare(db, "SELECT COUNT(*) FROM email_search;")
             defer { sqlite3_finalize(stmt) }
-            if sqlite3_step(stmt) == SQLITE_ROW {
+            if try stepRow(stmt, db) {
                 total += Int(sqlite3_column_int(stmt, 0))
             }
         }
@@ -908,7 +977,7 @@ actor FTSSearchIndex {
             let db = try ensureShard(year: year)
             let stmt = try prepare(db, "SELECT email_id FROM email_search;")
             defer { sqlite3_finalize(stmt) }
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try stepRow(stmt, db) {
                 if let c = sqlite3_column_text(stmt, 0),
                    let u = UUID(uuidString: String(cString: c)) {
                     ids.insert(u)
@@ -921,7 +990,7 @@ actor FTSSearchIndex {
     private func hasAnyRow(_ db: OpaquePointer, _ table: String) throws -> Bool {
         let stmt = try prepare(db, "SELECT EXISTS(SELECT 1 FROM \(table) LIMIT 1);")
         defer { sqlite3_finalize(stmt) }
-        return sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 1
+        return try stepRow(stmt, db) && sqlite3_column_int(stmt, 0) == 1
     }
 
     /// Of the given ids, which are already indexed (present in any shard's
@@ -943,7 +1012,7 @@ actor FTSSearchIndex {
                 let stmt = try prepare(db, "SELECT email_id FROM indexed_message WHERE email_id IN (\(placeholders));")
                 defer { sqlite3_finalize(stmt) }
                 for (i, s) in chunk.enumerated() { bindText(stmt, Int32(i + 1), s) }
-                while sqlite3_step(stmt) == SQLITE_ROW {
+                while try stepRow(stmt, db) {
                     if let c = sqlite3_column_text(stmt, 0), let u = UUID(uuidString: String(cString: c)) {
                         found.insert(u)
                     }
@@ -1199,7 +1268,7 @@ actor FTSSearchIndex {
             """)
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, id.uuidString)
-            if sqlite3_step(stmt) == SQLITE_ROW {
+            if try stepRow(stmt, db) {
                 return (Int(sqlite3_column_int64(stmt, 0)), Int(sqlite3_column_int64(stmt, 1)))
             }
         }
@@ -1217,7 +1286,7 @@ actor FTSSearchIndex {
                 WHERE total_text_bytes > indexed_text_bytes;
             """)
             defer { sqlite3_finalize(stmt) }
-            if sqlite3_step(stmt) == SQLITE_ROW {
+            if try stepRow(stmt, db) {
                 total += Int(sqlite3_column_int64(stmt, 0))
             }
         }
@@ -1227,11 +1296,14 @@ actor FTSSearchIndex {
     /// Synchronous snapshot for view code that cannot await the actor. Opens
     /// its own short-lived read connection per shard rather than touching the
     /// actor's handles.
-    nonisolated static func partiallyIndexedCountSnapshot() throws -> Int {
-        let appSupport = UITestStorageRoot.applicationSupport
-        let dir = appSupport
-            .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
-            .appendingPathComponent("fts5", isDirectory: true)
+    ///
+    /// C22 (review 2026-11-16): reads the shards the shared index really uses
+    /// (`productionShardsDirectory` — the relocation-aware archive root), not
+    /// the hard-coded Application Support folder, which after a move held the
+    /// retired copy or nothing.
+    nonisolated static func partiallyIndexedCountSnapshot(
+        shardsDirectory dir: URL = FTSSearchIndex.productionShardsDirectory
+    ) throws -> Int {
         let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         var total = 0
         for name in files where name.hasSuffix(".db") {
@@ -1362,12 +1434,20 @@ actor FTSSearchIndex {
             try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
             return override
         }
-        if let override = FTSSearchIndex.testShardsDirectoryOverride {
-            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
-            return override
+        let dir = Self.productionShardsDirectory
+        if FTSSearchIndex.testShardsDirectoryOverride != nil {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        // B5: the shards follow the store — one root for both, resolved by
-        // `ArchiveLayout` (chosen location, verified relocation, fallback).
+        return dir
+    }
+
+    /// Where the SHARED index keeps its shards: the test override when set,
+    /// otherwise — B5: the shards follow the store, one root for both —
+    /// `<ArchiveLayout.productionRoot>/fts5` (chosen location, verified
+    /// relocation, fallback). The one answer for the actor and for the
+    /// synchronous snapshot readers.
+    nonisolated static var productionShardsDirectory: URL {
+        if let override = testShardsDirectoryOverride { return override }
         return ArchiveLayout.ftsDirectory(under: ArchiveLayout.productionRoot)
     }
 
@@ -1402,6 +1482,19 @@ actor FTSSearchIndex {
             throw FTSError.execFailed(lastError(db))
         }
         return stmt
+    }
+
+    /// B8: step expecting rows — true = a row is available, false = DONE.
+    /// Throws on anything else (an FTS5 syntax error in MATCH, SQLITE_BUSY, a
+    /// corrupt shard) instead of letting a `while == SQLITE_ROW` loop mistake
+    /// the failure for the end of the results and show "No results". Same
+    /// contract as `SQLiteEmailStore.stepRow`.
+    private func stepRow(_ stmt: OpaquePointer?, _ db: OpaquePointer) throws -> Bool {
+        switch sqlite3_step(stmt) {
+        case SQLITE_ROW:  return true
+        case SQLITE_DONE: return false
+        default:          throw FTSError.execFailed(lastError(db))
+        }
     }
 
     private func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String) {
@@ -1466,21 +1559,22 @@ struct RegexSearchOutcome: Sendable {
 /// a regex search into FTS candidate retrieval + exact verification.
 ///
 /// Conservative by construction: anything uncertain (top-level alternation,
-/// groups, classes, unbalanced syntax) contributes nothing or aborts with []
-/// — a missing literal only costs speed (capped-scan fallback), never
-/// correctness.
+/// groups, classes, unbalanced syntax) contributes nothing or aborts with [].
+/// A literal left OUT only costs speed (capped-scan fallback). A literal used
+/// for the FTS pre-filter must never exclude a true match — which is why the
+/// pre-filter reads `prefilterTokens`, not `mandatoryLiteralTokens` (B9).
 enum RegexLiteralExtractor {
 
     /// Alphanumeric tokens (length ≥ 3) drawn from the pattern's mandatory
     /// literal runs. Empty when no literal can be derived with certainty.
-    /// NOTE: candidate retrieval is token/prefix-granular (FTS5); a literal
-    /// that only ever occurs mid-token in a document is a caveat covered by
-    /// the exact-verify step operating on FTS-retrieved candidates.
+    /// Every one must occur in a match as a SUBSTRING — not necessarily as a
+    /// whole indexed word, so these are not safe FTS terms as they stand
+    /// (see `prefilterTokens`).
     static func mandatoryLiteralTokens(from pattern: String) -> [String] {
         guard let runs = mandatoryLiteralRuns(from: pattern) else { return [] }
         var tokens: [String] = []
         for run in runs {
-            for piece in run.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
+            for piece in run.text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
                 let token = String(piece)
                 if token.count >= 3 && !tokens.contains(token) { tokens.append(token) }
             }
@@ -1488,14 +1582,81 @@ enum RegexLiteralExtractor {
         return Array(tokens.prefix(4))   // keep the FTS query small
     }
 
+    /// B9 (review 2026-11-16): the mandatory tokens that are safe as exact
+    /// FTS5 terms — those the pattern itself ENDS at a word boundary
+    /// (whitespace, ASCII punctuation, `\s` `\b` `\W` … with a quantifier of at
+    /// least one, or `$`).
+    ///
+    /// The index runs the porter stemmer, so a literal that may continue into
+    /// a longer word can never be matched as a prefix: `runn\w+` gave
+    /// `"runn"*`, but "running" is indexed as its stem "run", which "runn" is
+    /// not a prefix of — zero candidates, no truncation flag, a true match
+    /// silently lost. A literal that ends at a word boundary IS the whole word
+    /// (from where it starts), and the same tokenizer stems the query term and
+    /// the indexed word alike, so an exact term `"invoices"` always finds
+    /// "invoices". Literals that may continue are left out; with none left,
+    /// the search takes the bounded scan, which reports truncation.
+    ///
+    /// Remaining caveat (unchanged, recorded rather than hidden): the
+    /// pre-filter assumes the literal STARTS a word. A pattern whose literal
+    /// can begin mid-word (`voice\s` inside "invoice ") is only found when the
+    /// literal also starts a word somewhere in that message.
+    static func prefilterTokens(from pattern: String) -> [String] {
+        // `(?x)` (free spacing) makes a written space match nothing, so a
+        // space would no longer end a word: no pre-filter at all.
+        if hasFreeSpacingFlag(pattern) { return [] }
+        guard let runs = mandatoryLiteralRuns(from: pattern) else { return [] }
+        var tokens: [String] = []
+        for run in runs {
+            let chars = Array(run.text)
+            var i = 0
+            while i < chars.count {
+                guard chars[i].isLetter || chars[i].isNumber else { i += 1; continue }
+                var j = i
+                while j < chars.count, chars[j].isLetter || chars[j].isNumber { j += 1 }
+                // What follows the token: a character inside the run, or
+                // whatever ended the run.
+                let endsAtBoundary = j < chars.count ? isDefiniteSeparator(chars[j]) : run.endsAtBoundary
+                let token = String(chars[i..<j])
+                if endsAtBoundary, token.count >= 3, !tokens.contains(token) { tokens.append(token) }
+                i = j
+            }
+        }
+        return Array(tokens.prefix(4))   // fewer terms = a wider (still sound) net
+    }
+
+    /// A character that always separates words for both the regex text and
+    /// the FTS5 unicode61 tokenizer. Non-ASCII symbols are left out on
+    /// purpose (conservative: unknown → not a boundary).
+    private static func hasFreeSpacingFlag(_ pattern: String) -> Bool {
+        var rest = Substring(pattern)
+        while let open = rest.range(of: "(?") {
+            let flags = rest[open.upperBound...].prefix { $0.isLetter || $0 == "-" }
+            if flags.contains("x") { return true }
+            rest = rest[open.upperBound...]
+        }
+        return false
+    }
+
+    private static func isDefiniteSeparator(_ ch: Character) -> Bool {
+        ch.isWhitespace || (ch.isASCII && !ch.isLetter && !ch.isNumber)
+    }
+
+    /// `\x` escapes that consume or assert a non-word position: whitespace,
+    /// non-word, word boundary, line break, end of input.
+    private static let boundaryEscapes: Set<Character> = ["s", "W", "b", "n", "t", "r", "f", "v", "h", "R", "z", "Z"]
+
+    private struct Run { let text: String; let endsAtBoundary: Bool }
+
     /// The contiguous literal runs that must appear in every match, or nil if
-    /// extraction is uncertain.
-    private static func mandatoryLiteralRuns(from pattern: String) -> [String]? {
-        var runs: [String] = []
+    /// extraction is uncertain. `endsAtBoundary`: what ends the run is
+    /// certainly a non-word position.
+    private static func mandatoryLiteralRuns(from pattern: String) -> [Run]? {
+        var runs: [Run] = []
         var current = ""
-        func flush(droppingLast: Bool = false) {
+        func flush(droppingLast: Bool = false, boundary: Bool = false) {
             if droppingLast, !current.isEmpty { current.removeLast() }
-            if !current.isEmpty { runs.append(current) }
+            if !current.isEmpty { runs.append(Run(text: current, endsAtBoundary: boundary && !droppingLast)) }
             current = ""
         }
         let chars = Array(pattern)
@@ -1530,9 +1691,11 @@ enum RegexLiteralExtractor {
                 let next = chars[i + 1]
                 if next.isLetter || next.isNumber {
                     // \d \w \b \1 \u… — a class/anchor/reference, not a literal.
-                    flush()
-                    i += 2
-                    i = skipQuantifier(chars, from: i) ?? i
+                    // \s+ \b \W … end the run at a word boundary; \s* / \s? may
+                    // match nothing, so they do not.
+                    let q = quantifierKind(chars, at: i + 2)
+                    flush(boundary: boundaryEscapes.contains(next) && !(q?.minZero ?? false))
+                    i = q?.endIndex ?? (i + 2)
                     continue
                 }
                 // Escaped punctuation is a literal char — but a following
@@ -1547,7 +1710,8 @@ enum RegexLiteralExtractor {
                 i += 2
                 continue
             case ".", "^", "$":
-                flush()
+                // `$`: end of the text, nothing follows (unless made optional).
+                flush(boundary: ch == "$" && !(quantifierKind(chars, at: i + 1)?.minZero ?? false))
             case "?", "*", "+", "{":
                 // Quantifier applying to the previous literal char.
                 guard let q = quantifierKind(chars, at: i) else { return nil }
@@ -1720,12 +1884,17 @@ enum BoundedRegexSearch {
             return d >= lo && d < hi
         }
 
-        let literals = RegexLiteralExtractor.mandatoryLiteralTokens(from: pattern)
+        let literals = RegexLiteralExtractor.prefilterTokens(from: pattern)
         if !literals.isEmpty {
-            // Literal path: FTS candidates (every match must contain all the
-            // literals) → bounded hydration → exact verify.
+            // Literal path: FTS candidates (every match contains each literal
+            // as a whole word) → bounded hydration → exact verify.
+            // B9: exact terms, never `"literal"*` — the porter stemmer would
+            // stem the prefix and the indexed word differently ("runn" vs
+            // "run"), excluding true matches. `prefilterTokens` only returns
+            // literals that end at a word boundary, so the exact term is the
+            // word and both sides stem alike.
             outcome.usedLiteralPath = true
-            let ftsQuery = literals.map { FTSQueryBuilder.escapeTerm($0) + "*" }
+            let ftsQuery = literals.map { FTSQueryBuilder.escapeTerm($0) }
                 .joined(separator: " AND ")
             let years = FTSSearchIndex.shardYears(after: after, before: before)
             var cursor: FTSSearchIndex.RankedCursor? = nil
