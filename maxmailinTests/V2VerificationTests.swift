@@ -6000,6 +6000,37 @@ final class ExportRecoverResumeTests: XCTestCase {
         XCTAssertNil(again.lastReceipt)
     }
 
+    /// Review 2026-11-16 (E): an interrupted export followed by a completed one is still
+    /// offered Recover and resume at launch — the newest interrupted run is found, not
+    /// only the newest receipt.
+    func testE_interruptedRunBehindANewerCompletedOne_isStillOfferedAtLaunch() async throws {
+        try await insert(250)
+        let mbox = root.appendingPathComponent("killed-then-other.mbox")
+        _ = try await service().exportMBOXArchive(scope: scope, to: mbox)
+        let manifestURL = ContainerManifest.url(for: mbox)
+        let boundary = try XCTUnwrap(try ContainerManifest.scan(url: manifestURL).checkpoints.first)
+        let m = try FileHandle(forWritingTo: manifestURL)
+        try m.truncate(atOffset: boundary.manifestEnd); try m.close()
+
+        let receipts = ExportReceiptStore(directory: root.appendingPathComponent("receipts-e", isDirectory: true))
+        let placeholder = ExportReceipt(title: "mbox export", destination: mbox.path, isFolder: false, requested: 250, written: 0,
+                                        outcome: .failed, startedAt: Date(), completedAt: Date(),
+                                        recoverableRequest: request(mbox, total: 250), interrupted: true)
+        let placeholderURL = try receipts.save(placeholder)
+        // A later, finished export (written after the interrupted one).
+        let done = ExportReceipt(title: "CSV export", destination: root.appendingPathComponent("x.csv").path, isFolder: false,
+                                 requested: 3, written: 3, outcome: .complete, startedAt: Date(), completedAt: Date())
+        let doneURL = try receipts.save(done)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-60)], ofItemAtPath: placeholderURL.path)
+        try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: doneURL.path)
+        XCTAssertEqual(receipts.list().first, doneURL, "the completed export is the newest receipt")
+
+        let relaunched = ExportRunCenter(receiptStore: receipts)
+        try await within(30) { await relaunched.restoreAfterLaunch() }
+        XCTAssertEqual(relaunched.lastReceipt?.id, placeholder.id, "the interrupted run is offered")
+        XCTAssertEqual(relaunched.lastReceipt?.offersRecovery, true)
+    }
+
     /// R3 (iOS): the Share sheet hands on the file alone; the receipt keeps the
     /// manifest, and verification uses it.
     func testR3_containerWrittenInsideTheApp_keepsItsManifestForVerification() async throws {

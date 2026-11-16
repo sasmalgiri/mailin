@@ -190,12 +190,22 @@ final class ExportRunCenter {
         guard !isActive, lastReceipt == nil else { return }
         let store = receiptStore
         let newest: (URL, ExportReceipt)? = await Task.detached(priority: .utility) {
-            guard let url = store.list().first, let stored = try? store.load(url) else { return nil }
-            // R8 (rule 9): an interrupted export whose partial file is there again is offered Recover and resume.
-            if Self.offersRecoveryAtLaunch(stored) { return (url, stored) }
-            guard let receipt = Self.relaunchReceipt(stored, fileExists: FileManager.default.fileExists(atPath: stored.destination))
-            else { return nil }
-            return (url, receipt)
+            let urls = store.list()
+            // R1: the newest receipt, when it was still waiting to be handed on.
+            if let url = urls.first, let stored = try? store.load(url) {
+                if Self.offersRecoveryAtLaunch(stored) { return (url, stored) }
+                if let receipt = Self.relaunchReceipt(stored, fileExists: FileManager.default.fileExists(atPath: stored.destination)) {
+                    return (url, receipt)
+                }
+            }
+            // R8 (rule 9): the newest INTERRUPTED export whose partial file is there
+            // again is offered Recover and resume, even when a later export finished
+            // after it (review 2026-11-16: not only the newest receipt).
+            for url in urls.dropFirst() {
+                guard let stored = try? store.load(url), stored.interrupted == true || stored.offersRecovery else { continue }
+                if Self.offersRecoveryAtLaunch(stored) { return (url, stored) }
+            }
+            return nil
         }.value
         guard let (url, found) = newest, !isActive, lastReceipt == nil else { return }
         if found.delivery == .awaitingDelivery || found.offersRecovery {
