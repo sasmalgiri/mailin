@@ -465,6 +465,29 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
+    /// C24: moving a tripped engine's switch to off and then choosing "Keep it on"
+    /// is not a user choice — the new-version restore still applies; confirming is.
+    func testC24_cancelledSwitchOff_doesNotBlockTheNewVersionRestore() {
+        let env = makeEnv(engineOn: false)
+        ScopeJobEnvironment.$current.withValue(env.job) {
+            var applied: [(Capability, Bool)] = []
+            EngineGuard.saveTrips([EngineTrip(capability: Capability.v3PIIReport.rawValue, date: Date(), appVersion: "3.0 (600)")])
+            let pending = CapabilityMatrixView.switchMoved(.v3PIIReport, to: false) { applied.append(($0, $1)) }
+            XCTAssertEqual(pending, .v3PIIReport, "off asks first")
+            XCTAssertTrue(applied.isEmpty)
+            // "Keep it on": nothing else happens.
+            XCTAssertEqual(EngineGuard.takeRestorableTrips(currentVersion: "3.0 (601)"), [.v3PIIReport],
+                           "a cancelled switch-off is not the user's choice")
+
+            EngineGuard.saveTrips([EngineTrip(capability: Capability.v3IOC.rawValue, date: Date(), appVersion: "3.0 (600)")])
+            if let c = CapabilityMatrixView.switchMoved(.v3IOC, to: false, apply: { applied.append(($0, $1)) }) {
+                CapabilityMatrixView.confirmOff(c) { applied.append(($0, $1)) }
+            }
+            XCTAssertEqual(applied.map(\.1), [false])
+            XCTAssertTrue(EngineGuard.takeRestorableTrips(currentVersion: "3.0 (601)").isEmpty, "a confirmed choice wins")
+        }
+    }
+
     // MARK: - M1 / M5: every 3.0 engine is a switch, promoted (on by default)
 
     func testEveryEngine_hasAMatrixEntry_andIsOnByDefaultAfterPromotion() {

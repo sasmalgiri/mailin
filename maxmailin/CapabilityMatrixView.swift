@@ -63,7 +63,7 @@ struct CapabilityMatrixView: View {
         ) {
             if let capability = pendingOff {
                 Button("Switch off") {
-                    modules.set(capability, enabled: false)
+                    Self.confirmOff(capability) { modules.set($0, enabled: $1) }
                     pendingOff = nil
                 }
                 Button("Keep it on", role: .cancel) { pendingOff = nil }
@@ -73,6 +73,25 @@ struct CapabilityMatrixView: View {
                 Text(offMessage(for: capability))
             }
         }
+    }
+
+    /// The switch moved. On applies at once; off returns the capability to
+    /// confirm first (turning one off can turn its dependents off too).
+    /// The choice is noted (§3-M2) only once it really happens — a cancelled
+    /// switch-off (C24) leaves a trip's new-version restore in place.
+    static func switchMoved(_ capability: Capability, to on: Bool, apply: (Capability, Bool) -> Void) -> Capability? {
+        if on {
+            EngineGuard.noteUserChoice(capability)   // §3-M2: the user's choice wins over a trip
+            apply(capability, true)
+            return nil
+        }
+        return capability
+    }
+
+    /// "Switch off" confirmed.
+    static func confirmOff(_ capability: Capability, apply: (Capability, Bool) -> Void) {
+        EngineGuard.noteUserChoice(capability)
+        apply(capability, false)
     }
 
     // MARK: Header
@@ -260,14 +279,7 @@ struct CapabilityMatrixView: View {
                         get: { modules.switchPosition(capability) },
                         set: { newValue in
                             guard OrgPolicy.confirmAllowed(.manageModules) else { return }   // enterprise role
-                            EngineGuard.noteUserChoice(capability)   // §3-M2: the user's choice wins over a trip
-                            if newValue {
-                                modules.set(capability, enabled: true)
-                            } else {
-                                // Ask first, because turning one off can turn
-                                // its dependents off too.
-                                pendingOff = capability
-                            }
+                            pendingOff = Self.switchMoved(capability, to: newValue) { modules.set($0, enabled: $1) }
                         }))
                         .labelsHidden()
                         .toggleStyle(.switch)
