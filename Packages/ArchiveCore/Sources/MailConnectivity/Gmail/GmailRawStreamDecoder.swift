@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import ArchiveCore
 
 public enum GmailRawDecodeError: Error, Equatable, LocalizedError {
     /// The stream ended before the JSON object closed (transfer cut short).
@@ -27,7 +28,7 @@ public enum GmailRawDecodeError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .truncated: return "The Gmail response ended before the message was complete."
-        case .malformed(let why): return "The Gmail response could not be read (\(why))."
+        case .malformed(let why): return String(localized: "The Gmail response could not be read (\(why)).", bundle: PackageLocalization.bundle)
         case .missingRaw: return "Gmail returned the message without its raw bytes."
         }
     }
@@ -93,6 +94,12 @@ struct GmailRawStreamDecoder {
     /// is not limited.
     static let maximumMetadataBytes = 1 << 20
 
+    /// The stated metadata limit, translatable (rule 10).
+    static var metadataLimitReason: String {
+        let mib = maximumMetadataBytes >> 20
+        return String(localized: "the message metadata beside the raw value is larger than \(mib) MiB, the limit", bundle: PackageLocalization.bundle)
+    }
+
     /// The response JSON with the raw value emptied (small).
     private(set) var metadataJSON = Data()
     private(set) var rawByteCount: Int64 = 0
@@ -144,7 +151,7 @@ struct GmailRawStreamDecoder {
             guard byte == UInt8(ascii: "{") else { throw GmailRawDecodeError.malformed("not a JSON object") }
         }
         guard metadataJSON.count < Self.maximumMetadataBytes else {
-            throw GmailRawDecodeError.malformed("the message metadata beside the raw value is larger than 1 MiB, the limit")
+            throw GmailRawDecodeError.malformed(Self.metadataLimitReason)
         }
         metadataJSON.append(byte)
         if inString {

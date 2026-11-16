@@ -1397,7 +1397,8 @@ extension BulkImportCoordinator {
     nonisolated static func nsfStepLimitLine(sourceName: String, categories: [String: Int]) -> String? {
         guard let n = categories[NSFODSReader.stepLimitCategory], n > 0 else { return nil }
         let limit = NSFODSReader.placementStepLimit.formatted()
-        return String(localized: "\(sourceName): \(n) Notes documents not read — their item table needs more than the reader's limit of \(limit) placement steps.")
+        return String(localized: "\(sourceName): \(n) Notes documents not read — their item table needs more than the reader's limit of \(limit) placement steps.",
+                      bundle: PackageLocalization.bundle)
     }
 
     nonisolated static func containerRefusalLine(sourceName: String, categories: [String: Int]) -> String? {

@@ -65,6 +65,11 @@ public actor GmailAdapter: MailProviderAdapter {
     public nonisolated let tokenAudience: String? = GmailOAuth.audience
     public nonisolated let options: GmailCaptureOptions
 
+    /// Rule 10: translatable (the app's catalog, `PackageLocalization`).
+    nonisolated static var metadataUnreadableText: String {
+        String(localized: "Gmail's message metadata could not be read.", bundle: PackageLocalization.bundle)
+    }
+
     let transport: GmailHTTPTransport
     let permission: NetworkPermission
 
@@ -141,7 +146,7 @@ public actor GmailAdapter: MailProviderAdapter {
         guard decoder.rawByteCount > 0 else { throw MailProviderError.permanent("Gmail returned an empty message.") }
         let meta: GmailAPI.RawMessageMeta
         do { meta = try JSONDecoder().decode(GmailAPI.RawMessageMeta.self, from: decoder.metadataJSON) } catch {
-            throw MailProviderError.permanent("Gmail's message metadata could not be read.")
+            throw MailProviderError.permanent(Self.metadataUnreadableText)
         }
         if let returned = meta.id, returned != id {
             throw MailProviderError.permanent("Gmail answered with another message (\(returned)).")

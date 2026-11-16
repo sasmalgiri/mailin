@@ -23,6 +23,7 @@
 //
 
 import Foundation
+import ArchiveCore
 
 // MARK: - Values
 
@@ -110,7 +111,7 @@ public enum IMAPProtocolError: Error, Sendable, Equatable, LocalizedError {
         switch self {
         case .malformed(let why): return "The mail server sent a response mailin cannot read: \(why)."
         case .literalTooLarge(let n): return "The mail server announced a literal of \(n) bytes, which is not a valid size."
-        case .limitExceeded(let limit): return "The mail server sent \(limit.what), more than mailin reads (\(limit.stated))."
+        case .limitExceeded(let limit): return limit.sentence
         }
     }
 }
@@ -127,23 +128,22 @@ public enum IMAPReaderLimit: String, Sendable, Equatable {
     /// Parenthesised lists inside one another.
     case nestingDepth
 
-    var what: String {
+    /// What was sent and the stated limit, as one translatable sentence
+    /// (rule 10; looked up in the app's catalog, `PackageLocalization`).
+    var sentence: String {
+        let bundle = PackageLocalization.bundle
         switch self {
-        case .lineLength: return "a response line longer than \(Self.mebibytes(IMAPResponseFramer.maximumLineBytes))"
-        case .bufferedLiteral: return "a literal (not a message) longer than \(Self.mebibytes(IMAPResponseFramer.maximumBufferedLiteralBytes))"
-        case .nestingDepth: return "lists nested more than \(IMAPTokenCursor.maximumNestingDepth) deep"
+        case .lineLength:
+            let mib = IMAPResponseFramer.maximumLineBytes >> 20
+            return String(localized: "The mail server sent a response line longer than \(mib) MiB, more than mailin reads (limit: \(mib) MiB per line).", bundle: bundle)
+        case .bufferedLiteral:
+            let mib = IMAPResponseFramer.maximumBufferedLiteralBytes >> 20
+            return String(localized: "The mail server sent a literal (not a message) longer than \(mib) MiB, more than mailin reads (limit: \(mib) MiB per literal; messages are not limited).", bundle: bundle)
+        case .nestingDepth:
+            let depth = IMAPTokenCursor.maximumNestingDepth
+            return String(localized: "The mail server sent lists nested more than \(depth) deep, more than mailin reads (limit: \(depth) levels).", bundle: bundle)
         }
     }
-
-    var stated: String {
-        switch self {
-        case .lineLength: return "limit: \(Self.mebibytes(IMAPResponseFramer.maximumLineBytes)) per line"
-        case .bufferedLiteral: return "limit: \(Self.mebibytes(IMAPResponseFramer.maximumBufferedLiteralBytes)) per literal; messages are not limited"
-        case .nestingDepth: return "limit: \(IMAPTokenCursor.maximumNestingDepth) levels"
-        }
-    }
-
-    private static func mebibytes(_ n: Int) -> String { "\(n >> 20) MiB" }
 }
 
 // MARK: - Framing

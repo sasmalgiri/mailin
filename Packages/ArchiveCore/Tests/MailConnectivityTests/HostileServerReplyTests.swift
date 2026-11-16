@@ -10,6 +10,8 @@
 //         unlimited; Gmail's metadata JSON is bounded beside the streamed raw
 //    §E   enumeration after UID 4294967295 on a server without UIDNEXT ends
 //         (nothing can be newer) instead of overflowing `after + 1`
+//    Review closeout: the A19 limit texts and the Gmail metadata reason are
+//         looked up in the string catalog (PackageLocalization.bundle)
 //
 
 import XCTest
@@ -220,5 +222,41 @@ final class HostileServerReplyTests: XCTestCase {
         let first = try await adapter.enumerate(folder: inbox, cursor: nil, pageSize: 10, context: ctx)
         XCTAssertEqual(first.items.count, 1)
         await adapter.disconnect()
+    }
+
+    // MARK: Review closeout — limit texts go through the string catalog
+
+    func testA19_limitAndGmailTexts_areLookedUpInTheCatalog() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("loc-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let entries = [
+            "The mail server sent a response line longer than %lld MiB, more than mailin reads (limit: %lld MiB per line).": "«line %lld %lld»",
+            "The mail server sent a literal (not a message) longer than %lld MiB, more than mailin reads (limit: %lld MiB per literal; messages are not limited).": "«literal %lld %lld»",
+            "The mail server sent lists nested more than %lld deep, more than mailin reads (limit: %lld levels).": "«nesting %lld %lld»",
+            "The Gmail response could not be read (%@).": "«gmail %@»",
+            "the message metadata beside the raw value is larger than %lld MiB, the limit": "«meta %lld»",
+            "Gmail's message metadata could not be read.": "«meta unreadable»",
+        ]
+        let root = dir.appendingPathComponent("Marker.bundle", isDirectory: true)
+        var body = ""
+        for (k, v) in entries { body += "\"\(k)\" = \"\(v)\";\n" }
+        var langs: Set<String> = ["en", "Base"]
+        if let first = Locale.preferredLanguages.first { langs.insert(first); langs.insert(String(first.prefix(2))) }
+        for lang in langs {
+            let lproj = root.appendingPathComponent("\(lang).lproj", isDirectory: true)
+            try FileManager.default.createDirectory(at: lproj, withIntermediateDirectories: true)
+            try Data(body.utf8).write(to: lproj.appendingPathComponent("Localizable.strings"))
+        }
+        let saved = PackageLocalization.bundle
+        defer { PackageLocalization.bundle = saved }
+        PackageLocalization.bundle = try XCTUnwrap(Bundle(url: root))
+
+        let line = IMAPResponseFramer.maximumLineBytes >> 20, literal = IMAPResponseFramer.maximumBufferedLiteralBytes >> 20
+        let depth = IMAPTokenCursor.maximumNestingDepth
+        XCTAssertEqual(IMAPProtocolError.limitExceeded(.lineLength).errorDescription, "«line \(line) \(line)»")
+        XCTAssertEqual(IMAPProtocolError.limitExceeded(.bufferedLiteral).errorDescription, "«literal \(literal) \(literal)»")
+        XCTAssertEqual(IMAPProtocolError.limitExceeded(.nestingDepth).errorDescription, "«nesting \(depth) \(depth)»")
+        XCTAssertEqual(GmailRawDecodeError.malformed(GmailRawStreamDecoder.metadataLimitReason).errorDescription, "«gmail «meta 1»»")
+        XCTAssertEqual(GmailAdapter.metadataUnreadableText, "«meta unreadable»")
     }
 }

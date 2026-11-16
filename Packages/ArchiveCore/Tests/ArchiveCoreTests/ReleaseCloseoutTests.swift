@@ -13,6 +13,10 @@
 //    4. NSF: a note the item placement search gave up on at its step limit
 //       is named with that reason in the import report and the receipt's
 //       warnings, not only in the log.
+//    5. Package texts that reach the screen are looked up in the string
+//       catalog (`PackageLocalization.bundle`, the app's main bundle), not
+//       fixed English: the C7 "Deleted X of Y" and the NSF reason here, the
+//       IMAP limits and Gmail metadata reason in HostileServerReplyTests.
 //
 
 import XCTest
@@ -192,5 +196,46 @@ final class ReleaseCloseoutTests: XCTestCase {
         let plain = try NSFODSParser.inventory(fileURL: url)
         XCTAssertEqual(plain.unplacedAtStepLimit, [])
         XCTAssertEqual(plain.unplacedDocuments.count, 1)
+    }
+
+    // MARK: 5 — package texts go through the string catalog
+
+    /// A bundle whose Localizable.strings maps `entries` (format keys) to marked values.
+    static func markerBundle(_ entries: [String: String], in dir: URL) throws -> Bundle {
+        let root = dir.appendingPathComponent("Marker-\(UUID().uuidString).bundle", isDirectory: true)
+        var body = ""
+        for (k, v) in entries {
+            func esc(_ s: String) -> String { s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") }
+            body += "\"\(esc(k))\" = \"\(esc(v))\";\n"
+        }
+        var langs = ["en", "Base"]
+        if let first = Locale.preferredLanguages.first { langs.append(first); langs.append(String(first.prefix(2))) }
+        for lang in Set(langs) {
+            let lproj = root.appendingPathComponent("\(lang).lproj", isDirectory: true)
+            try FileManager.default.createDirectory(at: lproj, withIntermediateDirectories: true)
+            try Data(body.utf8).write(to: lproj.appendingPathComponent("Localizable.strings"))
+        }
+        return try XCTUnwrap(Bundle(url: root))
+    }
+
+    func testPackageTexts_C7DeletedXofY_andNSFReason_areLookedUpInTheCatalog() throws {
+        let saved = PackageLocalization.bundle
+        defer { PackageLocalization.bundle = saved }
+        PackageLocalization.bundle = try Self.markerBundle([
+            "Deleted %lld of %lld messages; the other %lld are still in the archive.": "«%lld/%lld/%lld»",
+            "Stopped by: %@": "«stop %@»",
+            "%lld deleted messages are removed from search at the next launch.": "«search %lld»",
+            "%@: %lld Notes documents not read — their item table needs more than the reader's limit of %@ placement steps.": "«nsf %@ %lld %@»",
+        ], in: dir)
+
+        var partial = ConnectedAccountArchiveDeletion(accountID: UUID(), deletedEmailIDs: [UUID(), UUID()], heldKept: 0,
+                                                      keptOnlyCopy: 0, blobsRemoved: 0, bytesReclaimed: 0,
+                                                      blobsKeptShared: 0, total: 5, searchIndexNotPurged: 1)
+        XCTAssertEqual(ConnectedAccountArchiveDeletionIncomplete(partial: partial, reason: "disk full").errorDescription,
+                       "«2/5/3» «stop disk full» «search 1»")
+        partial.searchIndexNotPurged = 0
+        XCTAssertEqual(ConnectedAccountArchiveDeletionIncomplete(partial: partial, reason: "x").errorDescription, "«2/5/3» «stop x»")
+        XCTAssertEqual(BulkImportCoordinator.nsfStepLimitLine(sourceName: "a.nsf", categories: [NSFODSReader.stepLimitCategory: 2]),
+                       "«nsf a.nsf 2 \(NSFODSReader.placementStepLimit.formatted())»")
     }
 }

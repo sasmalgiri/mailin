@@ -85,11 +85,15 @@ public struct ConnectedAccountArchiveDeletionIncomplete: LocalizedError, Sendabl
     /// What stopped it (the store or search-index error, as text).
     public var reason: String
 
+    /// Rule 10: the same three catalog keys the app's MailLifecycleText uses.
     public var errorDescription: String? {
-        let done = partial.deletedEmailIDs.count
-        var text = "Deleted \(done) of \(partial.total) messages; the other \(partial.notDeleted) are still in the archive. Stopped by: \(reason)"
-        if partial.searchIndexNotPurged > 0 {
-            text += " \(partial.searchIndexNotPurged) deleted messages are removed from search at the next launch."
+        let done = partial.deletedEmailIDs.count, total = partial.total, notDeleted = partial.notDeleted
+        let bundle = PackageLocalization.bundle
+        var text = String(localized: "Deleted \(done) of \(total) messages; the other \(notDeleted) are still in the archive.", bundle: bundle)
+        text += " " + String(localized: "Stopped by: \(reason)", bundle: bundle)
+        let notPurged = partial.searchIndexNotPurged
+        if notPurged > 0 {
+            text += " " + String(localized: "\(notPurged) deleted messages are removed from search at the next launch.", bundle: bundle)
         }
         return text
     }
