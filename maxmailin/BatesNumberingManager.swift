@@ -256,7 +256,16 @@ class BatesNumberingManager: ObservableObject {
 struct BatesConfigView: View {
     let emails: [MBOXParser.RawEmail]
 
-    @StateObject private var manager = BatesNumberingManager()
+    /// Review C2: the one numbering authority. This view used to own a
+    /// second live manager (`@StateObject … = BatesNumberingManager()`)
+    /// persisting to the same settings key as `.shared`, so the last writer
+    /// won and numbers were reissued after a relaunch.
+    @ObservedObject var manager: BatesNumberingManager
+
+    init(emails: [MBOXParser.RawEmail], manager: BatesNumberingManager = .shared) {
+        self.emails = emails
+        self.manager = manager
+    }
     // §3-L6: whole-scope numbering that never renumbers.
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
     @Environment(\.archiveScope) private var scope

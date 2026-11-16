@@ -48,6 +48,25 @@ final class ProfessionalGatingTests: XCTestCase {
         XCTAssertEqual(BatesNumberingManager.shared.getBatesNumber(for: id), "TEST000042")
     }
 
+    /// Review C2: one numbering authority. The Bates tool works on `.shared`,
+    /// and no app source builds a second live manager over the same settings.
+    func testBatesToolUsesTheSharedManager_andNoSecondManagerExists() throws {
+        XCTAssertTrue(BatesConfigView(emails: []).manager === BatesNumberingManager.shared)
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin", isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(at: app, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        XCTAssertFalse(files.isEmpty)
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let second = text.split(separator: "\n").filter {
+                $0.contains("BatesNumberingManager()") && !$0.contains("static let shared")
+                    && !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//")
+            }
+            XCTAssertTrue(second.isEmpty, "\(file.lastPathComponent) builds a second BatesNumberingManager; use .shared: \(second)")
+        }
+    }
+
     func testRiskScorerFollowsThePageSwitch() throws {
         let modules = registry()
         try modules.enable(.professional)
