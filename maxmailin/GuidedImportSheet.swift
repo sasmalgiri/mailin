@@ -203,7 +203,7 @@ struct GuidedImportSheet: View {
 
     /// A3: duplicate policy, originals, indexing — chosen here, before Start.
     private var choices: some View {
-        section("Choices", systemImage: "slider.horizontal.3") {
+        section(String(localized: "Choices"), systemImage: "slider.horizontal.3") {
             Picker("Duplicates", selection: $chosenDedup) {
                 Text("Skip messages already in the archive").tag(DedupPolicy.messageID)
                 Text("Skip duplicates, including re-encoded copies").tag(DedupPolicy.messageIDOrCanonicalFingerprint)
@@ -265,7 +265,7 @@ struct GuidedImportSheet: View {
     }
 
     private func whatItIs(_ plan: ImportPlan) -> some View {
-        section("What these files are", systemImage: "doc.text.magnifyingglass") {
+        section(String(localized: "What these files are"), systemImage: "doc.text.magnifyingglass") {
             ForEach(plan.items) { item in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -315,7 +315,7 @@ struct GuidedImportSheet: View {
     @ViewBuilder
     private func whatItCosts(_ plan: ImportPlan) -> some View {
         if let storage = plan.storagePlan {
-            section("Space", systemImage: "internaldrive") {
+            section(String(localized: "Space"), systemImage: "internaldrive") {
                 Text(storage.summary)
                     .font(.caption)
                     .foregroundStyle(storage.canProceed ? Color.secondary : Color.red)
@@ -337,13 +337,13 @@ struct GuidedImportSheet: View {
     private var allowance: some View {
         if let limit = inputByteLimit {
             let f = { (n: Int) in ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
-            section("Free plan input allowance", systemImage: "lock") {
-                row("Allowance", "\(f(limit)) of input in total")
-                row("Already imported", ingestedBytes.map(f) ?? "Measuring…")
-                row("This import adds", requestedBytes.map(f) ?? "Measuring…")
+            section(String(localized: "Free plan input allowance"), systemImage: "lock") {
+                row(String(localized: "Allowance"), String(localized: "\(f(limit)) of input in total"))
+                row(String(localized: "Already imported"), ingestedBytes.map(f) ?? String(localized: "Measuring…"))
+                row(String(localized: "This import adds"), requestedBytes.map(f) ?? String(localized: "Measuring…"))
                 if let ingestedBytes, let requestedBytes {
                     let after = ingestedBytes + requestedBytes
-                    row("After this import", after <= limit ? "\(f(after)) (\(f(limit - after)) left)" : "\(f(after)) — over the allowance")
+                    row(String(localized: "After this import"), after <= limit ? String(localized: "\(f(after)) (\(f(limit - after)) left)") : String(localized: "\(f(after)) — over the allowance"))
                 }
                 if let denial = allowanceDenial {
                     Text(denial.message)
@@ -370,7 +370,7 @@ struct GuidedImportSheet: View {
     @ViewBuilder
     private func whatMayBeLost(_ plan: ImportPlan) -> some View {
         let warnings = plan.items.compactMap(\.classification.warning)
-        section("What to expect", systemImage: "exclamationmark.triangle") {
+        section(String(localized: "What to expect"), systemImage: "exclamationmark.triangle") {
             ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
                 Text(warning)
                     .font(.caption)
@@ -400,23 +400,23 @@ struct GuidedImportSheet: View {
     }
 
     private func whatHappensNext(_ plan: ImportPlan) -> some View {
-        section("How it will run", systemImage: "gearshape") {
-            row("Engine", modules.isOn(.offsetParser)
-                ? "Offset parser (no message size limit)"
-                : "Streaming parser")
-            row("Duplicates", chosenDedup == .preserveAll
-                ? "Keep every copy"
-                : "Skip messages already in the archive")
-            row("Originals", chosenCopiesOriginals
-                ? "Copied into the archive"
-                : "Stored in the archive; very large messages read from the original file")
-            row("Attachments", chosenIndexAttachmentText
-                ? "Contents indexed in the background after import"
-                : "Stored and exported; contents not indexed")
-            row("Large bodies", modules.isOn(.blobTier)
-                ? "Stored beside the database above 8 MB"
-                : "Stored inside the database")
-            row("Receipt", "Written for every source, with a Complete / Partial / Failed verdict")
+        section(String(localized: "How it will run"), systemImage: "gearshape") {
+            row(String(localized: "Engine"), modules.isOn(.offsetParser)
+                ? String(localized: "Offset parser (no message size limit)")
+                : String(localized: "Streaming parser"))
+            row(String(localized: "Duplicates"), chosenDedup == .preserveAll
+                ? String(localized: "Keep every copy")
+                : String(localized: "Skip messages already in the archive"))
+            row(String(localized: "Originals"), chosenCopiesOriginals
+                ? String(localized: "Copied into the archive")
+                : String(localized: "Stored in the archive; very large messages read from the original file"))
+            row(String(localized: "Attachments"), chosenIndexAttachmentText
+                ? String(localized: "Contents indexed in the background after import")
+                : String(localized: "Stored and exported; contents not indexed"))
+            row(String(localized: "Large bodies"), modules.isOn(.blobTier)
+                ? String(localized: "Stored beside the database above 8 MB")
+                : String(localized: "Stored inside the database"))
+            row(String(localized: "Receipt"), String(localized: "Written for every source, with a Complete / Partial / Failed verdict"))
         }
     }
 

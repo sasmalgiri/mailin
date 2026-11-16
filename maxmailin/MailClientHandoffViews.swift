@@ -85,20 +85,20 @@ struct MailClientImportSheet: View {
     private var steps: some View {
         switch client {
         case .appleMail:
-            stepList("How to export from Apple Mail", [
-                "In Mail, select the mailbox (or several) in the sidebar.",
-                "Choose Mailbox ▸ Export Mailbox… and pick a folder.",
-                "Mail writes one “Name.mbox” package per mailbox into that folder.",
-                "Choose that folder below. mailin imports every package inside it."
+            stepList(String(localized: "How to export from Apple Mail"), [
+                String(localized: "In Mail, select the mailbox (or several) in the sidebar."),
+                String(localized: "Choose Mailbox ▸ Export Mailbox… and pick a folder."),
+                String(localized: "Mail writes one “Name.mbox” package per mailbox into that folder."),
+                String(localized: "Choose that folder below. mailin imports every package inside it.")
             ])
             Text("Alternatively, “Detect on this Mac” looks in ~/Library/Mail for mailboxes Mail already stores locally.")
                 .font(.caption2).foregroundStyle(.secondary)
         case .thunderbird:
-            stepList("How Thunderbird stores mail", [
-                "Thunderbird keeps each folder as a raw mbox file inside its profile (Library/Thunderbird/Profiles/…/Mail or ImapMail).",
-                "Quit Thunderbird first so the files are not being written to.",
-                "Use “Detect on this Mac” to find the profile folders, or choose a profile folder yourself.",
-                "Every mbox file in the folder is imported; .msf index files are skipped."
+            stepList(String(localized: "How Thunderbird stores mail"), [
+                String(localized: "Thunderbird keeps each folder as a raw mbox file inside its profile (Library/Thunderbird/Profiles/…/Mail or ImapMail)."),
+                String(localized: "Quit Thunderbird first so the files are not being written to."),
+                String(localized: "Use “Detect on this Mac” to find the profile folders, or choose a profile folder yourself."),
+                String(localized: "Every mbox file in the folder is imported; .msf index files are skipped.")
             ])
         }
     }
@@ -180,9 +180,9 @@ struct MailClientImportSheet: View {
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = true
         panel.message = client == .appleMail
-            ? "Choose the folder Mail exported into (it holds one .mbox package per mailbox)"
-            : "Choose a Thunderbird profile folder or one of its mbox files"
-        panel.prompt = "Import"
+            ? String(localized: "Choose the folder Mail exported into (it holds one .mbox package per mailbox)")
+            : String(localized: "Choose a Thunderbird profile folder or one of its mbox files")
+        panel.prompt = String(localized: "Import")
         if panel.runModal() == .OK, !panel.urls.isEmpty { onImport(panel.urls) }
         #else
         showPicker = true
@@ -270,7 +270,7 @@ struct MailClientExportSheet: View {
     private var destinationRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "folder").foregroundStyle(.secondary)
-            Text(destination?.path ?? "No folder chosen — the mbox files are written into a “mailin-handoff” folder inside it")
+            Text(destination?.path ?? String(localized: "No folder chosen — the mbox files are written into a “mailin-handoff” folder inside it"))
                 .font(.system(.caption, design: .monospaced))
                 .lineLimit(2).truncationMode(.middle)
                 .foregroundStyle(destination == nil ? .secondary : .primary)
@@ -316,18 +316,18 @@ struct MailClientExportSheet: View {
         switch client {
         case .appleMail:
             return [
-                "Choose File ▸ Import Mailboxes…",
-                "Select “Files in mbox format” and click Continue.",
-                "Choose the “mailin-handoff” folder (or the individual .mbox files inside it) and click Choose.",
-                "Mail creates an “Import” mailbox with one folder per file. Move them where you want them.",
-                "Compare the message count with the number above; they must match."
+                String(localized: "Choose File ▸ Import Mailboxes…"),
+                String(localized: "Select “Files in mbox format” and click Continue."),
+                String(localized: "Choose the “mailin-handoff” folder (or the individual .mbox files inside it) and click Choose."),
+                String(localized: "Mail creates an “Import” mailbox with one folder per file. Move them where you want them."),
+                String(localized: "Compare the message count with the number above; they must match.")
             ]
         case .thunderbird:
             return [
-                "Quit Thunderbird, or use the ImportExportTools NG add-on (Tools ▸ ImportExportTools NG ▸ Import mbox file).",
-                "Without the add-on: copy each .mbox file into the profile's Local Folders directory, removing the “.mbox” extension.",
-                "Start Thunderbird; each file appears as a folder under Local Folders.",
-                "Compare the message count with the number above; they must match."
+                String(localized: "Quit Thunderbird, or use the ImportExportTools NG add-on (Tools ▸ ImportExportTools NG ▸ Import mbox file)."),
+                String(localized: "Without the add-on: copy each .mbox file into the profile's Local Folders directory, removing the “.mbox” extension."),
+                String(localized: "Start Thunderbird; each file appears as a folder under Local Folders."),
+                String(localized: "Compare the message count with the number above; they must match.")
             ]
         }
     }
@@ -338,8 +338,8 @@ struct MailClientExportSheet: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.message = "Choose where to write the mbox files"
-        panel.prompt = "Export here"
+        panel.message = String(localized: "Choose where to write the mbox files")
+        panel.prompt = String(localized: "Export here")
         if panel.runModal() == .OK { destination = panel.url }
         #else
         showPicker = true
@@ -354,12 +354,12 @@ struct MailClientExportSheet: View {
         defer { isRunning = false }
         let folder = destination.appendingPathComponent("mailin-handoff", isDirectory: true)
         do {
-            stage = "Writing mbox files…"
+            stage = String(localized: "Writing mbox files…")
             let service = ArchiveExportService.shared
             let results = try await service.exportMBOXPartitions(scope: scope, toDirectory: folder, baseName: "mailin-handoff")
             let records = results.last?.recordsWritten ?? 0
             let bytes = results.reduce(Int64(0)) { $0 + Int64($1.bytesWritten) }
-            stage = "Reading the files back…"
+            stage = String(localized: "Reading the files back…")
             let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
                 .filter { $0.pathExtension == "mbox" }
             var reparsed = 0, failed = 0

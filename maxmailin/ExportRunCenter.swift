@@ -629,7 +629,7 @@ final class ExportRunCenter {
         let recorded = pendingReceipt ?? ExportReceipt(
             title: title, destination: "—", isFolder: false, requested: total > 0 ? total : nil,
             written: done, outcome: .failed,
-            errorMessage: "The export ended without reporting a result.",
+            errorMessage: String(localized: "The export ended without reporting a result."),
             startedAt: startedAt, completedAt: Date())
         // R3 (iOS): a container written inside the app keeps its manifest with the receipt.
         let receipt = Self.keepingManifest(recorded, in: receiptStore)

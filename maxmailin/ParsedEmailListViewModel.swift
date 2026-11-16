@@ -726,7 +726,7 @@ class ParsedEmailListViewModel: ObservableObject {
         if let coverage = try? await SQLiteEmailStore.shared.derivedAnalysisCoverage() {
             derivedCoverage = coverage
             if coverage.analyzed < coverage.total {
-                searchNotice = "AI filters cover \(coverage.analyzed) of \(coverage.total) emails — analysis running for the rest."
+                searchNotice = String(localized: "AI filters cover \(coverage.analyzed) of \(coverage.total) emails — analysis running for the rest.")
                 await BackgroundAnalysisManager.shared.runAnalysis()
             }
         }
@@ -1325,7 +1325,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     let outcome = (try? await self.archive.regexSearch(pattern: pattern)) ?? RegexSearchOutcome()
                     self.regexMatchIDs = outcome.matchedIDs
                     self.searchNotice = outcome.truncated
-                        ? "Regex too broad — only the first \(outcome.scanned) emails were scanned. Add a text term or a date filter to narrow it."
+                        ? String(localized: "Regex too broad — only the first \(outcome.scanned) emails were scanned. Add a text term or a date filter to narrow it.")
                         : nil
                     self.regexMatchKey = cacheKey
                     self.applyFilters()
@@ -1339,7 +1339,7 @@ class ParsedEmailListViewModel: ObservableObject {
             if parsed.isProximityQuery {
                 // Proximity matches within the loaded page window (NEAR has no
                 // repository paging form) — surfaced, never silent.
-                searchNotice = "Proximity search matches loaded pages — scroll or Load More to search further."
+                searchNotice = String(localized: "Proximity search matches loaded pages — scroll or Load More to search further.")
             } else if onModel {
                 searchNotice = modelSearchNotice
             } else if searchNotice != nil {
@@ -1360,18 +1360,18 @@ class ParsedEmailListViewModel: ObservableObject {
                     advancedMatchIDs = cached
                 }
                 if let progress = attachmentIndexProgress, progress.pending > 0 {
-                    searchNotice = "Searching attachment names + contents — \(progress.pending) email(s) still being indexed."
+                    searchNotice = String(localized: "Searching attachment names and contents — \(progress.pending) emails still being indexed.")
                 } else if searchNotice == nil && cached.isEmpty {
                     // FIND-03: name what could not be searched, never imply every attachment was.
                     if let coverage = attachmentCoverage, coverage.total > 0 {
                         searchNotice = AttachmentTextIndexJob.noMatchNotice(coverage)
                     } else {
-                        searchNotice = "No attachments matched. Contents of PDF and text files are searched; other binary formats match by filename."
+                        searchNotice = String(localized: "No attachments matched. Contents of PDF and text files are searched; other binary formats match by filename.")
                     }
                 }
             } else {
                 advancedMatchIDs = advancedMatchIDs ?? []   // empty until the lookup lands
-                searchNotice = "Searching attachment contents…"
+                searchNotice = String(localized: "Searching attachment contents…")
                 lastAttachmentSearchTask = Task { @MainActor [weak self] in
                     guard let self else { return }
                     let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(parsed.freeText) ?? FTSQueryBuilder.escapeTerm(parsed.freeText)

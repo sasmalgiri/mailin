@@ -151,9 +151,9 @@ struct UnifiedExportSections: View {
     /// it will actually bite.
     private var countHeadline: String? {
         guard let emailCount else { return nil }
-        var text = emailCount == 1 ? "Export 1 email" : "Export \(emailCount) emails (current filter)"
+        var text = emailCount == 1 ? String(localized: "Export 1 email") : String(localized: "Export \(emailCount) emails (current filter)")
         if !storeManager.isPremium && emailCount > StoreManager.freeEmailLimit {
-            text += " — free exports first \(StoreManager.freeEmailLimit)"
+            text += " — " + String(localized: "free exports first \(StoreManager.freeEmailLimit)")
         }
         return text
     }

@@ -90,7 +90,7 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
                 for email in batch {
                     let attributeSet = CSSearchableItemAttributeSet(contentType: UTType.emailMessage)
 
-                    attributeSet.title = email.headers["Subject"] ?? "(No Subject)"
+                    attributeSet.title = email.headers["Subject"] ?? String(localized: "(No Subject)")
                     attributeSet.contentType = UTType.emailMessage.identifier
 
                     // Full text content for Apple Intelligence summarization (needs 200+ chars)
@@ -246,7 +246,7 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
                 switch element {
                 case .item(let item):
                     let attrs = item.item.attributeSet
-                    let title = attrs.title ?? "(No Subject)"
+                    let title = attrs.title ?? String(localized: "(No Subject)")
                     let snippet: String
                     if #available(macOS 15.4, iOS 18.4, *) {
                         snippet = attrs.textContentSummary ?? attrs.contentDescription ?? ""

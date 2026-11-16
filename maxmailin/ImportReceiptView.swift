@@ -129,7 +129,7 @@ struct ImportReceiptView: View {
               partial > 0 else { return nil }
         let budget = ByteCountFormatter.string(
             fromByteCount: Int64(FTSSearchIndex.indexedTextBudgetBytes), countStyle: .file)
-        return "\(partial) message(s) in the archive are longer than the \(budget) search-index budget, so search covers only the first part of those messages."
+        return String(localized: "\(partial) messages in the archive are longer than the \(budget) search-index budget, so search covers only the first part of those messages.")
     }
 
     private func verdictIcon(_ verdict: ImportVerdict) -> String {
@@ -175,7 +175,7 @@ struct ImportReceiptView: View {
     }
 
     private var sourcesSection: some View {
-        section("Source files") {
+        section(String(localized: "Source files")) {
             if receipt.sources.isEmpty {
                 Text("No source recorded.").foregroundColor(AppColors.secondary)
             }
@@ -201,7 +201,7 @@ struct ImportReceiptView: View {
                 .padding(.vertical, 2)
             }
             if receipt.resumed {
-                Label(receipt.resumedDetail ?? "This run resumed a previous import.",
+                Label(receipt.resumedDetail ?? String(localized: "This run resumed a previous import."),
                       systemImage: "arrow.clockwise")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
@@ -212,16 +212,16 @@ struct ImportReceiptView: View {
     // MARK: Accounting
 
     private var accountingSection: some View {
-        section("What happened to every message") {
-            row("Discovered", receipt.discovered)
-            row("Read successfully", receipt.parsed)
-            row("Saved to the archive", receipt.inserted)
-            row("Recognised duplicates", receipt.duplicates)
-            row("Damaged and skipped", receipt.damaged)
-            row("Could not be saved", receipt.persistFailed)
-            row("Source files skipped (already imported)", receipt.skipped)
+        section(String(localized: "What happened to every message")) {
+            row(String(localized: "Discovered"), receipt.discovered)
+            row(String(localized: "Read successfully"), receipt.parsed)
+            row(String(localized: "Saved to the archive"), receipt.inserted)
+            row(String(localized: "Recognised duplicates"), receipt.duplicates)
+            row(String(localized: "Damaged and skipped"), receipt.damaged)
+            row(String(localized: "Could not be saved"), receipt.persistFailed)
+            row(String(localized: "Source files skipped (already imported)"), receipt.skipped)
             Divider()
-            row("Duration", text: String(format: "%.1f s", receipt.durationSeconds))
+            row(String(localized: "Duration"), text: String(localized: "\(receipt.durationSeconds.formatted(.number.precision(.fractionLength(1)))) s"))
         }
         // CLOSE-06: one element the five-journey UI test (and VoiceOver) reads whole.
         .accessibilityElement(children: .combine)
@@ -268,24 +268,24 @@ struct ImportReceiptView: View {
     }
 
     private var coverageSection: some View {
-        section("Coverage") {
-            row("Searchable (indexed this run)", receipt.indexed)
-            row("Attachments seen", receipt.attachmentsSeen)
+        section(String(localized: "Coverage")) {
+            row(String(localized: "Searchable (indexed this run)"), receipt.indexed)
+            row(String(localized: "Attachments seen"), receipt.attachmentsSeen)
             if let outcome = recheck {
                 // A5(d): attachment-family coverage, live from the store.
                 if !outcome.attachmentFamilies.isEmpty {
-                    row("Attachments by family (archive, now)",
+                    row(String(localized: "Attachments by family (archive, now)"),
                         text: outcome.attachmentFamilies.map { "\($0.family) \($0.count)" }.joined(separator: " · "))
                 }
                 if let attempted = outcome.attachmentTextAttempted, let pending = outcome.attachmentTextPending {
-                    row("Attachment content indexed (messages)",
-                        text: pending == 0 ? "\(attempted) — complete"
-                                           : "\(attempted) done, \(pending) pending — `in:attachments` is partial until this reaches zero")
+                    row(String(localized: "Attachment content indexed (messages)"),
+                        text: pending == 0 ? String(localized: "\(attempted) — complete")
+                                           : String(localized: "\(attempted) done, \(pending) pending — `in:attachments` is partial until this reaches zero"))
                 }
             }
-            row("Store rows before / after",
+            row(String(localized: "Store rows before / after"),
                  text: "\(countText(receipt.storeCountBefore)) → \(countText(receipt.storeCountAfter))")
-            row("Index rows at finish", receipt.ftsRowCount)
+            row(String(localized: "Index rows at finish"), receipt.ftsRowCount)
             if let partial = indexBudgetNote {
                 Label(partial, systemImage: "text.magnifyingglass")
                     .font(Typography.caption1)
@@ -314,7 +314,7 @@ struct ImportReceiptView: View {
     }
 
     private var problemsSection: some View {
-        section("Problems") {
+        section(String(localized: "Problems")) {
             ForEach(Array(receipt.fileFailures.enumerated()), id: \.offset) { _, failure in
                 VStack(alignment: .leading, spacing: 1) {
                     Text(failure.filename).font(Typography.callout)
@@ -332,7 +332,7 @@ struct ImportReceiptView: View {
     }
 
     private var integritySection: some View {
-        section("Integrity") {
+        section(String(localized: "Integrity")) {
             switch receipt.verifyDetailed() {
             case .verified:
                 Label("Verified — this receipt has not been modified since it was written.",
@@ -515,7 +515,7 @@ struct ImportReceiptView: View {
     }
 
     private func countText(_ value: Int?) -> String {
-        value.map(String.init) ?? "unavailable"
+        value.map(String.init) ?? String(localized: "unavailable")
     }
 
     private func byteText(_ bytes: Int) -> String {
@@ -555,7 +555,7 @@ struct LatestImportReceiptView: View {
                     Image(systemName: "doc.text.magnifyingglass")
                         .font(.largeTitle)
                         .foregroundColor(AppColors.secondary)
-                    Text(loadError ?? "No import receipts yet.")
+                    Text(loadError ?? String(localized: "No import receipts yet."))
                         .font(Typography.callout)
                     Text("Import mail and a receipt is written automatically.")
                         .font(Typography.caption1)
@@ -577,7 +577,7 @@ struct LatestImportReceiptView: View {
                 .first?.0
             if let newest {
                 do { receipt = try store.load(newest) }
-                catch { loadError = "The most recent receipt could not be read: \(error.localizedDescription)" }
+                catch { loadError = String(localized: "The most recent receipt could not be read: \(error.localizedDescription)") }
             }
             loaded = true
         }

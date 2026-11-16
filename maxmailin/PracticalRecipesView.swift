@@ -285,8 +285,22 @@ struct PracticalRecipeRunView: View {
 
     private func engine() -> PracticalRecipeEngine {
         let e = PracticalRecipeEngine(env: .production(policy: policy))
-        e.onProgress = { what, done, total in progressLine = total > 0 ? "\(what) \(done) / \(total)" : what }
+        e.onProgress = { what, done, total in
+            let step = Self.progressStep(what)
+            progressLine = total > 0 ? String(localized: "\(step) \(done) of \(total)") : step
+        }
         return e
+    }
+
+    /// The engine reports its step as a token; the person reads it in their language.
+    nonisolated static func progressStep(_ token: String) -> String {
+        switch token {
+        case "export": return String(localized: "Exporting")
+        case "files": return String(localized: "Saving files")
+        case "backup": return String(localized: "Backing up")
+        case "restore": return String(localized: "Restoring")
+        default: return token
+        }
     }
 
     @MainActor

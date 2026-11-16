@@ -135,9 +135,10 @@ struct ExportPreflightSheet: View {
     private var countLine: String {
         let n = estimate?.messages ?? request.emailCountHint
         var line: String
-        if let n { line = n == 1 ? "1 email as \(request.format.displayName)" : "\(n) emails as \(request.format.displayName)" } else { line = request.format.displayName }
-        if let cap = request.cap, let n, n >= cap { line += " — free tier writes the first \(cap)" }
-        if request.skipFirst > 0 { line += " — resuming at message \(request.skipFirst + 1)" }
+        let format = request.format.displayName
+        if let n { line = n == 1 ? String(localized: "1 email as \(format)") : String(localized: "\(n) emails as \(format)") } else { line = format }
+        if let cap = request.cap, let n, n >= cap { line += " — " + String(localized: "free tier writes the first \(cap)") }
+        if request.skipFirst > 0 { line += " — " + String(localized: "resuming at message \(request.skipFirst + 1)") }
         return line
     }
 
@@ -257,11 +258,13 @@ struct ExportPreflightSheet: View {
 
     private func spaceLine(_ e: ExportSizeEstimate) -> String {
         let need = ExportSizeEstimator.format(e.estimatedBytes)
-        guard let free = e.freeBytes else { return "About \(need) needed" }
+        guard let free = e.freeBytes else { return String(localized: "About \(need) needed") }
+        let freeText = ExportSizeEstimator.format(free)
         if e.isInsufficient {
-            return "About \(need) needed, \(ExportSizeEstimator.format(free)) free — short by \(ExportSizeEstimator.format(e.missingBytes))"
+            let short = ExportSizeEstimator.format(e.missingBytes)
+            return String(localized: "About \(need) needed, \(freeText) free — short by \(short)")
         }
-        return "About \(need) needed · \(ExportSizeEstimator.format(free)) free"
+        return String(localized: "About \(need) needed · \(freeText) free")
     }
 
     private var footer: some View {
@@ -513,13 +516,13 @@ final class ExportJobRunner {
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "JSON")
         case .printText:
             let r = try await service.exportBatchPrintText(scope: scope, to: url, write: write, onProgress: onProgress)
-            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "Print text")
+            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: String(localized: "Print text"))
         case .markdown:
             let r = try await service.exportMarkdownArchive(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress)
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "Markdown")
         case .headersCSV:
             let r = try await service.exportHeadersCSV(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress)
-            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "Headers CSV")
+            await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: String(localized: "Headers CSV"))
         case .mbox:
             if request.options.partitionMBOX {
                 let directory = url.deletingPathExtension()
@@ -563,10 +566,10 @@ final class ExportJobRunner {
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "HTML")
         case .vcard:
             let written = try await service.exportVCard(scope: scope, to: url, onProgress: onProgress)
-            await finish(request, result: nil, written: written, cancelled: Task.isCancelled, what: "Contacts")
+            await finish(request, result: nil, written: written, cancelled: Task.isCancelled, what: String(localized: "Contacts"))
         case .ics:
             let written = try await service.exportICS(scope: scope, to: url, onProgress: onProgress)
-            await finish(request, result: nil, written: written, cancelled: Task.isCancelled, what: "Calendar")
+            await finish(request, result: nil, written: written, cancelled: Task.isCancelled, what: String(localized: "Calendar"))
         }
     }
 
@@ -615,37 +618,45 @@ final class ExportJobRunner {
         var outcome: ExportReceipt.Outcome = .complete
         var note: String? = nil
         if cancelled {
-            onError?("\(what) export cancelled\(request.isResumable ? " — partial output kept; Resume continues it." : " — partial output removed.")")
+            onError?(request.isResumable
+                     ? String(localized: "\(what) export cancelled — partial output kept; Resume continues it.")
+                     : String(localized: "\(what) export cancelled — partial output removed."))
             outcome = .cancelled
         } else if let cap = request.cap, let requested, requested > cap {
             storeManager?.requestPurchase(.personal, feature: "Full Export",
-                                          reason: "The Free plan exports up to \(cap) emails per run. Personal and Professional export without the limit.")
-            onError?("Exported \(written) of \(requested) emails. Personal and Professional export without the \(cap)-email limit.")
+                                          reason: String(localized: "The Free plan exports up to \(cap) emails per run. Personal and Professional export without the limit."))
+            onError?(String(localized: "Exported \(written) of \(requested) emails. Personal and Professional export without the \(cap)-email limit."))
             outcome = .truncated
         } else if let requested, written < requested, result?.completed == false {
             outcome = .failed
         } else if let withheld = result?.withheld, withheld > 0 {
             // R5: messages this format could not produce honestly.
             outcome = .partial
-            note = "\(withheld) message\(withheld == 1 ? "" : "s") withheld: content not decoded at import (above the full-parse ceiling) — export \(withheld == 1 ? "it" : "them") as MBOX or EML, which stream the original bytes"
-            onError?("\(what) export: \(note!).")
+            let line = withheld == 1
+                ? String(localized: "1 message withheld: content not decoded at import (above the full-parse ceiling) — export it as MBOX or EML, which stream the original bytes")
+                : String(localized: "\(withheld) messages withheld: content not decoded at import (above the full-parse ceiling) — export them as MBOX or EML, which stream the original bytes")
+            note = line
+            onError?(String(localized: "\(what) export: \(line)."))
         }
         if let unverified = result?.unverifiedSources, unverified > 0 {
             // R4: an unverifiable source is stated, never passed off as verified.
-            let line = "\(unverified) source file\(unverified == 1 ? "" : "s") could not be verified against an import digest (imported before digests were recorded)"
+            let line = unverified == 1
+                ? String(localized: "1 source file could not be verified against an import digest (imported before digests were recorded)")
+                : String(localized: "\(unverified) source files could not be verified against an import digest (imported before digests were recorded)")
             note = note.map { $0 + "; " + line } ?? line
         }
         if let failure = result?.inventoryFailure {
             // Audit A07: every file was written but the portable inventory was
             // not — its own outcome, with the reason and what to do.
             if outcome == .complete { outcome = .unverified }
-            let line = "the inventory file could not be written (\(failure)); the working manifest \(ExportFolderManifest.filename) stays beside the files — Verify export re-hashes them once the destination allows writing"
+            let manifest = ExportFolderManifest.filename
+            let line = String(localized: "the inventory file could not be written (\(failure)); the working manifest \(manifest) stays beside the files — Verify export re-hashes them once the destination allows writing")
             note = note.map { $0 + "; " + line } ?? line
-            onError?("\(what) export: \(line).")
+            onError?(String(localized: "\(what) export: \(line)."))
         }
         if let attachments, let line = Self.attachmentShortfall(attachments) {
             Self.applyAttachments(attachments, outcome: &outcome, note: &note)
-            onError?("\(what) export: \(line)")
+            onError?(String(localized: "\(what) export: \(line)"))
         }
 
         var resume: ExportRequest? = nil
@@ -675,7 +686,7 @@ final class ExportJobRunner {
             outcome: outcome,
             sha256Hex: result?.sha256Hex,
             signaturePath: result?.signatureURL?.path,
-            errorMessage: outcome == .failed ? "The writer stopped before every requested message was written." : note,
+            errorMessage: outcome == .failed ? String(localized: "The writer stopped before every requested message was written.") : note,
             startedAt: ExportRunCenter.shared.startedAt,
             completedAt: Date(),
             resumeRequest: resume,

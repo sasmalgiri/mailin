@@ -1125,6 +1125,17 @@ struct InterfaceLocalizationTests {
         // C7 (MailLifecycleText) and C8 (ArchiveCore ChildHashRepair)
         "Deleted %lld of %lld messages; the other %lld are still in the archive.",
         " %@ messages failed to repair — retried at the next pass.",
+        // Rule 10 list (one per file)
+        "About %@ needed",                                        // ExportPreflight
+        "The export ended without reporting a result.",           // ExportRunCenter
+        "Export %lld emails (current filter)",                    // UnifiedExportMenu
+        "How it will run",                                        // GuidedImportSheet
+        "What happened to every message",                         // ImportReceiptView
+        "Searching attachment contents…",                         // ParsedEmailListViewModel
+        "Results may be incomplete for those messages.",          // SearchCoverageBadge
+        "Choose where to write the mbox files",                   // MailClientHandoffViews
+        "Backing up",                                             // PracticalRecipesView
+        "(No Subject)",                                           // SpotlightIndexer
     ]
 
     @Test("Review 2026-11-16 strings resolve to German in the built app")

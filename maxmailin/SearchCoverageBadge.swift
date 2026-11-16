@@ -115,13 +115,13 @@ struct SearchCoverageBadge: View {
         let budget = ByteCountFormatter.string(
             fromByteCount: Int64(FTSSearchIndex.indexedTextBudgetBytes), countStyle: .file)
         return partialCount == 1
-            ? "1 message is searchable only in its first \(budget)."
-            : "\(partialCount) messages are searchable only in their first \(budget)."
+            ? String(localized: "1 message is searchable only in its first \(budget).")
+            : String(localized: "\(partialCount) messages are searchable only in their first \(budget).")
     }
 
     private func accessibilityLabel(partialCount: Int) -> String {
         label(partialCount: partialCount)
-            + " Results may be incomplete for those messages."
+            + " " + String(localized: "Results may be incomplete for those messages.")
     }
 
     private func detail(partialCount: Int) -> some View {
