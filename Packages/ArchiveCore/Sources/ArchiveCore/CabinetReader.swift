@@ -58,7 +58,14 @@ final class CabinetReader {
     private(set) var notes: [String] = []
     private let b: [UInt8]
     private let reservePerBlock: Int
-    private var folderCache: [Int: [UInt8]] = [:]
+    /// A15: where each folder's decoding stands — the folder is streamed
+    /// block by block and only the requested member's bytes are kept, so a
+    /// folder of 65,535 × 32 KiB blocks in a small file never sits in memory.
+    private var cursors: [Int: FolderCursor] = [:]
+
+    /// MS-CAB: a CFDATA block holds at most 32,768 uncompressed bytes. A
+    /// block declaring more is not a cabinet block — refused by name.
+    static let maxBlockBytes = 32_768
 
     init(data: Data) throws {
         b = [UInt8](data)
@@ -115,61 +122,92 @@ final class CabinetReader {
         for m in members where m.spansCabinets { notes.append("\(m.name) continues in another cabinet of the set; only the part in this file is here") }
     }
 
-    /// The member's bytes; the folder is decompressed once and kept for the
-    /// other members of the same folder.
+    /// The member's bytes. A15: the folder is decoded as a stream, block by
+    /// block, only as far as the member's end; bytes before the member are
+    /// passed over (only the 32 KiB MSZIP history is kept), so memory is the
+    /// member's own size plus one block — never the whole folder, which a
+    /// small file can declare as 65,535 × 32 KiB. Members asked for in
+    /// folder order continue where the previous one stopped; out of order
+    /// restarts the folder.
     func extract(_ member: Member) throws -> [UInt8] {
-        let folder = try folderBytes(member.folderIndex)
-        guard member.offsetInFolder >= 0, member.offsetInFolder <= folder.count else {
-            throw ReadError(text: "\(member.name) starts at \(member.offsetInFolder), past the folder's \(folder.count) bytes")
+        let folder = folders[member.folderIndex]
+        guard folder.compression.isReadable else { throw ReadError(text: "\(folder.compression.name)-compressed folder is not opened") }
+        let start = member.offsetInFolder, end = member.offsetInFolder + member.size   // both from 32-bit fields
+        var cursor = cursors[member.folderIndex] ?? FolderCursor(position: folder.dataOffset)
+        if cursor.produced > start { cursor = FolderCursor(position: folder.dataOffset) }
+        var out: [UInt8] = []
+        while cursor.produced < end, let block = try nextBlock(&cursor, folderIndex: member.folderIndex) {
+            let blockStart = cursor.produced - block.count
+            let from = max(start, blockStart), to = min(end, cursor.produced)
+            if from < to { out.append(contentsOf: block[(from - blockStart)..<(to - blockStart)]) }
         }
-        let available = folder.count - member.offsetInFolder
-        guard member.size <= available else {
-            if member.spansCabinets { return Array(folder[member.offsetInFolder...]) }
-            throw ReadError(text: "\(member.name) needs \(member.size) bytes but the folder holds \(available) after its start")
+        cursors[member.folderIndex] = cursor
+        guard start <= cursor.produced else {
+            throw ReadError(text: "\(member.name) starts at \(start), past the folder's \(cursor.produced) bytes")
         }
-        return Array(folder[member.offsetInFolder..<(member.offsetInFolder + member.size)])
+        guard out.count == member.size else {
+            if member.spansCabinets { return out }
+            throw ReadError(text: "\(member.name) needs \(member.size) bytes but the folder holds \(cursor.produced - start) after its start")
+        }
+        return out
     }
 
-    private func folderBytes(_ index: Int) throws -> [UInt8] {
-        if let cached = folderCache[index] { return cached }
+    /// How far a folder has been decoded.
+    private struct FolderCursor {
+        var position: Int
+        var block = 0
+        /// Uncompressed bytes of the folder decoded so far.
+        var produced = 0
+        /// The last 32 KiB of output: the MSZIP dictionary for the next block.
+        var history: [UInt8] = []
+        var inflater: Inflater?
+        var ended = false
+    }
+
+    /// The next block's uncompressed bytes, or nil at the folder's end.
+    private func nextBlock(_ c: inout FolderCursor, folderIndex index: Int) throws -> [UInt8]? {
         let folder = folders[index]
-        guard folder.compression.isReadable else { throw ReadError(text: "\(folder.compression.name)-compressed folder is not opened") }
-        var out: [UInt8] = []
-        var pos = folder.dataOffset
-        var inflater: Inflater? = folder.compression == .mszip ? try Inflater() : nil
-        for block in 0..<folder.blockCount {
-            guard pos >= 0, pos + 8 + reservePerBlock <= b.count else { throw ReadError(text: "data block \(block + 1) of folder \(index + 1) lies outside the file") }
-            let checksum = Self.le32(b, pos)
-            let compressedSize = Int(Self.le16(b, pos + 4)), uncompressedSize = Int(Self.le16(b, pos + 6))
-            let headerRange = (pos + 4)..<(pos + 8 + reservePerBlock)
-            pos += 8 + reservePerBlock
-            guard pos + compressedSize <= b.count else { throw ReadError(text: "data block \(block + 1) of folder \(index + 1) is truncated") }
-            let payload = b[pos..<(pos + compressedSize)]
-            pos += compressedSize
-            if checksum != 0 {
-                let expected = Self.checksum(b[headerRange], seed: Self.checksum(payload, seed: 0))
-                if expected != checksum { notes.append("data block \(block + 1) of folder \(index + 1): checksum mismatch") }
-            }
-            if uncompressedSize == 0 { break }                       // the block continues in the next cabinet
-            switch folder.compression {
-            case .none:
-                out.append(contentsOf: payload)
-            case .mszip:
-                guard payload.count >= 2, payload[payload.startIndex] == 0x43, payload[payload.startIndex + 1] == 0x4B else {
-                    throw ReadError(text: "data block \(block + 1) of folder \(index + 1) has no MSZIP signature")
-                }
-                let inflated = try inflater!.inflate(Array(payload.dropFirst(2)), expected: uncompressedSize, history: Array(out.suffix(32768)))
-                guard inflated.count == uncompressedSize else {
-                    throw ReadError(text: "data block \(block + 1) of folder \(index + 1) inflated to \(inflated.count) bytes, \(uncompressedSize) declared")
-                }
-                out.append(contentsOf: inflated)
-            case .quantum, .lzx:
-                break
-            }
+        guard !c.ended, c.block < folder.blockCount else { c.ended = true; return nil }
+        let block = c.block
+        var pos = c.position
+        guard pos >= 0, pos + 8 + reservePerBlock <= b.count else { throw ReadError(text: "data block \(block + 1) of folder \(index + 1) lies outside the file") }
+        let checksum = Self.le32(b, pos)
+        let compressedSize = Int(Self.le16(b, pos + 4)), uncompressedSize = Int(Self.le16(b, pos + 6))
+        let headerRange = (pos + 4)..<(pos + 8 + reservePerBlock)
+        pos += 8 + reservePerBlock
+        guard pos + compressedSize <= b.count else { throw ReadError(text: "data block \(block + 1) of folder \(index + 1) is truncated") }
+        guard uncompressedSize <= Self.maxBlockBytes else {
+            throw ReadError(text: "data block \(block + 1) of folder \(index + 1) declares \(uncompressedSize) uncompressed bytes; a cabinet block holds at most \(Self.maxBlockBytes)")
         }
-        inflater = nil
-        folderCache[index] = out
-        return out
+        let payload = b[pos..<(pos + compressedSize)]
+        c.position = pos + compressedSize
+        c.block += 1
+        if checksum != 0 {
+            let expected = Self.checksum(b[headerRange], seed: Self.checksum(payload, seed: 0))
+            if expected != checksum { notes.append("data block \(block + 1) of folder \(index + 1): checksum mismatch") }
+        }
+        if uncompressedSize == 0 { c.ended = true; return nil }      // the block continues in the next cabinet
+        let output: [UInt8]
+        switch folder.compression {
+        case .none:
+            output = Array(payload)
+        case .mszip:
+            guard payload.count >= 2, payload[payload.startIndex] == 0x43, payload[payload.startIndex + 1] == 0x4B else {
+                throw ReadError(text: "data block \(block + 1) of folder \(index + 1) has no MSZIP signature")
+            }
+            let inflater = try c.inflater ?? Inflater()
+            c.inflater = inflater
+            let inflated = try inflater.inflate(Array(payload.dropFirst(2)), expected: uncompressedSize, history: c.history)
+            guard inflated.count == uncompressedSize else {
+                throw ReadError(text: "data block \(block + 1) of folder \(index + 1) inflated to \(inflated.count) bytes, \(uncompressedSize) declared")
+            }
+            output = inflated
+            c.history = Array((c.history + inflated).suffix(Self.maxBlockBytes))
+        case .quantum, .lzx:
+            output = []
+        }
+        c.produced += output.count
+        return output
     }
 
     // MARK: - MSZIP via the system zlib
@@ -239,7 +277,8 @@ final class CabinetReader {
     private static func le32(_ b: [UInt8], _ i: Int) -> UInt32 { UInt32(b[i]) | UInt32(b[i + 1]) << 8 | UInt32(b[i + 2]) << 16 | UInt32(b[i + 3]) << 24 }
 
     private static func cString(_ b: [UInt8], _ pos: inout Int) throws -> String {
-        guard let end = b[pos...].firstIndex(of: 0) else { throw ReadError(text: "cabinet string is not terminated") }
+        // A3: `pos` comes from the header (40 + cbCFHeader) and can lie past the file.
+        guard pos >= 0, pos <= b.count, let end = b[pos...].firstIndex(of: 0) else { throw ReadError(text: "cabinet string is not terminated") }
         defer { pos = end + 1 }
         return String(bytes: b[pos..<end], encoding: .utf8) ?? String(bytes: b[pos..<end], encoding: .windowsCP1252) ?? ""
     }

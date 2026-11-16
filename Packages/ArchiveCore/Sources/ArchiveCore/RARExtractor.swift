@@ -175,8 +175,9 @@ extension RARReader {
         private func decode(_ member: Member, with decoder: Decoder, to destination: URL, maxOutputBytes: Int64?, availableDiskBytes: Int64?,
                             checkCRC: Bool = true) throws -> UInt32 {
             let available = availableDiskBytes ?? ZIPArchiveReader.freeSpace(at: destination.deletingLastPathComponent())
-            if let available, member.sizeIsKnown, available < member.unpackedSize + diskMarginBytes {
-                throw ReadError.insufficientDisk(member: member.name, needed: member.unpackedSize + diskMarginBytes, available: available)
+            let needed = ZIPArchiveReader.scratchBytesNeeded(forDeclaredSize: member.unpackedSize)   // A2: saturating
+            if let available, member.sizeIsKnown, available < needed {
+                throw ReadError.insufficientDisk(member: member.name, needed: needed, available: available)
             }
             FileManager.default.createFile(atPath: destination.path, contents: nil)
             let out = try FileHandle(forWritingTo: destination)
@@ -200,8 +201,9 @@ extension RARReader {
         /// (RARLegacyDecoder.swift) straight from its volume; size and CRC-32 checked.
         private func extractLegacy(_ member: Member, to destination: URL, maxOutputBytes: Int64?, availableDiskBytes: Int64?) throws {
             let available = availableDiskBytes ?? ZIPArchiveReader.freeSpace(at: destination.deletingLastPathComponent())
-            if let available, available < member.unpackedSize + diskMarginBytes {
-                throw ReadError.insufficientDisk(member: member.name, needed: member.unpackedSize + diskMarginBytes, available: available)
+            let needed = ZIPArchiveReader.scratchBytesNeeded(forDeclaredSize: member.unpackedSize)   // A2: saturating
+            if let available, available < needed {
+                throw ReadError.insufficientDisk(member: member.name, needed: needed, available: available)
             }
             let volume = try source(forVolume: member.firstVolume)
             guard member.dataOffset >= 0, member.packedSize >= 0, member.dataOffset <= volume.length - member.packedSize else {

@@ -1295,8 +1295,10 @@ enum ContainerTextExtractor {
                         let name = disk < set.volumes.count ? set.volumes[disk].expectedName : "volume \(disk + 1)"
                         note = "not opened: volume \(disk + 1) (\(name)) missing"
                     } else {
-                        let end = member.localHeaderOffset + 30 + Int64(member.name.utf8.count) + max(0, member.compressedSize)
-                        if let missing = set.missingVolumes(in: member.localHeaderOffset..<max(end, member.localHeaderOffset + 1)).first {
+                        // A12: the offset and size are the archive's (up to Int64.max) — saturated, not trapped.
+                        let end = [30, Int64(member.name.utf8.count), max(0, member.compressedSize)]
+                            .reduce(member.localHeaderOffset) { sum, x in let (r, o) = sum.addingReportingOverflow(x); return o ? .max : r }
+                        if member.localHeaderOffset < .max, let missing = set.missingVolumes(in: member.localHeaderOffset..<max(end, member.localHeaderOffset + 1)).first {
                             note = "not opened: volume \(missing) (\(set.volumes[missing - 1].expectedName)) missing"
                         }
                     }

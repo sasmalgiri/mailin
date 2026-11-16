@@ -681,7 +681,11 @@ final class SevenZipReader {
                               isDirectory: false, isAnti: false, isSymlink: isSymlink, isEncrypted: folder.isEncrypted,
                               method: folder.methodDescription, unsupportedMethod: folder.unsupportedCoder,
                               folderIndex: folderIndex, offsetInFolder: offset, attributes: attr))
-            offset += Int64(size)
+            // A2: substream sizes are bounded by the folder's UInt64 size, so
+            // two of them can pass Int64.max together.
+            let (nextOffset, overflow) = offset.addingReportingOverflow(Int64(size))
+            guard !overflow else { throw ReadError.malformed("\(file.name): offset in its folder out of range") }
+            offset = nextOffset
             substream += 1
             indexInFolder += 1
             if indexInFolder >= streams.numUnpackStreams[folderIndex] {
@@ -843,8 +847,9 @@ final class SevenZipReader {
         if let unsupported = member.unsupportedMethod { throw ReadError.unsupportedMethod(unsupported, member: member.name) }
         if member.isEncrypted, password == nil { throw ReadError.encrypted(member: member.name) }
         let available = availableDiskBytes ?? ZIPArchiveReader.freeSpace(at: destination.deletingLastPathComponent())
-        if let available, available < member.size + Self.diskMarginBytes {
-            throw ReadError.insufficientDisk(member: member.name, needed: member.size + Self.diskMarginBytes, available: available)
+        let needed = ZIPArchiveReader.scratchBytesNeeded(forDeclaredSize: member.size)   // A2: saturating
+        if let available, available < needed {
+            throw ReadError.insufficientDisk(member: member.name, needed: needed, available: available)
         }
         guard folderIndex < streams.folders.count else { throw ReadError.malformed("\(member.name): folder missing") }
         let folder = streams.folders[folderIndex]

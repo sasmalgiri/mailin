@@ -640,8 +640,10 @@ struct RARReader {
                 break   // marker, comment, AV, sub-blocks, recovery, signature: skipped by size
             }
             if archive.damage != nil { break }
+            // A2: a RAR 1.5–4.x 64-bit size with its top bit set is negative —
+            // it walked the reader backwards (a size of minus the header length looped forever).
             let (next, overflow) = dataStart.addingReportingOverflow(addSize)
-            guard !overflow, next <= length else { archive.damage = "\(archive.members.last?.name ?? "a member")'s data runs past the end of the file"; break }
+            guard addSize >= 0, !overflow, next <= length else { archive.damage = "\(archive.members.last?.name ?? "a member")'s data runs past the end of the file"; break }
             position = next
         }
         return archive
@@ -730,10 +732,12 @@ struct RARReader {
             throw ReadError.sizeMismatch(member: member.name, declared: member.unpackedSize, actual: member.packedSize)
         }
         let available = availableDiskBytes ?? ZIPArchiveReader.freeSpace(at: destination.deletingLastPathComponent())
-        if let available, available < member.unpackedSize + diskMarginBytes {
-            throw ReadError.insufficientDisk(member: member.name, needed: member.unpackedSize + diskMarginBytes, available: available)
+        let needed = ZIPArchiveReader.scratchBytesNeeded(forDeclaredSize: member.unpackedSize)   // A2: saturating
+        if let available, available < needed {
+            throw ReadError.insufficientDisk(member: member.name, needed: needed, available: available)
         }
-        guard member.dataOffset >= 0, member.dataOffset <= source.length - member.packedSize else {
+        // A2: a RAR 1.5–4.x 64-bit size with its top bit set is negative; `length - packedSize` overflowed.
+        guard member.dataOffset >= 0, member.packedSize >= 0, member.dataOffset <= source.length - member.packedSize else {
             throw ReadError.truncated("\(member.name): data")
         }
         FileManager.default.createFile(atPath: destination.path, contents: nil)

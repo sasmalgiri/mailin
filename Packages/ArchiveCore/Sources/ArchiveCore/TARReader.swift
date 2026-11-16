@@ -127,8 +127,7 @@ struct TARReader {
 
             let declaredSize = try parseSize(block, 124, 12, context: rawName)
             let typeFlag = block[block.startIndex + 156]
-            let dataOffset = offset + Int64(blockSize)
-            let paddedSize = (declaredSize + Int64(blockSize) - 1) / Int64(blockSize) * Int64(blockSize)
+            let dataOffset = offset + Int64(blockSize)   // offset + 512 <= fileSize (loop condition)
 
             switch typeFlag {
             case 0x4C:   // 'L' GNU long name: the data block holds the next member's name
@@ -138,7 +137,12 @@ struct TARReader {
             case 0x78:   // 'x' PAX extended header for the next member
                 let records = try parsePax(try readString(handle, at: dataOffset, count: declaredSize, fileSize: fileSize, what: "PAX header"))
                 paxPath = records["path"]
-                if let sizeText = records["size"], let size = Int64(sizeText) { paxSize = size }
+                if let sizeText = records["size"], let size = Int64(sizeText) {
+                    // A2: a PAX size is any decimal the writer put there; a
+                    // negative one would walk the reader backwards.
+                    guard size >= 0 else { throw ReadError.truncated("PAX header: size \(sizeText) is not a byte count") }
+                    paxSize = size
+                }
             case 0x67:   // 'g' PAX global header
                 let records = try parsePax(try readString(handle, at: dataOffset, count: declaredSize, fileSize: fileSize, what: "PAX global header"))
                 if let path = records["path"] { globalPaxPath = path }
@@ -150,17 +154,25 @@ struct TARReader {
                     if !prefix.isEmpty { name = prefix + "/" + rawName }
                 }
                 let size = paxSize ?? declaredSize
-                guard dataOffset + size <= fileSize else {
-                    throw ReadError.truncated("\(name): declares \(size) bytes, the file ends \(dataOffset + size - fileSize) bytes early")
+                // A2: `size > fileSize - dataOffset`, not `dataOffset + size >
+                // fileSize` — PAX `size=9223372036854775807` overflowed the sum.
+                guard size <= fileSize - dataOffset else {
+                    throw ReadError.truncated("\(name): declares \(size) bytes, the file ends \(size - (fileSize - dataOffset)) bytes early")
                 }
                 members.append(Member(name: name, size: size, dataOffset: dataOffset, typeFlag: typeFlag))
                 pendingLongName = nil
                 paxPath = nil
                 paxSize = nil
-                offset = dataOffset + (size + Int64(blockSize) - 1) / Int64(blockSize) * Int64(blockSize)
+                offset = dataOffset + Self.padded(size)   // size <= fileSize - dataOffset: no overflow
                 continue
             }
-            offset = dataOffset + paddedSize
+            // A2: a size the file cannot hold is "truncated" — compared as
+            // `size > fileSize - dataOffset`, which cannot overflow; the old
+            // rounding `declaredSize + 511` trapped on a base-256 size near Int64.max.
+            guard declaredSize <= fileSize - dataOffset else {
+                throw ReadError.truncated("\(rawName): header declares \(declaredSize) bytes, the file holds \(fileSize - dataOffset) after it")
+            }
+            offset = dataOffset + Self.padded(declaredSize)
         }
         guard sawHeader else { throw ReadError.notATar }
         return members
@@ -173,15 +185,14 @@ struct TARReader {
     static func extract(_ member: Member, from url: URL, to destination: URL,
                         availableDiskBytes: Int64? = nil) throws {
         let available = availableDiskBytes ?? ZIPArchiveReader.freeSpace(at: destination.deletingLastPathComponent())
-        if let available, available < member.size + ZIPArchiveReader.diskMarginBytes {
-            throw ReadError.insufficientDisk(member: member.name,
-                                             needed: member.size + ZIPArchiveReader.diskMarginBytes,
-                                             available: available)
+        let needed = ZIPArchiveReader.scratchBytesNeeded(forDeclaredSize: member.size)
+        if let available, available < needed {
+            throw ReadError.insufficientDisk(member: member.name, needed: needed, available: available)
         }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let fileSize = Int64(try handle.seekToEnd())
-        guard member.dataOffset + member.size <= fileSize else {
+        guard member.dataOffset >= 0, member.size >= 0, member.dataOffset <= fileSize, member.size <= fileSize - member.dataOffset else {
             throw ReadError.truncated("\(member.name): member data")
         }
         try handle.seek(toOffset: UInt64(member.dataOffset))
@@ -210,6 +221,13 @@ struct TARReader {
     }
 
     // MARK: - Header fields
+
+    /// `size` rounded up to whole 512-byte blocks; `size` is at most the
+    /// file's length (checked by the caller), so the rounding cannot overflow.
+    private static func padded(_ size: Int64) -> Int64 {
+        let block = Int64(blockSize)
+        return size / block * block + (size % block == 0 ? 0 : block)
+    }
 
     private static func string(_ block: Data, _ offset: Int, _ length: Int) -> String {
         let start = block.startIndex + offset
@@ -259,7 +277,7 @@ struct TARReader {
     }
 
     private static func readString(_ handle: FileHandle, at offset: Int64, count: Int64, fileSize: Int64, what: String) throws -> String {
-        guard count >= 0, offset + count <= fileSize, count <= 1 << 20 else { throw ReadError.truncated(what) }
+        guard count >= 0, count <= 1 << 20, offset <= fileSize, count <= fileSize - offset else { throw ReadError.truncated(what) }
         try handle.seek(toOffset: UInt64(offset))
         let data = try handle.read(upToCount: Int(count)) ?? Data()
         guard Int64(data.count) == count else { throw ReadError.truncated(what) }

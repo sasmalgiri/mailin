@@ -43,6 +43,21 @@ struct ZIPArchiveReader {
     /// extraction cannot fill the disk to the last byte.
     static let diskMarginBytes: Int64 = 64 * 1024 * 1024
 
+    /// A2: scratch space a member of `declaredSize` bytes needs — its size
+    /// plus `diskMarginBytes`, saturating at `Int64.max`. The size is read
+    /// from the archive, so it can be anything up to `Int64.max`; a sum that
+    /// overflows is simply more room than any volume has ("insufficient
+    /// disk"), never a trap.
+    static func scratchBytesNeeded(forDeclaredSize declaredSize: Int64) -> Int64 {
+        let (sum, overflow) = max(0, declaredSize).addingReportingOverflow(diskMarginBytes)
+        return overflow ? Int64.max : sum
+    }
+
+    /// Largest window the central directory is read through (A20): the
+    /// directory is streamed entry by entry, never read whole, so its size is
+    /// bounded only by the file — the window is a read size, not a cap.
+    static let directoryWindowBytes = 1 << 20
+
     private static let windowSize = 64 * 1024
 
     struct Member: Sendable, Equatable {
@@ -157,7 +172,7 @@ struct ZIPArchiveReader {
             }
             let zip64Disk = Int(u32(tail, locatorStart + 4))
             var zip64Offset = try i64(u64(tail, locatorStart + 8), "ZIP64 locator offset")
-            zip64Offset += source.diskBase(zip64Disk) ?? 0
+            zip64Offset = try checkedSum(zip64Offset, source.diskBase(zip64Disk) ?? 0, "ZIP64 record offset")
             guard zip64Offset >= 0, try checkedSum(zip64Offset, 56, "ZIP64 record end") <= fileSize else {
                 throw ReadError.truncated("ZIP64 end-of-central-directory record")
             }
@@ -171,37 +186,60 @@ struct ZIPArchiveReader {
             cdDisk = Int(u32(z, 20))
         }
         // Spanned set: the directory offset is relative to its own disk.
-        if let base = source.diskBase(cdDisk) { cdOffset += base }
+        if let base = source.diskBase(cdDisk) { cdOffset = try checkedSum(cdOffset, base, "central directory offset") }
         else if source.volumeCount > 1 || cdDisk > 0 { throw ReadError.malformed("the central directory is on volume \(cdDisk + 1), which the set does not have") }
 
         guard cdOffset >= 0, cdSize >= 0, try checkedSum(cdOffset, cdSize, "central directory end") <= fileSize else {
             throw ReadError.truncated("central directory")
         }
-        let directory = try source.read(at: cdOffset, count: Int(cdSize))
-        guard Int64(directory.count) == cdSize else { throw ReadError.truncated("central directory") }
+        // A20: the directory is streamed through a window of at most
+        // `directoryWindowBytes`, one entry at a time — never read whole, so a
+        // directory of any size the file holds costs one window of memory
+        // (plus the members list itself).
+        let cdEnd = cdOffset + cdSize   // checked above
+        var window = Data()
+        var windowStart: Int64 = cdOffset
+        /// `count` bytes at `offset` (within the directory), refilling the window when needed.
+        func directoryBytes(at offset: Int64, count: Int) throws -> Data {
+            let windowEnd = windowStart + Int64(window.count)
+            if offset < windowStart || offset + Int64(count) > windowEnd {
+                let want = Int(min(Int64(max(count, directoryWindowBytes)), cdEnd - offset))
+                window = try source.read(at: offset, count: want)
+                windowStart = offset
+                guard window.count == want else { throw ReadError.truncated("central directory") }
+            }
+            let from = window.startIndex + Int(offset - windowStart)
+            return Data(window[from..<(from + count)])   // copied: the readers below index from zero
+        }
 
         var members: [Member] = []
         members.reserveCapacity(Int(min(entryCount, 1_000_000)))
-        var cursor = directory.startIndex
-        while cursor + 46 <= directory.endIndex {
-            guard directory[cursor..<cursor + 4].elementsEqual([0x50, 0x4B, 0x01, 0x02]) else {
-                throw ReadError.malformed("central directory entry signature at \(cursor - directory.startIndex)")
+        var position = cdOffset
+        while cdEnd - position >= 46 {
+            let fixed = try directoryBytes(at: position, count: 46)
+            guard fixed.prefix(4).elementsEqual([0x50, 0x4B, 0x01, 0x02]) else {
+                throw ReadError.malformed("central directory entry signature at \(position - cdOffset)")
             }
+            let nameLength = Int(u16(fixed, 28))
+            let extraLength = Int(u16(fixed, 30))
+            let commentLength = Int(u16(fixed, 32))
+            guard cdEnd - position - 46 >= Int64(nameLength + extraLength + commentLength) else {
+                throw ReadError.truncated("central directory entry")
+            }
+            // The entry without its comment (which is never read), zero-based.
+            let variable = try directoryBytes(at: position + 46, count: nameLength + extraLength)
+            let directory = fixed + variable
+            let cursor = 0
             let flags = u16(directory, cursor + 8)
             let method = u16(directory, cursor + 10)
             let crc = u32(directory, cursor + 16)
             var compressed = Int64(u32(directory, cursor + 20))
             var uncompressed = Int64(u32(directory, cursor + 24))
-            let nameLength = Int(u16(directory, cursor + 28))
-            let extraLength = Int(u16(directory, cursor + 30))
-            let commentLength = Int(u16(directory, cursor + 32))
             var diskStart = Int(u16(directory, cursor + 34))
             var localOffset = Int64(u32(directory, cursor + 42))
 
             let nameStart = cursor + 46
             let extraStart = nameStart + nameLength
-            let entryEnd = extraStart + extraLength + commentLength
-            guard entryEnd <= directory.endIndex else { throw ReadError.truncated("central directory entry") }
 
             let nameData = directory[nameStart..<extraStart]
             let name = String(data: nameData, encoding: .utf8)
@@ -236,7 +274,7 @@ struct ZIPArchiveReader {
             // disk; made absolute here. A disk the set does not have leaves
             // the offset relative — the caller marks the member as needing
             // that volume (`SplitVolumeSet`).
-            if let base = source.diskBase(diskStart) { localOffset += base }
+            if let base = source.diskBase(diskStart) { localOffset = try checkedSum(localOffset, base, "\(name): local header offset") }
 
             members.append(Member(name: name,
                                   compressedSize: compressed,
@@ -246,7 +284,7 @@ struct ZIPArchiveReader {
                                   localHeaderOffset: localOffset,
                                   isEncrypted: (flags & 0x0001) != 0,
                                   diskNumberStart: diskStart))
-            cursor = entryEnd
+            position += 46 + Int64(nameLength + extraLength + commentLength)
         }
         return members
     }
@@ -277,10 +315,9 @@ struct ZIPArchiveReader {
             throw ReadError.unsupportedMethod(member.method, member: member.name)
         }
         let available = availableDiskBytes ?? freeSpace(at: destination.deletingLastPathComponent())
-        if let available, available < member.uncompressedSize + diskMarginBytes {
-            throw ReadError.insufficientDisk(member: member.name,
-                                             needed: member.uncompressedSize + diskMarginBytes,
-                                             available: available)
+        let needed = scratchBytesNeeded(forDeclaredSize: member.uncompressedSize)
+        if let available, available < needed {
+            throw ReadError.insufficientDisk(member: member.name, needed: needed, available: available)
         }
 
         let fileSize = archive.length
@@ -451,9 +488,9 @@ struct ZIPArchiveReader {
         // uses the compressed length as the floor; the size check after
         // decoding is exact modulo 2^32.
         let available = availableDiskBytes ?? freeSpace(at: destination.deletingLastPathComponent())
-        if let available, available < compressedLength + diskMarginBytes {
-            throw ReadError.insufficientDisk(member: url.lastPathComponent,
-                                             needed: compressedLength + diskMarginBytes, available: available)
+        let needed = scratchBytesNeeded(forDeclaredSize: compressedLength)
+        if let available, available < needed {
+            throw ReadError.insufficientDisk(member: url.lastPathComponent, needed: needed, available: available)
         }
 
         FileManager.default.createFile(atPath: destination.path, contents: nil)
