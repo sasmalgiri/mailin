@@ -11,6 +11,30 @@ class ForensicManager: ObservableObject {
     static let shared = ForensicManager()
 
     @AppStorage("forensicModeEnabled") var isEnabled = false
+
+    /// Review D1: the one way forensic mode is switched. Turning it on is
+    /// part of Professional — without the purchase the shared paywall is
+    /// shown and the mode stays off. Turning it off is always allowed.
+    /// `store` nil = the app's live store manager.
+    @discardableResult
+    func setForensicMode(_ on: Bool, store: StoreManager? = nil) -> Bool {
+        guard on else { isEnabled = false; return true }
+        if isEnabled { return true }
+        let allowed: Bool
+        if let manager = store ?? StoreManager.live {
+            allowed = manager.require(.professional, feature: String(localized: "Forensic Mode"))
+        } else {
+            allowed = TierAccess.allows(.professional)
+        }
+        if allowed { isEnabled = true }
+        return allowed
+    }
+
+    /// Review D1: a persona's "forensic by default" applies only when the
+    /// purchase covers it — choosing the Forensic persona is not a purchase.
+    nonisolated static func personaDefault(_ wanted: Bool, tier: PurchaseTier) -> Bool {
+        wanted && tier >= .professional
+    }
     @AppStorage("forensicCaseNumber") var caseNumber = ""
     @AppStorage("forensicExaminerName") var examinerName = ""
     @AppStorage("forensicOrganization") var organization = ""

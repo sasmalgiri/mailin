@@ -1186,13 +1186,7 @@ struct SettingsView: View {
                 Toggle("Enable Forensic Mode", isOn: Binding(
                     get: { forensicManager.isEnabled },
                     set: { newValue in
-                        if newValue {
-                            if storeManager.requireProfessional() {
-                                forensicManager.isEnabled = true
-                            }
-                        } else {
-                            forensicManager.isEnabled = false
-                        }
+                        forensicManager.setForensicMode(newValue, store: storeManager)
                     }
                 ))
                     .help("Activates evidence integrity features: hash verification, audit logging and evidence tagging")

@@ -938,7 +938,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
         case "chainOfCustody":
             if storeManager.requireProfessional() { appState.showChainOfCustody = true }
         case "forensicMode":
-            ForensicManager.shared.isEnabled.toggle()
+            ForensicManager.shared.setForensicMode(!ForensicManager.shared.isEnabled, store: storeManager)
         case "custodianManager":
             if storeManager.requireProfessional() { appState.showCustodianPanel = true }
         case "reviewBatches":

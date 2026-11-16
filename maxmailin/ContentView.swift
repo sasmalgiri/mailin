@@ -608,11 +608,7 @@ struct ContentView: View {
                     .help("Open the email list — browse, search and filter your whole archive")
 
                     Button {
-                        if forensicManager.isEnabled {
-                            forensicManager.isEnabled = false
-                        } else if storeManager.requireProfessional() {
-                            forensicManager.isEnabled = true
-                        }
+                        forensicManager.setForensicMode(!forensicManager.isEnabled, store: storeManager)
                     } label: {
                         Label("Forensic", systemImage: forensicManager.isEnabled ? "shield.checkered" : "shield")
                     }
@@ -1297,9 +1293,7 @@ struct ContentView: View {
                                     }
                                 }
                                 Button {
-                                    if forensicManager.isEnabled || storeManager.requireProfessional() {
-                                        forensicManager.isEnabled.toggle()
-                                    }
+                                    forensicManager.setForensicMode(!forensicManager.isEnabled, store: storeManager)
                                 } label: {
                                     Label(
                                         forensicManager.isEnabled ? "Disable Forensic" : "Forensic Mode",
@@ -1685,9 +1679,7 @@ struct ContentView: View {
                                 .accessibilityLabel("Analytics")
                             }
                             Button {
-                                if forensicManager.isEnabled || storeManager.requireProfessional() {
-                                    forensicManager.isEnabled.toggle()
-                                }
+                                forensicManager.setForensicMode(!forensicManager.isEnabled, store: storeManager)
                             } label: {
                                 Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                             }
@@ -2688,11 +2680,7 @@ struct ContentView: View {
                                 GridItem(.flexible()), GridItem(.flexible())
                             ], spacing: Spacing.small) {
                                 detailToolButton(title: forensicManager.isEnabled ? String(localized: "Forensic ON") : String(localized: "Forensic OFF"), icon: forensicManager.isEnabled ? "shield.checkered" : "shield", color: forensicManager.isEnabled ? .orange : .gray, tip: "Toggle forensic mode — enables evidence tagging, Bates numbering, and chain of custody tracking") {
-                                    if forensicManager.isEnabled {
-                                        forensicManager.isEnabled = false
-                                    } else if storeManager.requireProfessional() {
-                                        forensicManager.isEnabled = true
-                                    }
+                                    forensicManager.setForensicMode(!forensicManager.isEnabled, store: storeManager)
                                 }
                                 detailToolButton(title: "e-Discovery", icon: "checklist", color: .blue, tip: "Manage legal discovery workflows — search, review, and produce documents for litigation") {
                                     if storeManager.requireProfessional() { appState.showEDiscovery = true }

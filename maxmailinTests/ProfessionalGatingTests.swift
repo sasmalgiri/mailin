@@ -67,6 +67,71 @@ final class ProfessionalGatingTests: XCTestCase {
         }
     }
 
+    /// Review D1: the purchase is checked where every path opens a tool —
+    /// the Mac menu, ⌘K, the persona toolbars and the sidebar all set the
+    /// same `AppStateManager` flag — and where forensic mode is switched on
+    /// (toolbar, ⌘K "Toggle Forensic Mode", Settings, the Forensic persona).
+    func testProfessionalTools_needThePurchase_onEveryPathThroughTheSeam() throws {
+        let professionalTools: [WritableKeyPath<AppStateManager, Bool>] = [
+            \.showBatesNumbering, \.showEDiscovery, \.showRedaction, \.showGDPRReport,
+            \.showChainOfCustody, \.showCustodianPanel, \.showReviewBatches, \.showInvestigationReport,
+        ]
+        // Free, and a lapsed Professional subscriber: refused, with the paywall.
+        for store in [StoreManager(testTier: .free), StoreManager(testTier: .free, lapsedFrom: .professional),
+                      StoreManager(testTier: .personal)] {
+            var state = AppStateManager()
+            state.isPurchased = AppStateManager.purchaseGate(store)
+            for tool in professionalTools {
+                state[keyPath: tool] = true
+                XCTAssertFalse(state[keyPath: tool], "\(tool) opened without Professional (tier \(store.effectiveTier))")
+            }
+            XCTAssertEqual(store.paywallRequest?.requiredTier, .professional, "the existing purchase prompt is shown")
+            // The audit trail keeps its Free view.
+            state.showAuditTrail = true
+            XCTAssertTrue(state.showAuditTrail)
+        }
+        // Professional: every tool opens.
+        let pro = StoreManager(testTier: .professional)
+        var owned = AppStateManager()
+        owned.isPurchased = AppStateManager.purchaseGate(pro)
+        for tool in professionalTools {
+            owned[keyPath: tool] = true
+            XCTAssertTrue(owned[keyPath: tool], "\(tool)")
+        }
+        XCTAssertNil(pro.paywallRequest)
+
+        // Forensic mode: the one switch, refused without the purchase.
+        let forensic = ForensicManager.shared
+        let saved = forensic.isEnabled
+        defer { forensic.isEnabled = saved }
+        forensic.isEnabled = false
+        let free = StoreManager(testTier: .free)
+        XCTAssertFalse(forensic.setForensicMode(true, store: free))
+        XCTAssertFalse(forensic.isEnabled)
+        XCTAssertNotNil(free.paywallRequest)
+        XCTAssertTrue(forensic.setForensicMode(true, store: pro))
+        XCTAssertTrue(forensic.isEnabled)
+        XCTAssertTrue(forensic.setForensicMode(false, store: free), "switching off never needs a purchase")
+        XCTAssertFalse(forensic.isEnabled)
+        // The Forensic persona is not a purchase.
+        XCTAssertFalse(ForensicManager.personaDefault(true, tier: .free))
+        XCTAssertFalse(ForensicManager.personaDefault(true, tier: .personal))
+        XCTAssertTrue(ForensicManager.personaDefault(true, tier: .professional))
+
+        // No app path flips the switch around the seam.
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin", isDirectory: true)
+        for file in try FileManager.default.contentsOfDirectory(at: app, includingPropertiesForKeys: nil)
+            where file.pathExtension == "swift" && file.lastPathComponent != "ForensicManager.swift" {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for bypass in ["forensicManager.isEnabled = true", "forensicManager.isEnabled.toggle()",
+                           "ForensicManager.shared.isEnabled.toggle()", "ForensicManager.shared.isEnabled = true",
+                           "cfg.showForensicByDefault, forKey"] {
+                XCTAssertFalse(text.contains(bypass), "\(file.lastPathComponent): \(bypass) bypasses setForensicMode")
+            }
+        }
+    }
+
     func testRiskScorerFollowsThePageSwitch() throws {
         let modules = registry()
         try modules.enable(.professional)

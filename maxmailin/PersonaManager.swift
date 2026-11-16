@@ -548,7 +548,8 @@ class PersonaManager: ObservableObject {
         UserDefaults.standard.set(cfg.defaultDensity, forKey: "emailListDensity")
         UserDefaults.standard.set(cfg.showEmailPreviews, forKey: "showEmailPreviews")
         UserDefaults.standard.set(cfg.enableAIByDefault, forKey: "enableAIFeatures")
-        UserDefaults.standard.set(cfg.showForensicByDefault, forKey: "forensicModeEnabled")
+        UserDefaults.standard.set(ForensicManager.personaDefault(cfg.showForensicByDefault, tier: TierAccess.tier),
+                                  forKey: "forensicModeEnabled")
 
         switch selectedPersona {
         case .forensic:

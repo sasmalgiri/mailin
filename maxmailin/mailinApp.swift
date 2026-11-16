@@ -157,6 +157,8 @@ struct mailinApp: App {
                         appState.isCapabilityOn = { [modules] capability in
                             modules.isOn(capability)
                         }
+                        // The third gate (review D1): the purchase.
+                        appState.isPurchased = AppStateManager.purchaseGate(storeManager)
                         // §3.3: map 2.x state forward exactly once, before any
                         // gate is read. An existing install keeps what it was
                         // already using; a fresh install gets Page 1 only.
@@ -961,6 +963,38 @@ class AppStateManager {
             }
         }
 
+        /// Review D1: the purchase this surface needs. The Professional tools
+        /// need Professional on every path (menu, ⌘K, persona toolbar,
+        /// sidebar); the audit trail has a Free view and the AI page's own
+        /// tools keep the page gate only.
+        var requiredTier: PurchaseTier {
+            switch self {
+            case .custodianPanel, .reviewBatches, .eDiscovery, .batesNumbering, .redaction,
+                 .gdprReport, .chainOfCustody, .investigationReport, .predictiveCoding:
+                return .professional
+            case .auditTrail, .reportBuilder,
+                 .aiAssistant, .aiDigest, .anomalyDetection, .smartAutoTagger,
+                 .topicClusters, .threadSummarizer, .smartAlerts, .keywordMonitor:
+                return .free
+            }
+        }
+
+        /// The name the purchase prompt shows.
+        var purchaseName: String {
+            switch self {
+            case .custodianPanel: return String(localized: "Custodian Manager")
+            case .reviewBatches: return String(localized: "Review Batches")
+            case .eDiscovery: return String(localized: "eDiscovery Workflow")
+            case .batesNumbering: return String(localized: "Bates Numbering")
+            case .redaction: return String(localized: "PII Redaction")
+            case .gdprReport: return String(localized: "GDPR Compliance Report")
+            case .chainOfCustody: return String(localized: "Chain of Custody")
+            case .investigationReport: return String(localized: "Investigation Report")
+            case .predictiveCoding: return String(localized: "Predictive Coding")
+            default: return String(localized: "Professional Workflows")
+            }
+        }
+
         /// The matrix switch that governs this surface. Matched by raw value,
         /// so the two enums cannot drift into disagreement without the
         /// `ownedFeaturesAllMapToACapability` test noticing.
@@ -977,6 +1011,22 @@ class AppStateManager {
     /// Both must pass, and the page gate is checked first so a capability can
     /// never outlive its page.
     var isCapabilityOn: (@MainActor (Capability) -> Bool)?
+
+    /// Third gate (review D1): the purchase. Installed by the shell with
+    /// `purchaseGate(_:)`; a feature whose tier is not owned is refused here
+    /// and the existing purchase prompt is shown, whichever path asked.
+    var isPurchased: (@MainActor (OwnedFeature) -> Bool)?
+
+    /// The purchase gate the shell installs: true when the effective tier
+    /// covers the feature, otherwise raises the shared paywall and refuses.
+    static func purchaseGate(_ store: StoreManager) -> @MainActor (OwnedFeature) -> Bool {
+        { [weak store] feature in
+            guard feature.requiredTier > .free else { return true }
+            guard let store else { return TierAccess.allows(feature.requiredTier) }
+            return store.require(feature.requiredTier, feature: feature.purchaseName,
+                                 reason: String(localized: "\(feature.purchaseName) is part of \(feature.requiredTier.displayName)."))
+        }
+    }
 
     private var openFeatures: Set<OwnedFeature> = []
 
@@ -1003,6 +1053,13 @@ class AppStateManager {
         if let capability = feature.capability, let gate = isCapabilityOn, !gate(capability) {
             Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PageIsolation")
                 .info("declined \(feature.rawValue, privacy: .public) — capability switched off")
+            return
+        }
+        // Review D1: the purchase, last — after the page and the switch, so
+        // a page that is off never shows a paywall for its tools.
+        if let gate = isPurchased, !gate(feature) {
+            Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PageIsolation")
+                .info("declined \(feature.rawValue, privacy: .public) — needs \(feature.requiredTier.displayName, privacy: .public)")
             return
         }
         openFeatures.insert(feature)
