@@ -547,6 +547,31 @@ final class V3FoundationTests: XCTestCase {
         XCTAssertFalse(try PreservationExporter.verify(bag: bag))
     }
 
+    /// C9 (rule 5): a read error on a stored original is not "no original available" —
+    /// it is counted as unreadable, stated, kept out of the PREMIS no-original events.
+    func testC9_preservationBag_readErrorIsNotNoOriginal() async throws {
+        let env = makeEnv()
+        let mail = (0..<4).map { makeEmail($0) }
+        try await env.store.insertBatch(mail, batchSize: 100)
+        let bag = env.root.appendingPathComponent("bag-c9", isDirectory: true)
+        let failing = mail[1].id
+        let saved = PreservationExporter.readRaw
+        defer { PreservationExporter.readRaw = saved }
+        PreservationExporter.readRaw = { id in
+            if id == failing { throw CocoaError(.fileReadUnknown) }
+            return try await ScopeJobEnvironment.store.rawBytes(id: id)
+        }
+        let result = try await ScopeJobEnvironment.$current.withValue(env.job) {
+            try await PreservationExporter.export(scope: .wholeArchive, to: bag, organization: "Org")
+        }
+        XCTAssertEqual(result.originals, 3)
+        XCTAssertEqual(result.withoutOriginal, 0, "a read error is not a missing original")
+        XCTAssertEqual(result.unreadable, 1)
+        let premis = try String(contentsOf: bag.appendingPathComponent("data/metadata/premis.xml"), encoding: .utf8)
+        XCTAssertFalse(premis.contains("missing-\(failing.uuidString)"))
+        XCTAssertTrue(env.job.auditLines().contains { $0.contains("1 could not be read") })
+    }
+
     // MARK: - Old Bates path never renumbers (finding #4, rule 3)
 
     /// The pre-3.0 path used to replace every assignment with a fresh

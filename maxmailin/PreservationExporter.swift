@@ -33,6 +33,14 @@ enum PreservationExporter {
         var withoutOriginal: Int
         var payloadBytes: Int64
         var verified: Bool
+        /// Originals that exist but could not be read this run (a read error,
+        /// not "no original") — left out of the bag; exporting again retries them.
+        var unreadable: Int = 0
+    }
+
+    /// Reads one email's stored original (tests substitute a failing reader).
+    static var readRaw: @Sendable (UUID) async throws -> Data? = { id in
+        try await ScopeJobEnvironment.store.rawBytes(id: id)
     }
 
     private static func sha256Hex(_ data: Data) -> String {
@@ -71,14 +79,25 @@ enum PreservationExporter {
 
             """.utf8))
 
-        var originals = 0, missing = 0
+        var originals = 0, missing = 0, unreadable = 0
         var bytes: Int64 = 0
-        let store = ScopeJobEnvironment.store
         for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 500) {
             try Task.checkCancellation()
             for summary in page {
                 let id = summary.id.uuidString
-                guard let raw = try? await store.rawBytes(id: summary.id) else {
+                let stored: Data?
+                do {
+                    stored = try await readRaw(summary.id)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // A read error, not a fact about the email: no PREMIS
+                    // "noOriginalAvailable" event; counted and stated, and the
+                    // next export reads it again.
+                    unreadable += 1
+                    continue
+                }
+                guard let raw = stored else {
                     missing += 1
                     try premis.write(contentsOf: Data("""
                         <event><eventIdentifier><eventIdentifierType>local</eventIdentifierType><eventIdentifierValue>missing-\(id)</eventIdentifierValue></eventIdentifier><eventType>noOriginalAvailable</eventType><eventDateTime>\(now)</eventDateTime><eventDetailInformation><eventDetail>Email \(id) was stored without its original MIME; no preservation copy was made.</eventDetail></eventDetailInformation></event>
@@ -99,7 +118,7 @@ enum PreservationExporter {
             }
         }
         try premis.write(contentsOf: Data("""
-            <event><eventIdentifier><eventIdentifierType>local</eventIdentifierType><eventIdentifierValue>ingest-\(now)</eventIdentifierValue></eventIdentifier><eventType>ingestion</eventType><eventDateTime>\(now)</eventDateTime><eventDetailInformation><eventDetail>\(originals) originals packaged; \(missing) without an original. Scope: \(xmlEscape(scope.description)).</eventDetail></eventDetailInformation><linkingAgentIdentifier><linkingAgentIdentifierType>local</linkingAgentIdentifierType><linkingAgentIdentifierValue>\(xmlEscape(agent))</linkingAgentIdentifierValue></linkingAgentIdentifier></event>
+            <event><eventIdentifier><eventIdentifierType>local</eventIdentifierType><eventIdentifierValue>ingest-\(now)</eventIdentifierValue></eventIdentifier><eventType>ingestion</eventType><eventDateTime>\(now)</eventDateTime><eventDetailInformation><eventDetail>\(originals) originals packaged; \(missing) without an original\(unreadable > 0 ? "; \(unreadable) could not be read and are not in this package" : ""). Scope: \(xmlEscape(scope.description)).</eventDetail></eventDetailInformation><linkingAgentIdentifier><linkingAgentIdentifierType>local</linkingAgentIdentifierType><linkingAgentIdentifierValue>\(xmlEscape(agent))</linkingAgentIdentifierValue></linkingAgentIdentifier></event>
             </premis>
 
             """.utf8))
@@ -120,7 +139,7 @@ enum PreservationExporter {
             Bagging-Date: \(String(now.prefix(10)))
             Bag-Software-Agent: \(agent)
             Payload-Oxum: \(payloadBytes).\(originals + 1)
-            External-Description: Email preservation package — \(originals) original messages (message/rfc822) with PREMIS 3 metadata; \(missing) emails had no stored original.
+            External-Description: Email preservation package — \(originals) original messages (message/rfc822) with PREMIS 3 metadata; \(missing) emails had no stored original\(unreadable > 0 ? "; \(unreadable) originals could not be read and are not in this package" : "").
 
             """
         try Data(info.utf8).write(to: bag.appendingPathComponent("bag-info.txt"))
@@ -132,8 +151,9 @@ enum PreservationExporter {
 
         let verified = try verify(bag: bag)
         ScopeJobEnvironment.logAction("Preservation package exported",
-            detail: "\(originals) originals, \(missing) without an original, bag verified: \(verified) → \(bag.lastPathComponent)")
-        return Result(bag: bag, originals: originals, withoutOriginal: missing, payloadBytes: payloadBytes, verified: verified)
+            detail: "\(originals) originals, \(missing) without an original\(unreadable > 0 ? ", \(unreadable) could not be read" : ""), bag verified: \(verified) → \(bag.lastPathComponent)")
+        return Result(bag: bag, originals: originals, withoutOriginal: missing, payloadBytes: payloadBytes,
+                      verified: verified, unreadable: unreadable)
     }
 
     /// RFC 8493 validation: every file listed in both manifests re-hashes to

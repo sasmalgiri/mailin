@@ -577,6 +577,7 @@ struct ChainOfCustodyView: View {
                                                               organization: ForensicManager.shared.examinerName)
                 exportStatus = String(localized: "Preservation package: \(r.originals) originals") +
                     (r.withoutOriginal > 0 ? String(localized: ", \(r.withoutOriginal) without a stored original") : "") +
+                    (r.unreadable > 0 ? String(localized: ", \(r.unreadable) could not be read — not in this package; export again to retry them") : "") +
                     (r.verified ? String(localized: " — every file verified.") : String(localized: " — VERIFICATION FAILED, do not rely on this package."))
                 #if os(iOS)
                 // Registered only once it really left through the Share sheet (rule 5).
