@@ -71,7 +71,8 @@ enum ArchiveQueryCompiler {
         for token0 in tokenize(input) {
             var token = token0
             if exclusionsOn {
-                if token.uppercased() == "NOT" { negateNext = true; continue }
+                // D-6 (owner): NOT is an operator only in capitals; lower-case "not" is a word.
+                if token == "NOT" { negateNext = true; continue }
                 var negated = negateNext
                 negateNext = false
                 if token.hasPrefix("-"), token.contains(":") { negated = true; token.removeFirst() }

@@ -254,4 +254,27 @@ final class FTSQueryCorrectnessTests: XCTestCase {
         let registered = try await fts.indexedSubset(of: c.all.map(\.id))
         XCTAssertEqual(registered.count, c.all.count)
     }
+
+    // MARK: - D-6 operators only in capitals in the query compiler too
+
+    /// Review a177c8b..dd0c10d #3: with exclusions on, the compiler read a
+    /// lower-case "not" as NOT, so `report not draft` left out "draft".
+    func testD6_queryCompilerReadsNotOnlyInCapitals() {
+        let lower = ArchiveQueryCompiler.compile("report not draft", exclusions: true)
+        XCTAssertEqual(lower.text, "report not draft", "lower-case not is a word")
+        XCTAssertNil(lower.exclusions)
+        XCTAssertEqual(SearchMatchTerms.positiveTerms(in: "report not draft"), ["report", "not", "draft"])
+
+        let upper = ArchiveQueryCompiler.compile("report NOT draft", exclusions: true)
+        XCTAssertEqual(upper.text, "report NOT draft", "capital NOT stays an operator for the index")
+        XCTAssertEqual(SearchMatchTerms.positiveTerms(in: "report NOT draft"), ["report"])
+
+        let lowerField = ArchiveQueryCompiler.compile("not from:alice", exclusions: true)
+        XCTAssertNil(lowerField.exclusions, "lower-case not does not negate an operator")
+        XCTAssertEqual(lowerField.sender, "alice")
+        XCTAssertEqual(lowerField.text, "not")
+        let upperField = ArchiveQueryCompiler.compile("NOT from:alice", exclusions: true)
+        XCTAssertEqual(upperField.exclusions, [EmailExclusion(field: .sender, value: "alice")])
+        XCTAssertNil(upperField.sender)
+    }
 }
