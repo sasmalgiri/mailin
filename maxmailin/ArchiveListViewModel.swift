@@ -252,6 +252,9 @@ final class ArchiveListViewModel: ObservableObject {
         guard !ids.isEmpty else { return }
         do {
             try await archive.setTrashed(ids: Array(ids), true)
+            // The sidebar's Trash / All Mail / folder counts listen for this;
+            // without it a restore here left "Trash, 1" on screen.
+            NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
         } catch {
             self.error = error
         }
@@ -266,6 +269,9 @@ final class ArchiveListViewModel: ObservableObject {
         guard !ids.isEmpty else { return }
         do {
             try await archive.setTrashed(ids: Array(ids), false)
+            // The sidebar's Trash / All Mail / folder counts listen for this;
+            // without it a restore here left "Trash, 1" on screen.
+            NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
         } catch {
             self.error = error
         }
@@ -277,6 +283,9 @@ final class ArchiveListViewModel: ObservableObject {
         guard !ids.isEmpty else { return }
         do {
             try await archive.delete(ids: Array(ids))
+            // The sidebar's Trash / All Mail / folder counts listen for this;
+            // without it a restore here left "Trash, 1" on screen.
+            NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
         } catch {
             self.error = error
         }

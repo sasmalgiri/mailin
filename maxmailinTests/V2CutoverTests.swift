@@ -8880,6 +8880,30 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(list.summaries.map(\.id).contains(victim))
     }
 
+    /// CLOSE-06 J4: Move to Trash / Restore from Trash on the three-pane list
+    /// changed the archive but told nobody, so the sidebar kept "Trash, 1" and
+    /// "All Mail, 6" after a restore. Each change now posts
+    /// `.archiveTrashChanged` (what the sidebar, folder and source counts
+    /// refresh on), once per change that really happened.
+    func testArchiveListTrashChangesTellTheSidebarCounts() async throws {
+        let env = try makeEnv()
+        let fixtures = try await seed(env, count: 3)
+        let victim = try XCTUnwrap(fixtures.first?.id)
+        let list = ArchiveListViewModel(archive: env.archive, pageSize: 20, maxRetained: 100)
+        await list.loadInitial()
+
+        var posts = 0
+        let token = NotificationCenter.default.addObserver(forName: .archiveTrashChanged, object: nil, queue: nil) { _ in posts += 1 }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        await list.delete([victim])
+        XCTAssertEqual(posts, 1, "Move to Trash tells the counts")
+        await list.restore([victim])
+        XCTAssertEqual(posts, 2, "Restore from Trash tells the counts")
+        await list.restore([])
+        XCTAssertEqual(posts, 2, "nothing restored, nothing posted")
+    }
+
     // MARK: - Gate 1 iPad walk — IPAD-02 (folder tree) and IPAD-05 (Trash, counts, duplicate summary)
 
     /// Awaits a re-page and any re-page a property change already started.
