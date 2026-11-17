@@ -1264,6 +1264,16 @@ final class V2CutoverTests: XCTestCase {
         return result == KERN_SUCCESS ? Int(info.phys_footprint) : 0
     }
 
+    /// Bytes of every malloc zone's blocks that are allocated now — what the
+    /// process really holds on the heap. Unlike `physFootprint`, it does not
+    /// count free memory the allocator keeps for reuse (per-CPU magazines,
+    /// region caches), so it does not move with which thread ran the work.
+    private static func liveHeapBytes() -> Int {
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(nil, &stats)
+        return Int(stats.size_in_use)
+    }
+
     func testOPEN02_pstStreamsInBatches_andTheFootprintFollowsTheBatch() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("mailin-open02-\(UUID().uuidString)", isDirectory: true)
@@ -1289,8 +1299,25 @@ final class V2CutoverTests: XCTestCase {
         defer { StreamingParserPolicy.binaryStreaming = wasStreaming }
         StreamingParserPolicy.binaryStreaming = true
 
-        let before = Self.physFootprint()
-        var peak = before
+        // Two measures, sampled at every batch while that batch is in hand:
+        // the live heap (what the stream really holds) and the footprint
+        // (what the system charges). The footprint alone is not a retention
+        // measure: the reader runs on a cooperative-pool thread, and the first
+        // batches there take fresh allocator regions instead of reusing the
+        // free memory the fixture writer left on the main thread's — measured
+        // 2026-11-17: footprint +147, +157, then +109 MB flat to the last
+        // batch, while the live heap was +51 then +60 MB flat; with twice the
+        // file (4,000 messages, 409 MB) the same +182 MB peak, +133 MB flat
+        // footprint and +60 MB flat live heap. So the checks are:
+        //  - the live heap never grows by half the file (it holds one batch);
+        //  - from batch 5 to the last, the live heap grows by less than one
+        //    batch's share of the file, and the footprint by less than a
+        //    quarter of the file — a stream that kept anything per message
+        //    (even only each UTF-8 body, ~52 KB × 1,500) fails both.
+        let liveBefore = Self.liveHeapBytes()
+        var live: [Int] = []
+        var footprint: [Int] = []
+        let footprintBefore = Self.physFootprint()
         var batches = 0, largestBatch = 0, total = 0
         var subjects = Set<String>()
         var folders = Set<String>()
@@ -1305,7 +1332,8 @@ final class V2CutoverTests: XCTestCase {
                 subjects.insert(email.headers["Subject"] ?? "")
                 folders.formUnion(email.tags)
             }
-            peak = max(peak, Self.physFootprint())
+            live.append(Self.liveHeapBytes() - liveBefore)
+            footprint.append(Self.physFootprint() - footprintBefore)
         }
         XCTAssertEqual(report.totalMessages, n)
         XCTAssertEqual(total, n)
@@ -1313,9 +1341,15 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(batches, n / 100)
         XCTAssertEqual(subjects.count, n, "every message arrived once")
         XCTAssertTrue(folders.contains { $0.hasSuffix("Inbox") }, "folder path preserved: \(folders)")
-        let grewBy = peak - before
-        XCTAssertLessThan(grewBy, fileSize / 2,
-                          "footprint grew \(grewBy / 1_048_576) MB while streaming a \(fileSize / 1_048_576) MB file")
+        let mb = { (bytes: [Int]) in bytes.map { $0 / 1_048_576 } }
+        let curves = "live heap MB per batch \(mb(live)), footprint MB per batch \(mb(footprint)), file \(fileSize / 1_048_576) MB"
+        XCTAssertLessThan(live.max() ?? 0, fileSize / 2, "the stream held half the file: \(curves)")
+        let settled = 4   // after batch 5
+        let batchShare = fileSize / max(1, batches)
+        XCTAssertLessThan((live[settled...].max() ?? 0) - live[settled], batchShare,
+                          "the live heap kept growing after batch 5 — it holds messages already handed out: \(curves)")
+        XCTAssertLessThan((footprint[settled...].max() ?? 0) - footprint[settled], fileSize / 4,
+                          "the footprint kept growing after batch 5: \(curves)")
 
         // Off: the previous path, unchanged — same messages, same order.
         StreamingParserPolicy.binaryStreaming = false
