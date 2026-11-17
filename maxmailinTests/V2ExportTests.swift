@@ -453,4 +453,26 @@ final class V2ExportTests: XCTestCase {
         XCTAssertEqual(CGImageSourceGetCount(source), PaginatedTextRenderer.pageCount(text, layout: layout))
         XCTAssertGreaterThan(CGImageSourceGetCount(source), 1)
     }
+
+    /// Review a177c8b..dd0c10d #4: the TIFF writer streams — each page is added
+    /// to the file as soon as it is rendered, so at most one page bitmap is held
+    /// (it used to render every page, ~7.7 MB each at 2×, before writing any).
+    func testB11_tiff_addsEachPageAsItIsRendered_neverHoldingTwo() throws {
+        let text = (1...300).map { "Row \($0)" }.joined(separator: "\n")
+        let layout = PaginatedTextRenderer.Layout(margin: 36, monospaced: true)
+        let pages = PaginatedTextRenderer.pageCount(text, layout: layout)
+        XCTAssertGreaterThan(pages, 2)
+        var events: [PaginatedTextRenderer.TIFFPageEvent] = []
+        let data = try XCTUnwrap(PaginatedTextRenderer.tiff(text, scale: 1, events: { events.append($0) }))
+        let expected = (1...pages).flatMap { [PaginatedTextRenderer.TIFFPageEvent.rendered($0), .added($0)] }
+        XCTAssertEqual(events, expected, "page k is added before page k+1 is rendered")
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        XCTAssertEqual(CGImageSourceGetCount(source), pages)
+        // Every page decodes at the page size.
+        for i in 0..<pages {
+            let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, i, nil))
+            XCTAssertEqual(image.width, Int(layout.pageSize.width))
+            XCTAssertEqual(image.height, Int(layout.pageSize.height))
+        }
+    }
 }

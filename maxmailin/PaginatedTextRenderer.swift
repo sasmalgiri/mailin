@@ -82,34 +82,61 @@ enum PaginatedTextRenderer {
         return data as Data
     }
 
+    /// What the TIFF writer did with a page (1-based), in order — for tests.
+    enum TIFFPageEvent: Equatable, Sendable { case rendered(Int), added(Int) }
+
     /// A multi-page TIFF (one image per page, LZW) at `scale` pixels per point.
     /// nil only if ImageIO cannot write TIFF.
-    static func tiff(_ text: String, layout: Layout = Layout(margin: 36, monospaced: true), scale: CGFloat = 2) -> Data? {
+    ///
+    /// Streams: the page count comes from the layout first, the TIFF
+    /// destination is created for that count, and each page is rendered,
+    /// compressed to its own one-page LZW TIFF and added from that before the
+    /// next page is drawn — the page bitmap (~7.7 MB at 2×) is released
+    /// inside the page's autorelease pool. Adding the bitmap itself would not
+    /// stream: ImageIO holds every added CGImage until Finalize (measured:
+    /// 40 pages peak at ~300 MB that way, ~11 MB this way).
+    static func tiff(_ text: String, layout: Layout = Layout(margin: 36, monospaced: true), scale: CGFloat = 2,
+                     events: ((TIFFPageEvent) -> Void)? = nil) -> Data? {
         let width = Int((layout.pageSize.width * scale).rounded())
         let height = Int((layout.pageSize.height * scale).rounded())
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
-        var images: [CGImage] = []
-        forEachPage(attributed(text, layout: layout), layout: layout) { frame in
-            guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-                                          space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
-            context.scaleBy(x: scale, y: scale)
-            context.setFillColor(CGColor(gray: 1, alpha: 1))
-            context.fill(CGRect(origin: .zero, size: layout.pageSize))
-            context.textMatrix = .identity
-            CTFrameDraw(frame, context)
-            if let image = context.makeImage() { images.append(image) }
-        }
-        return encodeTIFF(images)
-    }
-
-    /// Real TIFF bytes (`II*\0` / `MM\0*`), one page per image.
-    static func encodeTIFF(_ images: [CGImage]) -> Data? {
-        guard !images.isEmpty else { return nil }
+        let content = attributed(text, layout: layout)
+        let pages = forEachPage(content, layout: layout) { _ in }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.tiff.identifier as CFString,
-                                                                 images.count, nil) else { return nil }
+                                                                 pages, nil) else { return nil }
         let properties = [kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFCompression: 5]] as CFDictionary   // LZW
-        for image in images { CGImageDestinationAddImage(destination, image, properties) }
+        var added = 0
+        var failed = false
+        forEachPage(content, layout: layout) { frame in
+            guard !failed else { return }
+            autoreleasepool {
+                guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { failed = true; return }
+                context.scaleBy(x: scale, y: scale)
+                context.setFillColor(CGColor(gray: 1, alpha: 1))
+                context.fill(CGRect(origin: .zero, size: layout.pageSize))
+                context.textMatrix = .identity
+                CTFrameDraw(frame, context)
+                guard let image = context.makeImage() else { failed = true; return }
+                events?(.rendered(added + 1))
+                guard let page = onePageTIFF(image, properties: properties),
+                      let source = CGImageSourceCreateWithData(page as CFData, nil) else { failed = true; return }
+                CGImageDestinationAddImageFromSource(destination, source, 0, properties)
+                added += 1
+                events?(.added(added))
+            }
+        }
+        guard !failed, added == pages, CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
+
+    /// One page as its own LZW TIFF — a text page compresses to a small
+    /// fraction of its bitmap, and only this is held until the file is finished.
+    private static func onePageTIFF(_ image: CGImage, properties: CFDictionary) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.tiff.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, properties)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return data as Data
     }
