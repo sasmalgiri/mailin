@@ -281,11 +281,36 @@ final class FeatureIndexJob {
     private(set) var isRunning = false
     private(set) var lastCoverage: (indexed: Int, total: Int) = (0, 0)
     private var task: Task<Void, Never>?
+    /// Runs started so far (tests: an import re-kicks the job).
+    private(set) var runsStarted = 0
+    /// The run in progress, if any (tests drain it).
+    var currentRun: Task<Void, Never>? { task }
+    /// The registry the launch kick handed over, kept for re-kicks.
+    private var registry: ModuleRegistry?
+
+    init() {
+        // New imports create new work: analyse them now. Started only at
+        // launch before, mail imported in this session had no analysis index
+        // until the next launch — whole-archive near-duplicates then compared
+        // none of it ("0 of 7 emails indexed").
+        NotificationCenter.default.addObserver(forName: .parsingFinished, object: nil, queue: .main) { _ in
+            Task { @MainActor in FeatureIndexJob.shared.importLanded() }
+        }
+    }
+
+    /// An import finished: re-kick with the launch registry (a no-op with the
+    /// switch off or a run already going, which then picks the new rows up).
+    func importLanded() {
+        guard let registry else { return }
+        kickIfNeeded(registry: registry)
+    }
 
     /// Starts the backfill if the engine is on and it is not already running.
     func kickIfNeeded(registry: ModuleRegistry) {
+        self.registry = registry
         guard registry.isOn(.v3FeatureIndex), task == nil else { return }
         let jobs = registry.jobs
+        runsStarted += 1
         task = Task(priority: .background) { [weak self] in
             await self?.run()
             self?.task = nil
@@ -349,11 +374,32 @@ final class FingerprintJob {
     private(set) var isRunning = false
     private(set) var root: String?
     private var task: Task<Void, Never>?
+    /// Runs started so far (tests: an import re-kicks the job).
+    private(set) var runsStarted = 0
+    /// The run in progress, if any (tests drain it).
+    var currentRun: Task<Void, Never>? { task }
+    /// The registry the launch kick handed over, kept for re-kicks.
+    private var registry: ModuleRegistry?
+
+    init() {
+        // New imports add leaves: build them now, not at the next launch
+        // (the same gap as FeatureIndexJob).
+        NotificationCenter.default.addObserver(forName: .parsingFinished, object: nil, queue: .main) { _ in
+            Task { @MainActor in FingerprintJob.shared.importLanded() }
+        }
+    }
+
+    func importLanded() {
+        guard let registry else { return }
+        kickIfNeeded(registry: registry)
+    }
 
     /// Builds leaves for new emails and refreshes bucket roots (incremental).
     func kickIfNeeded(registry: ModuleRegistry) {
+        self.registry = registry
         guard registry.isOn(.v3Fingerprints), task == nil else { return }
         let jobs = registry.jobs
+        runsStarted += 1
         task = Task(priority: .background) { [weak self] in
             await self?.build()
             self?.task = nil

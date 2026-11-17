@@ -639,6 +639,36 @@ struct RunningJobLifecycleTests {
         #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID))
     }
 
+    @Test("An import re-kicks the 3.0 analysis index and fingerprint tree (they ran only at launch)")
+    func importReKicksFeatureAndFingerprintJobs() async throws {
+        let (registry, _) = makeRegistry()
+        registry.set(.v3ScopeEngine, enabled: true)
+        registry.set(.v3FeatureIndex, enabled: true)
+        registry.set(.v3Fingerprints, enabled: true)
+        try #require(registry.isOn(.v3FeatureIndex) && registry.isOn(.v3Fingerprints))
+        let features = FeatureIndexJob.shared, prints = FingerprintJob.shared
+
+        // The launch kick (LaunchJobs) hands each job the registry.
+        features.kickIfNeeded(registry: registry)
+        prints.kickIfNeeded(registry: registry)
+        while let run = features.currentRun { await run.value }
+        while let run = prints.currentRun { await run.value }
+        let featureRuns = features.runsStarted, printRuns = prints.runsStarted
+
+        // An import lands: both start again by themselves, as the attachment
+        // text job does. Before, nothing re-kicked them, so mail imported in
+        // this session had no analysis index (near-duplicates compared 0 of it).
+        NotificationCenter.default.post(name: .parsingFinished, object: nil)
+        let deadline = Date().addingTimeInterval(5)
+        while (features.runsStarted == featureRuns || prints.runsStarted == printRuns), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(features.runsStarted > featureRuns, "the analysis index runs after an import")
+        #expect(prints.runsStarted > printRuns, "the fingerprint tree is brought up to date after an import")
+        while let run = features.currentRun { await run.value }
+        while let run = prints.currentRun { await run.value }
+    }
+
     @Test("Cancelling a job clears its row immediately, and the cancelled run cannot clear a newer one")
     func attachmentIndexRowClearsOnCancel() async throws {
         let (registry, _) = makeRegistry()
