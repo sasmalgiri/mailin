@@ -122,6 +122,9 @@ struct MailAddAccountView: View {
         Section {
             TextField(String(localized: "Email address"), text: $form.address)
                 .autocorrectionDisabled()
+                // The same field as the sign-in section's: one identifier for
+                // "the address" whichever way this build adds Gmail (V4-16).
+                .accessibilityIdentifier("mail.add.address")
             TextField(String(localized: "Login name (if different)"), text: $form.loginName)
                 .autocorrectionDisabled()
             SecureField(choice.passwordLabel, text: $form.password)

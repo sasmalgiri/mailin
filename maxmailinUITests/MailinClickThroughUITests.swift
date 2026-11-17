@@ -3027,8 +3027,12 @@ final class MailinClickThroughUITests: XCTestCase {
     /// A real Gmail test account (Google project in "Testing" mode) is signed
     /// in, its mail preserved into a fresh, isolated archive, and what the UI
     /// reports is checked. Every click is the test's except the human part:
-    /// typing the address in Add account, pressing "Sign in…", and signing in /
-    /// allowing access in Google's window. The test waits up to 10 minutes.
+    /// in a 4.0 build (Gmail over IMAP, V4-16) typing the address and the app
+    /// password in Add account and pressing "Add"; in a Google sign-in build
+    /// typing the address, pressing "Sign in…", and signing in / allowing
+    /// access in Google's window. The test waits up to 10 minutes; when no
+    /// account is added and the sheet shows no error (nobody at the Mac) it
+    /// skips — an unattended run checks nothing, so it reports nothing failed.
     ///
     /// Connected build only. Skips when the Live Mail tab is absent (the
     /// offline edition has no tab), when the Mail page says the edition has no
@@ -3112,28 +3116,45 @@ final class MailinClickThroughUITests: XCTestCase {
         if fjElement("mail.add.notConfigured").exists {
             throw XCTSkip("Gmail sign-in is not set up in this build (no MailinGmailClientID in its Info.plist).")
         }
+        // V4-16 (18e209f): 4.0 builds add Gmail with an IMAP app password
+        // (MailinGmailSignInMode = imap) — address + app password + Add, no
+        // Google window; 4.0.x builds sign in with Google. Both pickers say
+        // "Gmail"; the app-password field tells them apart.
         let addressField = fjElement("mail.add.address")
         guard addressField.waitForExistence(timeout: 10) else {
             record("add account", false, "Gmail chosen (\(provider.value ?? "")) but no email address field")
             finish(); return
         }
+        let appPasswordMode = fjElement("mail.add.password").exists
         addressField.click()   // focused, so the owner can type straight away
         snapshotScreen("gmail-0-add-account")
 
-        // ── The human part: address, Sign in…, Google sign-in and consent ──
+        // ── The human part: the address and the app password / Google sign-in ──
         let accountRow = fjElement("mail.sidebar.account")
-        let instructions = "OWNER: type the Gmail test address, press Sign in… (Continue), sign in and allow 'View your email messages and settings'"
-        let signedIn: Bool = XCTContext.runActivity(named: instructions) { _ in
-            print("""
-
-                ============================================================
-                LIVE-GMAIL — OWNER ACTION NEEDED (waiting up to \(Int(Self.liveGmailWait / 60)) minutes)
+        let instructions = appPasswordMode
+            ? "OWNER: type the Gmail test address and its app password, press Add"
+            : "OWNER: type the Gmail test address, press Sign in… (Continue), sign in and allow 'View your email messages and settings'"
+        let steps = appPasswordMode
+            ? """
+                1. In mailin's Add account sheet (Gmail is chosen), type the
+                   Gmail TEST account address and its 16-character app
+                   password (Google Account ▸ Security ▸ 2-Step Verification
+                   ▸ App passwords), then press "Add".
+                """
+            : """
                 1. In mailin's Add account sheet (Gmail is chosen), type the
                    Gmail TEST account address, then press "Sign in…".
                 2. In Google's sign-in window: choose / sign in to that account,
                    press Continue past the "Google hasn't verified this app"
                    (Testing mode) notice, and allow
                    "View your email messages and settings".
+                """
+        let signedIn: Bool = XCTContext.runActivity(named: instructions) { _ in
+            print("""
+
+                ============================================================
+                LIVE-GMAIL — OWNER ACTION NEEDED (waiting up to \(Int(Self.liveGmailWait / 60)) minutes)
+                \(steps)
                 The test continues by itself once the account is listed.
                 ============================================================
 
@@ -3152,9 +3173,15 @@ final class MailinClickThroughUITests: XCTestCase {
             return accountRow.exists
         }
         guard signedIn else {
+            // The sheet said why: someone tried and it failed — a finding.
             let error = fjElement("mail.add.error")
-            record("sign-in", false, "no account listed within \(Int(Self.liveGmailWait)) s\(error.exists ? "; the sheet says: \(fjText(error))" : "")")
-            finish(); return
+            if error.exists {
+                record("sign-in", false, "no account listed within \(Int(Self.liveGmailWait)) s; the sheet says: \(fjText(error))")
+                finish(); return
+            }
+            // Nobody signed in (an unattended run): nothing was checked, so
+            // nothing failed. This test needs the owner at the Mac.
+            throw XCTSkip("Owner-run live check: no Gmail account was added within \(Int(Self.liveGmailWait / 60)) minutes (\(appPasswordMode ? "address + app password + Add" : "address + Sign in… + Google consent") is done by hand). Run it with the owner at the Mac.")
         }
         app.activate()
         Thread.sleep(forTimeInterval: 2)
