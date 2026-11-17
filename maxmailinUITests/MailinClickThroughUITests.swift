@@ -3074,6 +3074,14 @@ final class MailinClickThroughUITests: XCTestCase {
         app.activate()
         _ = app.windows.firstMatch.waitForExistence(timeout: 30)
         Thread.sleep(forTimeInterval: 3)
+        // The open page is remembered app-wide (not per fresh archive): left
+        // on Live Mail, the next launch — on the person's own archive — opens
+        // there (2026-11-17: the accessibility audit that ran next audited the
+        // Mail page instead of the Archive window). Leave it on Archive.
+        addTeardownBlock { [weak self] in
+            guard let self, self.app.state == .runningForeground || self.app.state == .runningBackground else { return }
+            _ = self.openPage("Archive")
+        }
 
         // ── Is this a connected build? ──
         let mailTab = app.buttons.matching(NSPredicate(format: "label == %@", "Live Mail")).firstMatch
