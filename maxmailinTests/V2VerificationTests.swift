@@ -13344,4 +13344,41 @@ final class Review1116CTests: XCTestCase {
         #endif
         XCTAssertFalse(UITestLaunch.isHonoured(arguments: ["mailin"]))
     }
+
+    /// Review a177c8b..dd0c10d #2: the restore alert's binding may be set to false
+    /// before the tapped button's action runs; the button's answer must win. Cancel
+    /// answers no; a dismissal with no button answers no.
+    func testRestoreAsker_buttonActionWinsOverAnEarlierBindingDismissal() async throws {
+        let snap = ArchiveSnapshot(url: URL(fileURLWithPath: "/tmp/none.db"), date: Date(), reason: "manual", bytes: 0)
+        func run(_ act: (SnapshotRestoreAsker) -> Void) async -> Bool {
+            let asker = SnapshotRestoreAsker()
+            let answer = Task { await asker.ask(ArchiveSnapshots.RestoreRequest(snapshot: snap, messages: 1)) }
+            while asker.pending == nil { await Task.yield() }
+            act(asker)
+            let value = await answer.value
+            XCTAssertNil(asker.pending)
+            return value
+        }
+        // Binding set to false first, then the Restore action: restore.
+        let restore = await run { asker in
+            asker.isPresentedBinding.wrappedValue = false
+            asker.answer(true)
+        }
+        XCTAssertTrue(restore, "tapping Restore must restore even when the binding is cleared first")
+        // Restore action first, then the binding: restore.
+        let restoreThenBinding = await run { asker in
+            asker.answer(true)
+            asker.isPresentedBinding.wrappedValue = false
+        }
+        XCTAssertTrue(restoreThenBinding)
+        // Cancel (either order): cancel.
+        let cancel = await run { asker in
+            asker.isPresentedBinding.wrappedValue = false
+            asker.answer(false)
+        }
+        XCTAssertFalse(cancel)
+        // Dismissed with no button at all: cancel, never left hanging.
+        let dismissed = await run { asker in asker.isPresentedBinding.wrappedValue = false }
+        XCTAssertFalse(dismissed)
+    }
 }

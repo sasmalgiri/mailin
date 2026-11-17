@@ -209,19 +209,44 @@ enum ArchiveSnapshots {
 final class SnapshotRestoreAsker {
     var pending: ArchiveSnapshots.RestoreRequest?
     private var continuation: CheckedContinuation<Bool, Never>?
+    /// Which question is open, so a deferred dismissal never answers a later one.
+    private var question = 0
 
     func ask(_ request: ArchiveSnapshots.RestoreRequest) async -> Bool {
         answer(false)   // a question still open is cancelled, never left hanging
+        question += 1
         return await withCheckedContinuation { c in
             continuation = c
             pending = request
         }
     }
 
+    /// The Restore / Cancel button's answer. One-shot: the first answer to a
+    /// question wins and any later call is ignored.
     func answer(_ restore: Bool) {
         pending = nil
-        continuation?.resume(returning: restore)
+        guard let c = continuation else { return }
         continuation = nil
+        c.resume(returning: restore)
+    }
+
+    /// The alert closed (its binding went false). SwiftUI does not promise
+    /// whether that comes before or after the tapped button's action, so the
+    /// "cancel" for a dismissal with no button is deferred to the next
+    /// main-actor turn — a Restore action arriving after the binding still wins.
+    func alertDismissed() {
+        pending = nil
+        guard continuation != nil else { return }
+        let open = question
+        Task { @MainActor [weak self] in
+            guard let self, self.question == open else { return }
+            self.answer(false)
+        }
+    }
+
+    /// The alert's `isPresented` binding.
+    var isPresentedBinding: Binding<Bool> {
+        Binding(get: { self.pending != nil }, set: { if !$0 { self.alertDismissed() } })
     }
 }
 
@@ -229,7 +254,7 @@ extension View {
     /// The restore question for `asker` (Restore is destructive; Cancel is the default).
     func snapshotRestoreConfirmation(_ asker: SnapshotRestoreAsker) -> some View {
         alert(asker.pending?.title ?? "",
-              isPresented: Binding(get: { asker.pending != nil }, set: { if !$0 { asker.answer(false) } }),
+              isPresented: asker.isPresentedBinding,
               presenting: asker.pending) { _ in
             Button(String(localized: "Restore"), role: .destructive) { asker.answer(true) }
             Button(String(localized: "Cancel"), role: .cancel) { asker.answer(false) }
