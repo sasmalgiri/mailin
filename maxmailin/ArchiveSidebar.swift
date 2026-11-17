@@ -519,6 +519,11 @@ struct ArchiveSidebarView: View {
             Image(systemName: symbol)
         }
         .tag(target)
+        // One element per row: without this the label (and any identifier
+        // set on the row) lands on both Texts, so VoiceOver reads the row
+        // twice, and a folder with children reads "Work, 2 messages, Work, 2
+        // messages" (the disclosure cell merges the two).
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(count) messages")
     }
 

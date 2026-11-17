@@ -953,6 +953,10 @@ struct ExportProgressOverlayView: View {
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
         .padding(.bottom, 32)
         .transition(.opacity)
+        // A container of its own, so its rows (verdict, reconciliation,
+        // Verify export…) keep their identifiers instead of all becoming
+        // "export.receipt".
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("export.receipt")
     }
 

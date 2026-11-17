@@ -99,6 +99,7 @@ struct SourceFolderSection: View {
             .padding(.vertical, Spacing.xxSmall)
             .background(inTrash ? AppColors.primary.opacity(0.1) : Color.clear)
             .cornerRadius(CornerRadius.small)
+            .contentShape(Rectangle())   // the whole row, as for the folder rows
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(String(localized: "Trash")), \(sidebar.trashedCount) messages")
@@ -181,6 +182,10 @@ struct SourceFolderSection: View {
             .padding(.vertical, Spacing.xxSmall)
             .background(isSelected ? AppColors.primary.opacity(0.1) : Color.clear)
             .cornerRadius(CornerRadius.small)
+            // The whole row is the target: a plain button answers only where
+            // something is drawn, so a click in the gap between the name and
+            // the count (the row's middle) chose nothing.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(row.node.path)

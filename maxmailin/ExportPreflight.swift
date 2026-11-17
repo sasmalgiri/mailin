@@ -111,6 +111,10 @@ struct ExportPreflightSheet: View {
         .frame(width: 440)
         #endif
         .task(id: request.options) { await refreshEstimate() }
+        // A container of its own: an identifier on the plain stack was
+        // pushed onto every child, replacing theirs, so Start, Space,
+        // fidelity and hand-off could not be found by identifier.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("export.preflight")
     }
 

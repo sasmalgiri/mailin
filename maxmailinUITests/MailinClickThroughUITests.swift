@@ -2575,14 +2575,14 @@ final class MailinClickThroughUITests: XCTestCase {
             record("J1 open", false, failure)
         } else {
             let all = fjElement("archive.sidebar.allMail")
-            let settled = fjWait(timeout: 240) { all.exists && all.label.contains("\(FiveJobsFixture.total) messages") }
+            let settled = fjWait(timeout: 240) { self.fjText(all).contains("\(FiveJobsFixture.total) messages") }
             // Attachment text is indexed after the import (search depends on it).
             _ = fjWait(timeout: 240) { !self.fjElement("import.queue.attachmentIndexing").exists }
             let receipt = fjOpenImportReceipt()
             let saved = receipt.accounting.range(of: #"Saved to the archive\W+\#(FiveJobsFixture.total)\b"#, options: .regularExpression) != nil
             let verdictOK = !receipt.verdict.isEmpty && !receipt.verdict.contains("Failed")
             record("J1 open", settled && saved && verdictOK,
-                   "sidebar: \(all.exists ? all.label : "All Mail row missing"); receipt verdict: \(receipt.verdict.prefix(120)); accounting: \(receipt.accounting.prefix(240))")
+                   "sidebar: \(all.exists ? fjText(all) : "All Mail row missing"); receipt verdict: \(receipt.verdict.prefix(120)); accounting: \(receipt.accounting.prefix(240))")
         }
 
         // ── J2 folders: nested and empty source folders, with counts ──
@@ -2596,8 +2596,8 @@ final class MailinClickThroughUITests: XCTestCase {
                 Thread.sleep(forTimeInterval: 0.5)
             }
             let rows = app.descendants(matching: .any).matching(identifier: "archive.sidebar.folder").allElementsBoundByIndex
-            let labels = rows.map(\.label)
-            func row(_ prefix: String) -> XCUIElement? { rows.first { $0.label.hasPrefix(prefix + ",") } }
+            let labels = rows.map { fjText($0) }
+            func row(_ prefix: String) -> XCUIElement? { rows.first { fjText($0).hasPrefix(prefix + ",") } }
             let expected = FiveJobsFixture.folders.map { "\($0.name), \($0.count) messages" }
             let allPresent = expected.allSatisfy { labels.contains($0) }
             let nested: Bool = {
@@ -2684,8 +2684,9 @@ final class MailinClickThroughUITests: XCTestCase {
             }
             let verified = fjElement("duplicates.group.verified")
             if verified.waitForExistence(timeout: 60) {
-                detail.append("exact: \(verified.label)")
-                if !(verified.label.hasPrefix("Byte-identical") && verified.label.contains(FiveJobsFixture.exactSubject)) { pass = false }
+                let exact = fjText(verified)
+                detail.append("exact: \(exact)")
+                if !(exact.hasPrefix("Byte-identical") && exact.contains(FiveJobsFixture.exactSubject)) { pass = false }
             } else { pass = false; detail.append("no verified-identical group") }
             // Near-duplicates: listed as Similar (never bulk-selected).
             let near = fjElement("duplicates.includeNear")
@@ -2693,7 +2694,7 @@ final class MailinClickThroughUITests: XCTestCase {
             for attempt in 0..<4 where similarLabel.isEmpty {
                 if near.exists, "\(near.value ?? "")" != "1" { near.click() }
                 if fjWait(timeout: attempt == 0 ? 30 : 20, { self.fjSimilarGroup() != nil }) {
-                    similarLabel = fjSimilarGroup()?.label ?? ""
+                    similarLabel = fjSimilarGroup().map { fjText($0) } ?? ""
                 } else if near.exists {
                     near.click()   // off, then on again next round: a fresh scan once the index caught up
                     Thread.sleep(forTimeInterval: 2)
@@ -2706,30 +2707,34 @@ final class MailinClickThroughUITests: XCTestCase {
             if selectAll.waitForExistence(timeout: 10), selectAll.isEnabled { selectAll.click() } else { pass = false; detail.append("Select all but first (verified groups) unavailable") }
             let count = fjElement("duplicates.selectedCount")
             let move = fjElement("duplicates.moveSelected")
-            let countLine = count.exists ? count.label : ""
+            let countLine = fjText(count)
             detail.append("before moving: “\(countLine)” / button “\(move.exists ? move.label : "missing")”")
             if !(countLine.hasPrefix("1 ") && move.exists && move.label.contains("1 selected")) { pass = false }
             if move.exists, move.isEnabled { move.click() } else { pass = false }
             let trash = fjElement("archive.sidebar.trash")
             app.activate()
-            let inTrash = fjWait(timeout: 30) { trash.exists && trash.label.contains("1 messages") }
-            detail.append("after moving: \(trash.exists ? trash.label : "Trash row missing")")
+            let inTrash = fjWait(timeout: 30) { self.fjText(trash).contains("1 messages") }
+            detail.append("after moving: \(trash.exists ? fjText(trash) : "Trash row missing")")
             if !inTrash { pass = false }
             // Restore from the Trash.
             if inTrash {
                 trash.click()
+                // The Trash list, not the All Mail rows still on screen for a
+                // moment after the click: exactly the one trashed message.
+                let trashListed = fjWait(timeout: 15) { self.fjRowCount() == 1 && !self.fjElement("archive.list.initialLoading").exists }
                 let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'archive.row.'")).firstMatch
-                if row.waitForExistence(timeout: 15) {
+                if trashListed, row.waitForExistence(timeout: 5) {
                     row.rightClick()
                     let restore = app.menuItems["Restore from Trash"]
                     if restore.waitForExistence(timeout: 5) { restore.click() } else {
                         pass = false; detail.append("no Restore from Trash on the trashed row"); app.typeKey(.escape, modifierFlags: [])
                     }
-                } else { pass = false; detail.append("the Trash list showed no row") }
-                let back = fjWait(timeout: 30) { trash.label.contains("0 messages") }
+                } else { pass = false; detail.append("the Trash list did not show the one trashed message (rows: \(fjRowCount()))") }
+                let back = fjWait(timeout: 30) { self.fjText(trash).contains("0 messages") }
+                detail.append("Trash list after restore: \(fjRowCount()) row(s)")
                 let all = fjElement("archive.sidebar.allMail")
-                detail.append("after restore: \(trash.label); \(all.exists ? all.label : "")")
-                if !back || !all.label.contains("\(FiveJobsFixture.total) messages") { pass = false }
+                detail.append("after restore: \(fjText(trash)); \(fjText(all))")
+                if !back || !fjText(all).contains("\(FiveJobsFixture.total) messages") { pass = false }
                 if all.exists { all.click() }
             }
             record("J4 duplicates", pass, detail.joined(separator: "; "))
@@ -2747,11 +2752,24 @@ final class MailinClickThroughUITests: XCTestCase {
             var expected = FiveJobsFixture.folders.first { $0.name == FiveJobsFixture.exportFolder }?.count ?? 0
             if folder.waitForExistence(timeout: 30) {
                 if let n = Int(folder.label.components(separatedBy: ", ").last?.components(separatedBy: " ").first ?? "") { expected = n }
-                folder.click()
+                // Seen 2026-11-17: with the row in view (y 707 of an 860-pt
+                // window) XCUITest's click still ran "Scroll element to
+                // visible", scrolled the sidebar the wrong way (row to y 1088,
+                // off the window) and clicked there — or sent no event — so
+                // the folder was never chosen. The test scrolls the sidebar
+                // itself until the row is hittable, clicks the row's centre,
+                // and checks the selected trait the row carries.
+                for _ in 0..<3 where !folder.isSelected {
+                    fjScrollIntoView(folder)
+                    folder.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+                    _ = fjWait(timeout: 3) { folder.isSelected }
+                }
+                if !folder.isSelected { pass = false; detail.append("the folder row would not select") }
                 Thread.sleep(forTimeInterval: 1.5)
                 detail.append("folder: \(folder.label)")
             } else { pass = false; detail.append("\(FiveJobsFixture.exportFolder) not in the Advanced list's source folders") }
-            let menu = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Export filtered emails'")).firstMatch
+            // A SwiftUI Menu's accessibilityLabel reaches macOS as its title (AXTitle), not its label.
+            let menu = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Export filtered emails' OR title == 'Export filtered emails'")).firstMatch
             var receiptShown = false
             if menu.waitForExistence(timeout: 10) {
                 menu.click()
@@ -2829,11 +2847,64 @@ final class MailinClickThroughUITests: XCTestCase {
         return condition()
     }
 
-    /// A Text's words: on macOS the value, else the label.
+    /// An element's words: on macOS a Text carries them (and any
+    /// accessibilityLabel set on it) in its value, a button or combined
+    /// element in its label; a container without either, its Texts joined.
     private func fjText(_ e: XCUIElement) -> String {
         guard e.exists else { return "" }
         let value = (e.value as? String) ?? ""
-        return value.isEmpty ? e.label : value
+        if !value.isEmpty { return value }
+        if !e.label.isEmpty { return e.label }
+        return fjTexts(in: e).joined(separator: " / ")
+    }
+
+    /// Scrolls the scroll view that holds `e` (same column, starting above
+    /// it) until `e` lies wholly inside it — measured 2026-11-17: the Advanced
+    /// list's Inbox source folder at y 1088 below an 827-pt window comes to
+    /// y 707 after a -400 scroll of the sidebar. "Hittable" is not enough: at
+    /// y 788 the row counted as hittable while it sat under the sticky
+    /// Apply / Export bar below the sidebar's scroll view (bottom 780), and
+    /// the click went to the bar.
+    private func fjScrollIntoView(_ e: XCUIElement) {
+        guard e.exists else { return }
+        let f = e.frame
+        let holder = app.scrollViews.allElementsBoundByIndex
+            .filter { $0.frame.minX <= f.minX && $0.frame.maxX >= f.maxX && $0.frame.minY <= f.minY && $0.frame.height > 0 }
+            .max { $0.frame.height < $1.frame.height }
+        guard let holder else { return }
+        let view = holder.frame
+        for _ in 0..<12 where !view.contains(e.frame) {
+            holder.scroll(byDeltaX: 0, deltaY: e.frame.maxY > view.maxY ? -150 : 150)
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+    }
+
+    /// Messages listed: SwiftUI puts a row's identifier on each of its
+    /// Texts, so distinct `archive.row.<id>` identifiers are counted, not
+    /// elements.
+    private func fjRowCount() -> Int {
+        let list = app.outlines["archive.list"].firstMatch
+        guard list.exists, let snap = try? list.snapshot() else { return 0 }
+        var ids = Set<String>()
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.identifier.hasPrefix("archive.row.") { ids.insert(s.identifier) }
+            s.children.forEach(walk)
+        }
+        walk(snap)
+        return ids.count
+    }
+
+    /// Puts `text` into the focused field through the pasteboard. On this
+    /// Mac (macOS 27.0.1, ABC-India input source) XCUITest's `typeText`
+    /// delivers some letters as shortcuts — "zanzibarite" arrives as "te" in
+    /// mailin's fields and in TextEdit alike (z undoes, a selects all, b/i/r
+    /// vanish) — so typed words are not what the app receives. Pasting is a
+    /// real edit of the field (the binding updates as for typing), and the
+    /// caller checks the field holds exactly `text`.
+    private func fjEnter(_ text: String, into field: XCUIElement) -> Bool {
+        field.click()
+        fjPaste(text)
+        return fjText(field) == text
     }
 
     private func fjTexts(in root: XCUIElement) -> [String] {
@@ -2900,7 +2971,7 @@ final class MailinClickThroughUITests: XCTestCase {
         let accounting = fjElement("import.receipt.accounting")
         guard accounting.waitForExistence(timeout: 20) else { return ("", "") }
         let verdict = fjElement("import.receipt.verdict")
-        let result = (verdict.exists ? verdict.label : "", accounting.label)
+        let result = (fjText(verdict), fjText(accounting))
         snapshotScreen("fivejobs-import-receipt")
         app.typeKey("w", modifierFlags: .command)
         Thread.sleep(forTimeInterval: 1)
@@ -2911,7 +2982,6 @@ final class MailinClickThroughUITests: XCTestCase {
     /// the file"); retried while attachment text may still be indexing.
     /// Returns the rows listed (-1: the builder could not be driven).
     private func fjAdvancedSearch(attachmentWord: String, expectRows: Int) -> Int {
-        let rowsQuery = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'archive.row.'"))
         var rows = -1
         for attempt in 0..<6 {
             app.activate()
@@ -2928,13 +2998,16 @@ final class MailinClickThroughUITests: XCTestCase {
             addAttachment.click()
             let field = fjElement("advancedSearch.attachment.content")
             guard field.waitForExistence(timeout: 5) else { return -1 }
-            field.click()
-            field.typeText(attachmentWord)
+            guard fjEnter(attachmentWord, into: field) else {
+                print("FIVE-JOURNEYS J3: the attachment field holds “\(fjText(field))”, not “\(attachmentWord)”")
+                app.typeKey(.escape, modifierFlags: [])
+                return -1
+            }
             fjElement("advancedSearch.apply").click()
             // Settled: rows listed, or the no-match notice.
-            _ = fjWait(timeout: 20) { rowsQuery.count > 0 || self.fjElement("archive.list.noResults").exists }
+            _ = fjWait(timeout: 20) { self.fjRowCount() > 0 || self.fjElement("archive.list.noResults").exists }
             Thread.sleep(forTimeInterval: 1)
-            rows = rowsQuery.count
+            rows = fjRowCount()
             if rows == expectRows { return rows }
             if attempt < 5 { Thread.sleep(forTimeInterval: 10) }   // the attachment-text index may still be running
         }
@@ -2943,7 +3016,7 @@ final class MailinClickThroughUITests: XCTestCase {
 
     private func fjSimilarGroup() -> XCUIElement? {
         let groups = app.descendants(matching: .any).matching(identifier: "duplicates.group.similar").allElementsBoundByIndex
-        return groups.first { $0.label.contains(FiveJobsFixture.nearSubject) }
+        return groups.first { fjText($0).contains(FiveJobsFixture.nearSubject) }
     }
 
     // MARK: - V4: live Gmail check (owner-run, semi-automated)
