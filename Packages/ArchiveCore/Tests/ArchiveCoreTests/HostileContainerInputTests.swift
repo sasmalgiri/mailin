@@ -322,6 +322,27 @@ final class HostileContainerInputTests: XCTestCase {
         }
     }
 
+    func testA15_cabinetMembersReadInOrder_decodeEachBlockOnce() throws {
+        // Review a177c8b..dd0c10d #1: 200 small members across 8 blocks, read in
+        // folder order. Each member ends mid-block, inside the next member's
+        // start; the reader must serve the next member from the block it holds,
+        // not restart the folder (members × blocks decodes).
+        let blockSize = 1_000
+        let blocks = (0..<8).map { k in [UInt8]((0..<blockSize).map { UInt8(($0 * 3 + k * 17) % 256) }) }
+        let all = blocks.flatMap { $0 }
+        let files = (0..<200).map { i in CabFile(name: "m\(i)", size: 40, offset: i * 40) }
+        for compression: UInt16 in [0, 1] {
+            let payloads = try blocks.map { compression == 0 ? Data($0) : try mszip($0) }
+            let cab = try CabinetReader(data: cabinet(compression: compression, blocks: zip(blocks, payloads).map { ($0.0.count, $0.1) }, files: files))
+            for m in cab.members {
+                XCTAssertEqual(try cab.extract(m), Array(all[m.offsetInFolder..<(m.offsetInFolder + m.size)]), m.name)
+            }
+            XCTAssertEqual(cab.blocksDecoded, blocks.count, "compression \(compression): each block decoded once in order")
+            // Out of order still restarts and still reads right.
+            XCTAssertEqual(try cab.extract(cab.members[0]), Array(all[0..<40]))
+        }
+    }
+
     // MARK: - A20 ZIP central directory streamed
 
     /// A random-access source over a sparse virtual file: zeros except the

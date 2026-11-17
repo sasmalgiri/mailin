@@ -62,6 +62,8 @@ final class CabinetReader {
     /// block by block and only the requested member's bytes are kept, so a
     /// folder of 65,535 × 32 KiB blocks in a small file never sits in memory.
     private var cursors: [Int: FolderCursor] = [:]
+    /// How many data blocks have been decoded (all folders, restarts included).
+    private(set) var blocksDecoded = 0
 
     /// MS-CAB: a CFDATA block holds at most 32,768 uncompressed bytes. A
     /// block declaring more is not a cabinet block — refused by name.
@@ -127,15 +129,28 @@ final class CabinetReader {
     /// passed over (only the 32 KiB MSZIP history is kept), so memory is the
     /// member's own size plus one block — never the whole folder, which a
     /// small file can declare as 65,535 × 32 KiB. Members asked for in
-    /// folder order continue where the previous one stopped; out of order
+    /// folder order continue where the previous one stopped — a member that
+    /// begins inside the last decoded block is served from that block — so
+    /// reading every member in order decodes each block once; out of order
     /// restarts the folder.
     func extract(_ member: Member) throws -> [UInt8] {
         let folder = folders[member.folderIndex]
         guard folder.compression.isReadable else { throw ReadError(text: "\(folder.compression.name)-compressed folder is not opened") }
         let start = member.offsetInFolder, end = member.offsetInFolder + member.size   // both from 32-bit fields
         var cursor = cursors[member.folderIndex] ?? FolderCursor(position: folder.dataOffset)
-        if cursor.produced > start { cursor = FolderCursor(position: folder.dataOffset) }
         var out: [UInt8] = []
+        if cursor.produced > start {
+            // The previous member stopped mid-block, past this member's start:
+            // when the start lies in the block still held, serve it from there
+            // and continue forward; only earlier (out-of-order) restarts.
+            let windowStart = cursor.produced - cursor.window.count
+            if start >= windowStart {
+                let to = min(end, cursor.produced)
+                if start < to { out.append(contentsOf: cursor.window[(start - windowStart)..<(to - windowStart)]) }
+            } else {
+                cursor = FolderCursor(position: folder.dataOffset)
+            }
+        }
         while cursor.produced < end, let block = try nextBlock(&cursor, folderIndex: member.folderIndex) {
             let blockStart = cursor.produced - block.count
             let from = max(start, blockStart), to = min(end, cursor.produced)
@@ -160,6 +175,9 @@ final class CabinetReader {
         var produced = 0
         /// The last 32 KiB of output: the MSZIP dictionary for the next block.
         var history: [UInt8] = []
+        /// The last decoded block (at most 32 KiB), ending at `produced`: a
+        /// member read next that starts inside it is served from here.
+        var window: [UInt8] = []
         var inflater: Inflater?
         var ended = false
     }
@@ -206,6 +224,8 @@ final class CabinetReader {
         case .quantum, .lzx:
             output = []
         }
+        blocksDecoded += 1
+        c.window = output
         c.produced += output.count
         return output
     }
