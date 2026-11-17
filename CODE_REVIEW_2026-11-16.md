@@ -24,6 +24,20 @@ verified on b34d6c4, MacBook Air arm64, macOS 27.0.1:
   ArchiveDataService); none from this pass.
 - No failure found; nothing needed fixing in the merge.
 
+**Review of a177c8b..dd0c10d (2026-11-17), five findings fixed:** #1 CAB reader decodes each block once
+for members read in folder order (87b853e); #2 snapshot-restore alert answer is one-shot, the tapped
+button wins (bef6638); #3 D-6 in ArchiveQueryCompiler — NOT only in capitals (1e3265a); #4 TIFF export
+streams page by page (f39003c); #5 PST spec reader reads lcbTotal 0xFFFFFFFF as "not stated" (39e34ef).
+Gate check: OPEN-02 PST streaming test had started failing ("footprint grew 160 MB while streaming a
+204 MB file") with the old and new PST reader sources alike. Per-batch measurement found no retention —
+footprint +147, +157, then +109 MB flat to batch 20, live heap +51 then +60 MB flat; 4,000 messages /
+409 MB: same plateau (+133 MB footprint, +60 MB live); the same per-message work with every result
+discarded is flat on the main thread and rises ~150 MB on the cooperative pool (allocator regions, not
+messages). The test now checks the live heap (< half the file) and the plateau after batch 5 (live heap
+< one batch's share, footprint < a quarter of the file), and was shown to fail when the reader keeps each
+message body (04e145d). Five-jobs gate on 04e145d: **214 passed, 2 skipped (COMP14, TYPE05 — owner-bound),
+0 failed**.
+
 Remaining, owner only: open the B13 `.msg` output in real Outlook; native-speaker review of the machine
 translations (~150 keys from this review); the two skipped owner-bound tests (S/MIME keychain identity,
 speech permission); review and push `v3-architecture`; a signed release candidate.
