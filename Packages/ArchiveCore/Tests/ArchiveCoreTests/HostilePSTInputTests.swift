@@ -168,6 +168,29 @@ final class HostilePSTInputTests: XCTestCase {
         XCTAssertEqual(reader.dataBlocks(0x06).map(\.count), [64, 64])
     }
 
+    /// Review a177c8b..dd0c10d #5: mailin's earlier PSTWriter writes lcbTotal as
+    /// UInt32(clamping:), so 0xFFFFFFFF means "4 GiB or more", not a 4 GiB cap
+    /// (PSTParser already reads it so). Distinct children read in full under that
+    /// sentinel, through an XBLOCK and an XXBLOCK; a repeated BID is still refused.
+    func testSpecReaderLcbTotalSentinelReadsDistinctChildren_repeatsStillRefused() throws {
+        let sentinel = UInt32.max
+        // The sentinel sets no total cap (an item over 4 GiB cannot be built here,
+        // so the budget is checked directly); any other value is the strict cap.
+        XCTAssertEqual(PSTSpecReader.dataTreeBudget(declared: sentinel), Int.max, "0xFFFFFFFF is \"not stated\", not 4 GiB")
+        XCTAssertEqual(PSTSpecReader.dataTreeBudget(declared: 0xFFFF_FFFE), 0xFFFF_FFFE)
+        XCTAssertEqual(PSTSpecReader.dataTreeBudget(declared: 64), 64)
+        let file = Self.dataTreeFile { b in
+            Self.xblock(&b, at: 4096, level: 1, children: [0x04, 0x08], total: sentinel)
+            Self.xblock(&b, at: 8192, level: 1, children: [0x04, 0x08, 0x04], total: sentinel)
+            Self.xblock(&b, at: 12288, level: 2, children: [0x06], total: sentinel)
+            return [(0x06, 4096, 24), (0x0E, 8192, 32), (0x0A, 12288, 16)]
+        }
+        let reader = try PSTSpecReader(data: file)
+        XCTAssertEqual(reader.dataBlocks(0x06).map(\.count), [64, 64], "XBLOCK with lcbTotal 0xFFFFFFFF")
+        XCTAssertEqual(reader.dataBlocks(0x0A).map(\.count), [64, 64], "XXBLOCK with lcbTotal 0xFFFFFFFF")
+        XCTAssertTrue(reader.dataBlocks(0x0E).isEmpty, "a repeated child BID is still a corrupt tree under the sentinel")
+    }
+
     /// A BTH whose index record lists itself three times, ten levels deep: the walk
     /// visited it 3^10 times (118,098 records from one 18-byte allocation).
     func testSpecReaderBTHSelfReferenceIsReadOnce() throws {

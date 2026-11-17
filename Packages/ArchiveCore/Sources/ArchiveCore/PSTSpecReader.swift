@@ -255,9 +255,18 @@ final class PSTSpecReader {
         guard bid & 2 != 0 else { return [d] }
         // XBLOCK (cLevel 1) or XXBLOCK (cLevel 2): btype 0x01; lcbTotal at offset 4.
         guard d.count >= 8, d[0] == 0x01 else { return [] }
-        var tree = DataTree(budget: Int(Self.u32(d, 4)), seen: [bid & ~1])
+        var tree = DataTree(budget: Self.dataTreeBudget(declared: Self.u32(d, 4)), seen: [bid & ~1])
         guard expand(d, depth: 0, into: &tree) else { return [] }
         return tree.out
+    }
+
+    /// The most bytes a data tree's external blocks may add up to: the root's
+    /// declared `lcbTotal`, except 0xFFFFFFFF — mailin's earlier PSTWriter
+    /// stores lcbTotal as UInt32(clamping:), so there it means "4 GiB or
+    /// more" (PSTParser reads it the same way). Such a tree is bounded by the
+    /// visited-BID set alone; a repeated BID is still refused.
+    static func dataTreeBudget(declared: UInt32) -> Int {
+        declared == UInt32.max ? Int.max : Int(declared)
     }
 
     private struct DataTree {
