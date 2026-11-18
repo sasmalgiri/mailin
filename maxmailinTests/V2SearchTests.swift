@@ -803,6 +803,25 @@ extension V2SearchTests {
         XCTAssertTrue(sheet.contains("attachmentDocumentHasText("))
     }
 
+    /// Gate 1 walk 2026-11-18 (iPad): "Show the text at this match" on a
+    /// DOCX inside a ZIP titled the sheet "Text inside report.docx:
+    /// report.docx" — the evidence knows only the child's name. The title
+    /// names the attachment that holds it, read from the message.
+    func testGate1Walk1118_textSheetTitleNamesTheContainerNotTheChildTwice() throws {
+        XCTAssertEqual(ExtractedTextSheet.title(filename: "report.docx", childPath: "report.docx", container: "bundle.zip"),
+                       "Text inside bundle.zip: report.docx")
+        XCTAssertEqual(ExtractedTextSheet.title(filename: "report.docx", childPath: "report.docx", container: nil),
+                       "Extracted text of report.docx", "the child is never named as its own holder")
+        XCTAssertEqual(ExtractedTextSheet.title(filename: "bundle.zip", childPath: "inner.zip › report.docx", container: nil),
+                       "Text inside bundle.zip: inner.zip › report.docx", "the attachment list passes the container already")
+        XCTAssertEqual(ExtractedTextSheet.title(filename: "minutes.pdf", childPath: nil, container: nil),
+                       "Extracted text of minutes.pdf")
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let sheet = try String(contentsOf: repo.appendingPathComponent("maxmailin/ExtractedTextSheet.swift"), encoding: .utf8)
+        XCTAssertTrue(sheet.contains("Text(Self.title(filename: filename, childPath: childPath, container: container))"))
+        XCTAssertTrue(sheet.contains("attachmentMetadata(forEmailID: emailID)"), "the container is read from the message")
+    }
+
     /// R7 (3): the sheet's find is the search's phrase rule — a phrase wrapped
     /// over a line or a double space is found, one across a section boundary
     /// is not, ASCII letters fold case and nothing else does — and agrees with

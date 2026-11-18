@@ -64,6 +64,10 @@ struct ExtractedTextSheet: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewer: ExtractedTextViewerModel
     @State private var openFailure: String?
+    /// The top-level attachment holding `childPath`, read from the message
+    /// (search evidence only knows the child's own name).
+    @State private var container: String?
+    private let archive: ArchiveDataService
 
     /// R7: `target` (from the search's evidence) opens the text at the match.
     init(emailID: UUID, ordinal: Int, filename: String, childPath: String? = nil, attachmentPosition: Int,
@@ -73,6 +77,7 @@ struct ExtractedTextSheet: View {
         self.filename = filename
         self.childPath = childPath
         self.attachmentPosition = attachmentPosition
+        self.archive = archive
         _viewer = StateObject(wrappedValue: ExtractedTextViewerModel(
             source: StoredExtractedTextSource(store: archive.sqliteStore, emailID: emailID, ordinal: ordinal), target: target))
     }
@@ -81,7 +86,7 @@ struct ExtractedTextSheet: View {
         VStack(alignment: .leading, spacing: Spacing.small) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(childPath.map { String(localized: "Text inside \(filename): \($0)") } ?? String(localized: "Extracted text of \(filename)")).font(Typography.headline)
+                    Text(Self.title(filename: filename, childPath: childPath, container: container)).font(Typography.headline)
                     Text(String(localized: "Exactly what search reads for this file. Section labels in brackets name where each part came from."))
                         .font(Typography.caption2).foregroundStyle(.secondary)
                 }
@@ -153,8 +158,30 @@ struct ExtractedTextSheet: View {
         }
         .padding(Spacing.large)
         .frame(minWidth: 560, minHeight: 420)
-        .task { await viewer.open() }
+        .task {
+            if childPath != nil, let store = archive.sqliteStore,
+               let attachments = try? await store.attachmentMetadata(forEmailID: emailID),
+               attachments.indices.contains(attachmentPosition) {
+                container = attachments[attachmentPosition].filename
+            }
+            await viewer.open()
+        }
         .onChange(of: viewer.query) { _, _ in viewer.queryDidChange() }
+    }
+
+    /// The sheet's title. A file inside an attachment is named with the
+    /// attachment that holds it ("Text inside bundle.zip: report.docx").
+    /// Opened from search evidence, `filename` is the child's own name, so
+    /// the title read "Text inside report.docx: report.docx" (gate 1 walk
+    /// 2026-11-18); the container read from the message is used instead.
+    static func title(filename: String, childPath: String?, container: String?) -> String {
+        guard let childPath else { return String(localized: "Extracted text of \(filename)") }
+        let holder = container.flatMap { $0.isEmpty ? nil : $0 } ?? filename
+        if holder == (childPath.components(separatedBy: " › ").last ?? childPath) {
+            // The container is not known: never name the child as its own holder.
+            return String(localized: "Extracted text of \(childPath)")
+        }
+        return String(localized: "Text inside \(holder): \(childPath)")
     }
 
     /// "Match 3 of 41 · 1,204,331 characters · part 4 to 6 of 25".
