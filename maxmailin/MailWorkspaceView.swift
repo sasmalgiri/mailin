@@ -175,6 +175,10 @@ private struct MailWorkspaceReadyView: View {
         NavigationSplitView {
             MailSidebar(model: model, sheet: $sheet)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+                // Each column is a named area (accessibility audit 2026-11-18:
+                // the three columns were unlabelled groups).
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(Text("Mailboxes"))
                 #if os(iOS)
                 // iPhone: the sidebar is the first screen, so Compose / Sync now / Add account live on it
                 // (a toolbar on the split view itself is not shown on iPhone — owner QA 2026-11-15).
@@ -183,11 +187,15 @@ private struct MailWorkspaceReadyView: View {
         } content: {
             MailContentColumn(model: model, sheet: $sheet)
                 .navigationSplitViewColumnWidth(min: 300, ideal: 380)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(Text("Message list"))
                 #if os(iOS)
                 .toolbar { toolbar }
                 #endif
         } detail: {
             MailDetailColumn(model: model, sheet: $sheet)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(Text("Message"))
         }
         .mailNoTopFade()
         #if os(macOS)
@@ -550,6 +558,7 @@ private struct MailMessageList: View {
         .contextMenu(forSelectionType: UUID.self) { ids in
             selectionMenu(Array(ids))
         }
+        .accessibilityLabel(Text("Messages"))
         .mailTopBar { quickFilterBar }
         // Over the list, not a row in it: a row does not wrap, and the text was cut off.
         .overlay {
@@ -691,6 +700,8 @@ private struct MailMessageList: View {
                     TextField(String(localized: "Filter these messages"), text: $model.quickText)
                         .textFieldStyle(.plain)
                         .focused($filterFocused)
+                        // The placeholder is not a description (audit 2026-11-18).
+                        .accessibilityLabel(Text("Filter these messages"))
                         .accessibilityIdentifier("mail.quickFilter")
                     if !model.quickText.isEmpty {
                         Button { model.quickText = "" } label: { Image(systemName: "xmark.circle.fill") }
@@ -904,8 +915,12 @@ private struct MailRowView: View {
                 .tint(.orange)
             }
         }
+        // One element per row, read as text (sender, subject, date, marks);
+        // the list row around it is what is selected. Without a trait the
+        // element had no role (audit 2026-11-18: "Unknown role").
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityText))
+        .accessibilityAddTraits(.isStaticText)
     }
 
     /// Mac: quick buttons where the date was while the pointer is over the row.
@@ -1151,7 +1166,23 @@ private struct MailDetailColumn: View {
                 MailMessageDetail(model: model, row: row, sheet: $sheet)
                     .id(id)
             } else {
-                ContentUnavailableView(String(localized: "Choose a message."), systemImage: "envelope")
+                // Not ContentUnavailableView: its pale icon and title failed
+                // the contrast audit (2026-11-18). The words are what is read.
+                // In a (still) scroll view so the column's named area spans the
+                // whole column, as it does when a message is open.
+                ScrollView {
+                    VStack(spacing: Spacing.small) {
+                        Image(systemName: "envelope")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("Choose a message.")
+                            .font(.title3)
+                            .foregroundStyle(.primary)
+                    }
+                    .containerRelativeFrame([.horizontal, .vertical])
+                }
+                .scrollDisabled(true)
             }
         }
     }

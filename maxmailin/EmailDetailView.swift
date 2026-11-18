@@ -856,13 +856,16 @@ struct EmailDetailView: View {
                     .foregroundColor(risk.level.color)
                     .font(.subheadline)
 
+                // The level's colour is on the icon, the border and the tint;
+                // the words are in the text colour — green or yellow text on its
+                // own pale tint failed the contrast audit (2026-11-18).
                 Text("Risk: \(risk.score)/100")
                     .font(.system(.footnote, design: .rounded)).fontWeight(.bold)
-                    .foregroundColor(risk.level.color)
+                    .foregroundStyle(.primary)
 
                 Text("(\(risk.level.rawValue))")
                     .font(.caption).fontWeight(.medium)
-                    .foregroundColor(risk.level.color.opacity(0.8))
+                    .foregroundStyle(.primary)
 
                 Spacer()
 

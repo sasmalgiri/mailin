@@ -60,7 +60,10 @@ final class AccessibilityAuditUITests: XCTestCase {
         // Named containers: an unnamed group of exactly the same rectangle is
         // SwiftUI's inner or outer wrapper of a pane the app has named (the
         // name is announced for that area either way).
-        let namedFrames = app.groups.matching(NSPredicate(format: "label != ''")).allElementsBoundByIndex
+        // A named pane can also reach AX as a scroll view (the Live Mail
+        // reading column while no message is chosen, 2026-11-18).
+        let namedFrames = (app.groups.matching(NSPredicate(format: "label != ''")).allElementsBoundByIndex
+            + app.scrollViews.matching(NSPredicate(format: "label != ''")).allElementsBoundByIndex)
             .map { ($0.frame, $0.label) }
         // The Lists' own frames (their clips). Only the frames: asking for every
         // text inside every List took one query per row — 17,510 queries and
@@ -281,6 +284,61 @@ final class AccessibilityAuditUITests: XCTestCase {
             + (advisories.isEmpty ? "" : "\n\nAdvisory (not failed):\n" + advisories.joined(separator: "\n"))
         let attachment = XCTAttachment(string: report)
         attachment.name = "Accessibility audit"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertTrue(issues.isEmpty, "accessibility audit:\n\(report)")
+    }
+
+    /// The Live Mail page with mail in it: sidebar with an account and its
+    /// folders, the quick-filter bar, message rows, the "Choose a message"
+    /// placeholder, then one message open. A fresh isolated archive with the
+    /// in-memory sample account (UITestMailSample: nothing connects); the
+    /// page is left on Archive afterwards (the open page is remembered
+    /// app-wide). Skips in a build without the Live Mail page.
+    func testAccessibilityAudit_liveMailPage() throws {
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launchEnvironment["MAILIN_UITEST_FRESH_ARCHIVE"] = "a11ymail\(Int(Date().timeIntervalSince1970))"
+        app.launchEnvironment["MAILIN_UITEST_MAIL_SAMPLE"] = "1"
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 30)
+        app.activate()
+        _ = app.windows.firstMatch.waitForExistence(timeout: 30)
+        addTeardownBlock { [weak self] in
+            guard let self, self.app.state == .runningForeground || self.app.state == .runningBackground else { return }
+            let archive = self.app.buttons["Archive"].firstMatch
+            if archive.waitForExistence(timeout: 5) { archive.click() }
+        }
+
+        let mailTab = app.buttons.matching(NSPredicate(format: "label == %@", "Live Mail")).firstMatch
+        guard mailTab.waitForExistence(timeout: 20) else {
+            throw XCTSkip("No Live Mail tab: this build has no connected mail (offline edition).")
+        }
+        mailTab.click()
+        let filter = app.descendants(matching: .any)["mail.quickFilter"].firstMatch
+        XCTAssertTrue(filter.waitForExistence(timeout: 20), "the Live Mail page did not show its message list")
+        let firstMessage = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Revised supplier contract", "Revised supplier contract")).firstMatch
+        XCTAssertTrue(firstMessage.waitForExistence(timeout: 10), "the sample messages are not listed")
+        Thread.sleep(forTimeInterval: 1.5)
+        var issues = audit("Live Mail page")
+
+        if firstMessage.exists {
+            firstMessage.click()
+            _ = app.buttons["Reply"].firstMatch.waitForExistence(timeout: 10)
+            Thread.sleep(forTimeInterval: 1.5)
+            issues += audit("Live Mail page, message open")
+        }
+
+        let archive = app.buttons["Archive"].firstMatch
+        if archive.waitForExistence(timeout: 5) { archive.click() }
+
+        let report = (issues.isEmpty ? "No accessibility issues." : issues.joined(separator: "\n"))
+            + (details.isEmpty ? "" : "\n\nFailing elements:\n" + details.joined(separator: "\n---\n"))
+            + (advisories.isEmpty ? "" : "\n\nAdvisory (not failed):\n" + advisories.joined(separator: "\n"))
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "Accessibility audit — Live Mail"
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertTrue(issues.isEmpty, "accessibility audit:\n\(report)")

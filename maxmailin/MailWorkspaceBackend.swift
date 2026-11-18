@@ -134,6 +134,10 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     /// The backend for the page right now.
     static func current() -> MailWorkspaceBackend {
         guard ConnectedBuildFeatures.mailTransportsCompiled else { return UnavailableMailBackend(.notInThisEdition) }
+        #if DEBUG
+        // The accessibility UI audit's Live Mail page with mail in it (in memory, connects nowhere).
+        if let sample = UITestMailSample.backend { return sample }
+        #endif
         guard let runtime = ConnectedMailRuntime.shared else {
             cached?.stop(); cached = nil
             return UnavailableMailBackend(.mailSwitchedOff)

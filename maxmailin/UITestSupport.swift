@@ -60,6 +60,11 @@ enum UITestSupport {
            ProcessInfo.processInfo.environment[connectedMailEnvironmentKey] == "1" {
             enableConnectedMail(modules ?? ModuleRegistry.live)
         }
+        // Accessibility audit of the Live Mail page (UITestMailSample): the page
+        // on, with an in-memory sample account; Connected mail stays off.
+        if UITestMailSample.isRequested() {
+            enableLiveMailPage(modules ?? ModuleRegistry.live)
+        }
 
         // CLOSE-06: a fresh-archive run (MAILIN_UITEST_FRESH_ARCHIVE) starts
         // empty — the test imports its own fixture, so no demo seed.
@@ -104,6 +109,12 @@ enum UITestSupport {
             return
         }
         modules.set(.connectedMail, enabled: true)
+        #endif
+    }
+
+    private static func enableLiveMailPage(_ modules: ModuleRegistry?) {
+        #if MAILIN_CONNECTED_MAIL && !NO_NETWORK_BUILD
+        try? modules?.enable(.liveMail)
         #endif
     }
 
