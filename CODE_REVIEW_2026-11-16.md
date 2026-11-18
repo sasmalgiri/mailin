@@ -90,6 +90,20 @@ highlighted two rows (0b20caf, 241b7f4). Verified on 241b7f4, Debug-Connected My
 27/27, V3Lint 2/2, InterfaceLocalization 8/8; ArchiveCore package 732 run / 22 skipped / 0 failed. Builds
 iPhone 17, iPad Pro 11" (M5), My Mac build-for-testing: **0 warnings**. No Mac UI test run.
 
+**Closeout 2026-11-18, gate 1 third follow-up (58e5bb2..99aacbb).** One commit each, with a test that fails
+without it. The iPad / iPhone sidebar has one scroll view, with the pinned bar under it, so the Trash and the
+last source folders scroll above the bar. This is a regression from 04188c7: a nested scroll view ran under the
+bar, and the iPhone sheet's safe-area inset did not inset the content. The jump on a tap came from the From / To
+/ Labels lists above the places changing length after the re-page, so the sidebar now keeps its bottom edge for
+2 s after a place is chosen (58e5bb2). From (Senders), To and Labels leave a just-trashed email out at once. The
+view model re-reads Reply Frequency on every `.archiveTrashChanged` (c3cbee0). Rule 6: the previous Reply
+Frequency list states "First 500 of N senders…", with a new `senderTotal` store count and 1 key x 10 languages
+(99aacbb). The Trash banner and the "N Emails" header were timing (the empty Trash has no banner by design), and
+nothing was changed for them. Verified on 99aacbb, Debug-Connected My Mac: five-jobs gate **220 passed, 2 skipped
+(COMP14, TYPE05), 0 failed**; IPadGate1Fix 23/23, InterfaceLocalization 8/8, V3Lint 2/2, Review1116C 27/27,
+V2Search 28/28; ArchiveCore package 733 run / 22 skipped / 0 failed. Builds iPhone 17, iPad Pro 11" (M5), My Mac
+build-for-testing: **0 warnings**. No Mac UI test run.
+
 **Pending Mac UI runs (owner present):**
 - AccessibilityAuditUITests.testAccessibilityAudit_liveMailPage
 - AccessibilityAuditUITests.testAccessibilityAudit_mainWindowAndModules (after the Live Mail page change)
