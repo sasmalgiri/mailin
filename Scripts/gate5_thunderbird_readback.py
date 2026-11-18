@@ -28,7 +28,7 @@ class Marionette:
         deadline = time.time() + wait
         while True:
             try:
-                self.s = socket.create_connection((host, port), timeout=120); break
+                self.s = socket.create_connection((host, port), timeout=120); self.s.settimeout(3600); break
             except OSError:
                 if time.time() > deadline: raise
                 time.sleep(1)
@@ -120,7 +120,7 @@ const [outDir, resolve] = [arguments[0], arguments[arguments.length - 1]];
 mn = Marionette()
 mn.cmd("WebDriver:NewSession", {"capabilities": {}})
 mn.cmd("Marionette:SetContext", {"value": "chrome"})
-mn.cmd("WebDriver:SetTimeouts", {"script": 300000})
+mn.cmd("WebDriver:SetTimeouts", {"script": 3600000})
 res = mn.cmd("WebDriver:ExecuteAsyncScript", {"script": SCRIPT, "args": [out_dir]})
 data = res.get("value", res)
 if isinstance(data, dict) and data.get("error"):
@@ -129,13 +129,35 @@ json.dump(data, open(os.path.join(g5, "thunderbird-readback.json"), "w"), ensure
 
 inv = json.load(open(os.path.join(g5, "inventory.json"), encoding="utf-8"))
 by_id = {e["messageID"].strip("<>"): e for e in inv}
-expected = {"mailin-Inbox": {k for k, e in by_id.items() if e["folder"] == "Inbox"},
-            "mailin-Projects": {k for k, e in by_id.items() if e["folder"] == "Projects"},
-            "mailin-handoff-0001": set(by_id)}
+# One Thunderbird folder per inventory folder (mailin-<folder>) plus the hand-off part(s), which
+# together hold every message once.
+expected = {"mailin-" + f[:48]: {k for k, e in by_id.items() if e["folder"] == f} for f in sorted({e["folder"] for e in inv})}
+assert len(expected) == len({e["folder"] for e in inv}), "folder names collide after the 48-character cut"
+# Thunderbird keeps a reply's subject without its reply prefix (NS_MsgStripRE: "Re:", "RE:",
+# "Re[10]:", repeated) plus the HasRe flag, and SHOWS "Re: " + the rest. mailin keeps the subject as
+# written. Compared: Thunderbird's stored subject against mailin's with the prefixes stripped, and
+# HasRe against "mailin's subject had a prefix". Whitespace runs and a missing Subject (mailin shows
+# "(No Subject)") are counted as normalisation, never hidden.
+import re as _re
+_RE = _re.compile(r"^\s*(re|aw|sv|antw)(\[\d+\])?\s*:\s*", _re.I)
+def strip_re(s):
+    had = False
+    while True:
+        m2 = _RE.match(s)
+        if not m2: return s, had
+        s, had = s[m2.end():], True
+normalised = []
+inline_messages = []
+parts = sorted(n[:-5] for n in os.listdir(os.path.join(g5, "mailin-handoff")) if n.endswith(".mbox"))
+expected.update({p: None for p in parts})
 print(data["app"], "offline" if data["offline"] else "ONLINE")
 ok, matched, total = True, 0, 0
+handoff_seen = set()
 for f in data["folders"]:
     want = expected.get(f["name"], set())
+    if want is None:  # a hand-off part: its own messages, checked below as a set over all parts
+        want = {m["messageId"].strip("<>") for m in f["messages"]} & set(by_id)
+        handoff_seen |= want
     problems = []
     if f["total"] != len(want): problems.append(f"Thunderbird count {f['total']} != {len(want)}")
     seen = set()
@@ -144,10 +166,27 @@ for f in data["folders"]:
         e = by_id.get(mid)
         if e is None: problems.append(f"unexpected {mid}"); continue
         bad = []
-        if m["subject"] != e["subject"]: bad.append(f"subject {m['subject']!r} != {e['subject']!r}")
+        want_subject, want_re = strip_re(e["subject"])
+        got_subject = m.get("storedSubject") or ""
+        if got_subject != want_subject or bool(m.get("hasRe")) != want_re:
+            if " ".join(got_subject.split()) == " ".join(want_subject.split()) and bool(m.get("hasRe")) == want_re:
+                normalised.append(mid)
+            elif not got_subject and e["subject"] == "(No Subject)":
+                normalised.append(mid)
+            else:
+                bad.append(f"subject {m['subject']!r} (stored {got_subject!r}, HasRe {m.get('hasRe')}) != {e['subject']!r}")
         got = sorted((a["name"], hashlib.sha256(open(a["saved"], "rb").read()).hexdigest()) for a in m["attachments"])
         exp = sorted((a["name"], a["sha256"]) for a in e["attachments"])
-        if got != exp: bad.append(f"attachments {got} != {exp}")
+        if got != exp:
+            # An inline message/rfc822 part without a file name (a bounce's returned message)
+            # is shown by Thunderbird as an attachment named after its subject; mailin reads it
+            # into the message body (by design, EmailBodyExtractor). Counted, not hidden.
+            extra = [a for a in m["attachments"] if (a["name"], hashlib.sha256(open(a["saved"], "rb").read()).hexdigest()) not in exp]
+            rest = sorted((a["name"], hashlib.sha256(open(a["saved"], "rb").read()).hexdigest()) for a in m["attachments"] if a not in extra)
+            if rest == exp and extra and all((a.get("contentType") or "").lower().startswith("message/rfc822") for a in extra):
+                inline_messages.append((mid, [a["name"] for a in extra]))
+            else:
+                bad.append(f"attachments {got} != {exp}")
         if bool(m.get("hasHTML")) != bool(e.get("html")): bad.append(f"HTML part {m.get('hasHTML')} != {e.get('html')}")
         if (e.get("inReplyTo") or None) and (m.get("inReplyTo") or "").strip() != e["inReplyTo"]:
             bad.append(f"In-Reply-To {m.get('inReplyTo')!r} != {e['inReplyTo']!r}")
@@ -159,8 +198,14 @@ for f in data["folders"]:
     print(f"{f['name']}: Thunderbird shows {f['total']}, {len(f['messages'])} read, "
           f"{sum(len(m['attachments']) for m in f['messages'])} attachments saved; problems={problems}")
     ok = ok and not problems
+if parts and handoff_seen != set(by_id):
+    ok = False; print(f"hand-off parts hold {len(handoff_seen)} of {len(by_id)} messages; missing {sorted(set(by_id) - handoff_seen)[:5]}")
 if {f["name"] for f in data["folders"]} != set(expected):
     ok = False; print("folders seen:", [f["name"] for f in data["folders"]])
+if inline_messages:
+    print(f"inline message/rfc822 shown by Thunderbird as an attachment, read into the body by mailin: {inline_messages}")
+if normalised:
+    print(f"subject normalisation only (whitespace / missing Subject): {len(normalised)} message rows")
 print(f"{matched} of {total} messages match")
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

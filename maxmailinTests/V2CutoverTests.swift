@@ -9926,3 +9926,70 @@ final class V2CutoverTests: XCTestCase {
         await AttachmentTextIndexJob.shared.cancelAndWaitUntilIdle()
     }
 }
+
+// MARK: - Gate 2 (2026-11-18): duplicate detection on REAL duplicates
+
+/// The real-corpus fixture of gate 2 (`Scripts/gate2_build_real_corpus.py`, Enron custodian
+/// maildirs): the same message filed in several folders is a real duplicate with a different
+/// Message-ID, X-Folder and X-FileName per copy. The app's whole-archive duplicate engine runs on
+/// the imported tree; a group may be shown as identical (bulk-removable) only when the
+/// independent manifest puts every member in ONE content group (From, To, Cc, Bcc, Date,
+/// Subject and the whole body equal — computed by Python from the files, not by mailin).
+/// Skips when `<fixture root>/real-corpus-enron/manifest.json` is absent.
+final class RealCorpusDuplicateTests: XCTestCase {
+    private struct Manifest: Decodable { let files: Int; let contentGroups: [[String]] }
+
+    func testGate2_realDuplicates_noFalseIdentical_everyVerifiedGroupIsOneIndependentContentGroup() async throws {
+        let dir = ExternalFixtures.resolvedRoot().appendingPathComponent("real-corpus-enron", isDirectory: true)
+        let manifestURL = dir.appendingPathComponent("manifest.json")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: manifestURL.path), "real corpus not built: \(manifestURL.path)")
+        let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifestURL))
+        var groupOf: [String: Int] = [:]
+        for (i, g) in manifest.contentGroups.enumerated() { for id in g { groupOf[id] = i } }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("realdup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let coordinator = await BulkImportCoordinator(store: store, fts: fts, checkpoints: ImportCheckpointStore(store: store),
+                                                      requiresStorageActivation: false)
+        var options = BulkImportCoordinator.Options()
+        options.enforceStoragePreflight = false
+        _ = try await coordinator.runImport(urls: [dir.appendingPathComponent("eml", isDirectory: true)], options: options)
+        let stored = try await store.totalCount()
+        XCTAssertEqual(stored, manifest.files)
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        let started = Date()
+        let environment = ScopeJobEnvironment(archive: archive, store: store, root: root)
+        let (groups, receipt) = try await ScopeJobEnvironment.$current.withValue(environment) { try await DuplicatesEngine.exactGroups() }
+        let classified = DuplicateVerification.classify(groups)
+        let seconds = Date().timeIntervalSince(started)
+        XCTAssertEqual(receipt.processed, manifest.files, "the whole archive was compared")
+
+        var falseIdentical: [[String]] = []
+        var byteIdentical = 0, contentEquivalent = 0
+        var verifiedIndependent = Set<Int>()
+        for g in classified.verified {
+            let ids = g.members.map { ($0.headers["Message-ID"] ?? "").trimmingCharacters(in: .whitespaces) }
+            let indices = Set(ids.map { groupOf[$0] ?? -1 })
+            if indices.count != 1 || indices.contains(-1) { falseIdentical.append(ids) } else { verifiedIndependent.formUnion(indices) }
+            if g.verdict == .byteIdentical { byteIdentical += 1 } else { contentEquivalent += 1 }
+        }
+        // Candidates: how many independent groups the engine left for the person.
+        var candidateMembersInIndependentGroups = 0
+        for g in classified.candidates {
+            let ids = g.members.map { ($0.headers["Message-ID"] ?? "").trimmingCharacters(in: .whitespaces) }
+            if Set(ids.map { groupOf[$0] ?? -1 }).count == 1, groupOf[ids[0]] != nil { candidateMembersInIndependentGroups += 1 }
+        }
+        let removable = DuplicateVerification.bulkRemovable(classified.verified).count
+        print("REALDUP: \(stored) messages; engine groups \(groups.count) (\(groups.map(\.count).reduce(0, +)) copies) in "
+              + String(format: "%.1f s", seconds) + "; verified \(classified.verified.count) (byte-identical \(byteIdentical), content-equivalent \(contentEquivalent)), "
+              + "candidates \(classified.candidates.count) (\(candidateMembersInIndependentGroups) of them entirely inside one independent group); "
+              + "bulk-removable copies \(removable); independent content groups \(manifest.contentGroups.count) (\(manifest.contentGroups.map(\.count).reduce(0, +)) copies), "
+              + "of which verified by mailin \(verifiedIndependent.count); false identical \(falseIdentical.count)")
+        XCTAssertTrue(falseIdentical.isEmpty, "groups shown identical that the independent check splits: \(falseIdentical.prefix(3))")
+        XCTAssertEqual(byteIdentical, 0, "every Enron copy carries its own Message-ID and X-Folder, so no two stored byte streams are equal")
+    }
+}

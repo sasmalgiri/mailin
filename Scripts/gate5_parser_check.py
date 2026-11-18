@@ -13,6 +13,7 @@ from email import policy
 root = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("MAILIN_GATE5_OUT", "/tmp/mailin-gate5")
 inv = json.load(open(os.path.join(root, "inventory.json")))
 by_id = {e["messageID"]: e for e in inv}
+normalised = []
 
 
 def parse(fp):
@@ -30,10 +31,21 @@ def check(msgs, label, ids):
         if mid in seen:
             problems.append(f"{mid} twice")
         seen.add(mid)
-        if str(m["subject"]) != e["subject"]:
-            problems.append(f"{mid} subject {str(m['subject'])!r} != {e['subject']!r}")
-        atts = {p.get_filename(): hashlib.sha256(p.get_payload(decode=True)).hexdigest()
-                for p in m.walk() if p.get_content_disposition() == "attachment"}
+        got_subject = "" if m["subject"] is None else str(m["subject"])
+        if got_subject != e["subject"]:
+            # 2026-11-18 (real mail): mailin's record keeps a subject with whitespace runs collapsed
+            # and ends trimmed (RFC 5322 unfolding keeps the folding whitespace), and shows a missing
+            # Subject as "(No Subject)". Those differences are counted, not hidden; anything else fails.
+            norm = lambda x: " ".join(x.split())
+            if norm(got_subject) == norm(e["subject"]) or (not got_subject and e["subject"] == "(No Subject)"):
+                normalised.append(mid)
+            else:
+                problems.append(f"{mid} subject {got_subject!r} != {e['subject']!r}")
+        # An attachment = a leaf part with a file name or an attachment disposition (real mail
+        # names inline images and zips with Content-Disposition: inline; filename=…).
+        atts = {p.get_filename(): hashlib.sha256(p.get_payload(decode=True) or b"").hexdigest()
+                for p in m.walk() if not p.is_multipart()
+                and (p.get_content_disposition() == "attachment" or p.get_filename())}
         want = {a["name"]: a["sha256"] for a in e["attachments"]}
         if atts != want:
             problems.append(f"{mid} attachments {atts} != {want}")
@@ -63,5 +75,8 @@ for p in sorted(glob.glob(os.path.join(root, "eml", "*.eml"))):
     with open(p, "rb") as f:
         emls.append(parse(f))
 ok &= check(emls, "eml/*.eml", all_ids)
+if normalised:
+    print(f"subject normalisation only (whitespace collapsed / missing Subject shown as '(No Subject)'): "
+          f"{len(set(normalised))} messages")
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

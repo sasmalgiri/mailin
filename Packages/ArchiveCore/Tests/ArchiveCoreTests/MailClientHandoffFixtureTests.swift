@@ -190,4 +190,84 @@ final class MailClientHandoffFixtureTests: XCTestCase {
         try encoder.encode(corpus.map(\.entry)).write(to: root.appendingPathComponent("inventory.json"))
         try encoder.encode(folderCounts).write(to: root.appendingPathComponent("folder-counts.json"))
     }
+
+    /// Gate 5, second run (2026-11-18): REAL messages. `MAILIN_GATE5_REAL_SOURCE` is a folder tree
+    /// of real message files (one sub-folder per source folder; `Scripts/gate5_real_source.py`
+    /// selects Enron and Digital Corpora Thunderbird messages, bytes unchanged). mailin imports it,
+    /// writes the same three exports as the synthetic run, and inventory.json is built from
+    /// mailin's ARCHIVE RECORDS (decoded subject, Message-ID, folder, HTML part, In-Reply-To, every
+    /// attachment's bytes from the stored message) — what a client must show after importing.
+    func testGate5_realMessages_buildsTheClientHandoffExport_inventoryFromTheArchive() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let sourcePath = env["MAILIN_GATE5_REAL_SOURCE"], let outPath = env["MAILIN_GATE5_OUT"] else {
+            throw XCTSkip("opt-in: MAILIN_GATE5_REAL_SOURCE=<tree of real messages> MAILIN_GATE5_OUT=<dir>")
+        }
+        let fm = FileManager.default
+        let source = URL(fileURLWithPath: sourcePath, isDirectory: true)
+        let root = URL(fileURLWithPath: outPath, isDirectory: true)
+        try? fm.removeItem(at: root)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let work = fm.temporaryDirectory.appendingPathComponent("gate5-real-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: work) }
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        let sourceFiles = (fm.enumerator(at: source, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])?.allObjects ?? [])
+            .compactMap { $0 as? URL }.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }.count
+
+        let store = SQLiteEmailStore(directory: work.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: work.appendingPathComponent("fts", isDirectory: true))
+        let coordinator = await BulkImportCoordinator(store: store, fts: fts, checkpoints: ImportCheckpointStore(store: store),
+                                                      requiresStorageActivation: false)
+        var options = BulkImportCoordinator.Options()
+        options.enforceStoragePreflight = false
+        let summary = try await coordinator.runImport(urls: [source], options: options)
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let imported = try await archive.count(query: .all)
+        XCTAssertEqual(imported, sourceFiles, "every real message file imported once (summary: parsed \(summary.parsed), damaged \(summary.damaged))")
+
+        let service = await ArchiveExportService(archive: archive)
+        let handoff = root.appendingPathComponent("mailin-handoff", isDirectory: true)
+        let parts = try await service.exportMBOXPartitions(scope: .query(.all, exclusions: []), toDirectory: handoff, baseName: "mailin-handoff")
+        XCTAssertEqual(parts.map(\.recordsWritten).max(), imported)
+
+        let byFolder = root.appendingPathComponent("folders", isDirectory: true)
+        try fm.createDirectory(at: byFolder, withIntermediateDirectories: true)
+        var entries: [Entry] = []
+        let nodes = try await store.folderNodes().filter { $0.messageCount > 0 }
+        XCTAssertEqual(Set(nodes.map(\.name)).count, nodes.count, "folder names are distinct: \(nodes.map(\.path))")
+        for node in nodes {
+            var q = EmailQuery.all; q.folderID = node.folderID
+            let r = try await service.exportMBOXArchive(scope: .query(q, exclusions: []), to: byFolder.appendingPathComponent("\(node.name).mbox"))
+            XCTAssertEqual(r.recordsWritten, node.messageCount, node.path)
+            for try await batch in await archive.streamFullEmails(query: q, batchSize: 100) {
+                for email in batch {
+                    let cache = AttachmentHydrator.Cache()
+                    defer { cache.removeTemporaryFiles() }
+                    let attachments = email.attachments.enumerated().map { i, a -> Attachment in
+                        let data = AttachmentHydrator.data(for: a, index: i, email: email, cache: cache) ?? Data()
+                        return Attachment(name: a.filename, mime: a.mimeType, sha256: Self.hex(data), bytes: data.count)
+                    }
+                    // Header names keep the source's spelling ("Message-Id" from AOL, "Message-ID").
+                    func header(_ name: String) -> String? {
+                        email.headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+                    }
+                    entries.append(Entry(subject: header("Subject") ?? "", messageID: (header("Message-ID") ?? "").trimmingCharacters(in: .whitespaces),
+                                         folder: node.name, html: !email.htmlBody.isEmpty,
+                                         inReplyTo: header("In-Reply-To").map { $0.trimmingCharacters(in: .whitespaces) },
+                                         attachments: attachments))
+                }
+            }
+        }
+        XCTAssertEqual(entries.count, imported)
+        XCTAssertEqual(Set(entries.map(\.messageID)).count, imported, "Message-IDs distinct (the selection script guarantees it)")
+
+        let eml = root.appendingPathComponent("eml", isDirectory: true)
+        let e = try await service.exportEMLFiles(scope: .query(.all, exclusions: []), to: eml)
+        XCTAssertEqual(e.recordsWritten, imported)
+
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(entries).write(to: root.appendingPathComponent("inventory.json"))
+        print("GATE5 real: \(sourceFiles) source files, \(imported) imported, \(nodes.count) folders, "
+              + "\(entries.reduce(0) { $0 + $1.attachments.count }) attachments, \(entries.filter(\.html).count) with HTML, "
+              + "\(entries.filter { $0.inReplyTo != nil }.count) with In-Reply-To; handoff parts \(parts.count)")
+    }
 }
