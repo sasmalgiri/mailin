@@ -76,6 +76,20 @@ TYPE05), 0 failed**; IPadGate1Fix 17/17, V2Search 28/28, Review1116C 27/27, V3Li
 InterfaceLocalization 8/8 (on 4dc5191). Builds iPhone 17, iPad Pro 11" (M5), My Mac build-for-testing:
 no new warnings. Package not touched. Simulator re-checks and screenshots in the walk record.
 
+**Closeout 2026-11-18, gate 1 second follow-up (29b111b..241b7f4).** The four items the first follow-up's
+re-check recorded, plus the two UI-test warnings, one commit each with a test that fails without it: the
+iPad Trash view is left by choosing any other sidebar place after the last restore (29b111b); label,
+source-folder and source-file counts exclude the Trash like All Mail, via `excludingTrashed` on the store
+queries (f4db397, package `SidebarTrashCountTests`); sidebar VoiceOver rows say "1 message" / "1 email"
+through `CountPhrase`, 2 keys x 10 languages, 3 orphaned keys removed (0f46378); Reply Frequency names wrap
+and the list pages instead of clipping in a 110 pt box, 1 key x 10 (fb6ba5c); dead code after `throw XCTSkip`
+moved into `#else` (6ee1ee7). Found during the simulator re-check and fixed: Reply Frequency counted
+trashed mail and reordered ties (6318828); sidebar places combined with a stale `type:received` and
+highlighted two rows (0b20caf, 241b7f4). Verified on 241b7f4, Debug-Connected My Mac: five-jobs gate
+**219 passed, 2 skipped (COMP14, TYPE05), 0 failed**; IPadGate1Fix 21/21, V2Search 28/28, Review1116C
+27/27, V3Lint 2/2, InterfaceLocalization 8/8; ArchiveCore package 732 run / 22 skipped / 0 failed. Builds
+iPhone 17, iPad Pro 11" (M5), My Mac build-for-testing: **0 warnings**. No Mac UI test run.
+
 **Pending Mac UI runs (owner present):**
 - AccessibilityAuditUITests.testAccessibilityAudit_liveMailPage
 - AccessibilityAuditUITests.testAccessibilityAudit_mainWindowAndModules (after the Live Mail page change)

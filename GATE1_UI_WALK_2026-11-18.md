@@ -193,3 +193,43 @@ Fixed on `v3-architecture` after `3095cd6`, one commit per item. Each has a unit
 - **Builds:** iPhone 17 and iPad Pro 11-inch (M5) simulators, and My Mac build-for-testing, all green. No new warnings. The only warnings in the log are the two existing "Code after 'throw' will never be executed" warnings in `maxmailinUITests/MailinClickThroughUITests.swift` (lines 1495 and 1524, unchanged file).
 - **Package:** not touched, not run.
 
+
+---
+
+## Second follow-up 2026-11-18: the four items seen during the re-check, and the UI-test warnings
+
+Fixed on `v3-architecture` after `cac9803`, one commit per item. Each has a unit test that fails without it. Re-checked on the iPad Pro 11-inch (M5) simulator (iOS 27) in three passes. No Mac UI test was run.
+
+**Reproduced first** (before any change, build of `cac9803`): one email to the Trash, open Trash, Restore. The list showed "No messages in Trash" (correct), but "All Emails, 7" and "Trash, 0 messages" were both Selected. Tapping All Emails changed nothing: the folder selection was already nil, so no `onChange` fired. Received (`type:received`) and Source Folders ▸ Inbox were applied *underneath* the Trash view, and the list stayed empty. Only tapping Trash again got out (`ipad-60`, `ipad-61`). While the email was in the Trash, Labels (3) still read 7 (Inbox 3, Work 2, Work/Clients 2), and Source Folders were unchanged. VoiceOver read "Trash, 1 messages".
+
+| Item | Fix | Commit | Test | Simulator check |
+|---|---|---|---|---|
+| Trash view sticks after the last restore | All Emails, a folder bucket, a label and a source folder are places, as the Trash is. Every tap on one calls `ParsedEmailListViewModel.leaveTrashForSidebarPlace`, and no folder row is highlighted while the Trash is shown. | `29b111b` | `V2CutoverTests.testGate1Followup1118_choosingAllEmailsLeavesTheTrashAfterTheLastRestore` (failed with the method a no-op) | Restore → "No messages in Trash", only Trash selected (`ipad-64`); All Emails → 7 emails including the restored one, only All Emails selected (`ipad-65`); Trash → Received and Trash → source Inbox both leave the Trash |
+| Labels / source-folder counts include the Trash | The store's label, folder and source-file count queries take `excludingTrashed` (the browse count's `NOT EXISTS` predicate). Both sidebars pass `true` and already re-read on `.archiveTrashChanged`. Without the switch the queries still count every stored row, which the duplicate merge/restore bookkeeping uses. | `f4db397` | ArchiveCore `SidebarTrashCountTests.testLabelFolderAndSourceCountsLeaveTheTrashOut_likeAllMail` (7 failures with the predicate disabled); `IPadGate1FixTests.testGate1Followup1118_labelAndFolderCountsLeaveTheTrashOut` | Client intro in the Trash: All Emails 6, Labels (3) 6, Work/Clients 1, source Clients 1. Back to 7 / 2 / 2 after Restore (`ipad-63`). |
+| "Trash, 1 messages" | The Trash and source-folder rows, the Mac sidebar rows, the smart-tag and evidence-tag filter rows, the Live Mail folder rows and the Subjects panel rows now count through `CountPhrase` (`row`, `filterRow`, `liveFolderRow`, built on the existing "1 message" / "1 email" keys). The smart-tag row's untranslated ", selected" suffix is now the Selected trait. There are 2 new keys × 10 languages (`~/mailin-loc-work/keys-gate1-plurals-1118.py`), and the 3 keys nothing names any more are removed. | `0f46378` | `IPadGate1FixTests.testGate1Followup1118_sidebarRowsReadOneMessageNotOneMessages` | hierarchy: "Trash, 1 message", "Clients, 1 message", "Work/Clients, 1 email" (`ipad-63`) |
+| Reply Frequency names cut short, last row clipped | `ReplyFrequencyList` lets a name wrap onto a second line. It breaks at the space before "<", so the address stays whole. VoiceOver reads the full name with "1 email" / "N emails". The fixed 110 pt scroll box is gone: the list grows a page at a time (8) with "Show more (X of N senders)" / "Show fewer", like the folder lists. That is 1 new key × 10 languages (`keys-gate1-replyfreq-1118.py`). | `fb6ba5c` | `IPadGate1FixTests.testGate1Followup1118_replyFrequencyNamesWrapAndNoRowIsClipped` | Alice Ledger and Frank Client wrap to two lines, no "…", nothing clipped (`ipad-62`) |
+| Two "Code after 'throw' will never be executed" warnings (`MailinClickThroughUITests.swift` ~1495, ~1524) | The Mac-only purchase tests keep their body in the `#else` branch. The Mac behaviour is unchanged. | `6ee1ee7` | compile only: iPhone 17 build-for-testing showed 0 warnings (2 before). The UI tests were not run. | — |
+
+**Found during the re-check and fixed the same way:**
+
+| Defect | Fix | Commit | Test | Simulator check |
+|---|---|---|---|---|
+| Reply Frequency still listed Frank Client while his only email was in the Trash. Equal counts also swapped places between refreshes. | `senderRollups(excludingTrashed:)`; the list's sender aggregates pass `true` and are re-read after a move to the Trash. Equal counts sort by name. | `6318828` | ArchiveCore `SidebarTrashCountTests.testSenderRollupsLeaveTheTrashOut` (failed with the predicate disabled); `IPadGate1FixTests.testGate1Followup1118_replyFrequencyLeavesTheTrashOutAndKeepsItsOrder` | Frank gone while trashed, back after Restore; order Alice, Erin, Carol, Dave, Frank (`ipad-67`) |
+| Received → Trash → source Inbox: the Inbox's 3 emails were shown, but `type:received` stayed in the search field, and Received and Inbox were both selected. | The sidebar's places replace each other. A folder bucket clears the source folder. A source folder clears the bucket and its search. | `0b20caf` | `V2CutoverTests.testGate1Followup1118_sidebarPlacesReplaceEachOther` | search empty, Received not selected (`ipad-68`, which still shows All Emails highlighted: fixed in the next row; `ipad-66` is the defect before `0b20caf`) |
+| …then All Emails was still highlighted beside the source folder, and entering the Trash kept `type:received`. | FolderTreeView's highlight yields to any other place shown. The Trash row also replaces the bucket and the source folder. | `241b7f4` | same test, extended | Received → Trash: search empty; → source Inbox: only Inbox selected (`ipad-70`); → All Emails: only All Emails (`ipad-71`) |
+
+**Seen and not changed (recorded):**
+- **From (Senders) after a move to the Trash.** The list is built from the resident window. The trashed email stays resident, hidden by the window filter, until the next re-page, so its sender is still listed.
+- **Reply Frequency is archive-wide.** It does not follow the current view. In the empty Trash it still lists every sender. This is the design: the reading pane's own note says so.
+- **Rows under the pinned bar.** Tapping a sidebar row scrolls the sidebar back to the top. The sidebar grows, and the Trash and source-folder rows can end up under the pinned Apply / Clear / Export bar until it is scrolled. The From (Senders) box cuts its last row at its scroll edge.
+- **"N Emails" header.** It was caught mid numeric-text transition in two captures ("9 ▯mails") and settles within a second (`ipad-70a`).
+- **Trash banner.** "Trash: touch and hold an email, or swipe it, to restore it." is in the hierarchy of the empty Trash but was not drawn in one capture.
+- **The Labels ▸ Inbox tag icon** is blue (the inbox colour) even when the source folder Inbox is selected. This is cosmetic.
+- **`senderRollups(limit: 500)`.** The list asks for 500, but under "Complete lists (3.0)" the store ignores the limit and returns every sender. With that switch off, the old 500 limit applies (old path, rule 14).
+
+**Tests after the second follow-up** (My Mac, Debug-Connected, on `241b7f4`):
+- **Five-jobs gate** (V2CutoverTests + ConnectedFiveJobsTests + ConnectedFiveJobsFixPassTests): **219 passed, 2 skipped** (COMP14 S/MIME keychain, TYPE05 speech; both owner-bound), **0 failed**.
+- **Other classes:** InterfaceLocalizationTests 8/8, V3LintTests 2/2, IPadGate1FixTests 21/21, Review1116CTests 27/27, V2SearchTests 28/28.
+- **Package** (ArchiveCore, `xcrun swift test` with Xcode's toolchain): **732 run, 22 skipped, 0 failed**.
+- **Builds:** iPhone 17 and iPad Pro 11-inch (M5) simulators, and My Mac build-for-testing, all green with **0 warnings**. The two UI-test warnings are gone.
+- **Catalog:** Xcode re-sorted `Localizable.xcstrings` during the build in `0f46378`, which moved existing keys into order. No values changed.
