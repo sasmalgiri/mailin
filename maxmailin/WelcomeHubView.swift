@@ -361,20 +361,34 @@ struct WelcomeHubView: View {
                 .foregroundStyle(.tertiary)
                 .tracking(0.5)
 
-            HStack(spacing: Spacing.xSmall) {
-                ForEach(HomeSupportedFormats.names, id: \.self) { fmt in
-                    Text(fmt)
-                        .font(.system(.caption2, design: .monospaced).weight(.medium))
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                    #if os(iOS)
-                        .background(Color(.tertiarySystemFill))
-                    #else
-                        .background(AppColors.backgroundSecondary)
-                    #endif
-                        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+            // One row when it fits; otherwise two, never a chip squeezed to
+            // "MBO/X" or cut off at the screen edge (iPhone 17e, 2026-11-18).
+            ViewThatFits(in: .horizontal) {
+                formatChipRow(HomeSupportedFormats.names)
+                VStack(spacing: Spacing.xSmall) {
+                    formatChipRow(Array(HomeSupportedFormats.names.prefix(5)))
+                    formatChipRow(Array(HomeSupportedFormats.names.dropFirst(5)))
                 }
+            }
+        }
+    }
+
+    private func formatChipRow(_ names: [String]) -> some View {
+        HStack(spacing: Spacing.xSmall) {
+            ForEach(names, id: \.self) { fmt in
+                Text(fmt)
+                    .font(.system(.caption2, design: .monospaced).weight(.medium))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                #if os(iOS)
+                    .background(Color(.tertiarySystemFill))
+                #else
+                    .background(AppColors.backgroundSecondary)
+                #endif
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
             }
         }
     }

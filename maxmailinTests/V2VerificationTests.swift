@@ -5468,7 +5468,9 @@ final class IPadGate1FixTests: XCTestCase {
 
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
         let hub = try String(contentsOf: dir.appendingPathComponent("WelcomeHubView.swift"), encoding: .utf8)
-        XCTAssertTrue(hub.contains("ForEach(HomeSupportedFormats.names, id: \\.self)"), "the chips read the same list")
+        XCTAssertTrue(hub.contains("formatChipRow(HomeSupportedFormats.names)"), "the chips read the same list")
+        XCTAssertTrue(hub.contains("formatChipRow(Array(HomeSupportedFormats.names.dropFirst(5)))"), "two rows on a narrow screen")
+        XCTAssertTrue(hub.contains(".lineLimit(1)\n                    .fixedSize()"), "a chip is never squeezed to \"MBO/X\"")
         XCTAssertFalse(hub.contains(#"ForEach(["MBOX""#))
     }
 
