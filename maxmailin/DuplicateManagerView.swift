@@ -809,7 +809,7 @@ struct DuplicateManagerView: View {
                             note += " " + String(localized: "Near-duplicates: among the newest \(window.formatted()) emails only (previous engine). The whole archive needs “Whole-archive near-duplicates (3.0)” in Settings ▸ Modules.")
                         }
                     }
-                    nearDuplicateGroups = near
+                    nearDuplicateGroups = Self.similarOnly(near, verified: verifiedGroups.map(\.members))
                     nearCoverage = coverage
                     v3Note = note
                 } catch is CancellationError {
@@ -849,7 +849,7 @@ struct DuplicateManagerView: View {
             await MainActor.run {
                 self.verifiedGroups = classified.verified
                 self.candidateGroups = classified.candidates
-                self.nearDuplicateGroups = nearGroups
+                self.nearDuplicateGroups = Self.similarOnly(nearGroups, verified: classified.verified.map(\.members))
                 self.nearCoverage = includeNear ? .newest(window) : .notChecked
                 // Stage A: the window is stated on screen, after a fallback too.
                 self.v3Note = Self.previousEngineScopeNote(appendedTo: previousEngine ? self.v3Note : nil)
@@ -909,6 +909,29 @@ struct DuplicateManagerView: View {
     /// threshold (IPAD-05 (c), gate 1 walk).
     nonisolated static func similarityWords(_ text: String) -> Set<String> {
         Set(text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+    }
+
+    /// Gate 1 walk 2026-11-18: a pair already proven identical is not
+    /// "similar, not identical". Within each similar group only one copy of
+    /// a verified-identical group stays (the first met); a group left with
+    /// fewer than two messages is dropped. Before, the identical pair was
+    /// listed twice — as verified identical and again as a similar group the
+    /// sheet called "not identical", and counted in "Also similar: 2 groups".
+    nonisolated static func similarOnly(_ near: [[MBOXParser.RawEmail]],
+                                        verified: [[MBOXParser.RawEmail]]) -> [[MBOXParser.RawEmail]] {
+        var groupOf: [UUID: Int] = [:]
+        for (index, group) in verified.enumerated() {
+            for email in group { groupOf[email.id] = index }
+        }
+        guard !groupOf.isEmpty else { return near }
+        return near.compactMap { group in
+            var seenVerified = Set<Int>()
+            let kept = group.filter { email in
+                guard let g = groupOf[email.id] else { return true }
+                return seenVerified.insert(g).inserted
+            }
+            return kept.count > 1 ? kept : nil
+        }
     }
 
     nonisolated static func findNearDuplicates(in emails: [MBOXParser.RawEmail], threshold: Double) -> [[MBOXParser.RawEmail]] {

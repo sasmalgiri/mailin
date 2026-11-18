@@ -9075,6 +9075,37 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(near.map { Set($0.map(\.id)) }, [Set([a.id, b.id])], "one punctuation mark apart is similar")
     }
 
+    /// Gate 1 walk 2026-11-18 (iPad): with near-duplicates on, the verified
+    /// identical pair was listed again as a similar group "not identical", and
+    /// the summary said "Also similar: 2 groups" for one real similar pair.
+    func testGate1Walk1118_verifiedIdenticalPairIsNotListedAgainAsSimilar() {
+        var ledgerA = mail(9_310, from: "alice@example.com", subject: "Quarterly ledger", body: "The quarterly ledger is closed. Totals are final.")
+        ledgerA.headers["Message-ID"] = "<fj-exact@example.com>"
+        var ledgerB = mail(9_314, from: "alice@example.com", subject: "Quarterly ledger", body: "The quarterly ledger is closed. Totals are final.")
+        ledgerB.headers["Message-ID"] = "<fj-exact@example.com>"
+        XCTAssertNotEqual(ledgerA.id, ledgerB.id)
+        let words = (0..<40).map { "itinerary\($0)" }
+        let travelA = mail(9_311, from: "erin@example.com", subject: "Travel plans", body: words.joined(separator: " "))
+        let travelB = mail(9_312, from: "erin@example.com", subject: "Travel plans (revised)",
+                           body: (words.dropLast() + ["itineraryfinal"]).joined(separator: " "))
+        let near = DuplicateManagerView.findNearDuplicates(in: [ledgerA, ledgerB, travelA, travelB], threshold: 0.85)
+        XCTAssertEqual(near.count, 2, "the previous engine groups the identical pair as similar too")
+
+        let similar = DuplicateManagerView.similarOnly(near, verified: [[ledgerA, ledgerB]])
+        XCTAssertEqual(similar.map { Set($0.map(\.id)) }, [Set([travelA.id, travelB.id])],
+                       "only the pair that really differs is offered as similar")
+        let summary = DuplicateSummary.text(verified: 1, candidates: 0, similar: similar.count, near: .newest(5_000))
+        XCTAssertTrue(summary.detail.contains("1 group "), summary.detail)
+
+        // A similar group that holds an identical pair plus a third, different
+        // message keeps one copy of the pair beside the third.
+        var ledgerC = mail(9_313, from: "alice@example.com", subject: "Quarterly ledger", body: "The quarterly ledger is closed. Totals are final!")
+        ledgerC.headers["Message-ID"] = "<fj-other@example.com>"
+        let mixed = DuplicateManagerView.similarOnly([[ledgerA, ledgerB, ledgerC]], verified: [[ledgerA, ledgerB]])
+        XCTAssertEqual(mixed.map { $0.map(\.id) }, [[ledgerA.id, ledgerC.id]])
+        XCTAssertEqual(DuplicateManagerView.similarOnly(near, verified: []).count, 2, "nothing verified, nothing removed")
+    }
+
     // MARK: - Release audit bf1a5b9 R2 — attachments compared as occurrences
 
     /// One attachment whose bytes the hydrator can produce (inline payload).
