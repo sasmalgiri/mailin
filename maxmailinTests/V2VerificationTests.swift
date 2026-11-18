@@ -5411,6 +5411,15 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(ClearArchiveConfirmation.message(.init(emails: nil, sources: nil)).contains("could not count"))
     }
 
+    // Gate 1 walk 2026-11-18 (iPad): VoiceOver read the sidebar row as
+    // "Has Attachments, 1 emails"; the Subjects panel said "1 subjects".
+    func testGate1Walk1118_folderRowAndSubjectCountPlurals() {
+        XCTAssertEqual(FolderTreeView.rowAccessibilityLabel(name: "Has Attachments", count: 1), "Has Attachments, 1 email")
+        XCTAssertEqual(FolderTreeView.rowAccessibilityLabel(name: "Inbox", count: 7), "Inbox, 7 emails")
+        XCTAssertEqual(SubjectsListView.countLabel(1), "1 subject")
+        XCTAssertEqual(SubjectsListView.countLabel(7), "7 subjects")
+    }
+
     // Gate 1 walk 2026-11-18 (iPad): Settings ▸ Data & Privacy ▸ "Delete All My
     // Data" asked to erase everything without saying how many emails (rule 4).
     func testGate1Walk1118_deleteAllConfirmationContainsTheCount() throws {

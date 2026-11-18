@@ -93,7 +93,7 @@ struct SubjectsListView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text("\(filteredSubjects.count) subjects")
+                Text(Self.countLabel(filteredSubjects.count))
                     .font(Typography.caption2)
                     .foregroundColor(AppColors.secondary)
 
@@ -195,5 +195,12 @@ struct SubjectsListView: View {
             return name.isEmpty ? from : name
         }
         return from
+    }
+}
+
+extension SubjectsListView {
+    /// "1 subject" / "7 subjects" — it said "1 subjects" (gate 1 walk 2026-11-18).
+    static func countLabel(_ n: Int) -> String {
+        n == 1 ? String(localized: "1 subject") : String(localized: "\(n) subjects")
     }
 }

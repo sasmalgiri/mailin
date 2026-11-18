@@ -112,7 +112,7 @@ struct FolderTreeView: View {
                         .help(row.node.filterValue.isEmpty
                               ? "\(row.node.name) — \(row.node.emailCount) emails"
                               : "Show only: \(row.node.name)")
-                        .accessibilityLabel("\(row.node.name), \(row.node.emailCount) emails")
+                        .accessibilityLabel(Text(verbatim: Self.rowAccessibilityLabel(name: row.node.name, count: row.node.emailCount)))
                         .accessibilityAddTraits(selectedFolder == row.node.filterValue ? .isSelected : [])
                     }
                     if labelBuckets.count < labelTotal {
@@ -258,5 +258,13 @@ struct FolderTreeView: View {
         }
 
         return nodes
+    }
+}
+
+extension FolderTreeView {
+    /// What VoiceOver reads for a folder row: "Has Attachments, 1 email" —
+    /// it read "1 emails" (gate 1 walk 2026-11-18).
+    static func rowAccessibilityLabel(name: String, count: Int) -> String {
+        "\(name), \(CountPhrase.emails(count))"
     }
 }
