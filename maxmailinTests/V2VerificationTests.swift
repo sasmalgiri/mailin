@@ -13342,7 +13342,8 @@ final class Review1116CTests: XCTestCase {
         let receipt = ImportReceipt(startedAt: Date(), completedAt: Date())
         let view = ImportReceiptView(receipt: receipt)
         let de = view.plainText(locale: Locale(identifier: "de"))
-        XCTAssertTrue(de.contains("mailin-Importbeleg"), de)
+        // "Quittung", the glossary term (back-translation review 2026-11-18; was "Importbeleg").
+        XCTAssertTrue(de.contains("mailin-Importquittung"), de)
         XCTAssertTrue(de.contains("Bilanz"), de)
         XCTAssertTrue(de.contains("gefunden: 0"), de)
         XCTAssertFalse(de.contains("Accounting"), de)
