@@ -16,6 +16,12 @@
 //      survivor, so account search, the Mail workspace and provenance still
 //      find the mail, and later label changes attach to the survivor. The
 //      occurrence remembers which record it came from (`mailinCarriedFrom`).
+//    • Restore is a true undo of the merge: the memberships and tags the
+//      merge GAVE the survivor are recorded in `duplicate_merge_additions`
+//      in the same transaction; restoring that copy from the Trash takes
+//      exactly those off the survivor again (never one it had before, and
+//      not one another still-trashed copy also gave it). The record is
+//      only ever added to or marked undone, never deleted.
 //    • A copy under a legal hold recorded in the database is kept, whatever
 //      the caller and whether or not the Professional interface is on.
 //    • `reclaimableBytesEstimate` says what a permanent deletion would free
@@ -88,11 +94,14 @@ extension SQLiteEmailStore {
         // layer or the store's delete gate is on.
         let held = try legalHeldAmong(plans.flatMap(\.removed))
         let now = Int64(Date().timeIntervalSince1970)
+        try ensureDuplicateMergeAdditions(db)
         try exec(db, SQLiteHygiene.beginWrite)
         do {
             for plan in plans {
                 for copy in plan.removed where copy != plan.survivor {
                     if held.contains(copy) { result.heldKept.append(copy); continue }
+                    // What the survivor gets from this copy, before it gets it.
+                    try recordMergeAdditions(db, into: plan.survivor, from: copy, at: now)
                     result.membershipsMerged += try copyRows(db,
                         "INSERT OR IGNORE INTO email_folders(email_id, folder_id) SELECT ?, folder_id FROM email_folders WHERE email_id = ?;",
                         into: plan.survivor, from: copy)
@@ -182,6 +191,94 @@ extension SQLiteEmailStore {
             if !referencedOutside { total += length }
         }
         return total
+    }
+
+    // MARK: Merge provenance (restore = undo)
+
+    /// The three kinds of row a merge copies, by the table and column they live in.
+    private static let mergeKinds: [(kind: String, table: String, column: String)] = [
+        ("folder", "email_folders", "folder_id"),
+        ("tag", "email_tags", "tag"),
+        ("user_tag", "email_user_tags", "tag"),
+    ]
+
+    func ensureDuplicateMergeAdditions(_ db: OpaquePointer) throws {
+        try exec(db, """
+            CREATE TABLE IF NOT EXISTS duplicate_merge_additions(
+                removed_id  TEXT NOT NULL,
+                survivor_id TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                merged_at   INTEGER NOT NULL,
+                undone_at   INTEGER,
+                PRIMARY KEY(removed_id, survivor_id, kind, value)
+            );
+        """)
+        try exec(db, "CREATE INDEX IF NOT EXISTS idx_dup_merge_survivor ON duplicate_merge_additions(survivor_id, kind, value) WHERE undone_at IS NULL;")
+    }
+
+    /// Records every membership / tag of `copy` that the survivor does not
+    /// own in its own right: one it lacks, or one it only has from another
+    /// copy's merge that is still in force. Runs before the rows are copied.
+    private func recordMergeAdditions(_ db: OpaquePointer, into survivor: UUID, from copy: UUID, at now: Int64) throws {
+        for k in Self.mergeKinds {
+            let stmt = try prepare(db, """
+                INSERT INTO duplicate_merge_additions(removed_id, survivor_id, kind, value, merged_at)
+                SELECT ?1, ?2, '\(k.kind)', CAST(c.\(k.column) AS TEXT), ?3 FROM \(k.table) c
+                WHERE c.email_id = ?1
+                  AND (NOT EXISTS (SELECT 1 FROM \(k.table) s WHERE s.email_id = ?2 AND s.\(k.column) = c.\(k.column))
+                       OR EXISTS (SELECT 1 FROM duplicate_merge_additions d
+                                  WHERE d.survivor_id = ?2 AND d.kind = '\(k.kind)' AND d.value = CAST(c.\(k.column) AS TEXT)
+                                    AND d.undone_at IS NULL AND d.removed_id <> ?1))
+                ON CONFLICT(removed_id, survivor_id, kind, value) DO UPDATE SET merged_at = excluded.merged_at, undone_at = NULL;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, copy.uuidString)
+            bindText(stmt, 2, survivor.uuidString)
+            sqlite3_bind_int64(stmt, 3, now)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    /// Restore from the Trash of a copy a duplicate merge removed: its merge
+    /// records are marked undone, and each membership / tag it gave the
+    /// survivor is taken off again unless another merge still in force gave
+    /// the same one. Runs inside the caller's write transaction. Returns the
+    /// rows taken off the survivors.
+    @discardableResult
+    func undoDuplicateMerge(_ db: OpaquePointer, restored copy: UUID, at now: Int64) throws -> Int {
+        let select = try prepare(db, """
+            SELECT survivor_id, kind, value FROM duplicate_merge_additions WHERE removed_id = ? AND undone_at IS NULL;
+        """)
+        var additions: [(survivor: String, kind: String, value: String)] = []
+        bindText(select, 1, copy.uuidString)
+        while sqlite3_step(select) == SQLITE_ROW {
+            additions.append((columnText(select, 0), columnText(select, 1), columnText(select, 2)))
+        }
+        sqlite3_finalize(select)
+        guard !additions.isEmpty else { return 0 }
+        let mark = try prepare(db, "UPDATE duplicate_merge_additions SET undone_at = ? WHERE removed_id = ? AND undone_at IS NULL;")
+        sqlite3_bind_int64(mark, 1, now)
+        bindText(mark, 2, copy.uuidString)
+        let marked = sqlite3_step(mark) == SQLITE_DONE
+        sqlite3_finalize(mark)
+        guard marked else { throw SQLiteStoreError.step(lastError(db)) }
+        var removed = 0
+        for a in additions {
+            guard let k = Self.mergeKinds.first(where: { $0.kind == a.kind }) else { continue }
+            let stmt = try prepare(db, """
+                DELETE FROM \(k.table) WHERE email_id = ?1 AND CAST(\(k.column) AS TEXT) = ?2
+                  AND NOT EXISTS (SELECT 1 FROM duplicate_merge_additions d
+                                  WHERE d.survivor_id = ?1 AND d.kind = ?3 AND d.value = ?2 AND d.undone_at IS NULL);
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, a.survivor)
+            bindText(stmt, 2, a.value)
+            bindText(stmt, 3, a.kind)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            removed += Int(sqlite3_changes(db))
+        }
+        return removed
     }
 
     // MARK: Helpers

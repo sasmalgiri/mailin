@@ -4558,6 +4558,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
             ON CONFLICT(email_id) DO UPDATE SET \(flag.rawValue) = excluded.\(flag.rawValue), updated_at = excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
+        // Restore from the Trash undoes a duplicate merge of the copy (DuplicateCleanup).
+        let undoesMerges = flag == .trashed && !value
+        if undoesMerges { try ensureDuplicateMergeAdditions(db) }
         try exec(db, SQLiteHygiene.beginWrite)
         do {
             for id in ids {
@@ -4566,6 +4569,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 sqlite3_bind_int(stmt, 2, value ? 1 : 0)
                 sqlite3_bind_int64(stmt, 3, now)
                 guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                if undoesMerges { try undoDuplicateMerge(db, restored: id, at: now) }
             }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }

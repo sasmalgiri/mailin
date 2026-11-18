@@ -7013,6 +7013,14 @@ final class V2CutoverTests: XCTestCase {
         try await env.archive.setTrashed(ids: [gone.id], false)
         let restored = try await env.archive.count(query: .all)
         XCTAssertEqual(restored, 2, "the Trash restores it")
+        // Restore undoes the merge (CLOSE-06 J4): the folder and tag the merge
+        // gave the kept copy come off it; the Inbox it had stays.
+        let restoredNodes = try await env.store.folderNodes()
+        XCTAssertEqual(restoredNodes.first { $0.path == "Projects/Alpha" }?.messageCount, 1, "only the restored copy is in Projects/Alpha again")
+        XCTAssertEqual(restoredNodes.first { $0.path == "Inbox" }?.messageCount, 2)
+        let restoredTags = try await env.store.userTags(ids: [keep.id, gone.id])
+        XCTAssertEqual(restoredTags[keep.id] ?? [], [])
+        XCTAssertEqual(restoredTags[gone.id], ["Follow up"])
 
         // A held copy is kept even though nothing turned the store's hold gate on.
         let heldEnforced = await env.store.enforcesDatabaseLegalHolds

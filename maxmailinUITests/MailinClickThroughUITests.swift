@@ -2735,6 +2735,15 @@ final class MailinClickThroughUITests: XCTestCase {
                 let all = fjElement("archive.sidebar.allMail")
                 detail.append("after restore: \(fjText(trash)); \(fjText(all))")
                 if !back || !fjText(all).contains("\(FiveJobsFixture.total) messages") { pass = false }
+                // Restore undoes the merge (DuplicateRestoreUndoTests): every
+                // folder counts what it did before the move — Inbox 3, not 4.
+                let folderLabels = app.descendants(matching: .any).matching(identifier: "archive.sidebar.folder")
+                    .allElementsBoundByIndex.map { fjText($0) }
+                for f in FiveJobsFixture.folders where f.count > 0 {
+                    let want = "\(f.name), \(f.count) messages"
+                    let shown = folderLabels.first { $0.hasPrefix(f.name + ",") } ?? "missing"
+                    if shown != want { pass = false; detail.append("after restore \(f.name): “\(shown)”, expected “\(want)”") }
+                }
                 if all.exists { all.click() }
             }
             record("J4 duplicates", pass, detail.joined(separator: "; "))
@@ -2749,9 +2758,13 @@ final class MailinClickThroughUITests: XCTestCase {
             _ = openPage("Archive")
             let folder = app.descendants(matching: .any).matching(identifier: "sidebar.sourceFolder")
                 .matching(NSPredicate(format: "label BEGINSWITH %@", FiveJobsFixture.exportFolder + ",")).firstMatch
-            var expected = FiveJobsFixture.folders.first { $0.name == FiveJobsFixture.exportFolder }?.count ?? 0
+            // The fixture's count (3), not whatever the sidebar says: J4's
+            // move-and-restore once left the Inbox at 4 and J5 followed it.
+            let expected = FiveJobsFixture.folders.first { $0.name == FiveJobsFixture.exportFolder }?.count ?? 0
             if folder.waitForExistence(timeout: 30) {
-                if let n = Int(folder.label.components(separatedBy: ", ").last?.components(separatedBy: " ").first ?? "") { expected = n }
+                if let n = Int(folder.label.components(separatedBy: ", ").last?.components(separatedBy: " ").first ?? ""), n != expected {
+                    pass = false; detail.append("sidebar says \(FiveJobsFixture.exportFolder) has \(n), the fixture has \(expected)")
+                }
                 // Seen 2026-11-17: with the row in view (y 707 of an 860-pt
                 // window) XCUITest's click still ran "Scroll element to
                 // visible", scrolled the sidebar the wrong way (row to y 1088,
