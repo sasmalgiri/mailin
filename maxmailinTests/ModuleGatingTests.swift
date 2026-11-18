@@ -1203,6 +1203,54 @@ struct InterfaceLocalizationTests {
             #expect(Self.placeholders(value) == Self.placeholders(key), "placeholders changed: \(key) -> \(value)")
         }
     }
+
+    /// A key Xcode marks stale is kept only while something still names it:
+    /// the package looks its texts up in this catalog by literal
+    /// (`String(localized:bundle: PackageLocalization.bundle)`, which Xcode
+    /// does not extract), Info.plist usage texts come from the project's
+    /// build settings, and a few keys are read from bundled resources. A
+    /// stale key nothing names is a leftover of a replaced string
+    /// (2026-11-18: 157 of them, e.g. "Per import, under the Free plan only.").
+    @Test("Every stale catalog key is still named by the app, the package, the project or a resource")
+    func noOrphanedStaleKeys() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        var haystack = ""
+        for dir in ["maxmailin", "Packages/ArchiveCore/Sources"] {
+            let enumerator = try #require(FileManager.default.enumerator(at: root.appendingPathComponent(dir), includingPropertiesForKeys: nil))
+            for case let url as URL in enumerator where ["swift", "plist", "json", "strings"].contains(url.pathExtension) {
+                haystack += (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+                haystack += "\n"
+            }
+        }
+        haystack += (try? String(contentsOf: root.appendingPathComponent("maxmailin.xcodeproj/project.pbxproj"), encoding: .utf8)) ?? ""
+        let text = haystack as NSString
+        let placeholder = try NSRegularExpression(pattern: #"%(?:\d+\$)?(?:lld|ld|llu|lu|d|u|@|f|\.\d+f)"#)
+        func literal(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "\n", with: "\\n")
+        }
+        func named(_ key: String) -> Bool {
+            let lit = literal(key)
+            if text.range(of: "\"" + lit + "\"").location != NSNotFound { return true }
+            if key.count > 15, text.range(of: lit).location != NSNotFound { return true }
+            let ns = key as NSString
+            let matches = placeholder.matches(in: key, range: NSRange(location: 0, length: ns.length))
+            guard !matches.isEmpty else { return false }
+            // The interpolated form: "Moved \(n) of \(total)" for "Moved %lld of %lld".
+            var pattern = "", last = 0
+            for m in matches {
+                pattern += NSRegularExpression.escapedPattern(for: literal(ns.substring(with: NSRange(location: last, length: m.range.location - last))))
+                pattern += #"\\\(.*?\)"#
+                last = m.range.location + m.range.length
+            }
+            pattern += NSRegularExpression.escapedPattern(for: literal(ns.substring(from: last)))
+            let regex = try? NSRegularExpression(pattern: pattern)
+            return regex?.firstMatch(in: haystack, range: NSRange(location: 0, length: text.length)) != nil
+        }
+        let stale = try Self.loadCatalog().strings.filter { $0.value.extractionState == "stale" }.map(\.key).sorted()
+        let orphaned = stale.filter { !named($0) }
+        #expect(orphaned.isEmpty, "stale keys nothing names any more (\(orphaned.count)): \(orphaned.prefix(20))")
+    }
 }
 
 
