@@ -160,6 +160,7 @@ extension SQLiteEmailStore {
             let filename: String
             switch hit.location {
             case .attachmentText(_, let name, _, _): filename = name
+            case .speech(_, let name, _): filename = name   // TYPE-05: recognised speech is attachment content too
             case .childText(_, _, let path, _): filename = (path.components(separatedBy: " › ").last ?? path)
             default: return false
             }

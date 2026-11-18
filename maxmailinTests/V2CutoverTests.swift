@@ -6529,6 +6529,10 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertFalse(AttachmentSpeech.isMedia(mimeType: "application/pdf", filename: "deed.pdf"))
         let media = Self.fixturesRoot.appendingPathComponent("media")
         let m4a = media.appendingPathComponent("speech.m4a"), aiff = media.appendingPathComponent("speech.aiff")
+        // Made with the Samantha voice, which the on-device recogniser hears verbatim (2026-11-18; the
+        // earlier voice made macOS 27 hear "aquarium" for "quorum"):
+        //   say -v Samantha -o speech.m4a --file-format=m4af --data-format=aac "The quorum clause applies to every board vote. Payment within 30 days."
+        //   say -v Samantha -o speech.aiff "Roadmap overview for the milestones."
         XCTAssertTrue(FileManager.default.fileExists(atPath: m4a.path) && FileManager.default.fileExists(atPath: aiff.path), "real recordings made with the system voice")
 
         // The person must have allowed speech recognition for the test host once; without that the test says so and skips.

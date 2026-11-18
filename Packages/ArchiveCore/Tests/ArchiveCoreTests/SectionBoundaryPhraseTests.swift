@@ -491,6 +491,37 @@ final class SectionBoundaryPhraseTests: XCTestCase {
         }
     }
 
+    /// TYPE-05: an attachment content condition that matched recognised speech
+    /// names the recording as speech (ordinal + filename), and the group's name
+    /// filter applies to it as to any attachment — never "evidence unavailable".
+    @MainActor
+    func testTYPE05_attachmentConditionEvidence_namesRecognisedSpeech() async throws {
+        let email = MBOXParser.RawEmail(
+            headers: ["Message-ID": "<type05-evidence-\(UUID().uuidString)@test>", "Subject": "Voice memo", "From": "a@test", "To": "b@test",
+                      "Date": "Wed, 01 Mar 2023 12:00:00 +0000"],
+            rawSource: "", messageType: "email",
+            attachments: [AttachmentMetadata(filename: "memo.m4a", mimeType: "audio/mp4", size: 10),
+                          AttachmentMetadata(filename: "roadmap.aiff", mimeType: "audio/aiff", size: 10)],
+            timestamp: "", domains: [], plainBody: "listen to this", htmlBody: "")
+        try await store.insertBatch([email], batchSize: 10)
+        try await store.indexAttachmentSearchDocuments(emailID: email.id, documents: [
+            AttachmentSearchDocument(ordinal: 0, filename: "memo.m4a", text: "[Recognised speech (en-US)]\nthe board met", state: .complete, extractorVersion: 1, ocr: false, speech: true),
+            AttachmentSearchDocument(ordinal: 1, filename: "roadmap.aiff", text: "[Recognised speech (en-US)]\nthe roadmap has three milestones", state: .complete, extractorVersion: 1, ocr: false, speech: true)])
+
+        let spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(type: "aiff", contentMatch: .allWords, content: "roadmap")])])
+        let evidence = try await archive.matchEvidence(emailID: email.id, spec: spec, freeText: nil)
+        guard case .speech(let ordinal, let filename, _)? = evidence.first?.location else {
+            return XCTFail("evidence should name recognised speech, got \(evidence)")
+        }
+        XCTAssertEqual(ordinal, 1); XCTAssertEqual(filename, "roadmap.aiff")
+        XCTAssertNotNil(evidence.first?.excerpt)
+
+        // The name filter still applies to a recording.
+        let named = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "memo", contentMatch: .allWords, content: "roadmap")])])
+        let none = try await archive.matchEvidence(emailID: email.id, spec: named, freeText: nil)
+        XCTAssertEqual(none.map(\.location), [.unavailable], "roadmap is not in memo.m4a: \(none)")
+    }
+
     /// Perf: the matcher runs on the FTS candidates only; a 5 MB hard-wrapped
     /// body with a wrapped phrase across the first chunk join, as in testFIND07.
     @MainActor
