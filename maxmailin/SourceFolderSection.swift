@@ -55,6 +55,10 @@ extension ArchiveSidebarModel {
 /// The source-folder tree + Trash for the list's sidebar.
 struct SourceFolderSection: View {
     @ObservedObject var model: ParsedEmailListViewModel
+    /// Gate 1 follow-up 2026-11-18: a source folder replaces the host's folder
+    /// bucket (Received + "type:received" stayed applied under it, and both
+    /// rows were highlighted).
+    var onChoosePlace: () -> Void = {}
     @StateObject private var sidebar = ArchiveSidebarModel()
     /// Folders are drawn a page at a time; the total is always shown.
     @State private var reach = ArchiveSidebarModel.labelPage
@@ -165,6 +169,7 @@ struct SourceFolderSection: View {
         return Button {
             // Gate 1 follow-up 2026-11-18: a source folder is a place; choosing
             // it leaves the Trash (it was applied underneath the Trash view).
+            onChoosePlace()
             model.leaveTrashForSidebarPlace()
             model.selectedSourceFolder = isSelected ? nil : selection
         } label: {

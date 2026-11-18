@@ -2484,20 +2484,23 @@ struct ContentView: View {
                         // count, buckets over a bounded working set.
                         FolderTreeView(selectedFolder: $selectedFolder,
                                        trashShown: modelVM.reviewStateFilter == .trashed,
-                                       onChoosePlace: { modelVM.leaveTrashForSidebarPlace() })
+                                       onChoosePlace: {
+                                           // Gate 1 follow-up 2026-11-18: one place at a time —
+                                           // a folder bucket replaces a source folder (and the Trash).
+                                           modelVM.leaveTrashForSidebarPlace()
+                                           modelVM.selectedSourceFolder = nil
+                                       })
                             .padding(.horizontal, Spacing.xSmall)
                             .onChange(of: selectedFolder) { _, newFolder in
-                                if let folder = newFolder {
-                                    modelVM.searchText = folder
-                                } else {
-                                    modelVM.searchText = ""
-                                    modelVM.selectedSourceFolder = nil
-                                }
+                                // The source folder is cleared where a place is chosen
+                                // (above); clearing it here also undid a source folder
+                                // that had just replaced Received.
+                                modelVM.searchText = newFolder ?? ""
                             }
                         // IPAD-02 / IPAD-05: every source folder (empty and
                         // nested ones too) and the Trash — on iPad, iPhone
                         // (Filters sheet) and the Mac's Advanced list alike.
-                        SourceFolderSection(model: modelVM)
+                        SourceFolderSection(model: modelVM, onChoosePlace: { selectedFolder = nil })
                             .padding(.horizontal, Spacing.xSmall)
                             .padding(.top, Spacing.xSmall)
                     }

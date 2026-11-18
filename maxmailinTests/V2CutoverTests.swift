@@ -9176,10 +9176,30 @@ final class V2CutoverTests: XCTestCase {
         let tree = try String(contentsOf: appSource.appendingPathComponent("FolderTreeView.swift"), encoding: .utf8)
         XCTAssertEqual(tree.components(separatedBy: "onChoosePlace()\n").count - 1, 2, "All Emails and every folder row")
         let content = try String(contentsOf: appSource.appendingPathComponent("ContentView.swift"), encoding: .utf8)
-        XCTAssertTrue(content.contains("onChoosePlace: { modelVM.leaveTrashForSidebarPlace() }"))
+        XCTAssertTrue(content.contains("onChoosePlace: {\n                                           // Gate 1 follow-up 2026-11-18: one place at a time —\n                                           // a folder bucket replaces a source folder (and the Trash).\n                                           modelVM.leaveTrashForSidebarPlace()"))
         XCTAssertTrue(content.contains("trashShown: modelVM.reviewStateFilter == .trashed"))
         let source = try String(contentsOf: appSource.appendingPathComponent("SourceFolderSection.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("model.leaveTrashForSidebarPlace()\n            model.selectedSourceFolder = isSelected ? nil : selection"))
+    }
+
+    /// Found in the follow-up re-check 2026-11-18 (iPad): after Trash, then
+    /// Source Folders > Inbox, the list showed the Inbox but "type:received"
+    /// stayed in the search field and Received and Inbox were both highlighted.
+    /// The sidebar's places replace each other: a folder bucket clears the
+    /// source folder, a source folder clears the bucket and its search.
+    func testGate1Followup1118_sidebarPlacesReplaceEachOther() throws {
+        let content = try String(contentsOf: appSource.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        let host = try XCTUnwrap(content.range(of: "FolderTreeView(selectedFolder: $selectedFolder,"))
+        let block = String(content[host.lowerBound...].prefix(1_600))
+        XCTAssertTrue(block.contains("modelVM.leaveTrashForSidebarPlace()\n                                           modelVM.selectedSourceFolder = nil"),
+                      "a folder bucket (All Emails, Received, a label) replaces a source folder")
+        XCTAssertTrue(block.contains("modelVM.searchText = newFolder ?? \"\""))
+        XCTAssertFalse(block.contains("} else {\n                                    modelVM.searchText = \"\"\n                                    modelVM.selectedSourceFolder = nil"),
+                       "clearing the bucket no longer undoes the source folder that replaced it")
+        XCTAssertTrue(block.contains("SourceFolderSection(model: modelVM, onChoosePlace: { selectedFolder = nil })"),
+                      "a source folder clears the bucket (and with it type:received)")
+        let source = try String(contentsOf: appSource.appendingPathComponent("SourceFolderSection.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("onChoosePlace()\n            model.leaveTrashForSidebarPlace()"))
     }
 
     // MARK: - Release audit bf1a5b9 R2 — attachments compared as occurrences
