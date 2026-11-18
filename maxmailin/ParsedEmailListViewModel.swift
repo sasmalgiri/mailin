@@ -917,6 +917,20 @@ class ParsedEmailListViewModel: ObservableObject {
         var counts: [String: Int] = [:]
         for rollup in rollups { counts[rollup.sender] = rollup.count }
         replyCountPerSender = counts
+        // Gate 1 third follow-up 2026-11-18 (rule 6): the previous list stops
+        // at 500 senders; the sidebar says so, with the total.
+        replyFrequencyTotal = Self.replyFrequencyIsCut(listed: rollups.count, limit: 500, completeLists: SQLiteEmailStore.unboundedIDLookups)
+            ? (try? await ArchiveAggregateService.shared.senderTotal(excludingTrashed: true)) : nil
+    }
+
+    /// Every sender in the archive (without the Trash) when Reply Frequency
+    /// is the previous list and was cut at its limit; nil when it lists all.
+    @Published private(set) var replyFrequencyTotal: Int?
+
+    /// With "Complete lists (3.0)" off the store stops at `limit` senders
+    /// (rule 14 keeps that path); a list that reached it may be cut.
+    static func replyFrequencyIsCut(listed: Int, limit: Int, completeLists: Bool) -> Bool {
+        !completeLists && listed >= limit
     }
 
     func searchTextDidChange() {

@@ -5520,10 +5520,10 @@ final class IPadGate1FixTests: XCTestCase {
 
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
         let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
-        XCTAssertTrue(content.contains("ReplyFrequencyList(senders: modelVM.sortedSendersByReplyCount)"))
+        XCTAssertTrue(content.contains("ReplyFrequencyList(senders: modelVM.sortedSendersByReplyCount, total: modelVM.replyFrequencyTotal)"))
         XCTAssertFalse(content.contains(".frame(maxHeight: 110)"), "no fixed box that clips the last row")
         let list = try XCTUnwrap(content.range(of: "struct ReplyFrequencyList: View {"))
-        let body = String(content[list.lowerBound...].prefix(3_000))
+        let body = String(content[list.lowerBound...].prefix(4_000))
         XCTAssertTrue(body.contains(".lineLimit(2)") && body.contains(".fixedSize(horizontal: false, vertical: true)"), "a name wraps onto a second line")
         XCTAssertTrue(body.contains("CountPhrase.row(entry.email, emails: entry.count)"))
         XCTAssertTrue(body.contains("Show more (\\(shown) of \\(senders.count) senders)"))
@@ -5545,6 +5545,27 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(vm.contains("senderRollups(limit: 500, excludingTrashed: true)"), "the counts leave the Trash out (ArchiveCore SidebarTrashCountTests)")
         XCTAssertTrue(vm.contains(".publisher(for: .archiveTrashChanged)\n            .receive(on: RunLoop.main)\n            .sink { [weak self] _ in\n                guard let self, self.isParsed else { return }\n                self.objectWillChange.send()\n                Task { @MainActor [weak self] in await self?.refreshSenderAggregates() }"),
                       "a move to the Trash re-reads them (gate 1 third follow-up: from anywhere that posts it)")
+    }
+
+    // Gate 1 third follow-up 2026-11-18 (rule 6): with "Complete lists (3.0)"
+    // off, Reply Frequency is the previous list, cut at the busiest 500
+    // senders (rule 14 keeps it). The cut is stated on screen with the total.
+    func testGate1Third1118_replyFrequencyStatesThePreviousListsLimit() throws {
+        XCTAssertTrue(ParsedEmailListViewModel.replyFrequencyIsCut(listed: 500, limit: 500, completeLists: false))
+        XCTAssertFalse(ParsedEmailListViewModel.replyFrequencyIsCut(listed: 499, limit: 500, completeLists: false), "every sender fitted")
+        XCTAssertFalse(ParsedEmailListViewModel.replyFrequencyIsCut(listed: 2_000, limit: 500, completeLists: true), "the complete list is never cut")
+        XCTAssertEqual(ReplyFrequencyList.cutNote(listed: 500, total: 900),
+                       "First 500 of 900 senders. All of them are listed when “Complete lists (3.0)” is on in Settings ▸ Modules.")
+        XCTAssertNil(ReplyFrequencyList.cutNote(listed: 500, total: nil))
+        XCTAssertNil(ReplyFrequencyList.cutNote(listed: 500, total: 500), "nothing was left out")
+
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let vm = try String(contentsOf: dir.appendingPathComponent("ParsedEmailListViewModel.swift"), encoding: .utf8)
+        XCTAssertTrue(vm.contains("replyFrequencyTotal = Self.replyFrequencyIsCut(listed: rollups.count, limit: 500, completeLists: SQLiteEmailStore.unboundedIDLookups)\n            ? (try? await ArchiveAggregateService.shared.senderTotal(excludingTrashed: true)) : nil"))
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains("ReplyFrequencyList(senders: modelVM.sortedSendersByReplyCount, total: modelVM.replyFrequencyTotal)"))
+        let list = try XCTUnwrap(content.range(of: "struct ReplyFrequencyList: View {"))
+        XCTAssertTrue(content[list.lowerBound...].prefix(4_000).contains("if let note = Self.cutNote(listed: senders.count, total: total)"))
     }
 
     // Gate 1 walk 2026-11-18: the home subtitle said "Open an mbox or eml

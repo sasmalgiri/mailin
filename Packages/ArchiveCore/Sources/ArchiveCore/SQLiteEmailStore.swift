@@ -3661,6 +3661,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
     }
 
+    /// Distinct senders (non-empty From), the N of Reply Frequency's "First
+    /// 500 of N" when the previous list is cut at its limit (gate 1 third
+    /// follow-up 2026-11-18, rule 6). `excludingTrashed` as for senderRollups.
+    func senderTotal(excludingTrashed: Bool = false) throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, """
+            SELECT COUNT(DISTINCT from_addr) FROM emails e
+            WHERE e.from_addr <> ''\(excludingTrashed ? " AND \(Self.notTrashedPredicate)" : "");
+        """)
+    }
+
     private func senderRollupRows(limit requested: Int, excludingTrashed: Bool) throws -> [SenderRollup] {
         // §3-H5: one row per distinct sender — complete under v3PagedLists.
         let limit = Self.unboundedIDLookups ? Int(Int32.max) : requested

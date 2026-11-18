@@ -73,6 +73,12 @@ final class ArchiveAggregateService {
         try await store.senderRollups(limit: limit, excludingTrashed: excludingTrashed)
     }
 
+    /// Distinct senders, without the Trash when asked (Reply Frequency's
+    /// "First 500 of N" on the previous list).
+    func senderTotal(excludingTrashed: Bool = false) async throws -> Int {
+        try await store.senderTotal(excludingTrashed: excludingTrashed)
+    }
+
     /// Sent/received split using the same rule the legacy annotator applied
     /// (From contains the user's address ⇒ sent), as two COUNT aggregates.
     func sentReceivedCounts(senderEmail: String) async throws -> (sent: Int, received: Int) {

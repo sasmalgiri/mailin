@@ -114,4 +114,25 @@ final class SidebarTrashCountTests: XCTestCase {
         XCTAssertEqual(stored.count, 2, "without the switch: every stored row")
         XCTAssertTrue(stored.contains { $0.contains("frank@example.com") })
     }
+
+    /// Gate 1 third follow-up 2026-11-18 (rule 6): with "Complete lists" off,
+    /// Reply Frequency lists the busiest 500 senders and states "First 500 of
+    /// N": N is every sender All Mail shows, without the Trash.
+    func testSenderTotalCountsEverySenderWithoutTheTrash() async throws {
+        let store = SQLiteEmailStore(directory: root)
+        var frank = email("frank", folders: ["Work/Clients"]); frank.headers["From"] = "Frank Client <frank@example.com>"
+        var alice = email("alice", folders: ["Inbox"]); alice.headers["From"] = "Alice Ledger <alice@example.com>"
+        var alice2 = email("alice2", folders: ["Inbox"]); alice2.headers["From"] = "Alice Ledger <alice@example.com>"
+        var carol = email("carol", folders: ["Inbox"]); carol.headers["From"] = "Carol Board <carol@example.com>"
+        try await store.insertBatch([frank, alice, alice2, carol], batchSize: 10)
+        let all = try await store.senderTotal()
+        XCTAssertEqual(all, 3)
+        try await store.reviewSetFlag(.trashed, ids: [frank.id], value: true)
+        let visible = try await store.senderTotal(excludingTrashed: true)
+        XCTAssertEqual(visible, 2, "Frank's only email is in the Trash")
+        let stored = try await store.senderTotal()
+        XCTAssertEqual(stored, 3)
+        let listed = try await store.senderRollups(limit: 1, excludingTrashed: true).count
+        XCTAssertEqual(listed, SQLiteEmailStore.unboundedIDLookups ? 2 : 1, "the list is cut at its limit only on the old path")
+    }
 }

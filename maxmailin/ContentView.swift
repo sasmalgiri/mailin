@@ -3357,7 +3357,7 @@ struct ContentView: View {
 
             if !modelVM.sortedSendersByReplyCount.isEmpty && personaManager.showSection(.replyFrequency) {
                 SidebarSectionHeader(title: String(localized: "Reply Frequency"), icon: "envelope.arrow.triangle.branch", color: AppColors.primary, helpText: String(localized: "Senders ranked by how often you replied to them"))
-                ReplyFrequencyList(senders: modelVM.sortedSendersByReplyCount)
+                ReplyFrequencyList(senders: modelVM.sortedSendersByReplyCount, total: modelVM.replyFrequencyTotal)
             }
 
             if !modelVM.allDomains.isEmpty && personaManager.showSection(.domains) {
@@ -5352,7 +5352,15 @@ private struct SidebarPlaceAnchorKeeper: ViewModifier {
 
 struct ReplyFrequencyList: View {
     let senders: [(email: String, count: Int)]
+    /// Every sender, when the previous list stopped short of them (rule 6).
+    var total: Int? = nil
     @State private var reach = ReplyFrequencyList.page
+
+    /// Gate 1 third follow-up 2026-11-18: the previous list's limit, stated.
+    static func cutNote(listed: Int, total: Int?) -> String? {
+        guard let total, total > listed else { return nil }
+        return String(localized: "First \(listed) of \(total) senders. All of them are listed when “Complete lists (3.0)” is on in Settings ▸ Modules.")
+    }
 
     /// Rows shown at first and added per "Show more" (a page size, not a cap).
     static let page = 8
@@ -5402,6 +5410,13 @@ struct ReplyFrequencyList: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("sidebar.replyFrequency.fewer")
+            }
+            if let note = Self.cutNote(listed: senders.count, total: total) {
+                Label(note, systemImage: "info.circle")
+                    .font(Typography.caption2)
+                    .foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sidebar.replyFrequency.limit")
             }
         }
     }
