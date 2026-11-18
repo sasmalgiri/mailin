@@ -10,6 +10,9 @@
 //  Read-only except for the actions the user presses.
 //
 
+// SpeechPermissionSection keeps an SFSpeechRecognizerAuthorizationStatus in @State;
+// the @State macro's generated storage needs the type's module imported here.
+import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 

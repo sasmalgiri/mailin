@@ -1568,7 +1568,7 @@ final class V2CutoverTests: XCTestCase {
             XCTAssertEqual(inFolder, 4)
             let sourceName = sourceIDs.first { $0.value == inbox.sourceID }!.key
             var subjects: [String] = []
-            for try await batch in await env.archive.streamFullEmails(query: q, batchSize: 10) {
+            for try await batch in env.archive.streamFullEmails(query: q, batchSize: 10) {
                 subjects += batch.map { $0.headers["Subject"] ?? "" }
             }
             XCTAssertEqual(subjects.count, 4)
@@ -1696,7 +1696,7 @@ final class V2CutoverTests: XCTestCase {
 
     private func importForLife01(_ env: Env, _ url: URL) async throws -> BulkImportCoordinator.RunSummary {
         let checkpoints = ImportCheckpointStore(store: env.store)
-        let coordinator = await BulkImportCoordinator(store: env.store, fts: env.fts, checkpoints: checkpoints,
+        let coordinator = BulkImportCoordinator(store: env.store, fts: env.fts, checkpoints: checkpoints,
                                                       requiresStorageActivation: false)
         var options = BulkImportCoordinator.Options()
         options.useOffsetEngine = true
@@ -1710,7 +1710,7 @@ final class V2CutoverTests: XCTestCase {
         var q = EmailQuery.all
         q.subjectContains = "Life 2"
         var ids: [UUID] = []
-        for try await batch in await env.archive.streamFullEmails(query: q, batchSize: 10) { ids += batch.map(\.id) }
+        for try await batch in env.archive.streamFullEmails(query: q, batchSize: 10) { ids += batch.map(\.id) }
         XCTAssertEqual(ids.count, 1)
         let locator = try await env.store.locator(forEmailID: ids[0])
         return try XCTUnwrap(locator)
@@ -1928,7 +1928,7 @@ final class V2CutoverTests: XCTestCase {
         SourceCopyPolicy.isEnabled = false
 
         let checkpoints = ImportCheckpointStore(store: env.store)
-        let coordinator = await BulkImportCoordinator(store: env.store, fts: env.fts, checkpoints: checkpoints,
+        let coordinator = BulkImportCoordinator(store: env.store, fts: env.fts, checkpoints: checkpoints,
                                                       requiresStorageActivation: false)
         var options = BulkImportCoordinator.Options()
         options.useOffsetEngine = true
@@ -1991,7 +1991,7 @@ final class V2CutoverTests: XCTestCase {
         var q = scope
         q.spec = spec
         var subjects = Set<String>()
-        for try await batch in await env.archive.streamFullEmails(query: q, batchSize: 50) {
+        for try await batch in env.archive.streamFullEmails(query: q, batchSize: 50) {
             for e in batch { subjects.insert(e.headers["Subject"] ?? "") }
         }
         let count = try await env.archive.count(query: q)
@@ -5531,7 +5531,7 @@ final class V2CutoverTests: XCTestCase {
         let fingerprint = try await env.archive.selectionFingerprint(scope: .query(query, exclusions: []))
         XCTAssertTrue(fingerprint.hasPrefix("2300:"), fingerprint)
         var streamed = 0
-        for try await batch in await env.archive.streamSummaries(query: query, batchSize: 700) { streamed += batch.count }
+        for try await batch in env.archive.streamSummaries(query: query, batchSize: 700) { streamed += batch.count }
         XCTAssertEqual(streamed, 2_300)
         // Dates narrow it honestly, still with no window.
         query.afterDate = ISO8601DateFormatter().date(from: "2023-03-01T00:10:00Z")
@@ -5645,7 +5645,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(unresolved, 0, "every body is indexed; nothing is unknown for a positive search")
         // Evidence names the body, with no free text left to guess from.
         var ids: [UUID] = []
-        for try await batch in await env.archive.streamFullEmails(query: query, batchSize: 50) { ids += batch.map(\.id) }
+        for try await batch in env.archive.streamFullEmails(query: query, batchSize: 50) { ids += batch.map(\.id) }
         let evidence = try await env.archive.matchEvidence(emailID: try XCTUnwrap(ids.first), spec: query.spec, freeText: nil)
         XCTAssertFalse(evidence.isEmpty)
         // A negative search over attachment text leaves the unreadable .doc unknown — said, not hidden.
@@ -6735,7 +6735,7 @@ final class V2CutoverTests: XCTestCase {
         let restartedArchive = ArchiveDataService(repository: EmailStoreRepository(store: restarted, fts: env.fts))
         var deferredQuery = EmailQuery.all; deferredQuery.subjectContains = "Large deferred"
         var deferredIDs: [UUID] = []
-        for try await batch in await restartedArchive.streamFullEmails(query: deferredQuery, batchSize: 10) { deferredIDs += batch.map(\.id) }
+        for try await batch in restartedArchive.streamFullEmails(query: deferredQuery, batchSize: 10) { deferredIDs += batch.map(\.id) }
         let deferredID = try XCTUnwrap(deferredIDs.first)
         let locatorValue = try await restarted.locator(forEmailID: deferredID)
         let locator = try XCTUnwrap(locatorValue)
@@ -6754,7 +6754,7 @@ final class V2CutoverTests: XCTestCase {
         let foundCount = try await restartedArchive.count(query: attachmentQuery)
         XCTAssertEqual(foundCount, 3, "both versions carry the document, and so does the file inside the archive (COMP-18 nested step)")
         var foundSubjects: [String] = []
-        for try await batch in await restartedArchive.streamFullEmails(query: attachmentQuery, batchSize: 10) { foundSubjects += batch.map { $0.headers["Subject"] ?? "" } }
+        for try await batch in restartedArchive.streamFullEmails(query: attachmentQuery, batchSize: 10) { foundSubjects += batch.map { $0.headers["Subject"] ?? "" } }
         XCTAssertEqual(foundSubjects.sorted(), ["Bundle", "Contract", "Contract"])
         var nestedQuery = EmailQuery.all
         nestedQuery.spec = SearchSpec(groups: [SearchGroup(.all, attachments: [AttachmentConditionGroup(nameContains: "bundle", type: "docx", contentMatch: .phrase, content: "quorum clause")])])
@@ -6798,7 +6798,7 @@ final class V2CutoverTests: XCTestCase {
         // 7. Rebuild the search index for the restored archive, then search and export from it.
         let restoredFTS = FTSSearchIndex(shardsDirectory: cleanRoot.appendingPathComponent("fts", isDirectory: true))
         let restoredArchive = ArchiveDataService(repository: EmailStoreRepository(store: restored, fts: restoredFTS))
-        for try await batch in await restoredArchive.streamFullEmails(query: .all, batchSize: 50) { try await restoredFTS.indexBatch(batch) }
+        for try await batch in restoredArchive.streamFullEmails(query: .all, batchSize: 50) { try await restoredFTS.indexBatch(batch) }
         let ftsRows = try await restoredFTS.rowCount()
         XCTAssertEqual(ftsRows, 4)
         var textQuery = EmailQuery.all; textQuery.text = "Contract"

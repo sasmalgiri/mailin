@@ -1218,12 +1218,13 @@ final class MailinClickThroughUITests: XCTestCase {
             throw XCTSkip("Mac purchases need a person to sign in to the App Store sandbox; set TEST_RUNNER_MAC_SANDBOX_PURCHASE=1")
         }
         return nil
-        #endif
+        #else
         let session = try SKTestSession(contentsOf: Self.storeConfigURL)
         if clear { session.resetToDefaultState(); session.clearTransactions() }
         session.disableDialogs = true
         session.askToBuyEnabled = false
         return session
+        #endif
     }
 
     private func planBadge() -> String {

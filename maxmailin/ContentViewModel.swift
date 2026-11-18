@@ -221,9 +221,9 @@ class ContentViewModel: ObservableObject {
     /// mode) and collect-to-preserve holds + seals (§3-E7) — each on its own
     /// switch; nil when neither is on.
     static func committedBatchWork(forensic: Bool, preserve: Bool,
-                                   hash: @escaping @MainActor ([MBOXParser.RawEmail]) -> Void,
-                                   hold: @escaping @MainActor ([MBOXParser.RawEmail]) -> Void)
-        -> (@MainActor ([MBOXParser.RawEmail]) -> Void)? {
+                                   hash: @escaping @MainActor @Sendable ([MBOXParser.RawEmail]) -> Void,
+                                   hold: @escaping @MainActor @Sendable ([MBOXParser.RawEmail]) -> Void)
+        -> (@MainActor @Sendable ([MBOXParser.RawEmail]) -> Void)? {
         guard forensic || preserve else { return nil }
         return { batch in
             if forensic { hash(batch) }

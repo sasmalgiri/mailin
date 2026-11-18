@@ -17,7 +17,7 @@ import Foundation
 #if DEBUG
 @MainActor
 enum UITestMailSample {
-    static let environmentKey = "MAILIN_UITEST_MAIL_SAMPLE"
+    nonisolated static let environmentKey = "MAILIN_UITEST_MAIL_SAMPLE"
 
     /// Whether this launch asked for the sample page.
     nonisolated static func isRequested(arguments: [String] = ProcessInfo.processInfo.arguments,
