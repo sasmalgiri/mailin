@@ -1491,7 +1491,7 @@ final class MailinClickThroughUITests: XCTestCase {
     func testPurchase0_sandboxBootstrap() throws {
         #if os(iOS)
         throw XCTSkip("Mac only: Apple's sandbox with a person signing in (iOS purchases run on the local StoreKit test store)")
-        #endif
+        #else
         _ = try storeSession(clear: false)
         relaunch(["-mailinSimulateTier", "free"])
         var rows: [String] = ["Launched with the tier displayed as Free: badge “\(planBadge())”"]
@@ -1509,6 +1509,7 @@ final class MailinClickThroughUITests: XCTestCase {
         rows.append("Bates Numbering (Professional tool): \(toolOutcome("batesNumbering"))")
         report("BOOTSTRAP", rows)
         XCTAssertTrue(closed)
+        #endif
     }
 
     /// Subscription lifecycle watch (Mac, Apple sandbox): with a monthly
@@ -1520,7 +1521,7 @@ final class MailinClickThroughUITests: XCTestCase {
     func testPurchaseWatch_renewalThenExpiry() throws {
         #if os(iOS)
         throw XCTSkip("Mac only: Apple's sandbox with a person signing in (iOS purchases run on the local StoreKit test store)")
-        #endif
+        #else
         _ = try storeSession(clear: false)
         relaunch(["-mailinRealStore"])
         var rows: [String] = []
@@ -1568,6 +1569,7 @@ final class MailinClickThroughUITests: XCTestCase {
         report("WATCH", rows)
         XCTAssertGreaterThanOrEqual(dates.count, 2, "the renewal date never moved")
         if stopAtDates == Int.max { XCTAssertTrue(sawFree, "the plan did not return to Free after the subscription ended") }
+        #endif
     }
 
     func testPurchase1_buyMonthlyUnlocksFeatures() throws {
