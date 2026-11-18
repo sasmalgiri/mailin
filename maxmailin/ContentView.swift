@@ -1394,10 +1394,7 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showFiltersSheet) {
                 NavigationStack {
-                    ScrollView {
-                        leftSidebar
-                            .padding(.horizontal, 4)
-                    }
+                    scrollingSidebar(horizontalPadding: 4)
                     .navigationTitle("Filters & Tools")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
@@ -1648,11 +1645,7 @@ struct ContentView: View {
             let detailW = remainingW * 0.45
             HStack(spacing: 0) {
                 if showFiltersPane {
-                    ScrollView {
-                        leftSidebar
-                            .padding(.horizontal, 6)
-                            .padding(.top, 8)
-                    }
+                    scrollingSidebar(horizontalPadding: 6, topPadding: 8)
                     .frame(width: filtersW)
                     .background(Color(.systemGroupedBackground))
 
@@ -1860,10 +1853,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showFiltersSheet) {
             NavigationStack {
-                ScrollView {
-                    leftSidebar
-                        .padding(.horizontal, 4)
-                }
+                scrollingSidebar(horizontalPadding: 4)
                 .navigationTitle("Filters & Tools")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -2262,7 +2252,37 @@ struct ContentView: View {
         .fixedSize()
     }
 
-    private var leftSidebar: some View {
+    private var leftSidebar: some View { sidebar(actionsPinnedByHost: false) }
+
+    /// The sidebar for a host that scrolls it as a whole (the iPad's filters
+    /// pane, the iPhone's Filters sheet). Apply / Clear / Export Emails are
+    /// pinned at the bottom of the host's scroll view instead of sitting at
+    /// the end of its content — gate 1 walk 2026-11-18 (iPad): they were
+    /// below the fold until the person scrolled past every filter and folder.
+    private func scrollingSidebar(horizontalPadding: CGFloat, topPadding: CGFloat = 0) -> some View {
+        ScrollView {
+            sidebar(actionsPinnedByHost: true)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, topPadding)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if modelVM.isParsed {
+                VStack(spacing: 0) {
+                    Divider()
+                    stickyFilterButtons
+                        .padding(.horizontal, horizontalPadding)
+                }
+                .background(.bar)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("sidebar.pinnedActions")
+            }
+        }
+    }
+
+    /// `actionsPinnedByHost`: the host draws Apply / Clear / Export itself,
+    /// pinned (`scrollingSidebar`); otherwise they follow the filters' own
+    /// scroll view (the Mac's fixed-height column).
+    private func sidebar(actionsPinnedByHost: Bool) -> some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: Spacing.small) {
                 if !modelVM.isParsed && viewModel.loadingProgress == 0 {
@@ -2480,7 +2500,9 @@ struct ContentView: View {
                             .padding(.top, Spacing.xSmall)
                     }
                 }
-                stickyFilterButtons
+                if !actionsPinnedByHost {
+                    stickyFilterButtons
+                }
             }
         }
         #if os(macOS)

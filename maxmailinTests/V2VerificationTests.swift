@@ -5487,6 +5487,27 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(mac.contains(#"row(.received, "Received", "tray.and.arrow.down""#), "the Mac sidebar's name and icon")
     }
 
+    // Gate 1 walk 2026-11-18 (iPad): Apply / Clear / Export Emails sat at the
+    // end of the filters pane's scroll content, below the fold until every
+    // filter and folder was scrolled past. Every host that scrolls the sidebar
+    // as a whole (iPad pane, both iPhone/iPad Filters sheets) pins them in a
+    // bottom inset; the Mac column keeps them under its own scroll view.
+    func testGate1Walk1118_sidebarActionsArePinnedWhereTheSidebarScrolls() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertFalse(content.contains("ScrollView {\n                        leftSidebar"), "the iPad pane no longer scrolls the actions away")
+        XCTAssertFalse(content.contains("ScrollView {\n                    leftSidebar"), "nor the Filters sheet")
+        XCTAssertEqual(content.components(separatedBy: "scrollingSidebar(horizontalPadding:").count - 1, 4,
+                       "declaration + iPad pane + two Filters sheets")
+        let helper = try XCTUnwrap(content.range(of: "private func scrollingSidebar("))
+        let body = content[helper.lowerBound...].prefix(900)
+        XCTAssertTrue(body.contains("sidebar(actionsPinnedByHost: true)"))
+        XCTAssertTrue(body.contains(".safeAreaInset(edge: .bottom, spacing: 0)"))
+        XCTAssertTrue(body.contains("stickyFilterButtons"))
+        XCTAssertTrue(content.contains("if !actionsPinnedByHost {\n                    stickyFilterButtons"), "drawn once, never twice")
+        XCTAssertTrue(content.contains("private var leftSidebar: some View { sidebar(actionsPinnedByHost: false) }"), "the Mac column is unchanged")
+    }
+
     // Gate 1 walk 2026-11-18 (iPad portrait, three columns): the attachment
     // row's buttons wrapped letter by letter — "Dow / nloa / d", "Sho / w
     // text", "Ope / n". Each label keeps to one line at its natural width.
