@@ -207,7 +207,7 @@ struct ArchiveSubjectGroupsView: View {
                             Text("\(row.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(String(localized: "\(row.subject.isEmpty ? String(localized: "(No Subject)") : row.subject), \(row.count) emails"))
+                        .accessibilityLabel(Text(verbatim: CountPhrase.row(row.subject.isEmpty ? String(localized: "(No Subject)") : row.subject, emails: row.count)))
                     }
                     .buttonStyle(.plain)
                 }

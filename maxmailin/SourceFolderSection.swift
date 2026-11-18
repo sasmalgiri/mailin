@@ -102,7 +102,7 @@ struct SourceFolderSection: View {
             .contentShape(Rectangle())   // the whole row, as for the folder rows
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(String(localized: "Trash")), \(sidebar.trashedCount) messages")
+        .accessibilityLabel(Text(verbatim: CountPhrase.row(String(localized: "Trash"), messages: sidebar.trashedCount)))
         .accessibilityAddTraits(inTrash ? .isSelected : [])
         .accessibilityIdentifier("sidebar.trash")
     }
@@ -192,7 +192,7 @@ struct SourceFolderSection: View {
         }
         .buttonStyle(.plain)
         .help(row.node.path)
-        .accessibilityLabel("\(row.node.name), \(row.node.messageCount) messages")
+        .accessibilityLabel(Text(verbatim: CountPhrase.row(row.node.name, messages: row.node.messageCount)))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("sidebar.sourceFolder")
     }

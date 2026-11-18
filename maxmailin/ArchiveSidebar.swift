@@ -526,7 +526,7 @@ struct ArchiveSidebarView: View {
         // twice, and a folder with children reads "Work, 2 messages, Work, 2
         // messages" (the disclosure cell merges the two).
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title), \(count) messages")
+        .accessibilityLabel(Text(verbatim: CountPhrase.row(title, messages: count)))
     }
 
     private func sourceHelp(_ source: SQLiteEmailStore.StoredSource, _ cov: SQLiteEmailStore.SourceCoverage?) -> String {

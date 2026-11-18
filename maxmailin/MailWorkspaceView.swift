@@ -328,7 +328,7 @@ private struct MailSidebar: View {
                             }
                             .tag(MailWorkspaceModel.Section.folder(snapshot.id, folder.serverID))
                             .accessibilityElement(children: .combine)
-                            .accessibilityLabel(Text("\(MailFolderStyle.displayName(folder.path)), \(folder.messages) messages, \(folder.unread) unread"))
+                            .accessibilityLabel(Text(verbatim: CountPhrase.liveFolderRow(MailFolderStyle.displayName(folder.path), messages: folder.messages, unread: folder.unread)))
                             .accessibilityIdentifier("mail.sidebar.folder")
                         }
                     } label: {

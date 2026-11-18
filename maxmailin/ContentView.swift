@@ -3229,7 +3229,8 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Show only the \(entry.count) emails the AI tagged “\(entry.tag.rawValue)” — click again to turn off")
-                        .accessibilityLabel("\(entry.tag.rawValue), \(entry.count) emails\(modelVM.selectedSmartTags.contains(entry.tag) ? ", selected" : "")")
+                        .accessibilityLabel(Text(verbatim: CountPhrase.row(entry.tag.rawValue, emails: entry.count)))
+                        .accessibilityAddTraits(modelVM.selectedSmartTags.contains(entry.tag) ? .isSelected : [])
                     }
                     if !modelVM.selectedSmartTags.isEmpty {
                         Button {
@@ -3297,7 +3298,7 @@ struct ContentView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Filter by \(tag.rawValue), \(count) emails")
+                            .accessibilityLabel(Text(verbatim: CountPhrase.filterRow(tag.rawValue, emails: count)))
                             .accessibilityAddTraits(modelVM.selectedEvidenceTag == tag ? .isSelected : [])
                         }
                     } else {

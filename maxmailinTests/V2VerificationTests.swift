@@ -5475,6 +5475,39 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(section.contains("publisher(for: .archiveTrashChanged)"), "the iPad source folders re-read on a Trash change")
     }
 
+    // Gate 1 follow-up 2026-11-18 (iPad): VoiceOver read "Trash, 1 messages". The
+    // source-folder rows, the Mac sidebar rows, the smart-tag and evidence-tag
+    // filter rows, the Live Mail folder rows and the Subjects panel rows had the
+    // same "1 …s". Every one now reads its count through CountPhrase.
+    func testGate1Followup1118_sidebarRowsReadOneMessageNotOneMessages() throws {
+        XCTAssertEqual(CountPhrase.row("Trash", messages: 1), "Trash, 1 message")
+        XCTAssertEqual(CountPhrase.row("Trash", messages: 0), "Trash, 0 messages")
+        XCTAssertEqual(CountPhrase.row("Inbox", messages: 3), "Inbox, 3 messages")
+        XCTAssertEqual(CountPhrase.row("Board pack", emails: 1), "Board pack, 1 email")
+        XCTAssertEqual(CountPhrase.filterRow("Privileged", emails: 1), "Filter by Privileged, 1 email")
+        XCTAssertEqual(CountPhrase.filterRow("Privileged", emails: 2), "Filter by Privileged, 2 emails")
+        XCTAssertEqual(CountPhrase.liveFolderRow("INBOX", messages: 1, unread: 0), "INBOX, 1 message, 0 unread")
+        XCTAssertEqual(CountPhrase.liveFolderRow("INBOX", messages: 4, unread: 2), "INBOX, 4 messages, 2 unread")
+
+        // No row reads a bare "\(n) messages" / "\(n) emails" any more.
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let bare = #"accessibilityLabel\(.*, \\\([^)]*\) (messages|emails)"#
+        var left: [String] = []
+        for file in ["SourceFolderSection.swift", "ArchiveSidebar.swift", "ArchiveWideLists.swift", "MailWorkspaceView.swift", "FolderTreeView.swift"] {
+            let text = try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+            for line in text.components(separatedBy: "\n") where line.range(of: bare, options: .regularExpression) != nil && !line.contains("conversation") {
+                left.append("\(file): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        for line in content.components(separatedBy: "\n") where line.contains(".accessibilityLabel(\"\\(entry.tag.rawValue), \\(entry.count) emails") || line.contains(".accessibilityLabel(\"Filter by \\(tag.rawValue), \\(count) emails\")") {
+            left.append("ContentView.swift: \(line.trimmingCharacters(in: .whitespaces))")
+        }
+        XCTAssertEqual(left, [], "rows that still read \"1 messages\":\n" + left.joined(separator: "\n"))
+        let section = try String(contentsOf: dir.appendingPathComponent("SourceFolderSection.swift"), encoding: .utf8)
+        XCTAssertTrue(section.contains(#"CountPhrase.row(String(localized: "Trash"), messages: sidebar.trashedCount)"#))
+    }
+
     // Gate 1 walk 2026-11-18: the home subtitle said "Open an mbox or eml
     // file…" while nine formats were listed under it. The subtitle and the
     // SUPPORTED FORMATS chips read one list, and every name on it is a file

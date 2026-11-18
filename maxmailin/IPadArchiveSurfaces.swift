@@ -199,6 +199,17 @@ enum CountPhrase {
     static func files(_ n: Int) -> String { n == 1 ? String(localized: "1 file") : String(localized: "\(n) files") }
     static func messages(_ n: Int) -> String { n == 1 ? String(localized: "1 message") : String(localized: "\(n) messages") }
     static func sources(_ n: Int) -> String { n == 1 ? String(localized: "1 imported source") : String(localized: "\(n) imported sources") }
+
+    /// What VoiceOver reads for a sidebar row: "Trash, 1 message" (gate 1
+    /// follow-up 2026-11-18: it read "Trash, 1 messages").
+    static func row(_ name: String, messages n: Int) -> String { "\(name), \(messages(n))" }
+    static func row(_ name: String, emails n: Int) -> String { "\(name), \(emails(n))" }
+    /// An evidence-tag filter row: "Filter by Privileged, 1 email".
+    static func filterRow(_ tag: String, emails n: Int) -> String { String(localized: "Filter by \(tag), \(emails(n))") }
+    /// A Live Mail folder row: "INBOX, 1 message, 0 unread".
+    static func liveFolderRow(_ name: String, messages n: Int, unread: Int) -> String {
+        "\(name), \(messages(n)), \(String(localized: "\(unread) unread"))"
+    }
 }
 
 // MARK: - IPAD-10: menu shortcuts the iPadOS system menu already owns
