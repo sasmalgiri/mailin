@@ -5596,6 +5596,39 @@ final class IPadGate1FixTests: XCTestCase {
     // filter and folder was scrolled past. Every host that scrolls the sidebar
     // as a whole (iPad pane, both iPhone/iPad Filters sheets) pins them in a
     // bottom inset; the Mac column keeps them under its own scroll view.
+    // Gate 1 third follow-up 2026-11-18 (iPad): the filters, folders and source
+    // folders had a scroll view of their own inside the host's, so it ran under
+    // the pinned Apply / Clear / Export bar (the Trash and the last source
+    // folders could not be scrolled above it). Choosing a place re-pages the
+    // list and the From / To / Labels lists above the places change length, so
+    // the sidebar jumped (to the top when it got shorter). One scroll view,
+    // ending where the bar starts; after a place is chosen it keeps its bottom
+    // edge, so the row just tapped stays where it was.
+    func testGate1Third1118_sidebarRowsScrollAboveThePinnedBarAndAPlaceKeepsItsPosition() throws {
+        typealias M = SidebarPlaceAnchor.Metrics
+        // Scrolled to the bottom (offset 400 of 1,400 in a 1,000 pt pane), then the lists above shrink by 150.
+        XCTAssertEqual(SidebarPlaceAnchor.offsetKeepingPlaces(old: M(contentHeight: 1_400, offset: 400, viewportHeight: 1_000, insetTop: 0, insetBottom: 110),
+                                                              new: M(contentHeight: 1_250, offset: 400, viewportHeight: 1_000, insetTop: 0, insetBottom: 110)), 250)
+        // The sidebar fitted (the Trash), then grows by 330 (All Emails): the row stays under the finger.
+        XCTAssertEqual(SidebarPlaceAnchor.offsetKeepingPlaces(old: M(contentHeight: 880, offset: 0, viewportHeight: 1_000, insetTop: 0, insetBottom: 110),
+                                                              new: M(contentHeight: 1_210, offset: 0, viewportHeight: 1_000, insetTop: 0, insetBottom: 110)), 320,
+                       "as far as it can scroll: 1,210 + 110 − 1,000")
+        // Shrinking below the pane: the top, which is all there is.
+        XCTAssertNil(SidebarPlaceAnchor.offsetKeepingPlaces(old: M(contentHeight: 1_100, offset: 210, viewportHeight: 1_000, insetTop: 0, insetBottom: 110),
+                                                            new: M(contentHeight: 700, offset: 0, viewportHeight: 1_000, insetTop: 0, insetBottom: 110)))
+        XCTAssertNil(SidebarPlaceAnchor.offsetKeepingPlaces(old: M(contentHeight: 1_400, offset: 400, viewportHeight: 1_000, insetTop: 0, insetBottom: 110),
+                                                            new: M(contentHeight: 1_400, offset: 380, viewportHeight: 1_000, insetTop: 0, insetBottom: 110)),
+                     "a scroll alone is left alone")
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains("if actionsPinnedByHost {\n                    VStack { sidebarListsAndPlaces }\n                } else {\n                    ScrollView { sidebarListsAndPlaces }\n                }"),
+                      "no second scroll view inside the host's: the rows scroll in the one that ends at the bar")
+        let helper = try XCTUnwrap(content.range(of: "private func scrollingSidebar("))
+        let body = content[helper.lowerBound...].prefix(2_000)
+        XCTAssertTrue(body.contains(".modifier(SidebarPlaceAnchor(keepPlacesInView: sidebarPlaceJustChosen))"))
+        XCTAssertTrue(body.contains(".onChange(of: sidebarPlace) { _, _ in noteSidebarPlaceChosen() }"))
+    }
+
     func testGate1Walk1118_sidebarActionsArePinnedWhereTheSidebarScrolls() throws {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
         let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
@@ -5604,9 +5637,12 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertEqual(content.components(separatedBy: "scrollingSidebar(horizontalPadding:").count - 1, 4,
                        "declaration + iPad pane + two Filters sheets")
         let helper = try XCTUnwrap(content.range(of: "private func scrollingSidebar("))
-        let body = content[helper.lowerBound...].prefix(900)
+        let body = content[helper.lowerBound...].prefix(1_800)
         XCTAssertTrue(body.contains("sidebar(actionsPinnedByHost: true)"))
-        XCTAssertTrue(body.contains(".safeAreaInset(edge: .bottom, spacing: 0)"))
+        // Gate 1 third follow-up: under the scroll view, not a safe-area inset over it (the
+        // inset did not inset the content in the iPhone's Filters sheet).
+        XCTAssertTrue(body.contains("VStack(spacing: 0) {\n            ScrollView {"))
+        XCTAssertFalse(body.contains(".safeAreaInset(edge: .bottom"))
         XCTAssertTrue(body.contains("stickyFilterButtons"))
         XCTAssertTrue(content.contains("if !actionsPinnedByHost {\n                    stickyFilterButtons"), "drawn once, never twice")
         XCTAssertTrue(content.contains("private var leftSidebar: some View { sidebar(actionsPinnedByHost: false) }"), "the Mac column is unchanged")

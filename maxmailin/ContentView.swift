@@ -35,6 +35,9 @@ struct ContentView: View {
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
     @State private var parseFailed = false
+    /// Gate 1 third follow-up: a sidebar place was just chosen (SidebarPlaceAnchor).
+    @State private var sidebarPlaceJustChosen = false
+    @State private var sidebarPlaceAnchorReset: Task<Void, Never>?
     @State private var parsingObserver: NSObjectProtocol?
     @State private var selectedEmailIDs = Set<UUID>()
     /// O1: true while a "Select All" is symbolic — bulk actions then consume
@@ -2259,13 +2262,24 @@ struct ContentView: View {
     /// pinned at the bottom of the host's scroll view instead of sitting at
     /// the end of its content — gate 1 walk 2026-11-18 (iPad): they were
     /// below the fold until the person scrolled past every filter and folder.
+    ///
+    /// Gate 1 third follow-up 2026-11-18: the bar sits under the scroll view,
+    /// not over it. As a bottom safe-area inset it did not inset the content
+    /// in the iPhone's Filters sheet, so the last source folders stayed under
+    /// the bar however far it was scrolled.
     private func scrollingSidebar(horizontalPadding: CGFloat, topPadding: CGFloat = 0) -> some View {
-        ScrollView {
-            sidebar(actionsPinnedByHost: true)
-                .padding(.horizontal, horizontalPadding)
-                .padding(.top, topPadding)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        VStack(spacing: 0) {
+            ScrollView {
+                sidebar(actionsPinnedByHost: true)
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.top, topPadding)
+                    .padding(.bottom, Spacing.small)
+            }
+            // Choosing a place re-pages the list, and the From / To / Labels
+            // lists above the places change length with it. For a moment the
+            // sidebar keeps its bottom edge, so the row just tapped stays under
+            // the finger (it jumped, to the top when it got shorter).
+            .modifier(SidebarPlaceAnchor(keepPlacesInView: sidebarPlaceJustChosen))
             if modelVM.isParsed {
                 VStack(spacing: 0) {
                     Divider()
@@ -2276,6 +2290,22 @@ struct ContentView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("sidebar.pinnedActions")
             }
+        }
+        .onChange(of: sidebarPlace) { _, _ in noteSidebarPlaceChosen() }
+    }
+
+    /// Where the list is: the folder bucket, the Trash, the source folder.
+    private var sidebarPlace: [String] {
+        [selectedFolder ?? "", modelVM.reviewStateFilter == .trashed ? "trash" : "", modelVM.selectedSourceFolder.map { String($0.id) } ?? ""]
+    }
+
+    private func noteSidebarPlaceChosen() {
+        sidebarPlaceJustChosen = true
+        sidebarPlaceAnchorReset?.cancel()
+        sidebarPlaceAnchorReset = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            sidebarPlaceJustChosen = false
         }
     }
 
@@ -2474,7 +2504,32 @@ struct ContentView: View {
             .zIndex(1)
 
             if modelVM.isParsed {
-                ScrollView {
+                // Gate 1 third follow-up 2026-11-18 (iPad): a host that scrolls the
+                // sidebar as a whole (scrollingSidebar) scrolls these rows in its own
+                // scroll view, which ends at the pinned bar. A second scroll view in it
+                // ran under the bar. The Mac column keeps its own.
+                if actionsPinnedByHost {
+                    VStack { sidebarListsAndPlaces }
+                } else {
+                    ScrollView { sidebarListsAndPlaces }
+                }
+                if !actionsPinnedByHost {
+                    stickyFilterButtons
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(
+            minWidth: sizeClass == .compact ? 220 : 260,
+            idealWidth: sizeClass == .expanded ? 320 : 280,
+            maxWidth: sizeClass == .compact ? 280 : 360
+        )
+        #endif
+    }
+
+    /// The filters, the folder buckets, the source folders and the Trash.
+    @ViewBuilder
+    private var sidebarListsAndPlaces: some View {
                     filterSection
                         .padding(.horizontal, Spacing.xSmall)
 
@@ -2504,19 +2559,6 @@ struct ContentView: View {
                             .padding(.horizontal, Spacing.xSmall)
                             .padding(.top, Spacing.xSmall)
                     }
-                }
-                if !actionsPinnedByHost {
-                    stickyFilterButtons
-                }
-            }
-        }
-        #if os(macOS)
-        .frame(
-            minWidth: sizeClass == .compact ? 220 : 260,
-            idealWidth: sizeClass == .expanded ? 320 : 280,
-            maxWidth: sizeClass == .compact ? 280 : 360
-        )
-        #endif
     }
 
     // Email Action Bar (Compose / Fetch / Cloud / Reply / Reply All /
@@ -5250,6 +5292,64 @@ extension ContentView {
 /// whole), and VoiceOver reads the full name with its count. The list grows a
 /// page at a time with the total shown, like the folder and label lists, so
 /// no row sits half under the edge of a box and every sender is reachable.
+/// Gate 1 third follow-up 2026-11-18 (iPad): right after a place is chosen in a
+/// sidebar that scrolls as a whole, a change in its length keeps the bottom
+/// edge where it was: the places are at the bottom, and what changes length
+/// is above them. That holds when the sidebar grows from fitting on screen
+/// too (the Trash, then All Emails). Otherwise the system's behaviour, as
+/// before; iOS 17 keeps it throughout.
+struct SidebarPlaceAnchor: ViewModifier {
+    let keepPlacesInView: Bool
+
+    struct Metrics: Equatable {
+        var contentHeight: CGFloat
+        var offset: CGFloat
+        var viewportHeight: CGFloat
+        var insetTop: CGFloat
+        var insetBottom: CGFloat
+    }
+
+    /// The offset that keeps the content's bottom edge where it was when the
+    /// content changed length (nil: nothing to do), within what can be scrolled.
+    static func offsetKeepingPlaces(old: Metrics, new: Metrics) -> CGFloat? {
+        guard new.contentHeight != old.contentHeight else { return nil }
+        let wanted = old.offset + (new.contentHeight - old.contentHeight)
+        let lowest = -new.insetTop
+        let highest = max(lowest, new.contentHeight + new.insetBottom - new.viewportHeight)
+        let offset = min(max(wanted, lowest), highest)
+        return abs(offset - new.offset) < 0.5 ? nil : offset
+    }
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content.modifier(SidebarPlaceAnchorKeeper(keepPlacesInView: keepPlacesInView))
+        } else {
+            content
+        }
+    }
+}
+
+@available(iOS 18.0, macOS 15.0, *)
+private struct SidebarPlaceAnchorKeeper: ViewModifier {
+    let keepPlacesInView: Bool
+    @State private var position = ScrollPosition()
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: SidebarPlaceAnchor.Metrics.self) { geometry in
+                SidebarPlaceAnchor.Metrics(contentHeight: geometry.contentSize.height, offset: geometry.contentOffset.y,
+                                           viewportHeight: geometry.containerSize.height,
+                                           insetTop: geometry.contentInsets.top, insetBottom: geometry.contentInsets.bottom)
+            } action: { old, new in
+                guard keepPlacesInView, let offset = SidebarPlaceAnchor.offsetKeepingPlaces(old: old, new: new) else { return }
+                // The geometry's offset rests at minus the top inset (the
+                // Filters sheet's title bar); a scroll position's at zero.
+                position.scrollTo(y: offset + new.insetTop)
+            }
+    }
+}
+
 struct ReplyFrequencyList: View {
     let senders: [(email: String, count: Int)]
     @State private var reach = ReplyFrequencyList.page
