@@ -195,11 +195,14 @@ extension SQLiteEmailStore {
     }
 
     /// Every folder with its direct message count, ordered by source then path.
-    func folderNodes() throws -> [ArchiveFolderNode] {
+    /// `excludingTrashed`: the count the sidebars show, without the Trash, as
+    /// All Mail (gate 1 follow-up 2026-11-18). Off, every stored member — the
+    /// duplicate merge/restore bookkeeping counts trashed copies too.
+    func folderNodes(excludingTrashed: Bool = false) throws -> [ArchiveFolderNode] {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT f.folder_id, f.source_id, f.path, f.name, f.parent_id, f.declared,
-                   (SELECT COUNT(*) FROM email_folders ef JOIN emails e ON e.id = ef.email_id WHERE ef.folder_id = f.folder_id)
+                   (SELECT COUNT(*) FROM email_folders ef JOIN emails e ON e.id = ef.email_id WHERE ef.folder_id = f.folder_id\(excludingTrashed ? " AND \(Self.notTrashedPredicate)" : ""))
             FROM folders f ORDER BY f.source_id, f.path;
         """)
         defer { sqlite3_finalize(stmt) }

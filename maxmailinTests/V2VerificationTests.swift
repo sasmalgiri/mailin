@@ -5445,6 +5445,36 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(wide[groups.lowerBound...].prefix(6_000).contains(".onChange(of: archiveChanges.generation)"))
     }
 
+    // Gate 1 follow-up 2026-11-18 (iPad): with one email in the Trash, All Emails
+    // and Received said 6 but "Labels (3)", its rows and Source Folders > Inbox
+    // still counted 7 / 3. Both sidebars ask the store for counts without the
+    // Trash (SidebarTrashCountTests in the package checks the queries) and
+    // re-read them on `.archiveTrashChanged`.
+    func testGate1Followup1118_labelAndFolderCountsLeaveTheTrashOut() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        func calls(_ file: String, _ name: String) throws -> [String] {
+            try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+                .components(separatedBy: "\n").filter { $0.contains("await") && $0.contains(".\(name)(") }
+        }
+        var missing: [String] = []
+        for file in ["FolderTreeView.swift", "ArchiveSidebar.swift"] {
+            let lines = try ["parserTagTotal", "parserTagCounts", "sourceFileCounts", "folderNodes"].flatMap { try calls(file, $0) }
+            XCTAssertFalse(lines.isEmpty, file)
+            // A call may continue on the next line; the file text around it must carry the switch.
+            let text = try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+            for line in lines {
+                let start = try XCTUnwrap(text.range(of: line))
+                if !text[start.lowerBound...].prefix(line.count + 120).contains("excludingTrashed: true") { missing.append("\(file): \(line.trimmingCharacters(in: .whitespaces))") }
+            }
+            XCTAssertTrue(text.contains("publisher(for: .archiveTrashChanged)") || file == "ArchiveSidebar.swift", "\(file) re-reads on a Trash change")
+        }
+        XCTAssertEqual(missing, [], "sidebar counts that still include the Trash:\n" + missing.joined(separator: "\n"))
+        let threePane = try String(contentsOf: dir.appendingPathComponent("ArchiveThreePaneView.swift"), encoding: .utf8)
+        XCTAssertTrue(threePane.contains("publisher(for: .archiveTrashChanged)"), "the Mac sidebar re-reads on a Trash change")
+        let section = try String(contentsOf: dir.appendingPathComponent("SourceFolderSection.swift"), encoding: .utf8)
+        XCTAssertTrue(section.contains("publisher(for: .archiveTrashChanged)"), "the iPad source folders re-read on a Trash change")
+    }
+
     // Gate 1 walk 2026-11-18: the home subtitle said "Open an mbox or eml
     // file…" while nine formats were listed under it. The subtitle and the
     // SUPPORTED FORMATS chips read one list, and every name on it is a file

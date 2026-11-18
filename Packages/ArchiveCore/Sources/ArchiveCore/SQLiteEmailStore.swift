@@ -3702,11 +3702,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// Parser tags (Gmail labels etc.) with archive-wide counts — the folder
     /// tree's Labels subtree, as one GROUP BY (never a corpus walk).
-    func parserTagCounts(limit: Int) throws -> [AggregateBucket] {
+    /// `excludingTrashed`: what the sidebars show — a label counts the mail
+    /// All Mail counts, so a message in the Trash is in neither (gate 1
+    /// follow-up 2026-11-18). Off, every stored row (duplicate bookkeeping).
+    func parserTagCounts(limit: Int, excludingTrashed: Bool = false) throws -> [AggregateBucket] {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT t.tag, COUNT(*) AS c FROM email_tags t
             JOIN emails e ON e.id = t.email_id
+            \(excludingTrashed ? "WHERE \(Self.notTrashedPredicate)" : "")
             GROUP BY t.tag ORDER BY c DESC, t.tag ASC LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
@@ -3722,13 +3726,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// optionally only those whose name contains `filter` (case-insensitive).
     /// The sidebar shows this total so a page of folders never looks like all
     /// of them.
-    func parserTagTotal(matching filter: String? = nil) throws -> Int {
+    func parserTagTotal(matching filter: String? = nil, excludingTrashed: Bool = false) throws -> Int {
         let db = try ensureDB()
         let pattern = Self.likePattern(containing: filter)
         let stmt = try prepare(db, """
             SELECT COUNT(DISTINCT t.tag) FROM email_tags t
             JOIN emails e ON e.id = t.email_id
-            \(pattern == nil ? "" : "WHERE t.tag LIKE ? ESCAPE '\\'");
+            \(Self.tagWhere(pattern: pattern, excludingTrashed: excludingTrashed));
         """)
         defer { sqlite3_finalize(stmt) }
         if let pattern { sqlite3_bind_text(stmt, 1, pattern, -1, Self.staticSQLiteTransient) }
@@ -3739,13 +3743,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// Five jobs FOLD-01: one page of labels/folders, busiest first, optionally
     /// filtered by name. Paging from `offset` with `limit` rows lets the sidebar
     /// reach every folder without rendering them all at once.
-    func parserTagCounts(matching filter: String?, offset: Int, limit: Int) throws -> [AggregateBucket] {
+    func parserTagCounts(matching filter: String?, offset: Int, limit: Int, excludingTrashed: Bool = false) throws -> [AggregateBucket] {
         let db = try ensureDB()
         let pattern = Self.likePattern(containing: filter)
         let stmt = try prepare(db, """
             SELECT t.tag, COUNT(*) AS c FROM email_tags t
             JOIN emails e ON e.id = t.email_id
-            \(pattern == nil ? "" : "WHERE t.tag LIKE ? ESCAPE '\\'")
+            \(Self.tagWhere(pattern: pattern, excludingTrashed: excludingTrashed))
             GROUP BY t.tag ORDER BY c DESC, t.tag ASC LIMIT ? OFFSET ?;
         """)
         defer { sqlite3_finalize(stmt) }
@@ -3758,6 +3762,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
             out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
         }
         return out
+    }
+
+    /// The WHERE clause of the label queries: the name filter (bound first)
+    /// and, for the sidebars, the Trash left out.
+    static func tagWhere(pattern: String?, excludingTrashed: Bool) -> String {
+        var clauses: [String] = []
+        if pattern != nil { clauses.append("t.tag LIKE ? ESCAPE '\\'") }
+        if excludingTrashed { clauses.append(notTrashedPredicate) }
+        return clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
     }
 
     /// `%filter%` with the LIKE wildcards in the filter itself escaped, so a
@@ -3784,13 +3797,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// Emails per source file (name resolved via the sources/forensic tables
     /// where known) — the folder tree's Source Files subtree.
-    func sourceFileCounts(limit: Int) throws -> [AggregateBucket] {
+    /// `excludingTrashed`: as `parserTagCounts`.
+    func sourceFileCounts(limit: Int, excludingTrashed: Bool = false) throws -> [AggregateBucket] {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT COALESCE(NULLIF(s.filename, ''), NULLIF(f.filename, ''), 'Unknown source') AS name, COUNT(*) AS c
             FROM emails e
             LEFT JOIN sources s ON s.sha256 = e.source_hash
             LEFT JOIN forensic_source_hashes f ON f.sha256 = e.source_hash
+            \(excludingTrashed ? "WHERE \(Self.notTrashedPredicate)" : "")
             GROUP BY name ORDER BY c DESC, name ASC LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }

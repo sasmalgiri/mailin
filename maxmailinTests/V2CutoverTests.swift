@@ -5672,7 +5672,7 @@ final class V2CutoverTests: XCTestCase {
 
         let tree = try String(contentsOf: repo.appendingPathComponent("maxmailin/FolderTreeView.swift"), encoding: .utf8)
         XCTAssertFalse(tree.contains("maxLabels") || tree.contains("maxSourceFiles"), "no label or source window")
-        XCTAssertTrue(tree.contains("parserTagTotal()") && tree.contains("folderTree.moreLabels"), "total shown, Show more offered")
+        XCTAssertTrue(tree.contains("parserTagTotal(excludingTrashed: true)") && tree.contains("folderTree.moreLabels"), "total shown, Show more offered")
 
         // The store side the tree pages through: 450 labels, all reachable, total exact.
         let env = try makeEnv()

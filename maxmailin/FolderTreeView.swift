@@ -175,17 +175,22 @@ struct FolderTreeView: View {
                       "sent": (try? await archive.count(query: sent)) ?? 0]
         attachmentTotal = (try? await archive.count(query: withAttachments)) ?? 0
         // CAP-03: the total is always known; the list keeps what was expanded.
-        labelTotal = (try? await store.parserTagTotal()) ?? 0
-        labelBuckets = (try? await store.parserTagCounts(matching: nil, offset: 0, limit: max(Self.labelPage, labelBuckets.count))) ?? []
+        // Gate 1 follow-up 2026-11-18: labels and source files leave the Trash
+        // out too — "Labels (3)" and its rows still counted a trashed email
+        // while All Emails and Received did not.
+        labelTotal = (try? await store.parserTagTotal(excludingTrashed: true)) ?? 0
+        labelBuckets = (try? await store.parserTagCounts(matching: nil, offset: 0, limit: max(Self.labelPage, labelBuckets.count),
+                                                         excludingTrashed: true)) ?? []
         // One bucket per imported file: bounded by the import history, never by a constant.
-        sourceBuckets = (try? await store.sourceFileCounts(limit: Int(Int32.max))) ?? []
+        sourceBuckets = (try? await store.sourceFileCounts(limit: Int(Int32.max), excludingTrashed: true)) ?? []
         recovery = RecoveryPolicy.isEnabled && TierAccess.allows(.recovery)
             ? ((try? await store.recoveryCounts()) ?? RecoveryCounts()) : RecoveryCounts()
     }
 
     @MainActor
     private func loadMoreLabels() async {
-        let next = (try? await SQLiteEmailStore.shared.parserTagCounts(matching: nil, offset: labelBuckets.count, limit: Self.labelPage)) ?? []
+        let next = (try? await SQLiteEmailStore.shared.parserTagCounts(matching: nil, offset: labelBuckets.count, limit: Self.labelPage,
+                                                                         excludingTrashed: true)) ?? []
         labelBuckets.append(contentsOf: next)
     }
 

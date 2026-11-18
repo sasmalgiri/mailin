@@ -267,10 +267,12 @@ final class ArchiveSidebarModel: ObservableObject {
     private func reloadLabels() async {
         if completeLabels {
             let filter: String? = labelFilter.isEmpty ? nil : labelFilter
-            labelTotal = (try? await archive.parserTagTotal(matching: filter)) ?? labelTotal
-            labels = (try? await archive.parserTagCounts(matching: filter, offset: 0, limit: labelReach)) ?? labels
+            // Gate 1 follow-up 2026-11-18: folder and label counts leave the
+            // Trash out, as All Mail, Sent and Received do.
+            labelTotal = (try? await archive.parserTagTotal(matching: filter, excludingTrashed: true)) ?? labelTotal
+            labels = (try? await archive.parserTagCounts(matching: filter, offset: 0, limit: labelReach, excludingTrashed: true)) ?? labels
         } else {
-            labels = (try? await archive.parserTagCounts(limit: Self.labelLimit)) ?? labels
+            labels = (try? await archive.parserTagCounts(limit: Self.labelLimit, excludingTrashed: true)) ?? labels
             labelTotal = labels.count
         }
     }
@@ -299,7 +301,7 @@ final class ArchiveSidebarModel: ObservableObject {
         }
         coverage = (try? await archive.sourceCoverage()) ?? coverage
         await reloadLabels()
-        if completeLabels, let nodes = try? await archive.folderNodes() {
+        if completeLabels, let nodes = try? await archive.folderNodes(excludingTrashed: true) {
             folderTrees = Self.trees(from: Self.visible(sources: [], nodes: nodes, hidden: hidden).nodes, sources: sources)
         }
         lastRefresh = Date()

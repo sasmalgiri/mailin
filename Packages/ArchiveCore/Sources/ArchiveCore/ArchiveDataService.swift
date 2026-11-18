@@ -203,10 +203,10 @@ final class ArchiveDataService {
     }
 
     /// Parser labels (Gmail labels, Maildir/PST folders) with counts.
-    func parserTagCounts(limit: Int) async throws -> [AggregateBucket] {
+    func parserTagCounts(limit: Int, excludingTrashed: Bool = false) async throws -> [AggregateBucket] {
         guard let repo = repository as? EmailStoreRepository,
               let sqlite = repo.store as? SQLiteEmailStore else { return [] }
-        return try await sqlite.parserTagCounts(limit: limit)
+        return try await sqlite.parserTagCounts(limit: limit, excludingTrashed: excludingTrashed)
     }
 
     /// The SQLite store behind this service, when that is what it is.
@@ -275,24 +275,24 @@ final class ArchiveDataService {
     }
 
     /// FOLD-02: every folder of every source with its direct message count.
-    func folderNodes() async throws -> [ArchiveFolderNode] {
+    func folderNodes(excludingTrashed: Bool = false) async throws -> [ArchiveFolderNode] {
         guard let repo = repository as? EmailStoreRepository,
               let sqlite = repo.store as? SQLiteEmailStore else { return [] }
-        return try await sqlite.folderNodes()
+        return try await sqlite.folderNodes(excludingTrashed: excludingTrashed)
     }
 
     /// FOLD-01: distinct labels/folders, optionally those containing `filter`.
-    func parserTagTotal(matching filter: String? = nil) async throws -> Int {
+    func parserTagTotal(matching filter: String? = nil, excludingTrashed: Bool = false) async throws -> Int {
         guard let repo = repository as? EmailStoreRepository,
               let sqlite = repo.store as? SQLiteEmailStore else { return 0 }
-        return try await sqlite.parserTagTotal(matching: filter)
+        return try await sqlite.parserTagTotal(matching: filter, excludingTrashed: excludingTrashed)
     }
 
     /// FOLD-01: one page of labels/folders, busiest first, optionally filtered.
-    func parserTagCounts(matching filter: String?, offset: Int, limit: Int) async throws -> [AggregateBucket] {
+    func parserTagCounts(matching filter: String?, offset: Int, limit: Int, excludingTrashed: Bool = false) async throws -> [AggregateBucket] {
         guard let repo = repository as? EmailStoreRepository,
               let sqlite = repo.store as? SQLiteEmailStore else { return [] }
-        return try await sqlite.parserTagCounts(matching: filter, offset: offset, limit: limit)
+        return try await sqlite.parserTagCounts(matching: filter, offset: offset, limit: limit, excludingTrashed: excludingTrashed)
     }
 
     /// sent / received / other counts.
