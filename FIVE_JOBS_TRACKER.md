@@ -94,6 +94,20 @@ Stage C: FIND-07, FIND-01, FIND-04, FIND-05, FIND-02/06 verify, DUP-03, DUP-04, 
 Stage D done 2026-11-05: OUT-07, OUT-04, OUT-03 + FOLD-05 (ceb243a), OUT-01 (50f4f35), OUT-02 (33b7158); OUT-06 test done earlier. Open in D: OUT-04 re-parse vs source, a Verify button on the receipt card.
 Stage E (2026-11-06): OPEN-06, LIFE-04, LIFE-05 done (aa5672e); LIFE-06 and OUT-05 owner-bound; gates to be ticked with the owner.
 
+## Owner attestations 2026-11-19
+
+The owner reports these owner-bound checks as done (2026-11-19). Detailed results (counts, scores,
+corrections) were not supplied to the agent, so each is recorded as **owner-attested**, not as measured evidence:
+
+| Item | Gate / row | Owner statement |
+|---|---|---|
+| Exported .msg and PST opened in real Outlook (attachments, inline images) | B13, gate 5 | done (owner-attested) |
+| Live Gmail and Outlook / M365 sign-in, capture, counts against the server | V4-05, V4-06, V4-08, V4-15 | done (owner-attested) |
+| App Store sandbox cycle: buy monthly, restore, renew, expire, lifetime | gate 7 | done (owner-attested) |
+| Native-speaker review of the translations | rule 10 | done (owner-attested) |
+| Usability pilot (PILOT_KIT_2026-11-18.md) | gate 10, REC-08 | done (owner-attested; per-task scores not recorded) |
+| OST / NSF / OLM at 100 MB from the owner's own clients | gate 2 | not supplied — **accepted limit for this version** (public real samples pass; stated on the Limits page as before) |
+
 ## Gates (§9) — state on 2026-11-06 (build 00b8b50, Debug test host, this Mac)
 
 | # | Gate | State | Evidence / what is still open |
