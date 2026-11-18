@@ -63,6 +63,19 @@ Verified on 15954eb, Debug-Connected, My Mac:
 - Package (`--skip LargeSingleMessageTests`): **898 run (MailConnectivity 179 / 2 skipped, ArchiveCore
   719 / 22 skipped), 0 failed**, 0 warnings.
 
+**Closeout 2026-11-18, gate 1 walk follow-up (fa72e0a..4dc5191).** The six items GATE1_UI_WALK_2026-11-18.md
+left open, one commit each with a test that fails without it: identifiers (hashes, addresses, Message-IDs)
+drawn by `IdentifierText` — iOS 27 no longer inserts hyphens and Copy returns the exact value (354c3ff);
+v1 "Inbox" bucket renamed "Received" (0d9834d); Subjects panel re-reads after Trash / restore / import
+(439834f); iPad / iPhone sidebar actions pinned (04188c7); home subtitle built from the supported-format
+list, 5 keys x 10 languages (9e2fda7) and the chips no longer squeezed on a narrow iPhone (53cea1f); the
+ordering-dependent testIPAD04 traced to the host app's launch `applyAll` landing after the test set
+`SearchChunkPolicy.isEnabled`, V2SearchTests now wait for it (fa72e0a); the stale key 38d658d left removed
+(4dc5191). Verified on 53cea1f, Debug-Connected My Mac: five-jobs gate **217 passed, 2 skipped (COMP14,
+TYPE05), 0 failed**; IPadGate1Fix 17/17, V2Search 28/28, Review1116C 27/27, V3Lint 2/2,
+InterfaceLocalization 8/8 (on 4dc5191). Builds iPhone 17, iPad Pro 11" (M5), My Mac build-for-testing:
+no new warnings. Package not touched. Simulator re-checks and screenshots in the walk record.
+
 **Pending Mac UI runs (owner present):**
 - AccessibilityAuditUITests.testAccessibilityAudit_liveMailPage
 - AccessibilityAuditUITests.testAccessibilityAudit_mainWindowAndModules (after the Live Mail page change)
