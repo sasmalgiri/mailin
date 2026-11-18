@@ -601,6 +601,56 @@ struct EmailDetailView: View {
         }
     }
 
+    private func attachmentInfo(_ att: AttachmentMetadata) -> some View {
+        HStack(spacing: Spacing.xSmall) {
+            Image(systemName: attachmentIcon(for: att.mimeType))
+                .foregroundColor(attachmentIconColor(for: att.mimeType))
+            VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
+                Text(att.filename.isEmpty ? "Unnamed Attachment" : att.filename)
+                    .font(Typography.subheadline)
+                    .fontWeight(.medium)
+                Text("\(att.mimeType) · \(formatSize(att.size))")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
+        }
+    }
+
+    private func attachmentButtons(_ att: AttachmentMetadata, index: Int) -> some View {
+        HStack(spacing: Spacing.xSmall) {
+            if let fileURL = att.fileURL {
+                Button {
+                    PlatformURLOpener.open(fileURL)
+                } label: {
+                    Label("Quick Look", systemImage: "eye")
+                        .font(Typography.caption1)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .buttonStyle(.plain)
+                .help("Preview this attachment without saving it")
+                .foregroundColor(AppColors.primary)
+                .accessibilityLabel("Preview \(att.filename)")
+            }
+            Button {
+                downloadAttachment(at: index)
+            } label: {
+                Label("Download", systemImage: "arrow.down.circle")
+                    .font(Typography.caption1)
+                    // Gate 1 walk 2026-11-18: in the iPad's narrow reading
+                    // pane the word wrapped letter by letter ("Dow / nloa / d").
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .help("Save this attachment to a folder you choose")
+            // IPAD-04: the plan decides (Free: a daily allowance), not whether a
+            // parse-time temp file still exists — the bytes come from the stored message.
+            .disabled(!downloadDecision.isEnabled)
+            .accessibilityLabel("Download \(att.filename.isEmpty ? "attachment" : att.filename)")
+        }
+    }
+
     // MARK: - Attachments Section
     private var attachmentsSection: some View {
         Group {
@@ -645,42 +695,19 @@ struct EmailDetailView: View {
 
                 ForEach(Array(shown.attachments.enumerated()), id: \.offset) { index, att in
                     VStack(alignment: .leading, spacing: Spacing.xxSmall) {
-                        HStack(spacing: Spacing.xSmall) {
-                            Image(systemName: attachmentIcon(for: att.mimeType))
-                                .foregroundColor(attachmentIconColor(for: att.mimeType))
-                            VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
-                                Text(att.filename.isEmpty ? "Unnamed Attachment" : att.filename)
-                                    .font(Typography.subheadline)
-                                    .fontWeight(.medium)
-                                Text("\(att.mimeType) · \(formatSize(att.size))")
-                                    .font(Typography.caption1)
-                                    .foregroundColor(AppColors.secondary)
+                        // Gate 1 walk 2026-11-18: in the iPad's narrow reading pane the
+                        // buttons squeezed the name and type to a few letters per line;
+                        // when one line does not fit, the buttons go under the name.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: Spacing.xSmall) {
+                                attachmentInfo(att)
+                                Spacer()
+                                attachmentButtons(att, index: index)
                             }
-                            Spacer()
-                            if let fileURL = att.fileURL {
-                                Button {
-                                    PlatformURLOpener.open(fileURL)
-                                } label: {
-                                    Label("Quick Look", systemImage: "eye")
-                                        .font(Typography.caption1)
-                                }
-                                .buttonStyle(.plain)
-                            .help("Preview this attachment without saving it")
-                                .foregroundColor(AppColors.primary)
-                                .accessibilityLabel("Preview \(att.filename)")
+                            VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                                attachmentInfo(att)
+                                attachmentButtons(att, index: index).padding(.leading, Spacing.large)
                             }
-                            Button {
-                                downloadAttachment(at: index)
-                            } label: {
-                                Label("Download", systemImage: "arrow.down.circle")
-                                    .font(Typography.caption1)
-                            }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .help("Save this attachment to a folder you choose")
-                            // IPAD-04: the plan decides (Free: a daily allowance), not whether a
-                            // parse-time temp file still exists — the bytes come from the stored message.
-                            .disabled(!downloadDecision.isEnabled)
-                            .accessibilityLabel("Download \(att.filename.isEmpty ? "attachment" : att.filename)")
                         }
 
                         attachmentPreview(for: att)

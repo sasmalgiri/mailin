@@ -32,7 +32,7 @@ struct AttachmentTextButton: View {
         // so the content it loads could never appear.
         VStack(alignment: .leading, spacing: 0) {
             if hasText {
-                Button { showing = true } label: { Label(String(localized: "Show text"), systemImage: "text.alignleft") }
+                Button { showing = true } label: { Label(String(localized: "Show text"), systemImage: "text.alignleft").lineLimit(1).fixedSize() }
                     .buttonStyle(.plain)
                     .font(Typography.caption1)
                     .foregroundStyle(Color.accentColor)

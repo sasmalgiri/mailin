@@ -5420,6 +5420,26 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertEqual(SubjectsListView.countLabel(7), "7 subjects")
     }
 
+    // Gate 1 walk 2026-11-18 (iPad portrait, three columns): the attachment
+    // row's buttons wrapped letter by letter — "Dow / nloa / d", "Sho / w
+    // text", "Ope / n". Each label keeps to one line at its natural width.
+    func testGate1Walk1118_attachmentRowButtonsKeepTheirWordsOnOneLine() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        func source(_ name: String) throws -> String { try String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8) }
+        let detail = try source("EmailDetailView.swift")
+        let download = try XCTUnwrap(detail.range(of: #"Label("Download", systemImage: "arrow.down.circle")"#))
+        let after = detail[download.upperBound...].prefix(400)
+        XCTAssertTrue(after.contains(".lineLimit(1)") && after.contains(".fixedSize()"), String(after))
+        XCTAssertTrue(try source("AttachmentChildrenList.swift")
+            .contains(#"Label(String(localized: "Open"), systemImage: "arrow.up.forward.square").lineLimit(1).fixedSize()"#))
+        XCTAssertTrue(try source("ExtractedTextSheet.swift")
+            .contains(#"Label(String(localized: "Show text"), systemImage: "text.alignleft").lineLimit(1).fixedSize()"#))
+        // …and when name + buttons do not fit on one line, the buttons go under the name
+        // instead of squeezing it to a letter per line.
+        XCTAssertTrue(detail.contains("ViewThatFits(in: .horizontal) {\n                            HStack(spacing: Spacing.xSmall) {\n                                attachmentInfo(att)"))
+        XCTAssertTrue(try source("AttachmentChildrenList.swift").contains("ViewThatFits(in: .horizontal) {\n                            HStack(spacing: Spacing.xSmall) {\n                                childInfo(child)"))
+    }
+
     // Gate 1 walk 2026-11-18 (iPad): Settings ▸ Data & Privacy ▸ "Delete All My
     // Data" asked to erase everything without saying how many emails (rule 4).
     func testGate1Walk1118_deleteAllConfirmationContainsTheCount() throws {

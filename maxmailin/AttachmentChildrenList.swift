@@ -30,27 +30,19 @@ struct AttachmentChildrenList: View {
             if !children.isEmpty {
                 DisclosureGroup(isExpanded: $isExpanded) {
                     ForEach(children, id: \.childIndex) { child in
-                        HStack(spacing: Spacing.xSmall) {
-                            Image(systemName: "doc.on.doc").foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(child.path).font(Typography.caption1).lineLimit(2)
-                                Text(Self.stateLabel(child.state) + (child.note.map { " — " + $0 } ?? ""))
-                                    .font(Typography.caption2).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+                        // Gate 1 walk 2026-11-18: in the iPad's narrow reading pane the
+                        // buttons squeezed the name and state to a letter per line; when
+                        // one line does not fit, the buttons go under the name.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: Spacing.xSmall) {
+                                childInfo(child)
+                                Spacer()
+                                childButtons(child)
                             }
-                            Spacer()
-                            // §13.3 (9): the text search reads for this file, with a find field.
-                            AttachmentTextButton(emailID: emailID, ordinal: child.ordinal, filename: child.filename, childPath: child.path, attachmentPosition: position)
-                            Button {
-                                Task { @MainActor in
-                                    failure = await EvidenceAttachmentOpener.open(emailID: emailID, ordinal: position, childPath: child.path,
-                                                                                 archive: archive)?.message
-                                }
-                            } label: { Label(String(localized: "Open"), systemImage: "arrow.up.forward.square") }
-                            .buttonStyle(.plain)
-                            .font(Typography.caption1)
-                            .help(String(localized: "Extract this file from the attachment and open it"))
-                            .accessibilityLabel(String(localized: "Open \(child.filename)"))
+                            VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                                childInfo(child)
+                                childButtons(child).padding(.leading, Spacing.large)
+                            }
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -74,6 +66,35 @@ struct AttachmentChildrenList: View {
         // message opened before it reached this one fills in when it does.
         .onReceive(NotificationCenter.default.publisher(for: .attachmentIndexUpdated)) { _ in
             Task { @MainActor in await load() }
+        }
+    }
+
+    private func childInfo(_ child: AttachmentChildRow) -> some View {
+        HStack(alignment: .top, spacing: Spacing.xSmall) {
+            Image(systemName: "doc.on.doc").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(child.path).font(Typography.caption1).lineLimit(2)
+                Text(Self.stateLabel(child.state) + (child.note.map { " — " + $0 } ?? ""))
+                    .font(Typography.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func childButtons(_ child: AttachmentChildRow) -> some View {
+        HStack(spacing: Spacing.xSmall) {
+            // §13.3 (9): the text search reads for this file, with a find field.
+            AttachmentTextButton(emailID: emailID, ordinal: child.ordinal, filename: child.filename, childPath: child.path, attachmentPosition: position)
+            Button {
+                Task { @MainActor in
+                    failure = await EvidenceAttachmentOpener.open(emailID: emailID, ordinal: position, childPath: child.path,
+                                                                 archive: archive)?.message
+                }
+            } label: { Label(String(localized: "Open"), systemImage: "arrow.up.forward.square").lineLimit(1).fixedSize() }
+            .buttonStyle(.plain)
+            .font(Typography.caption1)
+            .help(String(localized: "Extract this file from the attachment and open it"))
+            .accessibilityLabel(String(localized: "Open \(child.filename)"))
         }
     }
 
