@@ -9157,12 +9157,12 @@ final class V2CutoverTests: XCTestCase {
         await vm.refreshFromStoreNow()
         XCTAssertTrue(vm.residentEmails.isEmpty)
         XCTAssertEqual(ListEmptyState.of(searchText: vm.searchText, inTrash: vm.reviewStateFilter == .trashed, folderName: nil), .trash)
-        XCTAssertFalse(FolderTreeView.isShown(nil, selectedFolder: nil, trashShown: true), "All Emails is not highlighted beside Trash")
+        XCTAssertFalse(FolderTreeView.isShown(nil, selectedFolder: nil, otherPlaceShown: true), "All Emails is not highlighted beside Trash")
 
         // All Emails (already the folder selection, so no onChange fires).
         vm.leaveTrashForSidebarPlace()
         XCTAssertEqual(vm.reviewStateFilter, .active)
-        XCTAssertTrue(FolderTreeView.isShown(nil, selectedFolder: nil, trashShown: false))
+        XCTAssertTrue(FolderTreeView.isShown(nil, selectedFolder: nil, otherPlaceShown: false))
         // The change re-pages by itself (`applyFilters`); wait for that page.
         let deadline = Date().addingTimeInterval(10)
         while vm.visibleEmails.count < fixtures.count && Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
@@ -9177,7 +9177,7 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(tree.components(separatedBy: "onChoosePlace()\n").count - 1, 2, "All Emails and every folder row")
         let content = try String(contentsOf: appSource.appendingPathComponent("ContentView.swift"), encoding: .utf8)
         XCTAssertTrue(content.contains("onChoosePlace: {\n                                           // Gate 1 follow-up 2026-11-18: one place at a time —\n                                           // a folder bucket replaces a source folder (and the Trash).\n                                           modelVM.leaveTrashForSidebarPlace()"))
-        XCTAssertTrue(content.contains("trashShown: modelVM.reviewStateFilter == .trashed"))
+        XCTAssertTrue(content.contains("otherPlaceShown: modelVM.reviewStateFilter == .trashed || modelVM.selectedSourceFolder != nil"))
         let source = try String(contentsOf: appSource.appendingPathComponent("SourceFolderSection.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("model.leaveTrashForSidebarPlace()\n            model.selectedSourceFolder = isSelected ? nil : selection"))
     }
@@ -9200,6 +9200,12 @@ final class V2CutoverTests: XCTestCase {
                       "a source folder clears the bucket (and with it type:received)")
         let source = try String(contentsOf: appSource.appendingPathComponent("SourceFolderSection.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("onChoosePlace()\n            model.leaveTrashForSidebarPlace()"))
+        // Re-check: All Emails stayed highlighted beside the source folder, and
+        // Trash kept Received's type:received search.
+        XCTAssertFalse(FolderTreeView.isShown(nil, selectedFolder: nil, otherPlaceShown: true))
+        XCTAssertTrue(block.contains("otherPlaceShown: modelVM.reviewStateFilter == .trashed || modelVM.selectedSourceFolder != nil"))
+        XCTAssertTrue(source.contains("if !inTrash {\n                onChoosePlace()\n                model.selectedSourceFolder = nil\n            }"),
+                      "entering the Trash replaces Received and a source folder")
     }
 
     // MARK: - Release audit bf1a5b9 R2 — attachments compared as occurrences

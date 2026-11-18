@@ -2483,7 +2483,7 @@ struct ContentView: View {
                         // Part G7: self-loading — archive total from the store
                         // count, buckets over a bounded working set.
                         FolderTreeView(selectedFolder: $selectedFolder,
-                                       trashShown: modelVM.reviewStateFilter == .trashed,
+                                       otherPlaceShown: modelVM.reviewStateFilter == .trashed || modelVM.selectedSourceFolder != nil,
                                        onChoosePlace: {
                                            // Gate 1 follow-up 2026-11-18: one place at a time —
                                            // a folder bucket replaces a source folder (and the Trash).

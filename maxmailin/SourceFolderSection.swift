@@ -86,6 +86,13 @@ struct SourceFolderSection: View {
     private var trashRow: some View {
         let inTrash = model.reviewStateFilter == .trashed
         return Button {
+            // Gate 1 follow-up 2026-11-18: the Trash is a place too; it
+            // replaces Received (its type:received search stayed applied to
+            // the Trash) and a source folder.
+            if !inTrash {
+                onChoosePlace()
+                model.selectedSourceFolder = nil
+            }
             model.reviewStateFilter = inTrash ? .active : .trashed
         } label: {
             HStack(spacing: Spacing.xSmall) {

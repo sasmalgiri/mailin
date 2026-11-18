@@ -18,9 +18,10 @@ struct FolderNode: Identifiable {
 /// memory stays bounded at any archive size. No injected corpus.
 struct FolderTreeView: View {
     @Binding var selectedFolder: String?
-    /// Gate 1 follow-up 2026-11-18: the list shows the Trash, so no row here
-    /// is the place being shown (All Emails was highlighted beside Trash).
-    var trashShown: Bool = false
+    /// Gate 1 follow-up 2026-11-18: the list shows another place (the Trash
+    /// or a source folder), so no row here is the place being shown (All
+    /// Emails was highlighted beside Trash, and beside Source Folders > Inbox).
+    var otherPlaceShown: Bool = false
     /// Called on every choice of a row here, even one already selected, so
     /// the host can leave the Trash (`leaveTrashForSidebarPlace`).
     var onChoosePlace: () -> Void = {}
@@ -269,13 +270,13 @@ struct FolderTreeView: View {
 
 extension FolderTreeView {
     /// Whether the row for `filter` (nil: All Emails) is the place the list
-    /// shows: never while the Trash is shown.
+    /// shows: never while the Trash or a source folder is shown.
     func isShown(_ filter: String?) -> Bool {
-        Self.isShown(filter, selectedFolder: selectedFolder, trashShown: trashShown)
+        Self.isShown(filter, selectedFolder: selectedFolder, otherPlaceShown: otherPlaceShown)
     }
 
-    static func isShown(_ filter: String?, selectedFolder: String?, trashShown: Bool) -> Bool {
-        !trashShown && selectedFolder == filter
+    static func isShown(_ filter: String?, selectedFolder: String?, otherPlaceShown: Bool) -> Bool {
+        !otherPlaceShown && selectedFolder == filter
     }
 
     /// The received / sent buckets. The received one counts every email the
