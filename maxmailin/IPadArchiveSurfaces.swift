@@ -271,4 +271,14 @@ enum ClearArchiveConfirmation {
         let sourcePhrase = CountPhrase.sources(sources)
         return String(localized: "This clears \(emailPhrase) from \(sourcePhrase) and returns to the welcome screen. You can re-import anytime.")
     }
+
+    /// Rule 4, Settings ▸ Data & Privacy ▸ Delete All My Data (gate 1 walk
+    /// 2026-11-18): the erase-everything confirmation names how many emails
+    /// go, like "Clear & Start Fresh" does; an uncounted archive says so.
+    static func deleteAllMessage(_ counts: Counts) -> String {
+        guard let emails = counts.emails else {
+            return String(localized: "mailin could not count the emails in this archive. This permanently deletes every email and ALL other data: settings, forensic data, AI keys and preferences. The app will reset to its initial state. This cannot be undone.")
+        }
+        return String(localized: "This permanently deletes \(CountPhrase.emails(emails)) and ALL other data: settings, forensic data, AI keys and preferences. The app will reset to its initial state. This cannot be undone.")
+    }
 }

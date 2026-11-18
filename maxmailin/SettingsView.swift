@@ -136,6 +136,7 @@ struct SettingsView: View {
     @State private var settingsReset = false
     @State private var forensicDataCleared = false
     @State private var showDeleteAllConfirmation = false
+    @State private var deleteAllCounts = ClearArchiveConfirmation.Counts()
     @State private var allDataDeleted = false
     @ObservedObject private var compliance = LegalComplianceManager.shared
     #if MAILIN_CLOUD_AI && !NO_NETWORK_BUILD
@@ -760,7 +761,11 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
 
                 Button("Delete All My Data", role: .destructive) {
-                    showDeleteAllConfirmation = true
+                    // Rule 4: count first, then confirm with the number.
+                    Task { @MainActor in
+                        deleteAllCounts = await ClearArchiveConfirmation.count()
+                        showDeleteAllConfirmation = true
+                    }
                 }
                 .alert("Delete All Data", isPresented: $showDeleteAllConfirmation) {
                     Button("Cancel", role: .cancel) {}
@@ -773,7 +778,7 @@ struct SettingsView: View {
                         }
                     }
                 } message: {
-                    Text("This will permanently delete ALL data including emails, settings, forensic data, AI keys, and preferences. The app will reset to its initial state. This cannot be undone.")
+                    Text(ClearArchiveConfirmation.deleteAllMessage(deleteAllCounts))
                 }
 
                 if allDataDeleted {

@@ -5411,6 +5411,23 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(ClearArchiveConfirmation.message(.init(emails: nil, sources: nil)).contains("could not count"))
     }
 
+    // Gate 1 walk 2026-11-18 (iPad): Settings ▸ Data & Privacy ▸ "Delete All My
+    // Data" asked to erase everything without saying how many emails (rule 4).
+    func testGate1Walk1118_deleteAllConfirmationContainsTheCount() throws {
+        let seven = ClearArchiveConfirmation.deleteAllMessage(.init(emails: 7, sources: 1))
+        XCTAssertTrue(seven.contains("7 emails"), seven)
+        XCTAssertTrue(seven.contains("cannot be undone"), seven)
+        let one = ClearArchiveConfirmation.deleteAllMessage(.init(emails: 1, sources: 1))
+        XCTAssertTrue(one.contains("1 email "), one)
+        XCTAssertTrue(ClearArchiveConfirmation.deleteAllMessage(.init(emails: nil, sources: nil)).contains("could not count"))
+        // The alert shows this message, counted when the button is pressed.
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let settings = try String(contentsOf: dir.appendingPathComponent("SettingsView.swift"), encoding: .utf8)
+        XCTAssertTrue(settings.contains("Text(ClearArchiveConfirmation.deleteAllMessage(deleteAllCounts))"))
+        XCTAssertTrue(settings.contains("deleteAllCounts = await ClearArchiveConfirmation.count()"))
+        XCTAssertFalse(settings.contains("This will permanently delete ALL data including emails"), "the count-less message is gone")
+    }
+
     // IPAD-07: no speech permission prompt at launch or while the switch is off.
     func testIPAD07_speechAuthorizationNotRequestedWhileSwitchOff() {
         XCTAssertFalse(AttachmentSpeech.shouldRequestAuthorization(trigger: .launchWiring, switchOn: true, status: .notDetermined))
