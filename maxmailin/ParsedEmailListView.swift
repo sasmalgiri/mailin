@@ -2750,7 +2750,7 @@ struct ParsedEmailListView: View {
         }
         #if os(iOS)
         .onDrag {
-            let data = Data(email.rawSource.utf8)
+            let data = Self.emlDragData(rawSource: email.rawSource)
             let provider = NSItemProvider()
             let filename = sanitizeFilename(email.headers["Subject"] ?? "email") + ".eml"
             provider.suggestedName = filename
@@ -2761,6 +2761,12 @@ struct ParsedEmailListView: View {
             return provider
         }
         #endif
+    }
+
+    /// The bytes a dragged-out message carries as an .eml: the stored source without the
+    /// mbox envelope line it was parsed with (same rule as the .eml export, b515a69).
+    nonisolated static func emlDragData(rawSource: String) -> Data {
+        Data(MBOXRecordBuilder.strippingEnvelopeLine(rawSource).utf8)
     }
 
     #if os(iOS)

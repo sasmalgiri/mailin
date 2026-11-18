@@ -441,6 +441,18 @@ final class V2ExportTests: XCTestCase {
         XCTAssertFalse(source.contains("renderer.pngData"), "no PNG bytes under a .tiff name")
     }
 
+    /// Gate 2 follow-up: a message dragged out on iPhone/iPad as an .eml starts at its first
+    /// header — never with the mbox envelope line it was parsed with (b515a69 fixed the export).
+    func testGate2_draggedOutEML_hasNoMboxEnvelopeLine() {
+        let stored = "From MAILER-DAEMON Thu Jan  1 00:00:00 1970\nFrom: a@example.com\nSubject: Hi\n\nbody\n"
+        let dragged = String(decoding: ParsedEmailListView.emlDragData(rawSource: stored), as: UTF8.self)
+        XCTAssertTrue(dragged.hasPrefix("From: a@example.com"), dragged)
+        XCTAssertEqual(dragged, "From: a@example.com\nSubject: Hi\n\nbody\n")
+        let bare = "From: b@example.com\nSubject: Bare\n\nx\n"
+        XCTAssertEqual(String(decoding: ParsedEmailListView.emlDragData(rawSource: bare), as: UTF8.self), bare,
+                       "a source with no envelope line is unchanged")
+    }
+
     /// TIFF export writes real TIFF (`II*\0` / `MM\0*`), one image per page.
     func testB11_tiff_isRealMultiPageTIFF() throws {
         let text = (1...300).map { "Row \($0)" }.joined(separator: "\n")
