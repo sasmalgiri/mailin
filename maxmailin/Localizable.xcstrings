@@ -1022,7 +1022,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : ", %lld no se pudieron leer; no están en este paquete; exporte de nuevo para reintentarlo"
+            "value" : ", %lld no se pudieron leer: no están en este paquete; exporta de nuevo para reintentarlos"
           }
         },
         "fr" : {
@@ -3539,7 +3539,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ — au-delà de l’allocation"
+            "value" : "%@ — au-delà du quota"
           }
         },
         "hi" : {
@@ -5479,7 +5479,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 輸出已取消 — 已保留部分輸出；「繼續」可接著完成。"
+            "value" : "%@ 匯出已取消 — 已保留部分輸出；「繼續」可接著完成。"
           }
         }
       }
@@ -5543,7 +5543,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 輸出已取消 — 已刪除部分輸出。"
+            "value" : "%@ 匯出已取消 — 已刪除部分輸出。"
           }
         }
       }
@@ -5615,7 +5615,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 輸出：%@"
+            "value" : "%@ 匯出：%@"
           }
         }
       }
@@ -5687,7 +5687,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 輸出：%@。"
+            "value" : "%@ 匯出：%@。"
           }
         }
       }
@@ -18206,13 +18206,13 @@
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld फ़ाइलें ली गईं; प्रवेश लॉग सबसे नई %lld रखता है।"
+            "value" : "%lld फ़ाइलें ली गईं; इनटेक लॉग सबसे नई %lld रखता है।"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld file acquisiti; il registro di ingresso conserva i %lld più recenti."
+            "value" : "%lld file acquisiti; il registro di acquisizione conserva i %lld più recenti."
           }
         },
         "ja" : {
@@ -21238,7 +21238,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld mensagens do arquivo excedem o limite de %@ do índice de pesquisa, por isso a pesquisa cobre apenas a primeira parte dessas mensagens."
+            "value" : "%lld mensagens do arquivo excedem o limite de %@ do índice de busca, por isso a busca cobre apenas a primeira parte dessas mensagens."
           }
         },
         "zh-Hans" : {
@@ -21604,7 +21604,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld mensajes retenidos: contenido no decodificado al importar (por encima del límite de análisis completo); expórtelos como MBOX o EML, que transmiten los bytes originales"
+            "value" : "%lld mensajes retenidos: contenido no decodificado al importar (por encima del límite de análisis completo); expórtalos como MBOX o EML, que transmiten los bytes originales"
           }
         },
         "fr" : {
@@ -21652,7 +21652,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已暫扣 %lld 封郵件：匯入時未解碼內容（超過完整解析上限）— 請輸出為 MBOX 或 EML，它們會直接輸出原始位元組"
+            "value" : "已暫扣 %lld 封郵件：匯入時未解碼內容（超過完整解析上限）— 請匯出為 MBOX 或 EML，它們會直接輸出原始位元組"
           }
         }
       }
@@ -31979,7 +31979,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1 mensaje retenido: contenido no decodificado al importar (por encima del límite de análisis completo); expórtelo como MBOX o EML, que transmiten los bytes originales"
+            "value" : "1 mensaje retenido: contenido no decodificado al importar (por encima del límite de análisis completo); expórtalo como MBOX o EML, que transmiten los bytes originales"
           }
         },
         "fr" : {
@@ -32027,7 +32027,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已暫扣 1 封郵件：匯入時未解碼內容（超過完整解析上限）— 請輸出為 MBOX 或 EML，它們會直接輸出原始位元組"
+            "value" : "已暫扣 1 封郵件：匯入時未解碼內容（超過完整解析上限）— 請匯出為 MBOX 或 EML，它們會直接輸出原始位元組"
           }
         }
       }
@@ -35609,7 +35609,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El texto fijo de un patrón debe empezar una palabra: /voice\\s/ no encuentra «invoice». Empiece el patrón donde empieza la palabra."
+            "value" : "El texto fijo de un patrón debe empezar una palabra: /voice\\s/ no encuentra “invoice”. Empieza el patrón donde empieza la palabra."
           }
         },
         "fr" : {
@@ -47845,7 +47845,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI Insights ist aus. Schalten Sie es in mailin ▸ Einstellungen ▸ Module ein."
+            "value" : "KI-Einblicke sind aus. Schalten Sie sie in mailin ▸ Einstellungen ▸ Module ein."
           }
         },
         "es" : {
@@ -47857,13 +47857,13 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI Insights est désactivé. Activez-le dans mailin ▸ Réglages ▸ Modules."
+            "value" : "Les Informations IA sont désactivées. Activez-les dans mailin ▸ Réglages ▸ Modules."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI Insights बंद है। इसे mailin ▸ सेटिंग्स ▸ मॉड्यूल में चालू करें।"
+            "value" : "AI अंतर्दृष्टि बंद है। इसे mailin ▸ सेटिंग्स ▸ मॉड्यूल में चालू करें।"
           }
         },
         "it" : {
@@ -47875,13 +47875,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI Insightsはオフです。mailin ▸ 設定 ▸ モジュールでオンにしてください。"
+            "value" : "AI インサイトはオフです。mailin ▸ 設定 ▸ モジュールでオンにしてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI Insights가 꺼져 있습니다. mailin ▸ 설정 ▸ 모듈에서 켜십시오."
+            "value" : "AI 인사이트가 꺼져 있습니다. mailin ▸ 설정 ▸ 모듈에서 켜세요."
           }
         },
         "pt-BR" : {
@@ -47893,13 +47893,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI Insights 已关闭。请在 mailin ▸ 设置 ▸ 模块中打开。"
+            "value" : "AI 洞察已关闭。请在 mailin ▸ 设置 ▸ 模块中打开。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI Insights 已關閉。請在 mailin ▸ 設定 ▸ 模組中開啟。"
+            "value" : "AI 洞察已關閉。請在 mailin ▸ 設定 ▸ 模組中開啟。"
           }
         }
       }
@@ -52425,7 +52425,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allocation"
+            "value" : "Quota"
           }
         },
         "hi" : {
@@ -56287,7 +56287,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AND, OR y NOT funcionan cuando se escriben en mayúsculas; en minúsculas, and, or y not se buscan como palabras normales. Ponga un signo menos delante de una palabra (-draft) para excluir los correos que la contienen."
+            "value" : "AND, OR y NOT funcionan cuando se escriben en mayúsculas; en minúsculas, and, or y not se buscan como palabras normales. Pon un signo menos delante de una palabra (-draft) para excluir los correos que la contienen."
           }
         },
         "fr" : {
@@ -59836,7 +59836,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los resúmenes de Apple Intelligence de su correo en Spotlight ahora están desactivados hasta que los active en Ajustes ▸ Datos y privacidad."
+            "value" : "Los resúmenes de Apple Intelligence de tu correo en Spotlight ahora están desactivados hasta que los actives en Ajustes ▸ Datos y privacidad."
           }
         },
         "fr" : {
@@ -93845,7 +93845,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elija una carpeta de perfil de Thunderbird o uno de sus archivos mbox"
+            "value" : "Elige una carpeta de perfil de Thunderbird o uno de sus archivos mbox"
           }
         },
         "fr" : {
@@ -93875,7 +93875,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Thunderbird 프로필 폴더 또는 그 안의 mbox 파일을 선택하십시오"
+            "value" : "Thunderbird 프로필 폴더 또는 그 안의 mbox 파일을 선택하세요"
           }
         },
         "pt-BR" : {
@@ -94883,7 +94883,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elija esa carpeta a continuación. mailin importa todos los paquetes que contiene."
+            "value" : "Elige esa carpeta a continuación. mailin importa todos los paquetes que contiene."
           }
         },
         "fr" : {
@@ -94913,7 +94913,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "아래에서 해당 폴더를 선택하십시오. mailin이 그 안의 모든 패키지를 가져옵니다."
+            "value" : "아래에서 해당 폴더를 선택하세요. mailin이 그 안의 모든 패키지를 가져옵니다."
           }
         },
         "pt-BR" : {
@@ -94947,7 +94947,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elija la carpeta «mailin-handoff» (o los archivos .mbox que contiene) y haga clic en Elegir."
+            "value" : "Elige la carpeta “mailin-handoff” (o los archivos .mbox que contiene) y haz clic en Elegir."
           }
         },
         "fr" : {
@@ -94977,7 +94977,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "‘mailin-handoff’ 폴더(또는 그 안의 개별 .mbox 파일)를 선택하고 선택을 클릭하십시오."
+            "value" : "‘mailin-handoff’ 폴더(또는 그 안의 개별 .mbox 파일)를 선택하고 선택을 클릭하세요."
           }
         },
         "pt-BR" : {
@@ -95079,7 +95079,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elija la carpeta a la que exportó Mail (contiene un paquete .mbox por buzón)"
+            "value" : "Elige la carpeta a la que exportó Mail (contiene un paquete .mbox por buzón)"
           }
         },
         "fr" : {
@@ -95109,7 +95109,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mail이 내보낸 폴더를 선택하십시오(메일함마다 .mbox 패키지가 하나씩 있습니다)"
+            "value" : "Mail이 내보낸 폴더를 선택하세요(메일함마다 .mbox 패키지가 하나씩 있습니다)"
           }
         },
         "pt-BR" : {
@@ -95533,7 +95533,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elija dónde escribir los archivos mbox"
+            "value" : "Elige dónde escribir los archivos mbox"
           }
         },
         "fr" : {
@@ -95563,7 +95563,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mbox 파일을 기록할 위치를 선택하십시오"
+            "value" : "mbox 파일을 기록할 위치를 선택하세요"
           }
         },
         "pt-BR" : {
@@ -107003,7 +107003,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Compare el número de mensajes con la cifra de arriba; deben coincidir."
+            "value" : "Compara el número de mensajes con la cifra de arriba; deben coincidir."
           }
         },
         "fr" : {
@@ -107033,7 +107033,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "메시지 수를 위의 숫자와 비교하십시오. 두 숫자가 일치해야 합니다."
+            "value" : "메시지 수를 위의 숫자와 비교하세요. 두 숫자가 일치해야 합니다."
           }
         },
         "pt-BR" : {
@@ -115867,7 +115867,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "보관소에 복사됨"
+            "value" : "보관함에 복사됨"
           }
         },
         "pt-BR" : {
@@ -141844,7 +141844,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "duplicados: %@"
+            "value" : "duplicatas: %@"
           }
         },
         "zh-Hans" : {
@@ -161914,13 +161914,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "导出 %lld 封邮件（当前过滤条件）"
+            "value" : "导出 %lld 封邮件（当前筛选条件）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸出 %lld 封郵件（目前過濾條件）"
+            "value" : "匯出 %lld 封郵件（目前篩選條件）"
           }
         }
       }
@@ -162050,7 +162050,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸出 1 封郵件"
+            "value" : "匯出 1 封郵件"
           }
         }
       }
@@ -165074,7 +165074,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸出到此處"
+            "value" : "匯出到此處"
           }
         }
       }
@@ -168052,7 +168052,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已輸出 %lld 封郵件（共 %lld 封）。Personal 和 Professional 輸出不受 %lld 封郵件的限制。"
+            "value" : "已匯出 %lld 封郵件（共 %lld 封）。Personal 和 Professional 匯出不受 %lld 封郵件的限制。"
           }
         }
       }
@@ -168118,7 +168118,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在輸出"
+            "value" : "正在匯出"
           }
         }
       }
@@ -185437,13 +185437,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free 导出前 %lld 封"
+            "value" : "免费版导出前 %lld 封"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free 輸出前 %lld 封"
+            "value" : "免費版匯出前 %lld 封"
           }
         }
       }
@@ -185773,7 +185773,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gratis-Plan – E-Mails pro Import"
+            "value" : "Free-Plan – E-Mails pro Import"
           }
         },
         "es" : {
@@ -185785,19 +185785,19 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Forfait Gratuit — e-mails par importation"
+            "value" : "Forfait Free — e-mails par importation"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "मुफ़्त प्लान — प्रति आयात ईमेल"
+            "value" : "Free प्लान — प्रति आयात ईमेल"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Piano Gratuito — email per importazione"
+            "value" : "Piano Free — email per importazione"
           }
         },
         "ja" : {
@@ -185973,13 +185973,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuota de entrada del plan Free"
+            "value" : "Asignación de entrada del plan Gratis"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quota d’entrée de la formule Free"
+            "value" : "Quota d’entrée du forfait Free"
           }
         },
         "hi" : {
@@ -186009,19 +186009,19 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cota de entrada do plano Free"
+            "value" : "Cota de entrada do plano Gratuito"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free 方案输入额度"
+            "value" : "免费方案输入额度"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free 方案輸入額度"
+            "value" : "免費方案輸入額度"
           }
         }
       }
@@ -186539,13 +186539,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free 写入前 %lld 封"
+            "value" : "免费版写入前 %lld 封"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free 寫入前 %lld 封"
+            "value" : "免費版寫入前 %lld 封"
           }
         }
       }
@@ -211014,7 +211014,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En Mail, seleccione el buzón (o varios) en la barra lateral."
+            "value" : "En Mail, selecciona el buzón (o varios) en la barra lateral."
           }
         },
         "fr" : {
@@ -211044,7 +211044,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mail의 사이드바에서 메일함(여러 개 가능)을 선택하십시오."
+            "value" : "Mail의 사이드바에서 메일함(여러 개 가능)을 선택하세요."
           }
         },
         "pt-BR" : {
@@ -211399,7 +211399,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Insgesamt über alle Importe, nur im Gratis-Plan: Was das Archiv schon enthält, zählt mit, und ein Import, der darüber hinausginge, wird ganz abgelehnt, nie gekürzt."
+            "value" : "Insgesamt über alle Importe, nur im Free-Plan: Was das Archiv schon enthält, zählt mit, und ein Import, der darüber hinausginge, wird ganz abgelehnt, nie gekürzt."
           }
         },
         "es" : {
@@ -211411,19 +211411,19 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Au total sur toutes les importations, avec le forfait Gratuit uniquement : ce que l’archive contient déjà compte, et une importation qui dépasserait est refusée en entier, jamais tronquée."
+            "value" : "Au total sur toutes les importations, avec le forfait Free uniquement : ce que l’archive contient déjà compte, et une importation qui dépasserait est refusée en entier, jamais tronquée."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "सभी आयातों को मिलाकर, केवल मुफ़्त प्लान में: संग्रह में पहले से मौजूद डेटा भी गिना जाता है, और जो आयात इससे आगे जाता वह पूरा अस्वीकार होता है, कभी काटा नहीं जाता।"
+            "value" : "सभी आयातों को मिलाकर, केवल Free प्लान में: संग्रह में पहले से मौजूद डेटा भी गिना जाता है, और जो आयात इससे आगे जाता वह पूरा अस्वीकार होता है, कभी काटा नहीं जाता।"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In totale su tutte le importazioni, solo con il piano Gratuito: conta ciò che l’archivio contiene già, e un’importazione che lo supererebbe viene rifiutata per intero, mai tagliata."
+            "value" : "In totale su tutte le importazioni, solo con il piano Free: conta ciò che l’archivio contiene già, e un’importazione che lo supererebbe viene rifiutata per intero, mai tagliata."
           }
         },
         "ja" : {
@@ -213980,13 +213980,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Integrität: nur Prüfsumme (Beleg aus der Zeit vor Signaturen)"
+            "value" : "Integrität: nur Prüfsumme (Quittung aus der Zeit vor Signaturen)"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Integridad: solo suma de comprobación (comprobante anterior a la firma)"
+            "value" : "Integridad: solo suma de comprobación (recibo anterior a la firma)"
           }
         },
         "fr" : {
@@ -214034,7 +214034,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "完整性：僅檢查碼（簽章之前的回條）"
+            "value" : "完整性：僅檢查碼（簽章之前的收據）"
           }
         }
       }
@@ -214074,13 +214074,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "整合性：検証できません — %@"
+            "value" : "整合性：検証に失敗しました — %@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "무결성: 확인되지 않음 — %@"
+            "value" : "무결성: 검증 실패 — %@"
           }
         },
         "pt-BR" : {
@@ -214144,7 +214144,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "무결성: 확인됨(키 서명)"
+            "value" : "무결성: 검증됨(키 서명)"
           }
         },
         "pt-BR" : {
@@ -232052,7 +232052,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mail crea un buzón “Importación” con una carpeta por archivo. Muévalas donde quiera."
+            "value" : "Mail crea un buzón “Importación” con una carpeta por archivo. Muévelas donde quieras."
           }
         },
         "fr" : {
@@ -232082,7 +232082,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mail은 파일마다 폴더 하나가 있는 ‘가져오기’ 메일함을 만듭니다. 원하는 위치로 옮기십시오."
+            "value" : "Mail은 파일마다 폴더 하나가 있는 ‘가져오기’ 메일함을 만듭니다. 원하는 위치로 옮기세요."
           }
         },
         "pt-BR" : {
@@ -233749,13 +233749,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mailin-Importbeleg"
+            "value" : "mailin-Importquittung"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Comprobante de importación de mailin"
+            "value" : "Recibo de importación de mailin"
           }
         },
         "fr" : {
@@ -233803,7 +233803,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mailin 匯入回條"
+            "value" : "mailin 匯入收據"
           }
         }
       }
@@ -259533,7 +259533,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Noch keine Importbelege."
+            "value" : "Noch keine Importquittungen."
           }
         },
         "es" : {
@@ -259563,7 +259563,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "読み込みの記録はまだありません。"
+            "value" : "読み込みレシートはまだありません。"
           }
         },
         "ko" : {
@@ -259587,7 +259587,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "尚無匯入回執。"
+            "value" : "尚無匯入收據。"
           }
         }
       }
@@ -273661,19 +273661,19 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Avec le forfait Gratuit, une importation s’arrête après ce nombre d’e-mails et le signale ; le fichier garde sa position, donc après une mise à niveau l’importation reprend avec le reste."
+            "value" : "Avec le forfait Free, une importation s’arrête après ce nombre d’e-mails et le signale ; le fichier garde sa position, donc après une mise à niveau l’importation reprend avec le reste."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "मुफ़्त प्लान में आयात इतने ईमेल के बाद रुक जाता है और यह बताता है; फ़ाइल अपनी जगह याद रखती है, इसलिए अपग्रेड के बाद आयात बाकी के साथ जारी रहता है।"
+            "value" : "Free प्लान में आयात इतने ईमेल के बाद रुक जाता है और यह बताता है; फ़ाइल अपनी जगह याद रखती है, इसलिए अपग्रेड के बाद आयात बाकी के साथ जारी रहता है।"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Con il piano Gratuito un’importazione si ferma dopo questo numero di email e lo dice; il file mantiene la sua posizione, quindi dopo l’upgrade l’importazione prosegue con il resto."
+            "value" : "Con il piano Free un’importazione si ferma dopo questo numero di email e lo dice; il file mantiene la sua posizione, quindi dopo l’upgrade l’importazione prosegue con il resto."
           }
         },
         "ja" : {
@@ -273697,13 +273697,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在免费方案中，导入达到此数量的邮件后会停止并告知；文件会保留位置，升级后导入将继续处理其余部分。"
+            "value" : "在免费方案中，导入达到此数量的邮件后会停止并告知；mailin 会记住该文件的读取进度，升级后导入将继续处理其余邮件。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在免費方案中，匯入達到此數量的郵件後會停止並告知；檔案會保留位置，升級後匯入將繼續處理其餘部分。"
+            "value" : "在免費方案中，匯入達到此數量的郵件後會停止並告知；mailin 會記住該檔案的讀取進度，升級後匯入將繼續處理其餘郵件。"
           }
         }
       }
@@ -304495,7 +304495,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La búsqueda por proximidad abarca las páginas cargadas: desplácese o cargue más para seguir buscando."
+            "value" : "La búsqueda por proximidad abarca las páginas cargadas: desplázate o pulsa Cargar más para seguir buscando."
           }
         },
         "fr" : {
@@ -304525,7 +304525,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "근접 검색은 로드된 페이지에서만 일치시킵니다 — 더 검색하려면 스크롤하거나 더 로드하십시오."
+            "value" : "근접 검색은 로드된 페이지에서만 일치 항목을 찾습니다 — 더 검색하려면 스크롤하거나 더 불러오기를 누르세요."
           }
         },
         "pt-BR" : {
@@ -306489,7 +306489,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Salga primero de Thunderbird para que no se escriba en los archivos."
+            "value" : "Sal primero de Thunderbird para que no se escriba en los archivos."
           }
         },
         "fr" : {
@@ -306519,7 +306519,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "파일에 기록되지 않도록 먼저 Thunderbird를 종료하십시오."
+            "value" : "파일에 기록되지 않도록 먼저 Thunderbird를 종료하세요."
           }
         },
         "pt-BR" : {
@@ -310666,7 +310666,7 @@
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lettura del registro di controllo…"
+            "value" : "Lettura del registro di audit…"
           }
         },
         "ja" : {
@@ -318290,7 +318290,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Expresión regular demasiado amplia — solo se analizaron los primeros %lld correos. Añada un término de texto o un filtro de fecha para acotarla."
+            "value" : "Expresión regular demasiado amplia: solo se analizaron los primeros %lld correos. Añade un término de texto o un filtro de fecha para acotarla."
           }
         },
         "fr" : {
@@ -318308,7 +318308,7 @@
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Espressione regolare troppo ampia — sono state analizzate solo le prime %lld email. Aggiunga un termine di testo o un filtro per data per restringerla."
+            "value" : "Espressione regolare troppo ampia — sono state analizzate solo le prime %lld email. Aggiungi un termine di testo o un filtro per data per restringerla."
           }
         },
         "ja" : {
@@ -318320,7 +318320,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "정규식 범위가 너무 넓습니다 — 처음 %lld개의 이메일만 검사했습니다. 범위를 좁히려면 텍스트 검색어나 날짜 필터를 추가하십시오."
+            "value" : "정규식 범위가 너무 넓습니다 — 처음 %lld개의 이메일만 검사했습니다. 범위를 좁히려면 텍스트 검색어나 날짜 필터를 추가하세요."
           }
         },
         "pt-BR" : {
@@ -318332,7 +318332,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正则表达式范围过宽 — 仅扫描了前 %lld 封邮件。请添加文本词语或日期过滤条件以缩小范围。"
+            "value" : "正则表达式范围过宽 — 仅扫描了前 %lld 封邮件。请添加文本词语或日期筛选条件以缩小范围。"
           }
         },
         "zh-Hant" : {
@@ -331522,13 +331522,13 @@
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "टैग वाला हर ईमेल लौटाता है, सबसे नया पहले। Count Emails सटीक कुल संख्या देता है; ज़रूरत हो तो Shortcuts की Limit क्रिया सूची छोटी करती है।"
+            "value" : "टैग वाला हर ईमेल लौटाता है, सबसे नया पहले। “ईमेल गिनें” सटीक कुल संख्या देता है; ज़रूरत हो तो शॉर्टकट की “सीमित करें” क्रिया सूची छोटी करती है।"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Restituisce ogni email con un tag, dalla più recente. Conta email fornisce il totale esatto; l’azione Limita di Comandi accorcia l’elenco quando serve."
+            "value" : "Restituisce ogni email con un tag, dalla più recente. Conta le email fornisce il totale esatto; l’azione Limita di Comandi rapidi accorcia l’elenco quando serve."
           }
         },
         "ja" : {
@@ -331558,7 +331558,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "傳回帶有某個標籤的所有郵件，最新的在前。「計算郵件」提供精確總數；需要時可用捷徑的「限制」動作縮短列表。"
+            "value" : "傳回帶有某個標籤的所有郵件，最新的在前。「統計郵件」提供精確總數；需要時可用捷徑的「限制」動作縮短列表。"
           }
         }
       }
@@ -387285,7 +387285,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detenido: superó su límite de tiempo y se desactivó. Actívelo para volver a ejecutarlo."
+            "value" : "Detenido: superó su límite de tiempo y se desactivó. Actívalo para volver a ejecutarlo."
           }
         },
         "fr" : {
@@ -387535,61 +387535,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Archivzeilen: %@ -> %@"
+            "value" : "Datenbankzeilen: %@ -> %@"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "filas del archivo: %@ -> %@"
+            "value" : "filas de la base de datos: %@ -> %@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "lignes de l’archive : %@ -> %@"
+            "value" : "lignes de la base de données : %@ -> %@"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "संग्रह पंक्तियाँ: %@ -> %@"
+            "value" : "डेटाबेस पंक्तियाँ: %@ -> %@"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "righe dell’archivio: %@ -> %@"
+            "value" : "righe del database: %@ -> %@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アーカイブの行：%@ -> %@"
+            "value" : "データベースの行：%@ -> %@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "아카이브 행: %@ -> %@"
+            "value" : "데이터베이스 행: %@ -> %@"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "linhas do arquivo: %@ -> %@"
+            "value" : "linhas do banco de dados: %@ -> %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "归档行数：%@ -> %@"
+            "value" : "数据库行数：%@ -> %@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "封存列數：%@ -> %@"
+            "value" : "資料庫列數：%@ -> %@"
           }
         }
       }
@@ -402796,7 +402796,7 @@
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Impossibile leggere il registro di controllo: %@"
+            "value" : "Impossibile leggere il registro di audit: %@"
           }
         },
         "ja" : {
@@ -406039,7 +406039,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der kostenlose Tarif exportiert bis zu %lld E-Mails pro Durchgang. Personal und Professional exportieren ohne diese Begrenzung."
+            "value" : "Der Free-Plan exportiert bis zu %lld E-Mails pro Lauf. Personal und Professional exportieren ohne diese Begrenzung."
           }
         },
         "es" : {
@@ -406051,19 +406051,19 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le forfait Gratuit exporte jusqu'à %lld e-mails par exécution. Personal et Professional exportent sans cette limite."
+            "value" : "Le forfait Free exporte jusqu'à %lld e-mails par exécution. Personal et Professional exportent sans cette limite."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "निःशुल्क प्लान प्रति रन अधिकतम %lld ईमेल निर्यात करता है। Personal और Professional बिना सीमा के निर्यात करते हैं।"
+            "value" : "Free प्लान प्रति रन अधिकतम %lld ईमेल निर्यात करता है। Personal और Professional बिना सीमा के निर्यात करते हैं।"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Il piano Gratis esporta fino a %lld email per esecuzione. Personal e Professional esportano senza limite."
+            "value" : "Il piano Free esporta fino a %lld email per esecuzione. Personal e Professional esportano senza limite."
           }
         },
         "ja" : {
@@ -406081,7 +406081,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O plano Grátis exporta até %lld e-mails por execução. Personal e Professional exportam sem o limite."
+            "value" : "O plano Gratuito exporta até %lld e-mails por execução. Personal e Professional exportam sem o limite."
           }
         },
         "zh-Hans" : {
@@ -409929,7 +409929,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "raw 値に付随するメッセージのメタデータが上限の %lld MiB を超えています"
+            "value" : "未加工の値に付随するメッセージのメタデータが上限の %lld MiB を超えています"
           }
         },
         "ko" : {
@@ -427261,7 +427261,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "오늘의 무료 AI 질문을 모두 사용했습니다. 무제한 질문을 하려면 mailin Personal 또는 Professional을 잠금 해제하십시오."
+            "value" : "오늘의 무료 AI 질문을 모두 사용했습니다. 무제한 질문을 하려면 mailin Personal 또는 Professional을 잠금 해제하세요."
           }
         },
         "pt-BR" : {
@@ -440073,7 +440073,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Use “Detectar en este Mac” para encontrar las carpetas de perfil o elija usted mismo una carpeta de perfil."
+            "value" : "Usa “Detectar en este Mac” para encontrar las carpetas de perfil o elige tú mismo una carpeta de perfil."
           }
         },
         "fr" : {
@@ -440091,7 +440091,7 @@
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Usi “Rileva su questo Mac” per trovare le cartelle del profilo oppure scelga lei stesso una cartella del profilo."
+            "value" : "Usa “Rileva su questo Mac” per trovare le cartelle del profilo oppure scegli tu una cartella del profilo."
           }
         },
         "ja" : {
@@ -440103,7 +440103,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“이 Mac에서 감지”를 사용하여 프로필 폴더를 찾거나 프로필 폴더를 직접 선택하십시오."
+            "value" : "“이 Mac에서 감지”를 사용하여 프로필 폴더를 찾거나 프로필 폴더를 직접 선택하세요."
           }
         },
         "pt-BR" : {
@@ -460531,7 +460531,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Su organización exige este bloqueo, pero este dispositivo no tiene código, Touch ID ni Face ID configurados. Configure un código del dispositivo en Ajustes del Sistema y vuelva a intentarlo."
+            "value" : "Tu organización exige este bloqueo, pero este dispositivo no tiene código, Touch ID ni Face ID configurados. Configura un código del dispositivo en Ajustes del Sistema y vuelve a intentarlo."
           }
         },
         "fr" : {

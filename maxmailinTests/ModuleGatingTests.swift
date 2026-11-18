@@ -1104,6 +1104,23 @@ struct InterfaceLocalizationTests {
         #expect(Self.translatableKeys(catalog).count > 2_500)
     }
 
+    /// Back-translation review 2026-11-18: a failed integrity check (possible tampering) must read as a
+    /// failure, not as "could not be checked" (ja 検証できません) or "not confirmed" (ko 확인되지 않음);
+    /// and corrected terminology stays corrected (es tú register, zh-Hant 匯出 for Export).
+    @Test("Back-translation corrections stay applied (failed-integrity verdict, register, terminology)")
+    func backTranslationCorrections() throws {
+        let catalog = try Self.loadCatalog()
+        func value(_ key: String, _ lang: String) -> String {
+            catalog.strings[key]?.localizations?[lang]?.text ?? ""
+        }
+        let integrity = "Integrity: DOES NOT VERIFY — %@"
+        #expect(value(integrity, "ja") == "整合性：検証に失敗しました — %@")
+        #expect(value(integrity, "ko") == "무결성: 검증 실패 — %@")
+        #expect(value("%@ export: %@", "zh-Hant") == "%@ 匯出：%@")
+        #expect(value(", %lld could not be read — not in this package; export again to retry them", "es")
+                .contains("exporta de nuevo para reintentarlos"))
+    }
+
     @Test("Every translatable key has a value in all ten languages")
     func everyKeyTranslated() throws {
         let catalog = try Self.loadCatalog()
