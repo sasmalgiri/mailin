@@ -607,8 +607,13 @@ final class PSTStreamWriter {
 
     private static func parseISO(_ ts: String) -> Date? { ISO8601DateFormatter().date(from: ts) }
 
-    private static func fileTime(_ d: Date) -> UInt64 {
-        UInt64((d.timeIntervalSince1970 + 11_644_473_600.0) * 10_000_000.0)
+    /// Gate 2 (2026-11-18): a date before FILETIME's 1601 epoch (real Enron mail is dated
+    /// "21 Dec 0001") is written as 0, as `PSTSpecFormat.fileTime` does; `UInt64(negative)`
+    /// crashed the export. The message's own Date header travels in the transport headers.
+    static func fileTime(_ d: Date) -> UInt64 {
+        let ticks = (d.timeIntervalSince1970 + 11_644_473_600.0) * 10_000_000.0
+        guard ticks.isFinite, ticks > 0 else { return 0 }
+        return ticks >= 18_446_744_073_709_549_568.0 ? UInt64.max : UInt64(ticks)
     }
 
     private static func pageAlign(_ v: UInt64) -> UInt64 {

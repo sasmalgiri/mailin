@@ -161,6 +161,33 @@ final class ZipMailboxFolderTests: XCTestCase {
         XCTAssertEqual(viaZip.folders, ["Work": 3, "Work/Clients": 2])
     }
 
+    /// Gate 2 (2026-11-18), real Enron corpus: a ZIP of a tree of numbered message files (MH /
+    /// Claws / Sylpheed "1", "2"; the Enron dump "1.", "2.") imported 56,699 of 56,699 messages
+    /// into NO folder — the unzipped tree gave 118. A numbered member that reads as mail now
+    /// takes its directory, as the unzipped folder gives it.
+    func testGate2_zipOfNumberedMessageTree_keepsEveryFolder_likeTheUnzippedTree() async throws {
+        let fm = FileManager.default
+        let root = dir.appendingPathComponent("enron-maildir", isDirectory: true)
+        let files: [(String, String)] = [("kaminski-v/inbox/1.", "a"), ("kaminski-v/inbox/2.", "b"),
+                                         ("kaminski-v/c/mangmt/group/management/1.", "c"), ("dasovich-j/sent/17", "d")]
+        for (path, tag) in files {
+            let url = root.appendingPathComponent(path)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let text = "Message-ID: <\(tag)@example.org>\r\nDate: Mon, 6 Jan 2025 10:00:00 +0000\r\nFrom: a@example.org\r\n"
+                + "To: b@example.org\r\nSubject: message \(tag)\r\n\r\nBody \(tag).\n"
+            try Data(text.utf8).write(to: url)
+        }
+        let expected = ["kaminski-v/inbox": 2, "kaminski-v/c/mangmt/group/management": 1, "dasovich-j/sent": 1]
+        func direct(_ i: Imported) -> [String: Int] { i.folders.filter { $0.value > 0 } }
+        let unzipped = try await importThroughCoordinator(root)
+        XCTAssertEqual(unzipped.total, 4)
+        XCTAssertEqual(direct(unzipped), expected, "the unzipped tree")
+        let zipped = try await importThroughCoordinator(try zip(["enron-maildir"], in: dir, to: "enron-maildir.zip"))
+        XCTAssertEqual(zipped.total, 4)
+        XCTAssertEqual(direct(zipped), expected, "the same tree inside a ZIP keeps the same folders")
+        XCTAssertEqual(zipped.memberships, 4)
+    }
+
     func testIPAD01_containerFolderPath_rules() {
         func f(_ name: String, wrapper: String? = nil) -> String? {
             SourceFormatClassifier.containerFolderPath(memberName: name, wrapper: wrapper)
@@ -178,5 +205,9 @@ final class ZipMailboxFolderTests: XCTestCase {
         XCTAssertNil(f("one.eml"))
         XCTAssertNil(f("Takeout/Mail/All mail Including Spam and Trash.mbox", wrapper: "Takeout"))
         XCTAssertNil(f("backup/archive.pst"))
+        // Gate 2: numbered message files (MH, the Enron dump) take their directory.
+        XCTAssertEqual(f("enron-maildir/kaminski-v/inbox/12.", wrapper: "enron-maildir"), "kaminski-v/inbox")
+        XCTAssertEqual(f("mh/inbox/7"), "mh/inbox")
+        XCTAssertNil(f("notes/2024.txt"), "a dotted name with an extension is not a numbered message")
     }
 }

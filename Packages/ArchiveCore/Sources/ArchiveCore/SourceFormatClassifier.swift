@@ -647,10 +647,7 @@ enum SourceFormatClassifier {
     /// file starts with mail headers, so a stray numbered file is never taken for mail
     /// (gate 2, 2026-11-15: the real Enron mailbox was refused as "unrecognised").
     static func isNumberedMessageFile(_ url: URL) -> Bool {
-        let name = url.lastPathComponent
-        guard !name.isEmpty, name.count <= 12,
-              name.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }), name.first?.isNumber == true,
-              name.filter({ $0 == "." }).count <= 1, (name.last?.isNumber == true || name.last == ".") else { return false }
+        guard isNumberedMessageName(url.lastPathComponent) else { return false }
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         guard let head = try? handle.read(upToCount: 2_048), !head.isEmpty else { return false }
@@ -663,6 +660,13 @@ enum SourceFormatClassifier {
         // The first line is a header field and at least two known headers appear near the top.
         guard let first = lines.first, first.contains(":"), !first.hasPrefix(" ") else { return false }
         return headerLines.count >= 2
+    }
+
+    /// The name test of `isNumberedMessageFile`: "1", "2", "17." — digits, at most one dot, last.
+    static func isNumberedMessageName(_ name: String) -> Bool {
+        !name.isEmpty && name.count <= 12
+            && name.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }) && name.first?.isNumber == true
+            && name.filter({ $0 == "." }).count <= 1 && (name.last?.isNumber == true || name.last == ".")
     }
 
     /// The directory walk of a mailbox member: its path components below `root`.
@@ -841,6 +845,10 @@ enum SourceFormatClassifier {
             return joined(box)
         }
         if (file as NSString).pathExtension.lowercased() == "eml" { return joined(dirs) }
+        // Gate 2 (2026-11-18): numbered message files (MH, the Enron dump "1.") — the member was
+        // already read as mail — take their directory, as the unzipped tree gives them; a ZIP of
+        // the real Enron tree imported 56,699 messages into no folder at all.
+        if isNumberedMessageName(file) { return joined(dirs) }
         return nil
     }
 

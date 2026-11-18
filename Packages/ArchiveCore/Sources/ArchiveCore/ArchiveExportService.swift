@@ -865,7 +865,11 @@ final class ArchiveExportService {
             let eml: Data
             if let render { eml = Data(render(email).utf8) }
             else if email.rawSource.isEmpty { eml = RFC822Renderer.render(email) }
-            else { eml = Data(email.rawSource.utf8) }
+            // Gate 2 (2026-11-18): the stored raw carries the mbox envelope it was parsed with
+            // (the source's `From sender date`, or the parser's synthetic `From MAILER-DAEMON …`
+            // for a bare .eml / maildir file). That line is container framing, not part of the
+            // RFC 5322 message, so an .eml starts at the first header.
+            else { eml = Data(MBOXRecordBuilder.strippingEnvelopeLine(email.rawSource).utf8) }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "eml"), eml)
         }
     }
