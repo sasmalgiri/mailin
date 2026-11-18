@@ -20,8 +20,11 @@
 //      merge GAVE the survivor are recorded in `duplicate_merge_additions`
 //      in the same transaction; restoring that copy from the Trash takes
 //      exactly those off the survivor again (never one it had before, and
-//      not one another still-trashed copy also gave it). The record is
-//      only ever added to or marked undone, never deleted.
+//      not one another still-trashed copy also gave it, nor one something
+//      else has since added — a trigger on each table marks the record
+//      claimed when the person, an import or a sync adds that value to the
+//      survivor after the merge). The record is only ever added to or marked
+//      undone / claimed, never deleted.
 //    • A copy under a legal hold recorded in the database is kept, whatever
 //      the caller and whether or not the Professional interface is on.
 //    • `reclaimableBytesEstimate` says what a permanent deletion would free
@@ -97,6 +100,8 @@ extension SQLiteEmailStore {
         try ensureDuplicateMergeAdditions(db)
         try exec(db, SQLiteHygiene.beginWrite)
         do {
+            // The merge's own copies do not claim (the marker lives only inside this transaction).
+            try exec(db, "INSERT OR IGNORE INTO duplicate_merge_in_progress(marker) VALUES (1);")
             for plan in plans {
                 for copy in plan.removed where copy != plan.survivor {
                     if held.contains(copy) { result.heldKept.append(copy); continue }
@@ -144,6 +149,7 @@ extension SQLiteEmailStore {
                     guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
                 }
             }
+            try exec(db, "DELETE FROM duplicate_merge_in_progress;")
             try exec(db, "COMMIT;")
         } catch {
             try? exec(db, "ROLLBACK;")
@@ -211,15 +217,43 @@ extension SQLiteEmailStore {
                 value       TEXT NOT NULL,
                 merged_at   INTEGER NOT NULL,
                 undone_at   INTEGER,
+                claimed_at  INTEGER,
                 PRIMARY KEY(removed_id, survivor_id, kind, value)
             );
         """)
+        // Additive column for a table created before claims existed (02081c3); nothing is rewritten.
+        let info = try prepare(db, "PRAGMA table_info(duplicate_merge_additions);")
+        var hasClaimed = false
+        while sqlite3_step(info) == SQLITE_ROW { if columnText(info, 1) == "claimed_at" { hasClaimed = true } }
+        sqlite3_finalize(info)
+        if !hasClaimed { try exec(db, "ALTER TABLE duplicate_merge_additions ADD COLUMN claimed_at INTEGER;") }
         try exec(db, "CREATE INDEX IF NOT EXISTS idx_dup_merge_survivor ON duplicate_merge_additions(survivor_id, kind, value) WHERE undone_at IS NULL;")
+        // While a merge copies rows, its own inserts are not "something else adding it".
+        try exec(db, "CREATE TABLE IF NOT EXISTS duplicate_merge_in_progress(marker INTEGER PRIMARY KEY);")
+        // "Nothing else has since added it": any later insert of a merged membership / tag onto the
+        // survivor — the person's tag or folder, an import, a sync; also an INSERT OR IGNORE that
+        // finds the row already there (BEFORE triggers fire before the conflict check) — claims the
+        // merge record for the survivor, so restoring the copy no longer takes that value off.
+        for k in Self.mergeKinds {
+            try exec(db, """
+                CREATE TRIGGER IF NOT EXISTS trg_dup_merge_claim_\(k.kind) BEFORE INSERT ON \(k.table)
+                WHEN NOT EXISTS (SELECT 1 FROM duplicate_merge_in_progress)
+                 AND EXISTS (SELECT 1 FROM duplicate_merge_additions d
+                             WHERE d.survivor_id = NEW.email_id AND d.kind = '\(k.kind)' AND d.value = CAST(NEW.\(k.column) AS TEXT)
+                               AND d.undone_at IS NULL AND d.claimed_at IS NULL)
+                BEGIN
+                    UPDATE duplicate_merge_additions SET claimed_at = CAST(strftime('%s','now') AS INTEGER)
+                    WHERE survivor_id = NEW.email_id AND kind = '\(k.kind)' AND value = CAST(NEW.\(k.column) AS TEXT)
+                      AND undone_at IS NULL AND claimed_at IS NULL;
+                END;
+            """)
+        }
     }
 
     /// Records every membership / tag of `copy` that the survivor does not
     /// own in its own right: one it lacks, or one it only has from another
-    /// copy's merge that is still in force. Runs before the rows are copied.
+    /// copy's merge that is still in force (and nothing has since claimed).
+    /// Runs before the rows are copied.
     private func recordMergeAdditions(_ db: OpaquePointer, into survivor: UUID, from copy: UUID, at now: Int64) throws {
         for k in Self.mergeKinds {
             let stmt = try prepare(db, """
@@ -229,8 +263,8 @@ extension SQLiteEmailStore {
                   AND (NOT EXISTS (SELECT 1 FROM \(k.table) s WHERE s.email_id = ?2 AND s.\(k.column) = c.\(k.column))
                        OR EXISTS (SELECT 1 FROM duplicate_merge_additions d
                                   WHERE d.survivor_id = ?2 AND d.kind = '\(k.kind)' AND d.value = CAST(c.\(k.column) AS TEXT)
-                                    AND d.undone_at IS NULL AND d.removed_id <> ?1))
-                ON CONFLICT(removed_id, survivor_id, kind, value) DO UPDATE SET merged_at = excluded.merged_at, undone_at = NULL;
+                                    AND d.undone_at IS NULL AND d.claimed_at IS NULL AND d.removed_id <> ?1))
+                ON CONFLICT(removed_id, survivor_id, kind, value) DO UPDATE SET merged_at = excluded.merged_at, undone_at = NULL, claimed_at = NULL;
             """)
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, copy.uuidString)
@@ -243,12 +277,14 @@ extension SQLiteEmailStore {
     /// Restore from the Trash of a copy a duplicate merge removed: its merge
     /// records are marked undone, and each membership / tag it gave the
     /// survivor is taken off again unless another merge still in force gave
-    /// the same one. Runs inside the caller's write transaction. Returns the
+    /// the same one, or something else has since added it (a claimed record:
+    /// the person's own tag or folder, an import, a sync). Runs inside the caller's write transaction. Returns the
     /// rows taken off the survivors.
     @discardableResult
     func undoDuplicateMerge(_ db: OpaquePointer, restored copy: UUID, at now: Int64) throws -> Int {
         let select = try prepare(db, """
-            SELECT survivor_id, kind, value FROM duplicate_merge_additions WHERE removed_id = ? AND undone_at IS NULL;
+            SELECT survivor_id, kind, value FROM duplicate_merge_additions
+            WHERE removed_id = ? AND undone_at IS NULL AND claimed_at IS NULL;
         """)
         var additions: [(survivor: String, kind: String, value: String)] = []
         bindText(select, 1, copy.uuidString)

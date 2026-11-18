@@ -99,6 +99,53 @@ final class DuplicateRestoreUndoTests: XCTestCase {
         XCTAssertEqual(after["Inbox"], 1)
     }
 
+    /// "Nothing else has since added it": a tag the person gives the kept copy themselves after
+    /// the merge — added again on top of the merged one, or taken off and put back — is theirs,
+    /// and restoring the copy leaves it. A merged tag nobody touched still comes off.
+    func testTagAddedAgainAfterTheMerge_staysWhenTheCopyIsRestored() async throws {
+        let store = SQLiteEmailStore(directory: root)
+        let kept = email("kept", folders: ["Inbox"])
+        let copy = email("copy", folders: ["Work"])
+        try await store.insertBatch([kept, copy], batchSize: 10)
+        try await store.userTagAdd("again", ids: [copy.id])
+        try await store.userTagAdd("readded", ids: [copy.id])
+        try await store.userTagAdd("untouched", ids: [copy.id])
+        _ = try await store.removeDuplicateCopies([.init(survivor: kept.id, removed: [copy.id])])
+        let merged = try await store.userTags(ids: [kept.id])[kept.id] ?? []
+        XCTAssertEqual(merged, ["again", "readded", "untouched"])
+
+        // After the merge, the person tags the kept copy themselves.
+        try await store.userTagAdd("again", ids: [kept.id])            // already shown: added on top
+        try await store.userTagRemove("readded", ids: [kept.id])       // taken off …
+        try await store.userTagAdd("readded", ids: [kept.id])          // … and put back
+
+        try await store.reviewSetFlag(.trashed, ids: [copy.id], value: false)
+        let after = try await store.userTags(ids: [kept.id])[kept.id] ?? []
+        XCTAssertEqual(after, ["again", "readded"], "the person's own tags stay; only the untouched merged one comes off")
+        let folders = try await counts(store)
+        XCTAssertEqual(folders["Work"], 1, "the merged folder nobody re-added still comes off: \(folders)")
+    }
+
+    /// A later merge that gives the kept copy the same folder is not "something else adding it":
+    /// copies merged in two runs and restored newest first still leave the folder as it was.
+    func testCopiesMergedInTwoRuns_restoredNewestFirst_leaveTheFolderAsBefore() async throws {
+        let store = SQLiteEmailStore(directory: root)
+        let kept = email("kept", folders: ["Inbox"])
+        let first = email("first", folders: ["Work"])
+        let second = email("second", folders: ["Work"])
+        try await store.insertBatch([kept, first, second], batchSize: 10)
+        let before = try await counts(store)
+
+        _ = try await store.removeDuplicateCopies([.init(survivor: kept.id, removed: [first.id])])
+        _ = try await store.removeDuplicateCopies([.init(survivor: kept.id, removed: [second.id])])
+        try await store.reviewSetFlag(.trashed, ids: [second.id], value: false)
+        let oneBack = try await counts(store)
+        XCTAssertEqual(oneBack["Work"], 3, "the first copy, still in the Trash, also gave the kept copy Work")
+        try await store.reviewSetFlag(.trashed, ids: [first.id], value: false)
+        let after = try await counts(store)
+        XCTAssertEqual(after, before)
+    }
+
     func testPlainTrashRestore_changesNoMemberships() async throws {
         let store = SQLiteEmailStore(directory: root)
         let a = email("a", folders: ["Inbox"]), b = email("b", folders: ["Inbox", "Work"])
