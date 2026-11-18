@@ -182,6 +182,7 @@ struct mailinApp: App {
                         // readers). The registry re-pushes on every later
                         // change, so this is only the initial arming.
                         CapabilityWiring.applyAll(modules)
+                        CapabilityWiring.markLaunchArmingDone()
                         // Notification permission is opt-in via Settings → General
                         // → Notifications, not auto-prompted at launch.
                         // §3.3 R2: background analysis belongs to AI Insights,

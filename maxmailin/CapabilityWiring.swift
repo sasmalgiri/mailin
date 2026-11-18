@@ -23,6 +23,32 @@ import Foundation
 
 enum CapabilityWiring {
 
+    /// The app's launch arming — `applyAll` from the main window's `onAppear` —
+    /// has run. Before it runs, every flag below holds its compiled-in value.
+    @MainActor private(set) static var launchArmingDone = false
+
+    /// Called by the app right after its launch `applyAll`.
+    @MainActor static func markLaunchArmingDone() { launchArmingDone = true }
+
+    /// Test seam. The launch arming runs when the host app's window appears,
+    /// which can be after the first app-hosted test has started. A test that
+    /// sets these process-wide flags itself (`SearchChunkPolicy.isEnabled`,
+    /// `AttachmentOCR.isEnabled`, …) waits here first, so the arming cannot
+    /// overwrite them mid-test. Gate 1 walk 2026-11-18:
+    /// `V2SearchTests.testIPAD04_zipAttachmentContentsAreListedForTheMessage`
+    /// started 0.6 s after launch, the arming then turned the chunk index off
+    /// (the host's own switch), and the pass recorded 0 child rows.
+    /// Returns whether the arming happened within `timeout`.
+    @MainActor @discardableResult
+    static func waitForLaunchArming(timeout: Duration = .seconds(10)) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while !launchArmingDone, clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return launchArmingDone
+    }
+
     /// Pushes one capability's state into whatever needs it as a plain flag.
     ///
     /// `isOn` here is the FULLY resolved answer from

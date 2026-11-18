@@ -17,6 +17,26 @@ import XCTest
 @MainActor
 final class V2SearchTests: XCTestCase {
 
+    /// These tests set process-wide flags (`SearchChunkPolicy.isEnabled`,
+    /// `AttachmentOCR.isEnabled`) themselves. The host app arms the same flags
+    /// from its own switches when its window appears, which can be after the
+    /// first test started: wait for that first, so it cannot overwrite a test's
+    /// flags mid-test (gate 1 walk 2026-11-18: testIPAD04 ran 0.6 s after launch
+    /// and found 0 child rows).
+    override func setUp() async throws {
+        try await super.setUp()
+        await CapabilityWiring.waitForLaunchArming()
+    }
+
+    /// Gate 1 walk 2026-11-18: the app signals its launch arming, and a test of
+    /// this class only starts after it — whichever class ran first.
+    func testGate1Walk1118_hostLaunchArmingHasRunBeforeATestTakesTheFlags() {
+        XCTAssertTrue(CapabilityWiring.launchArmingDone, "the host app's launch applyAll has run and said so")
+        let app = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/mailinApp.swift"), encoding: .utf8)) ?? ""
+        XCTAssertTrue(app.contains("CapabilityWiring.applyAll(modules)\n                        CapabilityWiring.markLaunchArmingDone()"))
+    }
+
     // MARK: - Fixtures (isolated temp store + FTS)
 
     private struct Env {
