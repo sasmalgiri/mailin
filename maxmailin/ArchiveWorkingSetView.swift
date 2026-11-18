@@ -40,6 +40,45 @@ extension ArchiveDataService {
     }
 }
 
+/// Counts the changes to the archive's contents that the sidebar's counts
+/// refresh on — a move to or restore from the Trash (duplicate removal
+/// included), a permanent delete, an import. A view that read the archive
+/// once reads it again when `generation` moves.
+///
+/// Gate 1 walk 2026-11-18 (iPad): after "Move All to Trash" the sidebar said
+/// 6 emails but the Subjects panel kept "7 subjects" — it was read once and
+/// never told.
+@MainActor
+final class ArchiveContentsChanges: ObservableObject {
+    /// The notifications that mean "what is in the archive changed" — the
+    /// set `SourceFolderSection` refreshes the folder counts on.
+    static let names: [Notification.Name] = [.archiveTrashChanged, .newEmailsImported, .parsingFinished]
+
+    @Published private(set) var generation = 0
+    private let center: NotificationCenter
+    nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
+
+    init(center: NotificationCenter = .default) {
+        self.center = center
+        observers = Self.names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.generation += 1 }
+            }
+        }
+    }
+
+    deinit {
+        for observer in observers { center.removeObserver(observer) }
+    }
+}
+
+/// What a working set is read for: the query, and how many times the
+/// archive's contents changed since the view appeared.
+struct ArchiveWorkingSetLoad: Equatable {
+    let query: EmailQuery
+    let generation: Int
+}
+
 /// Hosts a legacy `[RawEmail]`-taking feature view over a bounded working set
 /// it streams itself from the store for the given query.
 struct ArchiveWorkingSetView<Content: View>: View {
@@ -50,6 +89,8 @@ struct ArchiveWorkingSetView<Content: View>: View {
     @State private var workingSet: [MBOXParser.RawEmail] = []
     @State private var scopeTotal = 0
     @State private var isLoaded = false
+    /// A move to the Trash, a restore or an import reads the working set again.
+    @StateObject private var archiveChanges = ArchiveContentsChanges()
 
     var body: some View {
         Group {
@@ -75,7 +116,7 @@ struct ArchiveWorkingSetView<Content: View>: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: query) {
+        .task(id: ArchiveWorkingSetLoad(query: query, generation: archiveChanges.generation)) {
             workingSet = await ArchiveDataService.shared.workingSet(query: query, cap: cap)
             scopeTotal = (try? await ArchiveDataService.shared.count(query: query)) ?? workingSet.count
             isLoaded = true

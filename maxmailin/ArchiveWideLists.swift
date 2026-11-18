@@ -156,6 +156,8 @@ struct ArchiveSubjectGroupsView: View {
     @State private var loading = false
     @State private var exhausted = false
     @State private var selectError: String?
+    /// A move to the Trash, a restore or an import reads the groups again.
+    @StateObject private var archiveChanges = ArchiveContentsChanges()
 
     static let pageSize = 100
 
@@ -220,6 +222,11 @@ struct ArchiveSubjectGroupsView: View {
         .task { if rows.isEmpty { await loadMore() } }
         // A purchase, expiry or restore changes what the plan reaches: read the groups again.
         .onReceive(NotificationCenter.default.publisher(for: .accessScopeChanged)) { _ in
+            rows = []; distinct = 0; exhausted = false
+            Task { await loadMore() }
+        }
+        // Gate 1 walk 2026-11-18: after a move to the Trash the counts here stayed as they were.
+        .onChange(of: archiveChanges.generation) { _, _ in
             rows = []; distinct = 0; exhausted = false
             Task { await loadMore() }
         }

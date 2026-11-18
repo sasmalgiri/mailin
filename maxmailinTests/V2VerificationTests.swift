@@ -5420,6 +5420,31 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertEqual(SubjectsListView.countLabel(7), "7 subjects")
     }
 
+    // Gate 1 walk 2026-11-18 (iPad): after "Move All to Trash" the sidebar said
+    // 6 emails and the Subjects panel kept "7 subjects". Both Subjects panels
+    // (the previous engine's working set and the whole-archive groups) read the
+    // archive again on the notification the sidebar counts refresh on.
+    func testGate1Walk1118_subjectsPanelRereadsAfterAMoveToTrash() async throws {
+        let center = NotificationCenter()
+        let changes = ArchiveContentsChanges(center: center)
+        XCTAssertEqual(changes.generation, 0)
+        center.post(name: .archiveTrashChanged, object: nil)
+        XCTAssertEqual(changes.generation, 1, "a move to or restore from the Trash")
+        center.post(name: .newEmailsImported, object: nil)
+        XCTAssertEqual(changes.generation, 2, "an import")
+        center.post(name: Notification.Name("unrelated"), object: nil)
+        XCTAssertEqual(changes.generation, 2)
+        XCTAssertNotEqual(ArchiveWorkingSetLoad(query: .all, generation: 1), ArchiveWorkingSetLoad(query: .all, generation: 2),
+                          "a change re-runs the working set's load")
+
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let host = try String(contentsOf: dir.appendingPathComponent("ArchiveWorkingSetView.swift"), encoding: .utf8)
+        XCTAssertTrue(host.contains(".task(id: ArchiveWorkingSetLoad(query: query, generation: archiveChanges.generation))"))
+        let wide = try String(contentsOf: dir.appendingPathComponent("ArchiveWideLists.swift"), encoding: .utf8)
+        let groups = try XCTUnwrap(wide.range(of: "struct ArchiveSubjectGroupsView"))
+        XCTAssertTrue(wide[groups.lowerBound...].prefix(6_000).contains(".onChange(of: archiveChanges.generation)"))
+    }
+
     // Gate 1 walk 2026-11-18 (iPad portrait, three columns): the attachment
     // row's buttons wrapped letter by letter — "Dow / nloa / d", "Sho / w
     // text", "Ope / n". Each label keeps to one line at its natural width.
