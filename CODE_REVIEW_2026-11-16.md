@@ -28,6 +28,46 @@ verified on b34d6c4, MacBook Air arm64, macOS 27.0.1:
 for members read in folder order (87b853e); #2 snapshot-restore alert answer is one-shot, the tapped
 button wins (bef6638); #3 D-6 in ArchiveQueryCompiler — NOT only in capitals (1e3265a); #4 TIFF export
 streams page by page (f39003c); #5 PST spec reader reads lcbTotal 0xFFFFFFFF as "not stated" (39e34ef).
+
+**Closeout 2026-11-18 (five items after the CLOSE-06 five-journey run; 3a2a2ea..15954eb).** Owner rule
+2026-11-18: no Mac UI tests run unattended. Mac UI tests are compiled only and listed as pending below.
+1. Back-translation corrections: 117 translations in 54 keys from
+   `~/mailin-loc-work/backtranslation-fixes-2026-11-18.py` (FIXES only; the Apple Mail / Thunderbird
+   menu labels in NEEDS_UI_CHECK are not applied). This includes the two errors, where ja and ko had
+   weakened "Integrity: DOES NOT VERIFY" into "could not check" (8ef698c). The test is
+   InterfaceLocalizationTests.backTranslationCorrections (failed before). Review1116C's German
+   receipt test now expects "mailin-Importquittung" (15954eb).
+2. Live Mail accessibility. The page now has named columns, a quick-filter label, one element per
+   row and a contrast-safe placeholder and risk badge, and a new Live Mail page audit was added
+   (3a2a2ea). The row label is now the pure function `MailOrganize.rowAccessibilityLabel`. It uses
+   the display name and "(no sender)" / "(no subject)", never a bare comma (77333d9). The test is
+   MailWorkspaceTests.testLiveMailRowAccessibilityLabel… (failed with the old logic).
+3. Restore from the Trash is a true undo of a duplicate merge: provenance is kept in
+   `duplicate_merge_additions` and J4 shows Inbox 3, not 4 (02081c3). A value that something else
+   adds to the kept copy after the merge (the person, an import, a sync) now claims the record
+   through a BEFORE INSERT trigger, so restore leaves it. The merge's own copies do not claim
+   (47006d0). The tests are package DuplicateRestoreUndoTests, 5 in total; the new tag test failed
+   before.
+4. Zero build warnings: the Speech import for the `@State` macro, the `@MainActor @Sendable` batch
+   callback, and the 10 sync `await`s in V2CutoverTests (661f914). A full recompile of the app, unit
+   and UI test targets (every source touched, build for testing) on 15954eb gave **0 warnings**.
+5. 160 stale catalog keys removed and a test keeps it that way (9e798b6). Re-checked against the
+   app and package sources: no removed key is named in the code (one appears only in a package test
+   comment). The 40 keys still marked stale are all still referenced.
+
+Verified on 15954eb, Debug-Connected, My Mac:
+- Five-jobs gate (V2Cutover + ConnectedFiveJobs + FixPass): **215 passed, 2 skipped (COMP14, TYPE05;
+  owner-bound), 0 failed**.
+- Touched classes: InterfaceLocalization 8/8, V3Lint 2/2, RunningJobLifecycle 5/5, Review1116C 27/27,
+  MailWorkspace 16 passed and 1 skipped (offline-only).
+- Package (`--skip LargeSingleMessageTests`): **898 run (MailConnectivity 179 / 2 skipped, ArchiveCore
+  719 / 22 skipped), 0 failed**, 0 warnings.
+
+**Pending Mac UI runs (owner present):**
+- AccessibilityAuditUITests.testAccessibilityAudit_liveMailPage
+- AccessibilityAuditUITests.testAccessibilityAudit_mainWindowAndModules (after the Live Mail page change)
+- MailinClickThroughUITests.testFiveJourneys_release (J4 Inbox 3, J5 "3 of 3"; the restore change
+  in 47006d0 has not been through it)
 Gate check: OPEN-02 PST streaming test had started failing ("footprint grew 160 MB while streaming a
 204 MB file") with the old and new PST reader sources alike. Per-batch measurement found no retention —
 footprint +147, +157, then +109 MB flat to batch 20, live heap +51 then +60 MB flat; 4,000 messages /
