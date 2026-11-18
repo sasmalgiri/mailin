@@ -3312,32 +3312,7 @@ struct ContentView: View {
 
             if !modelVM.sortedSendersByReplyCount.isEmpty && personaManager.showSection(.replyFrequency) {
                 SidebarSectionHeader(title: String(localized: "Reply Frequency"), icon: "envelope.arrow.triangle.branch", color: AppColors.primary, helpText: String(localized: "Senders ranked by how often you replied to them"))
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                        ForEach(modelVM.sortedSendersByReplyCount, id: \.email) { entry in
-                            HStack {
-                                // The whole address; a narrow sidebar shortens it in the
-                                // middle so the name and the domain both stay readable
-                                // (a fixed 38-character cut lost "…com>").
-                                Text(entry.email)
-                                    .font(Typography.caption1)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .help(entry.email)
-                                Spacer()
-                                Text("\(entry.count)")
-                                    .font(Typography.caption1)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(AppColors.primary)
-                                    .padding(.horizontal, Spacing.xxSmall)
-                                    .padding(.vertical, 1)
-                                    .background(AppColors.primary.opacity(0.1))
-                                    .cornerRadius(CornerRadius.small)
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 110)
+                ReplyFrequencyList(senders: modelVM.sortedSendersByReplyCount)
             }
 
             if !modelVM.allDomains.isEmpty && personaManager.showSection(.domains) {
@@ -5261,6 +5236,70 @@ extension ContentView {
             return .success(try write(email))
         } catch {
             return .failure(MSGShareFailure(text: String(localized: "MSG export failed: \(error.localizedDescription)")))
+        }
+    }
+}
+
+/// The sidebar's Reply Frequency list. Gate 1 follow-up 2026-11-18 (iPad):
+/// names were cut short ("Alice Ledger <ali…@example.com>"), and the last row
+/// was clipped by the 110 pt scroll box the list sat in. A name now wraps onto
+/// a second line (it breaks at the space before "<", so the address stays
+/// whole), and VoiceOver reads the full name with its count. The list grows a
+/// page at a time with the total shown, like the folder and label lists, so
+/// no row sits half under the edge of a box and every sender is reachable.
+struct ReplyFrequencyList: View {
+    let senders: [(email: String, count: Int)]
+    @State private var reach = ReplyFrequencyList.page
+
+    /// Rows shown at first and added per "Show more" (a page size, not a cap).
+    static let page = 8
+
+    static func shown(total: Int, reach: Int) -> Int { min(total, reach) }
+
+    var body: some View {
+        let shown = Self.shown(total: senders.count, reach: reach)
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            ForEach(senders.prefix(shown), id: \.email) { entry in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(verbatim: entry.email)
+                        .font(Typography.caption1)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(entry.email)
+                    Text("\(entry.count)")
+                        .font(Typography.caption1)
+                        .fontWeight(.medium)
+                        .foregroundColor(AppColors.primary)
+                        .padding(.horizontal, Spacing.xxSmall)
+                        .padding(.vertical, 1)
+                        .background(AppColors.primary.opacity(0.1))
+                        .cornerRadius(CornerRadius.small)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: CountPhrase.row(entry.email, emails: entry.count)))
+                .accessibilityIdentifier("sidebar.replyFrequency.row")
+            }
+            if shown < senders.count {
+                Button {
+                    reach += Self.page
+                } label: {
+                    Label("Show more (\(shown) of \(senders.count) senders)", systemImage: "ellipsis.circle")
+                        .font(Typography.caption1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebar.replyFrequency.more")
+            } else if senders.count > Self.page {
+                Button {
+                    reach = Self.page
+                } label: {
+                    Label("Show fewer", systemImage: "chevron.up")
+                        .font(Typography.caption1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebar.replyFrequency.fewer")
+            }
         }
     }
 }

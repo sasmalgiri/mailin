@@ -5508,6 +5508,27 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(section.contains(#"CountPhrase.row(String(localized: "Trash"), messages: sidebar.trashedCount)"#))
     }
 
+    // Gate 1 follow-up 2026-11-18 (iPad): Reply Frequency cut names short
+    // ("Alice Ledger <ali…@example.com>") and clipped its last row at the bottom
+    // of a 110 pt scroll box. Names wrap onto a second line, VoiceOver reads the
+    // full name and count, and the list grows a page at a time with the total.
+    func testGate1Followup1118_replyFrequencyNamesWrapAndNoRowIsClipped() throws {
+        XCTAssertEqual(ReplyFrequencyList.shown(total: 5, reach: ReplyFrequencyList.page), 5, "a short list is shown whole")
+        XCTAssertEqual(ReplyFrequencyList.shown(total: 30, reach: ReplyFrequencyList.page), ReplyFrequencyList.page)
+        XCTAssertEqual(ReplyFrequencyList.shown(total: 30, reach: 4 * ReplyFrequencyList.page), 30, "every sender is reachable")
+        XCTAssertEqual(CountPhrase.row("Alice Ledger <alice.ledger@example.com>", emails: 1), "Alice Ledger <alice.ledger@example.com>, 1 email")
+
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let content = try String(contentsOf: dir.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains("ReplyFrequencyList(senders: modelVM.sortedSendersByReplyCount)"))
+        XCTAssertFalse(content.contains(".frame(maxHeight: 110)"), "no fixed box that clips the last row")
+        let list = try XCTUnwrap(content.range(of: "struct ReplyFrequencyList: View {"))
+        let body = String(content[list.lowerBound...].prefix(3_000))
+        XCTAssertTrue(body.contains(".lineLimit(2)") && body.contains(".fixedSize(horizontal: false, vertical: true)"), "a name wraps onto a second line")
+        XCTAssertTrue(body.contains("CountPhrase.row(entry.email, emails: entry.count)"))
+        XCTAssertTrue(body.contains("Show more (\\(shown) of \\(senders.count) senders)"))
+    }
+
     // Gate 1 walk 2026-11-18: the home subtitle said "Open an mbox or eml
     // file…" while nine formats were listed under it. The subtitle and the
     // SUPPORTED FORMATS chips read one list, and every name on it is a file

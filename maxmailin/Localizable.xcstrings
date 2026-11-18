@@ -462834,6 +462834,70 @@
           }
         }
       }
+    },
+    "Show more (%lld of %lld senders)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehr anzeigen (%1$lld von %2$lld Absendern)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar más (%1$lld de %2$lld remitentes)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher plus (%1$lld sur %2$lld expéditeurs)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "और दिखाएँ (%2$lld में से %1$lld प्रेषक)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra altri (%1$lld di %2$lld mittenti)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "さらに表示（%2$lld 人中 %1$lld 人の差出人）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "더 보기(보낸 사람 %2$lld명 중 %1$lld명)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar mais (%1$lld de %2$lld remetentes)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示更多（%2$lld 位发件人中的 %1$lld 位）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示更多（%2$lld 位寄件人中的 %1$lld 位）"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
