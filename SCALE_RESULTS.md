@@ -392,6 +392,74 @@ the attachment text eagerly; a known shape, not a defect — the search coverage
 synthetic structure tests only), Apple Mail .emlx libraries and Maildir (no 100 MB fixture on this
 Mac). Rows for those stay open until a fixture exists.
 
+## Executed 2026-11-18 — the format matrix on a REAL corpus (gate 2)
+
+**Dataset:** two CMU Enron custodians (enron_mail_20150507, fetched from cs.cmu.edu 2026-11-15 and
+2026-11-18): kaminski-v + dasovich-j = **56,699 real messages, 210,180,300 bytes, 118 folders,
+56,699 distinct Message-IDs**; counted by Python from the files, not by mailin. Built by
+`Scripts/gate2_build_real_corpus.py` at `~/Downloads/Mail/Fixtures/real-corpus-enron/`: the
+original files as a tree (hard links, bytes unchanged), `enron.mbox` (mboxrd: From_ line per
+record, `^>*From ` quoted; 213,466,347 B, SHA-256 `6bc199db…5f0e`), `enron-maildir.zip` (deflated,
+102,090,580 B, `cfe4e539…a9`) and `manifest.json` (`9951e762…df`). The CMU release carries no
+attachments. **Build:** Debug; package rows `xcrun swift test` (CLI) — mbox / eml / search /
+export on the working tree that became b515a69 (EML-envelope and PST-date fixes in), ZIP and PST
+rows re-run on b515a69 (ZIP folder fix in); duplicate row Debug test host (RunSomeTests).
+**Device:** MacBook Air, Apple silicon, macOS 27.0.1, 4–6 GB free on the volume during the runs.
+The shipped app's switches were set as the app sets them (`v3PSTSpecWriter`,
+`streamingBinaryParsers` on); everything else at package defaults.
+`RealCorpusMatrixTests.testRealCorpus_matrix_*` (opt-in `MAILIN_REAL_CORPUS`).
+
+| Source | Size | Messages stored | First message | Total | Peak footprint over baseline | Store / FTS on disk | Reconciliation |
+|---|---|---|---|---|---|---|---|
+| mbox (real, mboxrd) | 213.5 MB | 56699 | 0.81 s | 703.0 s | 66 MB | 701.4 / 299.9 MB | discovered 56699, parsed 56699, damaged 0, persist failed 0, FTS rows 56699 |
+| eml folder tree (real files) | 210.2 MB | 56699 | 39.11 s | 1281.1 s | 119 MB | 715.7 / 301.0 MB | discovered 56699, parsed 56699, damaged 0, persist failed 0, FTS rows 56699 |
+| zip of the tree (real files) | 102.1 MB | 56699 | 0.92 s | 1382.9 s | 31 MB | 716.6 / 296.4 MB | discovered 56699, parsed 56699, damaged 0, persist failed 0, FTS rows 56699 |
+| pst (mailin spec writer, from the real archive) | 764.2 MB | 56699 | 2.38 s | 786.2 s | 56 MB | 789.8 / 298.9 MB | discovered 56699, parsed 56699, damaged 0, persist failed 0, FTS rows 56699 |
+
+- **Counts:** source 56,699 = stored 56,699 = listed 56,699 = distinct Message-IDs 56,699 in every row.
+- **Folders:** eml tree 118 of 118 and ZIP 118 of 118 folders, each with exactly the file count of
+  its source directory; 0 folders that are not in the source.
+- **Search** (folder-tree archive; expected = every message whose subject or CTE-decoded body
+  contains the phrase, Python regex): "Black-Scholes" 145/145, California 10,189 (mailin 10,248),
+  Dabhol 534/534, Duffie 228 (292), FERC 3,475 (3,489), "PG&E" 3,149 (3,171), "Stinson Gibner"
+  2,327 (4,059), "Vince Kaminski" 2,971 (24,167), Wharton 876 (964), "real options" 622 (1,464),
+  "value at risk" 212 (1,508), "weather derivatives" 471 (611) — **0 expected messages missing**
+  for every phrase; mailin's larger counts come from header fields (To/X-To/X-From names), which
+  the independent scan does not read. (The first oracle read quoted-printable bodies undecoded
+  and listed 5 "PG=\r\nE" messages; mailin was right, the oracle was fixed.)
+- **Export + verify:** mbox 213,278,417 B in 27.0 s, verified in 51.4 s; .eml folder 227,312,981 B
+  in 18.8 s, verified in 42.9 s — both `complete`, 56,699 eligible / checked / matching, 0
+  mismatched, 0 unverifiable, 0 without record, 0 unparsed. Independent re-read: Python `mailbox`
+  56,699 messages with the source's 56,699 Message-IDs, 0 repeated; Python `email` 56,699 .eml
+  files, same ID set. PST 764,158,976 B in 60.3 s; libpff 20231205 reads 56,699 messages with
+  56,699 Message-IDs (folder "mailin export").
+- **Duplicates on real duplicates** (`RealCorpusDuplicateTests`, app test host): the engine formed
+  19,432 groups (48,734 copies) in 44.2 s; 19,409 verified content-equivalent, 0 byte-identical
+  (every Enron copy has its own Message-ID / X-Folder), 23 candidates; 29,254 copies
+  bulk-removable. Against the independent content groups (From, To, Cc, Bcc, Date, Subject and the
+  whole body equal: 19,424 groups, 48,703 copies) **0 false identical**; 19,409 of 19,424
+  independent groups found and verified; none of the 23 candidates lies inside one independent group.
+- **Found and fixed on this corpus (b515a69):** (1) every exported .eml began with an mbox
+  envelope line (`From MAILER-DAEMON … 1970` or the source's From_), so 0 of 56,699 equalled its
+  source file; (2) the PST stream writer crashed on messages dated "21 Dec 0001"; (3) a ZIP of
+  the numbered-file tree imported 56,699 messages into no folder. (2) was hit by the first run,
+  which used the package default writer (the previous stream writer; the app ships the spec
+  writer). The second run imported the PST with the package default reader path (binary formats
+  not streamed — the previous array path) and took 870 MB over baseline on the 764 MB PST; with
+  the app's `streamingBinaryParsers` on (the row above) 56 MB.
+- **Throughput:** 44–81 messages/s in Debug with the store committing each batch (most time is
+  SQLite WAL checkpoint + fsync on a 97–98 % full volume) — a lower bound, not a shipping claim.
+  The PST is 3.6× the source (UTF-16 properties, transport headers kept).
+- **Also run on this candidate (real public data):** `Scripts/validate_fixtures.py` 7/7 PASS
+  (libpff, readpst, pstdump on mailin's PST fixtures); `RealDataRecoveryTests` 10/10 on the
+  Digital Corpora "filetypes1" PSTs and Thunderbird mailboxes fetched again today
+  (`Scripts/fetch_open_fixtures.sh`, both downloads succeeded); `EnronRealMailTests` 1/1 (kaminski-v
+  28,465 parsed in 18.3 s, 54 folders reconciled); `RealMailStoreFixtureTests`, `OwnerPackFixtureTests`,
+  `NativeOLMPairFixtureTests`, `NSFODSReaderTests`, `ExcelNumberFormatTests`,
+  `ReleasePreflightFixtureTests` 58/0; `MAILIN_RELEASE_PREFLIGHT=1` 11/0.
+- **NOT TESTED at 100 MB on real data:** .msg files (no real 100 MB set; mailin-written only), OST,
+  NSF and OLM (the public real samples are 0.3–47 MB), Apple Mail .emlx libraries.
+
 ## Earlier results
 
 `V2_SCALE_RESULTS.md` (synthetic tiny-message corpora up to 1,000,000
