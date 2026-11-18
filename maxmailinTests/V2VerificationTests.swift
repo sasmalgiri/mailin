@@ -5472,6 +5472,21 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertFalse(hub.contains(#"ForEach(["MBOX""#))
     }
 
+    // Gate 1 walk 2026-11-18 (iPad): the old Folders block said "Inbox 7" —
+    // every received email — right above Source Folders ▸ Inbox 3. The bucket
+    // is named for what it counts, "Received", as the Mac sidebar names it.
+    func testGate1Walk1118_receivedBucketIsNotCalledInbox() throws {
+        let nodes = FolderTreeView.typeNodes(received: 7, sent: 2)
+        XCTAssertEqual(nodes.map(\.name), [String(localized: "Received"), String(localized: "Sent")])
+        XCTAssertFalse(nodes.contains { $0.name == String(localized: "Inbox") })
+        XCTAssertEqual(nodes.first?.filterValue, "type:received", "it still filters every received email")
+        XCTAssertEqual(nodes.first?.emailCount, 7)
+        XCTAssertEqual(FolderTreeView.typeNodes(received: 0, sent: 0).count, 0, "empty buckets stay hidden")
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let mac = try String(contentsOf: dir.appendingPathComponent("ArchiveSidebar.swift"), encoding: .utf8)
+        XCTAssertTrue(mac.contains(#"row(.received, "Received", "tray.and.arrow.down""#), "the Mac sidebar's name and icon")
+    }
+
     // Gate 1 walk 2026-11-18 (iPad portrait, three columns): the attachment
     // row's buttons wrapped letter by letter — "Dow / nloa / d", "Sho / w
     // text", "Ope / n". Each label keeps to one line at its natural width.

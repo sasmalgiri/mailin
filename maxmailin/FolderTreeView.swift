@@ -206,14 +206,7 @@ struct FolderTreeView: View {
     private func buildTree() -> [FolderNode] {
         var nodes: [FolderNode] = []
 
-        let received = typeCounts["received"] ?? 0
-        let sent = typeCounts["sent"] ?? 0
-        if received > 0 {
-            nodes.append(FolderNode(name: String(localized: "Inbox"), icon: "tray.fill", children: [], emailCount: received, filterValue: "type:received"))
-        }
-        if sent > 0 {
-            nodes.append(FolderNode(name: String(localized: "Sent"), icon: "paperplane.fill", children: [], emailCount: sent, filterValue: "type:sent"))
-        }
+        nodes += Self.typeNodes(received: typeCounts["received"] ?? 0, sent: typeCounts["sent"] ?? 0)
 
         if attachmentTotal > 0 {
             nodes.append(FolderNode(name: String(localized: "Has Attachments"), icon: "paperclip", children: [], emailCount: attachmentTotal, filterValue: "has:attachment"))
@@ -262,6 +255,22 @@ struct FolderTreeView: View {
 }
 
 extension FolderTreeView {
+    /// The received / sent buckets. The received one counts every email the
+    /// archive holds as received mail, whatever folder it was filed in, so it
+    /// is called "Received", as in the Mac sidebar — gate 1 walk 2026-11-18:
+    /// it was called "Inbox" and showed 7 right above the source folder Inbox
+    /// with 3.
+    static func typeNodes(received: Int, sent: Int) -> [FolderNode] {
+        var nodes: [FolderNode] = []
+        if received > 0 {
+            nodes.append(FolderNode(name: String(localized: "Received"), icon: "tray.and.arrow.down", children: [], emailCount: received, filterValue: "type:received"))
+        }
+        if sent > 0 {
+            nodes.append(FolderNode(name: String(localized: "Sent"), icon: "paperplane.fill", children: [], emailCount: sent, filterValue: "type:sent"))
+        }
+        return nodes
+    }
+
     /// What VoiceOver reads for a folder row: "Has Attachments, 1 email" —
     /// it read "1 emails" (gate 1 walk 2026-11-18).
     static func rowAccessibilityLabel(name: String, count: Int) -> String {
