@@ -34,6 +34,25 @@ enum MailOrganize {
         return address.isEmpty ? from : address
     }
 
+    /// What VoiceOver reads for one message row (one element: sender, subject,
+    /// date, then its marks) — the same sender name and "(no sender)" /
+    /// "(no subject)" the row shows, so an empty field never reads as a bare
+    /// comma (accessibility audit 2026-11-18).
+    static func rowAccessibilityLabel(_ row: ConnectedMailboxRow, accountIdentity: String?, tags: [String],
+                                      conversationCount: Int = 1) -> String {
+        var parts = [row.from.isEmpty ? String(localized: "(no sender)") : displayName(row.from),
+                     row.subject.isEmpty ? String(localized: "(no subject)") : row.subject,
+                     row.date.formatted(date: .abbreviated, time: .omitted)]
+        if conversationCount > 1 { parts.append(String(localized: "\(conversationCount) messages in this conversation")) }
+        if row.isRead == false { parts.append(String(localized: "Unread")) }
+        if row.isFlagged == true { parts.append(String(localized: "Flagged")) }
+        if row.hasAttachments { parts.append(String(localized: "Has attachments")) }
+        parts += tags
+        if !row.onServer { parts.append(String(localized: "Removed from the server; kept here")) }
+        if let accountIdentity { parts.append(accountIdentity) }
+        return parts.joined(separator: ", ")
+    }
+
     /// The preview on two lines: whitespace runs folded to one space.
     static func cleanPreview(_ s: String) -> String {
         s.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")

@@ -948,15 +948,8 @@ private struct MailRowView: View {
     }
 
     private var accessibilityText: String {
-        var parts = [row.from, row.subject, row.date.formatted(date: .abbreviated, time: .omitted)]
-        if conversationCount > 1 { parts.append(String(localized: "\(conversationCount) messages in this conversation")) }
-        if row.isRead == false { parts.append(String(localized: "Unread")) }
-        if row.isFlagged == true { parts.append(String(localized: "Flagged")) }
-        if row.hasAttachments { parts.append(String(localized: "Has attachments")) }
-        parts += tags
-        if !row.onServer { parts.append(String(localized: "Removed from the server; kept here")) }
-        if let account { parts.append(account.displayIdentity) }
-        return parts.joined(separator: ", ")
+        MailOrganize.rowAccessibilityLabel(row, accountIdentity: account?.displayIdentity, tags: tags,
+                                           conversationCount: conversationCount)
     }
 }
 

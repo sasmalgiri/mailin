@@ -8872,6 +8872,28 @@ final class MailWorkspaceTests: XCTestCase {
                             identityKey: UUID().uuidString, preview: "Hello\n\n  there", messageID: messageID, references: references)
     }
 
+    /// Accessibility audit 2026-11-18: a Live Mail row reads as one element — sender name,
+    /// subject, date, then its marks — and an empty sender or subject reads as the row shows
+    /// it ("(no sender)" / "(no subject)"), never as a bare comma.
+    func testLiveMailRowAccessibilityLabel_senderSubjectDateThenMarks() {
+        let account = UUID()
+        var row = organizeRow(account, subject: "Budget")
+        row.hasAttachments = true
+        row.isFlagged = true
+        let date = row.date.formatted(date: .abbreviated, time: .omitted)
+        XCTAssertEqual(MailOrganize.rowAccessibilityLabel(row, accountIdentity: nil, tags: ["Work"]),
+                       ["Asha Rao", "Budget", date, String(localized: "Unread"), String(localized: "Flagged"),
+                        String(localized: "Has attachments"), "Work"].joined(separator: ", "),
+                       "the display name, not the raw From header")
+
+        row.from = ""; row.subject = ""; row.isRead = true; row.isFlagged = false; row.hasAttachments = false
+        row.onServer = false
+        XCTAssertEqual(MailOrganize.rowAccessibilityLabel(row, accountIdentity: "asha@example.com", tags: [], conversationCount: 3),
+                       [String(localized: "(no sender)"), String(localized: "(no subject)"), date,
+                        String(localized: "3 messages in this conversation"),
+                        String(localized: "Removed from the server; kept here"), "asha@example.com"].joined(separator: ", "))
+    }
+
     /// C11 (rule 5): a several-message server change counts and explains every row that
     /// did not change — thrown, refused, conflict, uncertain — not only ineligible ones.
     func testC11_bulkServerChange_countsAndExplainsEveryUnchangedRow() async throws {
