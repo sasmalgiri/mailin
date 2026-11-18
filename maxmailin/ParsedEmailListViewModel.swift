@@ -592,6 +592,16 @@ class ParsedEmailListViewModel: ObservableObject {
         didSet { if !isResettingFilters { applyFilters() } }
     }
 
+    /// Gate 1 follow-up 2026-11-18 (iPad): All Emails, a folder bucket, a label
+    /// and a source folder are places in the sidebar, as the Trash is.
+    /// Choosing one of them leaves the Trash. Before this, after the last
+    /// trashed email was restored, the list stayed on "No messages in Trash":
+    /// tapping All Emails changed nothing, and Received or a source folder was
+    /// applied underneath the Trash view. Only tapping Trash again got out.
+    func leaveTrashForSidebarPlace() {
+        if reviewStateFilter == .trashed { reviewStateFilter = .active }
+    }
+
     /// Quick-chip type filter (Sent/Received) — compiles to SQL messageType
     /// so the chips filter the WHOLE archive, including header-recovered
     /// rows that have flags but no re-parsable metadata.

@@ -9134,6 +9134,54 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(phone.contains(".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)"))
     }
 
+    /// Gate 1 follow-up 2026-11-18 (iPad): after the only trashed email was
+    /// restored, the list stayed on "No messages in Trash". Tapping All Emails
+    /// did nothing, and Received or a source folder was applied underneath the
+    /// Trash view. All Emails was highlighted beside Trash. Choosing any other
+    /// place in the sidebar now leaves the Trash, and the restored email is back.
+    func testGate1Followup1118_choosingAllEmailsLeavesTheTrashAfterTheLastRestore() async throws {
+        let env = try makeEnv()
+        let fixtures = try await seed(env, count: 3)
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+        let trashedID = fixtures[0].id
+        try await env.store.reviewSetFlag(.trashed, ids: [trashedID], value: true)
+        vm.reviewStateFilter = .trashed
+        await vm.reloadForQueryChangeNow()
+        // (The rows the store pages in; the window filter reads the app's shared review state.)
+        XCTAssertEqual(vm.residentEmails.map(\.id), [trashedID], "the Trash pages in the trashed email")
+
+        // Restore: the Trash is empty, and that is what the list says.
+        try await env.store.reviewSetFlag(.trashed, ids: [trashedID], value: false)
+        await vm.refreshFromStoreNow()
+        XCTAssertTrue(vm.residentEmails.isEmpty)
+        XCTAssertEqual(ListEmptyState.of(searchText: vm.searchText, inTrash: vm.reviewStateFilter == .trashed, folderName: nil), .trash)
+        XCTAssertFalse(FolderTreeView.isShown(nil, selectedFolder: nil, trashShown: true), "All Emails is not highlighted beside Trash")
+
+        // All Emails (already the folder selection, so no onChange fires).
+        vm.leaveTrashForSidebarPlace()
+        XCTAssertEqual(vm.reviewStateFilter, .active)
+        XCTAssertTrue(FolderTreeView.isShown(nil, selectedFolder: nil, trashShown: false))
+        // The change re-pages by itself (`applyFilters`); wait for that page.
+        let deadline = Date().addingTimeInterval(10)
+        while vm.visibleEmails.count < fixtures.count && Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(Set(vm.visibleEmails.map(\.id)), Set(fixtures.map(\.id)), "the restored email is back in the list (resident \(vm.residentEmails.count), total \(vm.queryTotalCount))")
+        // Choosing a place outside the Trash leaves other review filters alone.
+        vm.reviewStateFilter = .archived
+        vm.leaveTrashForSidebarPlace()
+        XCTAssertEqual(vm.reviewStateFilter, .archived)
+
+        // Every place in the sidebar calls it: All Emails, the folder buckets and labels, the source folders.
+        let tree = try String(contentsOf: appSource.appendingPathComponent("FolderTreeView.swift"), encoding: .utf8)
+        XCTAssertEqual(tree.components(separatedBy: "onChoosePlace()\n").count - 1, 2, "All Emails and every folder row")
+        let content = try String(contentsOf: appSource.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains("onChoosePlace: { modelVM.leaveTrashForSidebarPlace() }"))
+        XCTAssertTrue(content.contains("trashShown: modelVM.reviewStateFilter == .trashed"))
+        let source = try String(contentsOf: appSource.appendingPathComponent("SourceFolderSection.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("model.leaveTrashForSidebarPlace()\n            model.selectedSourceFolder = isSelected ? nil : selection"))
+    }
+
     // MARK: - Release audit bf1a5b9 R2 — attachments compared as occurrences
 
     /// One attachment whose bytes the hydrator can produce (inline payload).

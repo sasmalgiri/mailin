@@ -18,6 +18,12 @@ struct FolderNode: Identifiable {
 /// memory stays bounded at any archive size. No injected corpus.
 struct FolderTreeView: View {
     @Binding var selectedFolder: String?
+    /// Gate 1 follow-up 2026-11-18: the list shows the Trash, so no row here
+    /// is the place being shown (All Emails was highlighted beside Trash).
+    var trashShown: Bool = false
+    /// Called on every choice of a row here, even one already selected, so
+    /// the host can leave the Trash (`leaveTrashForSidebarPlace`).
+    var onChoosePlace: () -> Void = {}
 
     @State private var archiveTotal = 0
     @State private var typeCounts: [String: Int] = [:]
@@ -57,6 +63,7 @@ struct FolderTreeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     Button {
+                        onChoosePlace()
                         selectedFolder = nil
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
@@ -74,17 +81,18 @@ struct FolderTreeView: View {
                         }
                         .padding(.horizontal, Spacing.small)
                         .padding(.vertical, Spacing.xxSmall)
-                        .background(selectedFolder == nil ? AppColors.primary.opacity(0.1) : Color.clear)
+                        .background(isShown(nil) ? AppColors.primary.opacity(0.1) : Color.clear)
                         .cornerRadius(CornerRadius.small)
                     }
                     .buttonStyle(.plain)
                     .help("Show every email in the archive")
                     .accessibilityLabel("All Emails, \(archiveTotal)")
-                    .accessibilityAddTraits(selectedFolder == nil ? .isSelected : [])
+                    .accessibilityAddTraits(isShown(nil) ? .isSelected : [])
 
                     ForEach(rows) { row in
                         Button {
                             if !row.node.filterValue.isEmpty {
+                                onChoosePlace()
                                 selectedFolder = row.node.filterValue
                             }
                         } label: {
@@ -105,7 +113,7 @@ struct FolderTreeView: View {
                             .padding(.leading, CGFloat(row.depth * 16) + Spacing.small)
                             .padding(.trailing, Spacing.small)
                             .padding(.vertical, Spacing.xxSmall)
-                            .background(selectedFolder == row.node.filterValue ? AppColors.primary.opacity(0.1) : Color.clear)
+                            .background(isShown(row.node.filterValue) ? AppColors.primary.opacity(0.1) : Color.clear)
                             .cornerRadius(CornerRadius.small)
                         }
                         .buttonStyle(.plain)
@@ -113,7 +121,7 @@ struct FolderTreeView: View {
                               ? "\(row.node.name) — \(row.node.emailCount) emails"
                               : "Show only: \(row.node.name)")
                         .accessibilityLabel(Text(verbatim: Self.rowAccessibilityLabel(name: row.node.name, count: row.node.emailCount)))
-                        .accessibilityAddTraits(selectedFolder == row.node.filterValue ? .isSelected : [])
+                        .accessibilityAddTraits(isShown(row.node.filterValue) ? .isSelected : [])
                     }
                     if labelBuckets.count < labelTotal {
                         Button {
@@ -255,6 +263,16 @@ struct FolderTreeView: View {
 }
 
 extension FolderTreeView {
+    /// Whether the row for `filter` (nil: All Emails) is the place the list
+    /// shows: never while the Trash is shown.
+    func isShown(_ filter: String?) -> Bool {
+        Self.isShown(filter, selectedFolder: selectedFolder, trashShown: trashShown)
+    }
+
+    static func isShown(_ filter: String?, selectedFolder: String?, trashShown: Bool) -> Bool {
+        !trashShown && selectedFolder == filter
+    }
+
     /// The received / sent buckets. The received one counts every email the
     /// archive holds as received mail, whatever folder it was filed in, so it
     /// is called "Received", as in the Mac sidebar — gate 1 walk 2026-11-18:

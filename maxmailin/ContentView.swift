@@ -2482,7 +2482,9 @@ struct ContentView: View {
                         Divider().padding(.horizontal, Spacing.xSmall)
                         // Part G7: self-loading — archive total from the store
                         // count, buckets over a bounded working set.
-                        FolderTreeView(selectedFolder: $selectedFolder)
+                        FolderTreeView(selectedFolder: $selectedFolder,
+                                       trashShown: modelVM.reviewStateFilter == .trashed,
+                                       onChoosePlace: { modelVM.leaveTrashForSidebarPlace() })
                             .padding(.horizontal, Spacing.xSmall)
                             .onChange(of: selectedFolder) { _, newFolder in
                                 if let folder = newFolder {

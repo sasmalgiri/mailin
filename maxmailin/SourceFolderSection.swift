@@ -161,8 +161,11 @@ struct SourceFolderSection: View {
 
     private func folderRow(_ row: ArchiveSidebarModel.FlatFolderRow) -> some View {
         let selection = ParsedEmailListViewModel.SourceFolderSelection(id: row.node.folderID, name: row.node.name)
-        let isSelected = model.selectedSourceFolder == selection
+        let isSelected = model.reviewStateFilter != .trashed && model.selectedSourceFolder == selection
         return Button {
+            // Gate 1 follow-up 2026-11-18: a source folder is a place; choosing
+            // it leaves the Trash (it was applied underneath the Trash view).
+            model.leaveTrashForSidebarPlace()
             model.selectedSourceFolder = isSelected ? nil : selection
         } label: {
             HStack(spacing: Spacing.xSmall) {
