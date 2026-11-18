@@ -5543,8 +5543,8 @@ final class IPadGate1FixTests: XCTestCase {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
         let vm = try String(contentsOf: dir.appendingPathComponent("ParsedEmailListViewModel.swift"), encoding: .utf8)
         XCTAssertTrue(vm.contains("senderRollups(limit: 500, excludingTrashed: true)"), "the counts leave the Trash out (ArchiveCore SidebarTrashCountTests)")
-        XCTAssertTrue(vm.contains("NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)\n            // Reply Frequency counts leave the Trash out; re-read them.\n            await self.refreshSenderAggregates()"),
-                      "a move to the Trash re-reads them")
+        XCTAssertTrue(vm.contains(".publisher(for: .archiveTrashChanged)\n            .receive(on: RunLoop.main)\n            .sink { [weak self] _ in\n                guard let self, self.isParsed else { return }\n                self.objectWillChange.send()\n                Task { @MainActor [weak self] in await self?.refreshSenderAggregates() }"),
+                      "a move to the Trash re-reads them (gate 1 third follow-up: from anywhere that posts it)")
     }
 
     // Gate 1 walk 2026-11-18: the home subtitle said "Open an mbox or eml

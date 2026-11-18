@@ -9182,6 +9182,30 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(source.contains("model.leaveTrashForSidebarPlace()\n            model.selectedSourceFolder = isSelected ? nil : selection"))
     }
 
+    /// Gate 1 third follow-up 2026-11-18 (iPad): From (Senders) still listed a
+    /// sender right after their only email went to the Trash, until the list
+    /// re-paged (the trashed row stays resident, hidden by the window filter).
+    /// The pickers list what the list's place shows, like the counts.
+    func testGate1Third1118_fromSendersLeaveATrashedEmailOutAtOnce() async throws {
+        let env = try makeEnv()
+        let fixtures = try await seed(env, count: 3)
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+        vm.reviewStateFilter = .active
+        await vm.reloadForQueryChangeNow()
+        let senders = fixtures.compactMap { $0.headers["From"] }.sorted()
+        XCTAssertEqual(vm.allFromEmails, senders)
+        let trashed = fixtures[0]
+        vm.deleteEmail(trashed.id)
+        XCTAssertTrue(vm.residentEmails.contains { $0.id == trashed.id }, "still resident until the next page")
+        XCTAssertEqual(vm.allFromEmails, senders.filter { $0 != trashed.headers["From"] }, "gone from From (Senders) at once")
+        XCTAssertEqual(vm.allToEmails, ["me@example.com"], "the other senders' mail is still addressed to me")
+        vm.undeleteEmail(trashed.id)
+        XCTAssertEqual(vm.allFromEmails, senders, "back after Restore")
+        await vm.review.waitForWrites()
+    }
+
     /// Found in the follow-up re-check 2026-11-18 (iPad): after Trash, then
     /// Source Folders > Inbox, the list showed the Inbox but "type:received"
     /// stayed in the search field and Received and Inbox were both highlighted.

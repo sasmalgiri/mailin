@@ -492,9 +492,8 @@ class ParsedEmailListViewModel: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.review.waitForWrites()
+            // Reply Frequency leaves the Trash out; the observer in init re-reads it.
             NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
-            // Reply Frequency counts leave the Trash out; re-read them.
-            await self.refreshSenderAggregates()
         }
     }
 
@@ -669,6 +668,16 @@ class ParsedEmailListViewModel: ObservableObject {
             .sink { [weak self] _ in
                 guard let self, self.isParsed else { return }
                 self.refreshFromStore()
+            }
+        // Gate 1 third follow-up 2026-11-18: a move to or from the Trash, here
+        // or anywhere else (the three-pane list, duplicates, recipes), re-reads
+        // Reply Frequency and redraws From (Senders), like the other lists.
+        trashChangeObserver = NotificationCenter.default.publisher(for: .archiveTrashChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isParsed else { return }
+                self.objectWillChange.send()
+                Task { @MainActor [weak self] in await self?.refreshSenderAggregates() }
             }
         // Views observe this VM — forward review-state changes (pin/read/tag
         // badges) so rows re-render without observing the service directly.
@@ -1158,6 +1167,7 @@ class ParsedEmailListViewModel: ObservableObject {
 
     private var personaObserver: AnyCancellable?
     private var accessScopeObserver: AnyCancellable?
+    private var trashChangeObserver: AnyCancellable?
     private var isRestoringFilters = false
     private var rememberedPersona: String?
 
@@ -1400,17 +1410,9 @@ class ParsedEmailListViewModel: ObservableObject {
         // IPAD-05: `in:trash` asks for trashed rows too, as on the Mac (the
         // store already pages them in); hiding them here ignored the operator.
         let trashRequested = compiled.includeTrashed
+        lastTrashRequested = trashRequested
         var result = residentEmails.filter { email in
-            switch reviewStateFilter {
-            case .active:
-                if review.isTrashed(email.id) && !trashRequested { return false }
-                if review.isArchived(email.id) { return false }
-            case .trashed:
-                if !review.isTrashed(email.id) { return false }
-            case .archived:
-                if review.isTrashed(email.id) { return false }
-                if !review.isArchived(email.id) { return false }
-            }
+            if !isInListPlace(email.id, trashRequested: trashRequested) { return false }
             if showPinnedOnly && !review.isPinned(email.id) { return false }
             if let clusterIDs = clusterFilterIDs {
                 if !clusterIDs.contains(email.id) { return false }
@@ -1673,11 +1675,36 @@ class ParsedEmailListViewModel: ObservableObject {
     var latestEmailDate: Date? {
         residentEmails.compactMap { isoFormatter.date(from: $0.timestamp) }.max()
     }
+    /// The Trash, Archived or neither, as the list's place says (`in:trash`
+    /// asks for trashed rows too).
+    private func isInListPlace(_ id: UUID, trashRequested: Bool) -> Bool {
+        switch reviewStateFilter {
+        case .active:
+            if review.isTrashed(id) && !trashRequested { return false }
+            if review.isArchived(id) { return false }
+        case .trashed:
+            if !review.isTrashed(id) { return false }
+        case .archived:
+            if review.isTrashed(id) { return false }
+            if !review.isArchived(id) { return false }
+        }
+        return true
+    }
+
+    /// `in:trash` as the last filter pass compiled it.
+    private var lastTrashRequested = false
+
+    /// Gate 1 third follow-up 2026-11-18: an email moved to the Trash stays
+    /// resident, hidden by the list's filter, until the next page; From
+    /// (Senders) and To (Recipients) leave it out at once, as the counts do.
+    private var residentEmailsInPlace: [MBOXParser.RawEmail] {
+        residentEmails.filter { isInListPlace($0.id, trashRequested: lastTrashRequested) }
+    }
     var allFromEmails: [String] {
-        Array(Set(residentEmails.compactMap { $0.headers["From"] })).sorted()
+        Array(Set(residentEmailsInPlace.compactMap { $0.headers["From"] })).sorted()
     }
     var allToEmails: [String] {
-        Array(Set(residentEmails.compactMap { $0.headers["To"] })).sorted()
+        Array(Set(residentEmailsInPlace.compactMap { $0.headers["To"] })).sorted()
     }
     var allSubjects: [String] {
         Array(Set(residentEmails.compactMap { $0.headers["Subject"] })).sorted()
@@ -1687,7 +1714,7 @@ class ParsedEmailListViewModel: ObservableObject {
         return Array(Set(domains)).sorted()
     }
     var allTags: [String] {
-        Array(Set(residentEmails.flatMap { $0.tags })).sorted()
+        Array(Set(residentEmailsInPlace.flatMap { $0.tags })).sorted()
     }
     /// Date span of the visible (window-backed) list.
     var filteredDateRange: (Date?, Date?) {
