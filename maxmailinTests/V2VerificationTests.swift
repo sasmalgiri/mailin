@@ -5445,6 +5445,33 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(wide[groups.lowerBound...].prefix(6_000).contains(".onChange(of: archiveChanges.generation)"))
     }
 
+    // Gate 1 walk 2026-11-18: the home subtitle said "Open an mbox or eml
+    // file…" while nine formats were listed under it. The subtitle and the
+    // SUPPORTED FORMATS chips read one list, and every name on it is a file
+    // type the importer opens.
+    func testGate1Walk1118_homeSubtitleNamesEverySupportedFormat() throws {
+        let names = HomeSupportedFormats.names
+        XCTAssertEqual(names.count, 9)
+        for name in names {
+            XCTAssertTrue(ParserFactory.allSupportedExtensions.contains(name.lowercased()), "\(name) is a type the importer opens")
+        }
+        for persona in PersonaManager.Persona.allCases {
+            let message = PersonaManager.config(for: persona).emptyStateMessage
+            XCTAssertFalse(message.lowercased().contains("mbox or eml"), "\(persona): \(message)")
+            if message.contains("MBOX") || message.lowercased().contains("mbox") {
+                for name in names { XCTAssertTrue(message.contains(name), "\(persona) names \(name): \(message)") }
+            }
+        }
+        let personal = PersonaManager.config(for: .personal).emptyStateMessage
+        XCTAssertTrue(personal.contains(HomeSupportedFormats.sentenceList), personal)
+        XCTAssertTrue(personal.hasPrefix("Open an email archive (MBOX, EML, EMLX, MSG, PST, OST, OLM, NSF"), personal)
+
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let hub = try String(contentsOf: dir.appendingPathComponent("WelcomeHubView.swift"), encoding: .utf8)
+        XCTAssertTrue(hub.contains("ForEach(HomeSupportedFormats.names, id: \\.self)"), "the chips read the same list")
+        XCTAssertFalse(hub.contains(#"ForEach(["MBOX""#))
+    }
+
     // Gate 1 walk 2026-11-18 (iPad portrait, three columns): the attachment
     // row's buttons wrapped letter by letter — "Dow / nloa / d", "Sho / w
     // text", "Ope / n". Each label keeps to one line at its natural width.

@@ -462663,6 +462663,326 @@
           }
         }
       }
+    },
+    "Open an email archive (%@) to browse your old emails, search messages, and save attachments." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnen Sie ein E-Mail-Archiv (%@), um Ihre alten E-Mails zu durchsuchen, Nachrichten zu finden und Anhänge zu sichern."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre un archivo de correo (%@) para explorar tus correos antiguos, buscar mensajes y guardar adjuntos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrez une archive d’e-mails (%@) pour parcourir vos anciens e-mails, rechercher des messages et enregistrer des pièces jointes."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "अपने पुराने ईमेल देखने, संदेश खोजने और अटैचमेंट सहेजने के लिए एक ईमेल आर्काइव (%@) खोलें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apri un archivio email (%@) per sfogliare le vecchie email, cercare messaggi e salvare allegati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールアーカイブ（%@）を開いて、昔のメールを閲覧し、メッセージを検索し、添付ファイルを保存できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이메일 보관함(%@)을 열어 오래된 이메일을 둘러보고, 메시지를 검색하고, 첨부 파일을 저장하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abra um arquivo de e-mail (%@) para navegar pelos seus e-mails antigos, pesquisar mensagens e salvar anexos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开邮件归档（%@），浏览旧邮件、搜索邮件并保存附件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打開郵件封存（%@），瀏覽舊郵件、搜尋郵件並儲存附件。"
+          }
+        }
+      }
+    },
+    "Import an email archive (%@) to begin forensic analysis. All processing stays on-device." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importieren Sie ein E-Mail-Archiv (%@), um mit der forensischen Analyse zu beginnen. Die gesamte Verarbeitung bleibt auf dem Gerät."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa un archivo de correo (%@) para comenzar el análisis forense. Todo el procesamiento se queda en el dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importez une archive d’e-mails (%@) pour commencer l’analyse forensique. Tout le traitement reste sur l’appareil."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "फ़ोरेंसिक विश्लेषण शुरू करने के लिए एक ईमेल आर्काइव (%@) इंपोर्ट करें। सारी प्रोसेसिंग डिवाइस पर ही रहती है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa un archivio email (%@) per iniziare l’analisi forense. Tutta l’elaborazione resta sul dispositivo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールアーカイブ（%@）を読み込んでフォレンジック分析を始めます。処理はすべてデバイス上で行われます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이메일 보관함(%@)을 가져와 포렌식 분석을 시작하세요. 모든 처리는 기기 내에서 이루어집니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importe um arquivo de e-mail (%@) para começar a análise forense. Todo o processamento fica no dispositivo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入邮件归档（%@）以开始取证分析。所有处理均在设备上完成。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入郵件封存（%@）以開始取證分析。所有處理均在裝置上完成。"
+          }
+        }
+      }
+    },
+    "Import email archives (%@) for technical analysis. View headers, MIME structure, and server routing." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importieren Sie E-Mail-Archive (%@) für die technische Analyse. Sehen Sie Header, MIME-Struktur und Server-Routing ein."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa archivos de correo (%@) para el análisis técnico. Consulta encabezados, estructura MIME y enrutamiento de servidores."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importez des archives d’e-mails (%@) pour l’analyse technique. Consultez les en-têtes, la structure MIME et le routage des serveurs."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "तकनीकी विश्लेषण के लिए ईमेल आर्काइव (%@) इंपोर्ट करें। हेडर, MIME संरचना और सर्वर रूटिंग देखें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa archivi email (%@) per l’analisi tecnica. Visualizza intestazioni, struttura MIME e instradamento dei server."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技術分析のためにメールアーカイブ（%@）を読み込みます。ヘッダ、MIME 構造、サーバ経路を確認できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기술 분석을 위해 이메일 보관함(%@)을 가져오세요. 헤더, MIME 구조, 서버 라우팅을 확인할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importe arquivos de e-mail (%@) para análise técnica. Veja cabeçalhos, estrutura MIME e roteamento de servidores."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入邮件归档（%@）进行技术分析。查看邮件头、MIME 结构和服务器路由。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入郵件封存（%@）進行技術分析。檢視郵件標頭、MIME 結構和伺服器路由。"
+          }
+        }
+      }
+    },
+    "Import a corpus (%@) to catalogue, screen, code, and build cited chronologies. Everything stays on-device." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importieren Sie ein Korpus (%@), um zu katalogisieren, zu sichten, zu kodieren und belegte Chronologien zu erstellen. Alles bleibt auf dem Gerät."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa un corpus (%@) para catalogar, filtrar, codificar y crear cronologías citadas. Todo se queda en el dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importez un corpus (%@) pour cataloguer, trier, coder et établir des chronologies sourcées. Tout reste sur l’appareil."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "सूचीबद्ध करने, छाँटने, कोड करने और संदर्भित कालक्रम बनाने के लिए एक कॉर्पस (%@) इंपोर्ट करें। सब कुछ डिवाइस पर ही रहता है।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa un corpus (%@) per catalogare, vagliare, codificare e costruire cronologie con fonti. Tutto resta sul dispositivo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コーパス（%@）を読み込んで、目録作成、選別、コーディング、出典付き年表の作成を行います。すべてデバイス上に留まります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "코퍼스(%@)를 가져와 목록화, 선별, 코딩하고 출처가 있는 연대기를 만드세요. 모든 것이 기기에 남습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importe um corpus (%@) para catalogar, triar, codificar e montar cronologias citadas. Tudo fica no dispositivo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入语料（%@），进行编目、筛选、编码并建立有出处的年表。一切都留在设备上。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入語料（%@），進行編目、篩選、編碼並建立有出處的年表。一切都留在裝置上。"
+          }
+        }
+      }
+    },
+    "Import an email archive (%@) to get started. Search, filter, analyze, and export your emails." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importieren Sie ein E-Mail-Archiv (%@), um loszulegen. Durchsuchen, filtern, analysieren und exportieren Sie Ihre E-Mails."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa un archivo de correo (%@) para empezar. Busca, filtra, analiza y exporta tus correos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importez une archive d’e-mails (%@) pour commencer. Recherchez, filtrez, analysez et exportez vos e-mails."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "शुरू करने के लिए एक ईमेल आर्काइव (%@) इंपोर्ट करें। अपने ईमेल खोजें, फ़िल्टर करें, विश्लेषण करें और एक्सपोर्ट करें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importa un archivio email (%@) per iniziare. Cerca, filtra, analizza ed esporta le tue email."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メールアーカイブ（%@）を読み込んで始めましょう。メールの検索、絞り込み、分析、書き出しができます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이메일 보관함(%@)을 가져와 시작하세요. 이메일을 검색, 필터링, 분석하고 내보낼 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importe um arquivo de e-mail (%@) para começar. Pesquise, filtre, analise e exporte seus e-mails."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入邮件归档（%@）即可开始。搜索、筛选、分析并导出你的邮件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入郵件封存（%@）即可開始。搜尋、篩選、分析並匯出你的郵件。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

@@ -362,7 +362,7 @@ struct WelcomeHubView: View {
                 .tracking(0.5)
 
             HStack(spacing: Spacing.xSmall) {
-                ForEach(["MBOX", "EML", "EMLX", "MSG", "PST", "OST", "OLM", "NSF", "ZIP"], id: \.self) { fmt in
+                ForEach(HomeSupportedFormats.names, id: \.self) { fmt in
                     Text(fmt)
                         .font(.system(.caption2, design: .monospaced).weight(.medium))
                         .foregroundColor(.secondary)
@@ -593,4 +593,17 @@ struct WelcomeHubView: View {
         case .professional: return nil
         }
     }
+}
+
+/// The formats the home screen names — the SUPPORTED FORMATS chips and the
+/// subtitle above them read this one list. Gate 1 walk 2026-11-18: the
+/// subtitle said "Open an mbox or eml file…" while nine formats were listed
+/// under it. Every name is a file type the importer opens
+/// (`ParserFactory.allSupportedExtensions`); ZIP stands for the archives
+/// mail arrives in (zip, tar, gz, 7z, rar).
+enum HomeSupportedFormats {
+    static let names = ["MBOX", "EML", "EMLX", "MSG", "PST", "OST", "OLM", "NSF", "ZIP"]
+
+    /// "MBOX, EML, EMLX, MSG, PST, OST, OLM, NSF or ZIP" in the reader's language.
+    static var sentenceList: String { names.formatted(.list(type: .or)) }
 }

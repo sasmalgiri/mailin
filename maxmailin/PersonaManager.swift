@@ -258,7 +258,7 @@ class PersonaManager: ObservableObject {
                     "Which emails were sent outside business hours?",
                     "Find emails with deleted or modified attachments"
                 ],
-                emptyStateMessage: "Import an mbox or eml file to begin forensic analysis. All processing stays on-device.",
+                emptyStateMessage: String(localized: "Import an email archive (\(HomeSupportedFormats.sentenceList)) to begin forensic analysis. All processing stays on-device."),
                 welcomeTitle: "Forensic Workstation"
             )
 
@@ -306,7 +306,7 @@ class PersonaManager: ObservableObject {
                     "Find bounce messages and delivery failures",
                     "Which emails have the largest attachments?"
                 ],
-                emptyStateMessage: "Import mbox or eml archives for technical analysis. View headers, MIME structure, and server routing.",
+                emptyStateMessage: String(localized: "Import email archives (\(HomeSupportedFormats.sentenceList)) for technical analysis. View headers, MIME structure, and server routing."),
                 welcomeTitle: "Email Technical Analysis"
             )
 
@@ -353,7 +353,7 @@ class PersonaManager: ObservableObject {
                     "Which emails have I never replied to?",
                     "Find important emails I might have missed"
                 ],
-                emptyStateMessage: "Open an mbox or eml file to browse your old emails, search messages, and save attachments.",
+                emptyStateMessage: String(localized: "Open an email archive (\(HomeSupportedFormats.sentenceList)) to browse your old emails, search messages, and save attachments."),
                 welcomeTitle: "Email Archive"
             )
 
@@ -376,7 +376,7 @@ class PersonaManager: ObservableObject {
                     "Compare how two people describe the same event",
                     "Which claims in this corpus are supported by only one source?"
                 ],
-                emptyStateMessage: "Import a corpus (mbox, eml, pst) to catalogue, screen, code, and build cited chronologies. Everything stays on-device.",
+                emptyStateMessage: String(localized: "Import a corpus (\(HomeSupportedFormats.sentenceList)) to catalogue, screen, code, and build cited chronologies. Everything stays on-device."),
                 welcomeTitle: "Research Corpus"
             )
 
@@ -399,7 +399,7 @@ class PersonaManager: ObservableObject {
                     "Show me the communication timeline",
                     "Are there any urgent or time-sensitive emails?"
                 ],
-                emptyStateMessage: "Import an mbox or eml file to get started. Search, filter, analyze, and export your emails.",
+                emptyStateMessage: String(localized: "Import an email archive (\(HomeSupportedFormats.sentenceList)) to get started. Search, filter, analyze, and export your emails."),
                 welcomeTitle: "Email Explorer"
             )
         }
