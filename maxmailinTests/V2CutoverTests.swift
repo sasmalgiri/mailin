@@ -9106,6 +9106,34 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(DuplicateManagerView.similarOnly(near, verified: []).count, 2, "nothing verified, nothing removed")
     }
 
+    /// Gate 1 walk 2026-11-18: the iPad showed a blank pane for the empty
+    /// "Archive 2019" folder and for an empty Trash; the iPhone answered a
+    /// search with no hits with "Try widening the date range…" (no such filter
+    /// was set) and centred that block, pushing the search field mid-screen.
+    func testGate1Walk1118_emptyListNamesWhatIsEmpty_onIPadAndIPhone() throws {
+        let folder = ListEmptyState.of(searchText: "", inTrash: false, folderName: "Archive 2019")
+        XCTAssertEqual(folder, .folder("Archive 2019"))
+        XCTAssertEqual(folder.title, "No messages in Archive 2019")
+        XCTAssertNil(folder.message)
+        XCTAssertEqual(ListEmptyState.of(searchText: "x", inTrash: true, folderName: "Work"), .trash)
+        XCTAssertEqual(ListEmptyState.trash.title, "No messages in Trash")
+        let search = ListEmptyState.of(searchText: " xylophonequartz ", inTrash: false, folderName: nil)
+        XCTAssertEqual(search, .search)
+        XCTAssertEqual(search.title, "No matching emails")
+        XCTAssertNil(search.message, "the search notice above the list says what was searched")
+        let filters = ListEmptyState.of(searchText: "  ", inTrash: false, folderName: nil)
+        XCTAssertTrue(filters.message?.contains("date range") ?? false)
+
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let content = try String(contentsOf: repo.appendingPathComponent("ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(content.contains("if modelVM.visibleEmails.isEmpty && !modelVM.isLoadingPage {"),
+                      "the iPad pane speaks for every empty list, not only a search")
+        XCTAssertTrue(content.contains("ContentUnavailableView(empty.title,"))
+        let phone = try String(contentsOf: repo.appendingPathComponent("ParsedEmailListView.swift"), encoding: .utf8)
+        XCTAssertTrue(phone.contains("title: empty.title,"))
+        XCTAssertTrue(phone.contains(".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)"))
+    }
+
     // MARK: - Release audit bf1a5b9 R2 — attachments compared as occurrences
 
     /// One attachment whose bytes the hydrator can produce (inline payload).

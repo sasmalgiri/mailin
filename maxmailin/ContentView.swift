@@ -1746,9 +1746,14 @@ struct ContentView: View {
                                 .accessibilityLabel("Search notice: \(notice)")
                                 .accessibilityIdentifier("ipad.list.searchNotice")
                         }
-                        if modelVM.visibleEmails.isEmpty && !modelVM.isLoadingPage
-                            && !modelVM.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            ContentUnavailableView("No matching emails", systemImage: "magnifyingglass")
+                        if modelVM.visibleEmails.isEmpty && !modelVM.isLoadingPage {
+                            // Gate 1 walk 2026-11-18: an empty folder or Trash says so
+                            // too — it used to be a blank pane (only a search spoke).
+                            let empty = ListEmptyState.of(searchText: modelVM.searchText,
+                                                          inTrash: modelVM.reviewStateFilter == .trashed,
+                                                          folderName: modelVM.selectedSourceFolder?.name)
+                            ContentUnavailableView(empty.title,
+                                                   systemImage: empty == .trash ? "trash" : (empty == .search ? "magnifyingglass" : "folder"))
                                 .frame(maxHeight: .infinity)
                                 .accessibilityIdentifier("ipad.list.noResults")
                         } else {

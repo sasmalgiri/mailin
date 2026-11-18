@@ -194,3 +194,37 @@ struct SourceFolderSection: View {
         .accessibilityIdentifier("sidebar.sourceFolder")
     }
 }
+
+/// Gate 1 walk 2026-11-18: what an empty list says. On iPad a folder or Trash
+/// with nothing in it left a blank pane (only a search said anything); on
+/// iPhone a search with no hits said "Try widening the date range, selecting
+/// more senders…" although no such filter was set. The empty state names the
+/// place that is empty; a search's own notice (above the list) says what
+/// was searched, so its empty state adds no advice.
+enum ListEmptyState: Equatable {
+    case trash
+    case folder(String)
+    case search
+    case filters
+
+    static func of(searchText: String, inTrash: Bool, folderName: String?) -> ListEmptyState {
+        if inTrash { return .trash }
+        if let folderName, !folderName.isEmpty { return .folder(folderName) }
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .search }
+        return .filters
+    }
+
+    var title: String {
+        switch self {
+        case .trash: return String(localized: "No messages in \(String(localized: "Trash"))")
+        case .folder(let name): return String(localized: "No messages in \(name)")
+        case .search, .filters: return String(localized: "No matching emails")
+        }
+    }
+
+    /// The advice line; only the date / sender / reply-count filters have any.
+    var message: String? {
+        guard self == .filters else { return nil }
+        return String(localized: "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count.")
+    }
+}

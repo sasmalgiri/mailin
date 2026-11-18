@@ -1492,13 +1492,20 @@ struct ParsedEmailListView: View {
         } else {
             let emails = quickFilteredEmails
             if emails.isEmpty {
+                // Gate 1 walk 2026-11-18 (iPhone): a search with no hits said
+                // "Try widening the date range…" and the centred block pushed the
+                // search field to mid-screen. The text names what is empty; the
+                // block sits at the top, under the field.
+                let empty = ListEmptyState.of(searchText: model.searchText,
+                                              inTrash: model.reviewStateFilter == .trashed,
+                                              folderName: model.selectedSourceFolder?.name)
                 VStack(spacing: Spacing.medium) {
                     EmptyStateView(
                         icon: "line.3.horizontal.decrease.circle",
-                        title: String(localized: "No matching emails"),
+                        title: empty.title,
                         message: hasAnyQuickFilterActive
                             ? "Active filter chips are hiding all emails. Clear them to see your \(model.visibleEmails.count) emails."
-                            : "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count."
+                            : (empty.message ?? "")
                     )
                     if hasAnyQuickFilterActive {
                         Button {
@@ -1510,6 +1517,8 @@ struct ParsedEmailListView: View {
                         .controlSize(.regular)
                     }
                 }
+                .padding(.top, Spacing.large)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             } else if model.groupByThread {
                 threadedListView
             } else {

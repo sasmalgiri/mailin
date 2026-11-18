@@ -462535,6 +462535,70 @@
           }
         }
       }
+    },
+    "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine E-Mails entsprechen Ihren aktuellen Filtern. Erweitern Sie den Zeitraum, wählen Sie mehr Absender aus oder verringern Sie die Mindestanzahl an Antworten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ningún correo coincide con tus filtros actuales. Prueba a ampliar el intervalo de fechas, seleccionar más remitentes o reducir el número mínimo de respuestas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun e-mail ne correspond à vos filtres actuels. Élargissez la plage de dates, sélectionnez davantage d’expéditeurs ou réduisez le nombre minimal de réponses."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "आपके मौजूदा फ़िल्टर से कोई ईमेल मेल नहीं खाता। तिथि सीमा बढ़ाकर, अधिक प्रेषक चुनकर या न्यूनतम उत्तर संख्या घटाकर देखें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessuna email corrisponde ai filtri attuali. Prova ad ampliare l’intervallo di date, selezionare più mittenti o ridurre il numero minimo di risposte."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のフィルタに一致するメールはありません。期間を広げる、差出人を増やす、または最小返信数を減らしてみてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 필터와 일치하는 이메일이 없습니다. 날짜 범위를 넓히거나, 보낸 사람을 더 선택하거나, 최소 답장 수를 줄여 보세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum e-mail corresponde aos seus filtros atuais. Tente ampliar o intervalo de datas, selecionar mais remetentes ou reduzir o número mínimo de respostas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有邮件符合当前筛选条件。请尝试扩大日期范围、选择更多发件人或降低最少回复数。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有郵件符合目前的篩選條件。請嘗試擴大日期範圍、選取更多寄件人或降低最少回覆數。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"
