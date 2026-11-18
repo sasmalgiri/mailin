@@ -5529,6 +5529,24 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(body.contains("Show more (\\(shown) of \\(senders.count) senders)"))
     }
 
+    // Found in the gate 1 follow-up re-check 2026-11-18 (iPad): Reply Frequency
+    // still listed "Frank Client" while his only email was in the Trash, and
+    // senders with equal counts swapped places between refreshes.
+    func testGate1Followup1118_replyFrequencyLeavesTheTrashOutAndKeepsItsOrder() throws {
+        let counts = ["Erin Travel <erin@example.com>": 2, "Alice Ledger <alice@example.com>": 2, "Dave Notes <dave@example.com>": 1,
+                      "Carol Board <carol@example.com>": 1, "Bob Big <bob@example.com>": 9]
+        let order = ParsedEmailListViewModel.rankedSenders(counts).map(\.email)
+        XCTAssertEqual(order, ["Bob Big <bob@example.com>", "Alice Ledger <alice@example.com>", "Erin Travel <erin@example.com>",
+                               "Carol Board <carol@example.com>", "Dave Notes <dave@example.com>"])
+        for _ in 0..<20 { XCTAssertEqual(ParsedEmailListViewModel.rankedSenders(Dictionary(uniqueKeysWithValues: counts.map { ($0.key, $0.value) })).map(\.email), order) }
+
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        let vm = try String(contentsOf: dir.appendingPathComponent("ParsedEmailListViewModel.swift"), encoding: .utf8)
+        XCTAssertTrue(vm.contains("senderRollups(limit: 500, excludingTrashed: true)"), "the counts leave the Trash out (ArchiveCore SidebarTrashCountTests)")
+        XCTAssertTrue(vm.contains("NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)\n            // Reply Frequency counts leave the Trash out; re-read them.\n            await self.refreshSenderAggregates()"),
+                      "a move to the Trash re-reads them")
+    }
+
     // Gate 1 walk 2026-11-18: the home subtitle said "Open an mbox or eml
     // file…" while nine formats were listed under it. The subtitle and the
     // SUPPORTED FORMATS chips read one list, and every name on it is a file

@@ -3652,17 +3652,22 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let latestDate: Date?
     }
 
-    func senderRollups(limit requested: Int) throws -> [SenderRollup] {
-        try EngineBreadcrumbs.run(Self.unboundedIDLookups ? "v3PagedLists" : nil) { try senderRollupRows(limit: requested) }
+    /// `excludingTrashed`: the sidebar's Reply Frequency, which counts what
+    /// All Mail counts (gate 1 follow-up 2026-11-18: a sender whose only email
+    /// was in the Trash was still listed). Off, every stored row.
+    func senderRollups(limit requested: Int, excludingTrashed: Bool = false) throws -> [SenderRollup] {
+        try EngineBreadcrumbs.run(Self.unboundedIDLookups ? "v3PagedLists" : nil) {
+            try senderRollupRows(limit: requested, excludingTrashed: excludingTrashed)
+        }
     }
 
-    private func senderRollupRows(limit requested: Int) throws -> [SenderRollup] {
+    private func senderRollupRows(limit requested: Int, excludingTrashed: Bool) throws -> [SenderRollup] {
         // §3-H5: one row per distinct sender — complete under v3PagedLists.
         let limit = Self.unboundedIDLookups ? Int(Int32.max) : requested
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT from_addr, COUNT(*) AS c, COALESCE(SUM(size_bytes), 0), MAX(date)
-            FROM emails WHERE from_addr <> '' GROUP BY from_addr
+            FROM emails e WHERE e.from_addr <> ''\(excludingTrashed ? " AND \(Self.notTrashedPredicate)" : "") GROUP BY from_addr
             ORDER BY c DESC, from_addr ASC LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }

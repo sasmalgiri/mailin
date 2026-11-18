@@ -69,8 +69,8 @@ final class ArchiveAggregateService {
 
     /// Per-sender rollups (count / bytes / latest date) for the cleanup view —
     /// a bounded GROUP BY, never a corpus scan.
-    func senderRollups(limit: Int = 200) async throws -> [SQLiteEmailStore.SenderRollup] {
-        try await store.senderRollups(limit: limit)
+    func senderRollups(limit: Int = 200, excludingTrashed: Bool = false) async throws -> [SQLiteEmailStore.SenderRollup] {
+        try await store.senderRollups(limit: limit, excludingTrashed: excludingTrashed)
     }
 
     /// Sent/received split using the same rule the legacy annotator applied

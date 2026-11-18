@@ -493,6 +493,8 @@ class ParsedEmailListViewModel: ObservableObject {
             guard let self else { return }
             await self.review.waitForWrites()
             NotificationCenter.default.post(name: .archiveTrashChanged, object: nil)
+            // Reply Frequency counts leave the Trash out; re-read them.
+            await self.refreshSenderAggregates()
         }
     }
 
@@ -901,7 +903,8 @@ class ParsedEmailListViewModel: ObservableObject {
     /// computed from a corpus array.
     private func refreshSenderAggregates() async {
         guard isProductionArchive else { return }
-        let rollups = (try? await ArchiveAggregateService.shared.senderRollups(limit: 500)) ?? []
+        // Gate 1 follow-up 2026-11-18: without the Trash, like All Mail.
+        let rollups = (try? await ArchiveAggregateService.shared.senderRollups(limit: 500, excludingTrashed: true)) ?? []
         var counts: [String: Int] = [:]
         for rollup in rollups { counts[rollup.sender] = rollup.count }
         replyCountPerSender = counts
@@ -1695,8 +1698,14 @@ class ParsedEmailListViewModel: ObservableObject {
     /// For sidebar: returns senders sorted by their email count descending
     /// (store aggregate).
     var sortedSendersByReplyCount: [(email: String, count: Int)] {
-        replyCountPerSender
-            .sorted { $0.value > $1.value }
+        Self.rankedSenders(replyCountPerSender)
+    }
+
+    /// Busiest first; equal counts by name, so the order does not change
+    /// between refreshes (it followed the dictionary's order).
+    static func rankedSenders(_ counts: [String: Int]) -> [(email: String, count: Int)] {
+        counts
+            .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key.localizedStandardCompare($1.key) == .orderedAscending }
             .map { ($0.key, $0.value) }
     }
 

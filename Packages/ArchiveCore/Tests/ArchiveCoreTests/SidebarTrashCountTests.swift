@@ -99,4 +99,19 @@ final class SidebarTrashCountTests: XCTestCase {
         XCTAssertEqual(restoredFolders["Inbox"], 2)
         XCTAssertEqual(restoredFolders["Clients"], 1)
     }
+
+    /// Reply Frequency: a sender whose only email is in the Trash is not listed.
+    func testSenderRollupsLeaveTheTrashOut() async throws {
+        let store = SQLiteEmailStore(directory: root)
+        var frank = email("frank", folders: ["Work/Clients"]); frank.headers["From"] = "Frank Client <frank@example.com>"
+        var alice = email("alice", folders: ["Inbox"]); alice.headers["From"] = "Alice Ledger <alice@example.com>"
+        try await store.insertBatch([frank, alice], batchSize: 10)
+        try await store.reviewSetFlag(.trashed, ids: [frank.id], value: true)
+        let visible = try await store.senderRollups(limit: 10, excludingTrashed: true).map(\.sender)
+        XCTAssertEqual(visible.count, 1, "\(visible)")
+        XCTAssertTrue(visible.allSatisfy { $0.contains("alice@example.com") }, "\(visible)")
+        let stored = try await store.senderRollups(limit: 10).map(\.sender)
+        XCTAssertEqual(stored.count, 2, "without the switch: every stored row")
+        XCTAssertTrue(stored.contains { $0.contains("frank@example.com") })
+    }
 }
