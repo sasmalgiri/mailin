@@ -62,9 +62,13 @@ enum UITestSupport {
         }
         // Accessibility audit of the Live Mail page (UITestMailSample): the page
         // on, with an in-memory sample account; Connected mail stays off.
+        // UITestMailSample exists in Debug builds only (a Release build stops at
+        // the isHonoured guard above anyway).
+        #if DEBUG
         if UITestMailSample.isRequested() {
             enableLiveMailPage(modules ?? ModuleRegistry.live)
         }
+        #endif
 
         // CLOSE-06: a fresh-archive run (MAILIN_UITEST_FRESH_ARCHIVE) starts
         // empty — the test imports its own fixture, so no demo seed.
