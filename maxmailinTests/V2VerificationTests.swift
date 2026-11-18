@@ -5508,6 +5508,53 @@ final class IPadGate1FixTests: XCTestCase {
         XCTAssertTrue(content.contains("private var leftSidebar: some View { sidebar(actionsPinnedByHost: false) }"), "the Mac column is unchanged")
     }
 
+    // Gate 1 walk 2026-11-18 (iOS 27): wrapped hashes and addresses were
+    // hyphenated — "c019e-/b5312", "carol@example.-com" — so a hash copied by
+    // eye was wrong. Identifiers are drawn with hyphenation off, and the text
+    // drawn (and copied) is exactly the value: no hyphen, no invisible break
+    // character.
+    func testGate1Walk1118_identifiersAreNeverHyphenatedAndCopyExactly() throws {
+        let values = [
+            "SHA-256 c019eb53128a0f7e4c2d9b1a6e5f3c8d7b0a9e1f2d3c4b5a69788796a5b4c3d2",
+            "Carol Board <carol@example.com>, Dave Notes <dave@example.com>",
+            "<fj-exact-0001@fivejobs.example>",
+            "/Users/someone/Library/Containers/com.ecosanskriti.mailin/Data/Documents/mailin_emails_20261118_112627.mbox",
+        ]
+        let font = IdentifierFormatting.PlatformFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        for value in values {
+            let text = IdentifierFormatting.attributedString(value, font: font, color: .black)
+            XCTAssertEqual(text.string, value, "what is drawn and copied is the value itself")
+            XCTAssertFalse(text.string.contains("\u{00AD}") || text.string.contains("\u{200B}"), "no soft hyphen or zero-width space")
+            let style = try XCTUnwrap(text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+            XCTAssertEqual(style.hyphenationFactor, 0)
+            XCTAssertFalse(style.usesDefaultHyphenation, "the system's hyphenation is off too")
+            XCTAssertEqual(style.lineBreakMode, .byCharWrapping, "word wrapping still gave \"example.-com\" on iOS 27")
+            var range = NSRange()
+            _ = text.attribute(.paragraphStyle, at: 0, effectiveRange: &range)
+            XCTAssertEqual(range, NSRange(location: 0, length: (value as NSString).length), "over the whole value")
+        }
+        // Where identifiers are shown: the import receipt, the message header card,
+        // the message integrity box, the S/MIME signer, the production manifest,
+        // the audit chain and Settings' source-file hashes.
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("maxmailin")
+        func source(_ name: String) throws -> String { try String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8) }
+        let receipt = try source("ImportReceiptView.swift")
+        XCTAssertTrue(receipt.contains(#"IdentifierText(String(localized: "SHA-256 \(source.sha256)"))"#))
+        XCTAssertTrue(receipt.contains(#"IdentifierText(String(localized: "Content hash"#))
+        let detail = try source("EmailDetailView.swift")
+        XCTAssertTrue(detail.contains("IdentifierText(value, style: .footnote, monospaced: false, tone: .primary)"), "From / To / Cc / Message-ID")
+        XCTAssertTrue(detail.contains(#"LabelText(title: String(localized: "Date"), value: header("Date"), isIdentifier: false)"#), "a date wraps between words")
+        XCTAssertTrue(detail.contains("IdentifierText(md5)"))
+        XCTAssertTrue(detail.contains("IdentifierText(signer, monospaced: false)"))
+        XCTAssertTrue(try source("ProductionWindowView.swift").contains(#"LabeledContent("Manifest SHA-256") { IdentifierText(hash, style: .caption) }"#))
+        XCTAssertTrue(try source("AuditTrailView.swift").contains(#"IdentifierText(String(localized: "Entry hash  \(entry.entryHash)"))"#))
+        XCTAssertTrue(try source("SettingsView.swift").contains(#"IdentifierText(String(localized: "MD5: \(hash.md5)"), style: .caption)"#))
+        // On iOS the view is a selectable UITextView with this paragraph style.
+        let view = try source("IdentifierText.swift")
+        XCTAssertTrue(view.contains("view.isEditable = false") && view.contains("view.isSelectable = true"))
+        XCTAssertTrue(view.contains("IdentifierFormatting.attributedString(value"))
+    }
+
     // Gate 1 walk 2026-11-18 (iPad portrait, three columns): the attachment
     // row's buttons wrapped letter by letter — "Dow / nloa / d", "Sho / w
     // text", "Ope / n". Each label keeps to one line at its natural width.

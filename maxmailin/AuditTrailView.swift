@@ -352,8 +352,8 @@ struct AuditTrailView: View {
             }
             if expandedEntryID == entry.id {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Entry hash  \(entry.entryHash)")
-                    Text("Links to    \(entry.previousHash)")
+                    IdentifierText(String(localized: "Entry hash  \(entry.entryHash)"))
+                    IdentifierText(String(localized: "Links to    \(entry.previousHash)"))
                 }
                 .font(Typography.monoSmall)
                 .foregroundColor(AppColors.secondary)

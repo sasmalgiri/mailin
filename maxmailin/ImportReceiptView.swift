@@ -185,10 +185,8 @@ struct ImportReceiptView: View {
                     Text("\(byteText(source.sizeBytes)) · \(source.parser) v\(source.parserVersion)")
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary)
-                    Text("SHA-256 \(source.sha256)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundColor(AppColors.secondary)
-                        .textSelection(.enabled)
+                    // Gate 1 walk 2026-11-18: never hyphenated when it wraps; copied exactly.
+                    IdentifierText(String(localized: "SHA-256 \(source.sha256)"))
                     // OPEN-05: what happened to THIS file, not only the run.
                     if let line = Self.accountingLine(for: source) {
                         Text(line)
@@ -349,10 +347,7 @@ struct ImportReceiptView: View {
                     .font(Typography.caption1)
                     .foregroundColor(.red)
             }
-            Text("Content hash \(receipt.contentHash.isEmpty ? "not recorded" : receipt.contentHash)")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundColor(AppColors.secondary)
-                .textSelection(.enabled)
+            IdentifierText(String(localized: "Content hash \(receipt.contentHash.isEmpty ? String(localized: "not recorded") : receipt.contentHash)"))
         }
     }
 

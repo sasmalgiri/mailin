@@ -130,7 +130,7 @@ struct ProductionWindowView: View {
                     LabeledContent("Pages", value: "\(result.pages)")
                     LabeledContent("Attachment families", value: result.attachmentFamilies.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: " · "))
                     if let hash = result.manifestSHA256 {
-                        LabeledContent("Manifest SHA-256") { Text(hash).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                        LabeledContent("Manifest SHA-256") { IdentifierText(hash, style: .caption) }
                     }
                     #if os(macOS)
                     Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.folder)]) }

@@ -1248,9 +1248,7 @@ struct EmailDetailView: View {
                 HStack(spacing: 4) {
                     Text("MD5:")
                         .font(.system(.caption, design: .monospaced)).fontWeight(.semibold)
-                    Text(md5)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundColor(.secondary)
+                    IdentifierText(md5)
                     Button {
                         PlatformClipboard.copyString(md5)
                     } label: {
@@ -2293,7 +2291,7 @@ struct EmailDetailView: View {
                 }
                 Spacer()
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                    LabelText(title: String(localized: "Date"), value: header("Date"))
+                    LabelText(title: String(localized: "Date"), value: header("Date"), isIdentifier: false)
                     if hasHeader("Cc") {
                         LabelText(title: "CC", value: header("Cc"))
                     }
@@ -2316,7 +2314,7 @@ struct EmailDetailView: View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
             LabelText(title: String(localized: "From"), value: header("From"))
             LabelText(title: String(localized: "To"), value: header("To"))
-            LabelText(title: String(localized: "Date"), value: header("Date"))
+            LabelText(title: String(localized: "Date"), value: header("Date"), isIdentifier: false)
             if hasHeader("Reply-To") {
                 LabelText(title: String(localized: "Reply-To"), value: header("Reply-To"))
             }
@@ -2357,9 +2355,7 @@ struct EmailDetailView: View {
                             }
                             // B4: who actually signed, when it is not the sender.
                             if sigResult.status == .validSignerMismatch, let signer = sigResult.signerEmail {
-                                Text(verbatim: signer)
-                                    .font(Typography.caption2)
-                                    .foregroundColor(AppColors.secondary)
+                                IdentifierText(signer, monospaced: false)
                             }
                         }
                     }
@@ -2426,14 +2422,24 @@ struct EmailDetailView: View {
 // MARK: - Reusable Label Component
 struct LabelText: View {
     let title: String, value: String
+    /// Addresses and Message-IDs (the default) are drawn by `IdentifierText`;
+    /// a date reads better wrapped between words.
+    var isIdentifier = true
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xxSmall) {
             Text("\(title):")
                 .fontWeight(.semibold)
                 .frame(width: 70, alignment: .leading)
-            Text(value)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Addresses and Message-IDs: never hyphenated when they wrap
+            // ("carol@example.-com", gate 1 walk 2026-11-18); selectable.
+            if isIdentifier {
+                IdentifierText(value, style: .footnote, monospaced: false, tone: .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(value)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .font(Typography.footnote)
     }
