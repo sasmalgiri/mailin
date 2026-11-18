@@ -2716,7 +2716,8 @@ final class MailinClickThroughUITests: XCTestCase {
             if move.exists, move.isEnabled { move.click() } else { pass = false }
             let trash = fjElement("archive.sidebar.trash")
             app.activate()
-            let inTrash = fjWait(timeout: 30) { self.fjText(trash).contains("1 messages") }
+            // Singular since 0f46378 ("Trash, 1 message").
+            let inTrash = fjWait(timeout: 30) { self.fjText(trash).contains("1 message") }
             detail.append("after moving: \(trash.exists ? fjText(trash) : "Trash row missing")")
             if !inTrash { pass = false }
             // Restore from the Trash.
