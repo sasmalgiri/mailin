@@ -1,24 +1,4 @@
-# mailin 4.0 / 4.0.1 — store metadata for the connected edition (V4-14), updated 2026-11-19
-
-**4.0.1 (build 1001, owner 2026-11-19): the first submitted build is 4.0.1 with Google sign-in for Gmail**
-(`MailinGmailSignInMode = oauth`; Google verified the restricted scopes). Read every "Gmail … app password" line
-below as 4.0 history; for the submission use these replacements:
-
-- Description, "NEW IN 4.0 — LIVE MAIL", last bullet: "• Gmail and Outlook sign in on Google's and Microsoft's own
-  pages; mailin never sees your password. Passwords for iCloud and other IMAP accounts, and every sign-in token, stay
-  in this device's Keychain."
-- What's New in 4.0 → head it "What's New in 4.0.1" and add as the first line: "• Gmail connects through Google's own
-  sign-in page — no app password to create — and Change server mail now works for Gmail too." Replace the bullet
-  "Gmail connects with a Google app password; Outlook with Microsoft's own sign-in." with "Gmail and Outlook sign in
-  on their providers' own pages."
-- Review notes step 3, Gmail: "Gmail: enter the demo Gmail address, click 'Sign in…' and sign in on Google's page
-  with the demo password; allow what mailin asks for (read mail and labels). Sending or changing mail asks again when
-  that switch is turned on." Step 5: Gmail asks once for the send permission (like Outlook). Step 6: Change server
-  mail works for Gmail, Outlook and iCloud / IMAP accounts; the "Not available for Gmail with an app password"
-  sentence applies only to accounts added in 4.0 with an app password.
-- Demo accounts: a Gmail account **with a password the reviewer can type on Google's page** (no passkey-only sign-in;
-  if 2-Step Verification is on, provide backup codes in the notes), plus the Outlook.com account.
-- §"Gmail sign-in mode (V4-16)" below: 4.0.1 ships `oauth`; the script's step 5 prints `MailinGmailSignInMode = oauth`.
+# mailin 4.0 — store metadata for the connected edition (V4-14), updated 2026-11-15
 
 **Owner decision 2026-11-14:** release v4.0 (build 1000) with connected mail on the existing App Store record:
 Gmail over IMAP + Google app password (Google sign-in returns in a 4.0.x update after Google verification);

@@ -94,10 +94,5 @@ bound to its own mail and sign-in hosts; AI hosts and remote content always refu
    Google sign-in returns in 4.0.x after Google verifies the restricted scopes. When 4.0.x switches the key to
    `oauth`, restore the Gmail API rows (`accounts.google.com`, `oauth2.googleapis.com`, `gmail.googleapis.com`) as
    the Gmail path and keep the IMAP wording for accounts added with an app password.
-   **Done 2026-11-19 for 4.0.1 (build 1001):** `docs/privacy/index.html` and `PrivacyPolicy.html` carry the
-   Google sign-in text (effective November 19, 2026, version 4.0.1; hosts `accounts.google.com`,
-   `oauth2.googleapis.com`, `gmail.googleapis.com`, `www.googleapis.com`; scopes per switch; Limited Use section
-   current; withdrawal at myaccount.google.com/permissions); the 4.0 text is kept at `docs/privacy/4.0.html`; the
-   in-app summary names both withdrawal routes. Live once `main` is published.
 5. Have the text reviewed for the jurisdictions you sell in (plan §10: engineering tests do not establish legal
    compliance).

@@ -156,23 +156,7 @@ private let releaseItems40: [ReleaseItem] = {
     return items
 }()
 
-// 4.0.1 (owner 2026-11-19): Google sign-in for Gmail ships — Google verified the restricted Gmail scopes, so
-// Info-Connected.plist carries MailinGmailSignInMode = oauth. Connected edition only: the offline edition has
-// no 4.0.1 note, so What's New does not interrupt it for a version with nothing to show.
-private let releaseItems401: [ReleaseItem] = {
-    var items: [ReleaseItem] = []
-    #if MAILIN_CONNECTED_MAIL
-    items.append(ReleaseItem(icon: "person.badge.key", title: String(localized: "Google Sign-in for Gmail"), description: String(localized: "Gmail now connects through Google's own sign-in page — no app password to create. Change server mail works for Gmail too: mark, label, move to Trash and restore, each change listed first. Accounts added with an app password keep working."), color: .red))
-    #endif
-    return items
-}()
-
-private let releaseNotes401: [ReleaseNote] =
-    releaseItems401.isEmpty ? [] : [ReleaseNote(version: "4.0.1", date: "November 2026", items: releaseItems401)]
-
-private let releaseNotes: [ReleaseNote] = releaseNotes401 + releaseNotes40AndEarlier
-
-private let releaseNotes40AndEarlier: [ReleaseNote] = [
+private let releaseNotes: [ReleaseNote] = [
     ReleaseNote(version: "4.0", date: "November 2026", items: releaseItems40),
     ReleaseNote(version: "3.0.1", date: "October 2026", items: [
         ReleaseItem(icon: "checkmark.seal", title: String(localized: "Exports Say What Happened"), description: String(localized: "Every export now ends with a receipt that reports the real result — complete, limited by the Free plan, cancelled, or failed with the reason. Outlook Archive (.pst) is in every Export menu, on iPhone and iPad too."), color: .green),
