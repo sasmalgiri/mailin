@@ -70,6 +70,7 @@ struct PSTParser {
         fileURL: URL,
         senderEmail: String,
         batchSize: Int,
+        envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> StreamResult {
@@ -94,6 +95,16 @@ struct PSTParser {
         var batch: [MBOXParser.RawEmail] = []
         batch.reserveCapacity(size)
         var emitted = 0
+        var envelope = await envelopeProvider?() ?? BatchEnvelope(maxMessages: size, maxBytes: Int.max)
+        var batchBytes = 0
+        func flush() async throws {
+            guard !batch.isEmpty else { return }
+            try await onBatch(batch)
+            emitted += batch.count
+            batch.removeAll(keepingCapacity: true)
+            batchBytes = 0
+            if let envelopeProvider { envelope = await envelopeProvider() }
+        }
         for (index, node) in nodes.enumerated() {
             try Task.checkCancellation()
             let message: PSTReader.PSTMessage? = autoreleasepool { spec.message(for: node, folderCache: &folderCache) }
@@ -102,22 +113,25 @@ struct PSTParser {
                     carveKeys.insert(PSTSpecReader.carveKey(message))
                     carveSubjects.insert(message.subject)
                 }
-                batch.append(rawEmail(from: message, senderEmail: senderEmail, isoFormatter: isoFormatter))
-                if batch.count >= size {
-                    try await onBatch(batch)
-                    emitted += batch.count
-                    batch.removeAll(keepingCapacity: true)
+                let email = rawEmail(from: message, senderEmail: senderEmail, isoFormatter: isoFormatter)
+                let bytes = email.rawSource.utf8.count
+                // One decoded PST item is the minimum unit. Flush siblings
+                // before a large item; never retain an entire count-only batch
+                // of large attachments. Per-item decoding is still not streamed.
+                if !batch.isEmpty, bytes > max(0, envelope.maxBytes - batchBytes) {
+                    try await flush()
+                }
+                batch.append(email)
+                batchBytes += bytes
+                if batch.count >= min(size, envelope.maxMessages) || batchBytes >= envelope.maxBytes {
+                    try await flush()
                 }
             }
             if index % 64 == 0 {
                 onProgress?(Double(index + 1) / Double(max(nodes.count, 1)) * (deep ? 0.9 : 1))
             }
         }
-        if !batch.isEmpty {
-            try await onBatch(batch)
-            emitted += batch.count
-            batch.removeAll()
-        }
+        try await flush()
         if deep, emitted > 0 {
             let carved = spec.carveUnallocated(listedKeys: carveKeys, listedSubjects: carveSubjects)
                 .map { rawEmail(from: $0, senderEmail: senderEmail, isoFormatter: isoFormatter) }

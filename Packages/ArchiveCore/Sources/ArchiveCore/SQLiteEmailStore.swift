@@ -574,7 +574,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         // off a cache cliff and go disk-bound. A fixed 128 MB cache + memory-
         // mapped reads keep import throughput and deep-page seeks flat. Both are
         // CONSTANT regardless of archive size, so resident memory stays bounded.
-        try applyMemoryBudget(Self.interactiveBudget, to: handle)
+        // Preserve a budget selected before first open or a volume reconnect.
+        try applyMemoryBudget(activeBudget, to: handle)
         try exec(handle, "PRAGMA temp_store = MEMORY;")
         try exec(handle, "PRAGMA busy_timeout = 5000;")
         SQLiteHygiene.apply(to: handle)
@@ -786,9 +787,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// Switches the live connection to the given budget. Safe to call mid-run:
     /// both pragmas take effect on the open connection.
     func setMemoryBudget(_ budget: MemoryBudget) {
+        guard budget != activeBudget else { return }
         guard let db else { activeBudget = budget; return }
+        let previous = activeBudget
         try? applyMemoryBudget(budget, to: db)
-        if budget.cacheKB < Self.interactiveBudget.cacheKB {
+        if budget.cacheKB < previous.cacheKB {
             // Release pages the smaller cache no longer permits, rather than
             // waiting for eviction to happen naturally.
             sqlite3_db_release_memory(db)

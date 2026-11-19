@@ -585,6 +585,7 @@ struct ParserFactory {
                         try await PSTParser.parseStreaming(
                             fileURL: fileURL, senderEmail: senderEmail,
                             batchSize: max(1, min(batchSize, chunkLimit)),
+                            envelopeProvider: envelopeProvider,
                             onProgress: onProgress, onBatch: onBatch)
                     }
                 }

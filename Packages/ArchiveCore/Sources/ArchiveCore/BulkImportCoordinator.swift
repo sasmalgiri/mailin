@@ -412,31 +412,36 @@ final class BulkImportCoordinator {
         options: Options = Options(),
         callbacks: Callbacks = Callbacks()
     ) async throws -> RunSummary {
-        defer {
-            // Restore interactive storage budgets whether the run completed,
-            // threw, or was cancelled - a finished import must not leave the
-            // app in import-mode caches.
+        func restoreBudgets() async {
             if options.adaptiveBatching {
-                let store = self.store, fts = self.fts
-                Task {
-                    await store.setMemoryBudget(SQLiteEmailStore.interactiveBudget)
-                    await fts.endImportMode()
-                }
+                await store.setMemoryBudget(SQLiteEmailStore.interactiveBudget)
+                await fts.endImportMode()
             }
         }
         do {
             let summary = try await run(urls: urls, options: options, callbacks: callbacks)
+            await restoreBudgets()
             return summary
         } catch is CancellationError {
+            await restoreBudgets()
             status = .cancelled
             throw CancellationError()
         } catch {
+            await restoreBudgets()
             status = .failed(error.localizedDescription)
             throw error
         }
     }
 
     // MARK: - Adaptive batching
+
+    private func applyImportMemoryBudget(_ sample: PressureSample) async {
+        let budget = ImportMemoryPolicy.storeBudget(
+            limit: sample.memoryBudgetBytes, constrained: !sample.isMemoryHealthy,
+            desktop: ImportMemoryPolicy.isDesktop)
+        await store.setMemoryBudget(budget)
+        await fts.beginImportMode(cacheKB: ImportMemoryPolicy.shardCacheKB(storeBudget: budget))
+    }
 
     /// Asked by the parser at every batch boundary. Blocks (with an explicit,
     /// user-readable reason) while the controller says pause, so a low-disk or
@@ -451,6 +456,8 @@ final class BulkImportCoordinator {
                 storeDirectory: storeDirectory,
                 indexBacklog: indexBacklog,
                 observedPressure: LivePressureSampler.currentPressure())
+            // This also releases caches while the controller is paused.
+            await applyImportMemoryBudget(sample)
             switch await controller.next(after: lastBatchOutcome, sample: sample) {
             case .proceed(let envelope):
                 if batchPauseReason != nil {
@@ -508,12 +515,12 @@ final class BulkImportCoordinator {
             }
         }
 
-        // P3.3: an import gets a tighter storage memory budget than
-        // interactive use - smaller page caches and fewer concurrent shard
-        // connections - restored when the run ends, however it ends.
+        // Useful cache capacity follows RAM and live headroom. Re-evaluate at
+        // every batch boundary; restore before returning on every exit path.
         if options.adaptiveBatching {
-            await store.setMemoryBudget(SQLiteEmailStore.importBudget)
-            await fts.beginImportMode()
+            await applyImportMemoryBudget(LivePressureSampler.sample(
+                storeDirectory: store.storeDirectory, indexBacklog: false,
+                observedPressure: LivePressureSampler.currentPressure()))
         }
 
         // P3.1: one controller per run, so the envelope adapts across all of

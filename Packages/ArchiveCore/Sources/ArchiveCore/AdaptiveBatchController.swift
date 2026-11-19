@@ -43,10 +43,11 @@ struct BatchEnvelope: Sendable, Equatable {
     /// from this through the expansion factor, so the thing being bounded is
     /// the thing that actually runs the machine out of memory.
     static func targetResidentBytes(forPhysicalMemory bytes: UInt64) -> Int {
-        // 1.5 % of RAM, clamped: 192 MiB on a 16 GB Mac, never below 96 MiB
-        // (progress must still be possible) nor above 512 MiB (import must not
-        // starve browsing, typing, search or export).
-        let derived = Int(Double(bytes) * 0.015)
+        // Desktop starts at 1/32 of RAM (512 MiB on a 16 GiB Mac).
+        // Mobile retains the smaller starting target. Every next envelope is
+        // also constrained by live headroom, not just installed RAM.
+        let fraction = ImportMemoryPolicy.isDesktop ? 0.03125 : 0.015
+        let derived = Int(Double(bytes) * fraction)
         return min(max(derived, 96 * 1_048_576), 512 * 1_048_576)
     }
 
@@ -168,7 +169,10 @@ enum LivePressureSampler {
                        indexBacklog: Bool,
                        observedPressure: PressureSample.MemoryPressure) -> PressureSample {
         let physical = ProcessInfo.processInfo.physicalMemory
-        let budget = UInt64(Double(physical) * memoryBudgetFraction)
+        let footprint = currentFootprintBytes()
+        let budget = ImportMemoryPolicy.footprintLimit(
+            physical: physical, footprint: footprint,
+            available: ImportMemoryPolicy.availableBytes(), desktop: ImportMemoryPolicy.isDesktop)
 
         let free: UInt64
         let reserve: UInt64
@@ -185,7 +189,7 @@ enum LivePressureSampler {
         }
 
         return PressureSample(
-            footprintBytes: currentFootprintBytes(),
+            footprintBytes: footprint,
             memoryBudgetBytes: budget,
             memoryPressure: observedPressure,
             freeDiskBytes: free,
@@ -234,6 +238,9 @@ actor AdaptiveBatchController {
 
     private(set) var envelope: BatchEnvelope
     private let limits: Limits
+    /// Slow storage alone must not repeatedly halve batches to eight messages.
+    /// Real pressure can still shrink below this latency-only floor.
+    private let latencyFloor: BatchEnvelope
     private var consecutiveHealthy = 0
     private var paused = false
     private(set) var trace: [Transition] = []
@@ -241,6 +248,7 @@ actor AdaptiveBatchController {
     init(start: BatchEnvelope, limits: Limits? = nil) {
         self.envelope = start
         self.limits = limits ?? .default(startingFrom: start)
+        self.latencyFloor = start
         self.trace = [Transition(kind: .start, envelope: start,
                                  cause: "initial envelope from machine memory")]
     }
@@ -249,6 +257,7 @@ actor AdaptiveBatchController {
         let start = BatchEnvelope.starting(forPhysicalMemory: physicalMemory)
         self.envelope = start
         self.limits = .default(startingFrom: start)
+        self.latencyFloor = start
         self.trace = [Transition(kind: .start, envelope: start,
                                  cause: "initial envelope from machine memory")]
     }
@@ -269,12 +278,39 @@ actor AdaptiveBatchController {
             record(.resumed, cause: "pressure cleared")
         }
 
+        let byteCeiling = ImportMemoryPolicy.batchSourceBytes(
+            limit: sample.memoryBudgetBytes, footprint: sample.footprintBytes)
+        if envelope.maxBytes > byteCeiling {
+            envelope.maxBytes = byteCeiling
+            consecutiveHealthy = 0
+            record(.shrank, cause: "next batch limited by available memory")
+            return .proceed(envelope)
+        }
+
         // 2. Shrink on any bad signal, promptly and multiplicatively.
         if let cause = shrinkCause(outcome: outcome, sample: sample) {
             consecutiveHealthy = 0
             envelope = clamp(BatchEnvelope(maxMessages: envelope.maxMessages / 2,
                                            maxBytes: envelope.maxBytes / 2))
             record(.shrank, cause: cause)
+            return .proceed(envelope)
+        }
+
+        // Commit time measures disk/index work too. Repeatedly shrinking a
+        // healthy starting batch amplifies fixed transaction/checkpoint cost.
+        // Undo growth above the starting size; otherwise hold and profile I/O.
+        if let outcome, outcome.commitSeconds >= limits.growCommitSecondsMax {
+            consecutiveHealthy = 0
+            if outcome.commitSeconds >= limits.shrinkCommitSeconds,
+               envelope.maxMessages > latencyFloor.maxMessages || envelope.maxBytes > latencyFloor.maxBytes {
+                envelope = clamp(BatchEnvelope(
+                    maxMessages: max(latencyFloor.maxMessages, envelope.maxMessages / 2),
+                    maxBytes: max(latencyFloor.maxBytes, envelope.maxBytes / 2)))
+                envelope.maxBytes = min(envelope.maxBytes, byteCeiling)
+                record(.shrank, cause: "slow commit: undo batch growth")
+            } else {
+                record(.held, cause: "slow commit without memory pressure; avoid tiny transactions")
+            }
             return .proceed(envelope)
         }
 
@@ -285,6 +321,7 @@ actor AdaptiveBatchController {
             consecutiveHealthy = 0
             envelope = clamp(BatchEnvelope(maxMessages: envelope.maxMessages * 3 / 2,
                                            maxBytes: envelope.maxBytes * 3 / 2))
+            envelope.maxBytes = min(envelope.maxBytes, byteCeiling)
             record(.grew, cause: "memory, disk, thermal and commit latency all healthy")
             return .proceed(envelope)
         }
@@ -325,9 +362,6 @@ actor AdaptiveBatchController {
         if sample.thermalState == .serious { return "thermal throttling" }
         if sample.indexBacklog { return "search index is falling behind" }
         if sample.freeDiskBytes <= sample.diskReserveBytes * 2 { return "disk space running low" }
-        if let outcome, outcome.commitSeconds >= limits.shrinkCommitSeconds {
-            return String(format: "store commits are slow (%.1fs)", outcome.commitSeconds)
-        }
         if !sample.isMemoryHealthy { return "memory use is approaching the budget" }
         return nil
     }

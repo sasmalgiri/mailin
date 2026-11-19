@@ -123,13 +123,15 @@ struct AdaptiveBatchControllerTests {
         #expect((decision.envelope?.maxBytes ?? .max) < 16 * mib)
     }
 
-    @Test("Slow store commits shrink the envelope")
-    func slowCommitsShrink() async {
+    @Test("Slow storage alone does not collapse healthy batches to the floor")
+    func slowCommitsHoldStartingEnvelope() async {
         let controller = AdaptiveBatchController(
             start: BatchEnvelope(maxMessages: 128, maxBytes: 16 * mib))
         let slow = BatchOutcome(messages: 128, bytes: 16 * mib, commitSeconds: 3.0)
-        let decision = await controller.next(after: slow, sample: healthy())
-        #expect((decision.envelope?.maxBytes ?? .max) < 16 * mib)
+        for _ in 0..<20 {
+            let decision = await controller.next(after: slow, sample: healthy())
+            #expect(decision.envelope == BatchEnvelope(maxMessages: 128, maxBytes: 16 * mib))
+        }
     }
 
     @Test("An index backlog and thermal throttling both shrink")

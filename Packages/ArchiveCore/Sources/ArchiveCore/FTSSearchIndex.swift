@@ -1070,15 +1070,18 @@ actor FTSSearchIndex {
     /// Enters import mode: fewer concurrent shard handles and a smaller cache
     /// per handle. Already-open shards above the new cap are evicted now rather
     /// than at the next open.
-    func beginImportMode() {
+    func beginImportMode(cacheKB: Int = 2_048) {
+        let nextCacheKB = min(8_192, max(2_048, cacheKB))
+        guard maxOpenShards != Self.importMaxOpenShards || shardCacheKB != nextCacheKB else { return }
+        let shrinking = nextCacheKB < shardCacheKB
         maxOpenShards = Self.importMaxOpenShards
-        shardCacheKB = 2_048
+        shardCacheKB = nextCacheKB
         if shards.count > maxOpenShards {
             evictIdleShards(keep: maxOpenShards)
         }
         for (_, handle) in shards {
             _ = try? exec(handle, "PRAGMA cache_size = -\(shardCacheKB);")
-            sqlite3_db_release_memory(handle)
+            if shrinking { sqlite3_db_release_memory(handle) }
         }
         logger.notice("FTS import mode: max \(self.maxOpenShards) open shards, \(self.shardCacheKB) KB cache each")
     }
