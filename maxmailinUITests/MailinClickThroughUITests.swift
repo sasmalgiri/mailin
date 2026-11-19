@@ -38,6 +38,11 @@ final class MailinClickThroughUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = true
         app = makeApp()
+        // The five-journey and live-Gmail tests relaunch at once on a fresh,
+        // isolated archive. No launch here first: in a Release build
+        // `--uitest` is ignored, so this launch would open the person's own
+        // archive (CLOSE-06).
+        if name.contains("testFiveJourneys_release") || name.contains("testConnectedGmail_liveSignIn") { return }
         app.launchArguments = ["--uitest"]
         // Extra launch arguments from the runner (TEST_RUNNER_UITEST_EXTRA_ARGS),
         // e.g. -simulateAppleIntelligenceOff.
@@ -2849,6 +2854,8 @@ final class MailinClickThroughUITests: XCTestCase {
         app.activate()
         _ = app.windows.firstMatch.waitForExistence(timeout: 30)
         Thread.sleep(forTimeInterval: 2)
+        // Release: Terms / onboarding are not pre-accepted — complete them as a user would.
+        app.completeFirstRunStepsIfShown()
     }
 
     private func fjElement(_ id: String) -> XCUIElement {
@@ -3580,6 +3587,63 @@ enum FiveJobsFixture {
         file.append(contentsOf: le32(0x06054b50) + le16(0) + le16(0) + le16(members.count) + le16(members.count)
                     + le32(UInt32(central.count)) + le32(UInt32(local.count)) + le16(0))
         return file
+    }
+}
+
+// MARK: - First-run steps, as a Release user meets them (CLOSE-06)
+
+extension XCUIApplication {
+    /// A Release build ignores `--uitest` (Debug-only since 9486ee3), so the
+    /// Terms are not pre-accepted and no onboarding sheet is suppressed. This
+    /// completes each first-run screen through the real UI, only when it is on
+    /// screen: Terms & Privacy (both "I have read" boxes, then "I Agree"), the
+    /// persona picker ("Skip persona selection"), Getting Started ("Skip") and
+    /// What's New ("Continue"). The screens arrive one after another (Getting
+    /// Started waits for the launch sheets to clear), so it keeps looking until
+    /// none has appeared for `quiet` seconds. Returns what it did, for the log.
+    @discardableResult
+    func completeFirstRunStepsIfShown(quiet: TimeInterval = 4, limit: TimeInterval = 40) -> [String] {
+        var done: [String] = []
+        let deadline = Date().addingTimeInterval(limit)
+        var lastAction = Date()
+        func button(_ format: String, _ text: String) -> XCUIElement {
+            descendants(matching: .button).matching(NSPredicate(format: format, text, text)).firstMatch
+        }
+        while Date() < deadline, Date().timeIntervalSince(lastAction) < quiet {
+            let termsBox = button("label CONTAINS %@ OR title CONTAINS %@", "I have read the Terms of Use")
+            if termsBox.exists {
+                termsBox.click()
+                button("label CONTAINS %@ OR title CONTAINS %@", "I have read the Privacy Policy").click()
+                let agree = button("label BEGINSWITH %@ OR title BEGINSWITH %@", "I Agree to the Terms")
+                if agree.waitForExistence(timeout: 3), agree.isEnabled { agree.click() }
+                done.append("accepted Terms & Privacy")
+                lastAction = Date(); Thread.sleep(forTimeInterval: 1); continue
+            }
+            let skipPersona = button("label == %@ OR title == %@", "Skip persona selection")
+            if skipPersona.exists {
+                skipPersona.click()
+                done.append("skipped persona selection")
+                lastAction = Date(); Thread.sleep(forTimeInterval: 1); continue
+            }
+            let sheet = sheets.firstMatch
+            if sheet.exists {
+                let skipTour = sheet.buttons["Skip"].firstMatch
+                if skipTour.exists {
+                    skipTour.click()
+                    done.append("skipped Getting Started")
+                    lastAction = Date(); Thread.sleep(forTimeInterval: 1); continue
+                }
+                let whatsNew = sheet.buttons["Continue"].firstMatch
+                if whatsNew.exists, sheet.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Version ' OR value BEGINSWITH 'Version '")).firstMatch.exists {
+                    whatsNew.click()
+                    done.append("closed What's New")
+                    lastAction = Date(); Thread.sleep(forTimeInterval: 1); continue
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        if !done.isEmpty { print("FIRST-RUN: \(done.joined(separator: "; "))") }
+        return done
     }
 }
 #endif

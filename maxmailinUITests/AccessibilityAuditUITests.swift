@@ -28,10 +28,20 @@ final class AccessibilityAuditUITests: XCTestCase {
         continueAfterFailure = true
         app = XCUIApplication()
         app.launchArguments = ["--uitest"]
+        #if !DEBUG
+        // Release (CLOSE-06): `--uitest` is ignored, so nothing is seeded and
+        // the Terms are not pre-accepted. Audit a fresh, isolated archive —
+        // never the person's own — as a new Release user first sees it, after
+        // the first-run screens are completed through the real UI.
+        app.launchEnvironment["MAILIN_UITEST_FRESH_ARCHIVE"] = "a11y\(Int(Date().timeIntervalSince1970))"
+        #endif
         app.launch()
         _ = app.wait(for: .runningForeground, timeout: 30)
         app.activate()
         _ = app.windows.firstMatch.waitForExistence(timeout: 30)
+        #if os(macOS) && !DEBUG
+        app.completeFirstRunStepsIfShown()
+        #endif
     }
 
     override func tearDown() {
@@ -69,6 +79,7 @@ final class AccessibilityAuditUITests: XCTestCase {
         // text inside every List took one query per row — 17,510 queries and
         // 2 h 44 min on 2026-10-14.
         let listFrames = app.outlines.allElementsBoundByIndex.map(\.frame)
+        let splitFrames = app.splitGroups.allElementsBoundByIndex.map(\.frame)
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
                 // An element the audit saw can be gone a moment later (a
@@ -104,7 +115,7 @@ final class AccessibilityAuditUITests: XCTestCase {
                 // Picker in place of a Menu). Reported, not failed; anything
                 // the app draws still fails. See ACCESSIBILITY_3_0.md.
                 if let why = Self.frameworkElement(issue, windowFrames: windowFrames, scrollFrames: scrollFrames, namedFrames: namedFrames,
-                                                 listFrames: listFrames) {
+                                                 listFrames: listFrames, splitFrames: splitFrames) {
                     self.advisories.append("\(surface): SwiftUI-generated (\(why)) — \(issue.compactDescription) — \(element)")
                     return true
                 }
@@ -198,7 +209,7 @@ final class AccessibilityAuditUITests: XCTestCase {
 
     private static func frameworkElement(_ issue: XCUIAccessibilityAuditIssue, windowFrames: [CGRect],
                                          scrollFrames: [CGRect], namedFrames: [(CGRect, String)],
-                                         listFrames: [CGRect]) -> String? {
+                                         listFrames: [CGRect], splitFrames: [CGRect]) -> String? {
         let text = issue.compactDescription
         guard let e = issue.element else {
             return text.localizedCaseInsensitiveContains("no description") || text.localizedCaseInsensitiveContains("contrast")
@@ -211,6 +222,14 @@ final class AccessibilityAuditUITests: XCTestCase {
         let unlabelled = e.label.isEmpty && e.identifier.isEmpty
         if e.elementType == .group, unlabelled, windowFrames.contains(where: { $0 == e.frame }) {
             return "window content root"
+        }
+        // NavigationSplitView's detail-column host reaches AX as an unnamed
+        // group spanning the whole split view (seen 2026-11-19 on the empty
+        // archive's welcome screen: group 0,122 1450×737 = the split group);
+        // no app modifier reaches it — a label on the detail lands on the
+        // detail's content instead, which is a narrower frame.
+        if e.elementType == .group, unlabelled, splitFrames.contains(e.frame) {
+            return "split view column host"
         }
         // `exists` first: an element the audit saw can be gone a moment later
         // (a transient view), and querying a vanished element fails the test.
@@ -296,6 +315,11 @@ final class AccessibilityAuditUITests: XCTestCase {
     /// page is left on Archive afterwards (the open page is remembered
     /// app-wide). Skips in a build without the Live Mail page.
     func testAccessibilityAudit_liveMailPage() throws {
+        #if !DEBUG
+        // The in-memory sample account (UITestMailSample) is compiled into
+        // Debug builds only; a Release build has no mail to put on the page.
+        throw XCTSkip("Release build: the Live Mail sample account is Debug-only (UITestMailSample), so there is no Live Mail page with mail to audit.")
+        #else
         app.terminate()
         app = XCUIApplication()
         app.launchArguments = ["--uitest"]
@@ -342,5 +366,6 @@ final class AccessibilityAuditUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertTrue(issues.isEmpty, "accessibility audit:\n\(report)")
+        #endif
     }
 }
